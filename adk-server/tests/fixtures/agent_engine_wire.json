@@ -1,0 +1,50 @@
+{
+  "comment": "Canonical Agent Engine wire fixtures. Shared by the agent_engine dispatch tests (server side) and, later, the RemoteReasoningEngineAgent round-trip tests (client side) so the two modules stay wire-compatible. The envelope is snake_case per the platform contract (V14).",
+  "requests": {
+    "create_session": { "class_method": "create_session", "input": { "user_id": "u", "session_id": "s-fixture", "state": { "kind": "fixture" } } },
+    "async_create_session": { "class_method": "async_create_session", "input": { "user_id": "u", "session_id": "s-fixture-async" } },
+    "get_session": { "class_method": "get_session", "input": { "user_id": "u", "session_id": "s-fixture" } },
+    "async_get_session": { "class_method": "async_get_session", "input": { "user_id": "u", "session_id": "s-fixture" } },
+    "list_sessions": { "class_method": "list_sessions", "input": { "user_id": "u" } },
+    "async_list_sessions": { "class_method": "async_list_sessions", "input": { "user_id": "u" } },
+    "delete_session": { "class_method": "delete_session", "input": { "user_id": "u", "session_id": "s-fixture" } },
+    "async_delete_session": { "class_method": "async_delete_session", "input": { "user_id": "u", "session_id": "s-fixture-async" } },
+    "stream_query": { "class_method": "stream_query", "input": { "user_id": "u", "session_id": "s-stream", "message": "hi" } },
+    "async_stream_query": { "class_method": "async_stream_query", "input": { "user_id": "u", "message": "hi" } },
+    "streaming_agent_run_with_events": { "class_method": "streaming_agent_run_with_events", "input": { "request_json": "{\"appName\":\"test-app\",\"userId\":\"u\",\"sessionId\":\"s-playground\",\"newMessage\":{\"role\":\"user\",\"parts\":[{\"text\":\"hi\"}]},\"streaming\":true}" } },
+    "async_add_session_to_memory": { "class_method": "async_add_session_to_memory", "input": { "user_id": "u", "session_id": "s-stream" } },
+    "async_search_memory": { "class_method": "async_search_memory", "input": { "user_id": "u", "query": "hi" } },
+    "register_operations": { "class_method": "register_operations" }
+  },
+  "register_operations_output": {
+    "": ["create_session", "get_session", "list_sessions", "delete_session", "register_operations"],
+    "async": ["async_create_session", "async_get_session", "async_list_sessions", "async_delete_session", "async_add_session_to_memory", "async_search_memory"],
+    "stream": ["stream_query"],
+    "async_stream": ["async_stream_query", "streaming_agent_run_with_events"]
+  },
+  "streamed_events": [
+    {
+      "id": "agent-engine-fixture-event",
+      "timestamp": "2025-01-01T00:00:00Z",
+      "invocation_id": "agent-engine-fixture-invocation",
+      "branch": "",
+      "author": "echo-agent",
+      "content": { "role": "model", "parts": [{ "text": "echo: hi" }] },
+      "usage_metadata": null,
+      "finish_reason": null,
+      "partial": false,
+      "turn_complete": false,
+      "interrupted": false,
+      "error_code": null,
+      "error_message": null,
+      "actions": {
+        "state_delta": {},
+        "artifact_delta": {},
+        "skip_summarization": false,
+        "transfer_to_agent": null,
+        "escalate": false
+      },
+      "long_running_tool_ids": []
+    }
+  ]
+}

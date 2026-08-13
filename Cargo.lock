@@ -928,6 +928,7 @@ dependencies = [
  "adk-agent",
  "adk-artifact",
  "adk-core",
+ "adk-memory",
  "adk-runner",
  "adk-session",
  "adk-skill",

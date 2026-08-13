@@ -79,6 +79,12 @@ pub mod webhooks;
 #[cfg(feature = "background")]
 pub mod background;
 
+#[cfg(feature = "agent-engine")]
+pub mod agent_engine;
+
+#[cfg(feature = "agent-engine")]
+pub use agent_engine::{AgentEngineState, agent_engine_router};
+
 // Background runs and cron scheduling re-exports
 #[cfg(feature = "background")]
 pub use background::{

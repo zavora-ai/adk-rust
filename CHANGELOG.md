@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agent Engine dispatch surface** (`adk-server`, feature `agent-engine`): the
+  container-side runtime contract that makes an adk-rust agent drivable by the
+  Gemini Enterprise Agent Platform (`reasoningEngines.query` /
+  `streamQuery`, console Playground, platform SDKs). `agent_engine_router`
+  mounts `POST /api/reasoning_engine` (unary, `{"output": ...}`) and
+  `POST /api/stream_reasoning_engine` (newline-delimited JSON events), dispatching
+  the exact `AdkApp` operation set — session CRUD in sync/async pairs,
+  `stream_query` / `async_stream_query`, `streaming_agent_run_with_events`,
+  `async_add_session_to_memory` / `async_search_memory` (Unsupported until a
+  memory service is configured), and `register_operations`. A shared wire
+  fixture (`adk-server/tests/fixtures/agent_engine_wire.json`) pins the
+  envelope and streamed-event framing for the future remote-engine client.
+
 - **adk-rag: shared `VectorStore` contract test suite.** A new
   `adk-rag/tests/common/vector_store_contract.rs` holds the behavioral contract
   every vector store backend must satisfy — idempotent collection creation,

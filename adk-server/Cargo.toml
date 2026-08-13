@@ -20,6 +20,8 @@ adk-runner = { workspace = true, features = ["artifacts", "plugins", "skills"] }
 adk-session.workspace = true
 adk-skill.workspace = true
 adk-artifact.workspace = true
+# Optional: Agent Engine dispatch surface (memory class methods)
+adk-memory = { workspace = true, optional = true }
 adk-telemetry.workspace = true
 tokio = { workspace = true, features = ["sync", "signal", "macros", "rt", "time"] }
 tokio-stream.workspace = true
@@ -69,6 +71,8 @@ a2a-interceptors = []
 openai-webhooks = ["dep:hmac", "dep:sha2", "dep:hex"]
 # Enable background run endpoints and cron job management
 background = ["dep:cron"]
+# Enable the Gemini Enterprise Agent Platform (ReasoningEngine) dispatch surface
+agent-engine = ["dep:adk-memory"]
 
 [dev-dependencies]
 async-stream.workspace = true

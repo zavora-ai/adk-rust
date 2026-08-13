@@ -147,6 +147,10 @@ jobs:
           # default --workspace build skips their tests entirely. Nothing compiled them
           # when durable run records were added.
           - { package: adk-server, features: background }
+          # The Agent Engine dispatch surface (Gemini Enterprise Agent Platform runtime
+          # contract) is behind `agent-engine`; its wire-fixture and dispatch tests only
+          # run with the feature on. Umbrella forwarding follows in the entrypoint PR.
+          - { package: adk-server, features: agent-engine }
           # sandbox-linux is Linux-only *and* feature-gated, so nothing built it until a
           # container run found the bubblewrap probe could never succeed and that its
           # property tests did not compile.
