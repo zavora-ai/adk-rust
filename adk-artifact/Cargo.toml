@@ -15,9 +15,18 @@ readme = "README.md"
 [dependencies]
 adk-core.workspace = true
 async-trait.workspace = true
+serde = { workspace = true, optional = true }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["fs"] }
+google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
+reqwest = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { workspace = true, features = ["fs", "rt", "macros"] }
+tokio = { workspace = true, features = ["fs", "rt", "macros", "net"] }
+axum = "0.8"
+
+[features]
+default = []
+gcs = ["google-cloud-auth", "reqwest", "serde", "tracing", "tokio/sync", "tokio/time"]

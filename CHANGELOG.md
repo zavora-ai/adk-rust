@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **adk-rag: shared `VectorStore` contract test suite.** A new
+  `adk-rag/tests/common/vector_store_contract.rs` holds the behavioral contract
+  every vector store backend must satisfy — idempotent collection creation,
+  upsert-then-search round trips, descending-score ordering bounded by `top_k`,
+  deletion by ID, empty-input no-ops, metadata preservation, collection
+  isolation, and teardown — plus proptest search invariants. The suite runs
+  against InMemory, SurrealDB (embedded), and LanceDB (embedded, behind the
+  `lancedb` feature). LanceDB scopes out the upsert-replaces-by-ID assertion:
+  its `upsert` appends instead of replacing, a divergence the suite documents
+  rather than fixes.
+- **GCS artifact backend** (`adk-artifact`, feature `gcs`): `GcsArtifactService`
+  stores artifacts in a Google Cloud Storage bucket over the GCS JSON API with
+  ADC authentication, keeping byte-for-byte blob-name parity with adk-python's
+  `GcsArtifactService` (session-scoped and `user:`-namespaced layouts, `adkDisplayName`/
+  `adkIsText`/`adkFileUri`/`adkFileMimeType` object metadata, versions starting at 0).
+  Umbrella feature `gcs-artifacts`, included in the `gemini-agent-platform` meta-feature.
 - **adk-gemini: cached content on Vertex AI.** `VertexBackend` implements the five
   cached-content operations (create, get, update, list, delete) against the Vertex
   REST endpoint `…/v1/projects/{project}/locations/{location}/cachedContents`,
