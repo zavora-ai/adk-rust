@@ -14,7 +14,8 @@ use std::sync::Arc;
 use futures::FutureExt;
 use rmcp::model::{
     ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability,
-    ElicitationSchema, FormElicitationCapability, UrlElicitationCapability,
+    ElicitationSchema, FormElicitationCapability, InputRequest, InputRequests, InputResponses,
+    UrlElicitationCapability,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleClient};
 use serde_json::Value;
@@ -124,6 +125,7 @@ impl ElicitationHandler for AutoDeclineElicitationHandler {
 ///
 /// When the `mcp-sampling` feature is enabled, also accepts an optional
 /// `Arc<dyn SamplingHandler>` to handle `sampling/createMessage` requests.
+#[derive(Clone)]
 pub struct AdkClientHandler {
     handler: Arc<dyn ElicitationHandler>,
     resource_notification_handler: Option<Arc<dyn ResourceNotificationHandler>>,
@@ -153,6 +155,80 @@ impl AdkClientHandler {
     pub fn with_tasks(mut self) -> Self {
         self.tasks = true;
         self
+    }
+
+    async fn handle_elicitation(&self, request: ElicitRequestParams) -> ElicitResult {
+        let result = match &request {
+            ElicitRequestParams::FormElicitationParams {
+                message, requested_schema, meta, ..
+            } => {
+                let metadata_value = meta.as_ref().and_then(|m| serde_json::to_value(m).ok());
+                std::panic::AssertUnwindSafe(self.handler.handle_form_elicitation(
+                    message,
+                    requested_schema,
+                    metadata_value.as_ref(),
+                ))
+                .catch_unwind()
+                .await
+            }
+            ElicitRequestParams::UrlElicitationParams {
+                message,
+                url,
+                elicitation_id,
+                meta,
+                ..
+            } => {
+                let metadata_value = meta.as_ref().and_then(|m| serde_json::to_value(m).ok());
+                std::panic::AssertUnwindSafe(self.handler.handle_url_elicitation(
+                    message,
+                    url,
+                    elicitation_id,
+                    metadata_value.as_ref(),
+                ))
+                .catch_unwind()
+                .await
+            }
+            _ => return ElicitResult::new(ElicitationAction::Decline),
+        };
+
+        match result {
+            Ok(Ok(elicitation_result)) => elicitation_result,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "elicitation handler returned error, declining");
+                ElicitResult::new(ElicitationAction::Decline)
+            }
+            Err(_) => {
+                tracing::warn!("elicitation handler panicked, declining");
+                ElicitResult::new(ElicitationAction::Decline)
+            }
+        }
+    }
+
+    /// Fulfil stateless MRTR requests through the same policy used for legacy
+    /// server-initiated elicitation. Sampling and roots are intentionally not
+    /// accepted here: both are deprecated in the 2026-07-28 lifecycle.
+    pub(crate) async fn fulfill_input_requests(
+        &self,
+        requests: InputRequests,
+    ) -> Result<InputResponses, String> {
+        let mut responses = InputResponses::new();
+        for (key, request) in requests {
+            let value = match request {
+                InputRequest::Elicitation(request) => {
+                    serde_json::to_value(self.handle_elicitation(request.params).await)
+                        .map_err(|error| error.to_string())?
+                }
+                InputRequest::CreateMessage(_) => {
+                    return Err("MRTR sampling is deprecated and not enabled by ADK".to_string());
+                }
+                InputRequest::ListRoots(_) => {
+                    return Err("MRTR roots are deprecated and not enabled by ADK".to_string());
+                }
+                _ => return Err("unsupported MRTR input request".to_string()),
+            };
+            responses.insert(key, value);
+        }
+        Ok(responses)
     }
 
     /// Set the handler for resource update and resource-list notifications.
@@ -308,55 +384,7 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
         request: ElicitRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> Result<ElicitResult, rmcp::ErrorData> {
-        {
-            let result = match &request {
-                ElicitRequestParams::FormElicitationParams {
-                    message,
-                    requested_schema,
-                    meta,
-                    ..
-                } => {
-                    let metadata_value = meta.as_ref().and_then(|m| serde_json::to_value(m).ok());
-                    std::panic::AssertUnwindSafe(self.handler.handle_form_elicitation(
-                        message,
-                        requested_schema,
-                        metadata_value.as_ref(),
-                    ))
-                    .catch_unwind()
-                    .await
-                }
-                ElicitRequestParams::UrlElicitationParams {
-                    message,
-                    url,
-                    elicitation_id,
-                    meta,
-                    ..
-                } => {
-                    let metadata_value = meta.as_ref().and_then(|m| serde_json::to_value(m).ok());
-                    std::panic::AssertUnwindSafe(self.handler.handle_url_elicitation(
-                        message,
-                        url,
-                        elicitation_id,
-                        metadata_value.as_ref(),
-                    ))
-                    .catch_unwind()
-                    .await
-                }
-                _ => return Ok(ElicitResult::new(ElicitationAction::Decline)),
-            };
-
-            match result {
-                Ok(Ok(elicitation_result)) => Ok(elicitation_result),
-                Ok(Err(e)) => {
-                    tracing::warn!(error = %e, "elicitation handler returned error, declining");
-                    Ok(ElicitResult::new(ElicitationAction::Decline))
-                }
-                Err(_panic) => {
-                    tracing::warn!("elicitation handler panicked, declining");
-                    Ok(ElicitResult::new(ElicitationAction::Decline))
-                }
-            }
-        }
+        Ok(self.handle_elicitation(request).await)
     }
 
     async fn on_resource_updated(

@@ -68,6 +68,8 @@ fn fixture_config(disabled: bool) -> anyhow::Result<McpServerConfig> {
         env: HashMap::new(),
         disabled,
         auto_approve: Vec::new(),
+        lifecycle: Default::default(),
+        task_config: Default::default(),
         restart_policy: Some(RestartPolicy {
             initial_delay_ms: 100,
             max_delay_ms: 1_000,

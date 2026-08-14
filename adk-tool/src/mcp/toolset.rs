@@ -20,6 +20,7 @@ use rmcp::{
         GetPromptRequestParams, GetPromptResult, GetTaskParams, GetTaskRequest, Prompt,
         ReadResourceRequestParams, Resource, ResourceContents, ResourceTemplate, ServerResult,
         SubscribeRequestParams, TaskPayload, ToolAnnotations, UnsubscribeRequestParams,
+        UpdateTaskParams, UpdateTaskRequest,
     },
     service::RunningService,
 };
@@ -194,6 +195,8 @@ where
     retry_tool_calls: bool,
     /// Resource subscriptions restored after an automatic connection refresh.
     resource_subscriptions: Arc<RwLock<BTreeSet<String>>>,
+    /// Policy bridge used to fulfil stateless MRTR and in-task input requests.
+    mrtr_handler: Option<super::elicitation::AdkClientHandler>,
 }
 
 impl<S> Clone for McpToolset<S>
@@ -210,6 +213,7 @@ where
             refresh_config: self.refresh_config.clone(),
             retry_tool_calls: self.retry_tool_calls,
             resource_subscriptions: Arc::clone(&self.resource_subscriptions),
+            mrtr_handler: self.mrtr_handler.clone(),
         }
     }
 }
@@ -245,6 +249,7 @@ where
             refresh_config: RefreshConfig::default(),
             retry_tool_calls: DEFAULT_RETRY_TOOL_CALLS,
             resource_subscriptions: Arc::new(RwLock::new(BTreeSet::new())),
+            mrtr_handler: None,
         }
     }
 
@@ -287,6 +292,15 @@ where
     /// ```
     pub fn with_task_support(mut self, config: McpTaskConfig) -> Self {
         self.task_config = config;
+        self
+    }
+
+    /// Reuse the connection's client policy for stateless MRTR and task input.
+    pub(crate) fn with_mrtr_handler(
+        mut self,
+        handler: super::elicitation::AdkClientHandler,
+    ) -> Self {
+        self.mrtr_handler = Some(handler);
         self
     }
 
@@ -749,6 +763,7 @@ where
                 annotations: mcp_tool.annotations,
                 server_supports_tasks,
                 task_config: self.task_config.clone(),
+                mrtr_handler: self.mrtr_handler.clone(),
             };
 
             tools.push(Arc::new(adk_tool) as Arc<dyn Tool>);
@@ -942,6 +957,8 @@ where
     server_supports_tasks: bool,
     /// Task configuration
     task_config: McpTaskConfig,
+    /// Policy bridge used to fulfil MRTR input without keeping server state.
+    mrtr_handler: Option<super::elicitation::AdkClientHandler>,
 }
 
 impl<S> McpTool<S>
@@ -972,13 +989,14 @@ where
     /// which would break every server that materializes a task.
     async fn call_tool_with_retry(
         &self,
-        params: CallToolRequestParams,
+        mut params: CallToolRequestParams,
     ) -> Result<CallToolResponse> {
         let has_connection_factory = self.connection_factory.is_some();
         let (_, metadata_allows_replay) = mcp_tool_safety(self.annotations.as_ref());
         let replay_allowed = self.retry_tool_calls || metadata_allows_replay;
         let mut attempt = 0u32;
 
+        let mut input_rounds = 0usize;
         loop {
             let call_result = {
                 let client = self.client.lock().await;
@@ -986,6 +1004,35 @@ where
             };
 
             match call_result {
+                Ok(CallToolResponse::InputRequired(required)) => {
+                    input_rounds += 1;
+                    if input_rounds > self.task_config.max_input_rounds {
+                        return Err(AdkError::tool(format!(
+                            "MCP tool '{}' exceeded {} MRTR input rounds",
+                            self.name, self.task_config.max_input_rounds
+                        )));
+                    }
+                    let handler = self.mrtr_handler.as_ref().ok_or_else(|| {
+                        AdkError::tool(format!(
+                            "MCP tool '{}' requires input but no elicitation handler is configured",
+                            self.name
+                        ))
+                    })?;
+                    let responses = match required.input_requests {
+                        Some(requests) => {
+                            handler.fulfill_input_requests(requests).await.map_err(|error| {
+                                AdkError::tool(format!(
+                                    "MCP tool '{}' input request failed: {error}",
+                                    self.name
+                                ))
+                            })?
+                        }
+                        None => Default::default(),
+                    };
+                    params.input_responses = (!responses.is_empty()).then_some(responses);
+                    params.request_state = required.request_state;
+                    attempt = 0;
+                }
                 Ok(result) => return Ok(result),
                 Err(error) => {
                     if !should_retry_mcp_operation(
@@ -1129,13 +1176,30 @@ where
                 TaskPayload::Cancelled => {
                     return Err(TaskError::Cancelled(task_id));
                 }
-                TaskPayload::InputRequired { .. } => {
-                    return Err(TaskError::InputRequired {
-                        task_id,
-                        message: task.status_message.unwrap_or_else(|| {
-                            "the remote server did not describe the required input".to_string()
-                        }),
-                    });
+                TaskPayload::InputRequired { input_requests } => {
+                    let Some(handler) = self.mrtr_handler.as_ref() else {
+                        return Err(TaskError::InputRequired {
+                            task_id,
+                            message: task.status_message.unwrap_or_else(|| {
+                                "the remote server did not describe the required input".to_string()
+                            }),
+                        });
+                    };
+                    let responses = handler
+                        .fulfill_input_requests(input_requests)
+                        .await
+                        .map_err(TaskError::PollFailed)?;
+                    let request = ClientRequest::UpdateTaskRequest(UpdateTaskRequest::new(
+                        UpdateTaskParams::new(&task_id, responses),
+                    ));
+                    match self.send_task_request(request).await? {
+                        ServerResult::TaskAckResult(_) => {}
+                        response => {
+                            return Err(TaskError::PollFailed(format!(
+                                "tasks/update returned an unexpected response: {response:?}"
+                            )));
+                        }
+                    }
                 }
                 TaskPayload::Working => {
                     debug!(task_id, "MCP task is still working");
@@ -1209,8 +1273,7 @@ where
             }
             CallToolResponse::InputRequired(_) => {
                 return Err(AdkError::tool(format!(
-                    "MCP tool '{}' asked for mid-call input (SEP-2322), which this client does not \
-                     drive yet. Configure the server to complete the call in one round.",
+                    "MCP tool '{}' returned an unresolved MRTR input request",
                     self.name
                 )));
             }

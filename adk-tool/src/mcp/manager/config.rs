@@ -6,6 +6,37 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::mcp::McpTaskConfig;
+
+/// MCP client lifecycle used for a managed server connection.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum McpLifecycleMode {
+    /// Maximum compatibility: use the pre-2026 initialization handshake.
+    #[default]
+    Initialize,
+    /// Probe with `server/discover`, falling back only on method-not-found.
+    Auto,
+    /// Require the stateless 2026-07-28 discovery lifecycle.
+    Discover,
+}
+
+impl McpLifecycleMode {
+    pub(crate) fn to_rmcp(self) -> rmcp::ClientLifecycleMode {
+        use rmcp::model::ProtocolVersion;
+        match self {
+            Self::Initialize => rmcp::ClientLifecycleMode::Initialize,
+            Self::Auto => rmcp::ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+            Self::Discover => rmcp::ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        }
+    }
+}
+
 /// Configuration for a single managed MCP server.
 ///
 /// Deserialized from Kiro's `mcp.json` format with camelCase field names.
@@ -55,6 +86,14 @@ pub struct McpServerConfig {
     /// Optional restart policy controlling auto-restart behavior with exponential backoff.
     #[serde(default)]
     pub restart_policy: Option<RestartPolicy>,
+
+    /// Connection lifecycle. Controlled first-party servers should use `discover`.
+    #[serde(default)]
+    pub lifecycle: McpLifecycleMode,
+
+    /// Negotiated Tasks and MRTR execution policy.
+    #[serde(default)]
+    pub task_config: McpTaskConfig,
 }
 
 /// Controls auto-restart behavior with exponential backoff.
@@ -166,6 +205,8 @@ mod tests {
         assert!(!config.disabled);
         assert!(config.auto_approve.is_empty());
         assert!(config.restart_policy.is_none());
+        assert_eq!(config.lifecycle, McpLifecycleMode::Initialize);
+        assert!(!config.task_config.enable_tasks);
     }
 
     #[test]
@@ -212,6 +253,8 @@ mod tests {
                 backoff_multiplier: 1.5,
                 max_restart_attempts: 3,
             }),
+            lifecycle: McpLifecycleMode::Discover,
+            task_config: McpTaskConfig::enabled(),
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: McpServerConfig = serde_json::from_str(&json).unwrap();
