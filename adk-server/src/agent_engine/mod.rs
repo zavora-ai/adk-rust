@@ -25,9 +25,11 @@
 //! # }
 //! ```
 
+mod entrypoint;
 mod envelope;
 mod operations;
 
+pub use entrypoint::{AgentEngineOptions, build_agent_engine_app, serve_agent_engine};
 pub use envelope::DispatchRequest;
 pub use operations::{
     AddSessionToMemoryInput, AgentRunRequest, ApiMode, ClassMethod, CreateSessionInput,

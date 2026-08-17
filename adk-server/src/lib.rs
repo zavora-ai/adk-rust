@@ -83,7 +83,10 @@ pub mod background;
 pub mod agent_engine;
 
 #[cfg(feature = "agent-engine")]
-pub use agent_engine::{AgentEngineState, agent_engine_router};
+pub use agent_engine::{
+    AgentEngineOptions, AgentEngineState, agent_engine_router, build_agent_engine_app,
+    serve_agent_engine,
+};
 
 // Background runs and cron scheduling re-exports
 #[cfg(feature = "background")]

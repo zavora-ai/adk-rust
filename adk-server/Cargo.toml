@@ -72,7 +72,8 @@ openai-webhooks = ["dep:hmac", "dep:sha2", "dep:hex"]
 # Enable background run endpoints and cron job management
 background = ["dep:cron"]
 # Enable the Gemini Enterprise Agent Platform (ReasoningEngine) dispatch surface
-agent-engine = ["dep:adk-memory"]
+# and the turnkey serve_agent_engine entrypoint (tokio/net for the listener)
+agent-engine = ["dep:adk-memory", "tokio/net"]
 
 [dev-dependencies]
 async-stream.workspace = true

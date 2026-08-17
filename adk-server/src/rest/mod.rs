@@ -541,6 +541,8 @@ pub struct ServerBuilder {
     root_routes: Vec<Router>,
     shutdown_endpoint: bool,
     skill_index: Option<Arc<adk_skill::SkillIndex>>,
+    #[cfg(feature = "agent-engine")]
+    agent_engine: bool,
 }
 
 impl ServerBuilder {
@@ -553,6 +555,8 @@ impl ServerBuilder {
             root_routes: Vec::new(),
             shutdown_endpoint: false,
             skill_index: None,
+            #[cfg(feature = "agent-engine")]
+            agent_engine: false,
         }
     }
 
@@ -616,6 +620,29 @@ impl ServerBuilder {
     /// ```
     pub fn with_skill_index(mut self, skill_index: Arc<adk_skill::SkillIndex>) -> Self {
         self.skill_index = Some(skill_index);
+        self
+    }
+
+    /// Mount the Agent Engine dispatch endpoints alongside the built-in routes.
+    ///
+    /// When enabled, `POST /api/reasoning_engine` and
+    /// `POST /api/stream_reasoning_engine` serve the Gemini Enterprise Agent
+    /// Platform runtime contract for the loader's root agent, using the
+    /// configured session and artifact services. The routes carry the shared
+    /// middleware stack but **not** the auth middleware — a deployed engine is
+    /// fronted by the platform, which authenticates callers before they reach
+    /// the container. The memory class methods report `Unsupported`; use
+    /// [`serve_agent_engine`](crate::agent_engine::serve_agent_engine) with
+    /// [`AgentEngineOptions`](crate::agent_engine::AgentEngineOptions) to
+    /// configure a memory service.
+    ///
+    /// # Panics
+    ///
+    /// [`build`](Self::build) panics when the root agent's name is not a
+    /// valid app name, mirroring the builder's other misuse panics.
+    #[cfg(feature = "agent-engine")]
+    pub fn with_agent_engine(mut self, enabled: bool) -> Self {
+        self.agent_engine = enabled;
         self
     }
 
@@ -817,6 +844,30 @@ impl ServerBuilder {
         // Merge custom root routes
         for custom_routes in self.root_routes {
             app = app.merge(custom_routes);
+        }
+
+        // Agent Engine dispatch surface: root-level merge (its routes carry
+        // their own /api/... paths) so the platform host reaches it without
+        // the local auth middleware — the platform authenticates callers
+        // before they reach the container.
+        #[cfg(feature = "agent-engine")]
+        if self.agent_engine {
+            let root_agent = config.agent_loader.root_agent();
+            let mut runner_builder = adk_runner::Runner::builder()
+                .app_name(root_agent.name())
+                .agent(root_agent.clone())
+                .session_service(config.session_service.clone());
+            if let Some(artifact_service) = &config.artifact_service {
+                runner_builder = runner_builder.artifact_service(artifact_service.clone());
+            }
+            let runner = runner_builder
+                .build()
+                .expect("with_agent_engine requires the root agent's name to be a valid app name");
+            let mut state = crate::agent_engine::AgentEngineState::new(Arc::new(runner));
+            if let Some(artifact_service) = &config.artifact_service {
+                state = state.with_artifact_service(artifact_service.clone());
+            }
+            app = app.merge(crate::agent_engine::agent_engine_router(state));
         }
 
         if let Some(base_url) = &self.a2a_base_url {

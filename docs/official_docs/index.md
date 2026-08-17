@@ -117,6 +117,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Server](deployment/server.md) - REST API and web UI integration
 - [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication
 - [Agentic Web Protocol](deployment/awp.md) - AWP protocol for agent-native web services
+- [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 
 ## Evaluation
 

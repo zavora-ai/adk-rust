@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agent Engine turnkey entrypoint** (`adk-server`, feature `agent-engine`;
+  umbrella feature `agent-engine`, included in `gemini-agent-platform`):
+  `serve_agent_engine(agent, options)` is the whole `main` of a deployable
+  Gemini Enterprise Agent Platform engine — binds `0.0.0.0:$PORT` (fallback
+  `8080`), installs the crypto provider, and serves the dispatch endpoints
+  plus `GET /health`. `AgentEngineOptions` configures session, memory, and
+  artifact services, app name, and port; `build_agent_engine_app` returns the
+  same app as a plain `Router`. `ServerBuilder::with_agent_engine(true)`
+  mounts the dispatch surface alongside the built-in REST/UI/A2A routes.
+  New docs page: `docs/official_docs/deployment/agent-engine.md`.
+
 - **Agent Engine dispatch surface** (`adk-server`, feature `agent-engine`): the
   container-side runtime contract that makes an adk-rust agent drivable by the
   Gemini Enterprise Agent Platform (`reasoningEngines.query` /

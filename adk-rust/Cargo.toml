@@ -85,8 +85,8 @@ gemini-agent-platform = [
     "gcp-secrets",    # GCP Secret Manager (adk-auth)
     "gcs-artifacts",  # GCS artifact backend (adk-artifact)
     "gcp-telemetry",  # Cloud Trace/Logging transport (adk-telemetry)
+    "agent-engine",   # class-method runtime contract + turnkey entrypoint (adk-server)
     # target end-state — appended by the PR that introduces each flag:
-    # "agent-engine",           class-method runtime contract (adk-server)
     # "vertex-memory",          Memory Bank (adk-memory)
     # "example-store",          Example Store (adk-tool)
     # "gcp-telemetry",          Cloud Trace/Logging transport (adk-telemetry)
@@ -206,6 +206,9 @@ openai-webrtc = ["realtime", "adk-realtime/openai-webrtc"]
 yaml-agent = ["server", "adk-server/yaml-agent"]
 # Agent Registry REST API (forwarded to adk-server)
 agent-registry = ["server", "adk-server/agent-registry"]
+# Gemini Enterprise Agent Platform runtime contract: class-method dispatch
+# endpoints and the turnkey serve_agent_engine entrypoint (forwarded to adk-server)
+agent-engine = ["server", "adk-server/agent-engine"]
 # MCP sampling callback support (forwarded to adk-tool)
 mcp = ["tools", "adk-tool/mcp"]
 mcp-http = ["mcp", "adk-tool/http-transport"]
