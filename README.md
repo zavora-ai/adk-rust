@@ -11,10 +11,17 @@
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
 and async, across 42 crates for agent orchestration.
 
-> **v2.0.0 Released!** A major release with breaking changes. Coming from 1.x, read the
-> [migration guide](docs/official_docs/migration/1.0-to-2.0.md) — six APIs changed
-> shape, and the fan-in default changed behaviour without an API change. The
-> [CHANGELOG](CHANGELOG.md) has the full entry.
+> **v2.0.0 Released!** Graph orchestration gains subgraphs (`SubgraphNode`, each with
+> its own checkpoint thread), dynamic routing through `NodeOutput::with_goto` and
+> `with_goto_parent`, imperative child invocation through `ctx.run_node_with`,
+> per-node `RetryPolicy` and timeouts, a frontier concurrency bound, and
+> `RetentionPolicy` for checkpoints. Interrupts resume across processes over a shared
+> SQLite checkpointer. Two crates are new: `adk-computer-use` for digest-bound
+> desktop automation and `adk-devtools` for workspace-scoped coding-agent tools.
+>
+> Coming from 1.x: six APIs changed shape and the fan-in default changed behaviour
+> without an API change. See the [migration guide](docs/official_docs/migration/1.0-to-2.0.md)
+> and the [CHANGELOG](CHANGELOG.md).
 
 ### 🎬 Rust & Beyond Podcast — Episode 3: Agents That Act
 
