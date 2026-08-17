@@ -126,11 +126,11 @@ adk-rust = "2.0.0"                                        # Gemini, agents, runn
 | Tier | Includes | Use case |
 |------|----------|----------|
 | `minimal` (default) | Gemini provider, agents, runner, sessions | Fast starter agents |
-| `standard` | minimal + OpenAI, Anthropic, tools, memory, telemetry, server, auth, graph, eval, guardrail, plugins, artifacts, skills | Production deployment |
-| `enterprise` | standard + realtime, browser, RAG, payments, AWP | Full-featured production |
+| `standard` | minimal + OpenAI, Anthropic, tools, memory, telemetry, server, auth, graph, eval, guardrail, plugins, artifacts, skills | Serving an agent over HTTP |
+| `enterprise` | standard + realtime, browser, RAG, payments, AWP | Voice, retrieval and payments |
 | `full` | enterprise + audio, code execution, sandbox | Everything |
 
-A tier is a starting point for ADK-Rust feature sets. Add any single capability on top of one
+A tier is a starting point, not a ceiling. Add any single capability on top of one
 without moving to the next tier, so `features = ["minimal", "audio"]` gives you the
 minimal build plus audio. [AGENTS.md](AGENTS.md#adk-rust-umbrella) lists every feature you can add
 this way.
@@ -171,7 +171,7 @@ Swap the provider by swapping the client. The agent, runner and tools are unchan
 | mistral.rs | `MistralRsModel::new(config)` | `adk-mistralrs` | none, local |
 
 Or let it choose: `adk_rust::run(instructions, input)` picks a provider from the
-environment across the features you compiled.
+environment, among those you compiled in.
 
 ### Models
 
@@ -204,7 +204,7 @@ Each row links to its guide and a runnable example.
 
 | Capability | Guide | Example |
 |------------|-------|---------|
-| Tools with zero boilerplate — `#[tool]` derives the schema from your arg type | [tools](docs/official_docs/tools/function-tools.md) | [`examples/coding_agent`](examples/coding_agent) |
+| Tools — `#[tool]` derives the JSON schema from your argument type | [tools](docs/official_docs/tools/function-tools.md) | [`examples/coding_agent`](examples/coding_agent) |
 | MCP clients and servers on `rmcp 3.1` — tools, resources, prompts, elicitation, tasks | [mcp](docs/official_docs/mcp/index.md) | [`examples/mcp_protocol_revisions`](examples/mcp_protocol_revisions) |
 | Workflow agents — sequential, parallel, loop | [agents](docs/official_docs/agents/workflow-agents.md) | [`examples/multi_perspective_analysis`](examples/multi_perspective_analysis) |
 | Graph workflows — checkpoints, durable resume, human-in-the-loop, subgraphs | [graph-agents](docs/official_docs/agents/graph-agents.md) | [`examples/graph_subgraph_claims`](examples/graph_subgraph_claims) |
@@ -213,7 +213,7 @@ Each row links to its guide and a runnable example.
 | Governed computer use — approval interrupts bound to a digest | [computer-use](docs/official_docs/computer-use/index.md) | — |
 | RAG — chunking, embeddings, vector search, 6 backends | [rag](docs/official_docs/tools/rag.md) | — |
 | Memory — semantic search, project isolation, a bi-temporal knowledge graph | [memory](docs/official_docs/tools/memory-tools.md) | [`examples/skill_memory_improvements`](examples/skill_memory_improvements) |
-| Servers — REST with SSE, A2A v1.0.0, background runs, cron | [deployment](docs/official_docs/deployment/server.md) | [`examples/awp_agent`](examples/awp_agent) |
+| Servers — REST with SSE, A2A v1.0.0, background runs, cron | [deployment](docs/official_docs/deployment/server.md) | [`examples/ambient_cron_agent`](examples/ambient_cron_agent) |
 | Agentic Web Protocol — discovery, manifests, trust levels, consent | [awp](docs/official_docs/deployment/awp.md) | [`examples/awp_agent`](examples/awp_agent) |
 | Agentic commerce — ACP and AP2 with durable journals | [payments](docs/official_docs/security/payments.md) | [`examples/payments`](examples/payments) |
 | Editor interop — use an ACP coding agent as a tool, or expose yours | [acp](docs/official_docs/acp/index.md) | — |
@@ -303,7 +303,7 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-tool` | Tool system and extensibility | Typed Rust tools, provider-native tools, composable toolsets, MCP clients and server SDK, dynamic local-server management |
 | `adk-devtools` | Coding-agent dev tools | `read_file`/`write_file`/`edit_file`/`glob`/`grep`/`bash` as a `DevToolset`, scoped to a sandboxed `Workspace` |
 | `adk-session` | Session and state management | SQLite/in-memory backends, conversation history, state persistence |
-| `adk-artifact` | Artifact storage system | File-based storage, MIME type handling, image/PDF/video support |
+| `adk-artifact` | Binary artifacts for agents | File-based storage, MIME type handling, image/PDF/video support |
 | `adk-memory` | Long-term memory | Vector embeddings, semantic search, project-scoped isolation, bi-temporal knowledge graph (`GraphMemoryService`), 6 backends |
 | `adk-payments` | Agentic commerce orchestration | ACP/AP2 adapters, canonical transaction kernel, durable journals, evidence-backed payment flows |
 | `awp-types` | AWP protocol types | Trust levels, requester types, discovery documents, capability manifests, payment intents, typed A2A messages — zero `adk-*` deps |
@@ -312,9 +312,9 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Context management, event streaming, session lifecycle, callbacks |
 | `adk-server` | Production API servers | REST API, A2A v1.0.0 protocol (11 JSON-RPC operations; `tasks/resubscribe` returns a snapshot, not a live re-attach), middleware, health checks |
-| `adk-cli` | Command-line interface | Interactive REPL, session management, MCP server integration |
+| `adk-cli` | Run and inspect agents from a terminal | Interactive REPL, session management, MCP server integration |
 | `adk-realtime` | Real-time voice & multimodal agents | OpenAI Realtime + Gemini Live, bidirectional audio, video frames, VAD, affective dialogue, server-side tools via `IntegratedRealtimeRunner` |
-| `adk-graph` | Graph-based workflows | LangGraph-style orchestration, state management, checkpointing, human-in-the-loop |
+| `adk-graph` | Graph-based workflows | LangGraph-style orchestration, state reducers, checkpointing (memory, SQLite, delta), durable resume, human-in-the-loop interrupts, subgraphs, `with_goto` routing, per-node retry and timeouts, time travel |
 | `adk-browser` | Browser automation | 46 WebDriver tools, navigation, forms, screenshots, PDF generation |
 | `adk-computer-use` | Governed desktop automation | Deterministic graph over `computer-use-mcp`: parallel observation, digest-bound approval interrupts, single-executor mutation, verification; wire contracts + tamper-evident evaluation receipts |
 | `adk-eval` | Agent evaluation | Test definitions, trajectory validation, LLM-judged scoring, rubrics |
