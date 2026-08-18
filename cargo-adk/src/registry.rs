@@ -27,7 +27,7 @@ pub struct TemplateRegistry {
 impl TemplateRegistry {
     /// Build the default registry with all built-in templates.
     ///
-    /// Populates 12 agent templates, 9 capability addons, 5 enterprise patterns,
+    /// Populates 12 agent templates, 10 capability addons, 5 enterprise patterns,
     /// and 2 legacy aliases.
     pub fn builtin() -> Self {
         Self {
@@ -560,7 +560,7 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
     ]
 }
 
-/// All 9 built-in capability addons.
+/// All 10 built-in capability addons.
 fn builtin_capability_addons() -> Vec<CapabilityAddon> {
     vec![
         CapabilityAddon {
@@ -729,6 +729,108 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
                 additional_files: vec![],
             },
         },
+        CapabilityAddon {
+            name: "docker",
+            description: "Container packaging: multi-stage Dockerfile (distroless runtime), static musl variant, and .dockerignore",
+            required_features: vec![],
+            additional_deps: vec![],
+            init_priority: 100,
+            incompatible_with: vec![],
+            code_fragments: AddonCodeFragments {
+                imports: vec![],
+                initialization: "// Container packaging is build-time only — see Dockerfile, Dockerfile.static, and .dockerignore.",
+                agent_builder_calls: "",
+                env_vars: vec![],
+                additional_files: vec![
+                    FileFragment {
+                        path: "Dockerfile",
+                        content: r##"# Multi-stage image: compile with the full Rust toolchain, run on distroless.
+#
+# The build stage tag is kept in lockstep with rust-toolchain.toml at the
+# ADK-Rust workspace root, which pins Rust 1.95.0.
+FROM rust:1.95-slim AS builder
+
+WORKDIR /build
+
+# Optional compilation cache — uncomment to reuse artifacts across builds:
+# RUN cargo install sccache --locked
+# ENV RUSTC_WRAPPER=sccache
+
+COPY . .
+RUN cargo build --release
+
+# Distroless keeps the glibc C runtime the binary links against but ships no
+# shell or package manager, minimizing image size and attack surface.
+FROM gcr.io/distroless/cc-debian12
+
+COPY --from=builder /build/target/release/{name} /app/agent
+
+ENV PORT=8080
+ENTRYPOINT ["/app/agent"]
+"##,
+                    },
+                    FileFragment {
+                        path: "Dockerfile.static",
+                        content: r##"# Fully static image: musl-linked binary on a `FROM scratch` runtime.
+#
+# COMPATIBILITY GUARD — static linking only works when every native dependency
+# links statically:
+#
+#   works:  the `gemini-agent-platform` / `gemini-agent-platform-full` feature
+#           sets — the TLS stack is rustls with a statically built aws-lc, and
+#           no OpenSSL is involved.
+#   fails:  the `livekit` feature — pinned to native-tls, which requires a
+#           shared OpenSSL.
+#   fails:  the adk-audio `onnx` / `kokoro` / `desktop-audio` features — ONNX
+#           Runtime is a shared library, and espeak-ng / ALSA are system
+#           libraries with no static musl builds.
+#
+# A link-time failure in this file usually means the feature set above.
+
+# The build stage tag is kept in lockstep with rust-toolchain.toml at the
+# ADK-Rust workspace root, which pins Rust 1.95.0.
+FROM rust:1.95-slim AS builder
+
+# musl-tools provides musl-gcc; cmake builds aws-lc-sys for the musl target;
+# ca-certificates supplies the bundle copied into the runtime stage below.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends musl-tools cmake ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN rustup target add x86_64-unknown-linux-musl
+
+WORKDIR /build
+
+COPY . .
+RUN cargo build --release --target x86_64-unknown-linux-musl
+
+FROM scratch
+
+# ADK-Rust uses rustls-tls-native-roots, which reads /etc/ssl/certs at runtime.
+# `scratch` ships no filesystem, so the CA bundle must be copied in or every
+# TLS connection fails certificate verification.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/{name} /app/agent
+
+ENV PORT=8080
+ENTRYPOINT ["/app/agent"]
+"##,
+                    },
+                    FileFragment {
+                        path: ".dockerignore",
+                        content: r##"# Keep build output, VCS state, and local secrets out of the build context.
+target/
+.git/
+.env
+.env.*
+!.env.example
+*.swp
+*.swo
+.DS_Store
+"##,
+                    },
+                ],
+            },
+        },
     ]
 }
 
@@ -806,6 +908,24 @@ mod tests {
         // Aliases resolve to real targets.
         assert_eq!(registry.resolve_template("basic").unwrap().name, "llm");
         assert_eq!(registry.resolve_pattern("a2a").unwrap().name, "a2a-server");
+    }
+
+    #[test]
+    fn docker_addon_is_registered_with_container_files() {
+        let registry = TemplateRegistry::builtin();
+        let docker = registry
+            .capability_addons
+            .iter()
+            .find(|a| a.name == "docker")
+            .expect("docker addon missing from registry");
+
+        let paths: Vec<&str> =
+            docker.code_fragments.additional_files.iter().map(|f| f.path).collect();
+        assert_eq!(paths, vec!["Dockerfile", "Dockerfile.static", ".dockerignore"]);
+
+        // Packaging is build-time only: no cargo feature, no runtime dependency.
+        assert!(docker.required_features.is_empty());
+        assert!(docker.additional_deps.is_empty());
     }
 
     #[test]

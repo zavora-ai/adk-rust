@@ -701,6 +701,12 @@ fn get_builtin_addons() -> Vec<AddonInfo> {
             priority: 90,
             features: vec!["server"],
         },
+        AddonInfo {
+            name: "docker",
+            description: "Multi-stage Dockerfile (distroless), static musl variant, and .dockerignore",
+            priority: 100,
+            features: vec![],
+        },
     ]
 }
 

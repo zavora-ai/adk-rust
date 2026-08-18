@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **cargo-adk `docker` addon** (`cargo adk new my-agent --addon docker`): emits a
+  multi-stage `Dockerfile` (`rust:1.95-slim` build stage kept in lockstep with
+  `rust-toolchain.toml`, `gcr.io/distroless/cc-debian12` runtime, `ENV PORT=8080`,
+  `ENTRYPOINT ["/app/agent"]`), a fully static `Dockerfile.static`
+  (`x86_64-unknown-linux-musl` + `FROM scratch`, CA bundle copied in for
+  `rustls-tls-native-roots`, with a compatibility guard naming the feature sets
+  that cannot link statically), and a `.dockerignore`. Fixes the README drift
+  that advertised a `docker` addon the registry did not provide.
+
 - **Agent Engine turnkey entrypoint** (`adk-server`, feature `agent-engine`;
   umbrella feature `agent-engine`, included in `gemini-agent-platform`):
   `serve_agent_engine(agent, options)` is the whole `main` of a deployable

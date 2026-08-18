@@ -59,11 +59,14 @@ pub fn generate_project_with_registry(
     ];
 
     // Append additional files contributed by the template and addons.
+    // File contents honor the same `{name}` placeholder as agent construction
+    // fragments — the docker addon needs the crate name to locate the release
+    // binary inside the build stage.
     if let Some(template) = registry.resolve_template(&manifest.template_name) {
         for fragment in &template.code_fragments.additional_files {
             files.push(GeneratedFile {
                 path: fragment.path.to_string(),
-                content: fragment.content.to_string(),
+                content: fragment.content.replace("{name}", project_name),
             });
         }
     }
@@ -72,7 +75,7 @@ pub fn generate_project_with_registry(
             for fragment in &addon.code_fragments.additional_files {
                 files.push(GeneratedFile {
                     path: fragment.path.to_string(),
-                    content: fragment.content.to_string(),
+                    content: fragment.content.replace("{name}", project_name),
                 });
             }
         }
@@ -662,6 +665,57 @@ mod tests {
         assert!(paths.contains(&".env.example"));
         assert!(paths.contains(&"README.md"));
         assert!(paths.contains(&".gitignore"));
+    }
+
+    #[test]
+    fn test_generate_project_with_docker_addon_renders_container_files() {
+        let reg = registry();
+        let manifest = resolve_composition(&reg, "llm", &["docker"], "gemini").unwrap();
+        let files = generate_project(&manifest, "my-agent");
+
+        let file = |path: &str| {
+            files
+                .iter()
+                .find(|f| f.path == path)
+                .map(|f| f.content.as_str())
+                .unwrap_or_else(|| panic!("expected generated file '{path}'"))
+        };
+
+        let dockerfile = file("Dockerfile");
+        assert!(dockerfile.contains("FROM rust:1.95-slim AS builder"));
+        assert!(dockerfile.contains("rust-toolchain.toml"));
+        assert!(dockerfile.contains("cargo build --release"));
+        assert!(dockerfile.contains("FROM gcr.io/distroless/cc-debian12"));
+        assert!(
+            dockerfile.contains("COPY --from=builder /build/target/release/my-agent /app/agent")
+        );
+        assert!(dockerfile.contains("ENV PORT=8080"));
+        assert!(dockerfile.contains(r#"ENTRYPOINT ["/app/agent"]"#));
+
+        let static_dockerfile = file("Dockerfile.static");
+        assert!(static_dockerfile.contains("FROM rust:1.95-slim AS builder"));
+        assert!(static_dockerfile.contains("rustup target add x86_64-unknown-linux-musl"));
+        assert!(static_dockerfile.contains("musl-tools cmake ca-certificates"));
+        assert!(static_dockerfile.contains("FROM scratch"));
+        // rustls-tls-native-roots reads /etc/ssl/certs at runtime, so the CA
+        // bundle copy is load-bearing, not cosmetic.
+        assert!(static_dockerfile.contains(
+            "COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"
+        ));
+        assert!(static_dockerfile.contains(
+            "COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/my-agent /app/agent"
+        ));
+        assert!(static_dockerfile.contains("ENV PORT=8080"));
+        assert!(static_dockerfile.contains(r#"ENTRYPOINT ["/app/agent"]"#));
+        // The compatibility guard names the feature sets that cannot link statically.
+        assert!(static_dockerfile.contains("gemini-agent-platform"));
+        assert!(static_dockerfile.contains("livekit"));
+        assert!(static_dockerfile.contains("onnx"));
+
+        let dockerignore = file(".dockerignore");
+        assert!(dockerignore.contains("target/"));
+        assert!(dockerignore.contains(".git/"));
+        assert!(dockerignore.contains(".env"));
     }
 
     #[test]

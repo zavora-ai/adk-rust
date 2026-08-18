@@ -75,6 +75,7 @@ files in a stable priority order.
 | `eval` | Evaluation harness scaffolding | Measure behavior against repeatable cases before release |
 | `browser` | Browser automation integration | Let an approved agent operate a web interface |
 | `server` | Axum HTTP and A2A server setup | Publish the agent for remote callers |
+| `docker` | Multi-stage container build files (`Dockerfile`, `Dockerfile.static`, `.dockerignore`) | Package the agent as a minimal container image |
 
 Example:
 
