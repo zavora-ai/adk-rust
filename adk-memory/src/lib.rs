@@ -80,6 +80,8 @@ pub mod postgres;
 pub mod redis;
 #[cfg(feature = "sqlite-memory")]
 pub mod sqlite;
+#[cfg(feature = "vertex-memory")]
+pub mod vertex;
 
 pub use adapter::MemoryServiceAdapter;
 pub use inmemory::InMemoryMemoryService;
@@ -107,3 +109,5 @@ pub use postgres::{PostgresMemoryService, PostgresMemoryServiceBuilder, VectorIn
 pub use redis::{RedisMemoryConfig, RedisMemoryService};
 #[cfg(feature = "sqlite-memory")]
 pub use sqlite::SqliteMemoryService;
+#[cfg(feature = "vertex-memory")]
+pub use vertex::{VertexAiMemoryBankService, VertexAiMemoryConfig};

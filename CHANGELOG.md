@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Vertex AI Memory Bank backend** (`adk-memory`, feature `vertex-memory`;
+  umbrella feature `vertex-memory`, included in `gemini-agent-platform`):
+  `VertexAiMemoryBankService` implements `MemoryService` over the platform's
+  `memories:generate` (LRO-polled) and `memories:retrieve` (similarity
+  search) endpoints with the same `{app_name, user_id}` scope adk-python
+  writes, so both runtimes share one Memory Bank. `VertexAiMemoryConfig`
+  mirrors the session config (`from_env()` reads the platform's container
+  variables). `add_events_to_memory` persists a subset of events;
+  `delete_user` enumerates and deletes a scope's memories. This completes the
+  Agent Engine dispatch surface's `async_add_session_to_memory` /
+  `async_search_memory` class methods, which returned `Unsupported` until
+  now.
+
 - **Agent Engine turnkey entrypoint** (`adk-server`, feature `agent-engine`;
   umbrella feature `agent-engine`, included in `gemini-agent-platform`):
   `serve_agent_engine(agent, options)` is the whole `main` of a deployable
