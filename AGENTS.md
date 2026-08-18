@@ -414,7 +414,7 @@ Four tiered presets control which crates are compiled:
 Domain add-ons are composable with any tier: `features = ["minimal", "audio"]`.
 
 Platform meta-features (composable with any tier):
-- `gemini-agent-platform` — every Gemini Enterprise Agent Platform (Vertex/EAP) integration except realtime transports: `gemini-vertex`, `vertex-session`, `gcp-secrets`, `gcs-artifacts`, `gcp-telemetry`, `agent-engine` (grows as later integrations land). The right default for ReasoningEngine BYOC deployments. Deploy-time tooling is host-side and excluded.
+- `gemini-agent-platform` — every Gemini Enterprise Agent Platform (Vertex/EAP) integration except realtime transports: `gemini-vertex`, `vertex-session`, `gcp-secrets`, `gcs-artifacts`, `gcp-telemetry`, `agent-engine`, `example-store` (grows as later integrations land). The right default for ReasoningEngine BYOC deployments. Deploy-time tooling is host-side and excluded.
 - `gemini-agent-platform-full` — `gemini-agent-platform` + `vertex-live` (Vertex AI Live API, pulls in the adk-realtime stack)
 
 Graph capability features (forwarded to `adk-graph`, which has no default features):
@@ -435,6 +435,7 @@ Production backend features (require external infrastructure, NOT included in `f
 Specialist opt-in features:
 - `yaml-agent`, `agent-registry` — YAML agent config and registry REST API
 - `agent-engine` — Agent Engine runtime contract (adk-server): class-method dispatch endpoints and the turnkey `serve_agent_engine` entrypoint for Gemini Enterprise Agent Platform BYOC containers
+- `example-store` — Vertex AI Example Store client (adk-tool): v1beta1 data-plane upsert/search/fetch against a pre-provisioned store, plus `ExampleStoreProvider` for dynamic few-shot retrieval via a `BeforeModelCallback`
 - `gemini-interactions` — Gemini Interactions API (Beta): wire client surface (server-side history, step timeline) plus the runtime transport on `GeminiModel` (`use_interactions_api`) driving the standard `LlmAgent`/`Runner`
 - `mcp`, `mcp-http`, `mcp-sampling` — MCP transport and sampling support
 - `code-tools` — Code execution tools over the adk-code substrate (`CodeTool`, `PythonCodeTool`, `JavaScriptCodeTool`, `MontyPythonCodeTool`; forwarded to adk-tool; included in `full`)

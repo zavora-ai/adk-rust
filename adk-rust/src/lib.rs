@@ -440,7 +440,8 @@
 //! | `audio` | Audio processing | full (experimental) |
 //! | `cli` | CLI launcher | (opt-in, any preset) |
 //! | `agent-engine` | Agent Engine runtime contract: dispatch endpoints + `serve_agent_engine` entrypoint | (opt-in, any preset) |
-//! | `gemini-agent-platform` | Gemini Enterprise Agent Platform integrations (Vertex model backend, managed Sessions, GCP Secret Manager, GCS artifacts, Cloud telemetry, Agent Engine runtime contract); excludes realtime transports and host-side deploy tooling | (opt-in, any preset) |
+//! | `example-store` | Vertex AI Example Store client + few-shot retrieval provider | (opt-in, any preset) |
+//! | `gemini-agent-platform` | Gemini Enterprise Agent Platform integrations (Vertex model backend, managed Sessions, GCP Secret Manager, GCS artifacts, Cloud telemetry, Agent Engine runtime contract, Example Store); excludes realtime transports and host-side deploy tooling | (opt-in, any preset) |
 //! | `gemini-agent-platform-full` | `gemini-agent-platform` + Vertex AI Live API (realtime stack) | (opt-in, any preset) |
 //!
 //! ## Examples
