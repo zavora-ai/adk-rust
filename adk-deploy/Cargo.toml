@@ -29,6 +29,15 @@ flate2.workspace = true
 tar.workspace = true
 dirs = "6"
 url = "2"
+# Optional: Agent Engine (ReasoningEngine) deployment client
+google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
+tokio = { workspace = true, features = ["sync", "time"], optional = true }
+
+[features]
+# Agent Engine (ReasoningEngine) BYOC deployment: create/poll/get/delete
+gcp = ["google-cloud-auth", "tokio"]
 
 [dev-dependencies]
 tempfile = "3"
+axum = "0.8"
+tokio = { workspace = true, features = ["rt", "macros", "net"] }

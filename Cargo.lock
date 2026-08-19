@@ -424,9 +424,11 @@ name = "adk-deploy"
 version = "2.0.0"
 dependencies = [
  "anyhow",
+ "axum 0.8.9",
  "chrono",
  "dirs",
  "flate2",
+ "google-cloud-auth 1.12.0",
  "hex",
  "reqwest 0.12.28",
  "serde",
@@ -435,6 +437,7 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "toml 0.8.23",
  "tracing",
  "url",
@@ -858,6 +861,7 @@ dependencies = [
  "adk-codeact-monty",
  "adk-computer-use",
  "adk-core",
+ "adk-deploy",
  "adk-enterprise",
  "adk-eval",
  "adk-graph",
