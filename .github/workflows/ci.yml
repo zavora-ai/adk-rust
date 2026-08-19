@@ -204,6 +204,9 @@ jobs:
           # so default builds skip them entirely.
           - { package: adk-code, features: embedded-python }
           - { package: adk-tool, features: code-embedded-python }
+          # The Example Store client (Vertex AI few-shot retrieval) is opt-in; no default
+          # build compiles its wire contract or contract tests.
+          - { package: adk-tool, features: example-store }
           # `mcp-sampling` gates three rmcp model types that the workspace build never
           # reaches: `adk-computer-use` pulls in `adk-tool/mcp`, but nothing in the
           # workspace enables `mcp-sampling`. Its only cover was `examples/mcp_sampling`,

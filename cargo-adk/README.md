@@ -170,45 +170,52 @@ The `--addon` flag lets you layer cross-cutting capabilities onto any base templ
 # Add telemetry and auth to a tools agent
 cargo adk new my-agent --template tools --addon telemetry --addon auth
 
-# Add Docker and CI to an API server
-cargo adk new my-agent --template api --addon docker --addon ci
+# Add container packaging to an API server
+cargo adk new my-agent --template api --addon docker
 
 # Combine multiple addons
-cargo adk new my-agent --template a2a --addon telemetry --addon monitoring --addon docker
+cargo adk new my-agent --template llm --addon server --addon telemetry --addon docker
 ```
 
-### Available Addons (9)
+### Available Addons (10)
 
 | Addon | What it adds |
 |-------|-------------|
-| `telemetry` | OpenTelemetry integration with OTLP exporter |
-| `auth` | Authentication middleware (API keys, JWT, OAuth2) |
-| `eval` | Evaluation framework with trajectory and semantic scoring |
-| `docker` | Multi-stage Dockerfile and docker-compose.yml |
-| `ci` | GitHub Actions CI pipeline (fmt, clippy, test, build) |
-| `monitoring` | Health checks, readiness probes, Prometheus metrics |
-| `tracing` | Structured logging with configurable levels |
-| `logging` | File-based logging with rotation |
-| `testing` | Property-based testing and integration test scaffolding |
+| `telemetry` | OpenTelemetry tracing integration |
+| `auth` | API key and JWT authentication |
+| `sessions` | Session state management and persistence |
+| `memory` | Semantic memory and RAG search integration |
+| `mcp` | Model Context Protocol server connections |
+| `guardrails` | Input/output validation and content filtering |
+| `eval` | Evaluation framework for agent quality testing |
+| `browser` | Browser automation tools via WebDriver |
+| `server` | HTTP server with A2A protocol support |
+| `docker` | Container packaging: `Dockerfile`, `Dockerfile.static`, `.dockerignore` |
+
+The `docker` addon emits three build-time files and touches no runtime code:
+
+- `Dockerfile` — multi-stage build: `rust:1.95-slim` build stage (tag kept in lockstep with the workspace `rust-toolchain.toml`, optional `sccache` lines commented out) and a `gcr.io/distroless/cc-debian12` runtime stage with `ENV PORT=8080` and `ENTRYPOINT ["/app/agent"]`.
+- `Dockerfile.static` — fully static variant: `x86_64-unknown-linux-musl` build (musl-tools + cmake for `aws-lc-sys`) on a `FROM scratch` runtime that copies in the CA bundle (`rustls-tls-native-roots` reads `/etc/ssl/certs` at runtime). Works with the `gemini-agent-platform` / `gemini-agent-platform-full` feature sets; incompatible with `livekit` (OpenSSL via native-tls) and the adk-audio `onnx` / `kokoro` / `desktop-audio` features (shared ONNX Runtime, espeak-ng, ALSA).
+- `.dockerignore` — excludes `target/`, `.git/`, and `.env` files from the build context.
 
 ### Enterprise Patterns (5)
 
-Pre-composed combinations of a base template and curated addons for production scenarios:
+Pre-composed combinations of a base template and curated addons for production scenarios. Patterns share the `--template` namespace:
 
 | Pattern | Base | Addons | Use case |
 |---------|------|--------|----------|
-| `microservices` | api | telemetry, monitoring, docker, ci | Kubernetes-ready agent microservices |
-| `event-driven` | graph | telemetry, monitoring, logging | Event-driven workflows with durable execution |
-| `multi-agent` | basic | telemetry, tracing, monitoring | Multi-agent orchestration with observability |
-| `serverless` | basic | telemetry, logging | AWS Lambda / Cloud Functions deployment |
-| `data-pipeline` | basic | telemetry, eval, logging, testing | ETL and document processing pipelines |
+| `multi-agent` | sequential | telemetry | Multi-agent supervisor with observability |
+| `production` | llm | server, auth, sessions, telemetry | Production-ready agent service |
+| `pipeline` | sequential | sessions, telemetry | Sequential data processing pipeline |
+| `chatbot` | llm | sessions, memory, server | Conversational chatbot with memory and HTTP interface |
+| `a2a-server` | llm | server, sessions | A2A protocol server with session management |
 
 ```bash
 # Use an enterprise pattern
-cargo adk new my-service --pattern microservices
+cargo adk new my-service --template production
 
 # Extend a pattern with additional addons
-cargo adk new my-service --pattern microservices --addon auth
+cargo adk new my-service --template production --addon docker
 ```
 
 For full documentation on all templates, addons, and patterns, see the [Composable Templates Guide](../docs/official_docs/development/composable-templates.md).

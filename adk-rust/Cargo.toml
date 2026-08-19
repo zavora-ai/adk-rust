@@ -86,6 +86,9 @@ gemini-agent-platform = [
     "gcs-artifacts",  # GCS artifact backend (adk-artifact)
     "gcp-telemetry",  # Cloud Trace/Logging transport (adk-telemetry)
     "agent-engine",   # class-method runtime contract + turnkey entrypoint (adk-server)
+    "example-store",  # Example Store few-shot retrieval (adk-tool)
+    # target end-state — appended by the PR that introduces each flag:
+    # "vertex-memory",          Memory Bank (adk-memory)
     "vertex-memory",  # Memory Bank (adk-memory)
     # target end-state — appended by the PR that introduces each flag:
     # "example-store",          Example Store (adk-tool)
@@ -211,6 +214,8 @@ agent-registry = ["server", "adk-server/agent-registry"]
 # Gemini Enterprise Agent Platform runtime contract: class-method dispatch
 # endpoints and the turnkey serve_agent_engine entrypoint (forwarded to adk-server)
 agent-engine = ["server", "adk-server/agent-engine"]
+# Vertex AI Example Store client and few-shot retrieval provider (forwarded to adk-tool)
+example-store = ["tools", "adk-tool/example-store"]
 # MCP sampling callback support (forwarded to adk-tool)
 mcp = ["tools", "adk-tool/mcp"]
 mcp-http = ["mcp", "adk-tool/http-transport"]
