@@ -100,10 +100,15 @@ pub fn generate_cargo_toml(manifest: &CompositionManifest, project_name: &str) -
     // The agent-engine umbrella feature ships in the first release after the
     // published 2.0.0, so a crates.io resolution of the generated manifest
     // fails until then; the header comment states the workaround.
+    // Raw string: scripts/check-doc-versions.py scans .rs sources for
+    // `adk-rust = { ... features = [...] }` snippets and validates the
+    // feature names; escaped quotes would corrupt what it extracts.
     let header = if features.contains(&"agent-engine") {
-        "# The `agent-engine` feature requires the first adk-rust release after 2.0.0.\n\
-         # Until it is published on crates.io, use the git repository instead:\n\
-         #   adk-rust = { git = \"https://github.com/zavora-ai/adk-rust\", default-features = false, features = [\"minimal\", \"agent-engine\"] }\n\n"
+        r#"# The `agent-engine` feature requires the first adk-rust release after 2.0.0.
+# Until it is published on crates.io, use the git repository instead:
+#   adk-rust = { git = "https://github.com/zavora-ai/adk-rust", default-features = false, features = ["minimal", "agent-engine"] }
+
+"#
     } else {
         ""
     };
