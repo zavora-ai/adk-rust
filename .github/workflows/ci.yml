@@ -151,6 +151,9 @@ jobs:
           # contract) is behind `agent-engine`; its wire-fixture and dispatch tests only
           # run with the feature on. Umbrella forwarding follows in the entrypoint PR.
           - { package: adk-server, features: agent-engine }
+          # The Memory Bank backend (vertex-memory) is opt-in; its mock contract tests
+          # only run with the feature on.
+          - { package: adk-memory, features: vertex-memory }
           # sandbox-linux is Linux-only *and* feature-gated, so nothing built it until a
           # container run found the bubblewrap probe could never succeed and that its
           # property tests did not compile.

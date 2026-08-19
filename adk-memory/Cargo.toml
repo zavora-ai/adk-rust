@@ -24,12 +24,17 @@ pgvector = { version = "0.4", features = ["sqlx"], optional = true }
 mongodb = { version = "3", optional = true }
 neo4rs = { version = "0.8", optional = true }
 fred = { version = "10", optional = true }
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["sync", "time"], optional = true }
+google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 proptest = "1.5"
 serde_json.workspace = true
 chrono.workspace = true
+axum = "0.8"
+uuid = { version = "1.23", features = ["v4"] }
 
 [features]
 default = []
@@ -43,3 +48,5 @@ database-memory = ["sqlx/postgres", "pgvector"]
 redis-memory = ["fred"]
 mongodb-memory = ["dep:mongodb"]
 neo4j-memory = ["dep:neo4rs"]
+# Vertex AI Agent Engine Memory Bank backend (memories:generate / memories:retrieve)
+vertex-memory = ["google-cloud-auth", "reqwest", "tokio"]
