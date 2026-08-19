@@ -154,6 +154,7 @@ The convention maps `UPPER_SNAKE_CASE` env var names to `lower-kebab-case` secre
 | `a2a` | A2A protocol server with `A2aServer::quick_start` |
 | `graph` | Graph-based workflow with checkpoints and durable execution |
 | `realtime` | Real-time bidirectional audio/video streaming agent |
+| `agent-engine` | Gemini Enterprise Agent Engine BYOC container: `serve_agent_engine` binary, `Dockerfile`, and `deploy/terraform/` |
 
 Each template generates:
 

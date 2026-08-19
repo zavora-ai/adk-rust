@@ -62,21 +62,26 @@ pub fn generate_project_with_registry(
     // File contents honor the same `{name}` placeholder as agent construction
     // fragments — the docker addon needs the crate name to locate the release
     // binary inside the build stage.
+    //
+    // A fragment with the same path as an earlier file replaces it, so a
+    // template can override a base file (the agent-engine template ships its
+    // own README.md).
+    let push_or_replace = |files: &mut Vec<GeneratedFile>, path: &str, content: &str| {
+        let content = content.replace("{name}", project_name);
+        match files.iter_mut().find(|f| f.path == path) {
+            Some(existing) => existing.content = content,
+            None => files.push(GeneratedFile { path: path.to_string(), content }),
+        }
+    };
     if let Some(template) = registry.resolve_template(&manifest.template_name) {
         for fragment in &template.code_fragments.additional_files {
-            files.push(GeneratedFile {
-                path: fragment.path.to_string(),
-                content: fragment.content.replace("{name}", project_name),
-            });
+            push_or_replace(&mut files, fragment.path, fragment.content);
         }
     }
     for addon_name in &manifest.addons {
         if let Some(addon) = registry.capability_addons.iter().find(|a| a.name == *addon_name) {
             for fragment in &addon.code_fragments.additional_files {
-                files.push(GeneratedFile {
-                    path: fragment.path.to_string(),
-                    content: fragment.content.replace("{name}", project_name),
-                });
+                push_or_replace(&mut files, fragment.path, fragment.content);
             }
         }
     }
@@ -92,8 +97,19 @@ pub fn generate_cargo_toml(manifest: &CompositionManifest, project_name: &str) -
     let features: Vec<&str> = manifest.feature_set.iter().map(|s| s.as_str()).collect();
     let features_str = features.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
 
+    // The agent-engine umbrella feature ships in the first release after the
+    // published 2.0.0, so a crates.io resolution of the generated manifest
+    // fails until then; the header comment states the workaround.
+    let header = if features.contains(&"agent-engine") {
+        "# The `agent-engine` feature requires the first adk-rust release after 2.0.0.\n\
+         # Until it is published on crates.io, use the git repository instead:\n\
+         #   adk-rust = { git = \"https://github.com/zavora-ai/adk-rust\", default-features = false, features = [\"minimal\", \"agent-engine\"] }\n\n"
+    } else {
+        ""
+    };
+
     let mut output = format!(
-        r#"[package]
+        r#"{header}[package]
 name = "{project_name}"
 version = "0.1.0"
 edition = "2024"
@@ -200,7 +216,7 @@ pub fn generate_main_rs_with_registry(
     // When nothing serves (no server addon, template doesn't start its own
     // server), run the agent in the interactive console so `cargo run` does
     // something useful out of the box.
-    const SELF_SERVING_TEMPLATES: &[&str] = &["api"];
+    const SELF_SERVING_TEMPLATES: &[&str] = &["api", "agent-engine"];
     let has_server_addon = manifest.addons.iter().any(|a| a == "server");
     let interactive =
         !has_server_addon && !SELF_SERVING_TEMPLATES.contains(&manifest.template_name.as_str());
@@ -716,6 +732,102 @@ mod tests {
         assert!(dockerignore.contains("target/"));
         assert!(dockerignore.contains(".git/"));
         assert!(dockerignore.contains(".env"));
+    }
+
+    #[test]
+    fn test_generate_project_agent_engine_renders_deploy_files() {
+        let reg = registry();
+        let manifest = resolve_composition(&reg, "agent-engine", &[], "gemini").unwrap();
+        let files = generate_project(&manifest, "my-agent");
+
+        let file = |path: &str| {
+            files
+                .iter()
+                .find(|f| f.path == path)
+                .map(|f| f.content.as_str())
+                .unwrap_or_else(|| panic!("expected generated file '{path}'"))
+        };
+
+        // main.rs serves the dispatch contract and nothing else drives it.
+        let main_rs = file("src/main.rs");
+        assert!(main_rs.contains(
+            "use adk_rust::server::agent_engine::{AgentEngineOptions, serve_agent_engine};"
+        ));
+        assert!(main_rs.contains("serve_agent_engine(agent, AgentEngineOptions::new()).await?;"));
+        assert!(main_rs.contains(r#"LlmAgentBuilder::new("my-agent")"#));
+        assert!(!main_rs.contains("Launcher"), "self-serving template must not run the console");
+
+        // Cargo.toml carries the features and the version-requirement comment.
+        let cargo_toml = file("Cargo.toml");
+        assert!(cargo_toml.contains("\"minimal\""));
+        assert!(cargo_toml.contains("\"agent-engine\""));
+        assert!(
+            cargo_toml.contains("first adk-rust release after 2.0.0"),
+            "Cargo.toml must state that the agent-engine feature is not in the published 2.0.0"
+        );
+
+        // The docker addon's Dockerfile, with the crate name substituted.
+        let dockerfile = file("Dockerfile");
+        assert!(dockerfile.contains("FROM rust:1.95-slim AS builder"));
+        assert!(dockerfile.contains("FROM gcr.io/distroless/cc-debian12"));
+        assert!(
+            dockerfile.contains("COPY --from=builder /build/target/release/my-agent /app/agent")
+        );
+        assert!(dockerfile.contains("ENV PORT=8080"));
+        assert!(dockerfile.contains(r#"ENTRYPOINT ["/app/agent"]"#));
+        assert!(files.iter().any(|f| f.path == ".dockerignore"));
+        assert!(
+            !files.iter().any(|f| f.path == "Dockerfile.static"),
+            "the static variant belongs to the docker addon, not this template"
+        );
+
+        // Terraform: BYOC resource, image variable, and all 14 class methods.
+        let main_tf = file("deploy/terraform/main.tf");
+        assert!(main_tf.contains(r#"resource "google_vertex_ai_reasoning_engine" "agent""#));
+        assert!(main_tf.contains("image_uri = var.image_uri"));
+        assert!(main_tf.contains("class_methods   = jsonencode(local.class_methods)"));
+        assert!(main_tf.contains(r#"agent_framework = "google-adk""#));
+        for method in [
+            "create_session",
+            "get_session",
+            "list_sessions",
+            "delete_session",
+            "register_operations",
+            "async_create_session",
+            "async_get_session",
+            "async_list_sessions",
+            "async_delete_session",
+            "async_add_session_to_memory",
+            "async_search_memory",
+            "stream_query",
+            "async_stream_query",
+            "streaming_agent_run_with_events",
+        ] {
+            assert!(
+                main_tf.contains(&format!(r#""name" = "{method}""#)),
+                "class_methods must declare '{method}'"
+            );
+        }
+
+        let variables_tf = file("deploy/terraform/variables.tf");
+        assert!(variables_tf.contains(r#"variable "project_id""#));
+        assert!(variables_tf.contains(r#"variable "location""#));
+        assert!(variables_tf.contains(r#"variable "image_uri""#));
+        assert!(variables_tf.contains(r#"variable "display_name""#));
+        assert!(variables_tf.contains(r#"variable "service_account""#));
+
+        let outputs_tf = file("deploy/terraform/outputs.tf");
+        assert!(outputs_tf.contains(r#"output "reasoning_engine_id""#));
+        assert!(outputs_tf.contains(r#"output "reasoning_engine_name""#));
+
+        // The template's README replaces the generic one (exactly one README).
+        let readmes: Vec<_> = files.iter().filter(|f| f.path == "README.md").collect();
+        assert_eq!(readmes.len(), 1);
+        let readme = readmes[0].content.as_str();
+        assert!(readme.contains("gcloud builds submit"));
+        assert!(readme.contains("terraform -chdir=deploy/terraform apply"));
+        assert!(readme.contains("GOOGLE_CLOUD_AGENT_ENGINE_ID"));
+        assert!(readme.contains("/.well-known/agent.json"), "README documents the A2A option");
     }
 
     #[test]
