@@ -43,6 +43,8 @@ bigquery = ["dep:gcp-bigquery-client"]
 spanner = ["dep:google-cloud-spanner"]
 # Enable MCP sampling callback support (sampling/createMessage handling)
 mcp-sampling = ["mcp"]
+# Enable the Vertex AI Example Store client and few-shot retrieval provider
+example-store = ["google-cloud-auth", "reqwest"]
 
 [dependencies]
 adk-core.workspace = true
@@ -75,6 +77,8 @@ reqwest-mcp = { package = "reqwest", version = "0.13", default-features = false,
 gcp-bigquery-client = { version = "0.28", optional = true }
 # Optional: Spanner toolset
 google-cloud-spanner = { version = "0.33", optional = true }
+# Optional: ADC credentials for the Vertex AI Example Store client
+google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
 
 [dev-dependencies]
 # Internal dev-deps are path-only (no version) so cargo strips them from the
@@ -87,6 +91,8 @@ adk-sandbox = { path = "../adk-sandbox" }
 # Server side of rmcp, used only to drive an in-process peer in the protocol
 # negotiation tests. Not a runtime dependency: adk-tool is an MCP client.
 rmcp = { version = "3.1", features = ["client", "server", "elicitation"] }
+# Mock upstream for the Example Store contract tests.
+axum = "0.8"
 
 [[test]]
 name = "mcp_server_lifecycle_integration_tests"
@@ -95,3 +101,11 @@ required-features = ["mcp"]
 [[test]]
 name = "mcp_roundtrip_property_tests"
 required-features = ["mcp"]
+
+[[test]]
+name = "example_store_contract"
+required-features = ["example-store"]
+
+[[test]]
+name = "example_store_live"
+required-features = ["example-store"]

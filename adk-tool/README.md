@@ -26,6 +26,7 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 - **LoadArtifactsTool** - Inject binary artifacts into context
 - **LoadMemoryTool** - Agent-callable tool for on-demand memory search (feature: `memory-tools`)
 - **PreloadMemoryTool** - Auto-loads relevant memories at turn start (feature: `memory-tools`)
+- **ExampleStoreClient / ExampleStoreProvider** - Vertex AI Example Store few-shot retrieval (feature: `example-store`)
 
 ## Installation
 
@@ -387,6 +388,7 @@ let tool = MontyPythonCodeTool::builder()
 | `code` | Code execution tools over the `adk-code` substrate |
 | `code-embedded-js` | `JavaScriptCodeTool` live path (boa_engine) |
 | `code-embedded-python` | `MontyPythonCodeTool` live path (Monty interpreter) |
+| `example-store` | Vertex AI Example Store client (v1beta1 data plane) and `ExampleStoreProvider` few-shot retrieval |
 
 ## MCP examples and guides
 

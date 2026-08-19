@@ -99,6 +99,9 @@ pub mod spanner;
 #[cfg(feature = "mcp-sampling")]
 pub mod sampling;
 
+#[cfg(feature = "example-store")]
+pub mod example_store;
+
 pub use adk_core::{AdkError, Result, Tool, ToolContext, Toolset};
 pub use adk_rust_macros::tool;
 
@@ -116,6 +119,8 @@ pub use builtin::{
     OpenAIFileSearchTool, OpenAIImageGenerationTool, OpenAILocalShellTool, OpenAIMcpTool,
     OpenAIShellTool, OpenAIWebSearchTool, UrlContextTool, WebSearchTool, WebSearchUserLocation,
 };
+#[cfg(feature = "example-store")]
+pub use example_store::{ExampleStoreClient, ExampleStoreConfig, ExampleStoreProvider};
 pub use function_tool::FunctionTool;
 #[cfg(feature = "mcp")]
 pub use mcp::{

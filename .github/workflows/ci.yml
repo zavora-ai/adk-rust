@@ -151,6 +151,9 @@ jobs:
           # contract) is behind `agent-engine`; its wire-fixture and dispatch tests only
           # run with the feature on. Umbrella forwarding follows in the entrypoint PR.
           - { package: adk-server, features: agent-engine }
+          # The Memory Bank backend (vertex-memory) is opt-in; its mock contract tests
+          # only run with the feature on.
+          - { package: adk-memory, features: vertex-memory }
           # sandbox-linux is Linux-only *and* feature-gated, so nothing built it until a
           # container run found the bubblewrap probe could never succeed and that its
           # property tests did not compile.
@@ -201,6 +204,9 @@ jobs:
           # so default builds skip them entirely.
           - { package: adk-code, features: embedded-python }
           - { package: adk-tool, features: code-embedded-python }
+          # The Example Store client (Vertex AI few-shot retrieval) is opt-in; no default
+          # build compiles its wire contract or contract tests.
+          - { package: adk-tool, features: example-store }
           # `mcp-sampling` gates three rmcp model types that the workspace build never
           # reaches: `adk-computer-use` pulls in `adk-tool/mcp`, but nothing in the
           # workspace enables `mcp-sampling`. Its only cover was `examples/mcp_sampling`,
