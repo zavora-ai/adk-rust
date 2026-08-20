@@ -74,6 +74,7 @@ Standalone crates demonstrating current ADK-Rust features. Each has its own `Car
 | Example | Feature | Run |
 |---------|---------|-----|
 | `examples/example_store` | Vertex AI Example Store — few-shot upsert + similarity search against a pre-provisioned store | `cargo run --manifest-path examples/example_store/Cargo.toml` |
+| `examples/vertex_sandbox` | Vertex AI Agent Engine sandbox — create, execute code with input files, delete | `cargo run --manifest-path examples/vertex_sandbox/Cargo.toml` |
 
 ## Quick Start
 
