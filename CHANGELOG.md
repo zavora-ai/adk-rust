@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **adk-anthropic request betas and client auth options**: `MessageCreateParams`
+  gains `betas` (`with_betas` / `with_beta`, mirroring `ModelListParams`) to
+  request additional `anthropic-beta` versions on Messages calls — sent via the
+  request header, never in the body, with feature-implied betas (structured
+  outputs, context management, fast mode) appended after the caller's. The
+  client builder gains `with_auth_token`, which replaces `x-api-key` with
+  `Authorization: Bearer …` for OAuth access tokens and bearer-authenticated
+  gateways, and `with_api_version` to select the `anthropic-version` header.
+  (#592)
+
 - **cargo-adk `docker` addon** (`cargo adk new my-agent --addon docker`): emits a
   multi-stage `Dockerfile` (`rust:1.95-slim` build stage kept in lockstep with
   `rust-toolchain.toml`, `gcr.io/distroless/cc-debian12` runtime, `ENV PORT=8080`,

@@ -135,6 +135,14 @@ pub struct MessageCreateParams {
     /// Opt into programmatic tool calling flow.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_runner: Option<bool>,
+
+    /// Optional header to specify the beta version(s) you want to use.
+    ///
+    /// Sent via the `anthropic-beta` request header, never in the request body.
+    /// Beta versions implied by param-gated features (structured outputs,
+    /// context management, fast mode) are appended after these.
+    #[serde(skip)]
+    pub betas: Option<Vec<String>>,
 }
 
 impl MessageCreateParams {
@@ -188,6 +196,7 @@ impl MessageCreateParams {
             citations: None,
             skills: None,
             tool_runner: None,
+            betas: None,
         }
     }
 
@@ -220,6 +229,7 @@ impl MessageCreateParams {
             citations: None,
             skills: None,
             tool_runner: None,
+            betas: None,
         }
     }
 
@@ -322,6 +332,21 @@ impl MessageCreateParams {
     /// Sets the streaming option.
     pub fn with_stream(mut self, stream: bool) -> Self {
         self.stream = stream;
+        self
+    }
+
+    /// Set the beta versions to use for this request.
+    pub fn with_betas(mut self, betas: Vec<String>) -> Self {
+        self.betas = Some(betas);
+        self
+    }
+
+    /// Add a single beta version to use for this request.
+    pub fn with_beta(mut self, beta: String) -> Self {
+        match &mut self.betas {
+            Some(betas) => betas.push(beta),
+            None => self.betas = Some(vec![beta]),
+        }
         self
     }
 
@@ -600,6 +625,7 @@ impl Default for MessageCreateParams {
             citations: None,
             skills: None,
             tool_runner: None,
+            betas: None,
         }
     }
 }
@@ -823,5 +849,15 @@ mod tests {
             !params.requires_structured_outputs_beta(),
             "params without output_format or strict tools should not require structured outputs beta"
         );
+    }
+
+    #[test]
+    fn betas_not_serialized_into_body() {
+        let params = MessageCreateParams::simple("Hello", KnownModel::ClaudeSonnet46)
+            .with_beta("interleaved-thinking-2025-05-14".to_string());
+
+        let json = to_value(&params).unwrap();
+        assert!(json.get("betas").is_none());
+        assert!(json.get("anthropic-beta").is_none());
     }
 }

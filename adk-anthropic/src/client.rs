@@ -301,6 +301,49 @@ impl Anthropic {
         self.with_base_url(base_url)?.with_timeout(timeout)
     }
 
+    /// Use bearer-token authentication for this client.
+    ///
+    /// Replaces the `x-api-key` header with `Authorization: Bearer <token>` on
+    /// every request. Useful for OAuth access tokens and gateways that
+    /// authenticate Anthropic-shaped requests with a bearer credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the token is not a valid header value.
+    pub fn with_auth_token(mut self, auth_token: String) -> Result<Self> {
+        let mut headers = (*self.cached_headers).clone();
+        headers.remove("x-api-key");
+        let value = HeaderValue::from_str(&format!("Bearer {auth_token}")).map_err(|e| {
+            Error::validation(
+                format!("Invalid auth token format: {e}"),
+                Some("auth_token".to_string()),
+            )
+        })?;
+        headers.insert(header::AUTHORIZATION, value);
+        self.cached_headers = Arc::new(headers);
+        Ok(self)
+    }
+
+    /// Set the `anthropic-version` header for this client.
+    ///
+    /// Defaults to `2023-06-01`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the version is not a valid header value.
+    pub fn with_api_version(mut self, api_version: String) -> Result<Self> {
+        let mut headers = (*self.cached_headers).clone();
+        let value = HeaderValue::from_str(&api_version).map_err(|e| {
+            Error::validation(
+                format!("Invalid API version format: {e}"),
+                Some("api_version".to_string()),
+            )
+        })?;
+        headers.insert("anthropic-version", value);
+        self.cached_headers = Arc::new(headers);
+        Ok(self)
+    }
+
     /// Build default headers for API requests (static method for initialization).
     fn build_default_headers(api_key: &str) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
@@ -552,9 +595,27 @@ impl Anthropic {
         // Build headers
         let mut headers = self.default_headers();
 
+        // When the caller supplied betas, seed the anthropic-beta header with them
+        if let Some(betas) = params.betas.as_ref().filter(|betas| !betas.is_empty())
+            && let Ok(value) = HeaderValue::from_str(&betas.join(","))
+        {
+            headers.insert("anthropic-beta", value);
+        }
+
         // Check if structured outputs beta header is needed
         if params.requires_structured_outputs_beta() {
-            headers.insert("anthropic-beta", HeaderValue::from_static(STRUCTURED_OUTPUTS_BETA));
+            let existing =
+                headers.get("anthropic-beta").and_then(|v| v.to_str().ok()).unwrap_or("");
+            let new_val = if existing.is_empty() {
+                STRUCTURED_OUTPUTS_BETA.to_string()
+            } else {
+                format!("{existing},{STRUCTURED_OUTPUTS_BETA}")
+            };
+            headers.insert(
+                "anthropic-beta",
+                HeaderValue::from_str(&new_val)
+                    .unwrap_or_else(|_| HeaderValue::from_static(STRUCTURED_OUTPUTS_BETA)),
+            );
         }
 
         // When context_management is set, add the beta header
@@ -654,6 +715,9 @@ impl Anthropic {
         // Check if fast-mode beta header is needed
         let needs_fast_mode = params.speed.is_some();
 
+        // Caller-supplied betas lead the anthropic-beta header
+        let caller_betas = params.betas.clone().unwrap_or_default();
+
         let response = self
             .retry_with_backoff(|| async {
                 let url = self.build_url("messages");
@@ -662,7 +726,7 @@ impl Anthropic {
                 headers.insert(header::ACCEPT, HeaderValue::from_static("text/event-stream"));
 
                 // Build anthropic-beta header combining all needed betas
-                let mut betas = Vec::new();
+                let mut betas: Vec<&str> = caller_betas.iter().map(String::as_str).collect();
                 if needs_beta {
                     betas.push(STRUCTURED_OUTPUTS_BETA);
                 }
@@ -1694,5 +1758,28 @@ mod tests {
 
         // Verify all operations executed
         assert_eq!(attempt_counter.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn with_auth_token_replaces_api_key_auth() {
+        let client = Anthropic::new(Some("test_key".to_string()))
+            .unwrap()
+            .with_auth_token("oauth-access-token".to_string())
+            .unwrap();
+
+        let headers = client.default_headers();
+        assert!(!headers.contains_key("x-api-key"));
+        assert_eq!(headers.get(header::AUTHORIZATION).unwrap(), "Bearer oauth-access-token");
+        assert!(headers.contains_key("anthropic-version"));
+    }
+
+    #[test]
+    fn with_api_version_overrides_default() {
+        let client = Anthropic::new(Some("test_key".to_string()))
+            .unwrap()
+            .with_api_version("2024-10-22".to_string())
+            .unwrap();
+
+        assert_eq!(client.default_headers().get("anthropic-version").unwrap(), "2024-10-22");
     }
 }
