@@ -37,32 +37,26 @@
 //! post-create, and adk-python's `AdkApp` does not register it either —
 //! strict parity excludes it (Agent Engine plan, verification task V12).
 
-// The ADC credential caching and LRO polling below are the deploy-side copy
-// of the pattern in adk-session/src/vertex.rs; Wave 3 of the Agent Engine
-// plan (adk-gcp, PR 3.5) consolidates all copies into one crate.
-
 use crate::error::{DeployError, DeployResult};
-use google_cloud_auth::credentials::{self, CacheableResource, Credentials};
-use reqwest::{Client, RequestBuilder, StatusCode};
+use adk_core::{AdkError, ErrorComponent};
+use adk_gcp::{
+    GcpErrorCodes, GcpErrorContext, GcpHttpClient, LroPoller, VertexResourceName,
+    is_scoped_resource_name,
+};
+use google_cloud_auth::credentials::Credentials;
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
-use tokio::time::Instant;
 use tracing::info;
 
 const API_VERSION: &str = "v1beta1";
-const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
-const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-const AUTH_HEADERS_TIMEOUT: Duration = Duration::from_secs(30);
 // Engine creation provisions serving infrastructure and routinely takes
-// minutes, so the deploy deadline is far above the session/memory backends'
-// 120 s while keeping their backoff shape (100 ms initial, capped).
+// minutes, so the deploy deadline is far above adk-gcp's 120 s default
+// while keeping the shared backoff shape (100 ms initial, capped).
 const OPERATION_POLL_TIMEOUT: Duration = Duration::from_secs(900);
-const OPERATION_POLL_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const OPERATION_POLL_MAX_DELAY: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -300,7 +294,7 @@ pub struct ReasoningEngine {
 }
 
 /// A long-running operation returned by create/delete.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Operation {
     /// Operation resource name.
     pub name: String,
@@ -316,7 +310,7 @@ pub struct Operation {
 }
 
 /// The `google.rpc.Status` carried by a failed operation.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationError {
     /// Canonical gRPC status code.
     #[serde(default)]
@@ -354,14 +348,29 @@ pub fn default_class_methods() -> Vec<Value> {
 
 // ── Client ────────────────────────────────────────────────────────────────
 
+// The machine-readable codes the shared adk-gcp transport stamps on this
+// client's failures, following the workspace `<component>.<backend>.<failure>`
+// convention.
+const GCP_ERROR_CODES: GcpErrorCodes = GcpErrorCodes {
+    invalid_input: "deploy.gcp.invalid_input",
+    unauthorized: "deploy.gcp.unauthorized",
+    forbidden: "deploy.gcp.forbidden",
+    not_found: "deploy.gcp.not_found",
+    rate_limited: "deploy.gcp.rate_limited",
+    timeout: "deploy.gcp.timeout",
+    unavailable: "deploy.gcp.unavailable",
+    credentials_unavailable: "deploy.gcp.credentials_unavailable",
+    invalid_response: "deploy.gcp.invalid_response",
+    invalid_request: "deploy.gcp.invalid_request",
+    upstream_error: "deploy.gcp.upstream_error",
+    operation_failed: "deploy.gcp.operation_failed",
+};
+
 /// Minimal Agent Engine deployment client (create, poll, get, delete).
 pub struct GcpDeployClient {
-    http_client: Client,
-    endpoint: String,
+    gcp: GcpHttpClient,
     project_id: String,
     location: String,
-    credentials: Credentials,
-    auth_headers: Arc<RwLock<Option<reqwest::header::HeaderMap>>>,
 }
 
 impl GcpDeployClient {
@@ -372,13 +381,7 @@ impl GcpDeployClient {
     /// Returns an error when ADC cannot be constructed, the endpoint is not
     /// a valid secure origin, or the HTTP client cannot be built.
     pub fn new_with_adc(config: GcpDeployConfig) -> DeployResult<Self> {
-        let credentials = credentials::Builder::default()
-            .with_scopes([CLOUD_PLATFORM_SCOPE])
-            .build()
-            .map_err(|error| DeployError::Client {
-                message: format!("failed to build gcp deploy ADC credentials: {error}"),
-            })?;
-        Self::with_credentials(config, credentials)
+        Self::build(config, None)
     }
 
     /// Creates a client with explicit credentials.
@@ -391,24 +394,20 @@ impl GcpDeployClient {
         config: GcpDeployConfig,
         credentials: Credentials,
     ) -> DeployResult<Self> {
-        let http_client = Client::builder()
-            .connect_timeout(HTTP_CONNECT_TIMEOUT)
-            .timeout(HTTP_REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| DeployError::Client {
-                message: format!("failed to build bounded gcp deploy HTTP client: {error}"),
-            })?;
-        let client = Self {
-            http_client,
-            endpoint: config.endpoint(),
-            project_id: config.project_id,
-            location: config.location,
-            credentials,
-            auth_headers: Arc::new(RwLock::new(None)),
-        };
-        client.build_url("")?;
-        Ok(client)
+        Self::build(config, Some(credentials))
+    }
+
+    fn build(config: GcpDeployConfig, credentials: Option<Credentials>) -> DeployResult<Self> {
+        let errors = GcpErrorContext::new(ErrorComponent::Deploy, GCP_ERROR_CODES, "gcp deploy");
+        let mut builder = GcpHttpClient::builder(errors, config.endpoint())
+            .api_version(API_VERSION)
+            .request_timeout(HTTP_REQUEST_TIMEOUT)
+            .max_response_bytes(MAX_RESPONSE_BYTES);
+        if let Some(credentials) = credentials {
+            builder = builder.credentials(credentials);
+        }
+        let gcp = builder.build().map_err(map_gcp_error)?;
+        Ok(Self { gcp, project_id: config.project_id, location: config.location })
     }
 
     /// Creates a reasoning engine, returning the pending operation.
@@ -421,10 +420,14 @@ impl GcpDeployClient {
         &self,
         request: &CreateReasoningEngineRequest,
     ) -> DeployResult<Operation> {
-        let url = self.build_url(&format!("{API_VERSION}/{}/reasoningEngines", self.parent()))?;
         info!(engine.display_name = %request.display_name, "creating reasoning engine");
-        let http_request = self.apply_auth(self.http_client.post(url).json(request)).await?;
-        let value = self.send_value(http_request).await?;
+        let http_request = self
+            .gcp
+            .request(Method::POST, &format!("{}/reasoningEngines", self.parent()))
+            .await
+            .map_err(map_gcp_error)?
+            .json(request);
+        let value = self.gcp.send_value(http_request).await.map_err(map_gcp_error)?;
         parse_operation(value)
     }
 
@@ -436,9 +439,8 @@ impl GcpDeployClient {
     /// location or the request fails.
     pub async fn poll_operation(&self, operation_name: &str) -> DeployResult<Operation> {
         self.validate_operation_name(operation_name)?;
-        let url = self.build_url(&format!("{API_VERSION}/{operation_name}"))?;
-        let request = self.apply_auth(self.http_client.get(url)).await?;
-        let value = self.send_value(request).await?;
+        let request = self.gcp.request(Method::GET, operation_name).await.map_err(map_gcp_error)?;
+        let value = self.gcp.send_value(request).await.map_err(map_gcp_error)?;
         parse_operation(value)
     }
 
@@ -450,47 +452,22 @@ impl GcpDeployClient {
     /// Returns an error when the operation fails, does not finish within
     /// the 15-minute deadline, or a poll changes operation identity.
     pub async fn wait_for_operation(&self, operation: Operation) -> DeployResult<Option<Value>> {
-        self.validate_operation_name(&operation.name)?;
-        let operation_name = operation.name.clone();
-        let deadline = Instant::now() + OPERATION_POLL_TIMEOUT;
-        let mut delay = OPERATION_POLL_INITIAL_DELAY;
-        let mut operation = operation;
-
-        loop {
-            if operation.done {
-                if let Some(error) = operation.error {
-                    return Err(DeployError::Client {
-                        message: format!(
-                            "reasoning engine operation '{operation_name}' failed with code {}: {}",
-                            error.code, error.message,
-                        ),
-                    });
-                }
-                return Ok(operation.response);
-            }
-            if Instant::now() >= deadline {
-                return Err(DeployError::Client {
-                    message: format!(
-                        "reasoning engine operation '{operation_name}' did not complete within {} seconds; inspect the operation in Google Cloud before retrying",
-                        OPERATION_POLL_TIMEOUT.as_secs(),
-                    ),
-                });
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            tokio::time::sleep(delay.min(remaining)).await;
-            delay = delay.saturating_mul(2).min(OPERATION_POLL_MAX_DELAY);
-
-            let next = self.poll_operation(&operation_name).await?;
-            if next.name != operation_name {
-                return Err(DeployError::Client {
-                    message: format!(
-                        "operation poll changed identity from '{operation_name}' to '{}'; refusing to follow a different operation",
-                        next.name,
-                    ),
-                });
-            }
-            operation = next;
-        }
+        let initial = serde_json::to_value(&operation).map_err(|error| DeployError::Client {
+            message: format!("failed to serialize reasoning engine operation: {error}"),
+        })?;
+        LroPoller::new()
+            .with_poll_timeout(OPERATION_POLL_TIMEOUT)
+            .with_max_delay(OPERATION_POLL_MAX_DELAY)
+            .wait_for_operation(
+                &self.gcp,
+                initial,
+                "reasoning engine",
+                false,
+                &self.project_id,
+                &self.location,
+            )
+            .await
+            .map_err(map_gcp_error)
     }
 
     /// Fetches a reasoning engine by numeric ID or full resource name.
@@ -501,9 +478,8 @@ impl GcpDeployClient {
     /// reasoning engine.
     pub async fn get_reasoning_engine(&self, engine: &str) -> DeployResult<ReasoningEngine> {
         let name = self.engine_name(engine)?;
-        let url = self.build_url(&format!("{API_VERSION}/{name}"))?;
-        let request = self.apply_auth(self.http_client.get(url)).await?;
-        let value = self.send_value(request).await?;
+        let request = self.gcp.request(Method::GET, &name).await.map_err(map_gcp_error)?;
+        let value = self.gcp.send_value(request).await.map_err(map_gcp_error)?;
         serde_json::from_value(value).map_err(|error| DeployError::Client {
             message: format!("failed to parse reasoning engine payload: {error}"),
         })
@@ -517,10 +493,9 @@ impl GcpDeployClient {
     /// operation.
     pub async fn delete_reasoning_engine(&self, engine: &str) -> DeployResult<Operation> {
         let name = self.engine_name(engine)?;
-        let url = self.build_url(&format!("{API_VERSION}/{name}"))?;
         info!(engine.name = %name, "deleting reasoning engine");
-        let request = self.apply_auth(self.http_client.delete(url)).await?;
-        let value = self.send_value(request).await?;
+        let request = self.gcp.request(Method::DELETE, &name).await.map_err(map_gcp_error)?;
+        let value = self.gcp.send_value(request).await.map_err(map_gcp_error)?;
         parse_operation(value)
     }
 
@@ -529,120 +504,49 @@ impl GcpDeployClient {
     }
 
     fn engine_name(&self, engine: &str) -> DeployResult<String> {
-        let prefix = format!("{}/reasoningEngines/", self.parent());
-        if let Some(id) = engine.strip_prefix(&prefix) {
-            if !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()) {
+        if let Some(name) = VertexResourceName::parse(engine) {
+            if name.project_id() == self.project_id
+                && name.location() == self.location
+                && is_numeric_engine_id(name.engine_id())
+            {
                 return Ok(engine.to_string());
             }
-        } else if !engine.is_empty() && engine.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Ok(format!("{prefix}{engine}"));
+        } else if is_numeric_engine_id(engine) {
+            return Ok(
+                VertexResourceName::new(&self.project_id, &self.location, engine).to_string()
+            );
         }
         Err(DeployError::Client {
             message: format!(
-                "reasoning engine '{engine}' is invalid. Provide a numeric ID or the exact resource name '{prefix}<numeric-id>'",
+                "reasoning engine '{engine}' is invalid. Provide a numeric ID or the exact resource name '{}/reasoningEngines/<numeric-id>'",
+                self.parent(),
             ),
         })
     }
 
     fn validate_operation_name(&self, name: &str) -> DeployResult<()> {
-        let prefix = format!("{}/", self.parent());
-        if name.starts_with(&prefix) && !name.contains("://") && !name.contains("..") {
+        if is_scoped_resource_name(name, &self.project_id, &self.location) {
             return Ok(());
         }
         Err(DeployError::Client {
             message: format!("operation name '{name}' does not belong to {}", self.parent()),
         })
     }
+}
 
-    fn build_url(&self, path: &str) -> DeployResult<String> {
-        let mut url = reqwest::Url::parse(&self.endpoint).map_err(|error| DeployError::Client {
-            message: format!("invalid GCP endpoint URL: {error}"),
-        })?;
-        let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
-        if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
-            return Err(DeployError::Client {
-                message: "GCP endpoint must use HTTPS for secure transmission of deploy requests"
-                    .to_string(),
-            });
-        }
-        if !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || url.path() != "/"
-        {
-            return Err(DeployError::Client {
-                message:
-                    "GCP endpoint must be an origin without userinfo, path, query, or fragment"
-                        .to_string(),
-            });
-        }
-        url.set_path(&format!("/{}", path.trim_start_matches('/')));
-        Ok(url.to_string())
-    }
+// Reasoning-engine IDs are validated as all-ASCII digits (leading zeros
+// accepted), matching the pre-adk-gcp behavior; adk-gcp's canonical-ID check
+// is stricter and would reject zero-padded IDs.
+fn is_numeric_engine_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())
+}
 
-    async fn auth_headers(&self) -> DeployResult<reqwest::header::HeaderMap> {
-        let cacheable_headers = tokio::time::timeout(
-            AUTH_HEADERS_TIMEOUT,
-            self.credentials.headers(Default::default()),
-        )
-        .await
-        .map_err(|_| DeployError::Client {
-            message: format!(
-                "gcp deploy credential header acquisition timed out after {} seconds",
-                AUTH_HEADERS_TIMEOUT.as_secs(),
-            ),
-        })?
-        .map_err(|error| DeployError::Client {
-            message: format!("failed to obtain google cloud auth headers: {error}"),
-        })?;
-
-        match cacheable_headers {
-            CacheableResource::New { data, .. } => {
-                *self.auth_headers.write().await = Some(data.clone());
-                Ok(data)
-            }
-            CacheableResource::NotModified => {
-                self.auth_headers.read().await.clone().ok_or_else(|| DeployError::Client {
-                    message: "google cloud credentials returned NotModified before any cached auth headers were available".to_string(),
-                })
-            }
-        }
-    }
-
-    async fn apply_auth(&self, request: RequestBuilder) -> DeployResult<RequestBuilder> {
-        let headers = self.auth_headers().await?;
-        Ok(request.headers(headers))
-    }
-
-    async fn send_value(&self, request: RequestBuilder) -> DeployResult<Value> {
-        let response = request.send().await?;
-        let status = response.status();
-        if let Some(declared) = response.content_length()
-            && declared > MAX_RESPONSE_BYTES as u64
-        {
-            return Err(DeployError::Client {
-                message: format!(
-                    "gcp deploy response Content-Length {declared} exceeds the {MAX_RESPONSE_BYTES}-byte limit",
-                ),
-            });
-        }
-        let body = response.bytes().await?;
-        if body.len() > MAX_RESPONSE_BYTES {
-            return Err(DeployError::Client {
-                message: format!(
-                    "gcp deploy response body of {} bytes exceeds the {MAX_RESPONSE_BYTES}-byte limit",
-                    body.len(),
-                ),
-            });
-        }
-        if !status.is_success() {
-            return Err(status_error(status, &String::from_utf8_lossy(&body)));
-        }
-        serde_json::from_slice(&body).map_err(|error| DeployError::Client {
-            message: format!("failed to parse gcp deploy response JSON: {error}"),
-        })
-    }
+// The public error surface of this crate is [`DeployError`], not
+// [`AdkError`]: failures from the shared adk-gcp transport keep their
+// message but cross the boundary as the same `Client` variant the previous
+// in-crate transport produced.
+fn map_gcp_error(error: AdkError) -> DeployError {
+    DeployError::Client { message: error.message }
 }
 
 fn parse_operation(value: Value) -> DeployResult<Operation> {
@@ -656,17 +560,6 @@ fn parse_operation(value: Value) -> DeployResult<Operation> {
         });
     }
     Ok(operation)
-}
-
-fn status_error(status: StatusCode, body: &str) -> DeployError {
-    let body = body.trim();
-    let body = if body.is_empty() { "<empty body>" } else { body };
-    // Keep upstream detail but bound it: error bodies can carry large
-    // debug payloads.
-    let snippet: String = body.chars().take(512).collect();
-    DeployError::Client {
-        message: format!("gcp deploy request failed with status {}: {snippet}", status.as_u16()),
-    }
 }
 
 #[cfg(test)]
