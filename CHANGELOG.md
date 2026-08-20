@@ -211,6 +211,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `feature-coverage` matrix entry so the backend cannot silently break again
   (#568).
 
+### Changed
+
+- **Wave 3 ADC/LRO consolidation** — the Vertex plumbing duplicated across
+  five backends now lives in `adk-gcp`, with no public API change and each
+  backend's error codes, categories, and mock contract tests preserved:
+  `adk-session` (`vertex-session`), `adk-memory` (`vertex-memory`),
+  `adk-tool` (`example-store`), `adk-deploy` (`gcp`), and `adk-artifact`
+  (`gcs`, credential handling only).
+- **adk-gcp**: `GcpErrorContext` gains `with_response_too_large_code` (a
+  dedicated size-limit code override; the default remains the consumer's
+  `invalid_response` literal); `GcpHttpClient` gains `send_value_counted`
+  (parsed JSON plus decoded body size, for aggregate pagination bounds) and
+  a post-construction `with_max_response_bytes` override.
+
 ## [2.0.0] - 2026-08-09
 
 ### Breaking
