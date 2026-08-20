@@ -14,6 +14,8 @@ mod bundle;
 mod client;
 mod config;
 mod error;
+#[cfg(feature = "gcp")]
+pub mod gcp;
 mod manifest;
 mod models;
 
