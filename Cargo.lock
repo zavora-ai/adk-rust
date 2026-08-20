@@ -154,6 +154,7 @@ name = "adk-artifact"
 version = "2.0.0"
 dependencies = [
  "adk-core",
+ "adk-gcp",
  "async-trait",
  "axum 0.8.9",
  "google-cloud-auth 1.12.0",
