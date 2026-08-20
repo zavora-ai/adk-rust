@@ -25,6 +25,7 @@ members = [
     "adk-skill",
     "adk-rust",
     "adk-gemini",
+    "adk-gcp",
     "adk-code",
     "adk-devtools",
     "adk-sandbox",
@@ -181,6 +182,7 @@ adk-auth = { path = "adk-auth", version = "2.0.0" }
 adk-plugin = { path = "adk-plugin", version = "2.0.0" }
 adk-skill = { path = "adk-skill", version = "2.0.0" }
 adk-gemini = { path = "adk-gemini", version = "2.0.0" }
+adk-gcp = { path = "adk-gcp", version = "2.0.0" }
 adk-code = { path = "adk-code", version = "2.0.0" }
 adk-codeact-monty = { path = "adk-codeact-monty", version = "2.0.0" }
 adk-devtools = { path = "adk-devtools", version = "2.0.0" }

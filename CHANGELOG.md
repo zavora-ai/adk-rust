@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`adk-gcp` crate**: shared Google Cloud REST plumbing for Vertex AI
+  backends — `GcpHttpClient` (ADC with cached auth headers per
+  `CacheableResource` semantics, redirect-disabled bounded transport,
+  HTTPS-or-loopback endpoint validation), `LroPoller` (long-running-operation
+  polling with capped backoff, operation identity pinning, and
+  project/location scope validation), `VertexResourceName`
+  (`projects/*/locations/*/reasoningEngines/*` parse/format), and
+  `GcpErrorContext` (consumer-branded errors across the `AdkError`
+  boundary). Purely additive: consolidates the pattern duplicated across
+  `adk-session`, `adk-memory`, `adk-tool`, `adk-deploy`, and `adk-artifact`;
+  call-site migrations follow in later PRs.
+
 - **CLI deploy subcommand** (`adk-cli`, feature `gcp-deploy`):
   `adk-rust deploy agent-engine --image-uri <uri> --project <p> --location <l>
   [--service-account <sa>] [--kms-key <key>] [--display-name <n>]` deploys a
