@@ -20,6 +20,7 @@ mod content_block_stop_event;
 mod context;
 mod document_block;
 mod effort_level;
+mod fallback_model;
 mod file_object;
 mod file_source;
 mod image_block;
@@ -112,6 +113,7 @@ pub use context::{
 };
 pub use document_block::{DocumentBlock, DocumentSource};
 pub use effort_level::EffortLevel;
+pub use fallback_model::FallbackModel;
 pub use file_object::FileObject;
 pub use file_source::FileSource;
 pub use image_block::{ImageBlock, ImageSource};

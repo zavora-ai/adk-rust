@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **adk-anthropic server-side fallback models** (`MessageCreateParams.fallbacks`
+  with `FallbackModel` and a `with_fallbacks` builder): names alternate models
+  the server may substitute when the requested model is unavailable, serialized
+  as the wire's `fallbacks` array. When set, `send`/`stream` include the
+  `server-side-fallback-2026-07-01` beta in the composed `anthropic-beta`
+  header, following the existing param-gated beta pattern. (#593)
+
 - **cargo-adk `docker` addon** (`cargo adk new my-agent --addon docker`): emits a
   multi-stage `Dockerfile` (`rust:1.95-slim` build stage kept in lockstep with
   `rust-toolchain.toml`, `gcr.io/distroless/cc-debian12` runtime, `ENV PORT=8080`,

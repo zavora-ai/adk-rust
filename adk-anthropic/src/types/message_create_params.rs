@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    CacheControlEphemeral, CitationsConfig, ContextManagement, EffortLevel, MessageParam, Metadata,
-    Model, OutputConfig, OutputFormat, SkillRef, SpeedMode, SystemPrompt, TextBlock,
-    ThinkingConfig, ToolChoice, ToolUnionParam,
+    CacheControlEphemeral, CitationsConfig, ContextManagement, EffortLevel, FallbackModel,
+    MessageParam, Metadata, Model, OutputConfig, OutputFormat, SkillRef, SpeedMode, SystemPrompt,
+    TextBlock, ThinkingConfig, ToolChoice, ToolUnionParam,
 };
 
 /// Security limits for DoS prevention
@@ -107,6 +107,11 @@ pub struct MessageCreateParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_management: Option<ContextManagement>,
 
+    /// Fallback models the server may substitute when the requested model is unavailable.
+    /// Requires beta header `server-side-fallback-2026-07-01`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallbacks: Option<Vec<FallbackModel>>,
+
     /// Geographic routing for data residency control (e.g. "US", "EU").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inference_geo: Option<String>,
@@ -181,6 +186,7 @@ impl MessageCreateParams {
             output_config: None,
 
             context_management: None,
+            fallbacks: None,
             inference_geo: None,
             service_tier: None,
             container: None,
@@ -213,6 +219,7 @@ impl MessageCreateParams {
             output_config: None,
 
             context_management: None,
+            fallbacks: None,
             inference_geo: None,
             service_tier: None,
             container: None,
@@ -322,6 +329,12 @@ impl MessageCreateParams {
     /// Sets the streaming option.
     pub fn with_stream(mut self, stream: bool) -> Self {
         self.stream = stream;
+        self
+    }
+
+    /// Sets the fallback models for server-side fallback.
+    pub fn with_fallbacks(mut self, fallbacks: Vec<FallbackModel>) -> Self {
+        self.fallbacks = Some(fallbacks);
         self
     }
 
@@ -593,6 +606,7 @@ impl Default for MessageCreateParams {
             output_config: None,
 
             context_management: None,
+            fallbacks: None,
             inference_geo: None,
             service_tier: None,
             container: None,
@@ -823,5 +837,22 @@ mod tests {
             !params.requires_structured_outputs_beta(),
             "params without output_format or strict tools should not require structured outputs beta"
         );
+    }
+
+    #[test]
+    fn fallbacks_serialization() {
+        let params = MessageCreateParams::simple("Hello", KnownModel::ClaudeSonnet46)
+            .with_fallbacks(vec![FallbackModel::new("claude-sonnet-4-6")]);
+
+        let json = to_value(&params).unwrap();
+        assert_eq!(json["fallbacks"], json!([{ "model": "claude-sonnet-4-6" }]));
+    }
+
+    #[test]
+    fn fallbacks_omitted_when_unset() {
+        let params = MessageCreateParams::simple("Hello", KnownModel::ClaudeSonnet46);
+
+        let json = to_value(&params).unwrap();
+        assert!(json.get("fallbacks").is_none());
     }
 }

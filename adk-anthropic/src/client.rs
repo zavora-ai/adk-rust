@@ -589,6 +589,23 @@ impl Anthropic {
             );
         }
 
+        // When fallbacks is set, add the server-side fallback beta header
+        if params.fallbacks.is_some() {
+            let existing =
+                headers.get("anthropic-beta").and_then(|v| v.to_str().ok()).unwrap_or("");
+            let new_val = if existing.is_empty() {
+                "server-side-fallback-2026-07-01".to_string()
+            } else {
+                format!("{existing},server-side-fallback-2026-07-01")
+            };
+            headers.insert(
+                "anthropic-beta",
+                HeaderValue::from_str(&new_val).unwrap_or_else(|_| {
+                    HeaderValue::from_static("server-side-fallback-2026-07-01")
+                }),
+            );
+        }
+
         let result = self
             .retry_with_backoff(|| async {
                 let url = self.build_url("messages");
@@ -654,6 +671,9 @@ impl Anthropic {
         // Check if fast-mode beta header is needed
         let needs_fast_mode = params.speed.is_some();
 
+        // Check if server-side fallback beta header is needed
+        let needs_fallbacks = params.fallbacks.is_some();
+
         let response = self
             .retry_with_backoff(|| async {
                 let url = self.build_url("messages");
@@ -671,6 +691,9 @@ impl Anthropic {
                 }
                 if needs_fast_mode {
                     betas.push("fast-mode-2026-02-01");
+                }
+                if needs_fallbacks {
+                    betas.push("server-side-fallback-2026-07-01");
                 }
                 if !betas.is_empty() {
                     let beta_val = betas.join(",");
