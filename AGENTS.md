@@ -436,7 +436,7 @@ Production backend features (require external infrastructure, NOT included in `f
 
 Specialist opt-in features:
 - `yaml-agent`, `agent-registry` — YAML agent config and registry REST API
-- `gcp-deploy` — Agent Engine (ReasoningEngine) BYOC deployment client (adk-deploy): create/poll/get/delete; host-side tooling, deliberately excluded from `gemini-agent-platform`
+- `gcp-deploy` — Agent Engine (ReasoningEngine) BYOC deployment client (adk-deploy): create/poll/get/delete; host-side tooling, deliberately excluded from `gemini-agent-platform`. The same name on adk-cli enables `adk-rust deploy agent-engine`
 - `agent-engine` — Agent Engine runtime contract (adk-server): class-method dispatch endpoints and the turnkey `serve_agent_engine` entrypoint for Gemini Enterprise Agent Platform BYOC containers
 - `example-store` — Vertex AI Example Store client (adk-tool): v1beta1 data-plane upsert/search/fetch against a pre-provisioned store, plus `ExampleStoreProvider` for dynamic few-shot retrieval via a `BeforeModelCallback`
 - `gemini-interactions` — Gemini Interactions API (Beta): wire client surface (server-side history, step timeline) plus the runtime transport on `GeminiModel` (`use_interactions_api`) driving the standard `LlmAgent`/`Runner`

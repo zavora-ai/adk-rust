@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CLI deploy subcommand** (`adk-cli`, feature `gcp-deploy`):
+  `adk-rust deploy agent-engine --image-uri <uri> --project <p> --location <l>
+  [--service-account <sa>] [--kms-key <key>] [--display-name <n>]` deploys a
+  pushed container image as a Gemini Enterprise Agent Platform engine via the
+  adk-deploy `gcp` client — declares the full class-method contract, waits
+  for the create operation, and prints the engine resource name. The display
+  name defaults to the image name. Install with
+  `cargo install adk-cli --features gcp-deploy`.
+
 - **Agent Engine deployment client** (`adk-deploy`, feature `gcp`; umbrella
   feature `gcp-deploy` — host-side tooling, deliberately not part of
   `gemini-agent-platform`): `GcpDeployClient` with exactly four operations

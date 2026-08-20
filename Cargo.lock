@@ -327,6 +327,7 @@ dependencies = [
  "clap",
  "dirs",
  "futures",
+ "google-cloud-auth 1.12.0",
  "keyring",
  "rustyline",
  "serde",

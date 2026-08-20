@@ -157,6 +157,9 @@ jobs:
           # The Agent Engine deployment client (gcp) is opt-in; its golden DTO and
           # mock contract tests only run with the feature on.
           - { package: adk-deploy, features: gcp }
+          # The `deploy agent-engine` CLI subcommand is behind gcp-deploy; its
+          # arg-parse and mock create-contract tests only run with the feature on.
+          - { package: adk-cli, features: gcp-deploy }
           # sandbox-linux is Linux-only *and* feature-gated, so nothing built it until a
           # container run found the bubblewrap probe could never succeed and that its
           # property tests did not compile.

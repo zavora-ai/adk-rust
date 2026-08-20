@@ -164,6 +164,31 @@ middleware: a deployed engine is fronted by the platform, which
 authenticates callers before they reach the container. Do not expose these
 endpoints directly to untrusted networks.
 
+## Deploying from the CLI
+
+With `adk-cli` installed with the `gcp-deploy` feature
+(`cargo install adk-cli --features gcp-deploy`), one command creates the
+engine from a pushed container image:
+
+```bash
+# 1. Build and push the image
+gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT/agents/my-agent:latest
+
+# 2. Deploy it as a ReasoningEngine
+adk-rust deploy agent-engine \
+  --image-uri us-central1-docker.pkg.dev/PROJECT/agents/my-agent:latest \
+  --project PROJECT \
+  --location us-central1 \
+  --service-account agent-runner@PROJECT.iam.gserviceaccount.com
+```
+
+Optional flags: `--display-name` (defaults to the image name) and
+`--kms-key` for CMEK. The command declares the full class-method contract
+from the [operations table](#operations), waits for the create operation,
+and prints the engine resource name. The same client is available
+programmatically as `adk_deploy::gcp::GcpDeployClient` (umbrella feature
+`gcp-deploy`).
+
 ## Environment variables
 
 | Variable | Meaning |

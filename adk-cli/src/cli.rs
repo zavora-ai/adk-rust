@@ -333,6 +333,43 @@ pub enum DeployCommands {
         #[command(subcommand)]
         command: DeploySecretCommands,
     },
+    /// Deploy a container image as a Gemini Enterprise Agent Platform engine
+    #[cfg(feature = "gcp-deploy")]
+    AgentEngine(AgentEngineArgs),
+}
+
+/// Arguments for `adk-rust deploy agent-engine`.
+///
+/// A named struct rather than inline variant fields so later releases can
+/// extend the surface (e.g. Agent Registry self-registration) without
+/// re-plumbing the dispatch.
+#[cfg(feature = "gcp-deploy")]
+#[derive(clap::Args, Clone, Debug)]
+pub struct AgentEngineArgs {
+    /// Artifact Registry image URI of the agent container
+    /// (e.g. us-central1-docker.pkg.dev/PROJECT/REPO/agent:latest)
+    #[arg(long)]
+    pub image_uri: String,
+    /// GCP project ID
+    #[arg(long)]
+    pub project: String,
+    /// GCP location (e.g. us-central1)
+    #[arg(long)]
+    pub location: String,
+    /// Service account the engine runs as (defaults to the platform's
+    /// Reasoning Engine service agent)
+    #[arg(long)]
+    pub service_account: Option<String>,
+    /// Customer-managed encryption key resource name (CMEK)
+    #[arg(long)]
+    pub kms_key: Option<String>,
+    /// Engine display name (defaults to the image name)
+    #[arg(long)]
+    pub display_name: Option<String>,
+    /// Override the API origin. Advanced: for private endpoints and tests;
+    /// loopback HTTP is allowed, anything else must be HTTPS.
+    #[arg(long, hide = true)]
+    pub endpoint: Option<String>,
 }
 
 #[derive(Subcommand, Clone)]
