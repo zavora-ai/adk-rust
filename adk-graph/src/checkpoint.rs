@@ -205,6 +205,11 @@ impl SqliteCheckpointer {
             .await
             .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
 
+        Self::from_pool(pool).await
+    }
+
+    /// Create a SQLite checkpointer from an existing pool
+    pub async fn from_pool(pool: sqlx::SqlitePool) -> Result<Self> {
         // Create table
         sqlx::query(
             r#"
