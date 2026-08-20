@@ -18,6 +18,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-gcp"
+version = "2.0.0"
+dependencies = [
+ "adk-core",
+ "google-cloud-auth",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "adk-rust-macros"
 version = "2.0.0"
 dependencies = [
@@ -40,6 +52,7 @@ name = "adk-tool"
 version = "2.0.0"
 dependencies = [
  "adk-core",
+ "adk-gcp",
  "adk-rust-macros",
  "adk-telemetry",
  "async-trait",

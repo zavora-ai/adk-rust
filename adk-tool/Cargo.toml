@@ -44,7 +44,7 @@ spanner = ["dep:google-cloud-spanner"]
 # Enable MCP sampling callback support (sampling/createMessage handling)
 mcp-sampling = ["mcp"]
 # Enable the Vertex AI Example Store client and few-shot retrieval provider
-example-store = ["google-cloud-auth", "reqwest"]
+example-store = ["adk-gcp", "google-cloud-auth", "reqwest"]
 
 [dependencies]
 adk-core.workspace = true
@@ -79,6 +79,8 @@ gcp-bigquery-client = { version = "0.28", optional = true }
 google-cloud-spanner = { version = "0.33", optional = true }
 # Optional: ADC credentials for the Vertex AI Example Store client
 google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
+# Optional: shared Google Cloud REST plumbing for the Example Store client
+adk-gcp = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Internal dev-deps are path-only (no version) so cargo strips them from the
