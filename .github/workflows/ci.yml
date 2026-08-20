@@ -270,6 +270,13 @@ jobs:
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+    # libdbus-1 is linked at build time by adk-cli's keyring dependency
+    # (sync-secret-service on Linux). The workspace `test` job gets dbus from
+    # the devenv/nix shell; this plain runner must install it. Unconditional
+    # for the same reason as protoc above.
+    - name: Install libdbus
+      run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+
     - name: Install cargo-nextest
       uses: taiki-e/install-action@v2.85.5
       with:
