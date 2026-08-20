@@ -79,21 +79,15 @@ full = [
 # Growth rule: every PR that introduces a Vertex/EAP feature flag appends it
 # here (or to `gemini-agent-platform-full` if it pulls in a realtime transport).
 gemini-agent-platform = [
-    # existing integrations (Wave 0 initial content)
     "gemini-vertex",  # Vertex model backend (adk-model → adk-gemini/vertex)
     "vertex-session", # managed Sessions (adk-session)
     "gcp-secrets",    # GCP Secret Manager (adk-auth)
     "gcs-artifacts",  # GCS artifact backend (adk-artifact)
     "gcp-telemetry",  # Cloud Trace/Logging transport (adk-telemetry)
     "agent-engine",   # class-method runtime contract + turnkey entrypoint (adk-server)
+    "vertex-memory",  # Memory Bank (adk-memory)
     "example-store",  # Example Store few-shot retrieval (adk-tool)
     # target end-state — appended by the PR that introduces each flag:
-    # "vertex-memory",          Memory Bank (adk-memory)
-    "vertex-memory",  # Memory Bank (adk-memory)
-    # target end-state — appended by the PR that introduces each flag:
-    # "example-store",          Example Store (adk-tool)
-    # "gcp-telemetry",          Cloud Trace/Logging transport (adk-telemetry)
-    # "gcs-artifacts",          GCS artifact backend (adk-artifact)
     # "vertex-sandbox",         managed code-execution sandbox (adk-code)
     # "vertex-eval",            Gen AI Evaluation bridge (adk-eval)
     # "vertex-rag",             RAG Engine retrieval (adk-rag)
@@ -216,6 +210,10 @@ agent-registry = ["server", "adk-server/agent-registry"]
 agent-engine = ["server", "adk-server/agent-engine"]
 # Vertex AI Example Store client and few-shot retrieval provider (forwarded to adk-tool)
 example-store = ["tools", "adk-tool/example-store"]
+# Agent Engine (ReasoningEngine) deployment client — host-side tooling, so
+# deliberately NOT part of gemini-agent-platform (the agent container never
+# deploys itself)
+gcp-deploy = ["dep:adk-deploy", "adk-deploy/gcp"]
 # MCP sampling callback support (forwarded to adk-tool)
 mcp = ["tools", "adk-tool/mcp"]
 mcp-http = ["mcp", "adk-tool/http-transport"]
@@ -315,6 +313,7 @@ adk-memory = { workspace = true, optional = true }
 adk-runner = { workspace = true, optional = true }
 adk-server = { workspace = true, optional = true }
 adk-telemetry = { workspace = true, optional = true }
+adk-deploy = { workspace = true, optional = true }
 adk-cli = { workspace = true, optional = true }
 adk-graph = { workspace = true, optional = true }
 adk-code = { workspace = true, optional = true }

@@ -154,6 +154,9 @@ jobs:
           # The Memory Bank backend (vertex-memory) is opt-in; its mock contract tests
           # only run with the feature on.
           - { package: adk-memory, features: vertex-memory }
+          # The Agent Engine deployment client (gcp) is opt-in; its golden DTO and
+          # mock contract tests only run with the feature on.
+          - { package: adk-deploy, features: gcp }
           # sandbox-linux is Linux-only *and* feature-gated, so nothing built it until a
           # container run found the bubblewrap probe could never succeed and that its
           # property tests did not compile.

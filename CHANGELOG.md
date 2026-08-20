@@ -19,6 +19,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gateways, and `with_api_version` to select the `anthropic-version` header.
   (#592)
 
+- **Agent Engine deployment client** (`adk-deploy`, feature `gcp`; umbrella
+  feature `gcp-deploy` — host-side tooling, deliberately not part of
+  `gemini-agent-platform`): `GcpDeployClient` with exactly four operations
+  against the v1beta1 `reasoningEngines` surface — `create_reasoning_engine`,
+  `poll_operation` (plus a backoff-polling `wait_for_operation`),
+  `get_reasoning_engine`, `delete_reasoning_engine`. Typed camelCase wire
+  DTOs for the BYOC create body (`containerSpec.imageUri`, `deploymentSpec`
+  env/secret-env/scaling/resource limits/PSC-I, `classMethods`,
+  `agentFramework`, `serviceAccount`, CMEK `encryptionSpec`);
+  `CreateReasoningEngineRequest::byoc` declares the full WP1 class-method
+  contract by default. Image build/push stays with Cloud Build
+  (`gcloud_build_submit_command` renders the documented command).
+  `reasoningEngines:asyncQuery` is deliberately not declared (cannot be
+  added post-create; adk-python parity excludes it).
+
+- **cargo-adk `agent-engine` template** (`cargo adk new my-agent --template
+  agent-engine`): scaffolds a Gemini Enterprise Agent Engine BYOC container — a
+  binary whose `main` is `serve_agent_engine(agent, AgentEngineOptions::new())`
+  (features `["minimal", "agent-engine"]`), the docker addon's `Dockerfile` and
+  `.dockerignore`, and `deploy/terraform/` with a
+  `google_vertex_ai_reasoning_engine` BYOC resource (`spec.container_spec.image_uri`,
+  the full 14-method `class_methods` contract in `jsonencode`,
+  `agent_framework = "google-adk"`, optional `service_account`), plus
+  `variables.tf`/`outputs.tf` mirroring the containerized-agent codelab. The
+  generated README covers `gcloud builds submit`, `terraform apply`, the
+  platform-set environment variables, the `/api` passthrough for querying the
+  deployed engine, and the optional A2A-routes setup via
+  `ServerBuilder::with_agent_engine(true)` + `.with_a2a(...)`. Template and
+  addon file fragments now support `{name}` substitution and path override
+  (a template file replaces a base file with the same path).
 - **cargo-adk `docker` addon** (`cargo adk new my-agent --addon docker`): emits a
   multi-stage `Dockerfile` (`rust:1.95-slim` build stage kept in lockstep with
   `rust-toolchain.toml`, `gcr.io/distroless/cc-debian12` runtime, `ENV PORT=8080`,
