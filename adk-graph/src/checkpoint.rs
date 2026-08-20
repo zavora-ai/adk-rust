@@ -205,6 +205,30 @@ impl SqliteCheckpointer {
             .await
             .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
 
+        Self::from_pool(pool).await
+    }
+
+    /// Create a SQLite checkpointer from an existing pool.
+    ///
+    /// Use this to share one connection pool with the rest of an application
+    /// instead of opening a second one. The checkpointer writes through the pool
+    /// it is given, so the caller's own queries see its rows.
+    ///
+    /// The schema is applied to the pool's database on every call, so adopting an
+    /// already-initialized database is safe.
+    ///
+    /// `SqlitePool` comes from `sqlx`, so a caller has to depend on a
+    /// semver-compatible `sqlx` to construct one:
+    ///
+    /// ```toml
+    /// sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `GraphError::CheckpointError` when the table or the index cannot be
+    /// created on the pool's database.
+    pub async fn from_pool(pool: sqlx::SqlitePool) -> Result<Self> {
         // Create table
         sqlx::query(
             r#"

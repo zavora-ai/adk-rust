@@ -27,7 +27,7 @@ pub struct TemplateRegistry {
 impl TemplateRegistry {
     /// Build the default registry with all built-in templates.
     ///
-    /// Populates 12 agent templates, 10 capability addons, 5 enterprise patterns,
+    /// Populates 13 agent templates, 10 capability addons, 5 enterprise patterns,
     /// and 2 legacy aliases.
     pub fn builtin() -> Self {
         Self {
@@ -169,7 +169,7 @@ fn parse_custom_template(content: &str) -> Result<AgentTemplate, String> {
 // Built-in data population
 // ---------------------------------------------------------------------------
 
-/// All 12 built-in agent templates.
+/// All 13 built-in agent templates.
 fn builtin_agent_templates() -> Vec<AgentTemplate> {
     vec![
         AgentTemplate {
@@ -538,6 +538,60 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
             },
         },
         AgentTemplate {
+            name: "agent-engine",
+            description: "Gemini Enterprise Agent Engine BYOC container with Dockerfile and Terraform deploy",
+            category: TemplateCategory::AgentType,
+            default_provider: "gemini",
+            required_features: vec!["minimal", "agent-engine"],
+            // `server` would serve a second HTTP surface on the same port;
+            // `docker` would collide with the Dockerfile this template ships.
+            incompatible_addons: vec!["server", "docker"],
+            additional_deps: vec![],
+            code_fragments: AgentCodeFragments {
+                imports: vec![
+                    "use std::sync::Arc;",
+                    "use adk_rust::server::agent_engine::{AgentEngineOptions, serve_agent_engine};",
+                ],
+                agent_construction: r#"let agent: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("{name}")
+            .description("Agent Engine BYOC agent")
+            .instruction("You are a helpful assistant.")
+            .model(Arc::new(model))
+            .build()?,
+    );
+
+    // serve_agent_engine is the whole main of a BYOC engine: it binds
+    // 0.0.0.0:$PORT (the platform sets PORT) and serves the class-method
+    // dispatch endpoints plus GET /health until the process stops.
+    //
+    // Production deployments configure managed backends here:
+    //   AgentEngineOptions::new()
+    //       .with_session_service(...)   // VertexAiSessionService (feature `vertex-session`)
+    //       .with_memory_service(...)    // enables the memory class methods
+    //       .with_artifact_service(...)  // GcsArtifactService (adk-artifact `gcs`)
+    serve_agent_engine(agent, AgentEngineOptions::new()).await?;"#,
+                additional_files: vec![
+                    FileFragment { path: "Dockerfile", content: DOCKERFILE },
+                    FileFragment { path: ".dockerignore", content: DOCKERIGNORE },
+                    FileFragment {
+                        path: "deploy/terraform/main.tf",
+                        content: AGENT_ENGINE_MAIN_TF,
+                    },
+                    FileFragment {
+                        path: "deploy/terraform/variables.tf",
+                        content: AGENT_ENGINE_VARIABLES_TF,
+                    },
+                    FileFragment {
+                        path: "deploy/terraform/outputs.tf",
+                        content: AGENT_ENGINE_OUTPUTS_TF,
+                    },
+                    // Replaces the generic generated README: deployment is the
+                    // whole point of this template.
+                    FileFragment { path: "README.md", content: AGENT_ENGINE_README },
+                ],
+            },
+        },
+        AgentTemplate {
             name: "openai",
             description: "OpenAI-powered LLM agent",
             category: TemplateCategory::AgentType,
@@ -559,6 +613,303 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
         },
     ]
 }
+
+/// Multi-stage container build: `rust:1.95-slim` build stage, distroless
+/// runtime. Shared by the `docker` addon and the `agent-engine` template so
+/// the image definition is stated once.
+const DOCKERFILE: &str = r##"# Multi-stage image: compile with the full Rust toolchain, run on distroless.
+#
+# The build stage tag is kept in lockstep with rust-toolchain.toml at the
+# ADK-Rust workspace root, which pins Rust 1.95.0.
+FROM rust:1.95-slim AS builder
+
+WORKDIR /build
+
+# Optional compilation cache — uncomment to reuse artifacts across builds:
+# RUN cargo install sccache --locked
+# ENV RUSTC_WRAPPER=sccache
+
+COPY . .
+RUN cargo build --release
+
+# Distroless keeps the glibc C runtime the binary links against but ships no
+# shell or package manager, minimizing image size and attack surface.
+FROM gcr.io/distroless/cc-debian12
+
+COPY --from=builder /build/target/release/{name} /app/agent
+
+ENV PORT=8080
+ENTRYPOINT ["/app/agent"]
+"##;
+
+/// Fully static musl variant of [`DOCKERFILE`], emitted by the `docker` addon.
+const DOCKERFILE_STATIC: &str = r##"# Fully static image: musl-linked binary on a `FROM scratch` runtime.
+#
+# COMPATIBILITY GUARD — static linking only works when every native dependency
+# links statically:
+#
+#   works:  the `gemini-agent-platform` / `gemini-agent-platform-full` feature
+#           sets — the TLS stack is rustls with a statically built aws-lc, and
+#           no OpenSSL is involved.
+#   fails:  the `livekit` feature — pinned to native-tls, which requires a
+#           shared OpenSSL.
+#   fails:  the adk-audio `onnx` / `kokoro` / `desktop-audio` features — ONNX
+#           Runtime is a shared library, and espeak-ng / ALSA are system
+#           libraries with no static musl builds.
+#
+# A link-time failure in this file usually means the feature set above.
+
+# The build stage tag is kept in lockstep with rust-toolchain.toml at the
+# ADK-Rust workspace root, which pins Rust 1.95.0.
+FROM rust:1.95-slim AS builder
+
+# musl-tools provides musl-gcc; cmake builds aws-lc-sys for the musl target;
+# ca-certificates supplies the bundle copied into the runtime stage below.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends musl-tools cmake ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN rustup target add x86_64-unknown-linux-musl
+
+WORKDIR /build
+
+COPY . .
+RUN cargo build --release --target x86_64-unknown-linux-musl
+
+FROM scratch
+
+# ADK-Rust uses rustls-tls-native-roots, which reads /etc/ssl/certs at runtime.
+# `scratch` ships no filesystem, so the CA bundle must be copied in or every
+# TLS connection fails certificate verification.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/{name} /app/agent
+
+ENV PORT=8080
+ENTRYPOINT ["/app/agent"]
+"##;
+
+/// Build-context exclusions shared by the `docker` addon and the
+/// `agent-engine` template.
+const DOCKERIGNORE: &str = r##"# Keep build output, VCS state, and local secrets out of the build context.
+target/
+.git/
+.env
+.env.*
+!.env.example
+*.swp
+*.swo
+.DS_Store
+"##;
+
+/// Terraform resource for the `agent-engine` template, mirroring the BYOC
+/// codelab with the argument names from the `google_vertex_ai_reasoning_engine`
+/// provider documentation.
+const AGENT_ENGINE_MAIN_TF: &str = r#"terraform {
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      # google_vertex_ai_reasoning_engine gained spec.container_spec (BYOC),
+      # spec.class_methods, and spec.agent_framework by this version.
+      version = ">= 7.16.0"
+    }
+  }
+}
+
+provider "google" {
+  project = var.project_id
+  region  = var.location
+}
+
+locals {
+  # The full class-method dispatch contract adk-server's register_operations
+  # reports. Terraform deployments must declare it explicitly — without it,
+  # client SDKs cannot discover the methods and calls to the engine fail.
+  class_methods = [
+    { "api_mode" = "", "name" = "create_session" },
+    { "api_mode" = "", "name" = "get_session" },
+    { "api_mode" = "", "name" = "list_sessions" },
+    { "api_mode" = "", "name" = "delete_session" },
+    { "api_mode" = "", "name" = "register_operations" },
+    { "api_mode" = "async", "name" = "async_create_session" },
+    { "api_mode" = "async", "name" = "async_get_session" },
+    { "api_mode" = "async", "name" = "async_list_sessions" },
+    { "api_mode" = "async", "name" = "async_delete_session" },
+    { "api_mode" = "async", "name" = "async_add_session_to_memory" },
+    { "api_mode" = "async", "name" = "async_search_memory" },
+    { "api_mode" = "stream", "name" = "stream_query" },
+    { "api_mode" = "async_stream", "name" = "async_stream_query" },
+    { "api_mode" = "async_stream", "name" = "streaming_agent_run_with_events" },
+  ]
+}
+
+# agent_framework is "google-adk" because the container serves the google-adk
+# class-method contract; the console Playground keys interactive features off it.
+resource "google_vertex_ai_reasoning_engine" "agent" {
+  display_name = var.display_name
+  description  = "{name} deployed as a BYOC container via Terraform"
+  project      = var.project_id
+  region       = var.location
+
+  spec {
+    class_methods   = jsonencode(local.class_methods)
+    agent_framework = "google-adk"
+    service_account = var.service_account
+
+    container_spec {
+      image_uri = var.image_uri
+    }
+  }
+}
+"#;
+
+/// Terraform input variables for the `agent-engine` template.
+const AGENT_ENGINE_VARIABLES_TF: &str = r#"variable "project_id" {
+  type        = string
+  description = "The Google Cloud project to deploy into"
+}
+
+variable "location" {
+  type        = string
+  description = "The region hosting the reasoning engine"
+  default     = "us-central1"
+}
+
+variable "image_uri" {
+  type        = string
+  description = "Artifact Registry image URI, e.g. us-central1-docker.pkg.dev/PROJECT/REPO/{name}:latest"
+}
+
+variable "display_name" {
+  type        = string
+  description = "Display name of the reasoning engine"
+  default     = "{name}"
+}
+
+variable "service_account" {
+  type        = string
+  description = "Optional service account the engine runs as; defaults to the Vertex AI Reasoning Engine service agent"
+  default     = null
+}
+"#;
+
+/// Terraform outputs for the `agent-engine` template.
+const AGENT_ENGINE_OUTPUTS_TF: &str = r#"output "reasoning_engine_id" {
+  value       = google_vertex_ai_reasoning_engine.agent.id
+  description = "Identifier of the deployed reasoning engine (projects/../locations/../reasoningEngines/..)"
+}
+
+output "reasoning_engine_name" {
+  value       = google_vertex_ai_reasoning_engine.agent.name
+  description = "The generated resource name of the deployed reasoning engine"
+}
+"#;
+
+/// Project README for the `agent-engine` template. Replaces the generic
+/// generated README because build, push, and Terraform deploy are the
+/// template's whole purpose.
+const AGENT_ENGINE_README: &str = r#"# {name}
+
+A Gemini Enterprise Agent Engine (Agent Runtime) BYOC container: the binary
+serves the platform's class-method dispatch contract via
+`serve_agent_engine`, and `deploy/terraform/` provisions the
+`google_vertex_ai_reasoning_engine` resource that runs the image.
+
+> **Note:** the `agent-engine` cargo feature ships in the first adk-rust
+> release after 2.0.0. Until that release is published, point the dependency
+> at the git repository instead of crates.io:
+>
+> ```toml
+> adk-rust = { git = "https://github.com/zavora-ai/adk-rust", default-features = false, features = ["minimal", "agent-engine"] }
+> ```
+
+## Run locally
+
+```bash
+cp .env.example .env    # add your GOOGLE_API_KEY
+cargo run
+
+# Unary dispatch
+curl -s -X POST localhost:8080/api/reasoning_engine \
+  -H 'Content-Type: application/json' \
+  -d '{"class_method": "create_session", "input": {"user_id": "u"}}'
+
+# Streaming dispatch (one JSON event per line)
+curl -s -X POST localhost:8080/api/stream_reasoning_engine \
+  -H 'Content-Type: application/json' \
+  -d '{"class_method": "async_stream_query", "input": {"user_id": "u", "message": "hi"}}'
+```
+
+## Build and push the image
+
+```bash
+export PROJECT_ID=your-project
+export LOCATION=us-central1
+export REPOSITORY=agents-repo   # an Artifact Registry docker repository
+
+gcloud builds submit \
+  --project=$PROJECT_ID \
+  --region=$LOCATION \
+  --tag $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/{name}:latest \
+  .
+```
+
+## Deploy with Terraform
+
+```bash
+terraform -chdir=deploy/terraform init
+terraform -chdir=deploy/terraform apply \
+  -var project_id=$PROJECT_ID \
+  -var location=$LOCATION \
+  -var image_uri=$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/{name}:latest
+```
+
+`deploy/terraform/main.tf` declares the full class-method contract in
+`jsonencode` — Terraform deployments must list the methods explicitly or
+client SDKs cannot discover them.
+
+## Environment inside the deployed container
+
+| Variable | Set by | Meaning |
+|----------|--------|---------|
+| `PORT` | platform | Port the container must listen on (default 8080) |
+| `GOOGLE_CLOUD_PROJECT` | platform | GCP project of the deployment |
+| `GOOGLE_CLOUD_LOCATION` | platform | GCP location of the deployment |
+| `GOOGLE_CLOUD_AGENT_ENGINE_ID` | platform | Bare numeric engine ID |
+| `GOOGLE_API_KEY` | you | Gemini API key for the model (e.g. via a secret) |
+
+## Query the deployed engine
+
+Every HTTP route the container serves is reachable through the Agent Runtime
+`/api` passthrough, authenticated with Google credentials:
+
+```
+https://{LOCATION}-aiplatform.googleapis.com/reasoningEngines/v1/{ENGINE_RESOURCE_NAME}/api/{container_path}
+```
+
+For example, the streaming dispatch endpoint is
+`.../api/api/stream_reasoning_engine` (the first `api` belongs to the
+passthrough, the second to the container route).
+
+## Optional: serve A2A routes in the same container
+
+There is no separate create-time A2A mode — the passthrough exposes every
+container route, so an agent that also serves adk-server's A2A surface
+(`/.well-known/agent.json`, `/a2a`, `/a2a/stream`) is reachable through it.
+To opt in, replace `serve_agent_engine` with a `ServerBuilder` that mounts
+both surfaces:
+
+```rust,ignore
+let app = adk_rust::server::ServerBuilder::new(config)
+    .with_agent_engine(true)
+    .with_a2a("https://your-passthrough-base-url")
+    .build();
+```
+
+## Extending
+
+- Wire managed backends via `AgentEngineOptions` (`with_session_service`,
+  `with_memory_service`, `with_artifact_service`) in `src/main.rs`
+- Add tools to the agent with `.tool(...)` on `LlmAgentBuilder`
+"#;
 
 /// All 10 built-in capability addons.
 fn builtin_capability_addons() -> Vec<CapabilityAddon> {
@@ -742,92 +1093,9 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
                 agent_builder_calls: "",
                 env_vars: vec![],
                 additional_files: vec![
-                    FileFragment {
-                        path: "Dockerfile",
-                        content: r##"# Multi-stage image: compile with the full Rust toolchain, run on distroless.
-#
-# The build stage tag is kept in lockstep with rust-toolchain.toml at the
-# ADK-Rust workspace root, which pins Rust 1.95.0.
-FROM rust:1.95-slim AS builder
-
-WORKDIR /build
-
-# Optional compilation cache — uncomment to reuse artifacts across builds:
-# RUN cargo install sccache --locked
-# ENV RUSTC_WRAPPER=sccache
-
-COPY . .
-RUN cargo build --release
-
-# Distroless keeps the glibc C runtime the binary links against but ships no
-# shell or package manager, minimizing image size and attack surface.
-FROM gcr.io/distroless/cc-debian12
-
-COPY --from=builder /build/target/release/{name} /app/agent
-
-ENV PORT=8080
-ENTRYPOINT ["/app/agent"]
-"##,
-                    },
-                    FileFragment {
-                        path: "Dockerfile.static",
-                        content: r##"# Fully static image: musl-linked binary on a `FROM scratch` runtime.
-#
-# COMPATIBILITY GUARD — static linking only works when every native dependency
-# links statically:
-#
-#   works:  the `gemini-agent-platform` / `gemini-agent-platform-full` feature
-#           sets — the TLS stack is rustls with a statically built aws-lc, and
-#           no OpenSSL is involved.
-#   fails:  the `livekit` feature — pinned to native-tls, which requires a
-#           shared OpenSSL.
-#   fails:  the adk-audio `onnx` / `kokoro` / `desktop-audio` features — ONNX
-#           Runtime is a shared library, and espeak-ng / ALSA are system
-#           libraries with no static musl builds.
-#
-# A link-time failure in this file usually means the feature set above.
-
-# The build stage tag is kept in lockstep with rust-toolchain.toml at the
-# ADK-Rust workspace root, which pins Rust 1.95.0.
-FROM rust:1.95-slim AS builder
-
-# musl-tools provides musl-gcc; cmake builds aws-lc-sys for the musl target;
-# ca-certificates supplies the bundle copied into the runtime stage below.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends musl-tools cmake ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-RUN rustup target add x86_64-unknown-linux-musl
-
-WORKDIR /build
-
-COPY . .
-RUN cargo build --release --target x86_64-unknown-linux-musl
-
-FROM scratch
-
-# ADK-Rust uses rustls-tls-native-roots, which reads /etc/ssl/certs at runtime.
-# `scratch` ships no filesystem, so the CA bundle must be copied in or every
-# TLS connection fails certificate verification.
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/{name} /app/agent
-
-ENV PORT=8080
-ENTRYPOINT ["/app/agent"]
-"##,
-                    },
-                    FileFragment {
-                        path: ".dockerignore",
-                        content: r##"# Keep build output, VCS state, and local secrets out of the build context.
-target/
-.git/
-.env
-.env.*
-!.env.example
-*.swp
-*.swo
-.DS_Store
-"##,
-                    },
+                    FileFragment { path: "Dockerfile", content: DOCKERFILE },
+                    FileFragment { path: "Dockerfile.static", content: DOCKERFILE_STATIC },
+                    FileFragment { path: ".dockerignore", content: DOCKERIGNORE },
                 ],
             },
         },
@@ -908,6 +1176,38 @@ mod tests {
         // Aliases resolve to real targets.
         assert_eq!(registry.resolve_template("basic").unwrap().name, "llm");
         assert_eq!(registry.resolve_pattern("a2a").unwrap().name, "a2a-server");
+    }
+
+    #[test]
+    fn agent_engine_template_is_registered_with_deploy_files() {
+        let registry = TemplateRegistry::builtin();
+        let template =
+            registry.resolve_template("agent-engine").expect("agent-engine template registered");
+
+        assert_eq!(template.required_features, vec!["minimal", "agent-engine"]);
+        // The template serves itself and ships its own Dockerfile.
+        assert_eq!(template.incompatible_addons, vec!["server", "docker"]);
+
+        let paths: Vec<&str> =
+            template.code_fragments.additional_files.iter().map(|f| f.path).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "Dockerfile",
+                ".dockerignore",
+                "deploy/terraform/main.tf",
+                "deploy/terraform/variables.tf",
+                "deploy/terraform/outputs.tf",
+                "README.md",
+            ]
+        );
+
+        // The Dockerfile is the docker addon's, stated once.
+        let docker = registry.capability_addons.iter().find(|a| a.name == "docker").unwrap();
+        assert_eq!(
+            template.code_fragments.additional_files[0].content,
+            docker.code_fragments.additional_files[0].content
+        );
     }
 
     #[test]
