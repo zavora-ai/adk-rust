@@ -232,6 +232,17 @@ impl GcpHttpClient {
         self.max_response_bytes
     }
 
+    /// Overrides the maximum accepted response size after construction.
+    ///
+    /// Lets consumers expose their own post-construction bound override
+    /// without rebuilding credentials. The caller is responsible for
+    /// selecting a bound appropriate for the deployment.
+    #[must_use]
+    pub fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
+        self.max_response_bytes = max_response_bytes;
+        self
+    }
+
     /// Builds the absolute URL for an API path (version prefix applied).
     ///
     /// # Errors
@@ -312,8 +323,23 @@ impl GcpHttpClient {
     /// success, or the body is not valid JSON.
     pub async fn send_value(&self, request: RequestBuilder) -> Result<Value> {
         match self.send_value_internal(request, false).await? {
-            Some(value) => Ok(value),
+            Some((value, _)) => Ok(value),
             None => Ok(Value::Object(Map::new())),
+        }
+    }
+
+    /// Sends a request, returning the parsed JSON and the decoded body size.
+    ///
+    /// The byte count lets paginated callers enforce an aggregate response
+    /// bound across pages.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`send_value`](Self::send_value).
+    pub async fn send_value_counted(&self, request: RequestBuilder) -> Result<(Value, usize)> {
+        match self.send_value_internal(request, false).await? {
+            Some(value) => Ok(value),
+            None => Ok((Value::Object(Map::new()), 0)),
         }
     }
 
@@ -327,14 +353,14 @@ impl GcpHttpClient {
         &self,
         request: RequestBuilder,
     ) -> Result<Option<Value>> {
-        self.send_value_internal(request, true).await
+        self.send_value_internal(request, true).await.map(|option| option.map(|(value, _)| value))
     }
 
     async fn send_value_internal(
         &self,
         request: RequestBuilder,
         allow_not_found: bool,
-    ) -> Result<Option<Value>> {
+    ) -> Result<Option<(Value, usize)>> {
         let (status, body) = tokio::time::timeout(self.request_timeout, async {
             let mut response =
                 request.send().await.map_err(|error| self.errors.transport_error(error))?;
@@ -410,8 +436,9 @@ impl GcpHttpClient {
             return Err(self.errors.status_error(status, body));
         }
 
+        let body_len = body.len();
         if body.iter().all(u8::is_ascii_whitespace) {
-            return Ok(Some(Value::Object(Map::new())));
+            return Ok(Some((Value::Object(Map::new()), body_len)));
         }
 
         let value = serde_json::from_slice(&body).map_err(|error| {
@@ -423,7 +450,7 @@ impl GcpHttpClient {
                 ))
                 .with_upstream_status(status.as_u16())
         })?;
-        Ok(Some(value))
+        Ok(Some((value, body_len)))
     }
 }
 

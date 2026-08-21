@@ -996,6 +996,7 @@ name = "adk-session"
 version = "2.0.0"
 dependencies = [
  "adk-core",
+ "adk-gcp",
  "aes-gcm",
  "async-trait",
  "axum 0.8.9",

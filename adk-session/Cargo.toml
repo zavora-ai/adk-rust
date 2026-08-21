@@ -14,6 +14,7 @@ readme = "README.md"
 
 [dependencies]
 adk-core.workspace = true
+adk-gcp = { workspace = true, optional = true }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -49,5 +50,5 @@ redis = ["fred"]
 mongodb = ["dep:mongodb"]
 firestore = ["dep:firestore"]
 neo4j = ["dep:neo4rs"]
-vertex-session = ["base64", "google-cloud-auth", "reqwest", "sha2", "tokio"]
+vertex-session = ["adk-gcp", "base64", "google-cloud-auth", "reqwest", "sha2", "tokio"]
 encrypted-session = ["aes-gcm", "rand", "base64"]
