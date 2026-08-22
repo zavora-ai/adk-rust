@@ -34,6 +34,11 @@ impl Default for SkillInjectorConfig {
 pub struct SkillInjector {
     index: Arc<SkillIndex>,
     config: SkillInjectorConfig,
+    /// Root this injector was built from, when it was built by scanning one.
+    ///
+    /// [`SkillInjector::reloaded`] needs it to rescan; an injector built from an existing index
+    /// has no root to rescan.
+    root: Option<PathBuf>,
 }
 
 impl SkillInjector {
@@ -43,15 +48,54 @@ impl SkillInjector {
             extra_dirs.push(global.clone());
         }
         let index = if extra_dirs.is_empty() {
-            load_skill_index(root)?
+            load_skill_index(root.as_ref())?
         } else {
-            load_skill_index_with_extras(root, &extra_dirs)?
+            load_skill_index_with_extras(root.as_ref(), &extra_dirs)?
         };
-        Ok(Self { index: Arc::new(index), config })
+        Ok(Self { index: Arc::new(index), config, root: Some(root.as_ref().to_path_buf()) })
     }
 
     pub fn from_index(index: SkillIndex, config: SkillInjectorConfig) -> Self {
-        Self { index: Arc::new(index), config }
+        Self { index: Arc::new(index), config, root: None }
+    }
+
+    /// Rescans the root and returns an injector over the refreshed index.
+    ///
+    /// The index is snapshotted at construction, so a skill written after this injector was built
+    /// — by [`SkillWriter`](crate::SkillWriter), or by anything else on disk — is invisible to it.
+    ///
+    /// This returns a new injector rather than mutating in place because
+    /// [`build_plugin`](Self::build_plugin) captures the index by handle: a plugin already handed
+    /// to a runner keeps using the index it was built from. To pick up new skills, call this and
+    /// then rebuild the plugin from the result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SkillError::Validation`](crate::SkillError::Validation) if this injector was
+    /// built with [`from_index`](Self::from_index) and so has no root to rescan, or a load error
+    /// if rescanning fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let injector = injector.reloaded()?;
+    /// let plugin = injector.build_plugin("skills");
+    /// ```
+    pub fn reloaded(&self) -> SkillResult<Self> {
+        let Some(ref root) = self.root else {
+            return Err(crate::error::SkillError::Validation(
+                "this SkillInjector was built from an existing index with `from_index`, so there \
+                 is no root to rescan. Build it with `from_root` to reload."
+                    .to_string(),
+            ));
+        };
+
+        Self::from_root(root, self.config.clone())
+    }
+
+    /// The root this injector rescans, when it was built from one.
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
     }
 
     pub fn index(&self) -> &SkillIndex {

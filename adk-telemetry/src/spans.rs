@@ -172,6 +172,51 @@ pub fn tool_execute_span(tool_name: &str) -> Span {
     tracing::info_span!("tool.execute", tool.name = tool_name, otel.kind = "internal")
 }
 
+/// Creates a span for one portable team invocation.
+pub fn team_run_span(team_name: &str, invocation_id: &str, coordinator: &str) -> Span {
+    tracing::info_span!(
+        "team.run",
+        team.name = team_name,
+        team.coordinator = coordinator,
+        invocation.id = invocation_id,
+        team.status = tracing::field::Empty,
+        otel.kind = "internal"
+    )
+}
+
+/// Creates a span for one member execution inside a portable team.
+pub fn team_member_span(team_name: &str, member: &str, invocation_id: &str) -> Span {
+    tracing::info_span!(
+        "team.member.run",
+        team.name = team_name,
+        team.member = member,
+        invocation.id = invocation_id,
+        team.status = tracing::field::Empty,
+        otel.kind = "internal"
+    )
+}
+
+/// Creates a span for one exact team relationship execution.
+pub fn team_relationship_span(
+    team_name: &str,
+    from: &str,
+    to: &str,
+    kind: &str,
+    edge_id: &str,
+) -> Span {
+    tracing::info_span!(
+        "team.relationship.execute",
+        team.name = team_name,
+        team.relationship.from = from,
+        team.relationship.to = to,
+        team.relationship.kind = kind,
+        team.edge.id = edge_id,
+        team.status = tracing::field::Empty,
+        team.duration_ms = tracing::field::Empty,
+        otel.kind = "internal"
+    )
+}
+
 /// Create a span for callback execution
 ///
 /// # Arguments

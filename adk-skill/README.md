@@ -297,6 +297,52 @@ if let Some(m) = matched {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+### Write Skills
+
+`SkillWriter` writes into the `.skills` directory `load_skill_index` discovers. Writes go through
+a unique sibling temporary file, are synchronized, and atomically replace the destination on Unix
+and Windows, so a crash mid-write cannot leave a half-written skill that breaks the index load.
+
+```rust
+use adk_skill::{SkillDraft, SkillWriter, load_skill_index};
+
+let root = tempfile::tempdir().unwrap();
+let writer = SkillWriter::new(root.path());
+
+writer.write(
+    &SkillDraft::new("disk-triage", "Diagnose low disk space. Use when a disk alert fires.")
+        .with_body("1. Check the largest directories.\n2. Report the growth rate.")
+        .with_tags(["ops"])
+        .with_metadata_entry("incidents", serde_json::json!(["INC-1", "INC-2"])),
+)?;
+
+let index = load_skill_index(root.path())?;
+assert!(index.find_by_name("disk-triage").is_some());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+A skill name becomes a filename, so `validate_skill_name` enforces the specification's
+`[a-z0-9-]` rule (1–64 characters, no leading or trailing hyphen). That check is also the
+path-safety boundary: `../escape` and `nested/name` are rejected before any file is touched.
+
+Use `with_metadata_entry` to record provenance. A skill an agent derived from experience should
+carry the incidents and timestamp behind it, so a change in behaviour is auditable rather than
+unexplained.
+
+### Reload After Writing
+
+`SkillInjector` holds an index snapshotted at construction, and `build_plugin` captures it by
+handle — a plugin already handed to a runner keeps using the index it was built from. To pick up
+a skill written since, call `reloaded` and rebuild the plugin from the result:
+
+```rust,ignore
+let injector = injector.reloaded()?;
+let plugin = injector.build_plugin("skills");
+```
+
+`reloaded` returns an error when the injector was built with `from_index`, since there is no root
+to rescan.
+
 ### Build A Plugin Manager
 
 ```rust

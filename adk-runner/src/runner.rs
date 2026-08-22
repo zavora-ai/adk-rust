@@ -137,6 +137,13 @@ pub struct Runner {
     /// Each `run()` call registers a token here; `interrupt()` cancels it.
     active_runs: ActiveRuns,
     next_run_id: Arc<std::sync::atomic::AtomicU64>,
+    /// Serializes externally triggered invocations per session. The weak values prevent the
+    /// per-trigger session policy from retaining one lock forever for every completed event.
+    pub(crate) external_session_locks: Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>,
+        >,
+    >,
 }
 
 impl Runner {
@@ -211,7 +218,15 @@ impl Runner {
             context_compaction: config.context_compaction.map(Arc::new),
             active_runs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            external_session_locks: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         })
+    }
+
+    /// The executable root owned by this runner.
+    pub(crate) fn root_agent(&self) -> Arc<dyn Agent> {
+        Arc::clone(&self.root_agent)
     }
 
     /// Enable skill injection using a pre-built injector.
@@ -393,6 +408,14 @@ impl Runner {
             // Find which agent should handle this request
             let agent_to_run = Self::find_agent_to_run(&root_agent, session.as_ref());
 
+            // Let validated composite roots apply policy for the concrete agent
+            // selected for this turn. Ordinary agents keep the default no-op.
+            root_agent.configure_run(agent_to_run.name(), &mut run_config);
+            if let Some(targets) = root_agent.transfer_targets_for(agent_to_run.name()) {
+                run_config.transfer_targets = targets;
+                run_config.parent_agent = None;
+            }
+
             // Clone services for potential reuse in transfer
             #[cfg(feature = "artifacts")]
             let artifact_service_clone = artifact_service.clone();
@@ -531,6 +554,12 @@ impl Runner {
                                 return;
                             }
                         };
+                        refreshed_ctx = refreshed_ctx.with_orchestration_root_invocation_id(
+                            adk_core::InvocationContext::orchestration_root_invocation_id(
+                                ctx.as_ref(),
+                            )
+                            .to_string(),
+                        );
 
                         #[cfg(feature = "artifacts")]
                         if let Some(service) = artifact_service_clone.clone() {
@@ -661,6 +690,10 @@ impl Runner {
                             return;
                         }
                     };
+                    refreshed_ctx = refreshed_ctx.with_orchestration_root_invocation_id(
+                        adk_core::InvocationContext::orchestration_root_invocation_id(ctx.as_ref())
+                            .to_string(),
+                    );
                     #[cfg(feature = "artifacts")]
                     if let Some(service) = artifact_service_clone.clone() {
                         let scoped = adk_artifact::ScopedArtifacts::new(
@@ -795,7 +828,7 @@ impl Runner {
 
             // Stream events and check for transfers
             use futures::StreamExt;
-            let mut transfer_target: Option<String> = None;
+            let mut transfer_target: Option<(String, String)> = None;
 
             while let Some(result) = {
                 // Race the next event against cancellation so an in-flight
@@ -848,7 +881,30 @@ impl Runner {
 
                         // Check for transfer action
                         if let Some(target) = &event.actions.transfer_to_agent {
-                            transfer_target = Some(target.clone());
+                            let source = if event.author.is_empty() {
+                                agent_to_run.name()
+                            } else {
+                                &event.author
+                            };
+                            if let Some(allowed) = root_agent.transfer_targets_for(source)
+                                && !allowed.contains(target)
+                            {
+                                if root_agent.strict_transfer_policy() {
+                                    yield Err(adk_core::AdkError::new(
+                                        adk_core::ErrorComponent::Agent,
+                                        adk_core::ErrorCategory::Forbidden,
+                                        "agent.transfer.target_forbidden",
+                                        format!(
+                                            "agent '{source}' cannot hand off to '{target}'; allowed targets: {}",
+                                            allowed.join(", ")
+                                        ),
+                                    ));
+                                    return;
+                                }
+                                tracing::warn!(source, target, "handoff target rejected by root policy");
+                            } else {
+                                transfer_target = Some((source.to_string(), target.clone()));
+                            }
                         }
 
                         // CRITICAL: Apply state_delta to the mutable session immediately.
@@ -907,7 +963,7 @@ impl Runner {
             let mut transfer_depth: u32 = 0;
             let mut current_transfer_target = transfer_target;
 
-            while let Some(target_name) = current_transfer_target.take() {
+            while let Some((transfer_source, target_name)) = current_transfer_target.take() {
                 transfer_depth += 1;
                 if transfer_depth > max_depth {
                     tracing::warn!(
@@ -915,13 +971,60 @@ impl Runner {
                         target = %target_name,
                         "max transfer depth exceeded, stopping transfer chain"
                     );
+                    if root_agent.strict_transfer_policy() {
+                        yield Err(adk_core::AdkError::new(
+                            adk_core::ErrorComponent::Agent,
+                            adk_core::ErrorCategory::InvalidInput,
+                            "agent.transfer.depth_exceeded",
+                            format!(
+                                "maximum handoff depth {max_depth} exceeded while transferring to '{target_name}'"
+                            ),
+                        ));
+                        return;
+                    }
                     break;
+                }
+
+                let governance = adk_core::AgentTransferRequest {
+                    invocation_id: invocation_id.clone(),
+                    from: transfer_source.clone(),
+                    to: target_name.clone(),
+                    depth: transfer_depth,
+                };
+                match root_agent.govern_transfer(&governance).await {
+                    Ok(adk_core::AgentTransferDecision::Allow) => {}
+                    Ok(adk_core::AgentTransferDecision::Deny { reason }) => {
+                        yield Err(adk_core::AdkError::new(
+                            adk_core::ErrorComponent::Agent,
+                            adk_core::ErrorCategory::Forbidden,
+                            "agent.transfer.denied",
+                            format!(
+                                "handoff from '{transfer_source}' to '{target_name}' was denied: {reason}"
+                            ),
+                        ));
+                        return;
+                    }
+                    Err(error) => {
+                        yield Err(error);
+                        return;
+                    }
                 }
 
                 let target_agent = match Self::find_agent(&root_agent, &target_name) {
                     Some(a) => a,
                     None => {
                         tracing::warn!(target = %target_name, "transfer target not found in agent tree");
+                        if root_agent.strict_transfer_policy() {
+                            yield Err(adk_core::AdkError::new(
+                                adk_core::ErrorComponent::Agent,
+                                adk_core::ErrorCategory::NotFound,
+                                "agent.transfer.target_not_found",
+                                format!(
+                                    "handoff target '{target_name}' was not found in the agent tree"
+                                ),
+                            ));
+                            return;
+                        }
                         break;
                     }
                 };
@@ -930,16 +1033,22 @@ impl Runner {
                 // - parent: the agent that transferred to it (or root if applicable)
                 // - peers: siblings in the agent tree
                 // - children: handled by the agent itself via sub_agents()
-                let (parent_name, peer_names) = Self::compute_transfer_context(&root_agent, &target_name);
-
                 let mut transfer_run_config = run_config.clone();
-                let mut targets = Vec::new();
-                if let Some(ref parent) = parent_name {
-                    targets.push(parent.clone());
+                if let Some(targets) = root_agent.transfer_targets_for(&target_name) {
+                    transfer_run_config.transfer_targets = targets;
+                    transfer_run_config.parent_agent = None;
+                } else {
+                    let (parent_name, peer_names) =
+                        Self::compute_transfer_context(&root_agent, &target_name);
+                    let mut targets = Vec::new();
+                    if let Some(ref parent) = parent_name {
+                        targets.push(parent.clone());
+                    }
+                    targets.extend(peer_names);
+                    transfer_run_config.transfer_targets = targets;
+                    transfer_run_config.parent_agent = parent_name;
                 }
-                targets.extend(peer_names);
-                transfer_run_config.transfer_targets = targets;
-                transfer_run_config.parent_agent = parent_name;
+                root_agent.configure_run(&target_name, &mut transfer_run_config);
 
                 // For transfers, we reuse the same mutable session to preserve state
                 let transfer_invocation_id = format!("inv-{}", uuid::Uuid::new_v4());
@@ -958,6 +1067,10 @@ impl Runner {
                         return;
                     }
                 };
+                transfer_ctx = transfer_ctx.with_orchestration_root_invocation_id(
+                    adk_core::InvocationContext::orchestration_root_invocation_id(ctx.as_ref())
+                        .to_string(),
+                );
 
                 #[cfg(feature = "artifacts")]
                 if let Some(ref service) = artifact_service_clone {
@@ -978,6 +1091,9 @@ impl Runner {
                 }
                 if let Some(token) = cancellation_token.as_ref() {
                     transfer_ctx = transfer_ctx.with_cancellation_token(token.clone());
+                }
+                if let Some(shared_state) = adk_core::CallbackContext::shared_state(ctx.as_ref()) {
+                    transfer_ctx = transfer_ctx.with_shared_state(shared_state);
                 }
 
                 let transfer_ctx = Arc::new(transfer_ctx);
@@ -1044,7 +1160,31 @@ impl Runner {
 
                             // Capture further transfer requests
                             if let Some(target) = &event.actions.transfer_to_agent {
-                                current_transfer_target = Some(target.clone());
+                                let source = if event.author.is_empty() {
+                                    target_agent.name()
+                                } else {
+                                    &event.author
+                                };
+                                if let Some(allowed) = root_agent.transfer_targets_for(source)
+                                    && !allowed.contains(target)
+                                {
+                                    if root_agent.strict_transfer_policy() {
+                                        yield Err(adk_core::AdkError::new(
+                                            adk_core::ErrorComponent::Agent,
+                                            adk_core::ErrorCategory::Forbidden,
+                                            "agent.transfer.target_forbidden",
+                                            format!(
+                                                "agent '{source}' cannot hand off to '{target}'; allowed targets: {}",
+                                                allowed.join(", ")
+                                            ),
+                                        ));
+                                        return;
+                                    }
+                                    tracing::warn!(source, target, "handoff target rejected by root policy");
+                                } else {
+                                    current_transfer_target =
+                                        Some((source.to_string(), target.clone()));
+                                }
                             }
 
                             // Apply state delta for transferred agent too

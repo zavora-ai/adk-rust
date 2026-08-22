@@ -15,6 +15,7 @@ readme = "README.md"
 [dependencies]
 adk-core.workspace = true
 adk-telemetry.workspace = true
+adk-tool = { workspace = true, optional = true }
 adk-skill = { workspace = true, optional = true }
 adk-guardrail = { workspace = true, optional = true }
 adk-plugin = { workspace = true, optional = true }
@@ -29,6 +30,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }
 schemars = "1.0"
 jsonschema = { workspace = true }
 cron = { version = "0.15", optional = true }
@@ -36,6 +38,7 @@ notify = { version = "8", optional = true }
 axum = { version = "0.8", optional = true }
 # Graceful shutdown for the webhook trigger's owned HTTP listener.
 tokio-util = { version = "0.7", optional = true }
+tempfile = { version = "3", optional = true }
 
 [features]
 default = ["skills"]
@@ -45,8 +48,15 @@ skills = ["dep:adk-skill"]
 sandbox = ["dep:adk-sandbox", "adk-sandbox/workspace"]
 coding = ["dep:adk-devtools"]
 codeact = []
+team-tools = ["dep:adk-tool"]
 record-payloads = []
-ambient = ["dep:cron", "dep:notify", "dep:axum", "dep:tokio-util"]
+ambient = [
+    "dep:cron",
+    "dep:notify",
+    "dep:axum",
+    "dep:tokio-util",
+    "dep:tempfile",
+]
 
 [dev-dependencies]
 # Drives the webhook trigger over real HTTP in the trust-boundary tests.

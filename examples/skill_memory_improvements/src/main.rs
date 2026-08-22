@@ -16,7 +16,7 @@ use adk_memory::{
     InMemoryMemoryService, MemoryServiceAdapter, MemoryService, SearchRequest,
 };
 use adk_skill::{
-    SkillInjectorConfig, SkillInjector,
+    SkillDraft, SkillInjectorConfig, SkillInjector, SkillWriter,
     discover_skill_files, discover_skill_files_with_extras,
     discover_instruction_files_with_extras,
     load_skill_index, load_skill_index_with_extras,
@@ -250,6 +250,27 @@ Body.";
                 let summaries = index.summaries();
                 let summary = summaries.iter().find(|s| s.name == "rs").unwrap();
                 assert_eq!(summary.triggers, vec!["*.rs"]);
+            });
+        }
+
+        println!("\n=== SkillWriter: portable atomic replacement ===\n");
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let writer = SkillWriter::new(temp.path());
+            check!("writes and replaces one skill atomically", {
+                writer.write(
+                    &SkillDraft::new("runtime-policy", "First revision").with_body("First body."),
+                )?;
+                writer.write(
+                    &SkillDraft::new("runtime-policy", "Second revision")
+                        .with_body("Second body."),
+                )?;
+                let index = load_skill_index(temp.path())?;
+                assert_eq!(index.len(), 1);
+                assert_eq!(
+                    index.find_by_name("runtime-policy").unwrap().description,
+                    "Second revision"
+                );
             });
         }
 

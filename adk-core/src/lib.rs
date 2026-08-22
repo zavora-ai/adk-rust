@@ -74,6 +74,8 @@
 
 /// Core agent trait and event stream type.
 pub mod agent;
+/// Starting an agent turn without owning the runner's construction.
+pub mod agent_invoker;
 /// Dynamic agent loading by name.
 pub mod agent_loader;
 /// Callback type aliases for agent, model, and tool lifecycle hooks.
@@ -109,7 +111,11 @@ pub mod tool_concurrency;
 /// Content, Part, and multimodal data types.
 pub mod types;
 
-pub use agent::{Agent, EventStream, ResolvedContext};
+pub use agent::{
+    Agent, AgentCapabilities, AgentTransferDecision, AgentTransferRequest, EventStream,
+    ResolvedContext,
+};
+pub use agent_invoker::AgentInvoker;
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
 pub use callbacks::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull,
