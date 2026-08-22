@@ -425,6 +425,8 @@ dependencies = [
 name = "adk-deploy"
 version = "2.1.0"
 dependencies = [
+ "adk-core",
+ "adk-gcp",
  "anyhow",
  "axum 0.8.9",
  "chrono",
