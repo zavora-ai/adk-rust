@@ -1072,6 +1072,7 @@ version = "2.0.0"
 dependencies = [
  "adk-code",
  "adk-core",
+ "adk-gcp",
  "adk-memory",
  "adk-rust-macros",
  "adk-sandbox",

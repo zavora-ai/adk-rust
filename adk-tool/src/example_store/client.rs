@@ -1,15 +1,13 @@
 //! REST client for the Vertex AI Example Store v1beta1 data plane.
 
 use adk_core::{AdkError, Content, ErrorCategory, ErrorComponent, Result};
-use google_cloud_auth::credentials::{self, CacheableResource, Credentials};
-use reqwest::{Client, RequestBuilder, StatusCode};
+use adk_gcp::{GcpErrorCodes, GcpErrorContext, GcpHttpClient, truncate_for_error};
+use google_cloud_auth::credentials::Credentials;
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
 
 const EXAMPLE_STORE_API_VERSION: &str = "v1beta1";
-const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const AUTH_HEADERS_TIMEOUT: Duration = Duration::from_secs(30);
@@ -592,6 +590,27 @@ mod int64_string {
 
 // ===== Client =====
 
+// Slots are named by failure class, not by literal: the pre-migration
+// internal-error code `tool.example_store.internal` rides in the
+// `invalid_response` slot, so every error code this client ever stamped
+// survives the adk-gcp migration exactly.
+const GCP_ERROR_CODES: GcpErrorCodes = GcpErrorCodes {
+    invalid_input: "tool.example_store.invalid_input",
+    unauthorized: "tool.example_store.unauthorized",
+    forbidden: "tool.example_store.forbidden",
+    not_found: "tool.example_store.not_found",
+    rate_limited: "tool.example_store.rate_limited",
+    timeout: "tool.example_store.timeout",
+    unavailable: "tool.example_store.unavailable",
+    credentials_unavailable: "tool.example_store.credentials_unavailable",
+    invalid_response: "tool.example_store.internal",
+    invalid_request: "tool.example_store.invalid_request",
+    upstream_error: "tool.example_store.upstream_error",
+    // The synchronous data plane has no long-running operations; required by
+    // the table but never stamped.
+    operation_failed: "tool.example_store.operation_failed",
+};
+
 /// ADC-authenticated REST client for the Example Store v1beta1 data plane.
 ///
 /// Performs [`upsert_examples`](Self::upsert_examples),
@@ -603,18 +622,14 @@ mod int64_string {
 /// > **Note:** the Example Store API is **v1beta1 (Preview)** and is currently
 /// > served from the `us-central1` region only.
 pub struct ExampleStoreClient {
-    http_client: Client,
-    endpoint: String,
+    client: GcpHttpClient,
     store_path: String,
-    credentials: Credentials,
-    auth_headers: Arc<RwLock<Option<reqwest::header::HeaderMap>>>,
 }
 
 impl std::fmt::Debug for ExampleStoreClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Credentials carry secret material and do not implement Debug.
+        // The transport carries credentials; expose only the resource name.
         f.debug_struct("ExampleStoreClient")
-            .field("endpoint", &self.endpoint)
             .field("store_path", &self.store_path)
             .finish_non_exhaustive()
     }
@@ -641,14 +656,7 @@ impl ExampleStoreClient {
     /// valid secure origin, or the redirect-disabled HTTP client cannot be
     /// constructed.
     pub fn new_with_adc(config: ExampleStoreConfig) -> Result<Self> {
-        let credentials = credentials::Builder::default()
-            .with_scopes([CLOUD_PLATFORM_SCOPE])
-            .build()
-            .map_err(|error| {
-                let error = truncate_for_error(&error.to_string());
-                Self::auth_error(format!("failed to build example store ADC credentials: {error}"))
-            })?;
-        Self::with_credentials(config, credentials)
+        Self::build(config, None)
     }
 
     /// Creates a new client with explicit credentials.
@@ -658,24 +666,20 @@ impl ExampleStoreClient {
     /// Returns an error when the endpoint is not a valid secure origin or the
     /// redirect-disabled HTTP client cannot be constructed.
     pub fn with_credentials(config: ExampleStoreConfig, credentials: Credentials) -> Result<Self> {
-        let http_client = Client::builder()
+        Self::build(config, Some(credentials))
+    }
+
+    fn build(config: ExampleStoreConfig, credentials: Option<Credentials>) -> Result<Self> {
+        let errors = GcpErrorContext::new(ErrorComponent::Tool, GCP_ERROR_CODES, "example store");
+        let mut builder = GcpHttpClient::builder(errors, config.endpoint())
+            .api_version(EXAMPLE_STORE_API_VERSION)
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
-            .timeout(HTTP_REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| {
-                let error = truncate_for_error(&error.without_url().to_string());
-                Self::internal_error(format!("failed to build example store HTTP client: {error}"))
-            })?;
-        let client = Self {
-            http_client,
-            endpoint: config.endpoint(),
-            store_path: config.store_path(),
-            credentials,
-            auth_headers: Arc::new(RwLock::new(None)),
-        };
-        client.build_url("")?;
-        Ok(client)
+            .request_timeout(HTTP_REQUEST_TIMEOUT)
+            .auth_timeout(AUTH_HEADERS_TIMEOUT);
+        if let Some(credentials) = credentials {
+            builder = builder.credentials(credentials);
+        }
+        Ok(Self { client: builder.build()?, store_path: config.store_path() })
     }
 
     /// The full `projects/*/locations/*/exampleStores/*` resource name this
@@ -742,206 +746,20 @@ impl ExampleStoreClient {
         verb: &str,
         body: &T,
     ) -> Result<R> {
-        let url =
-            self.build_url(&format!("{EXAMPLE_STORE_API_VERSION}/{}:{verb}", self.store_path))?;
         tracing::debug!(example_store.verb = verb, "sending example store request");
-        let request = self.apply_auth(self.http_client.post(url).json(body)).await?;
-        self.send_json(request).await
-    }
-
-    fn auth_error(message: impl Into<String>) -> AdkError {
-        AdkError::unauthorized(ErrorComponent::Tool, "tool.example_store.unauthorized", message)
-            .with_provider("vertex_ai")
-    }
-
-    fn invalid_input(message: impl Into<String>) -> AdkError {
-        AdkError::new(
-            ErrorComponent::Tool,
-            ErrorCategory::InvalidInput,
-            "tool.example_store.invalid_input",
-            message,
-        )
-        .with_provider("vertex_ai")
-    }
-
-    fn internal_error(message: impl Into<String>) -> AdkError {
-        AdkError::internal(ErrorComponent::Tool, "tool.example_store.internal", message)
-            .with_provider("vertex_ai")
-    }
-
-    fn timeout_error(message: impl Into<String>) -> AdkError {
-        AdkError::timeout(ErrorComponent::Tool, "tool.example_store.timeout", message)
-            .with_provider("vertex_ai")
-    }
-
-    fn credentials_error(error: google_cloud_auth::errors::CredentialsError) -> AdkError {
-        let message = format!(
-            "failed to obtain google cloud auth headers: {}",
-            truncate_for_error(&error.to_string()),
-        );
-        if error.is_transient() {
-            AdkError::unavailable(
-                ErrorComponent::Tool,
-                "tool.example_store.credentials_unavailable",
-                message,
-            )
-            .with_provider("vertex_ai")
-        } else {
-            Self::auth_error(message)
-        }
-    }
-
-    fn transport_error(error: reqwest::Error) -> AdkError {
-        let timeout = error.is_timeout();
-        let error = truncate_for_error(&error.without_url().to_string());
-        if timeout {
-            return Self::timeout_error(format!("example store HTTP request timed out: {error}"));
-        }
-        AdkError::unavailable(
-            ErrorComponent::Tool,
-            "tool.example_store.unavailable",
-            format!("failed to send example store request: {error}"),
-        )
-        .with_provider("vertex_ai")
-    }
-
-    fn status_error(status: StatusCode, body: &str) -> AdkError {
-        let message = format!(
-            "example store request failed with status {}: {}",
-            status.as_u16(),
-            truncate_for_error(body),
-        );
-        let (category, code) = match status.as_u16() {
-            400 | 409 | 422 => (ErrorCategory::InvalidInput, "tool.example_store.invalid_request"),
-            401 => (ErrorCategory::Unauthorized, "tool.example_store.unauthorized"),
-            403 => (ErrorCategory::Forbidden, "tool.example_store.forbidden"),
-            404 => (ErrorCategory::NotFound, "tool.example_store.not_found"),
-            408 | 504 => (ErrorCategory::Timeout, "tool.example_store.timeout"),
-            429 => (ErrorCategory::RateLimited, "tool.example_store.rate_limited"),
-            500 | 502 | 503 => (ErrorCategory::Unavailable, "tool.example_store.unavailable"),
-            _ => (ErrorCategory::Internal, "tool.example_store.upstream_error"),
-        };
-        AdkError::new(ErrorComponent::Tool, category, code, message)
-            .with_provider("vertex_ai")
-            .with_upstream_status(status.as_u16())
-    }
-
-    /// Build a URL from the endpoint base, requiring HTTPS for non-loopback
-    /// endpoints so example data is never sent in cleartext.
-    fn build_url(&self, path: &str) -> Result<String> {
-        let mut url = reqwest::Url::parse(&self.endpoint).map_err(|error| {
+        let request = self
+            .client
+            .request(Method::POST, &format!("{}:{verb}", self.store_path))
+            .await?
+            .json(body);
+        let value = self.client.send_value(request).await?;
+        serde_json::from_value(value).map_err(|error| {
             let error = truncate_for_error(&error.to_string());
-            Self::invalid_input(format!("invalid example store endpoint URL: {error}"))
-        })?;
-        if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback_host(&url)) {
-            return Err(Self::invalid_input(
-                "example store endpoint must use HTTPS for secure transmission of example data",
-            ));
-        }
-        if !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || url.path() != "/"
-        {
-            return Err(Self::invalid_input(
-                "example store endpoint must be an origin without userinfo, path, query, or fragment",
-            ));
-        }
-        url.set_path(&format!("/{}", path.trim_start_matches('/')));
-        Ok(url.to_string())
-    }
-
-    // ADC auth-header caching copied from adk-session's Vertex backend.
-    // Deliberate debt: Wave 3 (PR 3.4) migrates every copy of this pattern to
-    // the shared adk-gcp crate; do not extract a helper here.
-    async fn auth_headers(&self) -> Result<reqwest::header::HeaderMap> {
-        let cacheable_headers = tokio::time::timeout(
-            AUTH_HEADERS_TIMEOUT,
-            self.credentials.headers(Default::default()),
-        )
-        .await
-        .map_err(|_| {
-            Self::timeout_error(format!(
-                "example store credential header acquisition timed out after {} seconds",
-                AUTH_HEADERS_TIMEOUT.as_secs_f64(),
-            ))
-        })?
-        .map_err(Self::credentials_error)?;
-
-        match cacheable_headers {
-            CacheableResource::New { data, .. } => {
-                *self.auth_headers.write().await = Some(data.clone());
-                Ok(data)
-            }
-            CacheableResource::NotModified => self
-                .auth_headers
-                .read()
-                .await
-                .clone()
-                .ok_or_else(|| {
-                    Self::auth_error(
-                        "google cloud credentials returned NotModified before any cached auth headers were available",
-                    )
-                }),
-        }
-    }
-
-    async fn apply_auth(&self, request: RequestBuilder) -> Result<RequestBuilder> {
-        let headers = self.auth_headers().await?;
-        Ok(request.headers(headers))
-    }
-
-    async fn send_json<R: for<'de> Deserialize<'de>>(&self, request: RequestBuilder) -> Result<R> {
-        let (status, body) = tokio::time::timeout(HTTP_REQUEST_TIMEOUT, async {
-            let response = request.send().await.map_err(Self::transport_error)?;
-            let status = response.status();
-            let body = response.bytes().await.map_err(Self::transport_error)?;
-            Ok::<_, AdkError>((status, body))
-        })
-        .await
-        .map_err(|_| {
-            Self::timeout_error(format!(
-                "example store request timed out after {} seconds",
-                HTTP_REQUEST_TIMEOUT.as_secs(),
-            ))
-        })??;
-
-        if !status.is_success() {
-            let body = String::from_utf8_lossy(&body);
-            let body = if body.trim().is_empty() { "<empty body>" } else { body.as_ref() };
-            return Err(Self::status_error(status, body));
-        }
-
-        serde_json::from_slice(&body).map_err(|error| {
-            let error = truncate_for_error(&error.to_string());
-            Self::internal_error(format!("failed to parse example store response JSON: {error}"))
-                .with_upstream_status(status.as_u16())
+            self.client
+                .errors()
+                .invalid_response(format!("failed to parse example store response JSON: {error}"))
         })
     }
-}
-
-fn is_loopback_host(url: &reqwest::Url) -> bool {
-    matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
-}
-
-fn truncate_for_error(value: &str) -> String {
-    const MAX_LEN: usize = 512;
-    let mut sanitized = String::with_capacity(value.len().min(MAX_LEN));
-    let mut truncated = false;
-    for character in value.chars() {
-        let character =
-            if character.is_control() { char::REPLACEMENT_CHARACTER } else { character };
-        if sanitized.len() + character.len_utf8() > MAX_LEN {
-            truncated = true;
-            break;
-        }
-        sanitized.push(character);
-    }
-    if truncated {
-        sanitized.push_str("...");
-    }
-    sanitized
 }
 
 #[cfg(test)]
