@@ -26,7 +26,7 @@ meta-feature):
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.0.0", features = ["minimal", "agent-engine"] }
+adk-rust = { version = "2.1.0", features = ["minimal", "agent-engine"] }
 ```
 
 `serve_agent_engine` is the whole `main` of a deployable engine. It binds

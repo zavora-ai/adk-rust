@@ -119,8 +119,8 @@ Or add it to an existing project:
 
 ```toml
 [dependencies]
-adk-rust = "2.0.0"                                        # Gemini, agents, runner, sessions
-# adk-rust = { version = "2.0.0", features = ["standard"] }  # + server, auth, graph, eval
+adk-rust = "2.1.0"                                        # Gemini, agents, runner, sessions
+# adk-rust = { version = "2.1.0", features = ["standard"] }  # + server, auth, graph, eval
 ```
 
 | Tier | Includes | Use case |
