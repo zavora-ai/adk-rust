@@ -11,13 +11,11 @@
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
 and async, across 42 crates for agent orchestration.
 
-> **v2.0.0 Released!** Graph orchestration gains subgraphs (`SubgraphNode`, each with
-> its own checkpoint thread), dynamic routing through `NodeOutput::with_goto` and
-> `with_goto_parent`, imperative child invocation through `ctx.run_node_with`,
-> per-node `RetryPolicy` and timeouts, a frontier concurrency bound, and
-> `RetentionPolicy` for checkpoints. Interrupts resume across processes over a shared
-> SQLite checkpointer. Two crates are new: `adk-computer-use` for digest-bound
-> desktop automation and `adk-devtools` for workspace-scoped coding-agent tools.
+> **v2.1.0 release candidate — unpublished.** This minor release preserves the 2.0
+> public API while adding Anthropic request customization and typed server-side
+> safety-refusal fallbacks. The 2.0 graph foundation remains intact: subgraphs,
+> dynamic routing, imperative child invocation, per-node retries and timeouts,
+> bounded frontier concurrency, checkpoint retention, and cross-process resume.
 >
 > Coming from 1.x: six APIs changed shape and the fan-in default changed behaviour
 > without an API change. See the [migration guide](docs/official_docs/migration/1.0-to-2.0.md)
@@ -384,7 +382,7 @@ per-platform tool matrix and the CI cost tiers.
 
 ## Project
 
-- [ROADMAP.md](ROADMAP.md) — **v2.0.0** (current). The authoritative roadmap, and
+- [ROADMAP.md](ROADMAP.md) — **v2.1.0** (release candidate). The authoritative roadmap, and
   why both orchestration APIs are supported
 - [CHANGELOG.md](CHANGELOG.md) — every release
 - [CONTRIBUTORS.md](CONTRIBUTORS.md) — the people who built this
