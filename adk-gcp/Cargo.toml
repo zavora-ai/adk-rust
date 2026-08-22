@@ -1,0 +1,23 @@
+[package]
+name = "adk-gcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared Google Cloud REST plumbing for Rust Agent Development Kit (ADK-Rust): ADC credential caching, bounded HTTP transport, and long-running-operation polling"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-gcp"
+keywords = ["ai", "agent", "adk", "gcp", "vertex-ai"]
+
+[dependencies]
+adk-core.workspace = true
+google-cloud-auth = { version = "1.8", default-features = false, features = ["default-rustls-provider"] }
+reqwest.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[dev-dependencies]
+axum = "0.8"
+tokio = { workspace = true, features = ["rt", "macros"] }

@@ -65,6 +65,9 @@ deepseek = ["adk-model/deepseek"]
 groq = ["adk-model/groq"]
 ollama = ["adk-model/ollama"]
 all-providers = ["gemini", "openai", "anthropic", "deepseek", "groq", "ollama"]
+# `adk-rust deploy agent-engine`: deploy a BYOC container as a Gemini
+# Enterprise Agent Platform engine (host-side tooling)
+gcp-deploy = ["adk-deploy/gcp"]
 telemetry-otlp = ["adk-telemetry/otlp"]
 # Prompt optimization CLI command (adk optimize)
 optimize = []
@@ -74,3 +77,5 @@ graph-sqlite = ["adk-graph/sqlite"]
 [dev-dependencies]
 async-trait.workspace = true
 tower = { version = "0.5", features = ["util"] }
+axum = "0.8"
+google-cloud-auth = { version = "1.8", default-features = false, features = ["default-rustls-provider"] }

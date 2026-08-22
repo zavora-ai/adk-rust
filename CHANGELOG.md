@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`adk-gcp` crate**: shared Google Cloud REST plumbing for Vertex AI
+  backends — `GcpHttpClient` (ADC with cached auth headers per
+  `CacheableResource` semantics, redirect-disabled bounded transport,
+  HTTPS-or-loopback endpoint validation), `LroPoller` (long-running-operation
+  polling with capped backoff, operation identity pinning, and
+  project/location scope validation), `VertexResourceName`
+  (`projects/*/locations/*/reasoningEngines/*` parse/format), and
+  `GcpErrorContext` (consumer-branded errors across the `AdkError`
+  boundary). Purely additive: consolidates the pattern duplicated across
+  `adk-session`, `adk-memory`, `adk-tool`, `adk-deploy`, and `adk-artifact`;
+  call-site migrations follow in later PRs.
+
+- **CLI deploy subcommand** (`adk-cli`, feature `gcp-deploy`):
+  `adk-rust deploy agent-engine --image-uri <uri> --project <p> --location <l>
+  [--service-account <sa>] [--kms-key <key>] [--display-name <n>]` deploys a
+  pushed container image as a Gemini Enterprise Agent Platform engine via the
+  adk-deploy `gcp` client — declares the full class-method contract, waits
+  for the create operation, and prints the engine resource name. The display
+  name defaults to the image name. Install with
+  `cargo install adk-cli --features gcp-deploy`.
+
+- **Agent Engine deployment client** (`adk-deploy`, feature `gcp`; umbrella
+  feature `gcp-deploy` — host-side tooling, deliberately not part of
+  `gemini-agent-platform`): `GcpDeployClient` with exactly four operations
+  against the v1beta1 `reasoningEngines` surface — `create_reasoning_engine`,
+  `poll_operation` (plus a backoff-polling `wait_for_operation`),
+  `get_reasoning_engine`, `delete_reasoning_engine`. Typed camelCase wire
+  DTOs for the BYOC create body (`containerSpec.imageUri`, `deploymentSpec`
+  env/secret-env/scaling/resource limits/PSC-I, `classMethods`,
+  `agentFramework`, `serviceAccount`, CMEK `encryptionSpec`);
+  `CreateReasoningEngineRequest::byoc` declares the full WP1 class-method
+  contract by default. Image build/push stays with Cloud Build
+  (`gcloud_build_submit_command` renders the documented command).
+  `reasoningEngines:asyncQuery` is deliberately not declared (cannot be
+  added post-create; adk-python parity excludes it).
+
+- **cargo-adk `agent-engine` template** (`cargo adk new my-agent --template
+  agent-engine`): scaffolds a Gemini Enterprise Agent Engine BYOC container — a
+  binary whose `main` is `serve_agent_engine(agent, AgentEngineOptions::new())`
+  (features `["minimal", "agent-engine"]`), the docker addon's `Dockerfile` and
+  `.dockerignore`, and `deploy/terraform/` with a
+  `google_vertex_ai_reasoning_engine` BYOC resource (`spec.container_spec.image_uri`,
+  the full 14-method `class_methods` contract in `jsonencode`,
+  `agent_framework = "google-adk"`, optional `service_account`), plus
+  `variables.tf`/`outputs.tf` mirroring the containerized-agent codelab. The
+  generated README covers `gcloud builds submit`, `terraform apply`, the
+  platform-set environment variables, the `/api` passthrough for querying the
+  deployed engine, and the optional A2A-routes setup via
+  `ServerBuilder::with_agent_engine(true)` + `.with_a2a(...)`. Template and
+  addon file fragments now support `{name}` substitution and path override
+  (a template file replaces a base file with the same path).
 - **cargo-adk `docker` addon** (`cargo adk new my-agent --addon docker`): emits a
   multi-stage `Dockerfile` (`rust:1.95-slim` build stage kept in lockstep with
   `rust-toolchain.toml`, `gcr.io/distroless/cc-debian12` runtime, `ENV PORT=8080`,
@@ -159,6 +210,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to `TYPE object FLEXIBLE`, and the `surrealdb` feature now has a PR-tier
   `feature-coverage` matrix entry so the backend cannot silently break again
   (#568).
+
+### Changed
+
+- **Wave 3 ADC/LRO consolidation** — the Vertex plumbing duplicated across
+  five backends now lives in `adk-gcp`, with no public API change and each
+  backend's error codes, categories, and mock contract tests preserved:
+  `adk-session` (`vertex-session`), `adk-memory` (`vertex-memory`),
+  `adk-tool` (`example-store`), `adk-deploy` (`gcp`), and `adk-artifact`
+  (`gcs`, credential handling only).
+- **adk-gcp**: `GcpErrorContext` gains `with_response_too_large_code` (a
+  dedicated size-limit code override; the default remains the consumer's
+  `invalid_response` literal); `GcpHttpClient` gains `send_value_counted`
+  (parsed JSON plus decoded body size, for aggregate pagination bounds) and
+  a post-construction `with_max_response_bytes` override.
 
 ## [2.0.0] - 2026-08-09
 

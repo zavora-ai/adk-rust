@@ -236,6 +236,10 @@ adk-gemini/      Dedicated Gemini client with GeminiBackend trait (Studio + Vert
                  streaming step events, and lifecycle (get/delete/cancel). The runtime
                  transport lives in adk-model (`gemini-interactions`): a `GeminiModel`
                  toggle that drives the standard LlmAgent/Runner through this endpoint.
+adk-gcp/         Shared Google Cloud REST plumbing for Vertex AI backends: ADC credential
+                 caching (GcpHttpClient), bounded HTTP transport, LRO polling (LroPoller),
+                 resource-name parsing (VertexResourceName), consumer-branded errors
+                 (GcpErrorContext). Wave 3 consolidation target for the ADC/LRO pattern.
 adk-anthropic/   Dedicated Anthropic API client: streaming, adaptive thinking, prompt caching,
                  citations, context management, fast mode, vision, PDF processing, pricing.
                  Supports Claude Opus 4.8, Opus 4.7, Sonnet 4.6, Haiku 4.5.
@@ -436,6 +440,7 @@ Production backend features (require external infrastructure, NOT included in `f
 
 Specialist opt-in features:
 - `yaml-agent`, `agent-registry` — YAML agent config and registry REST API
+- `gcp-deploy` — Agent Engine (ReasoningEngine) BYOC deployment client (adk-deploy): create/poll/get/delete; host-side tooling, deliberately excluded from `gemini-agent-platform`. The same name on adk-cli enables `adk-rust deploy agent-engine`
 - `agent-engine` — Agent Engine runtime contract (adk-server): class-method dispatch endpoints and the turnkey `serve_agent_engine` entrypoint for Gemini Enterprise Agent Platform BYOC containers
 - `example-store` — Vertex AI Example Store client (adk-tool): v1beta1 data-plane upsert/search/fetch against a pre-provisioned store, plus `ExampleStoreProvider` for dynamic few-shot retrieval via a `BeforeModelCallback`
 - `gemini-interactions` — Gemini Interactions API (Beta): wire client surface (server-side history, step timeline) plus the runtime transport on `GeminiModel` (`use_interactions_api`) driving the standard `LlmAgent`/`Runner`
@@ -807,14 +812,14 @@ Always verify builds during publish — never use `--no-verify`. Verification en
 Crates must be published in dependency order. `cargo xtask publish` (via
 `./publish.sh`) computes the order from the workspace graph, so this list is
 documentation rather than configuration — `scripts/check-publish-order.sh` is the
-gate that keeps it satisfiable. The current 8 tiers over 42 publishable crates:
+gate that keeps it satisfiable. The current 8 tiers over 43 publishable crates:
 
 ```
 Tier 1: adk-core, adk-anthropic, adk-deploy, adk-enterprise, adk-rust-macros,
         adk-telemetry, awp-types
-Tier 2: adk-action, adk-artifact, adk-awp, adk-browser, adk-devtools, adk-gemini,
-        adk-guardrail, adk-memory, adk-mistralrs, adk-plugin, adk-sandbox,
-        adk-session
+Tier 2: adk-action, adk-artifact, adk-awp, adk-browser, adk-devtools, adk-gcp,
+        adk-gemini, adk-guardrail, adk-memory, adk-mistralrs, adk-plugin,
+        adk-sandbox, adk-session
 Tier 3: adk-code, adk-graph, adk-model, adk-rag, adk-realtime, adk-retry-reflect,
         adk-skill
 Tier 4: adk-agent, adk-audio, adk-runner, adk-tool
