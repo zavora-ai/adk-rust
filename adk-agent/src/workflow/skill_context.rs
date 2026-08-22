@@ -135,6 +135,28 @@ impl InvocationContext for UserContentOverrideContext {
         self.parent.request_metadata()
     }
 
+    fn authoritative_transfer_targets(&self) -> bool {
+        self.parent.authoritative_transfer_targets()
+    }
+    fn delegation_depth(&self) -> u32 {
+        self.parent.delegation_depth()
+    }
+    fn max_delegation_depth(&self) -> Option<u32> {
+        self.parent.max_delegation_depth()
+    }
+
+    fn orchestration_root_invocation_id(&self) -> &str {
+        self.parent.orchestration_root_invocation_id()
+    }
+
+    fn orchestration_edge_id(&self) -> Option<&str> {
+        self.parent.orchestration_edge_id()
+    }
+
+    fn requires_tool_confirmation(&self, tool_name: &str) -> bool {
+        self.parent.requires_tool_confirmation(tool_name)
+    }
+
     async fn get_secret(&self, name: &str) -> Result<Option<String>> {
         self.parent.get_secret(name).await
     }

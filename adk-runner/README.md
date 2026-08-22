@@ -111,6 +111,15 @@ Runner automatically handles agent-to-agent transfers:
 // 4. Continues streaming events from the new agent
 ```
 
+Validated composite roots can provide an exact per-member transfer allowlist
+through the `Agent` policy hooks. Runner validates every handoff against that
+list and reports undeclared targets or depth overflow as errors. Ordinary agent
+trees return no explicit policy and retain legacy parent/peer discovery.
+After allowlist and depth validation, Runner awaits `Agent::govern_transfer`
+before executing the target. The default allows the transfer, preserving
+existing behavior; portable teams and other composite roots can deny it with an
+auditable reason. Denials surface as `agent.transfer.denied`.
+
 ## State Propagation
 
 Runner applies state changes immediately:

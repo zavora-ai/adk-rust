@@ -1,4 +1,6 @@
-use crate::{CallbackContext, EventActions, MemoryEntry, Result};
+use crate::{
+    CallbackContext, Event, EventActions, Memory, MemoryEntry, Result, RunConfig, Session,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -136,6 +138,64 @@ pub trait ToolContext: CallbackContext {
     fn set_actions(&self, actions: EventActions);
     /// Searches memory for entries matching the query.
     async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>>;
+
+    /// Returns the memory service backing the parent invocation, when exposed.
+    ///
+    /// The default keeps contexts written before this capability backward
+    /// compatible. Agent-as-tool adapters use it only when memory forwarding is
+    /// explicitly enabled.
+    fn memory(&self) -> Option<Arc<dyn Memory>> {
+        None
+    }
+
+    /// Returns the parent session, when exposed by the runtime tool context.
+    ///
+    /// Agent-as-tool adapters can snapshot its history and state for a child
+    /// invocation without sharing mutable session ownership.
+    fn session(&self) -> Option<&dyn Session> {
+        None
+    }
+
+    /// Returns the parent run configuration, when exposed by the runtime.
+    fn run_config(&self) -> Option<&RunConfig> {
+        None
+    }
+
+    /// Returns whether the parent invocation has been cancelled.
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+
+    /// Returns authenticated request metadata inherited from the parent run.
+    fn request_metadata(&self) -> std::collections::HashMap<String, Value> {
+        std::collections::HashMap::new()
+    }
+
+    /// Returns the current nested agent-as-tool delegation depth.
+    fn delegation_depth(&self) -> u32 {
+        0
+    }
+
+    /// Returns the maximum nested agent-as-tool delegation depth.
+    fn max_delegation_depth(&self) -> Option<u32> {
+        None
+    }
+
+    /// Returns the root invocation that owns this orchestration tree.
+    fn orchestration_root_invocation_id(&self) -> &str {
+        self.invocation_id()
+    }
+
+    /// Returns the causal relationship execution containing this tool call.
+    fn orchestration_edge_id(&self) -> Option<&str> {
+        None
+    }
+
+    /// Emits a nested agent event through the parent agent's event stream.
+    ///
+    /// The default is a no-op. AgentTool uses this only when event forwarding is
+    /// explicitly enabled, preserving existing callers' output behavior.
+    async fn emit_event(&self, _event: Event) {}
 
     /// Emit streaming progress output during long-running tool execution.
     ///

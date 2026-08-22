@@ -126,6 +126,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid 1.23.2",
 ]
 
 [[package]]
@@ -594,6 +595,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1035,6 +1037,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "walkdir",
 ]
 

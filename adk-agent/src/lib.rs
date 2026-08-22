@@ -14,6 +14,7 @@
 //! - [`ParallelAgent`] - Execute agents concurrently, with optional [`SharedState`](adk_core::SharedState) coordination
 //! - [`LoopAgent`] - Iterate until exit condition
 //! - [`ConditionalAgent`] - Branch based on conditions
+//! - [`TeamSpec`] - Validate and compile a portable team from existing agents
 //!
 //! ## What's New in 0.6.0
 //!
@@ -83,6 +84,7 @@ mod custom_agent;
 pub mod guardrails;
 mod llm_agent;
 mod skill_shim;
+pub mod team;
 pub mod tool_call_markup;
 mod workflow;
 
@@ -94,6 +96,20 @@ pub use custom_agent::{CustomAgent, CustomAgentBuilder};
 pub use guardrails::GuardrailSet;
 pub use llm_agent::{
     DEFAULT_MAX_ITERATIONS, DEFAULT_TOOL_TIMEOUT, LlmAgent, LlmAgentBuilder, extract_typed,
+};
+pub use team::{
+    BlackboardHistoryPolicy, BlackboardPolicy, BlackboardSchedule, BlackboardSpec,
+    BlackboardTransition, CircuitBreakerPolicy, CompiledBlackboardTeam, CompiledTeam,
+    RelationshipApprovalPolicy, RelationshipFailureStrategy, RelationshipKind, RelationshipPolicy,
+    ResolvedTeamMember, StaticTeamAgentRegistry, TEAM_EDGE_ID_KEY, TEAM_EXECUTION_STATE_KEY,
+    TEAM_ROOT_INVOCATION_KEY, TeamAgentDescriptor, TeamAgentHealth, TeamAgentRegistry,
+    TeamArchitectureTemplate, TeamBudget, TeamContextPolicy, TeamEdgeExecution, TeamError,
+    TeamExecutionAnalysis, TeamExecutionSnapshot, TeamExecutionStatus, TeamExecutionUsage,
+    TeamFailurePolicy, TeamHistoryPolicy, TeamLifecycleContext, TeamLifecycleDecision,
+    TeamLifecycleHook, TeamLifecycleOutcome, TeamLifecyclePhase, TeamManagerBranch, TeamMemberSpec,
+    TeamPolicy, TeamRegistryRequirement, TeamRelationship, TeamReplayError, TeamResumePlan,
+    TeamResumePolicy, TeamRuntimeError, TeamSpec, TeamStateMergePolicy, TeamTerminationPolicy,
+    WorkflowArchitectureTemplate, analyze_team_execution, validate_team_replay,
 };
 pub use tool_call_markup::{normalize_content, normalize_option_content};
 pub use workflow::{

@@ -22,6 +22,7 @@ Agent implementations for ADK-Rust (LLM, Custom, Workflow agents).
   [Coding Agent guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/coding-agent/index.md).
 - `LlmConditionalAgent` — LLM-powered multi-way routing to sub-agents
 - `LlmEventSummarizer` — LLM-based context compaction for long conversations
+- `TeamSpec` / `CompiledTeam` — portable, validated team topology compiled from existing agents
 - `CodeActAgent` — (feature `codeact`) a peer to `LlmAgent` that **acts by writing
   and running code** (the CodeAct loop): the model emits one script per turn,
   tools are exposed as callable functions, and the script returns a tagged
@@ -182,6 +183,80 @@ let iterator = LoopAgent::new("iterator", vec![worker.clone()])
 ```
 
 All workflow agents support `.with_description()`, `.before_callback()`, `.after_callback()`, and the full skills API (`with_skills`, `with_auto_skills`, `with_skill_policy`, `with_skill_budget`).
+
+### Portable Teams
+
+`TeamSpec` keeps orchestration semantics in ADK-Rust rather than a UI or
+deployment adapter. It is serializable, validates the complete topology, and
+compiles named bindings into one executable `CompiledTeam` root. Members can be
+LLM, CodeAct, workflow, graph, realtime, or remote agents because compilation
+binds the existing `Agent` contract.
+
+Enable `adk-agent`'s `team-tools` feature when the spec contains `Delegate`
+relationships. Handoff-only teams do not pull in `adk-tool`.
+
+```rust
+use adk_agent::{
+    Agent, RelationshipKind, TeamMemberSpec, TeamRelationship, TeamSpec,
+};
+use std::sync::Arc;
+
+let spec = TeamSpec {
+    name: "customer_service".into(),
+    description: "Routes and resolves customer requests".into(),
+    coordinator: "supervisor".into(),
+    members: vec![
+        TeamMemberSpec::new("supervisor"),
+        TeamMemberSpec::new("billing"),
+        TeamMemberSpec::new("researcher"),
+    ],
+    relationships: vec![
+        TeamRelationship::new("supervisor", "billing", RelationshipKind::Handoff),
+        TeamRelationship::new("supervisor", "researcher", RelationshipKind::Delegate),
+    ],
+    policy: Default::default(),
+};
+
+let root = spec.compile(vec![
+    Arc::new(supervisor) as Arc<dyn Agent>,
+    Arc::new(billing),
+    Arc::new(researcher),
+])?;
+```
+
+`Handoff` changes the active agent through Runner transfer mechanics. `Delegate`
+lowers to an `AgentTool`, returns the member's result to its caller, and requires
+the `team-tools` feature. Per-member handoff and delegate targets are exact;
+undeclared edges fail instead of expanding to every sibling. Team policies bound
+handoff depth, nested delegation, delegate concurrency, aggregate resource use,
+and termination. Exact edge contracts can restrict schemas, context/history,
+state keys, timeout, approval, retries, fallbacks, and circuit breaking.
+Schema, projection, timeout, approval, and circuit-breaker fields are
+delegate-only and are rejected on handoff edges instead of being ignored.
+
+Each run emits a durable execution receipt with a frozen roster, causal edge
+ledger, usage, and status. `TeamAgentRegistry` supports deterministic capability
+discovery, `TeamArchitectureTemplate` and `WorkflowArchitectureTemplate` provide
+portable presets, and `BlackboardSpec` provides bounded round-robin or
+selector-driven shared-transcript orchestration.
+
+Restored active handoffs resume at their frozen target. Active delegates are
+never replayed automatically: without a provider-specific checkpoint or
+idempotency contract, replay could duplicate side effects.
+
+Compilation validates execution-plane `AgentCapabilities`: delegate sources
+must consume runtime toolsets, handoff sources must support transfer, and
+approved edges must honor exact-call confirmation. Ordered async
+`TeamLifecycleHook`s cover team, member, and relationship boundaries while
+ordinary Runner plugins and existing agent callbacks continue to apply. Team
+execution emits native `team.*` telemetry spans and stable structured errors.
+
+Relationship contracts separately allow state reads and writes, reject
+concurrent state conflicts, and restrict artifact-name prefixes. Dynamic
+registry resolution can require health, version, digest, and trust labels.
+`resume_plan`, `validate_team_replay`, and `analyze_execution` support durable
+hosts and provider-free replay/coverage evaluation without replaying an unsafe
+delegate.
 
 ### Conditional Agents
 

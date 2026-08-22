@@ -107,7 +107,10 @@ pub use adk_rust_macros::tool;
 
 // Re-export async_trait so the #[tool] macro's generated code can reference it
 // without requiring users to add async-trait as a direct dependency.
-pub use agent_tool::{AgentTool, AgentToolConfig};
+pub use agent_tool::{
+    AgentTool, AgentToolConfig, AgentToolFailureMode, AgentToolSessionSnapshot,
+    AgentToolStateMergePolicy,
+};
 pub use async_trait::async_trait;
 pub use builtin::{
     AnthropicBashTool20241022, AnthropicBashTool20250124, AnthropicTextEditorTool20250124,
