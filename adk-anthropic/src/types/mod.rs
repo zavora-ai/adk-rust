@@ -47,6 +47,7 @@ mod paginated_list;
 mod plain_text_source;
 mod programmatic_tool_use_block;
 mod redacted_thinking_block;
+mod server_fallback;
 mod server_tool;
 mod server_tool_usage;
 mod server_tool_use_block;
@@ -139,6 +140,12 @@ pub use paginated_list::PaginatedList;
 pub use plain_text_source::PlainTextSource;
 pub use programmatic_tool_use_block::ProgrammaticToolUseBlock;
 pub use redacted_thinking_block::RedactedThinkingBlock;
+pub use server_fallback::{
+    FallbackContentBlock, FallbackModel, FallbackRoute, RefusalDetails, ServerFallbackContentBlock,
+    ServerFallbackContentBlockStartEvent, ServerFallbackDeltaUsage, ServerFallbackMessage,
+    ServerFallbackMessageDelta, ServerFallbackMessageDeltaEvent, ServerFallbackMessageStartEvent,
+    ServerFallbackRequest, ServerFallbackStreamEvent, ServerFallbackUsage, ServerFallbacks,
+};
 pub use server_tool::ServerTool;
 pub use server_tool_usage::ServerToolUsage;
 pub use server_tool_use_block::ServerToolUseBlock;

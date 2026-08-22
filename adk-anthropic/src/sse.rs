@@ -5,6 +5,7 @@
 
 use bytes::Bytes;
 use futures::stream::{self, Stream, StreamExt};
+use serde::de::DeserializeOwned;
 use std::time::{Duration, Instant};
 
 use crate::observability::{
@@ -49,6 +50,23 @@ pub fn process_sse<S>(byte_stream: S) -> impl Stream<Item = Result<MessageStream
 where
     S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin + 'static,
 {
+    process_sse_with(byte_stream, parse_standard_event)
+}
+
+pub(crate) fn process_json_sse<S, T>(byte_stream: S) -> impl Stream<Item = Result<T>>
+where
+    S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin + 'static,
+    T: DeserializeOwned + 'static,
+{
+    process_sse_with(byte_stream, parse_json_event::<T>)
+}
+
+fn process_sse_with<S, T, P>(byte_stream: S, parser: P) -> impl Stream<Item = Result<T>>
+where
+    S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin + 'static,
+    T: 'static,
+    P: Fn(&str, &str) -> Result<T> + Copy + 'static,
+{
     // Convert reqwest errors to our error type
     let stream = byte_stream.map(|result| {
         result
@@ -78,7 +96,7 @@ where
             }
 
             // Check if we have a complete event in the buffer
-            match extract_event(&state.buffer) {
+            match extract_event(&state.buffer, parser) {
                 Ok(Some((event, remaining))) => {
                     state.buffer = remaining;
                     match &event {
@@ -151,7 +169,7 @@ where
                 None => {
                     // End of stream - try to process any remaining buffered events
                     if !state.buffer.is_empty()
-                        && let Ok(Some((event, _))) = extract_event(&state.buffer)
+                        && let Ok(Some((event, _))) = extract_event(&state.buffer, parser)
                     {
                         match &event {
                             Ok(_) => STREAM_EVENTS.click(),
@@ -172,7 +190,10 @@ where
 /// Parses SSE format where events are delimited by double newlines and
 /// each event has an event type line followed by a data line.
 /// Includes production safety checks for event size limits.
-fn extract_event(buffer: &str) -> Result<Option<(Result<MessageStreamEvent>, String)>> {
+fn extract_event<T, P>(buffer: &str, parser: P) -> Result<Option<(Result<T>, String)>>
+where
+    P: Fn(&str, &str) -> Result<T>,
+{
     // Find event boundary
     let Some(event_end) = buffer.find("\n\n") else {
         return Ok(None);
@@ -198,7 +219,7 @@ fn extract_event(buffer: &str) -> Result<Option<(Result<MessageStreamEvent>, Str
 
     // Handle empty events (ping-like keepalives)
     if event_text.trim().is_empty() {
-        return Ok(Some((Ok(MessageStreamEvent::Ping), rest)));
+        return Ok(Some((parser("event: ping", "{}"), rest)));
     }
 
     // Parse event type and data with better error handling
@@ -229,8 +250,32 @@ fn extract_event(buffer: &str) -> Result<Option<(Result<MessageStreamEvent>, Str
 
     let event_data = data_lines.join("\n");
 
-    // Parse specific event types
-    Ok(parse_event_type(event_type, &event_data, rest))
+    Ok(Some((parser(event_type, &event_data), rest)))
+}
+
+fn parse_standard_event(event_type: &str, event_data: &str) -> Result<MessageStreamEvent> {
+    parse_event_type(event_type, event_data, String::new()).map(|(event, _)| event).unwrap_or_else(
+        || {
+            Err(Error::serialization(
+                format!("Unknown SSE event type: {}", event_type.trim()),
+                None,
+            ))
+        },
+    )
+}
+
+fn parse_json_event<T: DeserializeOwned>(event_type: &str, event_data: &str) -> Result<T> {
+    let mut value = if event_type == "event: ping" {
+        serde_json::json!({"type": "ping"})
+    } else {
+        serde_json::from_str::<serde_json::Value>(event_data)?
+    };
+    if event_type == "event: error"
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("type".to_string(), serde_json::Value::String("stream_error".to_string()));
+    }
+    serde_json::from_value(value).map_err(Into::into)
 }
 
 /// Parse a specific SSE event type and its data with enhanced error handling.
