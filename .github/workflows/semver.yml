@@ -3,6 +3,10 @@ name: Semver Checks
 on:
   pull_request:
     branches: [ main ]
+  # The merge queue creates a synthetic merge-group ref and requires this
+  # check to be reported for that ref before it can advance.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
