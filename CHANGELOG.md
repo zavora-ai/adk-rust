@@ -60,6 +60,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ServerBuilder::with_agent_engine(true)` + `.with_a2a(...)`. Template and
   addon file fragments now support `{name}` substitution and path override
   (a template file replaces a base file with the same path).
+- **Skill write path** (`adk-skill`): the crate was read-only — every `fs::write`
+  lived behind `#[cfg(test)]` — so an agent could not persist a skill it derived
+  at runtime and an operator could not generate one programmatically.
+  `SkillWriter` writes into the `.skills` directory `load_skill_index` already
+  discovers, through a temporary file that is then renamed so a crash mid-write
+  cannot leave a half-written skill that fails to parse and breaks the whole index
+  load. `SkillDraft` is a builder for the document; `SkillDraft::to_markdown`
+  renders frontmatter plus body and omits unset fields, and round-trips through
+  `parse_skill_markdown`. `validate_skill_name` enforces the specification's
+  `[a-z0-9-]` rule (1–64 characters, no leading or trailing hyphen) and is also
+  the path-safety boundary, since a name becomes a filename — `../escape` and
+  `nested/name` are rejected before any file is touched. `SkillWriter::remove`
+  and `exists` complete the lifecycle. `SkillInjector::reloaded` rescans the root
+  and returns a refreshed injector, and `SkillInjector::root` reports what it
+  rescans; `reloaded` returns a new value rather than mutating because
+  `build_plugin` captures the index by handle, so a plugin already handed to a
+  runner must be rebuilt to see new skills.
+
 - **`AgentInvoker` and the ambient runner bridge** (`adk-core`, `adk-runner`,
   `adk-agent` feature `ambient`): `AmbientAgent::start` refuses to run without a
   trigger handler, and writing one meant building `Content`, inventing a session
