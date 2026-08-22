@@ -8,6 +8,8 @@
 //! - [`EventSource`] — trait for producing trigger events
 //! - [`TriggerEvent`] — an event delivered by a source
 //! - [`CronTrigger`] — fires on a cron schedule
+//! - [`MissedTickPolicy`] — what a schedule does about ticks it was not watching for
+//! - [`TickWatermark`] / [`FileTickWatermark`] — records where a schedule left off
 //! - [`WebhookTrigger`] — fires on incoming HTTP POST requests
 //! - [`FileWatchTrigger`] — fires on filesystem changes matching a glob
 //! - [`AmbientAgent`] — wraps an agent + event source with lifecycle control
@@ -21,11 +23,14 @@ pub mod cron_trigger;
 pub mod event_source;
 /// FileWatchTrigger event source.
 pub mod file_watch_trigger;
+/// Durable tick watermarks for CronTrigger.
+pub mod watermark;
 /// WebhookTrigger event source.
 pub mod webhook_trigger;
 
 pub use agent::{AmbientAgent, AmbientAgentStatus, TriggerHandler};
-pub use cron_trigger::CronTrigger;
+pub use cron_trigger::{CronTrigger, MissedTickPolicy};
 pub use event_source::{EventSource, TriggerEvent};
 pub use file_watch_trigger::FileWatchTrigger;
+pub use watermark::{FileTickWatermark, TickWatermark};
 pub use webhook_trigger::{WebhookRequest, WebhookTrigger, WebhookVerifier};

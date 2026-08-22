@@ -60,6 +60,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ServerBuilder::with_agent_engine(true)` + `.with_a2a(...)`. Template and
   addon file fragments now support `{name}` substitution and path override
   (a template file replaces a base file with the same path).
+- **Cron missed-tick handling** (`adk-agent`, feature `ambient`):
+  `CronTrigger::subscribe` computes the next tick from the moment it is called, so
+  a trigger that restarted after downtime — or ran on a host that suspended —
+  resumed at the next future tick and discarded every tick that came due in
+  between, with no record that anything was skipped. `MissedTickPolicy` now
+  decides that span's fate: `Skip` (default, prior behaviour), `CoalesceOne` (one
+  event for the whole gap), or `All` (one event per elapsed tick, oldest first,
+  bounded by `CronTrigger::with_max_catch_up`, default 64). Detecting a gap across
+  a process restart needs a `TickWatermark`; `FileTickWatermark` stores one
+  RFC 3339 timestamp, writing through a temporary file and renaming so a crash
+  mid-write leaves the previous watermark intact. Replayed events carry
+  `scheduled_for`, `catch_up`, and — for `CoalesceOne` — `missed_count` in their
+  payload. The watermark advances on emission rather than on consumer completion,
+  making delivery at-most-once so a consumer that stops polling cannot replay the
+  same gap on every restart.
+
 - **cargo-adk `docker` addon** (`cargo adk new my-agent --addon docker`): emits a
   multi-stage `Dockerfile` (`rust:1.95-slim` build stage kept in lockstep with
   `rust-toolchain.toml`, `gcr.io/distroless/cc-debian12` runtime, `ENV PORT=8080`,

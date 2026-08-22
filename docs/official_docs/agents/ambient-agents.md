@@ -72,6 +72,51 @@ adk-agent = { version = "2.0.0", features = ["ambient"] }
 `TriggerEvent::principal` lets a handler distinguish an authorized trigger from an anonymous
 one rather than treating every event as equally trusted.
 
+## Missed ticks
+
+`CronTrigger::subscribe` computes the next tick from the moment it is called. A trigger that
+restarts after downtime, or runs on a host that suspends, therefore resumes at the next future
+tick and every tick that came due in between is discarded.
+
+`MissedTickPolicy` decides what happens to that span:
+
+| Policy | Behaviour | Use for |
+|--------|-----------|---------|
+| `Skip` | Discard elapsed ticks and wait for the next scheduled one. The default. | Schedules where a late run has no value |
+| `CoalesceOne` | Emit one event covering the whole elapsed span. | Sweeps where only current state matters |
+| `All` | Emit one event per elapsed tick, oldest first. | Schedules where each occurrence has its own work |
+
+A policy alone only covers gaps inside one subscription. Detecting a gap that spans a process
+restart needs a `TickWatermark` to record where the schedule left off:
+
+```rust,ignore
+use std::sync::Arc;
+use adk_agent::ambient::{CronTrigger, FileTickWatermark, MissedTickPolicy};
+
+let trigger = CronTrigger::new("0 */5 * * * *")?
+    .with_missed_tick_policy(MissedTickPolicy::CoalesceOne)
+    .with_watermark(Arc::new(FileTickWatermark::new("/var/lib/my-agent/sweep.tick")));
+```
+
+`FileTickWatermark` stores one RFC 3339 timestamp, writing through a temporary file and renaming
+so a crash mid-write leaves the previous watermark intact. Implement `TickWatermark` for other
+backing stores.
+
+### Bounding a replay
+
+`All` on a frequent schedule can leave thousands of ticks outstanding after a long outage.
+`with_max_catch_up` caps how many one pass replays (default 64); once the cap is reached the
+remainder of the gap is discarded and the trigger resumes at the next future tick, logging how
+many ticks were dropped.
+
+### Delivery contract
+
+The watermark advances when the trigger emits a tick, not when the consumer finishes acting on
+it. A crash between emission and completion drops that run rather than repeating it —
+at-most-once, not at-least-once. This is what stops a consumer that stops polling from replaying
+the same gap on every restart. Consumers whose work must survive a mid-run crash should record
+their own completion state.
+
 ## Webhook triggers
 
 A reachable webhook is a remote entry point into application logic, so `WebhookTrigger`
