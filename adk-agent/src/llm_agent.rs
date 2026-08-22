@@ -66,6 +66,7 @@ struct PendingToolCall {
     args: serde_json::Value,
     id: Option<String>,
     function_call_id: String,
+    guardrail_denial: Option<String>,
 }
 
 fn build_generation_config(
@@ -110,6 +111,7 @@ fn collect_function_calls(content: &Content, invocation_id: &str) -> Vec<Pending
             function_call_id: id
                 .clone()
                 .unwrap_or_else(|| format!("{invocation_id}_{name}_{index}")),
+            guardrail_denial: None,
         })
         .collect()
 }
@@ -1723,7 +1725,6 @@ struct ToolExecutor<'a> {
     after_tool_callbacks_full: &'a Arc<Vec<AfterToolCallbackFull>>,
     on_tool_error_callbacks: &'a Arc<Vec<OnToolErrorCallback>>,
     tool_confirmation_policy: &'a ToolConfirmationPolicy,
-    tool_guardrails: &'a Arc<ToolGuardrailSet>,
     cb_mutex: &'a std::sync::Mutex<Option<CircuitBreakerState>>,
     invocation_id: &'a str,
     concurrency_manager: &'a adk_core::ToolConcurrencyManager,
@@ -1738,7 +1739,7 @@ struct ToolExecutor<'a> {
 
 impl ToolExecutor<'_> {
     async fn execute(&self, call: PendingToolCall) -> ToolExecutionResult {
-        let PendingToolCall { index, name, args, id, function_call_id } = call;
+        let PendingToolCall { index, name, args, id, function_call_id, guardrail_denial } = call;
         let mut tool_actions = EventActions::default();
         let mut response_content: Option<Content> = None;
         let mut run_after_tool_callbacks = true;
@@ -1746,33 +1747,27 @@ impl ToolExecutor<'_> {
         let mut executed_tool: Option<Arc<dyn Tool>> = None;
         let mut executed_tool_response: Option<serde_json::Value> = None;
 
-        // Screen the call before taking a concurrency permit or resolving confirmation: a call
-        // the policy refuses should not queue behind other work or prompt the user. A guardrail
-        // may also narrow the arguments, in which case the tool runs with what it returned.
-        let args = match screen_tool_call(self.tool_guardrails, &name, &args).await {
-            ToolScreening::Allow(args) => args,
-            ToolScreening::Deny(reason) => {
-                // Reported as the tool's result rather than as an agent error, so the model can
-                // correct the call instead of the run stalling.
-                let denied_content = Content {
-                    role: "function".to_string(),
-                    parts: vec![Part::FunctionResponse {
-                        function_response: FunctionResponseData::new(
-                            name.clone(),
-                            serde_json::json!({ "error": reason }),
-                        ),
-                        id: id.clone(),
-                        annotations: None,
-                    }],
-                };
-                return ToolExecutionResult {
-                    index,
-                    content: denied_content,
-                    actions: tool_actions,
-                    escalate_or_skip: false,
-                };
-            }
-        };
+        if let Some(reason) = guardrail_denial {
+            // Screening happened before confirmation. Report a denial as the tool's result so the
+            // model can correct the call instead of the run stalling.
+            let denied_content = Content {
+                role: "function".to_string(),
+                parts: vec![Part::FunctionResponse {
+                    function_response: FunctionResponseData::new(
+                        name.clone(),
+                        serde_json::json!({ "error": reason }),
+                    ),
+                    id: id.clone(),
+                    annotations: None,
+                }],
+            };
+            return ToolExecutionResult {
+                index,
+                content: denied_content,
+                actions: tool_actions,
+                escalate_or_skip: false,
+            };
+        }
 
         // Acquire concurrency permit before tool execution.
         // The permit is held for the entire duration of this tool call
@@ -3002,7 +2997,7 @@ impl Agent for LlmAgent {
                     }
 
                     // Filter out transfer_to_agent and built-in tools
-                    let fc_parts: Vec<_> = fc_parts
+                    let mut fc_parts: Vec<_> = fc_parts
                         .into_iter()
                         .filter(|call| {
                             if call.name == "transfer_to_agent" {
@@ -3018,12 +3013,25 @@ impl Agent for LlmAgent {
                         })
                         .collect();
 
+                    // Guardrails must run before confirmation requests are constructed. This also
+                    // makes a revised call's arguments the ones shown to the approver and included
+                    // in its confirmation fingerprint.
+                    for call in &mut fc_parts {
+                        match screen_tool_call(&tool_guardrails, &call.name, &call.args).await {
+                            ToolScreening::Allow(args) => call.args = args,
+                            ToolScreening::Deny(reason) => {
+                                call.guardrail_denial = Some(reason);
+                            }
+                        }
+                    }
+
                     // ===== TOOL CONFIRMATION PRE-CHECK =====
                     // Tool confirmation interrupts cause an immediate return,
                     // so check before parallel dispatch.
                     let mut confirmation_interrupted = false;
                     for call in &fc_parts {
-                        if tool_confirmation_policy.requires_confirmation(&call.name)
+                        if call.guardrail_denial.is_none()
+                            && tool_confirmation_policy.requires_confirmation(&call.name)
                             && static_confirmation_decision(
                                 &confirmation_decisions,
                                 &confirmation_fingerprints,
@@ -3105,7 +3113,6 @@ impl Agent for LlmAgent {
                         after_tool_callbacks_full: &after_tool_callbacks_full,
                         on_tool_error_callbacks: &on_tool_error_callbacks,
                         tool_confirmation_policy: &tool_confirmation_policy,
-                        tool_guardrails: &tool_guardrails,
                         cb_mutex: &cb_mutex,
                         invocation_id: &invocation_id,
                         concurrency_manager: &concurrency_manager,

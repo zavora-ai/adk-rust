@@ -1,7 +1,7 @@
 //! Ambient Cron Agent Example
 //!
-//! Demonstrates **Ambient Agents** with a CronTrigger and real LLM integration.
-//! The agent wraps a Gemini-powered motivational quote generator with lifecycle
+//! Demonstrates **Ambient Agents** with a CronTrigger and real OpenAI integration.
+//! The agent wraps an OpenAI-powered motivational quote generator with lifecycle
 //! control (start → pause → resume → stop).
 //!
 //! The CronTrigger fires every 2 seconds for demonstration purposes. The ambient
@@ -22,7 +22,7 @@
 //! cargo run --manifest-path examples/ambient_cron_agent/Cargo.toml
 //! ```
 //!
-//! Set `GOOGLE_API_KEY` to see generated quotes. Without a key the lifecycle and
+//! Set `OPENAI_API_KEY` to see generated quotes. Without a key the lifecycle and
 //! trigger wiring still run, and each invocation reports the authentication
 //! failure through the output channel rather than failing silently.
 
@@ -31,22 +31,19 @@ use std::sync::Arc;
 use adk_agent::ambient::RunnerTriggerConfig;
 use adk_agent::{AmbientAgent, AmbientAgentStatus, CronTrigger, LlmAgentBuilder};
 use adk_core::Agent;
-use adk_model::GeminiModel;
+use adk_model::{OpenAIClient, OpenAIConfig};
 use adk_runner::Runner;
 use adk_session::{InMemorySessionService, SessionService};
 use tracing_subscriber::EnvFilter;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const MODEL_NAME: &str = "gemini-2.5-flash";
+const DEFAULT_MODEL: &str = "gpt-4.1-mini";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn api_key() -> Option<String> {
-    std::env::var("GOOGLE_API_KEY")
-        .ok()
-        .or_else(|| std::env::var("GEMINI_API_KEY").ok())
-        .filter(|key| !key.trim().is_empty())
+    std::env::var("OPENAI_API_KEY").ok().filter(|key| !key.trim().is_empty())
 }
 
 fn print_banner() {
@@ -88,24 +85,25 @@ async fn main() -> anyhow::Result<()> {
     print_banner();
 
     // ─── Step 1: Create the underlying LlmAgent ──────────────────────────
-    print_section("Step 1: Creating Gemini-powered quote agent");
+    print_section("Step 1: Creating OpenAI-powered quote agent");
 
     let has_key = api_key().is_some();
 
     // The AmbientAgent needs an Arc<dyn Agent>. A real key produces real quotes;
     // without one the run still happens and reports its authentication failure.
     let key = api_key().unwrap_or_else(|| "not-set".to_string());
+    let model_name = std::env::var("AMBIENT_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
     if has_key {
-        println!("  🔑 GOOGLE_API_KEY detected — building real Gemini agent");
-        println!("  📡 Model: {MODEL_NAME}");
+        println!("  🔑 OPENAI_API_KEY detected — building real OpenAI agent");
+        println!("  📡 Model: {model_name}");
     } else {
-        println!("  ℹ️  No GOOGLE_API_KEY set — using placeholder key for agent creation");
-        println!("  💡 Set GOOGLE_API_KEY to enable real LLM invocations");
+        println!("  ℹ️  No OPENAI_API_KEY set — using placeholder key for agent creation");
+        println!("  💡 Set OPENAI_API_KEY to enable real LLM invocations");
         println!("  💡 The trigger/lifecycle wiring runs without a key");
     }
 
-    let model = Arc::new(GeminiModel::new(&key, MODEL_NAME)?);
+    let model = Arc::new(OpenAIClient::new(OpenAIConfig::new(key, &model_name))?);
     let agent: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("motivational-quote-generator")
             .model(model)
@@ -166,22 +164,14 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let status = ambient.status().await;
-    println!(
-        "  ✓ AmbientAgent created (initial status: {} {:?})",
-        status_emoji(status),
-        status
-    );
+    println!("  ✓ AmbientAgent created (initial status: {} {:?})", status_emoji(status), status);
 
     // ─── Step 4: Start — observe triggers ────────────────────────────────
     print_section("Step 4: Starting ambient agent (observe ~3 triggers)");
 
     ambient.start().await?;
     let status = ambient.status().await;
-    println!(
-        "  ✓ Agent started (status: {} {:?})",
-        status_emoji(status),
-        status
-    );
+    println!("  ✓ Agent started (status: {} {:?})", status_emoji(status), status);
 
     if has_key {
         println!("  📡 Each trigger invokes the LLM through the Runner");
@@ -198,11 +188,7 @@ async fn main() -> anyhow::Result<()> {
 
     ambient.pause().await?;
     let status = ambient.status().await;
-    println!(
-        "  ✓ Agent paused (status: {} {:?})",
-        status_emoji(status),
-        status
-    );
+    println!("  ✓ Agent paused (status: {} {:?})", status_emoji(status), status);
     println!("  📋 Subscription alive but events are buffered, not processed");
 
     println!("  ⏳ Sleeping 4 seconds while paused (no triggers processed)...");
@@ -214,11 +200,7 @@ async fn main() -> anyhow::Result<()> {
 
     ambient.resume().await?;
     let status = ambient.status().await;
-    println!(
-        "  ✓ Agent resumed (status: {} {:?})",
-        status_emoji(status),
-        status
-    );
+    println!("  ✓ Agent resumed (status: {} {:?})", status_emoji(status), status);
 
     println!("  ⏳ Sleeping 5 seconds to observe resumed triggers...");
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -229,11 +211,7 @@ async fn main() -> anyhow::Result<()> {
 
     ambient.stop().await?;
     let status = ambient.status().await;
-    println!(
-        "  ✓ Agent stopped (status: {} {:?})",
-        status_emoji(status),
-        status
-    );
+    println!("  ✓ Agent stopped (status: {} {:?})", status_emoji(status), status);
     println!("  📋 Background task cancelled, resources cleaned up");
 
     // ─── Summary ─────────────────────────────────────────────────────────

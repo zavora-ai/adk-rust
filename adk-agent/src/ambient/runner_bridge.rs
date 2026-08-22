@@ -28,7 +28,8 @@ pub enum TriggerSessionPolicy {
     /// One session reused by every trigger, carrying history forward.
     ///
     /// Suits a trigger that should accumulate context, and only where the run frequency is low
-    /// enough that unbounded history growth is acceptable.
+    /// enough that unbounded history growth is acceptable. `Runner` serializes externally invoked
+    /// turns for the same shared session so their history cannot overlap.
     Shared(String),
 }
 
@@ -122,9 +123,9 @@ impl AmbientAgent {
     /// session for each run, which [`Runner::run`](adk_core::AgentInvoker) does not do on its
     /// own.
     ///
-    /// The agent that executes is the one the invoker holds. The agent passed to
-    /// [`AmbientAgent::new`] is used for this type's own logging and `Debug` output, so pass the
-    /// same one to both.
+    /// When the invoker exposes its executable agent, as `Runner` does, the ambient wrapper adopts
+    /// that agent for logging and diagnostics. Opaque invokers retain the agent supplied to
+    /// [`AmbientAgent::new`].
     ///
     /// # Example
     ///
@@ -142,7 +143,14 @@ impl AmbientAgent {
     ///     .with_invoker(runner, RunnerTriggerConfig::new("system"));
     /// ambient.start().await?;
     /// ```
-    pub fn with_invoker(self, invoker: Arc<dyn AgentInvoker>, config: RunnerTriggerConfig) -> Self {
+    pub fn with_invoker(
+        mut self,
+        invoker: Arc<dyn AgentInvoker>,
+        config: RunnerTriggerConfig,
+    ) -> Self {
+        if let Some(executable_agent) = invoker.agent() {
+            self.agent = executable_agent;
+        }
         let handler: TriggerHandler = Arc::new(move |event, _agent| {
             let invoker = Arc::clone(&invoker);
             let config = config.clone();

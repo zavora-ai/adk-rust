@@ -56,7 +56,8 @@ pub enum MissedTickPolicy {
 /// on it. A crash between emission and completion therefore drops that run rather than repeating
 /// it — at-most-once, not at-least-once. This keeps a consumer that stops polling from replaying
 /// the same gap on every restart. Consumers whose work must survive a mid-run crash should record
-/// their own completion state.
+/// their own completion state. When a configured watermark cannot be persisted, the stream stops
+/// before emitting the affected tick rather than violating this contract.
 ///
 /// # Example
 ///
@@ -121,8 +122,8 @@ impl CronTrigger {
     ///
     /// A long outage on a frequent schedule can leave thousands of ticks outstanding; replaying
     /// them all would flood the handler at subscribe time. Once the cap is reached the rest of
-    /// the gap is discarded and the trigger resumes at the next future tick, logging how many
-    /// ticks were dropped. A cap of zero is treated as one.
+    /// the gap is discarded, the durable cursor advances past it, and the trigger resumes at the
+    /// next future tick, logging how many ticks were dropped. A cap of zero is treated as one.
     pub fn with_max_catch_up(mut self, max_catch_up: usize) -> Self {
         self.max_catch_up = max_catch_up.max(1);
         self
@@ -214,10 +215,13 @@ impl EventSource for CronTrigger {
                                 // tick behind for as long as a consumer holds an event — and
                                 // permanently behind if it drops the stream, replaying the same
                                 // gap on every restart.
+                                let accounted_through =
+                                    if truncated { now } else { scheduled_for };
                                 if let Some(ref store) = watermark
-                                    && let Err(error) = store.write(scheduled_for).await
+                                    && let Err(error) = store.write(accounted_through).await
                                 {
-                                    tracing::warn!(%error, "failed to persist tick watermark");
+                                    tracing::error!(%error, "failed to persist tick watermark; stopping cron stream before emission");
+                                    return;
                                 }
                                 yield TriggerEvent {
                                     source: source_name.clone(),
@@ -234,11 +238,17 @@ impl EventSource for CronTrigger {
                                 };
                             }
                             MissedTickPolicy::All => {
-                                for scheduled_for in &missed {
+                                for (index, scheduled_for) in missed.iter().enumerate() {
+                                    let accounted_through = if truncated && index + 1 == missed_count {
+                                        now
+                                    } else {
+                                        *scheduled_for
+                                    };
                                     if let Some(ref store) = watermark
-                                        && let Err(error) = store.write(*scheduled_for).await
+                                        && let Err(error) = store.write(accounted_through).await
                                     {
-                                        tracing::warn!(%error, "failed to persist tick watermark");
+                                        tracing::error!(%error, "failed to persist tick watermark; stopping cron stream before emission");
+                                        return;
                                     }
                                     yield TriggerEvent {
                                         source: source_name.clone(),
@@ -272,10 +282,12 @@ impl EventSource for CronTrigger {
 
                 cursor = next_tick;
 
-                if let Some(ref store) = watermark
+                if policy != MissedTickPolicy::Skip
+                    && let Some(ref store) = watermark
                     && let Err(error) = store.write(next_tick).await
                 {
-                    tracing::warn!(%error, "failed to persist tick watermark");
+                    tracing::error!(%error, "failed to persist tick watermark; stopping cron stream before emission");
+                    return;
                 }
 
                 yield TriggerEvent {

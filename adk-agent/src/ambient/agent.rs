@@ -77,7 +77,7 @@ const DEFAULT_MAX_CONCURRENT_TRIGGERS: usize = 4;
 /// ambient.stop().await?;
 /// ```
 pub struct AmbientAgent {
-    agent: Arc<dyn Agent>,
+    pub(super) agent: Arc<dyn Agent>,
     source: Arc<dyn EventSource>,
     trigger_handler: Option<TriggerHandler>,
     status: Arc<RwLock<AmbientAgentStatus>>,

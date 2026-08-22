@@ -53,8 +53,10 @@
 //!
 //! Two implementations ship: [`DeniedArgumentPattern`] refuses calls whose serialized arguments
 //! match a regular expression, and [`PathAllowList`] confines path-valued arguments to a set of
-//! roots — comparing by path component rather than string prefix, and refusing any path with a
-//! `..` component.
+//! roots — comparing by path component, resolving each existing component to reject symlink
+//! escapes, and refusing any path with a `..` component. It is a preflight check; filesystem tools
+//! exposed across a hostile local trust boundary still need platform secure-open primitives to
+//! eliminate time-of-check/time-of-use races.
 
 pub mod content;
 pub mod error;

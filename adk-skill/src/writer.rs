@@ -10,6 +10,7 @@
 //! [`load_skill_index`](crate::load_skill_index) already discovers.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -358,11 +359,18 @@ impl SkillWriter {
         let dir = self.skills_dir();
         std::fs::create_dir_all(&dir)?;
 
-        // Rename is atomic within a filesystem, so a reader either sees the previous skill or the
-        // new one, never a truncated file.
-        let temporary = dir.join(format!(".{}.md.tmp", draft.name));
-        std::fs::write(&temporary, rendered)?;
-        std::fs::rename(&temporary, &path)?;
+        // `NamedTempFile::persist` uses replace-existing semantics on Windows as well as Unix.
+        // A unique name also lets independent writers update different skills concurrently.
+        let mut temporary = tempfile::NamedTempFile::new_in(&dir)?;
+        temporary.write_all(rendered.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(&path).map_err(|error| SkillError::Io(error.error))?;
+
+        // On Unix, syncing the directory makes the rename durable across a power loss. Windows'
+        // directory handles do not support this operation, while `persist` still supplies the
+        // required atomic replace semantics there.
+        #[cfg(unix)]
+        std::fs::File::open(&dir)?.sync_all()?;
 
         tracing::debug!(skill = %draft.name, path = %path.display(), "wrote skill");
         Ok(path)
@@ -531,6 +539,31 @@ mod tests {
         let index = load_skill_index(root.path()).expect("index loads");
         assert_eq!(index.len(), 1, "replacing must not leave a duplicate");
         assert_eq!(index.find_by_name("sweep").expect("present").description, "Second");
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_share_a_temporary_path() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let writer = SkillWriter::new(root.path());
+
+        std::thread::scope(|scope| {
+            let first = writer.clone();
+            scope.spawn(move || {
+                first
+                    .write(&SkillDraft::new("first", "First skill").with_body("One."))
+                    .expect("first write");
+            });
+            let second = writer.clone();
+            scope.spawn(move || {
+                second
+                    .write(&SkillDraft::new("second", "Second skill").with_body("Two."))
+                    .expect("second write");
+            });
+        });
+
+        let index = load_skill_index(root.path()).expect("index loads");
+        assert!(index.find_by_name("first").is_some());
+        assert!(index.find_by_name("second").is_some());
     }
 
     #[test]

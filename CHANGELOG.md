@@ -76,16 +76,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to named tools) and `PathAllowList` (confines path-valued arguments to allowed
   roots, comparing by path component rather than string prefix so
   `/etc/passwd-backup` is not admitted by a root of `/etc/passwd`, and refusing
-  any path containing a `..` component since the target need not exist and cannot
-  be resolved).
+  any path containing a `..` component. It also resolves every existing candidate
+  component to reject symlink escapes; hostile local races still require secure-open
+  primitives in the filesystem tool itself).
 
 - **Skill write path** (`adk-skill`): the crate was read-only — every `fs::write`
   lived behind `#[cfg(test)]` — so an agent could not persist a skill it derived
   at runtime and an operator could not generate one programmatically.
   `SkillWriter` writes into the `.skills` directory `load_skill_index` already
-  discovers, through a temporary file that is then renamed so a crash mid-write
-  cannot leave a half-written skill that fails to parse and breaks the whole index
-  load. `SkillDraft` is a builder for the document; `SkillDraft::to_markdown`
+  discovers, through a unique temporary file that is synchronized and atomically
+  replaces the destination on Unix and Windows, so a crash mid-write cannot leave
+  a half-written skill that breaks the whole index load. `SkillDraft` is a builder
+  for the document; `SkillDraft::to_markdown`
   renders frontmatter plus body and omits unset fields, and round-trips through
   `parse_skill_markdown`. `validate_skill_name` enforces the specification's
   `[a-z0-9-]` rule (1–64 characters, no leading or trailing hyphen) and is also
@@ -110,8 +112,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AmbientAgent::with_invoker(invoker, RunnerTriggerConfig)` supplies the handler.
   `TriggerSessionPolicy` chooses between `PerTrigger` (default — a fresh session
   per event, so a frequent schedule cannot grow one session's history and per-run
-  cost without bound) and `Shared(id)`. `RunnerTriggerConfig::with_prompt` shapes
-  the event into prompt text. The `ambient_cron_agent` example failed at `start()`
+  cost without bound) and `Shared(id)`; shared invocations are serialized through
+  the returned stream. The wrapper adopts the runner's executable root for accurate
+  diagnostics. `RunnerTriggerConfig::with_prompt` shapes the event into prompt text.
+  The OpenAI-backed `ambient_cron_agent` example failed at `start()`
   and documented that it did not invoke the agent; it now runs all seven lifecycle
   steps and prints what each run produced.
 
@@ -124,8 +128,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event for the whole gap), or `All` (one event per elapsed tick, oldest first,
   bounded by `CronTrigger::with_max_catch_up`, default 64). Detecting a gap across
   a process restart needs a `TickWatermark`; `FileTickWatermark` stores one
-  RFC 3339 timestamp, writing through a temporary file and renaming so a crash
-  mid-write leaves the previous watermark intact. Replayed events carry
+  RFC 3339 cursor using portable atomic replacement. A capped replay persists its
+  skipped-through cursor, and a persistence failure stops the stream before
+  emission. Replayed events carry
   `scheduled_for`, `catch_up`, and — for `CoalesceOne` — `missed_count` in their
   payload. The watermark advances on emission rather than on consumer completion,
   making delivery at-most-once so a consumer that stops polling cannot replay the

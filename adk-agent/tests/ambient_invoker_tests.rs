@@ -38,6 +38,64 @@ struct RecordingAgent {
     runs: Arc<AtomicUsize>,
 }
 
+#[derive(Debug)]
+struct SlowRecordingAgent {
+    active: Arc<AtomicUsize>,
+    max_active: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Agent for SlowRecordingAgent {
+    fn name(&self) -> &str {
+        "slow-recorder"
+    }
+
+    fn description(&self) -> &str {
+        "records concurrent execution"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let active = Arc::clone(&self.active);
+        let max_active = Arc::clone(&self.max_active);
+        Ok(Box::pin(async_stream::stream! {
+            let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+            max_active.fetch_max(current, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            active.fetch_sub(1, Ordering::SeqCst);
+            let mut event = Event::new("slow-inv");
+            event.author = "slow-recorder".to_string();
+            event.llm_response.content = Some(Content::new("model").with_text("done"));
+            yield Ok(event);
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct DifferentAgent;
+
+#[async_trait]
+impl Agent for DifferentAgent {
+    fn name(&self) -> &str {
+        "different-agent"
+    }
+
+    fn description(&self) -> &str {
+        "must be replaced by the invoker's executable root"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        unreachable!("the ambient wrapper must use the runner's agent")
+    }
+}
+
 #[async_trait]
 impl Agent for RecordingAgent {
     fn name(&self) -> &str {
@@ -190,6 +248,17 @@ async fn with_invoker_drives_the_agent_on_every_trigger() {
 }
 
 #[tokio::test]
+async fn with_invoker_adopts_the_runners_agent_for_diagnostics() {
+    let (runner, _runs, _sessions) = runner_with_counter();
+    let ambient = AmbientAgent::new(Arc::new(DifferentAgent), Arc::new(BurstSource { count: 0 }))
+        .with_invoker(runner, RunnerTriggerConfig::new("system"));
+    let debug = format!("{ambient:?}");
+
+    assert!(debug.contains("recorder"), "got {debug}");
+    assert!(!debug.contains("different-agent"), "got {debug}");
+}
+
+#[tokio::test]
 async fn per_trigger_sessions_keep_runs_isolated() {
     let (runner, _runs, sessions) = runner_with_counter();
     let agent: Arc<dyn Agent> = Arc::new(RecordingAgent::default());
@@ -244,4 +313,70 @@ async fn a_shared_session_accumulates_across_triggers() {
         .await
         .expect("list");
     assert_eq!(created.len(), 1, "Shared reuses one session for every tick");
+    assert!(
+        created[0].events().len() >= 6,
+        "three serialized turns should retain their user and agent events"
+    );
+}
+
+#[tokio::test]
+async fn shared_session_invocations_are_serialized_until_their_streams_finish() {
+    let active = Arc::new(AtomicUsize::new(0));
+    let max_active = Arc::new(AtomicUsize::new(0));
+    let agent: Arc<dyn Agent> =
+        Arc::new(SlowRecordingAgent { active, max_active: Arc::clone(&max_active) });
+    let sessions = Arc::new(InMemorySessionService::new());
+    let runner = Arc::new(
+        Runner::builder()
+            .app_name(APP)
+            .agent(Arc::clone(&agent))
+            .session_service(sessions as Arc<dyn SessionService>)
+            .build()
+            .expect("runner builds"),
+    );
+    let mut ambient = AmbientAgent::new(agent, Arc::new(BurstSource { count: 3 })).with_invoker(
+        runner,
+        RunnerTriggerConfig::new("system")
+            .with_session_policy(TriggerSessionPolicy::Shared("serialized".to_string())),
+    );
+    let mut outputs = ambient.take_output(16);
+
+    ambient.start().await.expect("start");
+    drain(&mut outputs, 3).await;
+
+    assert_eq!(
+        max_active.load(Ordering::SeqCst),
+        1,
+        "the same shared session must never execute overlapping turns"
+    );
+}
+
+#[tokio::test]
+async fn per_trigger_sessions_can_execute_concurrently() {
+    let active = Arc::new(AtomicUsize::new(0));
+    let max_active = Arc::new(AtomicUsize::new(0));
+    let agent: Arc<dyn Agent> =
+        Arc::new(SlowRecordingAgent { active, max_active: Arc::clone(&max_active) });
+    let sessions = Arc::new(InMemorySessionService::new());
+    let runner = Arc::new(
+        Runner::builder()
+            .app_name(APP)
+            .agent(Arc::clone(&agent))
+            .session_service(sessions as Arc<dyn SessionService>)
+            .build()
+            .expect("runner builds"),
+    );
+    let mut ambient = AmbientAgent::new(agent, Arc::new(BurstSource { count: 3 })).with_invoker(
+        runner,
+        RunnerTriggerConfig::new("system").with_session_policy(TriggerSessionPolicy::PerTrigger),
+    );
+    let mut outputs = ambient.take_output(16);
+
+    ambient.start().await.expect("start");
+    drain(&mut outputs, 3).await;
+
+    assert!(
+        max_active.load(Ordering::SeqCst) > 1,
+        "locking one session must not serialize unrelated sessions"
+    );
 }

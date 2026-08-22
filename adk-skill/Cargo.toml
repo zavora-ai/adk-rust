@@ -22,8 +22,8 @@ tracing.workspace = true
 serde_yaml = "0.9"
 walkdir = "2.5"
 sha2 = "0.10"
+tempfile = "3"
 
 [dev-dependencies]
 async-trait.workspace = true
-tempfile = "3"
 tokio = { workspace = true, features = ["full"] }

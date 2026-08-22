@@ -137,6 +137,13 @@ pub struct Runner {
     /// Each `run()` call registers a token here; `interrupt()` cancels it.
     active_runs: ActiveRuns,
     next_run_id: Arc<std::sync::atomic::AtomicU64>,
+    /// Serializes externally triggered invocations per session. The weak values prevent the
+    /// per-trigger session policy from retaining one lock forever for every completed event.
+    pub(crate) external_session_locks: Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>,
+        >,
+    >,
 }
 
 impl Runner {
@@ -211,7 +218,15 @@ impl Runner {
             context_compaction: config.context_compaction.map(Arc::new),
             active_runs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            external_session_locks: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         })
+    }
+
+    /// The executable root owned by this runner.
+    pub(crate) fn root_agent(&self) -> Arc<dyn Agent> {
+        Arc::clone(&self.root_agent)
     }
 
     /// Enable skill injection using a pre-built injector.

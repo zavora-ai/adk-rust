@@ -1,4 +1,6 @@
-use crate::{Content, EventStream, Result};
+use std::sync::Arc;
+
+use crate::{Agent, Content, EventStream, Result};
 use async_trait::async_trait;
 
 /// Starts an agent turn for a session, creating the session when it does not exist.
@@ -11,7 +13,8 @@ use async_trait::async_trait;
 /// `adk-runner` implements this for `Runner`, so a caller can accept `Arc<dyn AgentInvoker>` and
 /// stay independent of the runner's construction. Implementations are responsible for creating a
 /// missing session rather than failing, because an external event has no opportunity to register
-/// one first.
+/// one first. Implementations that permit concurrent calls should also serialize turns targeting
+/// the same session until the returned event stream completes or is dropped.
 ///
 /// # Example
 ///
@@ -31,6 +34,15 @@ use async_trait::async_trait;
 /// ```
 #[async_trait]
 pub trait AgentInvoker: Send + Sync {
+    /// Returns the agent this invoker executes when it can expose one.
+    ///
+    /// Wrappers that do not own an in-process agent may keep the default. Consumers use this to
+    /// align diagnostics and lifecycle metadata with the executable root without coupling to a
+    /// concrete runner type.
+    fn agent(&self) -> Option<Arc<dyn Agent>> {
+        None
+    }
+
     /// Starts a turn for `(user_id, session_id)` with `content` and returns the event stream.
     ///
     /// # Errors

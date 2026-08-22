@@ -27,10 +27,16 @@ ambient.start().await?;
 
 `PerTrigger` is the default because a schedule firing every minute into one shared session grows
 that session's history — and the token cost of every later run — without bound.
+`Runner` serializes externally invoked turns targeting the same shared session until each event
+stream finishes, while different session IDs can still run concurrently.
 
 `AgentInvoker::invoke` creates the session when it does not exist. `Runner::run` does not: it
 resolves an *existing* session and yields `session.not_found` through the stream otherwise, which
 an externally triggered run has no opportunity to pre-register.
+
+When the invoker exposes its executable root, as `Runner` does, `with_invoker` uses that agent for
+ambient logging and diagnostics. This prevents telemetry from naming one agent while another one
+actually handles the trigger.
 
 ### Supplying a handler directly
 
@@ -124,16 +130,17 @@ let trigger = CronTrigger::new("0 */5 * * * *")?
     .with_watermark(Arc::new(FileTickWatermark::new("/var/lib/my-agent/sweep.tick")));
 ```
 
-`FileTickWatermark` stores one RFC 3339 timestamp, writing through a temporary file and renaming
-so a crash mid-write leaves the previous watermark intact. Implement `TickWatermark` for other
-backing stores.
+`FileTickWatermark` stores one RFC 3339 cursor. It writes through a unique sibling temporary file,
+synchronizes it, and atomically replaces the destination on Unix and Windows. Implement
+`TickWatermark` for other backing stores.
 
 ### Bounding a replay
 
 `All` on a frequent schedule can leave thousands of ticks outstanding after a long outage.
 `with_max_catch_up` caps how many one pass replays (default 64); once the cap is reached the
-remainder of the gap is discarded and the trigger resumes at the next future tick, logging how
-many ticks were dropped.
+remainder of the gap is discarded, the durable cursor advances past it, and the trigger resumes at
+the next future tick, logging how many ticks were dropped. Restarting before the next ordinary tick
+does not recover the discarded remainder.
 
 ### Delivery contract
 
@@ -141,7 +148,8 @@ The watermark advances when the trigger emits a tick, not when the consumer fini
 it. A crash between emission and completion drops that run rather than repeating it —
 at-most-once, not at-least-once. This is what stops a consumer that stops polling from replaying
 the same gap on every restart. Consumers whose work must survive a mid-run crash should record
-their own completion state.
+their own completion state. If a configured watermark cannot be persisted, the cron stream stops
+before emitting the affected event rather than silently weakening this guarantee.
 
 ## Webhook triggers
 

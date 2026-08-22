@@ -20,7 +20,8 @@ use adk_agent::guardrails::{
 };
 use adk_core::{
     Agent, Content, FinishReason, InvocationContext, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolContext,
+    LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolConfirmationDecision,
+    ToolContext, tool_call_fingerprint,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -145,11 +146,16 @@ impl State for MockState {
 struct MockContext {
     session: MockSession,
     user_content: Content,
+    run_config: RunConfig,
 }
 
 impl MockContext {
-    fn new() -> Self {
-        Self { session: MockSession, user_content: Content::new("user").with_text("start") }
+    fn new(run_config: RunConfig) -> Self {
+        Self {
+            session: MockSession,
+            user_content: Content::new("user").with_text("start"),
+            run_config,
+        }
     }
 }
 
@@ -197,8 +203,7 @@ impl InvocationContext for MockContext {
         &self.session
     }
     fn run_config(&self) -> &RunConfig {
-        static RUN_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
-        RUN_CONFIG.get_or_init(RunConfig::default)
+        &self.run_config
     }
     fn end_invocation(&self) {}
     fn ended(&self) -> bool {
@@ -214,6 +219,16 @@ async fn run_with_guardrails(
     args: Value,
     guardrails: ToolGuardrailSet,
 ) -> (usize, Option<Value>, String) {
+    run_with_options(tool_name, args, guardrails, false, RunConfig::default()).await
+}
+
+async fn run_with_options(
+    tool_name: &'static str,
+    args: Value,
+    guardrails: ToolGuardrailSet,
+    require_confirmation: bool,
+    run_config: RunConfig,
+) -> (usize, Option<Value>, String) {
     let runs = Arc::new(AtomicUsize::new(0));
     let last_args = Arc::new(std::sync::Mutex::new(None));
     let tool = Arc::new(RecordingTool {
@@ -222,14 +237,16 @@ async fn run_with_guardrails(
         last_args: Arc::clone(&last_args),
     });
 
-    let agent = LlmAgentBuilder::new("test-agent")
+    let mut builder = LlmAgentBuilder::new("test-agent")
         .model(Arc::new(MockModel::calling(tool_name, args.clone())))
         .tool(tool)
-        .tool_guardrails(guardrails)
-        .build()
-        .expect("agent builds");
+        .tool_guardrails(guardrails);
+    if require_confirmation {
+        builder = builder.require_tool_confirmation(tool_name);
+    }
+    let agent = builder.build().expect("agent builds");
 
-    let mut stream = agent.run(Arc::new(MockContext::new())).await.expect("run starts");
+    let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.expect("run starts");
     let mut transcript = String::new();
     while let Some(event) = stream.next().await {
         if let Ok(event) = event {
@@ -271,6 +288,67 @@ async fn a_denied_call_never_reaches_the_tool() {
         transcript.contains("deny-everything"),
         "the denial should name the guardrail so the model can adjust: {transcript}"
     );
+}
+
+#[tokio::test]
+async fn a_denied_call_does_not_request_confirmation() {
+    let (runs, _, transcript) = run_with_options(
+        "delete_everything",
+        json!({ "path": "/" }),
+        ToolGuardrailSet::new().with(DenyEverything),
+        true,
+        RunConfig::default(),
+    )
+    .await;
+
+    assert_eq!(runs, 0);
+    assert!(transcript.contains("deny-everything"), "got {transcript}");
+    assert!(!transcript.contains("confirmation required"), "got {transcript}");
+}
+
+#[tokio::test]
+async fn a_revision_is_fingerprinted_and_confirmed_after_screening() {
+    struct ForceDryRun;
+
+    #[async_trait]
+    impl ToolGuardrail for ForceDryRun {
+        fn name(&self) -> &str {
+            "force-dry-run"
+        }
+        async fn validate_call(&self, _tool: &str, args: &Value) -> ToolGuardrailResult {
+            let mut revised = args.clone();
+            revised
+                .as_object_mut()
+                .expect("object arguments")
+                .insert("dry_run".to_string(), json!(true));
+            ToolGuardrailResult::revise(revised, "dry-run is mandatory")
+        }
+    }
+
+    let call_id = "call_prune_cache".to_string();
+    let revised = json!({ "path": "/var/cache", "dry_run": true });
+    let run_config = RunConfig::builder()
+        .tool_confirmation_decisions(HashMap::from([(
+            call_id.clone(),
+            ToolConfirmationDecision::Approve,
+        )]))
+        .tool_confirmation_fingerprints(HashMap::from([(
+            call_id,
+            tool_call_fingerprint("prune_cache", &revised),
+        )]))
+        .build();
+
+    let (runs, seen, transcript) = run_with_options(
+        "prune_cache",
+        json!({ "path": "/var/cache" }),
+        ToolGuardrailSet::new().with(ForceDryRun),
+        true,
+        run_config,
+    )
+    .await;
+
+    assert_eq!(runs, 1, "revised approved call should execute: {transcript}");
+    assert_eq!(seen, Some(revised));
 }
 
 #[tokio::test]
@@ -337,14 +415,13 @@ async fn a_path_outside_the_allow_list_is_blocked() {
 
 #[tokio::test]
 async fn a_path_inside_the_allow_list_is_permitted() {
-    let guardrails = ToolGuardrailSet::new().with(
-        PathAllowList::new("agents-only", ["path"], ["/Users/me/Library/LaunchAgents"])
-            .on_tools(["plist_write"]),
-    );
+    let root = tempfile::tempdir().expect("allowed root");
+    let guardrails = ToolGuardrailSet::new()
+        .with(PathAllowList::new("agents-only", ["path"], [root.path()]).on_tools(["plist_write"]));
 
     let (runs, _, _) = run_with_guardrails(
         "plist_write",
-        json!({ "path": "/Users/me/Library/LaunchAgents/ai.zavora.sysadmin.plist" }),
+        json!({ "path": root.path().join("ai.zavora.sysadmin.plist") }),
         guardrails,
     )
     .await;

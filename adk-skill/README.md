@@ -300,8 +300,8 @@ if let Some(m) = matched {
 ### Write Skills
 
 `SkillWriter` writes into the `.skills` directory `load_skill_index` discovers. Writes go through
-a temporary file and are renamed, so a crash mid-write cannot leave a half-written skill that
-fails to parse and breaks the whole index load.
+a unique sibling temporary file, are synchronized, and atomically replace the destination on Unix
+and Windows, so a crash mid-write cannot leave a half-written skill that breaks the index load.
 
 ```rust
 use adk_skill::{SkillDraft, SkillWriter, load_skill_index};

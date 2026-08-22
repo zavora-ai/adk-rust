@@ -37,6 +37,7 @@ notify = { version = "8", optional = true }
 axum = { version = "0.8", optional = true }
 # Graceful shutdown for the webhook trigger's owned HTTP listener.
 tokio-util = { version = "0.7", optional = true }
+tempfile = { version = "3", optional = true }
 
 [features]
 default = ["skills"]
@@ -47,7 +48,14 @@ sandbox = ["dep:adk-sandbox", "adk-sandbox/workspace"]
 coding = ["dep:adk-devtools"]
 codeact = []
 record-payloads = []
-ambient = ["dep:cron", "dep:notify", "dep:axum", "dep:tokio-util", "dep:uuid"]
+ambient = [
+    "dep:cron",
+    "dep:notify",
+    "dep:axum",
+    "dep:tokio-util",
+    "dep:uuid",
+    "dep:tempfile",
+]
 
 [dev-dependencies]
 # Drives the webhook trigger over real HTTP in the trust-boundary tests.

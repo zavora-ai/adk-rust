@@ -16,6 +16,8 @@ use std::time::Duration;
 use adk_agent::ambient::{
     CronTrigger, EventSource, FileTickWatermark, MissedTickPolicy, TickWatermark,
 };
+use adk_core::{AdkError, Result};
+use async_trait::async_trait;
 use chrono::Utc;
 use futures::StreamExt;
 use tokio::time::timeout;
@@ -101,7 +103,7 @@ async fn all_respects_the_catch_up_cap() {
         .expect("valid expression")
         .with_missed_tick_policy(MissedTickPolicy::All)
         .with_max_catch_up(3)
-        .with_watermark(watermark);
+        .with_watermark(Arc::clone(&watermark));
 
     let mut stream = trigger.subscribe().await.expect("subscribe");
 
@@ -112,12 +114,34 @@ async fn all_respects_the_catch_up_cap() {
             .expect("stream yielded an event");
     }
 
-    // The cap is a hard bound: a ninety-minute gap must not replay a fourth event, it must
-    // abandon the remainder and wait for the next real tick.
+    // The cap is a hard bound: a ninety-minute gap must not replay a fourth event. If this test
+    // happens to cross the next minute boundary, a fresh scheduled tick is still valid.
+    if let Ok(Some(event)) = timeout(PROMPT, stream.next()).await {
+        assert_eq!(
+            event.payload["catch_up"], false,
+            "replay must stop at the cap rather than draining the whole gap"
+        );
+    }
+
+    let accounted_through = watermark.read().await.expect("read").expect("cursor");
     assert!(
-        timeout(PROMPT, stream.next()).await.is_err(),
-        "replay must stop at the cap rather than draining the whole gap"
+        Utc::now() - accounted_through < chrono::Duration::minutes(1),
+        "discarding a truncated remainder must also advance the durable cursor: {accounted_through}"
     );
+
+    drop(stream);
+    let restarted = CronTrigger::new("0 * * * * *")
+        .expect("valid expression")
+        .with_missed_tick_policy(MissedTickPolicy::All)
+        .with_max_catch_up(3)
+        .with_watermark(watermark);
+    let mut restarted_stream = restarted.subscribe().await.expect("resubscribe");
+    if let Ok(Some(event)) = timeout(Duration::from_millis(200), restarted_stream.next()).await {
+        assert_eq!(
+            event.payload["catch_up"], false,
+            "a restart must not recover the deliberately discarded remainder"
+        );
+    }
 }
 
 #[tokio::test]
@@ -133,10 +157,12 @@ async fn skip_ignores_the_gap_entirely() {
 
     let mut stream = trigger.subscribe().await.expect("subscribe");
 
-    assert!(
-        timeout(PROMPT, stream.next()).await.is_err(),
-        "Skip waits for the next scheduled tick even with a stale watermark"
-    );
+    if let Ok(Some(event)) = timeout(PROMPT, stream.next()).await {
+        assert_eq!(
+            event.payload["catch_up"], false,
+            "Skip may emit a fresh scheduled tick, but never replays the stale gap"
+        );
+    }
 }
 
 #[tokio::test]
@@ -149,10 +175,12 @@ async fn a_policy_without_a_watermark_sees_no_gap_across_restarts() {
 
     let mut stream = trigger.subscribe().await.expect("subscribe");
 
-    assert!(
-        timeout(PROMPT, stream.next()).await.is_err(),
-        "without a watermark there is no record of a missed tick"
-    );
+    if let Ok(Some(event)) = timeout(PROMPT, stream.next()).await {
+        assert_eq!(
+            event.payload["catch_up"], false,
+            "without a watermark a fresh tick is valid, but no gap can be replayed"
+        );
+    }
 }
 
 #[tokio::test]
@@ -174,5 +202,35 @@ async fn a_replayed_tick_advances_the_watermark() {
         advanced > seeded,
         "replaying a gap must move the watermark forward so a second restart does not replay it \
          again: seeded {seeded}, advanced {advanced}"
+    );
+}
+
+struct FailingWriteWatermark;
+
+#[async_trait]
+impl TickWatermark for FailingWriteWatermark {
+    async fn read(&self) -> Result<Option<chrono::DateTime<Utc>>> {
+        Ok(Some(Utc::now() - chrono::Duration::minutes(5)))
+    }
+
+    async fn write(&self, _cursor: chrono::DateTime<Utc>) -> Result<()> {
+        Err(AdkError::agent("simulated watermark failure"))
+    }
+}
+
+#[tokio::test]
+async fn persistence_failure_stops_before_emitting_a_tick() {
+    let trigger = CronTrigger::new("0 * * * * *")
+        .expect("valid expression")
+        .with_missed_tick_policy(MissedTickPolicy::CoalesceOne)
+        .with_watermark(Arc::new(FailingWriteWatermark));
+    let mut stream = trigger.subscribe().await.expect("subscribe");
+
+    assert!(
+        timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("stream should stop promptly")
+            .is_none(),
+        "a tick must not be emitted after its durable cursor failed to persist"
     );
 }

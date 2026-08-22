@@ -6,14 +6,15 @@
 //! lost with no record that it was skipped. Supplying a watermark is what lets
 //! [`MissedTickPolicy`](crate::ambient::MissedTickPolicy) see that gap and act on it.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use adk_core::{AdkError, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-/// Records the most recent tick a schedule emitted, so a restarted process can tell which
-/// scheduled runs it missed.
+/// Records the point through which a schedule has been accounted for, so a restarted process can
+/// tell which scheduled runs it missed.
 ///
 /// # Example
 ///
@@ -28,18 +29,21 @@ use chrono::{DateTime, Utc};
 /// ```
 #[async_trait]
 pub trait TickWatermark: Send + Sync {
-    /// Reads the most recently emitted tick, or `None` when the schedule has never fired.
+    /// Reads the most recent accounted-through cursor, or `None` when the schedule has never run.
     async fn read(&self) -> Result<Option<DateTime<Utc>>>;
 
-    /// Records `tick` as the most recently emitted one.
-    async fn write(&self, tick: DateTime<Utc>) -> Result<()>;
+    /// Records `cursor` as the point through which the schedule has been accounted for.
+    ///
+    /// The cursor is normally a scheduled tick. It can be a wall-clock instant when a bounded
+    /// catch-up intentionally discards the remainder of an older gap.
+    async fn write(&self, cursor: DateTime<Utc>) -> Result<()>;
 }
 
 /// A [`TickWatermark`] backed by a single file holding one RFC 3339 timestamp.
 ///
-/// Writes go to a sibling temporary file and are then renamed, so a crash or power loss
-/// mid-write leaves the previous watermark intact rather than a truncated timestamp. Missing
-/// parent directories are created on first write.
+/// Writes go to a unique sibling temporary file, are synchronized, and atomically replace the
+/// destination, so a reader never observes a partial timestamp. Missing parent directories are
+/// created on first write.
 ///
 /// # Example
 ///
@@ -118,21 +122,47 @@ impl TickWatermark for FileTickWatermark {
                 })?;
             }
 
-            // Rename is atomic on the same filesystem, so a reader never observes a partial
-            // timestamp.
-            let temporary = path.with_extension("tick.tmp");
-            std::fs::write(&temporary, encoded).map_err(|err| {
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|err| {
                 AdkError::agent(format!(
-                    "failed to write tick watermark to {}: {err}",
-                    temporary.display()
-                ))
-            })?;
-            std::fs::rename(&temporary, &path).map_err(|err| {
-                AdkError::agent(format!(
-                    "failed to publish tick watermark to {}: {err}",
+                    "failed to create a temporary tick watermark beside {}: {err}",
                     path.display()
                 ))
-            })
+            })?;
+            temporary.write_all(encoded.as_bytes()).map_err(|err| {
+                AdkError::agent(format!(
+                    "failed to write tick watermark for {}: {err}",
+                    path.display()
+                ))
+            })?;
+            temporary.as_file().sync_all().map_err(|err| {
+                AdkError::agent(format!(
+                    "failed to synchronize tick watermark for {}: {err}",
+                    path.display()
+                ))
+            })?;
+            temporary.persist(&path).map_err(|error| {
+                AdkError::agent(format!(
+                    "failed to publish tick watermark to {}: {}",
+                    path.display(),
+                    error.error
+                ))
+            })?;
+
+            #[cfg(unix)]
+            std::fs::File::open(parent).and_then(|directory| directory.sync_all()).map_err(
+                |err| {
+                    AdkError::agent(format!(
+                        "failed to synchronize tick watermark directory {}: {err}",
+                        parent.display()
+                    ))
+                },
+            )?;
+
+            Ok(())
         })
         .await
         .map_err(|err| AdkError::agent(format!("tick watermark write task failed: {err}")))?
@@ -143,6 +173,7 @@ impl TickWatermark for FileTickWatermark {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn read_returns_none_when_the_file_is_absent() {
@@ -185,6 +216,22 @@ mod tests {
         watermark.write(second).await.expect("second write");
 
         assert_eq!(watermark.read().await.expect("read"), Some(second));
+    }
+
+    #[tokio::test]
+    async fn concurrent_writes_use_independent_temporary_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let watermark = Arc::new(FileTickWatermark::new(dir.path().join("sweep.tick")));
+        let first = Utc.with_ymd_and_hms(2026, 8, 22, 10, 0, 0).unwrap();
+        let second = Utc.with_ymd_and_hms(2026, 8, 22, 11, 0, 0).unwrap();
+
+        let (first_result, second_result) =
+            tokio::join!(watermark.write(first), watermark.write(second));
+        first_result.expect("first write");
+        second_result.expect("second write");
+
+        let stored = watermark.read().await.expect("read").expect("stored");
+        assert!(stored == first || stored == second);
     }
 
     #[tokio::test]

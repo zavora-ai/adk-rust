@@ -301,10 +301,14 @@ impl ToolGuardrail for DeniedArgumentPattern {
 /// Denies a call whose path-valued arguments fall outside a set of allowed roots.
 ///
 /// Checks the named arguments when present, and requires each to be an absolute path contained by
-/// one of the allowed roots. Containment is compared by path component, not by string prefix, so
-/// `/etc/passwd-backup` is not treated as inside `/etc/passwd`. Any path containing a `..`
-/// component is denied outright rather than normalized, because the target need not exist yet and
-/// so cannot be resolved reliably.
+/// one of the allowed roots. Containment is compared by path component and after resolving the
+/// allowed root and every existing candidate component, so string-prefix, dangling-symlink, and
+/// resolved-symlink escapes are refused. Any path containing a `..` component is denied outright.
+///
+/// This is a preflight policy check, not a replacement for opening filesystem paths relative to a
+/// trusted directory handle. A hostile process able to replace path components between validation
+/// and tool execution can create a time-of-check/time-of-use race; filesystem tools operating
+/// across such a trust boundary must still use platform secure-open primitives.
 ///
 /// # Example
 ///
@@ -373,9 +377,46 @@ impl PathAllowList {
             return false;
         }
 
-        // `Path::starts_with` compares whole components, so a root of `/etc/passwd` does not
-        // admit `/etc/passwd-backup`.
-        self.allowed_roots.iter().any(|root| path.starts_with(root))
+        self.allowed_roots.iter().any(|root| {
+            if !root.is_absolute()
+                || root.components().any(|component| matches!(component, Component::ParentDir))
+                || !path.starts_with(root)
+            {
+                return false;
+            }
+
+            let Ok(canonical_root) = std::fs::canonicalize(root) else {
+                // An unresolved policy root cannot establish a trustworthy boundary.
+                return false;
+            };
+
+            let Ok(relative) = path.strip_prefix(root) else {
+                return false;
+            };
+            let mut current = root.clone();
+            for component in relative.components() {
+                current.push(component);
+                match std::fs::symlink_metadata(&current) {
+                    Ok(_) => {
+                        let Ok(canonical) = std::fs::canonicalize(&current) else {
+                            // Includes dangling symlinks, whose eventual target cannot be trusted.
+                            return false;
+                        };
+                        if !canonical.starts_with(&canonical_root) {
+                            return false;
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        // Once a component is absent, every remaining component is new and cannot
+                        // currently hide a symlink. The tool may create this suffix.
+                        break;
+                    }
+                    Err(_) => return false,
+                }
+            }
+
+            true
+        })
     }
 }
 
@@ -574,14 +615,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_path_inside_an_allowed_root_is_permitted() {
-        let guardrail = PathAllowList::new("agents", ["path"], ["/Users/me/Library/LaunchAgents"]);
+        let root = tempfile::tempdir().expect("allowed root");
+        let guardrail = PathAllowList::new("agents", ["path"], [root.path()]);
+        let candidate = root.path().join("x.plist");
 
         assert!(
             guardrail
-                .validate_call(
-                    "plist_write",
-                    &json!({ "path": "/Users/me/Library/LaunchAgents/x.plist" })
-                )
+                .validate_call("plist_write", &json!({ "path": candidate }))
                 .await
                 .is_allowed()
         );
@@ -627,6 +667,54 @@ mod tests {
         assert!(
             !guardrail.validate_call("write", &json!({ "path": 42 })).await.is_allowed(),
             "a non-string path cannot be checked and must not be waved through"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symlink_inside_the_root_cannot_escape_it() {
+        let root = tempfile::tempdir().expect("allowed root");
+        let outside = tempfile::tempdir().expect("outside root");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("escape"))
+            .expect("create symlink");
+        let guardrail = PathAllowList::new("root", ["path"], [root.path()]);
+        let candidate = root.path().join("escape/secret.txt");
+
+        assert!(
+            !guardrail.validate_call("write", &json!({ "path": candidate })).await.is_allowed(),
+            "a lexical child resolving outside the allowed root must be denied"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dangling_symlink_inside_the_root_is_denied() {
+        let root = tempfile::tempdir().expect("allowed root");
+        let outside = tempfile::tempdir().expect("outside root");
+        let missing_target = outside.path().join("not-created");
+        std::os::unix::fs::symlink(&missing_target, root.path().join("escape"))
+            .expect("create dangling symlink");
+        let guardrail = PathAllowList::new("root", ["path"], [root.path()]);
+
+        assert!(
+            !guardrail
+                .validate_call("write", &json!({ "path": root.path().join("escape/secret.txt") }))
+                .await
+                .is_allowed()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unresolvable_allowed_root_is_fail_closed() {
+        let root = tempfile::tempdir().expect("root");
+        let missing = root.path().join("not-created");
+        let guardrail = PathAllowList::new("missing", ["path"], [&missing]);
+
+        assert!(
+            !guardrail
+                .validate_call("write", &json!({ "path": missing.join("file.txt") }))
+                .await
+                .is_allowed()
         );
     }
 
