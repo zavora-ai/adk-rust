@@ -278,6 +278,8 @@ pub struct InvocationContext {
     /// tools detect external cancellation (`Runner::interrupt()` or
     /// `RunConfig::cancellation_token`) during long-running work.
     cancellation_token: Option<tokio_util::sync::CancellationToken>,
+    /// Stable root invocation for a multi-hop orchestration tree.
+    orchestration_root_invocation_id: String,
 }
 
 impl InvocationContext {
@@ -291,6 +293,7 @@ impl InvocationContext {
         user_content: Content,
         session: Arc<dyn AdkSession>,
     ) -> adk_core::Result<Self> {
+        let orchestration_root_invocation_id = invocation_id.clone();
         let identity = ExecutionIdentity {
             adk: AdkIdentity { app_name, user_id, session_id },
             invocation_id: InvocationId::try_from(invocation_id)?,
@@ -310,6 +313,7 @@ impl InvocationContext {
             shared_state: None,
             secret_service: None,
             cancellation_token: None,
+            orchestration_root_invocation_id,
         })
     }
 
@@ -348,6 +352,7 @@ impl InvocationContext {
         user_content: Content,
         session: Arc<MutableSession>,
     ) -> adk_core::Result<Self> {
+        let orchestration_root_invocation_id = invocation_id.clone();
         let identity = ExecutionIdentity {
             adk: AdkIdentity { app_name, user_id, session_id },
             invocation_id: InvocationId::try_from(invocation_id)?,
@@ -367,6 +372,7 @@ impl InvocationContext {
             shared_state: None,
             secret_service: None,
             cancellation_token: None,
+            orchestration_root_invocation_id,
         })
     }
 
@@ -452,6 +458,12 @@ impl InvocationContext {
     /// cancellation during long-running work.
     pub fn with_cancellation_token(mut self, token: tokio_util::sync::CancellationToken) -> Self {
         self.cancellation_token = Some(token);
+        self
+    }
+
+    /// Preserve the stable orchestration root across a Runner handoff.
+    pub fn with_orchestration_root_invocation_id(mut self, invocation_id: String) -> Self {
+        self.orchestration_root_invocation_id = invocation_id;
         self
     }
 
@@ -552,6 +564,10 @@ impl InvocationContextTrait for InvocationContext {
                 .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
                 .collect()
         })
+    }
+
+    fn orchestration_root_invocation_id(&self) -> &str {
+        &self.orchestration_root_invocation_id
     }
 
     async fn get_secret(&self, name: &str) -> adk_core::Result<Option<String>> {

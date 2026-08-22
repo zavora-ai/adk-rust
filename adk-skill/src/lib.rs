@@ -32,6 +32,7 @@ mod injector;
 mod model;
 mod parser;
 mod select;
+mod writer;
 
 pub use coordinator::{
     ContextCoordinator, CoordinatorConfig, ResolutionStrategy, SkillContext, ToolRegistry,
@@ -52,3 +53,4 @@ pub use model::{
 };
 pub use parser::{parse_instruction_markdown, parse_skill_markdown};
 pub use select::select_skills;
+pub use writer::{SkillDraft, SkillWriter, validate_skill_name};

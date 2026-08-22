@@ -99,6 +99,7 @@ pub struct GcpErrorContext {
     codes: GcpErrorCodes,
     subject: String,
     provider: String,
+    response_too_large_code: Option<&'static str>,
 }
 
 impl GcpErrorContext {
@@ -108,13 +109,31 @@ impl GcpErrorContext {
         codes: GcpErrorCodes,
         subject: impl Into<String>,
     ) -> Self {
-        Self { component, codes, subject: subject.into(), provider: "vertex_ai".to_string() }
+        Self {
+            component,
+            codes,
+            subject: subject.into(),
+            provider: "vertex_ai".to_string(),
+            response_too_large_code: None,
+        }
     }
 
     /// Overrides the provider tag stamped on every error.
     #[must_use]
     pub fn with_provider(mut self, provider: impl Into<String>) -> Self {
         self.provider = provider.into();
+        self
+    }
+
+    /// Sets a dedicated code for oversized responses.
+    ///
+    /// Without the override, [`response_too_large`](Self::response_too_large)
+    /// stamps the consumer's `invalid_response` code. Consumers with a
+    /// dedicated size-limit code (e.g. `session.vertex.response_too_large`)
+    /// set it here.
+    #[must_use]
+    pub fn with_response_too_large_code(mut self, code: &'static str) -> Self {
+        self.response_too_large_code = Some(code);
         self
     }
 
@@ -248,10 +267,14 @@ impl GcpErrorContext {
 
     /// An oversized response, reporting the observed size against the limit.
     pub fn response_too_large(&self, context: &str, limit: usize, observed: u64) -> AdkError {
-        self.invalid_response(format!(
-            "{} {context} of at least {observed} bytes exceeds the {limit}-byte limit",
-            self.subject,
-        ))
+        self.error(
+            ErrorCategory::Internal,
+            self.response_too_large_code.unwrap_or(self.codes.invalid_response),
+            format!(
+                "{} {context} of at least {observed} bytes exceeds the {limit}-byte limit",
+                self.subject,
+            ),
+        )
     }
 }
 
@@ -371,5 +394,18 @@ mod tests {
     fn provider_override_is_stamped_on_errors() {
         let error = context().with_provider("gcs").invalid_input("bad");
         assert_eq!(error.details.provider.as_deref(), Some("gcs"));
+    }
+
+    #[test]
+    fn response_too_large_uses_invalid_response_unless_overridden() {
+        let default = context().response_too_large("response body", 256, 512);
+        assert_eq!(default.code, "memory.vertex.invalid_response");
+
+        let dedicated = context()
+            .with_response_too_large_code("memory.vertex.response_too_large")
+            .response_too_large("response body", 256, 512);
+        assert_eq!(dedicated.code, "memory.vertex.response_too_large");
+        assert_eq!(dedicated.category, ErrorCategory::Internal);
+        assert!(dedicated.message.contains("exceeds the 256-byte limit"));
     }
 }

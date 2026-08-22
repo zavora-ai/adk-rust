@@ -42,6 +42,7 @@
 //! - Artifact handling
 //! - Callback hooks at every stage
 
+mod agent_invoker;
 pub mod builder;
 mod cache;
 mod callbacks;

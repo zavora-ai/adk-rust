@@ -7,6 +7,7 @@ use adk_core::{
     FileDataPart, FinishReason, FunctionResponseData, InlineDataPart, Part, Result, RetryHint,
     SessionId, UsageMetadata, UserId,
 };
+use adk_gcp::{GcpErrorCodes, GcpErrorContext, GcpHttpClient, LroPoller, truncate_for_error};
 use async_trait::async_trait;
 use base64::{
     Engine,
@@ -16,8 +17,8 @@ use base64::{
     },
 };
 use chrono::{DateTime, Utc};
-use google_cloud_auth::credentials::{self, CacheableResource, Credentials};
-use reqwest::{Client, RequestBuilder, StatusCode, header::CONTENT_TYPE};
+use google_cloud_auth::credentials::Credentials;
+use reqwest::{Method, header::CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -28,10 +29,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 const SESSION_API_VERSION: &str = "v1";
-const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
-const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-const AUTH_HEADERS_TIMEOUT: Duration = Duration::from_secs(30);
 const OPERATION_POLL_TIMEOUT: Duration = Duration::from_secs(120);
 const PAGINATION_TIMEOUT: Duration = Duration::from_secs(120);
 const OPERATION_POLL_INITIAL_DELAY: Duration = Duration::from_millis(100);
@@ -232,6 +229,29 @@ impl VertexAiSessionConfig {
     }
 }
 
+/// The session backend's error identity, stamped by `adk-gcp` plumbing and
+/// local constructors alike so every failure carries the same codes the
+/// backend used before the Wave 3 consolidation.
+const GCP_ERROR_CODES: GcpErrorCodes = GcpErrorCodes {
+    invalid_input: "session.vertex.invalid_input",
+    unauthorized: "session.vertex.unauthorized",
+    forbidden: "session.vertex.forbidden",
+    not_found: "session.vertex.not_found",
+    rate_limited: "session.vertex.rate_limited",
+    timeout: "session.vertex.timeout",
+    unavailable: "session.vertex.unavailable",
+    credentials_unavailable: "session.vertex.credentials_unavailable",
+    invalid_response: "session.vertex.invalid_response",
+    invalid_request: "session.vertex.invalid_request",
+    upstream_error: "session.vertex.upstream_error",
+    operation_failed: "session.vertex.operation_failed",
+};
+
+fn gcp_error_context() -> GcpErrorContext {
+    GcpErrorContext::new(ErrorComponent::Session, GCP_ERROR_CODES, "vertex session")
+        .with_response_too_large_code("session.vertex.response_too_large")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SessionScope {
     app_name: String,
@@ -319,8 +339,7 @@ impl Write for BoundedJsonCounter {
 
 /// Vertex AI Session API service implementation.
 pub struct VertexAiSessionService {
-    http_client: Client,
-    endpoint: String,
+    client: GcpHttpClient,
     project_id: String,
     location: String,
     reasoning_engine: Option<String>,
@@ -330,8 +349,6 @@ pub struct VertexAiSessionService {
     pagination_timeout: Duration,
     session_ttl: Option<String>,
     session_expire_time: Option<String>,
-    credentials: Credentials,
-    auth_headers: Arc<RwLock<Option<reqwest::header::HeaderMap>>>,
     session_scopes: Arc<RwLock<VecDeque<(String, SessionScope)>>>,
 }
 
@@ -344,15 +361,7 @@ impl VertexAiSessionService {
     /// valid secure origin, or the bounded, redirect-disabled HTTP client
     /// cannot be constructed.
     pub fn new_with_adc(config: VertexAiSessionConfig) -> Result<Self> {
-        let credentials = credentials::Builder::default()
-            .with_scopes([CLOUD_PLATFORM_SCOPE])
-            .build()
-            .map_err(|error| {
-                let error = truncate_for_error(&error.to_string());
-                Self::auth_error(format!("failed to build vertex session ADC credentials: {error}"))
-            })?;
-
-        Self::with_credentials(config, credentials)
+        Self::build(config, None)
     }
 
     /// Creates a new service with explicit credentials.
@@ -367,6 +376,10 @@ impl VertexAiSessionService {
         config: VertexAiSessionConfig,
         credentials: Credentials,
     ) -> Result<Self> {
+        Self::build(config, Some(credentials))
+    }
+
+    fn build(config: VertexAiSessionConfig, credentials: Option<Credentials>) -> Result<Self> {
         // `ttl` and `expireTime` form the Session `expiration` oneof in
         // google/cloud/aiplatform/v1beta1/session.proto, so at most one may
         // be sent; `ttl` is input-only with a documented 24-hour minimum.
@@ -383,20 +396,20 @@ impl VertexAiSessionService {
                 ttl.as_secs(),
             )));
         }
-        let http_client = Client::builder()
-            .connect_timeout(HTTP_CONNECT_TIMEOUT)
-            .timeout(HTTP_REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| {
-                let error = truncate_for_error(&error.without_url().to_string());
-                Self::session_error(format!(
-                    "failed to build bounded Vertex session HTTP client: {error}",
-                ))
-            })?;
-        let service = Self {
-            http_client,
-            endpoint: config.endpoint(),
+        // Endpoint validation (HTTPS-or-loopback bare origin), the
+        // redirect-disabled bounded HTTP client, ADC construction, and
+        // cached auth headers all live in adk-gcp; the builder defaults
+        // match this backend's original constants (10 s connect, 120 s
+        // request, 30 s auth, 64 MiB responses).
+        let mut builder = GcpHttpClient::builder(gcp_error_context(), config.endpoint())
+            .api_version(SESSION_API_VERSION)
+            .max_response_bytes(DEFAULT_MAX_RESPONSE_BYTES);
+        if let Some(credentials) = credentials {
+            builder = builder.credentials(credentials);
+        }
+        let client = builder.build()?;
+        Ok(Self {
+            client,
             project_id: config.project_id,
             location: config.location,
             reasoning_engine: config.reasoning_engine,
@@ -408,12 +421,8 @@ impl VertexAiSessionService {
             session_expire_time: config.expire_time.map(|expire_time| {
                 expire_time.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
             }),
-            credentials,
-            auth_headers: Arc::new(RwLock::new(None)),
             session_scopes: Arc::new(RwLock::new(VecDeque::new())),
-        };
-        service.build_url("")?;
-        Ok(service)
+        })
     }
 
     /// Allows one logical app to access unmarked Python ADK or pre-v2 sessions.
@@ -435,6 +444,7 @@ impl VertexAiSessionService {
     #[must_use]
     pub fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
         self.max_response_bytes = max_response_bytes;
+        self.client = self.client.with_max_response_bytes(max_response_bytes);
         self
     }
 
@@ -456,45 +466,15 @@ impl VertexAiSessionService {
     }
 
     fn session_error(message: impl Into<String>) -> AdkError {
-        AdkError::internal(ErrorComponent::Session, "session.vertex.invalid_response", message)
-            .with_provider("vertex_ai")
+        gcp_error_context().invalid_response(message)
     }
 
     fn invalid_input(message: impl Into<String>) -> AdkError {
-        AdkError::new(
-            ErrorComponent::Session,
-            ErrorCategory::InvalidInput,
-            "session.vertex.invalid_input",
-            message,
-        )
-        .with_provider("vertex_ai")
-    }
-
-    fn auth_error(message: impl Into<String>) -> AdkError {
-        AdkError::unauthorized(ErrorComponent::Session, "session.vertex.unauthorized", message)
-            .with_provider("vertex_ai")
-    }
-
-    fn credentials_error(error: google_cloud_auth::errors::CredentialsError) -> AdkError {
-        let message = format!(
-            "failed to obtain google cloud auth headers: {}",
-            truncate_for_error(&error.to_string()),
-        );
-        if error.is_transient() {
-            AdkError::unavailable(
-                ErrorComponent::Session,
-                "session.vertex.credentials_unavailable",
-                message,
-            )
-            .with_provider("vertex_ai")
-        } else {
-            Self::auth_error(message)
-        }
+        gcp_error_context().invalid_input(message)
     }
 
     fn timeout_error(message: impl Into<String>) -> AdkError {
-        AdkError::timeout(ErrorComponent::Session, "session.vertex.timeout", message)
-            .with_provider("vertex_ai")
+        gcp_error_context().timeout(message)
     }
 
     fn response_too_large(context: &str, limit: usize, observed: u64) -> AdkError {
@@ -568,20 +548,6 @@ impl VertexAiSessionService {
         Ok(())
     }
 
-    fn transport_error(error: reqwest::Error) -> AdkError {
-        let timeout = error.is_timeout();
-        let error = truncate_for_error(&error.without_url().to_string());
-        if timeout {
-            return Self::timeout_error(format!("vertex session HTTP request timed out: {error}"));
-        }
-        AdkError::unavailable(
-            ErrorComponent::Session,
-            "session.vertex.unavailable",
-            format!("failed to send vertex session request: {error}"),
-        )
-        .with_provider("vertex_ai")
-    }
-
     fn mutation_outcome_error(
         mut error: AdkError,
         operation: &str,
@@ -627,87 +593,6 @@ impl VertexAiSessionService {
             Some(operation_name),
             true,
         )
-    }
-
-    fn status_error(status: StatusCode, body: &str) -> AdkError {
-        let message = format!(
-            "vertex session request failed with status {}: {}",
-            status.as_u16(),
-            truncate_for_error(body),
-        );
-        let (category, code) = match status.as_u16() {
-            400 | 409 | 422 => (ErrorCategory::InvalidInput, "session.vertex.invalid_request"),
-            401 => (ErrorCategory::Unauthorized, "session.vertex.unauthorized"),
-            403 => (ErrorCategory::Forbidden, "session.vertex.forbidden"),
-            404 => (ErrorCategory::NotFound, "session.vertex.not_found"),
-            408 | 504 => (ErrorCategory::Timeout, "session.vertex.timeout"),
-            429 => (ErrorCategory::RateLimited, "session.vertex.rate_limited"),
-            500 | 502 | 503 => (ErrorCategory::Unavailable, "session.vertex.unavailable"),
-            _ => (ErrorCategory::Internal, "session.vertex.upstream_error"),
-        };
-        AdkError::new(ErrorComponent::Session, category, code, message)
-            .with_provider("vertex_ai")
-            .with_upstream_status(status.as_u16())
-    }
-
-    fn operation_error(
-        operation_kind: &str,
-        operation_name: &str,
-        error: VertexOperationError,
-    ) -> AdkError {
-        let operation_name = truncate_for_error(operation_name);
-        let operation_message =
-            if error.message.trim().is_empty() { "<no error message>" } else { &error.message };
-        let message = format!(
-            "vertex {operation_kind} operation '{operation_name}' failed with code {}: {}",
-            error.code,
-            truncate_for_error(operation_message),
-        );
-        let category = match error.code {
-            1 => ErrorCategory::Cancelled,
-            3 | 6 | 9 | 11 => ErrorCategory::InvalidInput,
-            4 => ErrorCategory::Timeout,
-            5 => ErrorCategory::NotFound,
-            7 => ErrorCategory::Forbidden,
-            8 => ErrorCategory::RateLimited,
-            10 | 14 => ErrorCategory::Unavailable,
-            12 => ErrorCategory::Unsupported,
-            16 => ErrorCategory::Unauthorized,
-            _ => ErrorCategory::Internal,
-        };
-        AdkError::new(ErrorComponent::Session, category, "session.vertex.operation_failed", message)
-            .with_provider("vertex_ai")
-    }
-
-    fn endpoint_base(&self) -> &str {
-        &self.endpoint
-    }
-
-    /// Build a URL from the endpoint base, requiring HTTPS for non-localhost endpoints.
-    /// This prevents cleartext transmission of sensitive session data.
-    fn build_url(&self, path: &str) -> Result<String> {
-        let base = self.endpoint_base();
-        let mut url = reqwest::Url::parse(base).map_err(|error| {
-            let error = truncate_for_error(&error.to_string());
-            Self::invalid_input(format!("invalid Vertex AI endpoint URL: {error}"))
-        })?;
-        if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback_host(&url)) {
-            return Err(Self::invalid_input(
-                "Vertex AI endpoint must use HTTPS for secure transmission of session data",
-            ));
-        }
-        if !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || url.path() != "/"
-        {
-            return Err(Self::invalid_input(
-                "Vertex AI endpoint must be an origin without userinfo, path, query, or fragment",
-            ));
-        }
-        url.set_path(&format!("/{}", path.trim_start_matches('/')));
-        Ok(url.to_string())
     }
 
     fn resolve_reasoning_engine_id(&self, app_name: &str) -> Result<String> {
@@ -819,153 +704,6 @@ impl VertexAiSessionService {
         Ok(scope)
     }
 
-    async fn auth_headers(&self) -> Result<reqwest::header::HeaderMap> {
-        self.auth_headers_with_timeout(AUTH_HEADERS_TIMEOUT).await
-    }
-
-    async fn auth_headers_with_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Result<reqwest::header::HeaderMap> {
-        let cacheable_headers =
-            tokio::time::timeout(timeout, self.credentials.headers(Default::default()))
-                .await
-                .map_err(|_| {
-                    Self::timeout_error(format!(
-                        "vertex session credential header acquisition timed out after {} seconds",
-                        timeout.as_secs_f64(),
-                    ))
-                })?
-                .map_err(Self::credentials_error)?;
-
-        match cacheable_headers {
-            CacheableResource::New { data, .. } => {
-                *self.auth_headers.write().await = Some(data.clone());
-                Ok(data)
-            }
-            CacheableResource::NotModified => self
-                .auth_headers
-                .read()
-                .await
-                .clone()
-                .ok_or_else(|| {
-                    Self::auth_error(
-                        "google cloud credentials returned NotModified before any cached auth headers were available",
-                    )
-                }),
-        }
-    }
-
-    async fn apply_auth(&self, request: RequestBuilder) -> Result<RequestBuilder> {
-        let headers = self.auth_headers().await?;
-        Ok(request.headers(headers))
-    }
-
-    async fn send_value(&self, request: RequestBuilder) -> Result<Value> {
-        match self.send_value_internal(request, false).await? {
-            Some((value, _)) => Ok(value),
-            None => Ok(Value::Object(Map::new())),
-        }
-    }
-
-    async fn send_value_counted(&self, request: RequestBuilder) -> Result<(Value, usize)> {
-        match self.send_value_internal(request, false).await? {
-            Some(value) => Ok(value),
-            None => Ok((Value::Object(Map::new()), 0)),
-        }
-    }
-
-    async fn send_value_allow_not_found(&self, request: RequestBuilder) -> Result<Option<Value>> {
-        Ok(self.send_value_internal(request, true).await?.map(|(value, _)| value))
-    }
-
-    async fn send_value_internal(
-        &self,
-        request: RequestBuilder,
-        allow_not_found: bool,
-    ) -> Result<Option<(Value, usize)>> {
-        let (status, body) = tokio::time::timeout(HTTP_REQUEST_TIMEOUT, async {
-            let mut response = request.send().await.map_err(Self::transport_error)?;
-            let status = response.status();
-            if let Some(declared) = response.content_length()
-                && declared > self.max_response_bytes as u64
-            {
-                return Err(Self::response_too_large(
-                    "response Content-Length",
-                    self.max_response_bytes,
-                    declared,
-                )
-                .with_upstream_status(status.as_u16()));
-            }
-            let capacity = response
-                .content_length()
-                .and_then(|length| usize::try_from(length).ok())
-                .unwrap_or_default();
-            let mut body = Vec::with_capacity(capacity);
-            while let Some(chunk) = response.chunk().await.map_err(|error| {
-                let timeout = error.is_timeout();
-                let error = truncate_for_error(&error.without_url().to_string());
-                if timeout {
-                    Self::timeout_error(format!("vertex session response body timed out: {error}",))
-                        .with_upstream_status(status.as_u16())
-                } else {
-                    AdkError::unavailable(
-                        ErrorComponent::Session,
-                        "session.vertex.unavailable",
-                        format!("failed to read vertex session response body: {error}"),
-                    )
-                    .with_provider("vertex_ai")
-                    .with_upstream_status(status.as_u16())
-                }
-            })? {
-                let observed = body.len().checked_add(chunk.len()).ok_or_else(|| {
-                    Self::response_too_large("response body", self.max_response_bytes, u64::MAX)
-                        .with_upstream_status(status.as_u16())
-                })?;
-                if observed > self.max_response_bytes {
-                    return Err(Self::response_too_large(
-                        "response body",
-                        self.max_response_bytes,
-                        observed as u64,
-                    )
-                    .with_upstream_status(status.as_u16()));
-                }
-                body.extend_from_slice(&chunk);
-            }
-            Ok::<_, AdkError>((status, body))
-        })
-        .await
-        .map_err(|_| {
-            Self::timeout_error(format!(
-                "vertex session request timed out after {} seconds",
-                HTTP_REQUEST_TIMEOUT.as_secs(),
-            ))
-        })??;
-
-        if allow_not_found && status == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-
-        if !status.is_success() {
-            let body = String::from_utf8_lossy(&body);
-            let body = if body.trim().is_empty() { "<empty body>" } else { body.as_ref() };
-            return Err(Self::status_error(status, body));
-        }
-
-        let body_len = body.len();
-        if body.iter().all(u8::is_ascii_whitespace) {
-            return Ok(Some((Value::Object(Map::new()), body_len)));
-        }
-
-        let value = serde_json::from_slice(&body).map_err(|error| {
-            let error = truncate_for_error(&error.to_string());
-            Self::session_error(format!("failed to parse vertex session response JSON: {error}"))
-                .with_provider("vertex_ai")
-                .with_upstream_status(status.as_u16())
-        })?;
-        Ok(Some((value, body_len)))
-    }
-
     async fn wait_for_operation(
         &self,
         initial: Value,
@@ -988,73 +726,32 @@ impl VertexAiSessionService {
         require_response: bool,
         timeout: Duration,
     ) -> Result<Option<Value>> {
-        let mut operation = parse_operation(initial, operation_kind)?;
-        validate_vertex_operation_name(&operation.name, &self.project_id, &self.location)?;
-        let operation_name = operation.name.clone();
-        let deadline = Instant::now() + timeout;
-        let mut delay = OPERATION_POLL_INITIAL_DELAY;
-
-        loop {
-            if operation.done {
-                if let Some(error) = operation.error {
-                    return Err(Self::operation_error(operation_kind, &operation.name, error));
-                }
-
-                if require_response && operation.response.is_none() {
-                    return Err(Self::session_error(format!(
-                        "vertex {operation_kind} operation '{}' completed without a response; retry the request and inspect the operation in Google Cloud",
-                        operation.name,
-                    )));
-                }
-
-                return Ok(operation.response);
-            }
-
-            if Instant::now() >= deadline {
-                return Err(Self::timeout_error(format!(
-                    "vertex {operation_kind} operation '{}' did not complete within {} seconds; inspect the operation in Google Cloud before retrying",
-                    operation_name,
-                    timeout.as_secs_f64(),
-                )));
-            }
-
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            let poll = async {
-                let url = self.build_url(&format!("{SESSION_API_VERSION}/{operation_name}"))?;
-                let request = self.apply_auth(self.http_client.get(url)).await?;
-                self.send_value(request).await
-            };
-            let value = tokio::time::timeout(remaining, poll).await.map_err(|_| {
-                Self::timeout_error(format!(
-                    "vertex {operation_kind} operation '{operation_name}' did not complete within {} seconds; inspect the operation in Google Cloud before retrying",
-                    timeout.as_secs_f64(),
-                ))
-            })??;
-            let next_operation = parse_operation(value, operation_kind)?;
-            validate_vertex_operation_name(&next_operation.name, &self.project_id, &self.location)?;
-            if next_operation.name != operation_name {
-                return Err(Self::session_error(format!(
-                    "vertex {operation_kind} poll changed operation identity from '{operation_name}' to '{}'; refusing to follow a different operation",
-                    next_operation.name,
-                )));
-            }
-            operation = next_operation;
-
-            if !operation.done {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    continue;
-                }
-                tokio::time::sleep(delay.min(remaining)).await;
-                delay = delay.saturating_mul(2).min(OPERATION_POLL_MAX_DELAY);
-            }
+        // The session backend requires exact-shape operation names
+        // (`projects/*/locations/*/operations/*` with validated segments) —
+        // stricter than the shared poller's prefix scope check, so it runs
+        // first. Identity pinning inside the poller extends the guarantee
+        // to every subsequent poll.
+        if let Some(name) = initial.get("name").and_then(Value::as_str) {
+            validate_vertex_operation_name(name, &self.project_id, &self.location)?;
         }
+        LroPoller::new()
+            .with_poll_timeout(timeout)
+            .with_initial_delay(OPERATION_POLL_INITIAL_DELAY)
+            .with_max_delay(OPERATION_POLL_MAX_DELAY)
+            .wait_for_operation(
+                &self.client,
+                initial,
+                operation_kind,
+                require_response,
+                &self.project_id,
+                &self.location,
+            )
+            .await
     }
 
     async fn fetch_session(&self, session_name: &str) -> Result<Option<VertexSessionPayload>> {
-        let url = self.build_url(&format!("{}/{}", SESSION_API_VERSION, session_name))?;
-        let request = self.apply_auth(self.http_client.get(url)).await?;
-        let value = match self.send_value_allow_not_found(request).await? {
+        let request = self.client.request(Method::GET, session_name).await?;
+        let value = match self.client.send_value_allow_not_found(request).await? {
             Some(value) => value,
             None => return Ok(None),
         };
@@ -1195,9 +892,11 @@ impl VertexAiSessionService {
                 .map(|limit| limit.saturating_sub(events.len()).min(VERTEX_PAGE_SIZE))
                 .unwrap_or(VERTEX_PAGE_SIZE);
             let (value, page_bytes) = tokio::time::timeout(remaining, async {
-                let url =
-                    self.build_url(&format!("{}/{}/events", SESSION_API_VERSION, session_name,))?;
-                let mut request = self.http_client.get(url).query(&[("pageSize", page_size)]);
+                let mut request = self
+                    .client
+                    .request(Method::GET, &format!("{session_name}/events"))
+                    .await?
+                    .query(&[("pageSize", page_size)]);
                 if let Some(filter) = after_filter.as_ref() {
                     request = request.query(&[("filter", filter)]);
                 }
@@ -1207,8 +906,7 @@ impl VertexAiSessionService {
                 if let Some(token) = page_token.as_ref().filter(|token| !token.is_empty()) {
                     request = request.query(&[("pageToken", token)]);
                 }
-                let request = self.apply_auth(request).await?;
-                self.send_value_counted(request).await
+                self.client.send_value_counted(request).await
             })
             .await
             .map_err(|_| self.pagination_timeout_error("list events"))??;
@@ -1367,15 +1065,14 @@ impl SessionService for VertexAiSessionService {
             }
         }
 
-        let url = self.build_url(&format!("{}/{}/sessions", SESSION_API_VERSION, parent))?;
         let request = self
-            .http_client
-            .post(url)
+            .client
+            .request(Method::POST, &format!("{parent}/sessions"))
+            .await?
             .header(CONTENT_TYPE, "application/json")
             .body(body)
             .query(&[("sessionId", &remote_session_id)]);
-        let request = self.apply_auth(request).await?;
-        let operation = match self.send_value(request).await {
+        let operation = match self.client.send_value(request).await {
             Ok(operation) => operation,
             Err(error) if error.details.upstream_status_code == Some(409) => {
                 let session_name = self.session_name_from_app(&req.app_name, &remote_session_id)?;
@@ -1560,18 +1257,18 @@ impl SessionService for VertexAiSessionService {
                 return Err(self.pagination_timeout_error("list sessions"));
             }
             let (value, page_bytes) = tokio::time::timeout(remaining, async {
-                let url =
-                    self.build_url(&format!("{}/{}/sessions", SESSION_API_VERSION, parent))?;
-                let mut request =
-                    self.http_client.get(url).query(&[("pageSize", VERTEX_PAGE_SIZE)]);
+                let mut request = self
+                    .client
+                    .request(Method::GET, &format!("{parent}/sessions"))
+                    .await?
+                    .query(&[("pageSize", VERTEX_PAGE_SIZE)]);
 
                 let filter = vertex_user_filter(&req.user_id)?;
                 request = request.query(&[("filter", filter)]);
                 if let Some(token) = page_token.as_ref().filter(|token| !token.is_empty()) {
                     request = request.query(&[("pageToken", token)]);
                 }
-                let request = self.apply_auth(request).await?;
-                self.send_value_counted(request).await
+                self.client.send_value_counted(request).await
             })
             .await
             .map_err(|_| self.pagination_timeout_error("list sessions"))??;
@@ -1729,11 +1426,9 @@ impl SessionService for VertexAiSessionService {
                 after: None,
             }));
         };
-        let url = self.build_url(&format!("{}/{}", SESSION_API_VERSION, session_name))?;
-
-        let request = self.apply_auth(self.http_client.delete(url)).await?;
+        let request = self.client.request(Method::DELETE, &session_name).await?;
         if let Some(operation) =
-            self.send_value_allow_not_found(request).await.map_err(|error| {
+            self.client.send_value_allow_not_found(request).await.map_err(|error| {
                 Self::mutation_outcome_error(
                     error,
                     "delete session",
@@ -1815,14 +1510,13 @@ impl SessionService for VertexAiSessionService {
                     after: None,
                 })
             })?;
-        let url =
-            self.build_url(&format!("{}/{}:appendEvent", SESSION_API_VERSION, session_name,))?;
         let request = self
-            .apply_auth(
-                self.http_client.post(url).header(CONTENT_TYPE, "application/json").body(body),
-            )
-            .await?;
-        let response = self.send_value(request).await.map_err(|error| {
+            .client
+            .request(Method::POST, &format!("{session_name}:appendEvent"))
+            .await?
+            .header(CONTENT_TYPE, "application/json")
+            .body(body);
+        let response = self.client.send_value(request).await.map_err(|error| {
             Self::mutation_outcome_error(
                 error,
                 "append event",
@@ -1875,13 +1569,13 @@ impl SessionService for VertexAiSessionService {
                 })
             })?;
 
-        let url = self.build_url(&format!("{}/{session_name}:appendEvent", SESSION_API_VERSION))?;
         let request = self
-            .apply_auth(
-                self.http_client.post(url).header(CONTENT_TYPE, "application/json").body(body),
-            )
-            .await?;
-        let response = self.send_value(request).await.map_err(|error| {
+            .client
+            .request(Method::POST, &format!("{session_name}:appendEvent"))
+            .await?
+            .header(CONTENT_TYPE, "application/json")
+            .body(body);
+        let response = self.client.send_value(request).await.map_err(|error| {
             Self::mutation_outcome_error(
                 error,
                 "append event",
@@ -1990,26 +1684,6 @@ struct VertexCreateSession {
     ttl: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expire_time: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct VertexOperation {
-    name: String,
-    #[serde(default)]
-    done: bool,
-    #[serde(default)]
-    error: Option<VertexOperationError>,
-    #[serde(default)]
-    response: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct VertexOperationError {
-    #[serde(default)]
-    code: i64,
-    #[serde(default)]
-    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2769,33 +2443,6 @@ struct GoogleAdkRawActions {
     _extra: Map<String, Value>,
 }
 
-fn parse_operation(value: Value, operation_kind: &str) -> Result<VertexOperation> {
-    let operation: VertexOperation = serde_json::from_value(value).map_err(|error| {
-        let error = truncate_for_error(&error.to_string());
-        VertexAiSessionService::session_error(format!(
-            "failed to parse vertex {operation_kind} operation: {error}"
-        ))
-    })?;
-    if operation.name.trim().is_empty() {
-        return Err(VertexAiSessionService::session_error(format!(
-            "vertex {operation_kind} response did not contain an operation name"
-        )));
-    }
-    if operation.error.is_some() && operation.response.is_some() {
-        return Err(VertexAiSessionService::session_error(format!(
-            "vertex {operation_kind} operation '{}' contains both error and response results",
-            operation.name,
-        )));
-    }
-    if !operation.done && (operation.error.is_some() || operation.response.is_some()) {
-        return Err(VertexAiSessionService::session_error(format!(
-            "vertex {operation_kind} operation '{}' contains a terminal result while done is false",
-            operation.name,
-        )));
-    }
-    Ok(operation)
-}
-
 fn validate_empty_response(value: &Value, operation_kind: &str) -> Result<()> {
     if value.as_object().is_some_and(Map::is_empty) {
         return Ok(());
@@ -2838,10 +2485,6 @@ fn parse_create_session_operation_response(mut value: Value) -> Result<VertexSes
             "vertex create session operation returned an invalid Session response: {error}",
         ))
     })
-}
-
-fn is_loopback_host(url: &reqwest::Url) -> bool {
-    matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
 }
 
 fn is_valid_vertex_resource_segment(value: &str) -> bool {
@@ -4898,25 +4541,6 @@ fn validate_json_encoded_size<T: Serialize + ?Sized>(
     Ok(())
 }
 
-fn truncate_for_error(value: &str) -> String {
-    const MAX_LEN: usize = 512;
-    let mut sanitized = String::with_capacity(value.len().min(MAX_LEN));
-    let mut truncated = false;
-    for character in value.chars() {
-        let character =
-            if character.is_control() { char::REPLACEMENT_CHARACTER } else { character };
-        if sanitized.len() + character.len_utf8() > MAX_LEN {
-            truncated = true;
-            break;
-        }
-        sanitized.push(character);
-    }
-    if truncated {
-        sanitized.push_str("...");
-    }
-    sanitized
-}
-
 fn bounded_field_names(extra: &Map<String, Value>) -> String {
     const MAX_FIELDS: usize = 8;
     const MAX_LIST_BYTES: usize = 192;
@@ -5059,10 +4683,10 @@ mod tests {
         use std::convert::Infallible;
 
         let app = Router::new()
-            .route("/under", get(|| async { "{}" }))
-            .route("/exact", get(|| async { r#"{"ok":true}"# }))
+            .route("/v1/under", get(|| async { "{}" }))
+            .route("/v1/exact", get(|| async { r#"{"ok":true}"# }))
             .route(
-                "/declared-over",
+                "/v1/declared-over",
                 get(|| async {
                     Response::builder()
                         .header(CONTENT_LENGTH, "100")
@@ -5071,7 +4695,7 @@ mod tests {
                 }),
             )
             .route(
-                "/chunked-over",
+                "/v1/chunked-over",
                 get(|| async {
                     let chunks = stream::iter([
                         Ok::<_, Infallible>(Bytes::from_static(b"{\"large\":")),
@@ -5093,25 +4717,21 @@ mod tests {
         .expect("build response-limit service")
         .with_max_response_bytes(11);
 
+        let request = service.client.request(Method::GET, "under").await.expect("under request");
         assert_eq!(
-            service
-                .send_value(service.http_client.get(format!("http://{address}/under")))
-                .await
-                .expect("under-limit response"),
+            service.client.send_value(request).await.expect("under-limit response"),
             serde_json::json!({})
         );
+        let request = service.client.request(Method::GET, "exact").await.expect("exact request");
         assert_eq!(
-            service
-                .send_value(service.http_client.get(format!("http://{address}/exact")))
-                .await
-                .expect("exact-limit response"),
+            service.client.send_value(request).await.expect("exact-limit response"),
             serde_json::json!({ "ok": true })
         );
         for path in ["declared-over", "chunked-over"] {
-            let error = service
-                .send_value(service.http_client.get(format!("http://{address}/{path}")))
-                .await
-                .expect_err("oversized response must fail");
+            let request =
+                service.client.request(Method::GET, path).await.expect("oversized request");
+            let error =
+                service.client.send_value(request).await.expect_err("oversized response must fail");
             assert_eq!(error.code, "session.vertex.response_too_large");
             assert!(!error.is_retryable());
         }
@@ -5161,10 +4781,9 @@ mod tests {
             api_key_credentials::Builder::new("secret-api-key").build(),
         )
         .expect("build redirect test service");
-        let url = service.build_url("v1/test").expect("source URL");
-        let request =
-            service.apply_auth(service.http_client.get(url)).await.expect("apply test auth");
-        let error = service.send_value(request).await.expect_err("redirect must not be followed");
+        let request = service.client.request(Method::GET, "test").await.expect("apply test auth");
+        let error =
+            service.client.send_value(request).await.expect_err("redirect must not be followed");
         assert_eq!(error.details.upstream_status_code, Some(307));
         assert_eq!(sink_requests.load(Ordering::SeqCst), 0);
 
@@ -5300,12 +4919,13 @@ mod tests {
         assert!(!sanitized.chars().any(char::is_control));
         assert!(sanitized.len() <= 515);
 
-        let status = VertexAiSessionService::status_error(StatusCode::BAD_GATEWAY, &input);
+        let status = gcp_error_context().status_error(reqwest::StatusCode::BAD_GATEWAY, &input);
         assert!(!status.message.chars().any(char::is_control));
-        let operation = VertexAiSessionService::operation_error(
+        let operation = gcp_error_context().operation_error(
             "create session",
             "projects/p/locations/l/operations/op",
-            VertexOperationError { code: 13, message: input },
+            13,
+            &input,
         );
         assert!(!operation.message.chars().any(char::is_control));
         assert!(operation.message.len() < 700);
@@ -5333,7 +4953,7 @@ mod tests {
     fn test_credentials_errors_preserve_provider_retryability() {
         use google_cloud_auth::errors::CredentialsError;
 
-        let transient = VertexAiSessionService::credentials_error(CredentialsError::from_msg(
+        let transient = gcp_error_context().credentials_error(&CredentialsError::from_msg(
             true,
             "temporary metadata server failure",
         ));
@@ -5341,10 +4961,8 @@ mod tests {
         assert_eq!(transient.code, "session.vertex.credentials_unavailable");
         assert!(transient.is_retryable());
 
-        let permanent = VertexAiSessionService::credentials_error(CredentialsError::from_msg(
-            false,
-            "invalid service account",
-        ));
+        let permanent = gcp_error_context()
+            .credentials_error(&CredentialsError::from_msg(false, "invalid service account"));
         assert_eq!(permanent.category, ErrorCategory::Unauthorized);
         assert!(!permanent.is_retryable());
     }
@@ -6771,18 +6389,31 @@ mod tests {
         assert_eq!(function_response.inline_data.len(), 1);
     }
 
-    #[test]
-    fn test_vertex_operation_rejects_contradictory_result_shapes() {
-        let both = parse_operation(
-            serde_json::json!({
-                "name": "projects/p/locations/l/operations/op",
-                "done": true,
-                "error": { "code": 13, "message": "failed" },
-                "response": {}
-            }),
-            "create session",
+    #[tokio::test]
+    async fn test_vertex_operation_rejects_contradictory_result_shapes() {
+        use google_cloud_auth::credentials::api_key_credentials;
+
+        // Malformed shapes are rejected while parsing the initial operation,
+        // before any poll request is sent, so no mock server is needed.
+        let service = VertexAiSessionService::with_credentials(
+            VertexAiSessionConfig::new("p", "l"),
+            api_key_credentials::Builder::new("test-key").build(),
         )
-        .expect_err("operation result oneof must reject both arms");
+        .expect("build operation-shape service");
+
+        let both = service
+            .wait_for_operation(
+                serde_json::json!({
+                    "name": "projects/p/locations/l/operations/op",
+                    "done": true,
+                    "error": { "code": 13, "message": "failed" },
+                    "response": {}
+                }),
+                "create session",
+                false,
+            )
+            .await
+            .expect_err("operation result oneof must reject both arms");
         assert!(both.message.contains("both error and response"));
 
         for result in [
@@ -6794,7 +6425,9 @@ mod tests {
                 "done": false
             });
             operation.as_object_mut().unwrap().extend(result.as_object().unwrap().clone());
-            let error = parse_operation(operation, "create session")
+            let error = service
+                .wait_for_operation(operation, "create session", false)
+                .await
                 .expect_err("pending operation must reject terminal results");
             assert!(error.message.contains("done is false"));
         }
@@ -6874,11 +6507,15 @@ mod tests {
         assert!(session_update_timestamp(&missing_times, "test").is_err());
 
         assert_eq!(
-            VertexAiSessionService::status_error(StatusCode::TOO_MANY_REQUESTS, "slow").category,
+            gcp_error_context()
+                .status_error(reqwest::StatusCode::TOO_MANY_REQUESTS, "slow")
+                .category,
             ErrorCategory::RateLimited
         );
         assert_eq!(
-            VertexAiSessionService::status_error(StatusCode::SERVICE_UNAVAILABLE, "down").category,
+            gcp_error_context()
+                .status_error(reqwest::StatusCode::SERVICE_UNAVAILABLE, "down")
+                .category,
             ErrorCategory::Unavailable
         );
         assert_eq!(
@@ -6890,20 +6527,18 @@ mod tests {
             (10, ErrorCategory::Unavailable),
             (12, ErrorCategory::Unsupported),
         ] {
-            let error = VertexAiSessionService::operation_error(
+            let error = gcp_error_context().operation_error(
                 "test",
                 "projects/p/locations/l/operations/op",
-                VertexOperationError { code, message: "test".to_string() },
+                code,
+                "test",
             );
             assert_eq!(error.category, category);
         }
         assert!(
-            VertexAiSessionService::operation_error(
-                "test",
-                "projects/p/locations/l/operations/op",
-                VertexOperationError { code: 10, message: "aborted".to_string() },
-            )
-            .is_retryable()
+            gcp_error_context()
+                .operation_error("test", "projects/p/locations/l/operations/op", 10, "aborted")
+                .is_retryable()
         );
         assert!(validate_empty_response(&serde_json::json!({}), "append event").is_ok());
         assert!(
@@ -7003,17 +6638,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth_header_acquisition_is_bounded() {
-        let service = VertexAiSessionService::with_credentials(
-            VertexAiSessionConfig::new("test-project", "us-central1"),
-            Credentials::from(HangingCredentials),
+        // The bound now lives in adk-gcp's client; this pins the
+        // session-branded behavior with the backend's own error identity.
+        let client = GcpHttpClient::builder(
+            gcp_error_context(),
+            "https://us-central1-aiplatform.googleapis.com",
         )
-        .expect("build test service");
+        .auth_timeout(Duration::from_millis(20))
+        .credentials(Credentials::from(HangingCredentials))
+        .build()
+        .expect("build bounded-auth client");
         let start = Instant::now();
-        let error = service
-            .auth_headers_with_timeout(Duration::from_millis(20))
-            .await
-            .expect_err("hung credential refresh must time out");
+        let error = client.auth_headers().await.expect_err("hung credential refresh must time out");
         assert_eq!(error.category, ErrorCategory::Timeout);
+        assert_eq!(error.code, "session.vertex.timeout");
         assert!(start.elapsed() < Duration::from_millis(500));
     }
 }

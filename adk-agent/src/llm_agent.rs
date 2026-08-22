@@ -23,7 +23,9 @@ use adk_plugin::{
 #[cfg(feature = "skills")]
 use crate::skill_shim::load_skill_index;
 use crate::{
-    guardrails::{GuardrailSet, enforce_guardrails},
+    guardrails::{
+        GuardrailSet, ToolGuardrailSet, ToolScreening, enforce_guardrails, screen_tool_call,
+    },
     skill_shim::{SelectionPolicy, SkillIndex, apply_skill_injection},
     tool_call_markup::normalize_option_content,
     workflow::with_user_content_override,
@@ -64,6 +66,7 @@ struct PendingToolCall {
     args: serde_json::Value,
     id: Option<String>,
     function_call_id: String,
+    guardrail_denial: Option<String>,
 }
 
 fn build_generation_config(
@@ -108,6 +111,7 @@ fn collect_function_calls(content: &Content, invocation_id: &str) -> Vec<Pending
             function_call_id: id
                 .clone()
                 .unwrap_or_else(|| format!("{invocation_id}_{name}_{index}")),
+            guardrail_denial: None,
         })
         .collect()
 }
@@ -241,6 +245,7 @@ pub struct LlmAgent {
     tool_execution_strategy: Option<ToolExecutionStrategy>,
     input_guardrails: Arc<GuardrailSet>,
     output_guardrails: Arc<GuardrailSet>,
+    tool_guardrails: Arc<ToolGuardrailSet>,
     /// Enhanced plugin manager for fine-grained tool/model call interception.
     /// Only created when enhanced plugins are registered (zero overhead otherwise).
     #[cfg(feature = "enhanced-plugins")]
@@ -316,8 +321,13 @@ impl PromptConfig {
             )));
         }
 
-        let agent_filter =
-            if ctx.run_config().transfer_targets.is_empty() { None } else { Some(agent_name) };
+        let agent_filter = if ctx.authoritative_transfer_targets()
+            || !ctx.run_config().transfer_targets.is_empty()
+        {
+            Some(agent_name)
+        } else {
+            None
+        };
         let mut session_history =
             ctx.session().conversation_history_scoped(agent_filter, ctx.branch());
         let mut current_user_content = ctx.user_content().clone();
@@ -409,8 +419,11 @@ impl ToolSetup {
             .iter()
             .map(|tool| (tool.name().to_string(), tool.declaration()))
             .collect::<std::collections::HashMap<_, _>>();
-        let mut transfer_targets: Vec<String> =
-            self.sub_agents.iter().map(|agent| agent.name().to_string()).collect();
+        let mut transfer_targets: Vec<String> = if ctx.authoritative_transfer_targets() {
+            Vec::new()
+        } else {
+            self.sub_agents.iter().map(|agent| agent.name().to_string()).collect()
+        };
         let child_names: std::collections::HashSet<_> =
             self.sub_agents.iter().map(|agent| agent.name()).collect();
         let parent_name = ctx.run_config().parent_agent.as_deref();
@@ -676,6 +689,7 @@ pub struct LlmAgentBuilder {
     tool_execution_strategy: Option<ToolExecutionStrategy>,
     input_guardrails: GuardrailSet,
     output_guardrails: GuardrailSet,
+    tool_guardrails: ToolGuardrailSet,
     /// Enhanced plugins to register on the built agent.
     #[cfg(feature = "enhanced-plugins")]
     enhanced_plugins: Vec<Arc<dyn EnhancedPlugin>>,
@@ -726,6 +740,7 @@ impl LlmAgentBuilder {
             tool_execution_strategy: None,
             input_guardrails: GuardrailSet::new(),
             output_guardrails: GuardrailSet::new(),
+            tool_guardrails: ToolGuardrailSet::new(),
             #[cfg(feature = "enhanced-plugins")]
             enhanced_plugins: Vec::new(),
             #[cfg(feature = "sandbox")]
@@ -1129,6 +1144,36 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Set guardrails that screen tool calls before they execute.
+    ///
+    /// [`GuardrailSet`] validates `Content` and never sees a tool call, and
+    /// [`ToolConfirmationPolicy`] decides per tool *name*. Neither can express "this tool may run,
+    /// but not with these arguments". A [`ToolGuardrailSet`] receives the tool name and the
+    /// arguments and may allow, deny, or narrow them.
+    ///
+    /// Screening runs before the tool executes and before confirmation is resolved, so a denied
+    /// call neither prompts the user nor consumes a concurrency permit. A denial is reported to
+    /// the model as the tool's result, letting it correct the call rather than stalling the run.
+    ///
+    /// Requires the `guardrails` feature.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_agent::guardrails::{PathAllowList, ToolGuardrailSet};
+    ///
+    /// let agent = LlmAgentBuilder::new("ops")
+    ///     .tool_guardrails(ToolGuardrailSet::new().with(
+    ///         PathAllowList::new("agents-only", ["path"], ["/Users/me/Library/LaunchAgents"])
+    ///             .on_tools(["plist_write"]),
+    ///     ))
+    ///     .build()?;
+    /// ```
+    pub fn tool_guardrails(mut self, guardrails: ToolGuardrailSet) -> Self {
+        self.tool_guardrails = guardrails;
+        self
+    }
+
     /// Register a single enhanced plugin for fine-grained tool/model call interception.
     ///
     /// Enhanced plugins can inspect and modify tool arguments, tool results,
@@ -1303,6 +1348,7 @@ impl LlmAgentBuilder {
             tool_execution_strategy: self.tool_execution_strategy,
             input_guardrails: Arc::new(self.input_guardrails),
             output_guardrails: Arc::new(self.output_guardrails),
+            tool_guardrails: Arc::new(self.tool_guardrails),
             #[cfg(feature = "enhanced-plugins")]
             enhanced_plugin_manager,
             #[cfg(feature = "sandbox")]
@@ -1553,6 +1599,50 @@ impl ToolContext for AgentToolContext {
         }
     }
 
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        self.parent_ctx.memory()
+    }
+
+    fn session(&self) -> Option<&dyn adk_core::Session> {
+        Some(self.parent_ctx.session())
+    }
+
+    fn run_config(&self) -> Option<&adk_core::RunConfig> {
+        Some(self.parent_ctx.run_config())
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.parent_ctx.is_cancelled()
+    }
+
+    fn request_metadata(&self) -> HashMap<String, serde_json::Value> {
+        self.parent_ctx.request_metadata()
+    }
+
+    fn delegation_depth(&self) -> u32 {
+        self.parent_ctx.delegation_depth()
+    }
+
+    fn max_delegation_depth(&self) -> Option<u32> {
+        self.parent_ctx.max_delegation_depth()
+    }
+
+    fn orchestration_root_invocation_id(&self) -> &str {
+        self.parent_ctx.orchestration_root_invocation_id()
+    }
+
+    fn orchestration_edge_id(&self) -> Option<&str> {
+        self.parent_ctx.orchestration_edge_id()
+    }
+
+    async fn emit_event(&self, event: Event) {
+        if let Some(tx) = &self.progress_tx
+            && !tx.is_closed()
+        {
+            let _ = tokio::time::timeout(TOOL_PROGRESS_SEND_TIMEOUT, tx.send(event)).await;
+        }
+    }
+
     fn user_scopes(&self) -> Vec<String> {
         self.parent_ctx.user_scopes()
     }
@@ -1701,13 +1791,35 @@ struct ToolExecutor<'a> {
 
 impl ToolExecutor<'_> {
     async fn execute(&self, call: PendingToolCall) -> ToolExecutionResult {
-        let PendingToolCall { index, name, args, id, function_call_id } = call;
+        let PendingToolCall { index, name, args, id, function_call_id, guardrail_denial } = call;
         let mut tool_actions = EventActions::default();
         let mut response_content: Option<Content> = None;
         let mut run_after_tool_callbacks = true;
         let mut tool_outcome_for_callback: Option<ToolOutcome> = None;
         let mut executed_tool: Option<Arc<dyn Tool>> = None;
         let mut executed_tool_response: Option<serde_json::Value> = None;
+
+        if let Some(reason) = guardrail_denial {
+            // Screening happened before confirmation. Report a denial as the tool's result so the
+            // model can correct the call instead of the run stalling.
+            let denied_content = Content {
+                role: "function".to_string(),
+                parts: vec![Part::FunctionResponse {
+                    function_response: FunctionResponseData::new(
+                        name.clone(),
+                        serde_json::json!({ "error": reason }),
+                    ),
+                    id: id.clone(),
+                    annotations: None,
+                }],
+            };
+            return ToolExecutionResult {
+                index,
+                content: denied_content,
+                actions: tool_actions,
+                escalate_or_skip: false,
+            };
+        }
 
         // Acquire concurrency permit before tool execution.
         // The permit is held for the entire duration of this tool call
@@ -2242,6 +2354,17 @@ impl Agent for LlmAgent {
         &self.sub_agents
     }
 
+    fn capabilities(&self) -> adk_core::AgentCapabilities {
+        adk_core::AgentCapabilities {
+            runtime_tools: true,
+            handoff: true,
+            relationship_confirmation: true,
+            checkpoint_resume: false,
+            shared_state: true,
+            invocation_metadata: true,
+        }
+    }
+
     #[adk_telemetry::instrument(
         skip(self, ctx),
         fields(
@@ -2279,6 +2402,7 @@ impl Agent for LlmAgent {
         let tool_retry_budgets = self.tool_retry_budgets.clone();
         let circuit_breaker_threshold = self.circuit_breaker_threshold;
         let tool_confirmation_policy = self.tool_confirmation_policy.clone();
+        let tool_guardrails = Arc::clone(&self.tool_guardrails);
         let output_guardrails = self.output_guardrails.clone();
         let agent_tool_execution_strategy = self.tool_execution_strategy;
         #[cfg(feature = "enhanced-plugins")]
@@ -2936,7 +3060,7 @@ impl Agent for LlmAgent {
                     }
 
                     // Filter out transfer_to_agent and built-in tools
-                    let fc_parts: Vec<_> = fc_parts
+                    let mut fc_parts: Vec<_> = fc_parts
                         .into_iter()
                         .filter(|call| {
                             if call.name == "transfer_to_agent" {
@@ -2952,12 +3076,26 @@ impl Agent for LlmAgent {
                         })
                         .collect();
 
+                    // Guardrails must run before confirmation requests are constructed. This also
+                    // makes a revised call's arguments the ones shown to the approver and included
+                    // in its confirmation fingerprint.
+                    for call in &mut fc_parts {
+                        match screen_tool_call(&tool_guardrails, &call.name, &call.args).await {
+                            ToolScreening::Allow(args) => call.args = args,
+                            ToolScreening::Deny(reason) => {
+                                call.guardrail_denial = Some(reason);
+                            }
+                        }
+                    }
+
                     // ===== TOOL CONFIRMATION PRE-CHECK =====
                     // Tool confirmation interrupts cause an immediate return,
                     // so check before parallel dispatch.
                     let mut confirmation_interrupted = false;
                     for call in &fc_parts {
-                        if tool_confirmation_policy.requires_confirmation(&call.name)
+                        if call.guardrail_denial.is_none()
+                            && (tool_confirmation_policy.requires_confirmation(&call.name)
+                                || ctx.requires_tool_confirmation(&call.name))
                             && static_confirmation_decision(
                                 &confirmation_decisions,
                                 &confirmation_fingerprints,

@@ -60,6 +60,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ServerBuilder::with_agent_engine(true)` + `.with_a2a(...)`. Template and
   addon file fragments now support `{name}` substitution and path override
   (a template file replaces a base file with the same path).
+- **Tool guardrails** (`adk-guardrail`; `adk-agent` feature `guardrails`):
+  `Guardrail` validates `Content` and never sees a tool call, and
+  `ToolConfirmationPolicy` decides per tool *name*, so neither could express
+  "this tool may run, but not with these arguments" — argument-level policy had
+  nowhere to live inside the framework. `ToolGuardrail::validate_call` receives
+  the tool name and arguments and returns `Allow`, `Deny`, or `ReviseArgs`;
+  `ToolGuardrailSet::evaluate` runs guardrails in order so revisions compose, and
+  stops at the first denial. `LlmAgentBuilder::tool_guardrails` wires a set in.
+  Screening happens before the concurrency permit is acquired and before
+  confirmation is resolved, so a denied call neither queues behind other work nor
+  prompts the user, and the denial is reported as the tool's result so the model
+  can correct the call instead of the run stalling. Two implementations ship:
+  `DeniedArgumentPattern` (regex over the serialized arguments, optionally scoped
+  to named tools) and `PathAllowList` (confines path-valued arguments to allowed
+  roots, comparing by path component rather than string prefix so
+  `/etc/passwd-backup` is not admitted by a root of `/etc/passwd`, and refusing
+  any path containing a `..` component. It also resolves every existing candidate
+  component to reject symlink escapes; hostile local races still require secure-open
+  primitives in the filesystem tool itself).
+
+- **Skill write path** (`adk-skill`): the crate was read-only — every `fs::write`
+  lived behind `#[cfg(test)]` — so an agent could not persist a skill it derived
+  at runtime and an operator could not generate one programmatically.
+  `SkillWriter` writes into the `.skills` directory `load_skill_index` already
+  discovers, through a unique temporary file that is synchronized and atomically
+  replaces the destination on Unix and Windows, so a crash mid-write cannot leave
+  a half-written skill that breaks the whole index load. `SkillDraft` is a builder
+  for the document; `SkillDraft::to_markdown`
+  renders frontmatter plus body and omits unset fields, and round-trips through
+  `parse_skill_markdown`. `validate_skill_name` enforces the specification's
+  `[a-z0-9-]` rule (1–64 characters, no leading or trailing hyphen) and is also
+  the path-safety boundary, since a name becomes a filename — `../escape` and
+  `nested/name` are rejected before any file is touched. `SkillWriter::remove`
+  and `exists` complete the lifecycle. `SkillInjector::reloaded` rescans the root
+  and returns a refreshed injector, and `SkillInjector::root` reports what it
+  rescans; `reloaded` returns a new value rather than mutating because
+  `build_plugin` captures the index by handle, so a plugin already handed to a
+  runner must be rebuilt to see new skills.
+
+- **`AgentInvoker` and the ambient runner bridge** (`adk-core`, `adk-runner`,
+  `adk-agent` feature `ambient`): `AmbientAgent::start` refuses to run without a
+  trigger handler, and writing one meant building `Content`, inventing a session
+  id, and calling `Runner::run` by hand. `Runner::run` also resolves an *existing*
+  session and yields `session.not_found` through the stream when there is none,
+  which an external trigger has no opportunity to pre-register — so the obvious
+  wiring failed at the first tick, inside the stream rather than at the call site.
+  `adk-core` now defines `AgentInvoker`, a single `invoke(user_id, session_id,
+  content)` operation whose implementations create a missing session;
+  `adk-runner` implements it for `Runner`; and
+  `AmbientAgent::with_invoker(invoker, RunnerTriggerConfig)` supplies the handler.
+  `TriggerSessionPolicy` chooses between `PerTrigger` (default — a fresh session
+  per event, so a frequent schedule cannot grow one session's history and per-run
+  cost without bound) and `Shared(id)`; shared invocations are serialized through
+  the returned stream. The wrapper adopts the runner's executable root for accurate
+  diagnostics. `RunnerTriggerConfig::with_prompt` shapes the event into prompt text.
+  The OpenAI-backed `ambient_cron_agent` example failed at `start()`
+  and documented that it did not invoke the agent; it now runs all seven lifecycle
+  steps and prints what each run produced.
+
+- **Cron missed-tick handling** (`adk-agent`, feature `ambient`):
+  `CronTrigger::subscribe` computes the next tick from the moment it is called, so
+  a trigger that restarted after downtime — or ran on a host that suspended —
+  resumed at the next future tick and discarded every tick that came due in
+  between, with no record that anything was skipped. `MissedTickPolicy` now
+  decides that span's fate: `Skip` (default, prior behaviour), `CoalesceOne` (one
+  event for the whole gap), or `All` (one event per elapsed tick, oldest first,
+  bounded by `CronTrigger::with_max_catch_up`, default 64). Detecting a gap across
+  a process restart needs a `TickWatermark`; `FileTickWatermark` stores one
+  RFC 3339 cursor using portable atomic replacement. A capped replay persists its
+  skipped-through cursor, and a persistence failure stops the stream before
+  emission. Replayed events carry
+  `scheduled_for`, `catch_up`, and — for `CoalesceOne` — `missed_count` in their
+  payload. The watermark advances on emission rather than on consumer completion,
+  making delivery at-most-once so a consumer that stops polling cannot replay the
+  same gap on every restart.
+
 - **cargo-adk `docker` addon** (`cargo adk new my-agent --addon docker`): emits a
   multi-stage `Dockerfile` (`rust:1.95-slim` build stage kept in lockstep with
   `rust-toolchain.toml`, `gcr.io/distroless/cc-debian12` runtime, `ENV PORT=8080`,
@@ -210,6 +286,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to `TYPE object FLEXIBLE`, and the `surrealdb` feature now has a PR-tier
   `feature-coverage` matrix entry so the backend cannot silently break again
   (#568).
+
+### Changed
+
+- **Wave 3 ADC/LRO consolidation** — the Vertex plumbing duplicated across
+  five backends now lives in `adk-gcp`, with no public API change and each
+  backend's error codes, categories, and mock contract tests preserved:
+  `adk-session` (`vertex-session`), `adk-memory` (`vertex-memory`),
+  `adk-tool` (`example-store`), `adk-deploy` (`gcp`), and `adk-artifact`
+  (`gcs`, credential handling only).
+- **adk-gcp**: `GcpErrorContext` gains `with_response_too_large_code` (a
+  dedicated size-limit code override; the default remains the consumer's
+  `invalid_response` literal); `GcpHttpClient` gains `send_value_counted`
+  (parsed JSON plus decoded body size, for aggregate pagination bounds) and
+  a post-construction `with_max_response_bytes` override.
 
 ## [2.0.0] - 2026-08-09
 

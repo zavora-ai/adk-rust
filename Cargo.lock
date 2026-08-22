@@ -126,6 +126,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid 1.23.2",
 ]
 
 [[package]]
@@ -595,6 +596,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -996,6 +998,7 @@ name = "adk-session"
 version = "2.0.0"
 dependencies = [
  "adk-core",
+ "adk-gcp",
  "aes-gcm",
  "async-trait",
  "axum 0.8.9",
@@ -1034,6 +1037,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "walkdir",
 ]
 

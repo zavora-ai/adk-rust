@@ -141,6 +141,9 @@ jobs:
       matrix:
         include:
           - { package: adk-agent, features: codeact }
+          # Guardrails are not in adk-agent's default features, so `--workspace` never compiled
+          # the adk-guardrail integration and `tool_guardrail_tests` ran in no required check.
+          - { package: adk-agent, features: guardrails }
           - { package: adk-model, features: openrouter }
           - { package: adk-sandbox, features: wasm }
           # The background run store and its persistence are behind `background`, so a

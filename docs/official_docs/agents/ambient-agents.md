@@ -2,26 +2,58 @@
 
 ## Running an ambient agent
 
-A trigger handler is required. It receives the event and the agent, and drives the agent —
-typically through a `Runner`:
+A trigger handler is required. The supported path is `with_invoker`, which takes anything
+implementing `adk_core::AgentInvoker` — `Runner` does:
+
+```rust,ignore
+use adk_agent::ambient::{AmbientAgent, RunnerTriggerConfig};
+use std::sync::Arc;
+
+let mut ambient = AmbientAgent::new(agent, source)
+    .with_invoker(runner, RunnerTriggerConfig::new("system"))
+    .with_max_concurrent_triggers(4);
+
+let mut outputs = ambient.take_output(64);
+ambient.start().await?;
+```
+
+`RunnerTriggerConfig` controls three things:
+
+| Method | Purpose | Default |
+|--------|---------|---------|
+| `new(user_id)` | Identity the runs are recorded under. A trigger has no interactive user, so use `"system"` or a service account name. | required |
+| `with_session_policy` | `PerTrigger` gives each event its own session; `Shared(id)` reuses one. | `PerTrigger` |
+| `with_prompt` | Turns the event into prompt text. | states the source and serializes the payload |
+
+`PerTrigger` is the default because a schedule firing every minute into one shared session grows
+that session's history — and the token cost of every later run — without bound.
+`Runner` serializes externally invoked turns targeting the same shared session until each event
+stream finishes, while different session IDs can still run concurrently.
+
+`AgentInvoker::invoke` creates the session when it does not exist. `Runner::run` does not: it
+resolves an *existing* session and yields `session.not_found` through the stream otherwise, which
+an externally triggered run has no opportunity to pre-register.
+
+When the invoker exposes its executable root, as `Runner` does, `with_invoker` uses that agent for
+ambient logging and diagnostics. This prevents telemetry from naming one agent while another one
+actually handles the trigger.
+
+### Supplying a handler directly
+
+`with_trigger_handler` remains available for callers driving something other than a `Runner`. It
+receives the event and the agent and must return the event stream; creating the session is then
+the handler's responsibility.
 
 ```rust,ignore
 use adk_agent::ambient::{AmbientAgent, TriggerHandler};
 use std::sync::Arc;
 
 let handler: TriggerHandler = Arc::new(move |event, agent| {
-    let runner = runner.clone();
-    Box::pin(async move {
-        runner.run_str("user-1", "ambient-session", event.payload.to_string().into()).await
-    })
+    let backend = backend.clone();
+    Box::pin(async move { backend.dispatch(event, agent).await })
 });
 
-let mut ambient = AmbientAgent::new(agent, source)
-    .with_trigger_handler(handler)
-    .with_max_concurrent_triggers(4);
-
-let mut outputs = ambient.take_output(64);
-ambient.start().await?;
+let mut ambient = AmbientAgent::new(agent, source).with_trigger_handler(handler);
 ```
 
 `start` fails without a handler:
@@ -71,6 +103,53 @@ adk-agent = { version = "2.0.0", features = ["ambient"] }
 
 `TriggerEvent::principal` lets a handler distinguish an authorized trigger from an anonymous
 one rather than treating every event as equally trusted.
+
+## Missed ticks
+
+`CronTrigger::subscribe` computes the next tick from the moment it is called. A trigger that
+restarts after downtime, or runs on a host that suspends, therefore resumes at the next future
+tick and every tick that came due in between is discarded.
+
+`MissedTickPolicy` decides what happens to that span:
+
+| Policy | Behaviour | Use for |
+|--------|-----------|---------|
+| `Skip` | Discard elapsed ticks and wait for the next scheduled one. The default. | Schedules where a late run has no value |
+| `CoalesceOne` | Emit one event covering the whole elapsed span. | Sweeps where only current state matters |
+| `All` | Emit one event per elapsed tick, oldest first. | Schedules where each occurrence has its own work |
+
+A policy alone only covers gaps inside one subscription. Detecting a gap that spans a process
+restart needs a `TickWatermark` to record where the schedule left off:
+
+```rust,ignore
+use std::sync::Arc;
+use adk_agent::ambient::{CronTrigger, FileTickWatermark, MissedTickPolicy};
+
+let trigger = CronTrigger::new("0 */5 * * * *")?
+    .with_missed_tick_policy(MissedTickPolicy::CoalesceOne)
+    .with_watermark(Arc::new(FileTickWatermark::new("/var/lib/my-agent/sweep.tick")));
+```
+
+`FileTickWatermark` stores one RFC 3339 cursor. It writes through a unique sibling temporary file,
+synchronizes it, and atomically replaces the destination on Unix and Windows. Implement
+`TickWatermark` for other backing stores.
+
+### Bounding a replay
+
+`All` on a frequent schedule can leave thousands of ticks outstanding after a long outage.
+`with_max_catch_up` caps how many one pass replays (default 64); once the cap is reached the
+remainder of the gap is discarded, the durable cursor advances past it, and the trigger resumes at
+the next future tick, logging how many ticks were dropped. Restarting before the next ordinary tick
+does not recover the discarded remainder.
+
+### Delivery contract
+
+The watermark advances when the trigger emits a tick, not when the consumer finishes acting on
+it. A crash between emission and completion drops that run rather than repeating it —
+at-most-once, not at-least-once. This is what stops a consumer that stops polling from replaying
+the same gap on every restart. Consumers whose work must survive a mid-run crash should record
+their own completion state. If a configured watermark cannot be persisted, the cron stream stops
+before emitting the affected event rather than silently weakening this guarantee.
 
 ## Webhook triggers
 

@@ -20,6 +20,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -191,7 +192,9 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "tempfile",
  "thiserror",
+ "tracing",
  "walkdir",
 ]
 
