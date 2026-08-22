@@ -141,11 +141,9 @@ jobs:
       matrix:
         include:
           - { package: adk-agent, features: codeact }
-          # The ambient trigger sources (cron, webhook, file watch) and the AmbientAgent
-          # lifecycle are behind `ambient`, so a default --workspace build compiles none of
-          # them and neither `ambient_execution_tests` nor `ambient_missed_tick_tests` ran
-          # in any required check.
-          - { package: adk-agent, features: ambient }
+          # Guardrails are not in adk-agent's default features, so `--workspace` never compiled
+          # the adk-guardrail integration and `tool_guardrail_tests` ran in no required check.
+          - { package: adk-agent, features: guardrails }
           - { package: adk-model, features: openrouter }
           - { package: adk-sandbox, features: wasm }
           # The background run store and its persistence are behind `background`, so a

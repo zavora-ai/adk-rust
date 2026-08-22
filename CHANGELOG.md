@@ -60,6 +60,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ServerBuilder::with_agent_engine(true)` + `.with_a2a(...)`. Template and
   addon file fragments now support `{name}` substitution and path override
   (a template file replaces a base file with the same path).
+- **Tool guardrails** (`adk-guardrail`; `adk-agent` feature `guardrails`):
+  `Guardrail` validates `Content` and never sees a tool call, and
+  `ToolConfirmationPolicy` decides per tool *name*, so neither could express
+  "this tool may run, but not with these arguments" — argument-level policy had
+  nowhere to live inside the framework. `ToolGuardrail::validate_call` receives
+  the tool name and arguments and returns `Allow`, `Deny`, or `ReviseArgs`;
+  `ToolGuardrailSet::evaluate` runs guardrails in order so revisions compose, and
+  stops at the first denial. `LlmAgentBuilder::tool_guardrails` wires a set in.
+  Screening happens before the concurrency permit is acquired and before
+  confirmation is resolved, so a denied call neither queues behind other work nor
+  prompts the user, and the denial is reported as the tool's result so the model
+  can correct the call instead of the run stalling. Two implementations ship:
+  `DeniedArgumentPattern` (regex over the serialized arguments, optionally scoped
+  to named tools) and `PathAllowList` (confines path-valued arguments to allowed
+  roots, comparing by path component rather than string prefix so
+  `/etc/passwd-backup` is not admitted by a root of `/etc/passwd`, and refusing
+  any path containing a `..` component since the target need not exist and cannot
+  be resolved).
+
 - **Skill write path** (`adk-skill`): the crate was read-only — every `fs::write`
   lived behind `#[cfg(test)]` — so an agent could not persist a skill it derived
   at runtime and an operator could not generate one programmatically.
