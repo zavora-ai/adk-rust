@@ -60,6 +60,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ServerBuilder::with_agent_engine(true)` + `.with_a2a(...)`. Template and
   addon file fragments now support `{name}` substitution and path override
   (a template file replaces a base file with the same path).
+- **`AgentInvoker` and the ambient runner bridge** (`adk-core`, `adk-runner`,
+  `adk-agent` feature `ambient`): `AmbientAgent::start` refuses to run without a
+  trigger handler, and writing one meant building `Content`, inventing a session
+  id, and calling `Runner::run` by hand. `Runner::run` also resolves an *existing*
+  session and yields `session.not_found` through the stream when there is none,
+  which an external trigger has no opportunity to pre-register — so the obvious
+  wiring failed at the first tick, inside the stream rather than at the call site.
+  `adk-core` now defines `AgentInvoker`, a single `invoke(user_id, session_id,
+  content)` operation whose implementations create a missing session;
+  `adk-runner` implements it for `Runner`; and
+  `AmbientAgent::with_invoker(invoker, RunnerTriggerConfig)` supplies the handler.
+  `TriggerSessionPolicy` chooses between `PerTrigger` (default — a fresh session
+  per event, so a frequent schedule cannot grow one session's history and per-run
+  cost without bound) and `Shared(id)`. `RunnerTriggerConfig::with_prompt` shapes
+  the event into prompt text. The `ambient_cron_agent` example failed at `start()`
+  and documented that it did not invoke the agent; it now runs all seven lifecycle
+  steps and prints what each run produced.
+
 - **Cron missed-tick handling** (`adk-agent`, feature `ambient`):
   `CronTrigger::subscribe` computes the next tick from the moment it is called, so
   a trigger that restarted after downtime — or ran on a host that suspended —

@@ -2,26 +2,52 @@
 
 ## Running an ambient agent
 
-A trigger handler is required. It receives the event and the agent, and drives the agent —
-typically through a `Runner`:
+A trigger handler is required. The supported path is `with_invoker`, which takes anything
+implementing `adk_core::AgentInvoker` — `Runner` does:
+
+```rust,ignore
+use adk_agent::ambient::{AmbientAgent, RunnerTriggerConfig};
+use std::sync::Arc;
+
+let mut ambient = AmbientAgent::new(agent, source)
+    .with_invoker(runner, RunnerTriggerConfig::new("system"))
+    .with_max_concurrent_triggers(4);
+
+let mut outputs = ambient.take_output(64);
+ambient.start().await?;
+```
+
+`RunnerTriggerConfig` controls three things:
+
+| Method | Purpose | Default |
+|--------|---------|---------|
+| `new(user_id)` | Identity the runs are recorded under. A trigger has no interactive user, so use `"system"` or a service account name. | required |
+| `with_session_policy` | `PerTrigger` gives each event its own session; `Shared(id)` reuses one. | `PerTrigger` |
+| `with_prompt` | Turns the event into prompt text. | states the source and serializes the payload |
+
+`PerTrigger` is the default because a schedule firing every minute into one shared session grows
+that session's history — and the token cost of every later run — without bound.
+
+`AgentInvoker::invoke` creates the session when it does not exist. `Runner::run` does not: it
+resolves an *existing* session and yields `session.not_found` through the stream otherwise, which
+an externally triggered run has no opportunity to pre-register.
+
+### Supplying a handler directly
+
+`with_trigger_handler` remains available for callers driving something other than a `Runner`. It
+receives the event and the agent and must return the event stream; creating the session is then
+the handler's responsibility.
 
 ```rust,ignore
 use adk_agent::ambient::{AmbientAgent, TriggerHandler};
 use std::sync::Arc;
 
 let handler: TriggerHandler = Arc::new(move |event, agent| {
-    let runner = runner.clone();
-    Box::pin(async move {
-        runner.run_str("user-1", "ambient-session", event.payload.to_string().into()).await
-    })
+    let backend = backend.clone();
+    Box::pin(async move { backend.dispatch(event, agent).await })
 });
 
-let mut ambient = AmbientAgent::new(agent, source)
-    .with_trigger_handler(handler)
-    .with_max_concurrent_triggers(4);
-
-let mut outputs = ambient.take_output(64);
-ambient.start().await?;
+let mut ambient = AmbientAgent::new(agent, source).with_trigger_handler(handler);
 ```
 
 `start` fails without a handler:

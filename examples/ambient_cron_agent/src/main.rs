@@ -12,9 +12,9 @@
 //!   - Resume → status: Running (triggers resume)
 //!   - Stop → status: Stopped
 //!
-//! Note: The current `AmbientAgent` implementation logs trigger events but does
-//! not yet invoke the agent through a Runner (that requires a Runner reference).
-//! This example demonstrates the event source pattern and lifecycle management.
+//! Each trigger drives the agent through a `Runner` via
+//! `AmbientAgent::with_invoker`, and whatever the run produces is printed from
+//! `AmbientAgent::take_output`.
 //!
 //! # Usage
 //!
@@ -22,15 +22,18 @@
 //! cargo run --manifest-path examples/ambient_cron_agent/Cargo.toml
 //! ```
 //!
-//! No API key is required since the ambient agent currently logs trigger events
-//! without invoking the LLM. If `GOOGLE_API_KEY` is set, the example notes that
-//! the agent *would* be invoked in a full production setup.
+//! Set `GOOGLE_API_KEY` to see generated quotes. Without a key the lifecycle and
+//! trigger wiring still run, and each invocation reports the authentication
+//! failure through the output channel rather than failing silently.
 
 use std::sync::Arc;
 
+use adk_agent::ambient::RunnerTriggerConfig;
 use adk_agent::{AmbientAgent, AmbientAgentStatus, CronTrigger, LlmAgentBuilder};
 use adk_core::Agent;
 use adk_model::GeminiModel;
+use adk_runner::Runner;
+use adk_session::{InMemorySessionService, SessionService};
 use tracing_subscriber::EnvFilter;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -89,9 +92,8 @@ async fn main() -> anyhow::Result<()> {
 
     let has_key = api_key().is_some();
 
-    // The AmbientAgent needs an Arc<dyn Agent>. We build a real Gemini agent
-    // if a key is available; otherwise use a dummy key (the agent is never actually
-    // invoked via Runner in this demo — only triggers fire).
+    // The AmbientAgent needs an Arc<dyn Agent>. A real key produces real quotes;
+    // without one the run still happens and reports its authentication failure.
     let key = api_key().unwrap_or_else(|| "not-set".to_string());
 
     if has_key {
@@ -100,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         println!("  ℹ️  No GOOGLE_API_KEY set — using placeholder key for agent creation");
         println!("  💡 Set GOOGLE_API_KEY to enable real LLM invocations");
-        println!("  💡 The trigger/lifecycle demo works without a key");
+        println!("  💡 The trigger/lifecycle wiring runs without a key");
     }
 
     let model = Arc::new(GeminiModel::new(&key, MODEL_NAME)?);
@@ -127,7 +129,42 @@ async fn main() -> anyhow::Result<()> {
     // ─── Step 3: Create AmbientAgent ─────────────────────────────────────
     print_section("Step 3: Creating AmbientAgent");
 
-    let mut ambient = AmbientAgent::new(agent, Arc::new(trigger));
+    // The Runner owns session handling and executes the agent. `with_invoker`
+    // creates a session per trigger, which `Runner::run` does not do on its own.
+    let runner: Arc<Runner> = Arc::new(
+        Runner::builder()
+            .app_name("ambient-cron-agent")
+            .agent(Arc::clone(&agent))
+            .session_service(Arc::new(InMemorySessionService::new()) as Arc<dyn SessionService>)
+            .build()?,
+    );
+
+    let mut ambient = AmbientAgent::new(Arc::clone(&agent), Arc::new(trigger)).with_invoker(
+        runner,
+        RunnerTriggerConfig::new("system").with_prompt(|event| {
+            format!("Give me one motivational quote. Trigger: {}", event.source)
+        }),
+    );
+
+    // Without this, what each run produced would be logged at debug and dropped.
+    let mut outputs = ambient.take_output(32);
+    tokio::spawn(async move {
+        while let Some(result) = outputs.recv().await {
+            match result {
+                Ok(event) => {
+                    if let Some(content) = event.llm_response.content.as_ref() {
+                        let text: String =
+                            content.parts.iter().filter_map(|part| part.text()).collect();
+                        if !text.trim().is_empty() {
+                            println!("  💬 {}", text.trim());
+                        }
+                    }
+                }
+                Err(error) => println!("  ⚠️  invocation failed: {error}"),
+            }
+        }
+    });
+
     let status = ambient.status().await;
     println!(
         "  ✓ AmbientAgent created (initial status: {} {:?})",
@@ -147,14 +184,14 @@ async fn main() -> anyhow::Result<()> {
     );
 
     if has_key {
-        println!("  📡 With a real model, each trigger would invoke the LLM");
+        println!("  📡 Each trigger invokes the LLM through the Runner");
     } else {
-        println!("  📋 Trigger events are logged (check tracing output above)");
+        println!("  📋 Each trigger invokes the agent; failures print below");
     }
 
     println!("  ⏳ Sleeping 7 seconds to observe triggers...");
     tokio::time::sleep(tokio::time::Duration::from_secs(7)).await;
-    println!("  ✓ ~3 triggers should have fired (check INFO logs above)");
+    println!("  ✓ ~3 triggers should have fired");
 
     // ─── Step 5: Pause ───────────────────────────────────────────────────
     print_section("Step 5: Pausing ambient agent");

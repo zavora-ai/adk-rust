@@ -32,6 +32,7 @@ chrono = { workspace = true }
 schemars = "1.0"
 jsonschema = { workspace = true }
 cron = { version = "0.15", optional = true }
+uuid = { workspace = true, optional = true }
 notify = { version = "8", optional = true }
 axum = { version = "0.8", optional = true }
 # Graceful shutdown for the webhook trigger's owned HTTP listener.
@@ -46,7 +47,7 @@ sandbox = ["dep:adk-sandbox", "adk-sandbox/workspace"]
 coding = ["dep:adk-devtools"]
 codeact = []
 record-payloads = []
-ambient = ["dep:cron", "dep:notify", "dep:axum", "dep:tokio-util"]
+ambient = ["dep:cron", "dep:notify", "dep:axum", "dep:tokio-util", "dep:uuid"]
 
 [dev-dependencies]
 # Drives the webhook trigger over real HTTP in the trust-boundary tests.
