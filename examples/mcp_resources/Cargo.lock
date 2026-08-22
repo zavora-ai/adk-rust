@@ -20,6 +20,7 @@ dependencies = [
  "adk-devtools",
  "adk-skill",
  "adk-telemetry",
+ "adk-tool",
  "async-stream",
  "async-trait",
  "chrono",
@@ -31,6 +32,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -111,7 +111,10 @@ pub mod tool_concurrency;
 /// Content, Part, and multimodal data types.
 pub mod types;
 
-pub use agent::{Agent, EventStream, ResolvedContext};
+pub use agent::{
+    Agent, AgentCapabilities, AgentTransferDecision, AgentTransferRequest, EventStream,
+    ResolvedContext,
+};
 pub use agent_invoker::AgentInvoker;
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
 pub use callbacks::{

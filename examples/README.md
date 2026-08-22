@@ -69,6 +69,12 @@ Standalone crates demonstrating current ADK-Rust features. Each has its own `Car
 | `examples/live_translation` | Real-time speech translation web UI (OpenAI `gpt-realtime-translate` / Gemini 3.5 Live Translate) | `cargo run --manifest-path examples/live_translation/Cargo.toml` |
 | `examples/customer_service` | Multimodal customer-service voice agent — sees the camera, reads tone, runs refund/handoff tools (OpenAI or Gemini) | `cargo run --manifest-path examples/customer_service/Cargo.toml` |
 
+**Requires `OPENAI_API_KEY`:**
+
+| Example | Feature | Run |
+|---------|---------|-----|
+| `examples/team_architectures` | Portable `TeamSpec` examples for handoff, delegation, parallel shared-state swarms, and hybrid workflows | `cargo run --manifest-path examples/team_architectures/Cargo.toml --bin team-supervisor-handoff` |
+
 **Requires Google Cloud ADC (`gcloud auth application-default login`):**
 
 | Example | Feature | Run |

@@ -321,8 +321,13 @@ impl PromptConfig {
             )));
         }
 
-        let agent_filter =
-            if ctx.run_config().transfer_targets.is_empty() { None } else { Some(agent_name) };
+        let agent_filter = if ctx.authoritative_transfer_targets()
+            || !ctx.run_config().transfer_targets.is_empty()
+        {
+            Some(agent_name)
+        } else {
+            None
+        };
         let mut session_history =
             ctx.session().conversation_history_scoped(agent_filter, ctx.branch());
         let mut current_user_content = ctx.user_content().clone();
@@ -414,8 +419,11 @@ impl ToolSetup {
             .iter()
             .map(|tool| (tool.name().to_string(), tool.declaration()))
             .collect::<std::collections::HashMap<_, _>>();
-        let mut transfer_targets: Vec<String> =
-            self.sub_agents.iter().map(|agent| agent.name().to_string()).collect();
+        let mut transfer_targets: Vec<String> = if ctx.authoritative_transfer_targets() {
+            Vec::new()
+        } else {
+            self.sub_agents.iter().map(|agent| agent.name().to_string()).collect()
+        };
         let child_names: std::collections::HashSet<_> =
             self.sub_agents.iter().map(|agent| agent.name()).collect();
         let parent_name = ctx.run_config().parent_agent.as_deref();
@@ -1591,6 +1599,50 @@ impl ToolContext for AgentToolContext {
         }
     }
 
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        self.parent_ctx.memory()
+    }
+
+    fn session(&self) -> Option<&dyn adk_core::Session> {
+        Some(self.parent_ctx.session())
+    }
+
+    fn run_config(&self) -> Option<&adk_core::RunConfig> {
+        Some(self.parent_ctx.run_config())
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.parent_ctx.is_cancelled()
+    }
+
+    fn request_metadata(&self) -> HashMap<String, serde_json::Value> {
+        self.parent_ctx.request_metadata()
+    }
+
+    fn delegation_depth(&self) -> u32 {
+        self.parent_ctx.delegation_depth()
+    }
+
+    fn max_delegation_depth(&self) -> Option<u32> {
+        self.parent_ctx.max_delegation_depth()
+    }
+
+    fn orchestration_root_invocation_id(&self) -> &str {
+        self.parent_ctx.orchestration_root_invocation_id()
+    }
+
+    fn orchestration_edge_id(&self) -> Option<&str> {
+        self.parent_ctx.orchestration_edge_id()
+    }
+
+    async fn emit_event(&self, event: Event) {
+        if let Some(tx) = &self.progress_tx
+            && !tx.is_closed()
+        {
+            let _ = tokio::time::timeout(TOOL_PROGRESS_SEND_TIMEOUT, tx.send(event)).await;
+        }
+    }
+
     fn user_scopes(&self) -> Vec<String> {
         self.parent_ctx.user_scopes()
     }
@@ -2300,6 +2352,17 @@ impl Agent for LlmAgent {
 
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
         &self.sub_agents
+    }
+
+    fn capabilities(&self) -> adk_core::AgentCapabilities {
+        adk_core::AgentCapabilities {
+            runtime_tools: true,
+            handoff: true,
+            relationship_confirmation: true,
+            checkpoint_resume: false,
+            shared_state: true,
+            invocation_metadata: true,
+        }
     }
 
     #[adk_telemetry::instrument(
@@ -3031,7 +3094,8 @@ impl Agent for LlmAgent {
                     let mut confirmation_interrupted = false;
                     for call in &fc_parts {
                         if call.guardrail_denial.is_none()
-                            && tool_confirmation_policy.requires_confirmation(&call.name)
+                            && (tool_confirmation_policy.requires_confirmation(&call.name)
+                                || ctx.requires_tool_confirmation(&call.name))
                             && static_confirmation_decision(
                                 &confirmation_decisions,
                                 &confirmation_fingerprints,
