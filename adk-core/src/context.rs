@@ -550,6 +550,42 @@ pub trait InvocationContext: CallbackContext {
         HashMap::new()
     }
 
+    /// Whether the run's transfer target list replaces static sub-agent targets.
+    fn authoritative_transfer_targets(&self) -> bool {
+        false
+    }
+
+    /// Current nested agent-as-tool delegation depth.
+    fn delegation_depth(&self) -> u32 {
+        0
+    }
+
+    /// Maximum nested agent-as-tool delegation depth.
+    fn max_delegation_depth(&self) -> Option<u32> {
+        None
+    }
+
+    /// Returns the root invocation that owns this orchestration tree.
+    ///
+    /// Nested agent runs use this stable identifier to aggregate budgets,
+    /// traces, and execution receipts without conflating unrelated runs.
+    fn orchestration_root_invocation_id(&self) -> &str {
+        self.invocation_id()
+    }
+
+    /// Returns the causal relationship execution that started this run.
+    fn orchestration_edge_id(&self) -> Option<&str> {
+        None
+    }
+
+    /// Returns whether a runtime-injected tool requires confirmation.
+    ///
+    /// This additive hook lets composition layers protect relationship tools
+    /// without mutating the concrete agent that receives them.
+    fn requires_tool_confirmation(&self, _tool_name: &str) -> bool {
+        false
+    }
+
     /// Retrieve a secret by name from the configured secret provider.
     ///
     /// Returns `Ok(Some(value))` when a provider is configured and the secret

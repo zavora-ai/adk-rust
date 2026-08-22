@@ -1651,7 +1651,9 @@ impl CodeActAgent {
         match self.include_contents {
             IncludeContents::None => vec![current],
             IncludeContents::Default => {
-                let mut history = if ctx.run_config().transfer_targets.is_empty() {
+                let mut history = if ctx.run_config().transfer_targets.is_empty()
+                    && !ctx.authoritative_transfer_targets()
+                {
                     ctx.session().conversation_history()
                 } else {
                     ctx.session().conversation_history_for_agent(&self.name)
@@ -1693,6 +1695,17 @@ impl Agent for CodeActAgent {
         &self.sub_agents
     }
 
+    fn capabilities(&self) -> adk_core::AgentCapabilities {
+        adk_core::AgentCapabilities {
+            runtime_tools: true,
+            handoff: true,
+            relationship_confirmation: false,
+            checkpoint_resume: false,
+            shared_state: true,
+            invocation_metadata: true,
+        }
+    }
+
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_core::Result<EventStream> {
         // Input guardrails run first; a block aborts the run, a transform
         // (e.g. PII redaction) rewrites the user content downstream.
@@ -1709,8 +1722,11 @@ impl Agent for CodeActAgent {
         // the `disallow_transfer_to_parent`/`disallow_transfer_to_peers` flags
         // (which apply only to the runner-provided parent/peers, never to
         // sub-agents). Mirrors LlmAgent.
-        let mut transfer_targets: Vec<String> =
-            self.sub_agents.iter().map(|a| a.name().to_string()).collect();
+        let mut transfer_targets: Vec<String> = if ctx.authoritative_transfer_targets() {
+            Vec::new()
+        } else {
+            self.sub_agents.iter().map(|a| a.name().to_string()).collect()
+        };
         let parent = ctx.run_config().parent_agent.as_deref();
         for target in &ctx.run_config().transfer_targets {
             if transfer_targets.contains(target) {
@@ -2594,6 +2610,35 @@ impl ToolContext for CodeToolContext {
             Some(memory) => memory.search(query).await,
             None => Ok(vec![]),
         }
+    }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        self.inner.memory()
+    }
+    fn session(&self) -> Option<&dyn adk_core::Session> {
+        Some(self.inner.session())
+    }
+    fn run_config(&self) -> Option<&adk_core::RunConfig> {
+        Some(self.inner.run_config())
+    }
+    fn is_cancelled(&self) -> bool {
+        self.inner.is_cancelled()
+    }
+    fn request_metadata(&self) -> HashMap<String, serde_json::Value> {
+        self.inner.request_metadata()
+    }
+    fn delegation_depth(&self) -> u32 {
+        self.inner.delegation_depth()
+    }
+    fn max_delegation_depth(&self) -> Option<u32> {
+        self.inner.max_delegation_depth()
+    }
+
+    fn orchestration_root_invocation_id(&self) -> &str {
+        self.inner.orchestration_root_invocation_id()
+    }
+
+    fn orchestration_edge_id(&self) -> Option<&str> {
+        self.inner.orchestration_edge_id()
     }
     fn user_scopes(&self) -> Vec<String> {
         self.inner.user_scopes()

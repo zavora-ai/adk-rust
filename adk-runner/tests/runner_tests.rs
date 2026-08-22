@@ -182,6 +182,272 @@ async fn test_runner_run() {
     assert!(result.is_ok());
 }
 
+struct TransferAgent {
+    name: String,
+    target: Option<String>,
+}
+
+#[async_trait]
+impl Agent for TransferAgent {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        "emits a deterministic handoff"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let mut event = Event::new(ctx.invocation_id());
+        event.author = self.name.clone();
+        event.actions.transfer_to_agent = self.target.clone();
+        Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
+    }
+}
+
+struct StrictTransferRoot {
+    root: TransferAgent,
+    children: Vec<Arc<dyn Agent>>,
+    allowlists: std::collections::HashMap<String, Vec<String>>,
+    max_depth: u32,
+    denied_target: Option<String>,
+}
+
+#[async_trait]
+impl Agent for StrictTransferRoot {
+    fn name(&self) -> &str {
+        self.root.name()
+    }
+
+    fn description(&self) -> &str {
+        self.root.description()
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &self.children
+    }
+
+    fn configure_run(&self, _agent_name: &str, config: &mut adk_core::RunConfig) {
+        config.max_transfer_depth = Some(self.max_depth);
+    }
+
+    fn transfer_targets_for(&self, agent_name: &str) -> Option<Vec<String>> {
+        Some(self.allowlists.get(agent_name).cloned().unwrap_or_default())
+    }
+
+    fn strict_transfer_policy(&self) -> bool {
+        true
+    }
+
+    async fn govern_transfer(
+        &self,
+        request: &adk_core::AgentTransferRequest,
+    ) -> Result<adk_core::AgentTransferDecision> {
+        if self.denied_target.as_deref() == Some(request.to.as_str()) {
+            Ok(adk_core::AgentTransferDecision::Deny {
+                reason: "deployment policy rejected target".to_string(),
+            })
+        } else {
+            Ok(adk_core::AgentTransferDecision::Allow)
+        }
+    }
+
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        self.root.run(ctx).await
+    }
+}
+
+#[tokio::test]
+async fn strict_root_rejects_peer_widening() {
+    let billing: Arc<dyn Agent> =
+        Arc::new(TransferAgent { name: "billing".to_string(), target: None });
+    let technical: Arc<dyn Agent> =
+        Arc::new(TransferAgent { name: "technical".to_string(), target: None });
+    let root: Arc<dyn Agent> = Arc::new(StrictTransferRoot {
+        root: TransferAgent {
+            name: "supervisor".to_string(),
+            target: Some("technical".to_string()),
+        },
+        children: vec![billing, technical],
+        allowlists: std::collections::HashMap::from([(
+            "supervisor".to_string(),
+            vec!["billing".to_string()],
+        )]),
+        max_depth: 4,
+        denied_target: None,
+    });
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(root)
+        .session_service(Arc::new(MockSessionService) as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+    let mut stream = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("session456").unwrap(),
+            Content::new("user").with_text("route"),
+        )
+        .await
+        .unwrap();
+    let mut error = None;
+    while let Some(result) = stream.next().await {
+        if let Err(value) = result {
+            error = Some(value);
+            break;
+        }
+    }
+    let error = error.unwrap();
+    assert_eq!(error.code, "agent.transfer.target_forbidden");
+    assert!(error.to_string().contains("cannot hand off to 'technical'"));
+}
+
+#[tokio::test]
+async fn strict_root_reports_handoff_depth_overflow() {
+    let first: Arc<dyn Agent> =
+        Arc::new(TransferAgent { name: "first".to_string(), target: Some("second".to_string()) });
+    let second: Arc<dyn Agent> =
+        Arc::new(TransferAgent { name: "second".to_string(), target: None });
+    let root: Arc<dyn Agent> = Arc::new(StrictTransferRoot {
+        root: TransferAgent { name: "supervisor".to_string(), target: Some("first".to_string()) },
+        children: vec![first, second],
+        allowlists: std::collections::HashMap::from([
+            ("supervisor".to_string(), vec!["first".to_string()]),
+            ("first".to_string(), vec!["second".to_string()]),
+        ]),
+        max_depth: 1,
+        denied_target: None,
+    });
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(root)
+        .session_service(Arc::new(MockSessionService) as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+    let mut stream = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("session456").unwrap(),
+            Content::new("user").with_text("route"),
+        )
+        .await
+        .unwrap();
+    let mut error = None;
+    while let Some(result) = stream.next().await {
+        if let Err(value) = result {
+            error = Some(value);
+            break;
+        }
+    }
+    let error = error.unwrap();
+    assert_eq!(error.code, "agent.transfer.depth_exceeded");
+    assert!(error.to_string().contains("maximum handoff depth 1 exceeded"));
+}
+
+#[tokio::test]
+async fn runner_applies_async_transfer_governance_before_target_execution() {
+    let target: Arc<dyn Agent> =
+        Arc::new(TransferAgent { name: "billing".to_string(), target: None });
+    let root: Arc<dyn Agent> = Arc::new(StrictTransferRoot {
+        root: TransferAgent { name: "supervisor".to_string(), target: Some("billing".to_string()) },
+        children: vec![target],
+        allowlists: std::collections::HashMap::from([(
+            "supervisor".to_string(),
+            vec!["billing".to_string()],
+        )]),
+        max_depth: 4,
+        denied_target: Some("billing".to_string()),
+    });
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(root)
+        .session_service(Arc::new(MockSessionService) as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+    let mut stream = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("session456").unwrap(),
+            Content::new("user").with_text("route"),
+        )
+        .await
+        .unwrap();
+    let mut error = None;
+    while let Some(result) = stream.next().await {
+        if let Err(value) = result {
+            error = Some(value);
+            break;
+        }
+    }
+    let error = error.expect("governance must reject the transfer");
+    assert_eq!(error.code, "agent.transfer.denied");
+    assert!(error.to_string().contains("deployment policy rejected target"));
+}
+
+struct OrchestrationRootProbe {
+    observed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl Agent for OrchestrationRootProbe {
+    fn name(&self) -> &str {
+        "billing"
+    }
+
+    fn description(&self) -> &str {
+        "checks root invocation propagation"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        self.observed.store(
+            ctx.orchestration_root_invocation_id() != ctx.invocation_id(),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        Ok(Box::pin(futures::stream::empty()))
+    }
+}
+
+#[tokio::test]
+async fn runner_preserves_orchestration_root_across_handoffs() {
+    let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let target: Arc<dyn Agent> = Arc::new(OrchestrationRootProbe { observed: observed.clone() });
+    let root: Arc<dyn Agent> = Arc::new(StrictTransferRoot {
+        root: TransferAgent { name: "supervisor".to_string(), target: Some("billing".to_string()) },
+        children: vec![target],
+        allowlists: std::collections::HashMap::from([(
+            "supervisor".to_string(),
+            vec!["billing".to_string()],
+        )]),
+        max_depth: 4,
+        denied_target: None,
+    });
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(root)
+        .session_service(Arc::new(MockSessionService) as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+    let stream = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("session456").unwrap(),
+            Content::new("user").with_text("route"),
+        )
+        .await
+        .unwrap();
+    let results = stream.collect::<Vec<_>>().await;
+    assert!(results.into_iter().all(|result| result.is_ok()));
+    assert!(observed.load(std::sync::atomic::Ordering::SeqCst));
+}
+
 #[test]
 fn test_find_agent_in_tree() {
     let sub_agent: Arc<dyn Agent> = Arc::new(MockAgent { name: "sub_agent".to_string() });

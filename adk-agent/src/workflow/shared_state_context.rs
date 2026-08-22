@@ -115,6 +115,28 @@ impl InvocationContext for SharedStateContext {
         self.inner.request_metadata()
     }
 
+    fn authoritative_transfer_targets(&self) -> bool {
+        self.inner.authoritative_transfer_targets()
+    }
+    fn delegation_depth(&self) -> u32 {
+        self.inner.delegation_depth()
+    }
+    fn max_delegation_depth(&self) -> Option<u32> {
+        self.inner.max_delegation_depth()
+    }
+
+    fn orchestration_root_invocation_id(&self) -> &str {
+        self.inner.orchestration_root_invocation_id()
+    }
+
+    fn orchestration_edge_id(&self) -> Option<&str> {
+        self.inner.orchestration_edge_id()
+    }
+
+    fn requires_tool_confirmation(&self, tool_name: &str) -> bool {
+        self.inner.requires_tool_confirmation(tool_name)
+    }
+
     async fn get_secret(&self, name: &str) -> adk_core::Result<Option<String>> {
         self.inner.get_secret(name).await
     }

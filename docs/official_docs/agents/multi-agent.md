@@ -51,6 +51,127 @@ In this guide, you'll create a **Customer Service System** where a coordinator r
 - **Specialists** - Focused agents that excel at specific domains
 - **Transfer** - Seamless handoff from coordinator to specialist
 
+## Portable TeamSpec
+
+Use `TeamSpec` when the same team must execute identically in generated
+projects, the CLI, Studio preview, and Enterprise deployments. The spec is
+serializable data; `compile` binds each declared name to any existing `Agent`
+implementation and returns an executable `CompiledTeam` root. It does not add a
+new atomic agent kind.
+
+```rust
+use adk_agent::{
+    Agent, RelationshipKind, TeamMemberSpec, TeamRelationship, TeamSpec,
+};
+use std::sync::Arc;
+
+let spec = TeamSpec {
+    name: "support_team".into(),
+    description: "Customer support routing".into(),
+    coordinator: "coordinator".into(),
+    members: vec![
+        TeamMemberSpec::new("coordinator"),
+        TeamMemberSpec::new("billing_agent"),
+        TeamMemberSpec::new("research_agent"),
+    ],
+    relationships: vec![
+        TeamRelationship::new(
+            "coordinator", "billing_agent", RelationshipKind::Handoff,
+        ),
+        TeamRelationship::new(
+            "coordinator", "research_agent", RelationshipKind::Delegate,
+        ),
+    ],
+    policy: Default::default(),
+};
+
+let root = spec.compile(vec![
+    Arc::new(coordinator) as Arc<dyn Agent>,
+    Arc::new(billing_agent),
+    Arc::new(research_agent),
+])?;
+```
+
+For direct crate use, enable `adk-agent`'s `team-tools` feature when the spec
+contains `Delegate`. With the umbrella crate, enable `tools` (or the `standard`
+tier). Handoff-only specs compile with the base `adk-agent` feature set.
+
+| Relationship | Control behavior | Lowered mechanism |
+|---|---|---|
+| `Handoff` | Caller transfers control and does not resume | Runner `transfer_to_agent` |
+| `Delegate` | Caller invokes a member, receives its result, and resumes | `AgentTool` |
+
+Targets are exact per member. The compiler rejects duplicate members and
+edges, missing endpoints, cycles, unreachable members, invalid bounds, missing
+agent bindings, and extra bindings. Delegate edges can carry input/output JSON
+Schemas, context and history projection, exact state keys, timeout and approval
+requirements, retry/fallback behavior, and a circuit breaker. Handoff edges
+support bounded startup retry/fallback; delegate-only fields are rejected rather
+than silently ignored. Fallbacks must be separately declared edges; validation
+never widens their authority.
+
+Team-wide policy bounds handoff/delegation depth, concurrency, events, model and
+tool calls, tokens, cost, relationship counts, and wall time. Termination rules
+can stop on escalation, an exact final author, or a text marker. Every event
+carries a serializable execution receipt in `__adk_team_execution_v1`, including
+the frozen roster, causal delegation/handoff edges, aggregate usage, and terminal
+status. Use `CompiledTeam::execution_snapshot` to inspect it and
+`restore_execution_snapshot` before resuming with the same invocation ID.
+An active handoff resumes at its frozen target. An unresolved delegation is not
+automatically replayed because the generic `Agent` contract cannot prove that a
+tool call is idempotent; the runtime returns an actionable error instead. Resume
+that delegate through its own checkpoint mechanism or explicitly fail/restart
+the operation.
+
+For reusable architectures, `TeamArchitectureTemplate` lowers supervisor,
+router, and hierarchical presets to explicit `TeamSpec` data.
+`WorkflowArchitectureTemplate` compiles sequential, parallel, fan-out/fan-in,
+and bounded review-loop presets from existing workflow agents. Capability-based
+resolution is available through `TeamAgentRegistry`; selection is deterministic,
+can require health, version, digest, and trust labels, and the chosen roster is
+frozen in the execution receipt.
+
+### Execution-plane capabilities
+
+Compilation checks the source agent's declared `AgentCapabilities`. A delegate
+source must consume invocation-scoped runtime tools, a handoff source must emit
+transfers, and an approved delegate must support exact-call confirmation.
+`LlmAgent` and `CodeActAgent` declare their supported runtime capabilities;
+custom agents retain conservative defaults and can override `capabilities()`.
+
+Teams retain standard ADK behavior: Runner plugins, agent/model/tool callbacks,
+guardrails, cancellation, request identity, memory, artifacts, sessions, and
+event persistence still wrap the existing member agents. `compile_with_hooks`
+adds ordered async `TeamLifecycleHook` callbacks for the team, member, and exact
+relationship boundaries. Hooks can observe success/failure or deny a pending
+operation without widening its target. Runner also calls the root's async
+`govern_transfer` hook immediately before a validated handoff.
+
+Native `team.run`, `team.member.run`, and `team.relationship.execute` tracing
+spans carry team/member/edge identity, status, and relationship duration through
+the normal `adk-telemetry` exporter. Runtime failures use stable structured
+codes such as `agent.team.policy_denied`, `agent.team.budget_exceeded`, and
+`agent.team.resume_unsafe`.
+
+Delegate contracts distinguish state reads (`stateKeys`) from writes
+(`stateWriteKeys`). `stateMerge: rejectConflicts` rejects a child write when the
+parent value changed during delegation, and `artifactPrefixes` limits artifact
+names. Standalone `AgentTool` exposes the same controls. Its default remains
+last-writer-wins for compatibility; Team relationships default to conflict
+rejection.
+
+`CompiledTeam::resume_plan` describes the only safe next action after restoring
+a receipt: coordinator, handoff target, checkpoint-aware delegate, or unsafe
+fail-closed delegation. `validate_team_replay` verifies causal receipt integrity,
+while `analyze_execution` reports provider-free topology coverage, failures, and
+maximum causal depth for tests and evaluation pipelines.
+
+`BlackboardSpec` covers governed round-robin and selector-driven group chat. It
+bounds rounds and transcript projection, and selector transitions use exact
+allowlists. Existing
+`sub_agent` composition remains supported for backward compatibility, but it is
+an in-memory tree rather than a portable team definition.
+
 ---
 
 ## Quick Start
@@ -162,7 +283,7 @@ Assistant: I understand your concern about the duplicate charge. Let me help you
 
 ### The Big Picture
 
-When you add sub-agents to a parent agent, the LLM gains the ability to **delegate** tasks:
+When you add sub-agents to a parent agent, the LLM gains the ability to **hand off** control:
 
 ```
                     ┌─────────────────────┐

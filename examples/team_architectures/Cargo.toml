@@ -1,0 +1,37 @@
+[package]
+name = "team-architectures-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-agent = { path = "../../adk-agent", features = ["team-tools"] }
+adk-core = { path = "../../adk-core" }
+adk-model = { path = "../../adk-model", features = ["openai"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+adk-tool = { path = "../../adk-tool" }
+anyhow = "1.0"
+async-trait = "0.1"
+dotenvy = "0.15"
+futures = "0.3"
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["full"] }
+
+[[bin]]
+name = "team-supervisor-handoff"
+path = "src/bin/supervisor_handoff.rs"
+
+[[bin]]
+name = "team-supervisor-delegation"
+path = "src/bin/supervisor_delegation.rs"
+
+[[bin]]
+name = "team-parallel-swarm"
+path = "src/bin/parallel_swarm.rs"
+
+[[bin]]
+name = "team-hybrid"
+path = "src/bin/hybrid.rs"
