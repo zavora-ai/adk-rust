@@ -57,7 +57,7 @@ dependencies = [
 
 [[package]]
 name = "adk-acp"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-runner",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "adk-action"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "proptest",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "adk-agent"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-devtools",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "adk-anthropic"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "adk-artifact"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "adk-audio"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-realtime",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "adk-auth"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-server",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "adk-awp"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "arc-swap",
@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "adk-bench"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-agent",
  "adk-core",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "adk-browser"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "adk-cli"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-agent",
  "adk-artifact",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "adk-code"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-sandbox",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "adk-codeact-monty"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-agent",
  "adk-code",
@@ -378,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "adk-computer-use"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-agent",
  "adk-auth",
@@ -405,7 +405,7 @@ dependencies = [
 
 [[package]]
 name = "adk-core"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "adk-deploy"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-gcp",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "adk-devtools"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "adk-enterprise"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -488,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "adk-eval"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-memory",
@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "adk-gcp"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "axum 0.8.9",
@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "adk-gemini"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -559,7 +559,7 @@ dependencies = [
 
 [[package]]
 name = "adk-graph"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-action",
  "adk-agent",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "adk-guardrail"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "adk-managed"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-agent",
  "adk-core",
@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "adk-memory"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-gcp",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "adk-mistralrs"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-telemetry",
@@ -684,7 +684,7 @@ dependencies = [
 
 [[package]]
 name = "adk-model"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-anthropic",
  "adk-core",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "adk-payments"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-artifact",
  "adk-auth",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "adk-plugin"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "serde_json",
@@ -755,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rag"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-gemini",
@@ -778,7 +778,7 @@ dependencies = [
 
 [[package]]
 name = "adk-realtime"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-gemini",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "adk-retry-reflect"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-plugin",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "adk-runner"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-artifact",
  "adk-core",
@@ -864,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rust"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-acp",
  "adk-action",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rust-macros"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -925,7 +925,7 @@ dependencies = [
 
 [[package]]
 name = "adk-sandbox"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "adk-server"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "a2a-protocol-types",
  "adk-agent",
@@ -997,7 +997,7 @@ dependencies = [
 
 [[package]]
 name = "adk-session"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-gcp",
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "adk-skill"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-core",
  "adk-plugin",
@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "adk-telemetry"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "google-cloud-auth 1.12.0",
  "http 1.4.1",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "adk-tool"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-code",
  "adk-core",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "awp-types"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "chrono",
  "proptest",
@@ -3947,7 +3947,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-adk"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "adk-bench",
  "adk-deploy",

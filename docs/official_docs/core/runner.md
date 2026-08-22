@@ -47,7 +47,7 @@ sequenceDiagram
 
 ```toml
 [dependencies]
-adk-runner = "2.0.0"
+adk-runner = "2.1.0"
 ```
 
 ## RunnerConfig

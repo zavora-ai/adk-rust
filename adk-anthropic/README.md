@@ -22,6 +22,8 @@ This project is an **unofficial** community-maintained library. It is not affili
 - **PDF processing** — URL, base64, and Files API PDF analysis with citations
 - **Token counting** — `/v1/messages/count_tokens` endpoint
 - **Fast mode** — `speed: "fast"` for Opus 4.6 (beta, waitlist)
+- **Request customization** — caller-selected beta headers, bearer auth, API-version overrides, and exact per-request headers
+- **Server-side fallback** — typed default or explicit safety-refusal routing with fallback-aware responses and SSE events
 - **Batches API** — async batch processing
 - **Files API** — upload, get, delete, list
 - **Models API** — list and get model metadata with capabilities
@@ -74,6 +76,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Examples
 
+### Request headers and server-side fallback
+
+`MessageCreateParams` remains source-compatible with 2.0. Use client methods
+for request-scoped beta selection or full header replacement:
+
+```rust
+use adk_anthropic::{Anthropic, KnownModel, MessageCreateParams};
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let client = Anthropic::new(None)?;
+let params = MessageCreateParams::simple("Hello", KnownModel::ClaudeSonnet46);
+let response = client
+    .send_with_betas(params, &["fine-grained-tool-streaming-2025-05-14"])
+    .await?;
+# let _ = response;
+# Ok(())
+# }
+```
+
+For OAuth or an Anthropic-compatible gateway, use
+`Anthropic::new_with_auth_token`; it sends `Authorization: Bearer ...` and
+omits `x-api-key`. `default_headers_for_request` plus `send_with_headers` or
+`stream_with_headers` provides exact replacement semantics when every header
+must be controlled by the caller.
+
+Server fallback is limited to safety-classifier refusals. It does not retry
+rate limits, overloaded responses, or server errors. It is currently intended
+for classifier-enabled models such as Claude Fable 5 and Claude Opus 5:
+
+```rust
+use adk_anthropic::{Anthropic, MessageCreateParams, Model, ServerFallbackRequest};
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let client = Anthropic::new(None)?;
+let params = MessageCreateParams::simple(
+    "Hello",
+    Model::Custom("claude-fable-5".to_string()),
+);
+let response = client
+    .send_with_server_fallbacks(ServerFallbackRequest::default_routing(params)?)
+    .await?;
+println!("fallback ran: {}", response.served_by_fallback());
+# Ok(())
+# }
+```
+
 Run any example with `cargo run -p adk-anthropic --example <name>`:
 
 | Example | Description |
@@ -93,6 +141,8 @@ Run any example with `cargo run -p adk-anthropic --example <name>`:
 | `pdf_processing` | PDF analysis via URL, base64, and with citations |
 | `vision` | Image understanding via URL |
 | `anthropic_custom_base_url` | Custom endpoints (Ollama, Vercel, MiniMax, proxies) |
+| `request_customization` | Caller-selected beta headers and optional bearer authentication |
+| `server_fallback` | Typed server-side safety-refusal fallback |
 
 ### Managed Agents Examples
 

@@ -37,6 +37,7 @@ pub use client::{Anthropic, LoggingStream};
 pub use client_logger::ClientLogger;
 pub use error::{Error, Result};
 pub use json_schema::JsonSchema;
+pub use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 pub use tool_search::ToolSearchConfig;
 pub use types::*;
 

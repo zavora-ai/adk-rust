@@ -101,6 +101,14 @@ name = "anthropic_custom_base_url"
 path = "examples/custom_base_url.rs"
 
 [[example]]
+name = "request_customization"
+path = "examples/request_customization.rs"
+
+[[example]]
+name = "server_fallback"
+path = "examples/server_fallback.rs"
+
+[[example]]
 name = "managed_agents_hello"
 required-features = ["managed-agents"]
 

@@ -20,11 +20,12 @@ use crate::observability::{
     CLIENT_REQUEST_DURATION, CLIENT_REQUEST_ERRORS, CLIENT_REQUEST_RETRIES, CLIENT_REQUESTS,
     CLIENT_RETRY_BACKOFF,
 };
-use crate::sse::process_sse;
+use crate::sse::{process_json_sse, process_sse};
 use crate::types::{
     BatchRequest, BatchResultItem, FileObject, Message, MessageBatch, MessageCountTokensParams,
     MessageCreateParams, MessageStreamEvent, MessageTokensCount, ModelInfo, ModelListParams,
-    ModelListResponse, PaginatedList, SkillObject, ThinkingConfig,
+    ModelListResponse, PaginatedList, ServerFallbackMessage, ServerFallbackRequest,
+    ServerFallbackStreamEvent, SkillObject, ThinkingConfig,
 };
 
 use base64::Engine as _;
@@ -85,6 +86,7 @@ const DEFAULT_API_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const STRUCTURED_OUTPUTS_BETA: &str = "structured-outputs-2025-11-13";
+const SERVER_FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 
 /// Client for the Anthropic API with performance optimizations.
 #[derive(Debug, Clone)]
@@ -207,6 +209,78 @@ impl Anthropic {
         })
     }
 
+    /// Create an Anthropic client authenticated with a bearer token.
+    ///
+    /// Unlike [`Anthropic::new`], this constructor does not require an API key or
+    /// the `ANTHROPIC_API_KEY` environment variable. Requests carry
+    /// `Authorization: Bearer <token>` and omit `x-api-key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the token is empty or cannot be encoded
+    /// as an HTTP header value.
+    pub fn new_with_auth_token(auth_token: impl Into<String>) -> Result<Self> {
+        Self::new(Some(String::new()))?.with_auth_token(auth_token)
+    }
+
+    /// Replace API-key authentication with a bearer token.
+    ///
+    /// The resulting client omits `x-api-key` from every request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the token is empty or cannot be encoded
+    /// as an HTTP header value.
+    pub fn with_auth_token(mut self, auth_token: impl Into<String>) -> Result<Self> {
+        let auth_token = auth_token.into();
+        if auth_token.trim().is_empty() {
+            return Err(Error::validation(
+                "Auth token cannot be empty".to_string(),
+                Some("auth_token".to_string()),
+            ));
+        }
+
+        let mut headers = (*self.cached_headers).clone();
+        headers.remove("x-api-key");
+        let value = HeaderValue::from_str(&format!("Bearer {auth_token}")).map_err(|error| {
+            Error::validation(
+                format!("Invalid auth token format: {error}"),
+                Some("auth_token".to_string()),
+            )
+        })?;
+        headers.insert(header::AUTHORIZATION, value);
+        self.api_key.clear();
+        self.cached_headers = Arc::new(headers);
+        Ok(self)
+    }
+
+    /// Override the `anthropic-version` header used by this client.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the version is empty or cannot be
+    /// encoded as an HTTP header value.
+    pub fn with_api_version(mut self, api_version: impl Into<String>) -> Result<Self> {
+        let api_version = api_version.into();
+        if api_version.trim().is_empty() {
+            return Err(Error::validation(
+                "API version cannot be empty".to_string(),
+                Some("api_version".to_string()),
+            ));
+        }
+
+        let mut headers = (*self.cached_headers).clone();
+        let value = HeaderValue::from_str(&api_version).map_err(|error| {
+            Error::validation(
+                format!("Invalid API version format: {error}"),
+                Some("api_version".to_string()),
+            )
+        })?;
+        headers.insert("anthropic-version", value);
+        self.cached_headers = Arc::new(headers);
+        Ok(self)
+    }
+
     /// Set a custom base URL for this client.
     ///
     /// This method allows you to specify a different API endpoint for the client.
@@ -322,6 +396,16 @@ impl Anthropic {
     /// Get cached headers for performance (no allocation needed).
     fn default_headers(&self) -> HeaderMap {
         (*self.cached_headers).clone()
+    }
+
+    /// Return a copy of the headers this client normally sends.
+    ///
+    /// Callers can modify this map and pass it to
+    /// [`Anthropic::send_with_headers`] or [`Anthropic::stream_with_headers`].
+    /// Those methods use replacement semantics, so the supplied map is sent
+    /// instead of these defaults.
+    pub fn default_headers_for_request(&self) -> HeaderMap {
+        self.default_headers()
     }
 
     /// Build a full endpoint URL from the base URL and endpoint path.
@@ -529,8 +613,70 @@ impl Anthropic {
         })
     }
 
-    /// Send a message to the API and get a non-streaming response.
-    pub async fn send(&self, mut params: MessageCreateParams) -> Result<Message> {
+    fn append_beta_header(headers: &mut HeaderMap, beta: &str) -> Result<()> {
+        if beta.trim().is_empty() {
+            return Err(Error::validation(
+                "Beta identifier cannot be empty".to_string(),
+                Some("anthropic-beta".to_string()),
+            ));
+        }
+        let existing = headers
+            .get("anthropic-beta")
+            .map(HeaderValue::to_str)
+            .transpose()
+            .map_err(|error| {
+                Error::validation(
+                    format!("Invalid existing anthropic-beta header: {error}"),
+                    Some("anthropic-beta".to_string()),
+                )
+            })?
+            .unwrap_or_default();
+        if existing.split(',').any(|value| value.trim() == beta) {
+            return Ok(());
+        }
+
+        let combined =
+            if existing.is_empty() { beta.to_string() } else { format!("{existing},{beta}") };
+        let value = HeaderValue::from_str(&combined).map_err(|error| {
+            Error::validation(
+                format!("Invalid anthropic-beta header: {error}"),
+                Some("anthropic-beta".to_string()),
+            )
+        })?;
+        headers.insert("anthropic-beta", value);
+        Ok(())
+    }
+
+    fn message_headers(
+        &self,
+        params: &MessageCreateParams,
+        extra_betas: &[&str],
+        streaming: bool,
+    ) -> Result<HeaderMap> {
+        let mut headers = self.default_headers();
+        if streaming {
+            headers.insert(header::ACCEPT, HeaderValue::from_static("text/event-stream"));
+        }
+        if params.requires_structured_outputs_beta() {
+            Self::append_beta_header(&mut headers, STRUCTURED_OUTPUTS_BETA)?;
+        }
+        if params.context_management.is_some() {
+            Self::append_beta_header(&mut headers, "context-management-2025-06-27")?;
+        }
+        if params.speed.is_some() {
+            Self::append_beta_header(&mut headers, "fast-mode-2026-02-01")?;
+        }
+        for beta in extra_betas {
+            Self::append_beta_header(&mut headers, beta)?;
+        }
+        Ok(headers)
+    }
+
+    async fn send_with_resolved_headers(
+        &self,
+        mut params: MessageCreateParams,
+        replacement_headers: Option<HeaderMap>,
+    ) -> Result<Message> {
         let start = Instant::now();
         CLIENT_REQUESTS.click();
 
@@ -549,45 +695,10 @@ impl Anthropic {
             params.temperature = Some(1.0);
         }
 
-        // Build headers
-        let mut headers = self.default_headers();
-
-        // Check if structured outputs beta header is needed
-        if params.requires_structured_outputs_beta() {
-            headers.insert("anthropic-beta", HeaderValue::from_static(STRUCTURED_OUTPUTS_BETA));
-        }
-
-        // When context_management is set, add the beta header
-        if params.context_management.is_some() {
-            let existing =
-                headers.get("anthropic-beta").and_then(|v| v.to_str().ok()).unwrap_or("");
-            let new_val = if existing.is_empty() {
-                "context-management-2025-06-27".to_string()
-            } else {
-                format!("{existing},context-management-2025-06-27")
-            };
-            headers.insert(
-                "anthropic-beta",
-                HeaderValue::from_str(&new_val)
-                    .unwrap_or_else(|_| HeaderValue::from_static("context-management-2025-06-27")),
-            );
-        }
-
-        // When speed is set, add the fast-mode beta header
-        if params.speed.is_some() {
-            let existing =
-                headers.get("anthropic-beta").and_then(|v| v.to_str().ok()).unwrap_or("");
-            let new_val = if existing.is_empty() {
-                "fast-mode-2026-02-01".to_string()
-            } else {
-                format!("{existing},fast-mode-2026-02-01")
-            };
-            headers.insert(
-                "anthropic-beta",
-                HeaderValue::from_str(&new_val)
-                    .unwrap_or_else(|_| HeaderValue::from_static("fast-mode-2026-02-01")),
-            );
-        }
+        let headers = match replacement_headers {
+            Some(headers) => headers,
+            None => self.message_headers(&params, &[], false)?,
+        };
 
         let result = self
             .retry_with_backoff(|| async {
@@ -601,6 +712,50 @@ impl Anthropic {
             CLIENT_REQUEST_ERRORS.click();
         }
         result
+    }
+
+    /// Send a message to the API and get a non-streaming response.
+    pub async fn send(&self, params: MessageCreateParams) -> Result<Message> {
+        self.send_with_resolved_headers(params, None).await
+    }
+
+    /// Send a message using an exact replacement header map.
+    ///
+    /// The supplied headers replace all client defaults and automatically
+    /// generated beta headers. This permits per-request bearer authentication,
+    /// API versions, beta selection, and deliberate beta suppression. Start
+    /// from [`Anthropic::default_headers_for_request`] when only a small change
+    /// is needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the parameters are invalid, a header is invalid,
+    /// or the request fails.
+    pub async fn send_with_headers(
+        &self,
+        params: MessageCreateParams,
+        headers: HeaderMap,
+    ) -> Result<Message> {
+        self.send_with_resolved_headers(params, Some(headers)).await
+    }
+
+    /// Send a message with caller-selected Anthropic beta versions.
+    ///
+    /// Caller-selected betas are de-duplicated with beta headers required by
+    /// the request's typed features. They are sent only as headers and never
+    /// serialized into the JSON body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a beta identifier or message parameter is invalid,
+    /// or the request fails.
+    pub async fn send_with_betas(
+        &self,
+        params: MessageCreateParams,
+        betas: &[&str],
+    ) -> Result<Message> {
+        let headers = self.message_headers(&params, betas, false)?;
+        self.send_with_resolved_headers(params, Some(headers)).await
     }
 
     /// Send a message to the API with logging and get a non-streaming response.
@@ -622,9 +777,10 @@ impl Anthropic {
     /// Send a message to the API and get a streaming response.
     ///
     /// Returns a stream of MessageStreamEvent objects that can be processed incrementally.
-    pub async fn stream(
+    async fn stream_with_resolved_headers(
         &self,
         params: &MessageCreateParams,
+        replacement_headers: Option<HeaderMap>,
     ) -> Result<impl Stream<Item = Result<MessageStreamEvent>> + use<>> {
         let start = Instant::now();
         CLIENT_REQUESTS.click();
@@ -645,46 +801,19 @@ impl Anthropic {
             params.temperature = Some(1.0);
         }
 
-        // Check if structured outputs beta header is needed
-        let needs_beta = params.requires_structured_outputs_beta();
-
-        // Check if context_management beta header is needed
-        let needs_context_mgmt = params.context_management.is_some();
-
-        // Check if fast-mode beta header is needed
-        let needs_fast_mode = params.speed.is_some();
+        let headers = match replacement_headers {
+            Some(headers) => headers,
+            None => self.message_headers(&params, &[], true)?,
+        };
 
         let response = self
             .retry_with_backoff(|| async {
                 let url = self.build_url("messages");
 
-                let mut headers = self.default_headers();
-                headers.insert(header::ACCEPT, HeaderValue::from_static("text/event-stream"));
-
-                // Build anthropic-beta header combining all needed betas
-                let mut betas = Vec::new();
-                if needs_beta {
-                    betas.push(STRUCTURED_OUTPUTS_BETA);
-                }
-                if needs_context_mgmt {
-                    betas.push("context-management-2025-06-27");
-                }
-                if needs_fast_mode {
-                    betas.push("fast-mode-2026-02-01");
-                }
-                if !betas.is_empty() {
-                    let beta_val = betas.join(",");
-                    headers.insert(
-                        "anthropic-beta",
-                        HeaderValue::from_str(&beta_val)
-                            .unwrap_or_else(|_| HeaderValue::from_static(STRUCTURED_OUTPUTS_BETA)),
-                    );
-                }
-
                 let response = self
                     .client
                     .post(&url)
-                    .headers(headers)
+                    .headers(headers.clone())
                     .json(&params)
                     .send()
                     .await
@@ -712,6 +841,144 @@ impl Anthropic {
 
         // Create an SSE processor
         Ok(process_sse(stream))
+    }
+
+    /// Send a message to the API and stream response events.
+    pub async fn stream(
+        &self,
+        params: &MessageCreateParams,
+    ) -> Result<impl Stream<Item = Result<MessageStreamEvent>> + use<>> {
+        self.stream_with_resolved_headers(params, None).await
+    }
+
+    /// Stream a message using an exact replacement header map.
+    ///
+    /// The supplied headers replace all defaults, including `Accept`,
+    /// authentication, API-version, and generated beta headers. Callers should
+    /// normally include `Accept: text/event-stream`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the parameters are invalid, a header is invalid,
+    /// or the request fails.
+    pub async fn stream_with_headers(
+        &self,
+        params: &MessageCreateParams,
+        headers: HeaderMap,
+    ) -> Result<impl Stream<Item = Result<MessageStreamEvent>> + use<>> {
+        self.stream_with_resolved_headers(params, Some(headers)).await
+    }
+
+    /// Stream a message with caller-selected Anthropic beta versions.
+    ///
+    /// Caller-selected betas are de-duplicated with beta headers required by
+    /// the request's typed features. They are sent only as headers and never
+    /// serialized into the JSON body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a beta identifier or message parameter is invalid,
+    /// or the request fails.
+    pub async fn stream_with_betas(
+        &self,
+        params: &MessageCreateParams,
+        betas: &[&str],
+    ) -> Result<impl Stream<Item = Result<MessageStreamEvent>> + use<>> {
+        let headers = self.message_headers(params, betas, true)?;
+        self.stream_with_resolved_headers(params, Some(headers)).await
+    }
+
+    /// Send a message with Claude server-side refusal fallback enabled.
+    ///
+    /// The beta API retries only safety-classifier refusals. Rate limits,
+    /// overloads, and server failures are returned without fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request or fallback configuration is invalid,
+    /// or the request fails.
+    pub async fn send_with_server_fallbacks(
+        &self,
+        mut request: ServerFallbackRequest,
+    ) -> Result<ServerFallbackMessage> {
+        let start = Instant::now();
+        CLIENT_REQUESTS.click();
+        if let Err(error) = request.validate() {
+            CLIENT_REQUEST_ERRORS.click();
+            CLIENT_REQUEST_DURATION.add(start.elapsed().as_secs_f64());
+            return Err(error);
+        }
+
+        request.params.stream = false;
+        if matches!(request.params.thinking, Some(ThinkingConfig::Enabled { .. })) {
+            request.params.temperature = Some(1.0);
+        }
+        let headers = self.message_headers(&request.params, &[SERVER_FALLBACK_BETA], false)?;
+        let result = self
+            .retry_with_backoff(|| async {
+                let url = self.build_url("messages");
+                self.execute_post_request(&url, &request, Some(headers.clone())).await
+            })
+            .await;
+
+        CLIENT_REQUEST_DURATION.add(start.elapsed().as_secs_f64());
+        if result.is_err() {
+            CLIENT_REQUEST_ERRORS.click();
+        }
+        result
+    }
+
+    /// Stream a message with Claude server-side refusal fallback enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request or fallback configuration is invalid,
+    /// or the request fails.
+    pub async fn stream_with_server_fallbacks(
+        &self,
+        request: &ServerFallbackRequest,
+    ) -> Result<impl Stream<Item = Result<ServerFallbackStreamEvent>> + use<>> {
+        let start = Instant::now();
+        CLIENT_REQUESTS.click();
+        if let Err(error) = request.validate() {
+            CLIENT_REQUEST_ERRORS.click();
+            CLIENT_REQUEST_DURATION.add(start.elapsed().as_secs_f64());
+            return Err(error);
+        }
+
+        let mut request = request.clone();
+        request.params.stream = true;
+        if matches!(request.params.thinking, Some(ThinkingConfig::Enabled { .. })) {
+            request.params.temperature = Some(1.0);
+        }
+        let headers = self.message_headers(&request.params, &[SERVER_FALLBACK_BETA], true)?;
+        let response = self
+            .retry_with_backoff(|| async {
+                let url = self.build_url("messages");
+                let response = self
+                    .client
+                    .post(&url)
+                    .headers(headers.clone())
+                    .json(&request)
+                    .send()
+                    .await
+                    .map_err(|error| self.map_request_error(error))?;
+                if !response.status().is_success() {
+                    return Err(Self::process_error_response(response).await);
+                }
+                Ok(response)
+            })
+            .await;
+
+        CLIENT_REQUEST_DURATION.add(start.elapsed().as_secs_f64());
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                CLIENT_REQUEST_ERRORS.click();
+                return Err(error);
+            }
+        };
+        Ok(process_json_sse(response.bytes_stream()))
     }
 
     /// Send a message to the API with logging and get a streaming response.

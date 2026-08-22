@@ -5,9 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-08-22
 
 ### Added
+
+- **Anthropic request customization and server-side refusal fallback**
+  (`adk-anthropic`): additive client methods now support caller-selected beta
+  headers, exact per-request header replacement, bearer-only authentication,
+  and API-version overrides without adding fields to the exhaustive
+  `MessageCreateParams` struct. `ServerFallbackRequest` models both
+  `"default"` routing and one-to-three explicit fallback models, validates
+  duplicates and primary-model loops, and has fallback-aware response and SSE
+  types so handoff markers and per-attempt usage are not discarded. Fallback
+  is documented and tested as a safety-refusal feature, not a retry mechanism
+  for rate limits, overloads, or server errors. New live examples read
+  credentials from the environment; provider-free wire tests cover headers,
+  bodies, responses, and streams.
 
 - **`adk-gcp` crate**: shared Google Cloud REST plumbing for Vertex AI
   backends — `GcpHttpClient` (ADC with cached auth headers per
