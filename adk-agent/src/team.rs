@@ -838,7 +838,7 @@ impl TeamSpec {
     /// Binds this spec to concrete agents and returns an executable team root.
     ///
     /// Any [`Agent`] implementation can be a member. Delegate edges additionally
-    /// require the `team-tools` feature, which lowers them to [`AgentTool`]s.
+    /// require the `team-tools` feature, which lowers them to `AgentTool`s.
     pub fn compile(
         &self,
         agents: impl IntoIterator<Item = Arc<dyn Agent>>,
