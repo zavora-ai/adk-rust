@@ -19,6 +19,7 @@ The crate provides:
 - Embedded Python execution via `MontyOneShotExecutor` / `MontyReplExecutor` (Pydantic Monty, `embedded-python` feature)
 - WASM guest module execution via `WasmGuestExecutor` (phase 1 placeholder)
 - Docker container execution via `DockerExecutor` (persistent, `docker` feature) and `ContainerCommandExecutor` (ephemeral, always available)
+- Vertex AI Agent Engine managed sandboxes via `VertexSandboxClient` / `SandboxCodeExecutor` (`vertex-sandbox` feature)
 - `CodeTool` implementing `adk_core::Tool` for LLM agent integration
 - Structured Rust compiler diagnostics parsing
 - Workspace abstraction for multi-agent collaborative project builds
@@ -71,6 +72,7 @@ User code must provide `fn run(input: serde_json::Value) -> serde_json::Value`. 
 | `embedded-js` | `EmbeddedJsExecutor` via `boa_engine`    | ❌      |
 | `embedded-python` | `MontyOneShotExecutor` / `MontyReplExecutor` via the Monty interpreter | ❌ |
 | `docker`      | `DockerExecutor` via `bollard` (persistent Docker containers) | ❌ |
+| `vertex-sandbox` | `VertexSandboxClient` / `SandboxCodeExecutor` / `VertexSandboxTool` — Vertex AI Agent Engine managed sandboxes | ❌ |
 
 ## Execution Backends
 
@@ -235,6 +237,45 @@ Presets: `DockerConfig::python()`, `DockerConfig::node()`, `DockerConfig::custom
 Builder methods: `setup_command()`, `pip_install()`, `npm_install()`, `with_network()`, `bind_mount()`, `env()`.
 
 Lifecycle: `start()` → `execute()` (reusable) → `stop()` / `cleanup()`. Set `auto_start: true` (default) to start on first execute.
+
+### Vertex AI Agent Engine sandboxes (`vertex-sandbox` feature)
+
+A client for the Agent Engine `sandboxEnvironments` surface (v1beta1) — fully
+managed, isolated code-execution sandboxes under a reasoning engine. Built on
+the shared `adk-gcp` plumbing (ADC credential caching, bounded transport, LRO
+polling, scope validation).
+
+```rust
+use adk_code::vertex_sandbox::{
+    CreateSandboxRequest, SandboxCodeExecutor, VertexSandboxClient, VertexSandboxConfig,
+    VertexSandboxTool,
+};
+use std::sync::Arc;
+
+let client = Arc::new(VertexSandboxClient::new_with_adc(
+    VertexSandboxConfig::new("my-project", "us-central1"),
+)?);
+
+// Direct: create, execute, delete.
+let sandbox = client.create_sandbox("4242", CreateSandboxRequest::new("my-sandbox")).await?;
+let name = sandbox.name.unwrap();
+let result = client.execute_code(&name, "print('hello')", &[]).await?;
+println!("{}", result.stdout);
+client.delete_sandbox(&name).await?;
+
+// Managed: per-session lazy creation with recreate-on-not-running semantics
+// (adk-python AgentEngineSandboxCodeExecutor parity), plus an agent tool.
+let executor = Arc::new(SandboxCodeExecutor::for_engine(client, "4242"));
+let tool = VertexSandboxTool::new(executor);
+```
+
+- `create_sandbox` / `delete_sandbox` wait their long-running operations;
+  `get_sandbox` / `list_sandboxes` are plain reads; `:execute` is synchronous.
+- `execute_code` implements the chunk conventions shared with adk-python and
+  the Vertex AI SDK: a JSON code chunk, `file_name`-attributed file chunks,
+  and `msg_out`/`msg_err` console output.
+- Files are limited to 100 MB per request (rejected before sending) and per
+  response. Every `:execute` call resets the sandbox TTL server-side.
 
 ## CodeTool
 

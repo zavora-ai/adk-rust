@@ -296,7 +296,10 @@ adk-skill/       Skill discovery, parsing, and convention-based agent capabiliti
 adk-cli/         Command-line launcher for agents, `cargo adk deploy` for ADK Platform
 adk-rust-macros/ Procedural macros (#[tool] attribute with read_only, concurrency_safe,
                  long_running metadata)
-adk-code/        Code execution (experimental)
+adk-code/        Code execution (experimental). Vertex AI Agent Engine sandbox client
+                 (`vertex-sandbox` feature): sandboxEnvironments lifecycle, synchronous
+                 :execute chunk protocol, per-session SandboxCodeExecutor (adk-python
+                 parity), VertexSandboxTool
 adk-codeact-monty/ Python CodeRuntime for the CodeActAgent, backed by the Pydantic Monty
                  interpreter (via adk-code's embedded-python kernel, which pins the
                  monty crates once). Sandboxed OS access (mounts, environ, clock),
@@ -443,6 +446,7 @@ Specialist opt-in features:
 - `gcp-deploy` — Agent Engine (ReasoningEngine) BYOC deployment client (adk-deploy): create/poll/get/delete; host-side tooling, deliberately excluded from `gemini-agent-platform`. The same name on adk-cli enables `adk-rust deploy agent-engine`
 - `agent-engine` — Agent Engine runtime contract (adk-server): class-method dispatch endpoints and the turnkey `serve_agent_engine` entrypoint for Gemini Enterprise Agent Platform BYOC containers
 - `example-store` — Vertex AI Example Store client (adk-tool): v1beta1 data-plane upsert/search/fetch against a pre-provisioned store, plus `ExampleStoreProvider` for dynamic few-shot retrieval via a `BeforeModelCallback`
+- `vertex-sandbox` — Vertex AI Agent Engine managed code-execution sandbox (adk-code): v1beta1 sandboxEnvironments lifecycle (create/get/list/delete with LRO polling), synchronous `:execute` chunk protocol, `SandboxCodeExecutor` with per-session lazy create/recreate (adk-python parity), and `VertexSandboxTool` for LLM agents; part of `gemini-agent-platform`
 - `gemini-interactions` — Gemini Interactions API (Beta): wire client surface (server-side history, step timeline) plus the runtime transport on `GeminiModel` (`use_interactions_api`) driving the standard `LlmAgent`/`Runner`
 - `mcp`, `mcp-http`, `mcp-sampling` — MCP transport and sampling support
 - `code-tools` — Code execution tools over the adk-code substrate (`CodeTool`, `PythonCodeTool`, `JavaScriptCodeTool`, `MontyPythonCodeTool`; forwarded to adk-tool; included in `full`)
