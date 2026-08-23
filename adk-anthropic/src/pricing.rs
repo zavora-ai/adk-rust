@@ -382,7 +382,7 @@ mod tests {
         }
     }
 
-    /// Every model reachable through a [`Model`] factory must resolve to a price.
+    /// Every model reachable through a `Model` factory must resolve to a price.
     #[test]
     fn factory_models_all_resolve_to_pricing() {
         for model in [

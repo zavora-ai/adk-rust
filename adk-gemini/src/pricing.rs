@@ -362,7 +362,8 @@ impl GeminiPricing {
     /// Returns the standard (paid-tier) pricing for a raw Gemini model ID.
     ///
     /// Accepts both the bare ID and the `models/`-prefixed resource name. This is
-    /// the resolution path for models exposed through [`Model::Custom`] factories
+    /// the resolution path for models exposed through
+    /// [`Model::Custom`](crate::client::Model::Custom) factories
     /// rather than enum variants.
     ///
     /// Returns `None` when Google publishes no per-token text price for the ID.
@@ -522,7 +523,7 @@ mod tests {
         assert_eq!(current.output, GeminiPricing::GEMINI_37_FLASH.output);
     }
 
-    /// Every model reachable through a [`Model`] factory must resolve to a price.
+    /// Every model reachable through a `Model` factory must resolve to a price.
     /// A factory without a matching `for_model_id` arm silently reports no cost.
     #[test]
     fn factory_models_all_resolve_to_pricing() {
