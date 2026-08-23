@@ -1,38 +1,22 @@
-//! Preservation Property Test B — Batch Transcription Unchanged
+//! Preservation Property Test B — STT Surface Unchanged
 //!
 //! **Property 4: Preservation — batch transcribe() code paths unchanged**
 //!
-//! Verifies that `AssemblyAiStt::transcribe()` and `DeepgramStt::transcribe()`
-//! are structurally unchanged by the streaming fix. Since these methods are
-//! HTTP-dependent, we verify:
+//! Verifies the provider-facing structures used by batch transcription without
+//! contacting an external service:
 //!
 //! 1. The `SttProvider` trait still requires both `transcribe()` and `transcribe_stream()`
-//! 2. AssemblyAI `transcribe()` fails with expected HTTP error (no real server)
-//! 3. Deepgram `transcribe()` fails with expected HTTP error (no real server)
-//! 4. The error types are `AudioError::Stt` with the correct provider name
-//! 5. AudioFrame construction from arbitrary PCM-16 LE data is unchanged
+//! 2. AudioFrame construction from arbitrary PCM-16 LE data is unchanged
 //!
-//! This confirms the batch transcription code paths are untouched by the
-//! streaming stub fix.
+//! This confirms the batch transcription surface is untouched by the streaming
+//! stub fix.
 //!
 //! **Validates: Requirements 3.4, 3.5**
 
-use adk_audio::error::AudioError;
 use adk_audio::frame::AudioFrame;
 use adk_audio::traits::{SttOptions, SttProvider};
 use bytes::Bytes;
 use proptest::prelude::*;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn make_audio_frame(sample_count: usize) -> AudioFrame {
-    // AudioFrame::new expects raw PCM-16 LE bytes, not i16 samples directly.
-    let samples: Vec<i16> = (0..sample_count).map(|i| (i % 256) as i16).collect();
-    let byte_data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
-    AudioFrame::new(Bytes::from(byte_data), 16000, 1)
-}
 
 // ---------------------------------------------------------------------------
 // Property tests — AudioFrame construction preservation
@@ -84,54 +68,6 @@ proptest! {
         // SttOptions::default() should always be constructible
         // (compile-time check that the struct hasn't changed shape)
         let _ = opts;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Integration tests — verify transcribe() HTTP code paths
-// ---------------------------------------------------------------------------
-
-/// AssemblyAI transcribe() with invalid key returns Stt error with provider "assemblyai".
-/// This confirms the upload → create → poll workflow is unchanged.
-#[tokio::test]
-async fn assemblyai_transcribe_returns_stt_error() {
-    let provider = adk_audio::AssemblyAiStt::with_api_key("invalid-key".to_string());
-    let frame = make_audio_frame(1600); // 100ms of audio
-
-    let result = provider.transcribe(&frame, &SttOptions::default()).await;
-
-    match result {
-        Err(AudioError::Stt { provider, .. }) => {
-            assert_eq!(provider, "assemblyai");
-        }
-        Err(other) => {
-            panic!("unexpected error variant (expected Stt): {other}");
-        }
-        Ok(_) => {
-            panic!("transcribe() should not succeed with invalid key");
-        }
-    }
-}
-
-/// Deepgram transcribe() with invalid key returns Stt error with provider "deepgram".
-/// This confirms the /v1/listen endpoint workflow is unchanged.
-#[tokio::test]
-async fn deepgram_transcribe_returns_stt_error() {
-    let provider = adk_audio::DeepgramStt::with_api_key("invalid-key".to_string());
-    let frame = make_audio_frame(1600); // 100ms of audio
-
-    let result = provider.transcribe(&frame, &SttOptions::default()).await;
-
-    match result {
-        Err(AudioError::Stt { provider, .. }) => {
-            assert_eq!(provider, "deepgram");
-        }
-        Err(other) => {
-            panic!("unexpected error variant (expected Stt): {other}");
-        }
-        Ok(_) => {
-            panic!("transcribe() should not succeed with invalid key");
-        }
     }
 }
 
