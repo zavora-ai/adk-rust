@@ -66,6 +66,8 @@ temp/
 *.tmp
 node_modules/
 **/node_modules/
+# TypeScript incremental build metadata, emitted next to the tsconfig it belongs to.
+*.tsbuildinfo
 
 # OS Specific
 Thumbs.db
