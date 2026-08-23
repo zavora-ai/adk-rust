@@ -64,11 +64,19 @@ impl ModelPricing {
     }
 }
 
-/// Returns default pricing tables for common LLM models.
+/// Returns default pricing tables for current LLM models.
 ///
-/// Includes approximate pricing for Google Gemini, OpenAI GPT, and Anthropic
-/// Claude model families. Prices are approximations and may not reflect the
-/// latest published rates.
+/// Rates are the vendors' published standard-tier list prices, converted to USD
+/// per 1,000 tokens, verified 2026-08-23 against:
+///
+/// - <https://ai.google.dev/gemini-api/docs/pricing>
+/// - <https://developers.openai.com/api/docs/pricing>
+/// - <https://docs.claude.com/en/docs/about-claude/pricing>
+/// - <https://api-docs.deepseek.com/quick_start/pricing>
+///
+/// Only text input and output are modelled. Prompt-cache reads, batch discounts,
+/// long-context tiers, audio and image rates, and DeepSeek's off-peak halving are
+/// not represented; use the provider crates' pricing modules for those.
 ///
 /// # Example
 ///
@@ -76,33 +84,54 @@ impl ModelPricing {
 /// use adk_eval::pricing::default_pricing;
 ///
 /// let pricing = default_pricing();
-/// let gemini_flash = pricing.iter().find(|p| p.model_name == "gemini-2.5-flash");
-/// assert!(gemini_flash.is_some());
+/// let flash = pricing.iter().find(|p| p.model_name == "gemini-3.7-flash");
+/// assert!(flash.is_some());
 /// ```
 pub fn default_pricing() -> Vec<ModelPricing> {
     vec![
-        // Google Gemini models
-        ModelPricing::new("gemini-2.5-flash", 0.00015, 0.0006),
-        ModelPricing::new("gemini-2.5-pro", 0.00125, 0.005),
-        ModelPricing::new("gemini-2.0-flash", 0.0001, 0.0004),
-        ModelPricing::new("gemini-2.0-flash-lite", 0.000075, 0.0003),
-        // OpenAI models
+        // Google Gemini. 3.7 and 3.6 Flash carry introductory rates that double
+        // on 2027-01-01.
+        ModelPricing::new("gemini-3.7-flash", 0.00075, 0.00375),
+        ModelPricing::new("gemini-3.6-flash", 0.00075, 0.00375),
+        ModelPricing::new("gemini-3.5-flash", 0.0015, 0.009),
+        ModelPricing::new("gemini-3.5-flash-lite", 0.0003, 0.0025),
+        ModelPricing::new("gemini-3.1-pro-preview", 0.002, 0.012),
+        ModelPricing::new("gemini-3.1-flash-lite", 0.00025, 0.0015),
+        ModelPricing::new("gemini-3-flash-preview", 0.0005, 0.003),
+        ModelPricing::new("gemini-2.5-pro", 0.00125, 0.01),
+        ModelPricing::new("gemini-2.5-flash", 0.0003, 0.0025),
+        ModelPricing::new("gemini-2.5-flash-lite", 0.0001, 0.0004),
+        // OpenAI
+        ModelPricing::new("gpt-5.6-sol", 0.004, 0.02),
+        ModelPricing::new("gpt-5.6-terra", 0.002, 0.012),
+        ModelPricing::new("gpt-5.6-luna", 0.0002, 0.0012),
+        ModelPricing::new("gpt-5.5", 0.005, 0.03),
+        ModelPricing::new("gpt-5.4", 0.0025, 0.015),
+        ModelPricing::new("gpt-5.4-mini", 0.00075, 0.0045),
+        ModelPricing::new("gpt-5.4-nano", 0.0002, 0.00125),
+        ModelPricing::new("gpt-5.3-codex", 0.00175, 0.014),
+        ModelPricing::new("gpt-5.2", 0.00175, 0.014),
+        ModelPricing::new("gpt-5.1", 0.00125, 0.01),
+        ModelPricing::new("gpt-5", 0.00125, 0.01),
+        ModelPricing::new("gpt-5-mini", 0.00025, 0.002),
+        ModelPricing::new("gpt-5-nano", 0.00005, 0.0004),
+        ModelPricing::new("gpt-4.1", 0.002, 0.008),
+        ModelPricing::new("gpt-4.1-mini", 0.0004, 0.0016),
         ModelPricing::new("gpt-4o", 0.0025, 0.01),
         ModelPricing::new("gpt-4o-mini", 0.00015, 0.0006),
-        ModelPricing::new("gpt-4-turbo", 0.01, 0.03),
-        ModelPricing::new("gpt-4", 0.03, 0.06),
-        ModelPricing::new("gpt-3.5-turbo", 0.0005, 0.0015),
-        ModelPricing::new("o1", 0.015, 0.06),
-        ModelPricing::new("o1-mini", 0.003, 0.012),
-        ModelPricing::new("o3-mini", 0.0011, 0.0044),
-        // Anthropic Claude models
-        ModelPricing::new("claude-sonnet-4-20250514", 0.003, 0.015),
-        ModelPricing::new("claude-3.5-haiku", 0.0008, 0.004),
-        ModelPricing::new("claude-3-opus", 0.015, 0.075),
-        ModelPricing::new("claude-3-haiku", 0.00025, 0.00125),
-        // DeepSeek models
-        ModelPricing::new("deepseek-chat", 0.00014, 0.00028),
-        ModelPricing::new("deepseek-reasoner", 0.00055, 0.0022),
+        ModelPricing::new("o3", 0.002, 0.008),
+        ModelPricing::new("o4-mini", 0.0011, 0.0044),
+        // Anthropic Claude
+        ModelPricing::new("claude-fable-5", 0.01, 0.05),
+        ModelPricing::new("claude-mythos-5", 0.01, 0.05),
+        ModelPricing::new("claude-opus-5", 0.005, 0.025),
+        ModelPricing::new("claude-opus-4-8", 0.005, 0.025),
+        ModelPricing::new("claude-sonnet-5", 0.002, 0.01),
+        ModelPricing::new("claude-sonnet-4-6", 0.003, 0.015),
+        ModelPricing::new("claude-haiku-4-5", 0.001, 0.005),
+        // DeepSeek. Peak (cache-miss) rates; off-peak is half.
+        ModelPricing::new("deepseek-v4-flash", 0.00044, 0.00132),
+        ModelPricing::new("deepseek-v4-pro", 0.00132, 0.00396),
     ]
 }
 
@@ -127,7 +156,7 @@ mod tests {
     #[test]
     fn test_default_pricing_includes_gemini() {
         let pricing = default_pricing();
-        let gemini = pricing.iter().find(|p| p.model_name == "gemini-2.5-flash");
+        let gemini = pricing.iter().find(|p| p.model_name == "gemini-3.7-flash");
         assert!(gemini.is_some());
         let gemini = gemini.unwrap();
         assert!(gemini.input_cost_per_1k > 0.0);
@@ -137,21 +166,68 @@ mod tests {
     #[test]
     fn test_default_pricing_includes_openai() {
         let pricing = default_pricing();
-        let gpt4o = pricing.iter().find(|p| p.model_name == "gpt-4o");
-        assert!(gpt4o.is_some());
-        let gpt4o = gpt4o.unwrap();
-        assert!(gpt4o.input_cost_per_1k > 0.0);
-        assert!(gpt4o.output_cost_per_1k > 0.0);
+        let gpt = pricing.iter().find(|p| p.model_name == "gpt-5.6-terra");
+        assert!(gpt.is_some());
+        let gpt = gpt.unwrap();
+        assert!(gpt.input_cost_per_1k > 0.0);
+        assert!(gpt.output_cost_per_1k > 0.0);
     }
 
     #[test]
     fn test_default_pricing_includes_anthropic() {
         let pricing = default_pricing();
-        let claude = pricing.iter().find(|p| p.model_name == "claude-sonnet-4-20250514");
+        let claude = pricing.iter().find(|p| p.model_name == "claude-sonnet-5");
         assert!(claude.is_some());
         let claude = claude.unwrap();
         assert!(claude.input_cost_per_1k > 0.0);
         assert!(claude.output_cost_per_1k > 0.0);
+    }
+
+    /// The table must not carry models the vendors have shut down, and must not
+    /// duplicate a model ID.
+    #[test]
+    fn test_default_pricing_excludes_retired_models() {
+        let pricing = default_pricing();
+        for retired in [
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-3-pro-preview",
+            "claude-3-opus",
+            "claude-3-haiku",
+            "claude-3.5-haiku",
+            "claude-sonnet-4-20250514",
+            "deepseek-chat",
+            "deepseek-reasoner",
+            "gpt-4",
+            "gpt-4-turbo",
+            "gpt-3.5-turbo",
+        ] {
+            assert!(
+                !pricing.iter().any(|p| p.model_name == retired),
+                "{retired} is retired and must not be in the default table"
+            );
+        }
+
+        let mut names: Vec<&str> = pricing.iter().map(|p| p.model_name.as_str()).collect();
+        names.sort_unstable();
+        let count = names.len();
+        names.dedup();
+        assert_eq!(names.len(), count, "duplicate model IDs in default pricing");
+    }
+
+    /// Output must never be cheaper than input for these vendors' text models.
+    /// A swapped pair is the most common transcription error.
+    #[test]
+    fn test_output_never_cheaper_than_input() {
+        for model in default_pricing() {
+            assert!(
+                model.output_cost_per_1k >= model.input_cost_per_1k,
+                "{} output {} is below input {}",
+                model.model_name,
+                model.output_cost_per_1k,
+                model.input_cost_per_1k
+            );
+        }
     }
 
     #[test]
