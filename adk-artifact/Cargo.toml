@@ -14,6 +14,7 @@ readme = "README.md"
 
 [dependencies]
 adk-core.workspace = true
+adk-gcp = { workspace = true, optional = true }
 async-trait.workspace = true
 serde = { workspace = true, optional = true }
 serde_json.workspace = true
@@ -29,4 +30,4 @@ axum = "0.8"
 
 [features]
 default = []
-gcs = ["google-cloud-auth", "reqwest", "serde", "tracing", "tokio/sync", "tokio/time"]
+gcs = ["adk-gcp", "google-cloud-auth", "reqwest", "serde", "tracing", "tokio/sync", "tokio/time"]

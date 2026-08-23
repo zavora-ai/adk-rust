@@ -1,0 +1,15 @@
+[package]
+name = "vertex-sandbox-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-code = { path = "../../adk-code", features = ["vertex-sandbox"] }
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -155,6 +155,7 @@ name = "adk-artifact"
 version = "2.1.0"
 dependencies = [
  "adk-core",
+ "adk-gcp",
  "async-trait",
  "axum 0.8.9",
  "google-cloud-auth 1.12.0",
@@ -345,17 +346,22 @@ name = "adk-code"
 version = "2.1.0"
 dependencies = [
  "adk-core",
+ "adk-gcp",
  "adk-sandbox",
  "async-trait",
+ "axum 0.8.9",
+ "base64 0.22.1",
  "boa_engine",
  "bollard",
  "chrono",
  "futures",
+ "google-cloud-auth 1.12.0",
  "monty",
  "monty-fs",
  "monty-types",
  "proptest",
  "rand 0.9.4",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",

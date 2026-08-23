@@ -14,12 +14,16 @@ readme = "README.md"
 
 [dependencies]
 adk-core = { workspace = true }
+adk-gcp = { workspace = true, optional = true }
 adk-sandbox = { workspace = true }
 async-trait = { workspace = true }
+base64 = { version = "0.22", optional = true }
 boa_engine = { version = "0.20", optional = true }
 bollard = { version = "0.18", optional = true }
 futures = { workspace = true, optional = true }
+google-cloud-auth = { version = "1.8", default-features = false, features = ["default-rustls-provider"], optional = true }
 rand = { version = "0.9", optional = true }
+reqwest = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
@@ -53,8 +57,12 @@ default = []
 embedded-js = ["dep:boa_engine"]
 embedded-python = ["dep:monty", "dep:monty-types", "dep:monty-fs", "dep:chrono"]
 docker = ["dep:bollard", "dep:rand", "dep:futures"]
+# Vertex AI Agent Engine sandbox client (sandboxEnvironments, v1beta1):
+# lifecycle + synchronous :execute, SandboxCodeExecutor, VertexSandboxTool.
+vertex-sandbox = ["dep:adk-gcp", "dep:base64", "dep:google-cloud-auth", "dep:reqwest"]
 
 [dev-dependencies]
+axum = "0.8"
 proptest = "1.5"
 # rt-multi-thread: the property tests build a runtime with `Runtime::new()`, which
 # is gated on it. Without this the crate only compiles as part of a workspace

@@ -21,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for rate limits, overloads, or server errors. New live examples read
   credentials from the environment; provider-free wire tests cover headers,
   bodies, responses, and streams.
+- **Vertex AI Agent Engine sandbox client** (`adk-code`, feature
+  `vertex-sandbox`; same-named umbrella feature, part of
+  `gemini-agent-platform`): `VertexSandboxClient` against the v1beta1
+  `sandboxEnvironments` surface — create and delete wait their long-running
+  operations, get and list (paginated) are plain reads, and `:execute` is
+  synchronous. `execute_code` implements the code-execution chunk
+  conventions shared with adk-python and the Vertex AI SDK (JSON code
+  chunk, `file_name`-attributed file chunks, `msg_out`/`msg_err` console
+  output) with the 100 MB per-request file limit enforced before sending.
+  `SandboxCodeExecutor` mirrors adk-python's
+  `AgentEngineSandboxCodeExecutor`: per-session lazy sandbox creation
+  (display name `default_sandbox`, TTL one year) with recreate when the
+  sandbox is missing or not running. `VertexSandboxTool` exposes execution
+  to LLM agents keyed by the calling session. Built on the shared `adk-gcp`
+  plumbing. New example: `examples/vertex_sandbox`.
 
 - **`adk-gcp` crate**: shared Google Cloud REST plumbing for Vertex AI
   backends — `GcpHttpClient` (ADC with cached auth headers per

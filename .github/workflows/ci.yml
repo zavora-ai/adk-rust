@@ -220,6 +220,9 @@ jobs:
           # The Example Store client (Vertex AI few-shot retrieval) is opt-in; no default
           # build compiles its wire contract or contract tests.
           - { package: adk-tool, features: example-store }
+          # The Agent Engine sandbox client (vertex-sandbox) is opt-in; its mock contract
+          # tests only run with the feature on.
+          - { package: adk-code, features: vertex-sandbox }
           # `mcp-sampling` gates three rmcp model types that the workspace build never
           # reaches: `adk-computer-use` pulls in `adk-tool/mcp`, but nothing in the
           # workspace enables `mcp-sampling`. Its only cover was `examples/mcp_sampling`,

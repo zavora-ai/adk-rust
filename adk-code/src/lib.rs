@@ -76,6 +76,8 @@ pub mod harness;
 mod rust_executor;
 mod rust_sandbox;
 mod types;
+#[cfg(feature = "vertex-sandbox")]
+pub mod vertex_sandbox;
 mod wasm_guest;
 mod workspace;
 
@@ -97,5 +99,9 @@ pub use harness::{HARNESS_TEMPLATE, validate_rust_source};
 pub use rust_executor::{CodeResult, RustExecutor, RustExecutorConfig};
 pub use rust_sandbox::*;
 pub use types::*;
+#[cfg(feature = "vertex-sandbox")]
+pub use vertex_sandbox::{
+    SandboxCodeExecutor, VertexSandboxClient, VertexSandboxConfig, VertexSandboxTool,
+};
 pub use wasm_guest::*;
 pub use workspace::*;

@@ -8,32 +8,60 @@
 //!
 //! # Dependency choice
 //!
-//! This module talks to the GCS JSON API directly with `reqwest` and obtains
-//! Application Default Credentials via `google-cloud-auth` — the same pair
-//! already used by `adk-session`'s `vertex-session` backend. The official
-//! `google-cloud-storage` crate would add a substantially heavier dependency
-//! tree (gRPC, prost, tower) for the five plain-HTTP calls this service needs.
+//! This module talks to the GCS JSON API directly with `reqwest`; credential
+//! construction and auth-header caching come from `adk-gcp`'s
+//! [`GcpHttpClient`], the shared plumbing used by the workspace's Vertex
+//! backends. GCS is not the aiplatform API — binary up/downloads
+//! (`alt=media`), `multipart/related` uploads, and the `storage/v1` /
+//! `upload/storage/v1` URL scheme don't fit `adk-gcp`'s JSON-only helpers —
+//! so request building and response handling stay local and the
+//! `GcpHttpClient` serves purely as the credential/auth-header provider.
+//! The official `google-cloud-storage` crate would add a substantially
+//! heavier dependency tree (gRPC, prost, tower) for the five plain-HTTP
+//! calls this service needs.
 
 use crate::service::{
     ArtifactService, DeleteRequest, ListRequest, ListResponse, LoadRequest, LoadResponse,
     SaveRequest, SaveResponse, VersionsRequest, VersionsResponse,
 };
 use adk_core::{AdkError, ErrorComponent, Part, Result};
+use adk_gcp::{GcpErrorCodes, GcpErrorContext, GcpHttpClient};
 use async_trait::async_trait;
-use google_cloud_auth::credentials::{self, CacheableResource, Credentials};
-use reqwest::{Client, RequestBuilder, StatusCode};
+use google_cloud_auth::credentials::Credentials;
+use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
 
 const DEFAULT_ENDPOINT: &str = "https://storage.googleapis.com";
-const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+// Error identity stamped by the shared adk-gcp plumbing. Only the
+// credential-path slots (unauthorized, credentials_unavailable, timeout) and
+// the builder's invalid_response slot are ever produced — GCS request and
+// response handling stays local — so the remaining slots carry the closest
+// existing literal and introduce no new codes.
+const GCS_ERROR_CODES: GcpErrorCodes = GcpErrorCodes {
+    invalid_input: "artifact.gcs.invalid_input",
+    unauthorized: "artifact.gcs.unauthorized",
+    forbidden: "artifact.gcs.unauthorized",
+    not_found: "artifact.gcs.not_found",
+    rate_limited: "artifact.gcs.rate_limited",
+    timeout: "artifact.gcs.unavailable",
+    unavailable: "artifact.gcs.unavailable",
+    credentials_unavailable: "artifact.gcs.unavailable",
+    invalid_response: "artifact.gcs.internal",
+    invalid_request: "artifact.gcs.invalid_input",
+    upstream_error: "artifact.gcs.internal",
+    operation_failed: "artifact.gcs.internal",
+};
+
+fn gcp_error_context() -> GcpErrorContext {
+    GcpErrorContext::new(ErrorComponent::Artifact, GCS_ERROR_CODES, "gcs").with_provider("gcs")
+}
 
 // GCS object metadata keys shared with adk-python's GcsArtifactService.
 const GCS_DISPLAY_NAME_METADATA_KEY: &str = "adkDisplayName";
@@ -98,8 +126,9 @@ pub struct GcsArtifactService {
     http_client: Client,
     bucket: String,
     endpoint: String,
-    credentials: Credentials,
-    auth_headers: Arc<RwLock<Option<reqwest::header::HeaderMap>>>,
+    // Credential/auth-header provider only — its transport and base URL are
+    // never used, so `with_endpoint` overrides don't need to rebuild it.
+    gcp: GcpHttpClient,
 }
 
 /// One object returned by the GCS JSON API.
@@ -130,11 +159,9 @@ impl GcsArtifactService {
     /// Returns an error when ADC cannot be constructed or the HTTP client
     /// cannot be built.
     pub fn new_with_adc(bucket: impl Into<String>) -> Result<Self> {
-        let credentials =
-            credentials::Builder::default().with_scopes([CLOUD_PLATFORM_SCOPE]).build().map_err(
-                |error| Self::auth_error(format!("failed to build gcs ADC credentials: {error}")),
-            )?;
-        Self::with_credentials(bucket, credentials)
+        // The builder's default scopes are already `cloud-platform`.
+        let gcp = GcpHttpClient::builder(gcp_error_context(), DEFAULT_ENDPOINT).build()?;
+        Self::with_auth_provider(bucket, gcp)
     }
 
     /// Creates a service with explicit credentials.
@@ -143,6 +170,13 @@ impl GcsArtifactService {
     ///
     /// Returns an error when the HTTP client cannot be built.
     pub fn with_credentials(bucket: impl Into<String>, credentials: Credentials) -> Result<Self> {
+        let gcp = GcpHttpClient::builder(gcp_error_context(), DEFAULT_ENDPOINT)
+            .credentials(credentials)
+            .build()?;
+        Self::with_auth_provider(bucket, gcp)
+    }
+
+    fn with_auth_provider(bucket: impl Into<String>, gcp: GcpHttpClient) -> Result<Self> {
         let http_client = Client::builder()
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
             .timeout(HTTP_REQUEST_TIMEOUT)
@@ -154,13 +188,7 @@ impl GcsArtifactService {
                     error.without_url()
                 ))
             })?;
-        Ok(Self {
-            http_client,
-            bucket: bucket.into(),
-            endpoint: DEFAULT_ENDPOINT.to_string(),
-            credentials,
-            auth_headers: Arc::new(RwLock::new(None)),
-        })
+        Ok(Self { http_client, bucket: bucket.into(), endpoint: DEFAULT_ENDPOINT.to_string(), gcp })
     }
 
     /// Overrides the GCS API origin, e.g. for a local emulator or test server.
@@ -219,31 +247,6 @@ impl GcsArtifactService {
         error.with_upstream_status(status.as_u16())
     }
 
-    async fn auth_headers(&self) -> Result<reqwest::header::HeaderMap> {
-        let cacheable_headers =
-            self.credentials.headers(Default::default()).await.map_err(|error| {
-                Self::auth_error(format!("failed to obtain google cloud auth headers: {error}"))
-            })?;
-        match cacheable_headers {
-            CacheableResource::New { data, .. } => {
-                *self.auth_headers.write().await = Some(data.clone());
-                Ok(data)
-            }
-            CacheableResource::NotModified => {
-                self.auth_headers.read().await.clone().ok_or_else(|| {
-                    Self::auth_error(
-                        "google cloud credentials returned NotModified before any cached auth headers were available",
-                    )
-                })
-            }
-        }
-    }
-
-    async fn apply_auth(&self, request: RequestBuilder) -> Result<RequestBuilder> {
-        let headers = self.auth_headers().await?;
-        Ok(request.headers(headers))
-    }
-
     fn objects_url(&self) -> String {
         format!("{}/storage/v1/b/{}/o", self.endpoint, percent_encode(&self.bucket))
     }
@@ -297,7 +300,7 @@ impl GcsArtifactService {
                 query.push(("pageToken", token));
             }
             let request =
-                self.apply_auth(self.http_client.get(self.objects_url()).query(&query)).await?;
+                self.gcp.apply_auth(self.http_client.get(self.objects_url()).query(&query)).await?;
             let response = request.send().await.map_err(|error| {
                 Self::internal_error(format!(
                     "gcs list objects request failed: {}",
@@ -344,7 +347,7 @@ impl GcsArtifactService {
     }
 
     async fn get_object(&self, blob_name: &str) -> Result<Option<ObjectResource>> {
-        let request = self.apply_auth(self.http_client.get(self.object_url(blob_name))).await?;
+        let request = self.gcp.apply_auth(self.http_client.get(self.object_url(blob_name))).await?;
         let response = request.send().await.map_err(|error| {
             Self::internal_error(format!("gcs get object request failed: {}", error.without_url()))
         })?;
@@ -367,6 +370,7 @@ impl GcsArtifactService {
 
     async fn download_object(&self, blob_name: &str) -> Result<Vec<u8>> {
         let request = self
+            .gcp
             .apply_auth(self.http_client.get(self.object_url(blob_name)).query(&[("alt", "media")]))
             .await?;
         let response = request.send().await.map_err(|error| {
@@ -399,6 +403,7 @@ impl GcsArtifactService {
         }
         let (boundary, body) = multipart_related_body(&resource, content_type, data)?;
         let request = self
+            .gcp
             .apply_auth(
                 self.http_client
                     .post(self.upload_url())
@@ -422,7 +427,8 @@ impl GcsArtifactService {
     }
 
     async fn delete_object(&self, blob_name: &str) -> Result<()> {
-        let request = self.apply_auth(self.http_client.delete(self.object_url(blob_name))).await?;
+        let request =
+            self.gcp.apply_auth(self.http_client.delete(self.object_url(blob_name))).await?;
         let response = request.send().await.map_err(|error| {
             Self::internal_error(format!("gcs delete request failed: {}", error.without_url()))
         })?;
@@ -743,7 +749,7 @@ impl ArtifactService for GcsArtifactService {
 
     async fn health_check(&self) -> Result<()> {
         let url = format!("{}/storage/v1/b/{}", self.endpoint, percent_encode(&self.bucket));
-        let request = self.apply_auth(self.http_client.get(url)).await?;
+        let request = self.gcp.apply_auth(self.http_client.get(url)).await?;
         let response = request.send().await.map_err(|error| {
             Self::internal_error(format!(
                 "gcs health check request failed: {}",
