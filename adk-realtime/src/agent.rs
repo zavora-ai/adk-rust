@@ -55,15 +55,17 @@
 use crate::config::{RealtimeConfig, ToolDefinition, VadConfig, VadMode};
 use crate::events::{ServerEvent, ToolResponse};
 use adk_core::{
-    AdkError, AfterAgentCallback, AfterToolCallback, Agent, BeforeAgentCallback,
-    BeforeToolCallback, CallbackContext, Content, Event, EventActions, EventStream,
-    GlobalInstructionProvider, InstructionProvider, InvocationContext, MemoryEntry, Part,
-    ReadonlyContext, Result, Tool, ToolCallbackContext, ToolContext, Toolset,
+    AdkError, AfterAgentCallback, AfterToolCallback, Agent, AgentInteractionMode,
+    BeforeAgentCallback, BeforeToolCallback, CallbackContext, Content, Event, EventActions,
+    EventStream, GlobalInstructionProvider, InstructionProvider, InvocationContext, MemoryEntry,
+    Part, ReadonlyContext, Result, Tool, ToolCallbackContext, ToolContext, Toolset,
 };
 use async_stream::stream;
 use async_trait::async_trait;
 
 use std::sync::{Arc, Mutex};
+
+const MAX_BUFFERED_PLAYBACK_AUDIO_BYTES: usize = 16 * 1024 * 1024;
 
 /// Shared realtime model type (thread-safe for async usage).
 pub type BoxedRealtimeModel = Arc<dyn crate::model::RealtimeModel>;
@@ -643,6 +645,10 @@ impl Agent for RealtimeAgent {
         &self.sub_agents
     }
 
+    fn interaction_mode(&self) -> AgentInteractionMode {
+        AgentInteractionMode::Realtime
+    }
+
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         let agent_name = self.name.clone();
         let invocation_id = ctx.invocation_id().to_string();
@@ -813,6 +819,8 @@ impl Agent for RealtimeAgent {
             }
 
             // ===== PROCESS REALTIME EVENTS =====
+            let mut audio_buffers = std::collections::HashMap::<String, Vec<u8>>::new();
+            let mut oversized_audio = std::collections::HashSet::<String>::new();
             loop {
                 let event = session.next_event().await;
 
@@ -839,9 +847,30 @@ impl Agent for RealtimeAgent {
                                     cb(&delta, &item_id).await;
                                 }
 
+                                if !oversized_audio.contains(&item_id) {
+                                    let buffer = audio_buffers.entry(item_id.clone()).or_default();
+                                    if buffer.len().saturating_add(delta.len())
+                                        <= MAX_BUFFERED_PLAYBACK_AUDIO_BYTES
+                                    {
+                                        buffer.extend_from_slice(&delta);
+                                    } else {
+                                        audio_buffers.remove(&item_id);
+                                        oversized_audio.insert(item_id.clone());
+                                        tracing::warn!(
+                                            item.id = item_id,
+                                            limit.bytes = MAX_BUFFERED_PLAYBACK_AUDIO_BYTES,
+                                            "realtime playback buffer exceeded its limit; raw audio events continue"
+                                        );
+                                    }
+                                }
+
                                 // Yield audio event (delta is already raw bytes)
                                 let mut audio_event = Event::new(&invocation_id);
                                 audio_event.author = agent_name.clone();
+                                audio_event.provider_metadata.insert(
+                                    "adk.realtime.audio_stream".to_string(),
+                                    "pcm16-24000-mono".to_string(),
+                                );
                                 audio_event.llm_response.content = Some(Content {
                                     role: "model".to_string(),
                                     parts: vec![Part::InlineData {
@@ -854,12 +883,54 @@ impl Agent for RealtimeAgent {
                                 yield Ok(audio_event);
                             }
 
-                            ServerEvent::TextDelta { delta, .. } => {
-                                let mut text_event = Event::new(&invocation_id);
+                            ServerEvent::AudioDone { item_id, .. } => {
+                                let oversized = oversized_audio.remove(&item_id);
+                                if !oversized
+                                    && let Some(pcm) = audio_buffers.remove(&item_id)
+                                    && !pcm.is_empty()
+                                {
+                                    let mut audio_event = Event::new(&invocation_id);
+                                    audio_event.author = agent_name.clone();
+                                    audio_event.provider_metadata.insert(
+                                        "adk.realtime.audio_playback".to_string(),
+                                        "wav-24000-mono".to_string(),
+                                    );
+                                    audio_event.llm_response.content = Some(Content {
+                                        role: "model".to_string(),
+                                        parts: vec![Part::InlineData {
+                                            mime_type: "audio/wav".to_string(),
+                                            data: pcm16_mono_wav(&pcm, 24_000),
+                                            uri: None,
+                                            annotations: None,
+                                        }],
+                                    });
+                                    yield Ok(audio_event);
+                                }
+                            }
+
+                            ServerEvent::TextDelta { delta, item_id, .. } => {
+                                let mut text_event = Event::with_id(
+                                    format!("{invocation_id}:realtime-text:{item_id}"),
+                                    &invocation_id,
+                                );
                                 text_event.author = agent_name.clone();
+                                text_event.llm_response.partial = true;
                                 text_event.llm_response.content = Some(Content {
                                     role: "model".to_string(),
                                     parts: vec![Part::Text { text: delta.clone() }],
+                                });
+                                yield Ok(text_event);
+                            }
+
+                            ServerEvent::TextDone { text, item_id, .. } => {
+                                let mut text_event = Event::with_id(
+                                    format!("{invocation_id}:realtime-text:{item_id}"),
+                                    &invocation_id,
+                                );
+                                text_event.author = agent_name.clone();
+                                text_event.llm_response.content = Some(Content {
+                                    role: "model".to_string(),
+                                    parts: vec![Part::Text { text }],
                                 });
                                 yield Ok(text_event);
                             }
@@ -868,6 +939,38 @@ impl Agent for RealtimeAgent {
                                 if let Some(ref cb) = on_transcript {
                                     cb(&delta, &item_id).await;
                                 }
+                                let mut transcript_event = Event::with_id(
+                                    format!("{invocation_id}:realtime-transcript:{item_id}"),
+                                    &invocation_id,
+                                );
+                                transcript_event.author = agent_name.clone();
+                                transcript_event.llm_response.partial = true;
+                                transcript_event.provider_metadata.insert(
+                                    "adk.realtime.transcript".to_string(),
+                                    "output".to_string(),
+                                );
+                                transcript_event.llm_response.content = Some(Content {
+                                    role: "model".to_string(),
+                                    parts: vec![Part::Text { text: delta }],
+                                });
+                                yield Ok(transcript_event);
+                            }
+
+                            ServerEvent::TranscriptDone { transcript, item_id, .. } => {
+                                let mut transcript_event = Event::with_id(
+                                    format!("{invocation_id}:realtime-transcript:{item_id}"),
+                                    &invocation_id,
+                                );
+                                transcript_event.author = agent_name.clone();
+                                transcript_event.provider_metadata.insert(
+                                    "adk.realtime.transcript".to_string(),
+                                    "output".to_string(),
+                                );
+                                transcript_event.llm_response.content = Some(Content {
+                                    role: "model".to_string(),
+                                    parts: vec![Part::Text { text: transcript }],
+                                });
+                                yield Ok(transcript_event);
                             }
 
                             ServerEvent::SpeechStarted { audio_start_ms, .. } => {
@@ -1039,6 +1142,25 @@ impl Agent for RealtimeAgent {
 
         Ok(Box::pin(s))
     }
+}
+
+fn pcm16_mono_wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
+    let data_len = u32::try_from(pcm.len()).unwrap_or(u32::MAX);
+    let mut wav = Vec::with_capacity(44 + pcm.len());
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36_u32.saturating_add(data_len)).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.saturating_mul(2).to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.extend_from_slice(pcm);
+    wav
 }
 
 /// Tool context for realtime agent tool execution.
@@ -1231,6 +1353,20 @@ mod tool_safety_tests {
     use adk_core::{RunConfig, SharedState, State};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn completed_pcm_audio_is_wrapped_as_a_playable_wav() {
+        let pcm = [0_u8, 1, 2, 3];
+        let wav = pcm16_mono_wav(&pcm, 24_000);
+
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[12..16], b"fmt ");
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 24_000);
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), pcm.len() as u32);
+        assert_eq!(&wav[44..], pcm);
+    }
 
     /// Counts how many times it is executed.
     struct CountingTool {

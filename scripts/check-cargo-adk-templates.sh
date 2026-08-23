@@ -6,6 +6,14 @@ TMPDIR="$(mktemp -d)"
 CHECK_TARGET_DIR="$TMPDIR/target"
 trap 'rm -rf "$TMPDIR"' EXIT
 
+# The generated projects are checked from TMPDIR, outside the repository where
+# rustup would otherwise stop seeing rust-toolchain.toml and use a global
+# default. Keep this gate on the same pinned compiler as the workspace.
+if command -v rustup >/dev/null 2>&1; then
+  RUST_TOOLCHAIN="$(awk -F'"' '/^channel = / { print $2; exit }' "$ROOT/rust-toolchain.toml")"
+  export RUSTUP_TOOLCHAIN="${RUST_TOOLCHAIN}"
+fi
+
 # Entries are "template:provider[:addon1,addon2]".
 # An empty provider means "omit --provider" (exercises the template's
 # default provider, e.g. openai for the openai template).
@@ -17,6 +25,7 @@ templates=(
   "tools:anthropic"
   "rag:gemini"
   "api:gemini"
+  "api:openai"
   "openai:"
   "a2a:gemini"
   "tools:gemini:telemetry,sessions"

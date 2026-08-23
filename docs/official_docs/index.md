@@ -5,7 +5,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 ## Getting Started
 
 - [Introduction](introduction.md) - Overview of ADK-Rust, its architecture, and key concepts
-- [Quickstart](quickstart.md) - Build your first agent in under 10 minutes
+- [Quickstart](quickstart.md) - Scaffold, run, and test your first agent in the embedded UI in under 5 minutes
 - [A2UI Quickstart](quickstart-a2ui.md) - Emit A2UI JSONL and render it in React
 - [Migrating 1.0 → 2.0](migration/1.0-to-2.0.md) - Complete breaking-change list with before/after code
 

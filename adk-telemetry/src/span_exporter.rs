@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicBool, Ordering},
+};
 use tracing::{Id, Subscriber, debug};
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 
@@ -15,31 +18,56 @@ pub trait SpanSink: Send + Sync {
     fn export_span(&self, span_name: &str, attributes: HashMap<String, String>);
 }
 
-/// ADK-Go style span exporter that stores spans by event_id
-/// Follows the pattern from APIServerSpanExporter in ADK-Go
+/// ADK-Go style span exporter that retains runtime spans in memory.
+///
+/// Spans are keyed by a stable span ID while preserving the originating ADK
+/// event ID as an attribute. This lets multiple runtime operations describe the
+/// same event without overwriting one another.
 #[derive(Debug, Clone, Default)]
 pub struct AdkSpanExporter {
-    /// Map of event_id -> span attributes (following ADK-Go pattern)
+    /// Map of span ID to span attributes.
     trace_dict: Arc<RwLock<HashMap<String, HashMap<String, String>>>>,
+    /// Whether this exporter has observed at least one retained runtime span.
+    collecting: Arc<AtomicBool>,
 }
 
 impl AdkSpanExporter {
+    /// Creates an empty in-process span exporter.
     pub fn new() -> Self {
-        Self { trace_dict: Arc::new(RwLock::new(HashMap::new())) }
+        Self {
+            trace_dict: Arc::new(RwLock::new(HashMap::new())),
+            collecting: Arc::new(AtomicBool::new(false)),
+        }
     }
 
-    /// Get trace dict (following ADK-Go GetTraceDict method)
+    /// Returns a snapshot of retained spans keyed by span ID.
     pub fn get_trace_dict(&self) -> HashMap<String, HashMap<String, String>> {
         self.trace_dict.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    /// Get trace by event_id (following ADK-Go pattern)
+    /// Returns the first span associated with an ADK event ID.
     pub fn get_trace_by_event_id(&self, event_id: &str) -> Option<HashMap<String, String>> {
         debug!("AdkSpanExporter::get_trace_by_event_id called with event_id: {}", event_id);
         let trace_dict = self.trace_dict.read().unwrap_or_else(|e| e.into_inner());
-        let result = trace_dict.get(event_id).cloned();
+        let result = trace_dict.get(event_id).cloned().or_else(|| {
+            trace_dict
+                .values()
+                .find(|attributes| {
+                    attributes.get("gcp.vertex.agent.event_id").is_some_and(|id| id == event_id)
+                })
+                .cloned()
+        });
         debug!("get_trace_by_event_id result for event_id '{}': {:?}", event_id, result.is_some());
         result
+    }
+
+    /// Returns whether the exporter has retained at least one runtime span.
+    ///
+    /// A configured exporter reports `false` until a supported span closes.
+    /// Servers use this to distinguish a ready collector from one proven to be
+    /// collecting, instead of advertising telemetry from configuration alone.
+    pub fn is_collecting(&self) -> bool {
+        self.collecting.load(Ordering::Acquire)
     }
 
     /// Get all spans for a session (by filtering spans that have matching session_id)
@@ -63,23 +91,20 @@ impl AdkSpanExporter {
 }
 
 impl SpanSink for AdkSpanExporter {
-    /// Store a span in the in-memory trace dict (following ADK-Go ExportSpans
-    /// pattern). Only the agent-loop span names are kept.
+    /// Stores supported runtime spans in memory for the debug API.
     fn export_span(&self, span_name: &str, attributes: HashMap<String, String>) {
-        // Only capture specific span names (following ADK-Go pattern)
-        if span_name == "agent.execute"
-            || span_name == "call_llm"
-            || span_name == "send_data"
-            || span_name.starts_with("execute_tool")
-        {
+        if is_runtime_span(span_name) {
             if let Some(event_id) = attributes.get("gcp.vertex.agent.event_id") {
                 debug!(
                     "AdkSpanExporter: Storing span '{}' with event_id '{}'",
                     span_name, event_id
                 );
+                let storage_key =
+                    attributes.get("span_id").cloned().unwrap_or_else(|| event_id.clone());
                 let mut trace_dict = self.trace_dict.write().unwrap_or_else(|e| e.into_inner());
-                trace_dict.insert(event_id.clone(), attributes);
-                debug!("AdkSpanExporter: Span stored, total event_ids: {}", trace_dict.len());
+                trace_dict.insert(storage_key, attributes);
+                self.collecting.store(true, Ordering::Release);
+                debug!("AdkSpanExporter: Span stored, total spans: {}", trace_dict.len());
             } else {
                 debug!("AdkSpanExporter: Skipping span '{}' - no event_id found", span_name);
             }
@@ -87,6 +112,14 @@ impl SpanSink for AdkSpanExporter {
             debug!("AdkSpanExporter: Skipping span '{}' - not in allowed list", span_name);
         }
     }
+}
+
+pub(crate) fn is_runtime_span(span_name: &str) -> bool {
+    span_name == "agent.execute"
+        || span_name == "call_llm"
+        || span_name == "send_data"
+        || span_name.starts_with("execute_tool")
+        || matches!(span_name, "team.run" | "team.member.run" | "team.relationship.execute")
 }
 
 /// Tracing layer that captures spans and exports them via a [`SpanSink`]
@@ -102,7 +135,10 @@ impl AdkSpanLayer {
 }
 
 #[derive(Clone)]
-struct SpanFields(HashMap<String, String>);
+struct SpanFields {
+    values: HashMap<String, String>,
+    event_id_declared: bool,
+}
 
 #[derive(Clone)]
 struct SpanTiming {
@@ -124,6 +160,7 @@ where
         let mut visitor = StringVisitor::default();
         attrs.record(&mut visitor);
         let mut fields_map = visitor.0;
+        let event_id_declared = fields_map.contains_key("gcp.vertex.agent.event_id");
 
         // Propagate fields from parent span (for context inheritance)
         if let Some(parent) = span.parent()
@@ -142,14 +179,14 @@ where
 
             for key in context_keys {
                 if !fields_map.contains_key(key)
-                    && let Some(val) = parent_fields.0.get(key)
+                    && let Some(val) = parent_fields.values.get(key)
                 {
                     fields_map.insert(key.to_string(), val.clone());
                 }
             }
         }
 
-        extensions.insert(SpanFields(fields_map));
+        extensions.insert(SpanFields { values: fields_map, event_id_declared });
     }
 
     fn on_record(&self, id: &Id, values: &tracing::span::Record<'_>, ctx: Context<'_, S>) {
@@ -159,7 +196,10 @@ where
             let mut visitor = StringVisitor::default();
             values.record(&mut visitor);
             for (k, v) in visitor.0 {
-                fields.0.insert(k, v);
+                if k == "gcp.vertex.agent.event_id" {
+                    fields.event_id_declared = true;
+                }
+                fields.values.insert(k, v);
             }
         }
     }
@@ -175,8 +215,9 @@ where
             timing.map(|t| end_time.duration_since(t.start_time).as_nanos() as u64).unwrap_or(0);
 
         // Get captured fields
-        let mut attributes =
-            extensions.get::<SpanFields>().map(|f| f.0.clone()).unwrap_or_default();
+        let span_fields = extensions.get::<SpanFields>();
+        let event_id_declared = span_fields.is_some_and(|fields| fields.event_id_declared);
+        let mut attributes = span_fields.map(|fields| fields.values.clone()).unwrap_or_default();
 
         // Get span name - prefer otel.name attribute (for dynamic names), fallback to metadata
         let metadata = span.metadata();
@@ -189,20 +230,30 @@ where
             .unwrap_or_default()
             .as_nanos() as u64;
 
-        // Use invocation_id as trace_id (for grouping in UI)
-        // Use event_id as span_id (for uniqueness)
+        // Use invocation_id as trace_id (for grouping in UI). Spans that
+        // declare their own event ID keep it as the span ID for compatibility;
+        // child spans that inherit a parent event ID use tracing's unique ID so
+        // they cannot overwrite the parent or a sibling. `send_data` describes
+        // the same event as its enclosing `call_llm`, so it also needs its own
+        // ID to preserve both operations.
+        let generated_span_id = format!("{:016x}", id.into_u64());
         let invocation_id = attributes
             .get("gcp.vertex.agent.invocation_id")
             .cloned()
-            .unwrap_or_else(|| format!("{:016x}", id.into_u64()));
+            .unwrap_or_else(|| generated_span_id.clone());
         let event_id = attributes
             .get("gcp.vertex.agent.event_id")
             .cloned()
-            .unwrap_or_else(|| format!("{:016x}", id.into_u64()));
+            .unwrap_or_else(|| generated_span_id.clone());
+        let span_id = if event_id_declared && span_name != "send_data" {
+            event_id
+        } else {
+            generated_span_id
+        };
 
         attributes.insert("span_name".to_string(), span_name.clone());
         attributes.insert("trace_id".to_string(), invocation_id); // Group by invocation
-        attributes.insert("span_id".to_string(), event_id); // Unique per span
+        attributes.insert("span_id".to_string(), span_id);
         attributes.insert("start_time".to_string(), (now_nanos - duration_nanos).to_string());
         attributes.insert("end_time".to_string(), now_nanos.to_string());
 
@@ -217,7 +268,11 @@ where
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::{
+        EnvFilter,
+        filter::filter_fn,
+        layer::{Layer, SubscriberExt},
+    };
 
     #[test]
     fn test_conversation_id_propagates_to_child_spans() {
@@ -251,6 +306,106 @@ mod tests {
         assert_eq!(
             child_trace.get("gen_ai.conversation.id").map(String::as_str),
             Some("session-1")
+        );
+    }
+
+    #[test]
+    fn console_log_filter_does_not_suppress_runtime_span_capture() {
+        let exporter = Arc::new(AdkSpanExporter::new());
+        let capture = AdkSpanLayer::new(exporter.clone()).with_filter(filter_fn(|metadata| {
+            metadata.is_span() && is_runtime_span(metadata.name())
+        }));
+        let console = tracing_subscriber::fmt::layer()
+            .with_writer(std::io::sink)
+            .with_filter(EnvFilter::new("warn"));
+        let subscriber = tracing_subscriber::registry().with(console).with(capture);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                "agent.execute",
+                "gcp.vertex.agent.event_id" = "evt-filtered-console",
+                "gcp.vertex.agent.invocation_id" = "inv-filtered-console",
+                "gcp.vertex.agent.session_id" = "session-filtered-console"
+            );
+            let _guard = span.enter();
+        });
+
+        assert!(exporter.get_trace_by_event_id("evt-filtered-console").is_some());
+        assert!(exporter.is_collecting());
+    }
+
+    #[test]
+    fn inherited_event_ids_do_not_overwrite_team_relationship_spans() {
+        let exporter = Arc::new(AdkSpanExporter::new());
+        let layer = AdkSpanLayer::new(exporter.clone());
+        let subscriber = tracing_subscriber::registry().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let parent = tracing::info_span!(
+                "agent.execute",
+                "gcp.vertex.agent.event_id" = "evt-team",
+                "gcp.vertex.agent.invocation_id" = "inv-team",
+                "gcp.vertex.agent.session_id" = "session-team"
+            );
+            let parent_guard = parent.enter();
+            let relationship = tracing::info_span!(
+                "team.relationship.execute",
+                team.name = "support",
+                team.relationship.from = "supervisor",
+                team.relationship.to = "billing",
+                team.relationship.kind = "handoff",
+                team.edge.id = "edge-1"
+            );
+            let relationship_guard = relationship.enter();
+            drop(relationship_guard);
+            drop(relationship);
+            drop(parent_guard);
+            drop(parent);
+        });
+
+        let spans = exporter.get_session_trace("session-team");
+        assert_eq!(spans.len(), 2);
+        assert!(spans.iter().any(|span| {
+            span.get("span_name").is_some_and(|name| name == "team.relationship.execute")
+        }));
+        let unique_span_ids = spans
+            .iter()
+            .filter_map(|span| span.get("span_id"))
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique_span_ids.len(), 2);
+    }
+
+    #[test]
+    fn send_data_does_not_overwrite_call_llm_for_the_same_event() {
+        let exporter = Arc::new(AdkSpanExporter::new());
+        let layer = AdkSpanLayer::new(exporter.clone());
+        let subscriber = tracing_subscriber::registry().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let call_llm = tracing::info_span!(
+                "call_llm",
+                "gcp.vertex.agent.event_id" = "evt-model",
+                "gcp.vertex.agent.invocation_id" = "inv-model",
+                "gcp.vertex.agent.session_id" = "session-model"
+            );
+            drop(call_llm);
+
+            let send_data = tracing::info_span!(
+                "send_data",
+                "gcp.vertex.agent.event_id" = "evt-model",
+                "gcp.vertex.agent.invocation_id" = "inv-model",
+                "gcp.vertex.agent.session_id" = "session-model"
+            );
+            drop(send_data);
+        });
+
+        let spans = exporter.get_session_trace("session-model");
+        assert_eq!(spans.len(), 2);
+        assert!(
+            spans.iter().any(|span| span.get("span_name").is_some_and(|name| name == "call_llm"))
+        );
+        assert!(
+            spans.iter().any(|span| span.get("span_name").is_some_and(|name| name == "send_data"))
         );
     }
 }

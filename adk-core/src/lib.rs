@@ -112,8 +112,9 @@ pub mod tool_concurrency;
 pub mod types;
 
 pub use agent::{
-    Agent, AgentCapabilities, AgentTransferDecision, AgentTransferRequest, EventStream,
-    ResolvedContext,
+    Agent, AgentCapabilities, AgentInteractionMode, AgentRelationshipKind, AgentTopology,
+    AgentTopologyMember, AgentTopologyRelationship, AgentTransferDecision, AgentTransferRequest,
+    EventStream, ResolvedContext,
 };
 pub use agent_invoker::AgentInvoker;
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};

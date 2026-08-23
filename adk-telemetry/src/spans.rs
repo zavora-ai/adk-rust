@@ -184,6 +184,28 @@ pub fn team_run_span(team_name: &str, invocation_id: &str, coordinator: &str) ->
     )
 }
 
+/// Creates a portable team span with the runtime session identifiers required
+/// by in-process session telemetry.
+pub fn team_run_span_with_context(
+    team_name: &str,
+    invocation_id: &str,
+    session_id: &str,
+    coordinator: &str,
+) -> Span {
+    tracing::info_span!(
+        "team.run",
+        team.name = team_name,
+        team.coordinator = coordinator,
+        invocation.id = invocation_id,
+        "gcp.vertex.agent.invocation_id" = invocation_id,
+        "gcp.vertex.agent.session_id" = session_id,
+        "gcp.vertex.agent.event_id" = %format!("{invocation_id}:team"),
+        "gen_ai.conversation.id" = session_id,
+        team.status = tracing::field::Empty,
+        otel.kind = "internal"
+    )
+}
+
 /// Creates a span for one member execution inside a portable team.
 pub fn team_member_span(team_name: &str, member: &str, invocation_id: &str) -> Span {
     tracing::info_span!(
@@ -191,6 +213,28 @@ pub fn team_member_span(team_name: &str, member: &str, invocation_id: &str) -> S
         team.name = team_name,
         team.member = member,
         invocation.id = invocation_id,
+        team.status = tracing::field::Empty,
+        otel.kind = "internal"
+    )
+}
+
+/// Creates a portable team member span with explicit invocation and session
+/// identifiers for lossless in-process export.
+pub fn team_member_span_with_context(
+    team_name: &str,
+    member: &str,
+    invocation_id: &str,
+    session_id: &str,
+) -> Span {
+    tracing::info_span!(
+        "team.member.run",
+        team.name = team_name,
+        team.member = member,
+        invocation.id = invocation_id,
+        "gcp.vertex.agent.invocation_id" = invocation_id,
+        "gcp.vertex.agent.session_id" = session_id,
+        "gcp.vertex.agent.event_id" = %format!("{invocation_id}:team-member:{member}"),
+        "gen_ai.conversation.id" = session_id,
         team.status = tracing::field::Empty,
         otel.kind = "internal"
     )
@@ -211,6 +255,36 @@ pub fn team_relationship_span(
         team.relationship.to = to,
         team.relationship.kind = kind,
         team.edge.id = edge_id,
+        team.status = tracing::field::Empty,
+        team.duration_ms = tracing::field::Empty,
+        otel.kind = "internal"
+    )
+}
+
+/// Creates an exact team relationship span with explicit runtime context.
+///
+/// `edge_id` is used as the event identifier because every relationship
+/// execution already has a stable, unique causal edge ID.
+pub fn team_relationship_span_with_context(
+    team_name: &str,
+    from: &str,
+    to: &str,
+    kind: &str,
+    edge_id: &str,
+    invocation_id: &str,
+    session_id: &str,
+) -> Span {
+    tracing::info_span!(
+        "team.relationship.execute",
+        team.name = team_name,
+        team.relationship.from = from,
+        team.relationship.to = to,
+        team.relationship.kind = kind,
+        team.edge.id = edge_id,
+        "gcp.vertex.agent.invocation_id" = invocation_id,
+        "gcp.vertex.agent.session_id" = session_id,
+        "gcp.vertex.agent.event_id" = edge_id,
+        "gen_ai.conversation.id" = session_id,
         team.status = tracing::field::Empty,
         team.duration_ms = tracing::field::Empty,
         otel.kind = "internal"

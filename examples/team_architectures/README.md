@@ -1,6 +1,6 @@
 # Portable team architectures with OpenAI
 
-These four runnable binaries bind a serializable `TeamSpec` to ordinary ADK-Rust
+These five runnable binaries bind a serializable `TeamSpec` to ordinary ADK-Rust
 agents. Each program prints its portable specification before compiling it to an
 executable `CompiledTeam` and running it through `Runner`.
 
@@ -15,6 +15,7 @@ Set `TEAM_MODEL` to override the default `gpt-5-mini` model.
 | `team-supervisor-delegation` | Supervisor → researcher tool | The researcher completes a nested invocation and returns a result. The supervisor remains active and writes the final answer. |
 | `team-parallel-swarm` | Facts + risks + reviewer in parallel | Researchers publish to invocation-scoped `SharedState`; the reviewer waits for both notes and reconciles them. |
 | `team-hybrid` | Supervisor → sequential draft workflow → publisher | The workflow is delegated and returns a draft; the supervisor then hands control to the publisher. |
+| `team-runtime-ui` | Supervisor → billing or technical, served by `adk-server` | The embedded developer UI discovers the compiled topology, creates sessions, streams Runner events, and exposes team state and execution history. |
 
 `Delegate` and `Handoff` are intentionally different relationships. A delegate
 behaves like a function call. A handoff changes which agent owns the rest of the
@@ -42,7 +43,12 @@ cargo run --manifest-path examples/team_architectures/Cargo.toml \
   --bin team-parallel-swarm
 cargo run --manifest-path examples/team_architectures/Cargo.toml \
   --bin team-hybrid
+cargo run --manifest-path examples/team_architectures/Cargo.toml \
+  --bin team-runtime-ui
 ```
+
+Open `http://127.0.0.1:8088/ui/` after starting `team-runtime-ui`. Set
+`ADK_UI_ADDRESS` to bind a different local address.
 
 `cargo check` compiles every binary without making a network request. OpenAI is
 contacted only when a binary is run.
