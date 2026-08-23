@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 1. Create the OpenAI realtime model ---
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
-    let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime");
+    let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1");
 
     // --- 2. Build the LiveKit Config ---
     let lk_url = std::env::var("LIVEKIT_URL").expect("LIVEKIT_URL is required");

@@ -66,7 +66,7 @@ pub enum Effort {
 pub struct AnthropicConfig {
     /// Anthropic API key.
     pub api_key: String,
-    /// Model name (e.g., `"claude-opus-4-7"`, `"claude-sonnet-4-6"`).
+    /// Model name (e.g., `"claude-opus-5"`, `"claude-sonnet-5"`).
     pub model: String,
     /// Maximum tokens to generate.
     #[serde(default = "default_max_tokens")]
@@ -141,7 +141,7 @@ impl Default for AnthropicConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            model: "claude-sonnet-4-6".to_string(),
+            model: crate::catalog::ANTHROPIC_DEFAULT.to_string(),
             max_tokens: default_max_tokens(),
             base_url: None,
             prompt_caching: true,

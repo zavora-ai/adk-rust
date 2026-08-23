@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = client
         .create_agent(CreateAgentParams {
             name: "Data Analyst".to_string(),
-            model: serde_json::json!("claude-sonnet-4-6"),
+            model: serde_json::json!("claude-sonnet-5"),
             system: Some(
                 "You are a data analyst. When given files, analyze them thoroughly \
                  and provide insights with specific numbers from the data."

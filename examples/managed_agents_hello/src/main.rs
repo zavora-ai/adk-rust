@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = client
         .create_agent(CreateAgentParams {
             name: "Hello Agent".to_string(),
-            model: serde_json::json!("claude-sonnet-4-6"),
+            model: serde_json::json!("claude-sonnet-5"),
             system: Some("You are a friendly assistant. Keep responses brief.".to_string()),
             description: Some("A minimal hello-world agent".to_string()),
             tools: vec![ToolConfig::agent_toolset()],

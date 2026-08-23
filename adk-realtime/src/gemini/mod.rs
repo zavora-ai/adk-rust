@@ -62,7 +62,7 @@ pub const GEMINI_LIVE_URL: &str = "wss://generativelanguage.googleapis.com/ws/go
 pub const VERTEX_LIVE_URL_TEMPLATE: &str = "wss://{region}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent?project_id={project_id}";
 
 /// Default model for Gemini Live.
-pub const DEFAULT_MODEL: &str = "models/gemini-live-2.5-flash-native-audio";
+pub const DEFAULT_MODEL: &str = "models/gemini-3.1-flash-live-preview";
 
 /// Available voices for Gemini Live (varies by model).
 pub const GEMINI_VOICES: &[&str] = &["Puck", "Charon", "Kore", "Fenrir", "Aoede"];

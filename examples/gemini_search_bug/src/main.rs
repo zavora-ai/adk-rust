@@ -16,7 +16,7 @@ use adk_agent::LlmAgentBuilder;
 use adk_core::Agent;
 
 const APP_NAME: &str = "gemini-search-bug";
-const MODEL_NAME: &str = "gemini-3-pro-preview";
+const MODEL_NAME: &str = "gemini-3.7-flash";
 const INSTRUCTIONS: &str = "You are a research agent. Use Google Search for current information, then call record_tool_status.";
 
 fn gemini_server_tool_kind(value: &serde_json::Value) -> String {

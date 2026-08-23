@@ -27,7 +27,7 @@ impl Default for GroqConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            model: "llama-3.3-70b-versatile".to_string(),
+            model: crate::catalog::GROQ_DEFAULT.to_string(),
             base_url: None,
             reasoning_enabled: false,
             max_tokens: None,
@@ -41,9 +41,18 @@ impl GroqConfig {
         Self { api_key: api_key.into(), model: model.into(), ..Default::default() }
     }
 
-    /// Create a config for llama-3.3-70b-versatile model.
+    /// Create a config for the legacy `llama-3.3-70b-versatile` model.
+    ///
+    /// This model was removed from Groq's free and developer tiers on
+    /// 2026-08-16. Enterprise committed-spend plans may retain access. Prefer
+    /// [`GroqConfig::gpt_oss_120b`] for portable new deployments.
     pub fn llama70b(api_key: impl Into<String>) -> Self {
         Self::new(api_key, "llama-3.3-70b-versatile")
+    }
+
+    /// Create a config for Groq's production `openai/gpt-oss-120b` model.
+    pub fn gpt_oss_120b(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, crate::catalog::GROQ_DEFAULT)
     }
 
     /// Create a config for llama-3.1-8b-instant model (faster, smaller).

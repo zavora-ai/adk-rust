@@ -158,11 +158,11 @@ Events form the conversation history and enable replay and debugging.
 
 The underlying LLM that powers LlmAgents. ADK-Rust is optimized for Gemini but supports multiple providers through the `Llm` trait:
 
-- **Gemini**: Google's Gemini models (`gemini-3-pro`, `gemini-3-flash`, `gemini-2.5-flash`, `gemini-2.5-pro`)
-- **OpenAI**: `gpt-5.1`, `gpt-5`, `gpt-5-mini`, Azure OpenAI
-- **Anthropic**: `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5`
-- **DeepSeek**: `deepseek-r1`, `deepseek-v3.1`, `deepseek-chat` with thinking mode
-- **Groq**: Ultra-fast inference with `llama-4-scout`, `llama-3.1-70b-versatile`, `mixtral-8x7b-32768`
+- **Gemini**: `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite`
+- **OpenAI**: `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna`, Azure OpenAI deployments
+- **Anthropic**: `claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`
+- **DeepSeek**: `deepseek-v4-flash`, `deepseek-v4-pro`
+- **Groq**: Ultra-fast inference with `openai/gpt-oss-120b` and `openai/gpt-oss-20b`
 - **Ollama**: Local inference with `qwen3.6:35b-a3b`, `qwen3.5`, `llama3.2:3b`, `deepseek-r1:14b`
 - **mistral.rs**: High-performance local inference with hardware acceleration
 

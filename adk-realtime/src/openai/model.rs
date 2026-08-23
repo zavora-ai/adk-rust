@@ -18,7 +18,7 @@ use super::{DEFAULT_MODEL, OPENAI_REALTIME_URL, OPENAI_VOICES, OpenAITransport};
 /// use adk_realtime::openai::OpenAIRealtimeModel;
 /// use adk_realtime::RealtimeModel;
 ///
-/// let model = OpenAIRealtimeModel::new("sk-...", "gpt-realtime");
+/// let model = OpenAIRealtimeModel::new("sk-...", "gpt-realtime-2.1");
 /// let session = model.connect(config).await?;
 /// ```
 #[derive(Debug, Clone)]
@@ -35,7 +35,7 @@ impl OpenAIRealtimeModel {
     /// # Arguments
     ///
     /// * `api_key` - Your OpenAI API key
-    /// * `model_id` - The model ID (e.g., "gpt-realtime")
+    /// * `model_id` - The model ID (e.g., "gpt-realtime-2.1")
     pub fn new(api_key: impl Into<String>, model_id: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
@@ -66,7 +66,7 @@ impl OpenAIRealtimeModel {
     /// ```rust,ignore
     /// use adk_realtime::openai::{OpenAIRealtimeModel, OpenAITransport};
     ///
-    /// let model = OpenAIRealtimeModel::new("sk-...", "gpt-realtime")
+    /// let model = OpenAIRealtimeModel::new("sk-...", "gpt-realtime-2.1")
     ///     .with_transport(OpenAITransport::WebRTC);
     /// ```
     pub fn with_transport(mut self, transport: OpenAITransport) -> Self {

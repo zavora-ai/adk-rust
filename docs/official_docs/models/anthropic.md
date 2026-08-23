@@ -17,14 +17,10 @@ The `adk-anthropic` crate is a dedicated Anthropic API client for ADK-Rust. It p
 
 | Model | API ID | Notes |
 |-------|--------|-------|
-| Claude Opus 4.7 | `claude-opus-4-7` | Most capable GA model, 1M context, 128K output, adaptive thinking only |
-| Claude Opus 4.6 | `claude-opus-4-6` | Previous flagship, 1M context, 128K output |
-| Claude Sonnet 4.6 | `claude-sonnet-4-6` | Best speed/intelligence balance, 1M context |
-| Claude Haiku 4.5 | `claude-haiku-4-5` | Fastest, 200K context |
-| Claude Opus 4.5 | `claude-opus-4-5` | Previous generation |
-| Claude Sonnet 4.5 | `claude-sonnet-4-5` | Previous generation |
-| Claude Sonnet 4 | `claude-sonnet-4-0` | Legacy (retiring June 2026) |
-| Claude Opus 4 | `claude-opus-4-0` | Legacy (retiring June 2026) |
+| Claude Sonnet 5 | `claude-sonnet-5` | Default speed/intelligence balance, 1M context |
+| Claude Opus 5 | `claude-opus-5` | Flagship capability, 1M context |
+| Claude Fable 5 | `claude-fable-5` | Premium creative and long-form work, 1M context |
+| Claude Haiku 4.5 | `claude-haiku-4-5` | Cost-efficient previous generation, 200K context |
 
 ## Setup
 
@@ -50,7 +46,7 @@ let response = client.send(params).await?;
 use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
 
 let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-6"))?;
+let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5"))?;
 ```
 
 ## Custom base URL (gateways, proxies, compatible endpoints)
@@ -64,7 +60,7 @@ through `adk-model` to the underlying client:
 use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
 
 let model = AnthropicClient::new(
-    AnthropicConfig::new(api_key, "claude-sonnet-4-6")
+    AnthropicConfig::new(api_key, "claude-sonnet-5")
         .with_base_url("https://gateway.internal/anthropic"),
 )?;
 ```

@@ -6,8 +6,7 @@
 //! |-------|-------------|----------|
 //! | `deepseek-v4-pro` | Strongest reasoning, thinking enabled by default | Yes |
 //! | `deepseek-v4-flash` | Fast, cost-efficient | Optional |
-//! | `deepseek-chat` | Legacy general-purpose chat | No |
-//! | `deepseek-reasoner` | Legacy reasoning with thinking | Yes |
+//! | `deepseek-v4-flash-vision-exp` | Experimental vision | Yes |
 //!
 //! # Features
 //!

@@ -164,42 +164,35 @@
 //! ### Gemini
 //! | Model | Description |
 //! |-------|-------------|
-//! | `gemini-3-pro-preview` | Most intelligent, complex agentic workflows (1M context) |
-//! | `gemini-3-flash-preview` | Frontier intelligence at Flash speed (1M context) |
-//! | `gemini-2.5-pro` | Advanced reasoning and multimodal (1M context) |
-//! | `gemini-2.5-flash` | Balanced speed and capability, recommended (1M context) |
-//! | `gemini-2.5-flash-lite` | Ultra-fast for high-volume tasks (1M context) |
+//! | `gemini-3.7-flash` | Current balanced default (1M context) |
+//! | `gemini-3.6-flash` | Previous balanced generation (1M context) |
+//! | `gemini-3.5-flash-lite` | Cost-efficient high-volume model (1M context) |
 //!
 //! ### OpenAI
 //! | Model | Description |
 //! |-------|-------------|
-//! | `gpt-5` | Strongest coding and agentic model with adaptive reasoning |
-//! | `gpt-5-mini` | Efficient variant for most tasks |
-//! | `o3` | Advanced reasoning model for complex problem solving |
-//! | `o4-mini` | Efficient reasoning model (200K context) |
-//! | `gpt-4.1` | General purpose model with 1M context |
+//! | `gpt-5.6-terra` | Balanced default for agents |
+//! | `gpt-5.6-sol` | Flagship reasoning and coding |
+//! | `gpt-5.6-luna` | Cost-efficient high-volume model |
 //!
 //! ### Anthropic
 //! | Model | Description |
 //! |-------|-------------|
-//! | `claude-opus-4-5-20251101` | Most capable for complex autonomous tasks |
-//! | `claude-sonnet-4-5-20250929` | Best balance of intelligence, speed, and cost |
-//! | `claude-haiku-4-5-20251001` | Ultra-efficient for high-volume workloads |
-//! | `claude-opus-4-20250514` | Hybrid model with extended thinking |
-//! | `claude-sonnet-4-20250514` | Balanced model with extended thinking |
+//! | `claude-sonnet-5` | Balanced default |
+//! | `claude-opus-5` | Flagship capability |
+//! | `claude-fable-5` | Premium creative and long-form work |
 //!
 //! ### DeepSeek
 //! | Model | Description |
 //! |-------|-------------|
-//! | `deepseek-chat` | V3.2 non-thinking mode for fast general-purpose tasks |
-//! | `deepseek-reasoner` | V3.2 thinking mode with chain-of-thought reasoning |
+//! | `deepseek-v4-flash` | Fast balanced default |
+//! | `deepseek-v4-pro` | Advanced reasoning |
 //!
 //! ### Groq
 //! | Model | Description |
 //! |-------|-------------|
-//! | `meta-llama/llama-4-scout-17b-16e-instruct` | Llama 4 Scout via Groq LPU |
-//! | `llama-3.3-70b-versatile` | Versatile large model |
-//! | `llama-3.1-8b-instant` | Ultra-fast at 560 T/s |
+//! | `openai/gpt-oss-120b` | Production default via Groq LPU |
+//! | `openai/gpt-oss-20b` | Lower-latency economy model |
 //!
 //! ### OpenAI-Compatible Providers (via `openai` feature)
 //!
@@ -260,6 +253,8 @@ pub(crate) mod attachment;
 pub mod azure_ai;
 #[cfg(feature = "bedrock")]
 pub mod bedrock;
+/// Curated provider model catalog, lifecycle metadata, and recommended defaults.
+pub mod catalog;
 #[cfg(feature = "deepseek")]
 pub mod deepseek;
 /// Gemini model provider (Google AI Studio and Vertex AI).

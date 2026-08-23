@@ -43,12 +43,12 @@ impl ModelProvider {
     /// Default model for the provider.
     pub const fn default_model(self) -> &'static str {
         match self {
-            Self::Gemini => "gemini-3.1-flash-lite-preview",
-            Self::Openai => "gpt-5-mini",
-            Self::Anthropic => "claude-sonnet-4-5-20250929",
-            Self::Deepseek => "deepseek-v4-flash",
-            Self::Groq => "llama-3.3-70b-versatile",
-            Self::Ollama => "qwen3.5",
+            Self::Gemini => crate::catalog::GEMINI_DEFAULT,
+            Self::Openai => crate::catalog::OPENAI_DEFAULT,
+            Self::Anthropic => crate::catalog::ANTHROPIC_DEFAULT,
+            Self::Deepseek => crate::catalog::DEEPSEEK_DEFAULT,
+            Self::Groq => crate::catalog::GROQ_DEFAULT,
+            Self::Ollama => crate::catalog::OLLAMA_DEFAULT,
         }
     }
 
@@ -122,6 +122,15 @@ mod tests {
         for provider in ModelProvider::all() {
             let parsed = ModelProvider::from_str(provider.as_str()).expect("provider should parse");
             assert_eq!(*provider, parsed);
+        }
+    }
+
+    #[test]
+    fn provider_defaults_are_current_catalog_entries() {
+        for provider in ModelProvider::all() {
+            let entry = crate::catalog::lookup_model(provider.as_str(), provider.default_model())
+                .expect("provider default should be catalogued");
+            assert_eq!(entry.lifecycle, crate::catalog::ModelLifecycle::Active);
         }
     }
 }

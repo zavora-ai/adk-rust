@@ -51,7 +51,7 @@ impl DeepgramStt {
     fn build_ws_url(&self, opts: &SttOptions) -> String {
         let ws_base = self.base_url.replace("https://", "wss://");
         let mut params = vec![
-            "model=nova-2".to_string(),
+            "model=nova-3".to_string(),
             "encoding=linear16".to_string(),
             "sample_rate=16000".to_string(),
             "channels=1".to_string(),
@@ -85,7 +85,7 @@ impl SttProvider for DeepgramStt {
         assert!(self.base_url.starts_with("https://"), "Deepgram requires HTTPS");
         let wav_bytes = frame_to_wav_bytes(audio)?;
 
-        let mut params = vec!["model=nova-2".to_string(), "smart_format=true".to_string()];
+        let mut params = vec!["model=nova-3".to_string(), "smart_format=true".to_string()];
         if opts.diarize {
             params.push("diarize=true".to_string());
         }
@@ -382,7 +382,7 @@ mod tests {
         let stt = DeepgramStt::with_api_key("test-key".into());
         let url = stt.build_ws_url(&SttOptions::default());
         assert!(url.starts_with("wss://api.deepgram.com/v1/listen?"));
-        assert!(url.contains("model=nova-2"));
+        assert!(url.contains("model=nova-3"));
         assert!(url.contains("encoding=linear16"));
         assert!(url.contains("sample_rate=16000"));
         assert!(url.contains("channels=1"));
@@ -402,11 +402,11 @@ mod tests {
     #[test]
     fn build_ws_url_with_model_hint() {
         let stt = DeepgramStt::with_api_key("test-key".into());
-        let opts = SttOptions { model_hint: Some("nova-3".into()), ..Default::default() };
+        let opts = SttOptions { model_hint: Some("custom-model".into()), ..Default::default() };
         let url = stt.build_ws_url(&opts);
-        assert!(url.contains("model=nova-3"));
+        assert!(url.contains("model=custom-model"));
         // Should not contain the default model.
-        assert!(!url.contains("model=nova-2"));
+        assert!(!url.contains("model=nova-3"));
     }
 
     #[test]

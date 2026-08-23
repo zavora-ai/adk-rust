@@ -248,7 +248,8 @@ pub fn generate_main_rs_with_registry(
             format!("    let model = {};", init_code)
         }
     } else {
-        let model_id = manifest.model_override.as_deref().unwrap_or("gemini-3.5-flash");
+        let model_id =
+            manifest.model_override.as_deref().unwrap_or(adk_model::catalog::GEMINI_DEFAULT);
         format!(
             "    let api_key = std::env::var(\"GOOGLE_API_KEY\")\n        .map_err(|_| anyhow::anyhow!(\"GOOGLE_API_KEY is not set — copy .env.example to .env and add your key\"))?;\n    let model = adk_rust::model::GeminiModel::new(&api_key, \"{model_id}\")?;"
         )
@@ -559,7 +560,7 @@ mod tests {
         assert!(main_rs.contains("#[tokio::main]"));
         assert!(main_rs.contains("dotenvy::dotenv().ok();"));
         assert!(main_rs.contains("tracing_subscriber::fmt()"));
-        assert!(main_rs.contains("GeminiModel::new(&api_key, \"gemini-3.5-flash\")?"));
+        assert!(main_rs.contains("GeminiModel::new(&api_key, \"gemini-3.7-flash\")?"));
         assert!(main_rs.contains("anyhow::Result<()>"));
     }
 

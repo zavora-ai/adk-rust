@@ -68,7 +68,7 @@ The agent attempts to fetch data from `https://example.com` using Python's `urll
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Gemini LLM (gemini-3.1-flash-lite-preview)       │
+│  Gemini LLM (gemini-3.7-flash)                    │
 │  "Write Python code to answer questions"    │
 └──────────────┬──────────────────────────────┘
                │ generate code

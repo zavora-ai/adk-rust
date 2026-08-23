@@ -215,7 +215,7 @@ fn build_model(provider: Provider) -> anyhow::Result<(BoxedModel, &'static str)>
             let api_key = std::env::var("OPENAI_API_KEY")
                 .map_err(|_| anyhow::anyhow!("OPENAI_API_KEY is not set"))?;
             let model_id = std::env::var("OPENAI_REALTIME_MODEL")
-                .unwrap_or_else(|_| "gpt-realtime".to_string());
+                .unwrap_or_else(|_| "gpt-realtime-2.1".to_string());
             let model: BoxedModel = Arc::new(OpenAIRealtimeModel::new(api_key, model_id));
             Ok((model, "marin"))
         }

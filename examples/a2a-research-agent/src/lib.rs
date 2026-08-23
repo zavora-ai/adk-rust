@@ -36,8 +36,8 @@ Be thorough, factual, and well-organized. Use clear headings and bullet points w
 /// Detects the LLM provider from environment variables.
 pub fn detect_model() -> Result<(Arc<dyn Llm>, &'static str), Box<dyn std::error::Error>> {
     if let Ok(key) = std::env::var("GOOGLE_API_KEY") {
-        let model = adk_model::GeminiModel::new(&key, "gemini-3.1-flash-lite-preview")?;
-        return Ok((Arc::new(model), "Gemini (gemini-3.1-flash-lite-preview)"));
+        let model = adk_model::GeminiModel::new(&key, "gemini-3.7-flash")?;
+        return Ok((Arc::new(model), "Gemini (gemini-3.7-flash)"));
     }
     if let Ok(key) = std::env::var("OPENAI_API_KEY") {
         let config = adk_model::openai::OpenAIConfig::new(key, "gpt-4o-mini");

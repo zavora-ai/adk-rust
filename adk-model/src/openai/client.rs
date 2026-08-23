@@ -21,6 +21,7 @@ pub struct OpenAIClient {
 impl OpenAIClient {
     /// Create a new OpenAI client.
     pub fn new(config: OpenAIConfig) -> Result<Self, AdkError> {
+        crate::catalog::warn_if_obsolete("openai", &config.model);
         let reasoning_effort = config.reasoning_effort.map(|e| match e {
             super::config::ReasoningEffort::Low => ReasoningEffort::Low,
             super::config::ReasoningEffort::Medium => ReasoningEffort::Medium,

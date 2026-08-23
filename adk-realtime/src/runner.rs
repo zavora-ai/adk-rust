@@ -335,7 +335,7 @@ impl RealtimeRunnerBuilder {
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<()> {
-///     let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime");
+///     let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1");
 ///
 ///     let runner = RealtimeRunner::builder()
 ///         .model(Box::new(model))

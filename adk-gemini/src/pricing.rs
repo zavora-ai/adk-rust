@@ -39,6 +39,44 @@ pub struct GeminiPricing {
 }
 
 impl GeminiPricing {
+    /// Gemini 3.7 Flash introductory pricing through December 31, 2026.
+    ///
+    /// From January 1, 2027 these rates double to $1.50 input, $7.50 output,
+    /// $0.15 cache and $1.00/hour storage.
+    pub const GEMINI_37_FLASH: Self = Self {
+        input: 0.75,
+        input_long: 0.75,
+        output: 3.75,
+        output_long: 3.75,
+        cache_input: 0.075,
+        cache_input_long: 0.075,
+        cache_storage_per_hour: 0.50,
+    };
+
+    /// Gemini 3.6 Flash introductory pricing through December 31, 2026.
+    ///
+    /// From January 1, 2027 these rates double, as for [`Self::GEMINI_37_FLASH`].
+    pub const GEMINI_36_FLASH: Self = Self {
+        input: 0.75,
+        input_long: 0.75,
+        output: 3.75,
+        output_long: 3.75,
+        cache_input: 0.075,
+        cache_input_long: 0.075,
+        cache_storage_per_hour: 0.50,
+    };
+
+    /// Gemini 3.5 Flash-Lite (GA). The most cost-efficient GA model.
+    pub const GEMINI_35_FLASH_LITE: Self = Self {
+        input: 0.30,
+        input_long: 0.30,
+        output: 2.50,
+        output_long: 2.50,
+        cache_input: 0.03,
+        cache_input_long: 0.03,
+        cache_storage_per_hour: 1.00,
+    };
+
     /// Gemini 3.5 Flash (GA). Input $1.50/MTok, output $9.00/MTok (incl. thinking).
     pub const GEMINI_35_FLASH: Self = Self {
         input: 1.50,
@@ -72,14 +110,17 @@ impl GeminiPricing {
         cache_storage_per_hour: 1.00,
     };
 
-    /// Gemini 3 Flash Preview
+    /// Gemini 3 Flash Preview.
+    ///
+    /// Audio input is $1.00/MTok and audio cache $0.10/MTok; this constant
+    /// carries the text/image/video rates. There is no long-context tier.
     pub const GEMINI_3_FLASH_PREVIEW: Self = Self {
         input: 0.50,
         input_long: 0.50,
         output: 3.00,
         output_long: 3.00,
         cache_input: 0.05,
-        cache_input_long: 0.10,
+        cache_input_long: 0.05,
         cache_storage_per_hour: 1.00,
     };
 
@@ -94,29 +135,37 @@ impl GeminiPricing {
         cache_storage_per_hour: 4.50,
     };
 
-    /// Gemini 2.5 Flash
+    /// Gemini 2.5 Flash.
+    ///
+    /// Audio input is $1.00/MTok and audio cache $0.10/MTok; this constant
+    /// carries the text/image/video rates. There is no long-context tier, so the
+    /// `*_long` rates equal the base rates.
     pub const GEMINI_25_FLASH: Self = Self {
         input: 0.30,
         input_long: 0.30,
         output: 2.50,
         output_long: 2.50,
         cache_input: 0.03,
-        cache_input_long: 0.10,
+        cache_input_long: 0.03,
         cache_storage_per_hour: 1.00,
     };
 
-    /// Gemini 2.5 Flash Lite (no caching support)
+    /// Gemini 2.5 Flash Lite.
+    ///
+    /// Audio input is $0.30/MTok and audio cache $0.03/MTok; this constant
+    /// carries the text/image/video rates.
     pub const GEMINI_25_FLASH_LITE: Self = Self {
         input: 0.10,
         input_long: 0.10,
         output: 0.40,
         output_long: 0.40,
-        cache_input: 0.0,
-        cache_input_long: 0.0,
-        cache_storage_per_hour: 0.0,
+        cache_input: 0.01,
+        cache_input_long: 0.01,
+        cache_storage_per_hour: 1.00,
     };
 
-    /// Gemini 2.0 Flash (no caching support)
+    /// Gemini 2.0 Flash.
+    #[deprecated(note = "Gemini 2.0 Flash was shut down on June 1, 2026; rates are historical")]
     pub const GEMINI_20_FLASH: Self = Self {
         input: 0.10,
         input_long: 0.10,
@@ -305,7 +354,49 @@ impl GeminiPricing {
             // No published per-token text pricing (Pro Image preview text uses 3.1 Pro
             // rates; the dedicated Gemini 3 Pro Preview text model is discontinued).
             Model::Gemini3ProPreview => Self::GEMINI_31_PRO_PREVIEW,
-            Model::Custom(_) => return None,
+            Model::Custom(id) => return Self::for_model_id(id),
+        };
+        Some(pricing)
+    }
+
+    /// Returns the standard (paid-tier) pricing for a raw Gemini model ID.
+    ///
+    /// Accepts both the bare ID and the `models/`-prefixed resource name. This is
+    /// the resolution path for models exposed through [`Model::Custom`] factories
+    /// rather than enum variants.
+    ///
+    /// Returns `None` when Google publishes no per-token text price for the ID.
+    /// `None` means unpriced, never free.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_gemini::pricing::GeminiPricing;
+    ///
+    /// let p = GeminiPricing::for_model_id("gemini-3.7-flash").unwrap();
+    /// assert_eq!(p.input, 0.75);
+    /// ```
+    pub fn for_model_id(model_id: &str) -> Option<Self> {
+        let bare = model_id.strip_prefix("models/").unwrap_or(model_id);
+        let pricing = match bare {
+            "gemini-3.7-flash" => Self::GEMINI_37_FLASH,
+            "gemini-3.6-flash" => Self::GEMINI_36_FLASH,
+            "gemini-3.5-flash" => Self::GEMINI_35_FLASH,
+            "gemini-3.5-flash-lite" => Self::GEMINI_35_FLASH_LITE,
+            "gemini-3.1-pro-preview" => Self::GEMINI_31_PRO_PREVIEW,
+            "gemini-3.1-flash-lite" => Self::GEMINI_31_FLASH_LITE,
+            "gemini-3.1-flash-image" => Self::GEMINI_31_FLASH_IMAGE,
+            "gemini-3.1-flash-live-preview" => Self::GEMINI_31_FLASH_LIVE,
+            "gemini-3-flash-preview" => Self::GEMINI_3_FLASH_PREVIEW,
+            "gemini-3-pro-image" => Self::GEMINI_3_PRO_IMAGE,
+            "gemini-2.5-pro" => Self::GEMINI_25_PRO,
+            "gemini-2.5-flash" => Self::GEMINI_25_FLASH,
+            "gemini-2.5-flash-lite" => Self::GEMINI_25_FLASH_LITE,
+            "gemini-2.5-flash-image" => Self::GEMINI_25_FLASH_IMAGE,
+            "gemini-2.5-computer-use-preview-10-2025" => Self::GEMINI_25_COMPUTER_USE,
+            "gemini-embedding-2" => Self::GEMINI_EMBEDDING_2,
+            "gemini-embedding-001" => Self::GEMINI_EMBEDDING,
+            _ => return None,
         };
         Some(pricing)
     }
@@ -424,8 +515,111 @@ mod tests {
         // Embedding 2
         let emb = GeminiPricing::for_model(&Model::GeminiEmbedding2).unwrap();
         assert!((emb.input - 0.20).abs() < 1e-9);
-        // Custom models have no published pricing
+        // Custom models with no published pricing
         assert!(GeminiPricing::for_model(&Model::Custom("models/x".into())).is_none());
+        let current = GeminiPricing::for_model(&Model::gemini_3_7_flash()).unwrap();
+        assert_eq!(current.input, GeminiPricing::GEMINI_37_FLASH.input);
+        assert_eq!(current.output, GeminiPricing::GEMINI_37_FLASH.output);
+    }
+
+    /// Every model reachable through a [`Model`] factory must resolve to a price.
+    /// A factory without a matching `for_model_id` arm silently reports no cost.
+    #[test]
+    fn factory_models_all_resolve_to_pricing() {
+        use crate::client::Model;
+        for model in [
+            Model::gemini_3_7_flash(),
+            Model::gemini_3_6_flash(),
+            Model::gemini_3_5_flash_lite(),
+            Model::default(),
+        ] {
+            assert!(
+                GeminiPricing::for_model(&model).is_some(),
+                "{} has no pricing entry",
+                model.as_str()
+            );
+        }
+    }
+
+    /// Resolution must accept both the bare ID and the `models/` resource name.
+    #[test]
+    fn for_model_id_accepts_both_id_forms() {
+        let bare = GeminiPricing::for_model_id("gemini-3.6-flash").unwrap();
+        let prefixed = GeminiPricing::for_model_id("models/gemini-3.6-flash").unwrap();
+        assert_eq!(bare.input, prefixed.input);
+        assert_eq!(bare.input, 0.75);
+        assert!(GeminiPricing::for_model_id("gemini-nonexistent").is_none());
+    }
+
+    /// Anchor values from <https://ai.google.dev/gemini-api/docs/pricing>
+    /// (paid tier, standard) verified 2026-08-23. Update only against the page.
+    #[test]
+    fn published_rates_match_vendor_page() {
+        for (id, input, output, cache) in [
+            ("gemini-3.7-flash", 0.75, 3.75, 0.075),
+            ("gemini-3.6-flash", 0.75, 3.75, 0.075),
+            ("gemini-3.5-flash", 1.50, 9.00, 0.15),
+            ("gemini-3.5-flash-lite", 0.30, 2.50, 0.03),
+            ("gemini-3.1-pro-preview", 2.00, 12.00, 0.20),
+            ("gemini-3.1-flash-lite", 0.25, 1.50, 0.025),
+            ("gemini-3-flash-preview", 0.50, 3.00, 0.05),
+            ("gemini-2.5-pro", 1.25, 10.00, 0.125),
+            ("gemini-2.5-flash", 0.30, 2.50, 0.03),
+            ("gemini-2.5-flash-lite", 0.10, 0.40, 0.01),
+            ("gemini-embedding-2", 0.20, 0.0, 0.0),
+            ("gemini-embedding-001", 0.15, 0.0, 0.0),
+        ] {
+            let p = GeminiPricing::for_model_id(id).unwrap_or_else(|| panic!("{id} missing"));
+            assert!((p.input - input).abs() < 1e-9, "{id} input {} != {input}", p.input);
+            assert!((p.output - output).abs() < 1e-9, "{id} output {} != {output}", p.output);
+            assert!(
+                (p.cache_input - cache).abs() < 1e-9,
+                "{id} cache {} != {cache}",
+                p.cache_input
+            );
+        }
+    }
+
+    /// Flash-tier models have no long-context tier, so the `*_long` rates must
+    /// equal the base rates. Guards the regression where audio cache rates were
+    /// stored in `cache_input_long`.
+    #[test]
+    fn flash_tiers_have_no_long_context_premium() {
+        for p in [
+            GeminiPricing::GEMINI_37_FLASH,
+            GeminiPricing::GEMINI_36_FLASH,
+            GeminiPricing::GEMINI_35_FLASH,
+            GeminiPricing::GEMINI_35_FLASH_LITE,
+            GeminiPricing::GEMINI_31_FLASH_LITE,
+            GeminiPricing::GEMINI_3_FLASH_PREVIEW,
+            GeminiPricing::GEMINI_25_FLASH,
+            GeminiPricing::GEMINI_25_FLASH_LITE,
+        ] {
+            assert_eq!(p.input, p.input_long);
+            assert_eq!(p.output, p.output_long);
+            assert_eq!(p.cache_input, p.cache_input_long);
+        }
+    }
+
+    /// Models that support context caching must carry a non-zero cache rate and
+    /// storage price, or cached tokens are silently billed as free.
+    #[test]
+    fn cache_capable_models_price_cache_reads() {
+        for p in [
+            GeminiPricing::GEMINI_37_FLASH,
+            GeminiPricing::GEMINI_36_FLASH,
+            GeminiPricing::GEMINI_35_FLASH,
+            GeminiPricing::GEMINI_35_FLASH_LITE,
+            GeminiPricing::GEMINI_31_FLASH_LITE,
+            GeminiPricing::GEMINI_31_PRO_PREVIEW,
+            GeminiPricing::GEMINI_3_FLASH_PREVIEW,
+            GeminiPricing::GEMINI_25_PRO,
+            GeminiPricing::GEMINI_25_FLASH,
+            GeminiPricing::GEMINI_25_FLASH_LITE,
+        ] {
+            assert!(p.cache_input > 0.0);
+            assert!(p.cache_storage_per_hour > 0.0);
+        }
     }
 
     #[test]
@@ -452,12 +646,20 @@ mod tests {
 
     #[test]
     fn no_cache_model_zero_cache_cost() {
-        let cost = estimate_cost(&GeminiPricing::GEMINI_20_FLASH, 1_000_000, 1_000_000, 500_000);
-        // cache_input is 0.0, so cache cost should be 0
+        // A model without a cache rate must contribute no cache cost. Built
+        // inline rather than from a retired model's constant.
+        let uncached = GeminiPricing {
+            input: 0.10,
+            input_long: 0.10,
+            output: 0.40,
+            output_long: 0.40,
+            cache_input: 0.0,
+            cache_input_long: 0.0,
+            cache_storage_per_hour: 0.0,
+        };
+        let cost = estimate_cost(&uncached, 1_000_000, 1_000_000, 500_000);
         assert!((cost.cache_cost - 0.0).abs() < 1e-9);
-        // input: 1M @ $0.10 = $0.10
         assert!((cost.input_cost - 0.10).abs() < 1e-9);
-        // output: 1M @ $0.40 = $0.40
         assert!((cost.output_cost - 0.40).abs() < 1e-9);
     }
 

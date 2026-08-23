@@ -43,8 +43,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- 1. Create the model with WebRTC transport ---
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
 
-    let model =
-        OpenAIRealtimeModel::new(api_key, "gpt-realtime").with_transport(OpenAITransport::WebRTC);
+    let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1")
+        .with_transport(OpenAITransport::WebRTC);
 
     // --- 2. Configure the session ---
     let config = RealtimeConfig::default()

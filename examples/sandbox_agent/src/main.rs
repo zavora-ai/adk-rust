@@ -383,8 +383,8 @@ async fn main() -> anyhow::Result<()> {
     // -----------------------------------------------------------------------
     banner("Building LLM Agent");
 
-    let model = GeminiModel::new(&api_key, "gemini-3.1-flash-lite-preview")?;
-    println!("  Model: gemini-3.1-flash-lite-preview");
+    let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
+    println!("  Model: gemini-3.7-flash");
 
     let tool = Arc::new(SandboxedCodeTool::new(backend));
 
@@ -543,7 +543,7 @@ async fn run_agent_unsandboxed(api_key: &str) -> anyhow::Result<()> {
     println!("  This fallback demonstrates the agent without OS-level restrictions.\n");
 
     let backend = Arc::new(ProcessBackend::default());
-    let model = GeminiModel::new(api_key, "gemini-3.1-flash-lite-preview")?;
+    let model = GeminiModel::new(api_key, "gemini-3.7-flash")?;
     let tool = Arc::new(SandboxedCodeTool::new(backend));
 
     let agent = LlmAgentBuilder::new("sandbox-coder")

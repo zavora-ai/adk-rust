@@ -263,11 +263,11 @@ let model = OllamaModel::new(OllamaConfig::new("llama3.2"))?;
 
 | Provider | Model Examples | Feature Flag |
 |----------|---------------|--------------|
-| Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-pro-preview` | (default) |
-| OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-4.1` | `openai` |
-| Anthropic | `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5` | `anthropic` |
-| DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
-| Groq | `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile` | `groq` |
+| Gemini | `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.1-pro-preview` | (default) |
+| OpenAI | `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna` | `openai` |
+| Anthropic | `claude-sonnet-5`, `claude-opus-5`, `claude-fable-5` | `anthropic` |
+| DeepSeek | `deepseek-v4-flash`, `deepseek-v4-pro` | `deepseek` |
+| Groq | `openai/gpt-oss-120b`, `openai/gpt-oss-20b` | `groq` |
 | Ollama | `qwen3.6:35b-a3b`, `qwen3.5`, `llama3.2:3b` | `ollama` |
 
 ---

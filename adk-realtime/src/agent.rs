@@ -34,7 +34,7 @@
 //! use adk_realtime::RealtimeAgent;
 //! use adk_realtime::openai::OpenAIRealtimeModel;
 //!
-//! let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime");
+//! let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1");
 //!
 //! let agent = RealtimeAgent::builder("voice_assistant")
 //!     .model(Box::new(model))

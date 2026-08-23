@@ -279,6 +279,39 @@ impl GeminiModel {
         value.get("thoughtSignature").and_then(serde_json::Value::as_str).map(str::to_string)
     }
 
+    fn validate_request_contract(&self, req: &LlmRequest) -> Result<()> {
+        let model = self.model_name.strip_prefix("models/").unwrap_or(&self.model_name);
+        if !matches!(model, "gemini-3.6-flash" | "gemini-3.7-flash") {
+            return Ok(());
+        }
+
+        if let Some(config) = &req.config
+            && (config.temperature.is_some() || config.top_p.is_some() || config.top_k.is_some())
+        {
+            return Err(adk_core::AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::InvalidInput,
+                "model.gemini.sampling_unsupported",
+                format!(
+                    "{model} does not accept temperature, top_p, or top_k; remove explicit sampling parameters"
+                ),
+            )
+            .with_provider("gemini"));
+        }
+        if self.thinking_config.as_ref().is_some_and(|config| config.thinking_budget.is_some()) {
+            return Err(adk_core::AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::InvalidInput,
+                "model.gemini.thinking_budget_unsupported",
+                format!(
+                    "{model} uses thinking levels instead of token budgets; set thinking_level and clear thinking_budget"
+                ),
+            )
+            .with_provider("gemini"));
+        }
+        Ok(())
+    }
+
     /// Builds a `GeminiModel` from a constructed client and model name with all
     /// configurable fields defaulted.
     ///
@@ -302,6 +335,7 @@ impl GeminiModel {
     /// Create a new Gemini model client with an API key and model name.
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Result<Self> {
         let model_name = model.into();
+        crate::catalog::warn_if_obsolete("gemini", &model_name);
         let client = Gemini::with_model(api_key.into(), model_name.clone())
             .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
@@ -1568,6 +1602,7 @@ impl Llm for GeminiModel {
     )]
     async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
         adk_telemetry::info!("Generating content");
+        self.validate_request_contract(&req)?;
         let usage_span = adk_telemetry::llm_generate_span("gemini", &self.model_name, stream);
 
         // Dispatch on the configured transport. The default `GenerateContent`
@@ -2235,6 +2270,7 @@ mod tests {
 #[cfg(all(test, feature = "gemini-interactions"))]
 mod interactions_transport_tests {
     use super::*;
+    use adk_core::GenerateContentConfig;
 
     /// **Feature: gemini-interactions-runtime, Property 2: Default options match the API**
     /// *For any* default `InteractionOptions`, `store == true`, `stateful == true`,
@@ -2423,5 +2459,33 @@ mod interactions_transport_tests {
             .expect_err("failed interaction must surface an error");
         assert_eq!(err.category, adk_core::ErrorCategory::Internal);
         assert_eq!(err.details.provider.as_deref(), Some("gemini"));
+    }
+    #[test]
+    fn gemini_37_rejects_sampling_before_network_io() {
+        let model = GeminiModel::new("test-key", "gemini-3.7-flash").expect("construct model");
+        let mut request = LlmRequest::new("gemini-3.7-flash", Vec::new());
+        request.config =
+            Some(GenerateContentConfig { temperature: Some(0.2), ..Default::default() });
+
+        let error = model
+            .validate_request_contract(&request)
+            .expect_err("sampling must be rejected locally");
+        assert_eq!(error.code, "model.gemini.sampling_unsupported");
+    }
+
+    #[test]
+    fn gemini_37_rejects_token_budget_thinking() {
+        let model = GeminiModel::new("test-key", "gemini-3.7-flash")
+            .expect("construct model")
+            .with_thinking_config(adk_gemini::ThinkingConfig {
+                thinking_budget: Some(1024),
+                include_thoughts: None,
+                thinking_level: None,
+            });
+
+        let error = model
+            .validate_request_contract(&LlmRequest::new("gemini-3.7-flash", Vec::new()))
+            .expect_err("token budgets must be rejected locally");
+        assert_eq!(error.code, "model.gemini.thinking_budget_unsupported");
     }
 }

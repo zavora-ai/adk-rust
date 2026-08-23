@@ -61,10 +61,9 @@ Real-time bidirectional audio streaming for Rust Agent Development Kit (ADK-Rust
 
 | Provider | Model | Transport | Feature Flag | Description |
 |----------|-------|-----------|--------------|-------------|
-| OpenAI | `gpt-realtime` | WebSocket | `openai` | Stable realtime model |
-| OpenAI | `gpt-realtime` | WebSocket | `openai` | Latest model with improved speech & function calling |
-| OpenAI | `gpt-4o-realtime-*` | WebRTC | `openai-webrtc` | Browser-grade transport with Opus codec |
-| Google | `gemini-live-2.5-flash-native-audio` | WebSocket | `gemini` | Gemini Live API |
+| OpenAI | `gpt-realtime-2.1` | WebSocket | `openai` | Current production realtime model |
+| OpenAI | `gpt-realtime-2.1` | WebRTC | `openai-webrtc` | Browser-grade transport with Opus codec |
+| Google | `gemini-3.1-flash-live-preview` | WebSocket | `gemini` | Gemini Live API |
 | Google | Gemini via Vertex AI | WebSocket + OAuth2 | `vertex-live` | Vertex AI Live with ADC authentication |
 | LiveKit | Any (bridge) | WebRTC | `livekit` | Production WebRTC bridge to Gemini/OpenAI |
 

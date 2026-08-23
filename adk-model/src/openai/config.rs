@@ -22,7 +22,7 @@ pub enum ReasoningEffort {
 pub struct OpenAIConfig {
     /// OpenAI API key.
     pub api_key: String,
-    /// Model name (e.g., "gpt-5-mini", "gpt-4-turbo").
+    /// Model name (e.g., "gpt-5.6-terra", "gpt-5.6-sol").
     pub model: String,
     /// Optional organization ID.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,7 +45,7 @@ impl Default for OpenAIConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            model: "gpt-4o-mini".to_string(),
+            model: crate::catalog::OPENAI_DEFAULT.to_string(),
             organization_id: None,
             project_id: None,
             base_url: None,

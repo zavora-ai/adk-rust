@@ -44,12 +44,12 @@ for `code` / `goal` / `ultracode`.
 
 | Provider | Flag | Default Model | Env Var |
 |----------|------|---------------|---------|
-| Gemini | `--provider gemini` | `gemini-2.5-flash` | `GOOGLE_API_KEY` / `GEMINI_API_KEY` |
-| OpenAI | `--provider openai` | `gpt-4.1` | `OPENAI_API_KEY` |
-| Anthropic | `--provider anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
-| DeepSeek | `--provider deepseek` | `deepseek-chat` | `DEEPSEEK_API_KEY` |
-| Groq | `--provider groq` | `llama-3.3-70b-versatile` | `GROQ_API_KEY` |
-| Ollama | `--provider ollama` | `llama3.2` | _(none, local)_ |
+| Gemini | `--provider gemini` | `gemini-3.7-flash` | `GOOGLE_API_KEY` / `GEMINI_API_KEY` |
+| OpenAI | `--provider openai` | `gpt-5.6-terra` | `OPENAI_API_KEY` |
+| Anthropic | `--provider anthropic` | `claude-sonnet-5` | `ANTHROPIC_API_KEY` |
+| DeepSeek | `--provider deepseek` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` |
+| Groq | `--provider groq` | `openai/gpt-oss-120b` | `GROQ_API_KEY` |
+| Ollama | `--provider ollama` | `qwen3.5` | _(none, local)_ |
 
 ## First-Run Setup
 

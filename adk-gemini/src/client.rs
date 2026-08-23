@@ -49,10 +49,10 @@ static V1_BASE_URL: LazyLock<Url> = LazyLock::new(|| {
 ///
 /// Each variant maps to a specific model version on the Gemini API.
 /// Use [`Model::Custom`] for model IDs not yet represented as variants.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum Model {
-    // ── Gemini 3.5 (latest generation) ──────────────────────────
-    /// Gemini 3.5 Flash — latest stable model.
+    // ── Gemini 3.5 ──────────────────────────────────────────────
+    /// Gemini 3.5 Flash.
     #[serde(rename = "models/gemini-3.5-flash")]
     Gemini35Flash,
 
@@ -89,8 +89,7 @@ pub enum Model {
     /// Gemini 2.5 Pro preview with TTS support.
     #[serde(rename = "models/gemini-2.5-pro-preview-tts")]
     Gemini25ProPreviewTts,
-    /// Gemini 2.5 Flash — default model.
-    #[default]
+    /// Gemini 2.5 Flash.
     #[serde(rename = "models/gemini-2.5-flash")]
     Gemini25Flash,
     /// Gemini 2.5 Flash preview (September 2025).
@@ -133,7 +132,31 @@ pub enum Model {
     Custom(String),
 }
 
+impl Default for Model {
+    fn default() -> Self {
+        Self::gemini_3_7_flash()
+    }
+}
+
 impl Model {
+    /// Return the current balanced Gemini default.
+    ///
+    /// This factory avoids adding a new enum variant whenever Google releases a
+    /// model while preserving exhaustive matches for existing callers.
+    pub fn gemini_3_7_flash() -> Self {
+        Self::Custom("models/gemini-3.7-flash".to_string())
+    }
+
+    /// Return Gemini 3.6 Flash.
+    pub fn gemini_3_6_flash() -> Self {
+        Self::Custom("models/gemini-3.6-flash".to_string())
+    }
+
+    /// Return Gemini 3.5 Flash-Lite, the most cost-efficient GA model.
+    pub fn gemini_3_5_flash_lite() -> Self {
+        Self::Custom("models/gemini-3.5-flash-lite".to_string())
+    }
+
     /// Returns the model identifier as a string slice.
     pub fn as_str(&self) -> &str {
         #[allow(deprecated)]

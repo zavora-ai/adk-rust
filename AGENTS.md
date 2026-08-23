@@ -384,17 +384,18 @@ docs/official_docs/    Comprehensive documentation site content
 
 ### Gemini model selection
 
-Use current-generation models. Gemini 2.0 models are deprecated (shut down March 31, 2026).
+Use current-generation models. Gemini 2.0 models were shut down on June 1, 2026.
 
 | Use case | Model ID | Notes |
 |----------|----------|-------|
-| Default / general | `gemini-2.5-flash` | Default in `adk-gemini` |
-| Cost-efficient / high-volume | `gemini-3.1-flash-lite-preview` | Cheapest, fastest, best for agentic routing |
-| Advanced reasoning | `gemini-3.1-pro-preview` | Strongest reasoning |
-| Image generation | `gemini-2.5-flash-image` | Multimodal output |
-| Code + agents | `gemini-3-flash-preview` | Good balance of speed and capability |
+| Default / general | `gemini-3.7-flash` | Default in `adk-gemini` and `adk-model` |
+| Cost-efficient / high-volume | `gemini-3.5-flash-lite` | Fast routing and high-volume work |
+| Advanced reasoning | `gemini-3.1-pro-preview` | Preview reasoning model |
+| Image generation | `gemini-3.1-flash-image` | Native image output |
+| Live voice | `gemini-3.1-flash-live-preview` | Realtime audio and video |
 
-**Avoid deprecated models:** `gemini-2.0-flash`, `gemini-2.0-flash-lite` — these are shut down.
+**Avoid retired models:** `gemini-2.0-flash`, `gemini-2.0-flash-lite`,
+`gemini-3.1-flash-lite-preview`, and `gemini-3-pro-preview`.
 
 ### adk-realtime
 

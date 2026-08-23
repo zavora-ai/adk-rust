@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create the realtime model
     let model: Arc<dyn RealtimeModel> = Arc::new(
-        OpenAIRealtimeModel::new(&api_key, "gpt-realtime")
+        OpenAIRealtimeModel::new(&api_key, "gpt-realtime-2.1")
     );
 
     // Build the realtime agent
@@ -114,13 +114,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Provider | Model | Transport | Feature Flag | Audio Format |
 |----------|-------|-----------|--------------|--------------|
-| OpenAI | `gpt-realtime` | WebSocket | `openai` | PCM16 24kHz |
-| OpenAI | `gpt-realtime` | WebRTC | `openai-webrtc` | Opus |
-| Google | `gemini-live-2.5-flash-native-audio` | WebSocket | `gemini` | PCM16 16kHz/24kHz |
+| OpenAI | `gpt-realtime-2.1` | WebSocket | `openai` | PCM16 24kHz |
+| OpenAI | `gpt-realtime-2.1` | WebRTC | `openai-webrtc` | Opus |
+| Google | `gemini-3.1-flash-live-preview` | WebSocket | `gemini` | PCM16 16kHz/24kHz |
 | Google | Gemini via Vertex AI | WebSocket + OAuth2 | `vertex-live` | PCM16 16kHz/24kHz |
 | LiveKit | Any (bridge to Gemini/OpenAI) | WebRTC | `livekit` | PCM16 |
 
-> **Note**: `gpt-realtime` is OpenAI's latest realtime model with improved speech quality, emotion, and function calling capabilities.
+> **Note**: `gpt-realtime-2.1` is ADK-Rust's current OpenAI realtime default.
 
 ### Transport Options
 
@@ -367,7 +367,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let backend = GeminiLiveBackend::Vertex { credentials, region, project_id };
-    let model = GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio");
+    let model = GeminiRealtimeModel::new(backend, "models/gemini-3.1-flash-live-preview");
 
     let config = RealtimeConfig::default()
         .with_instruction("You are a helpful voice assistant.");
@@ -387,7 +387,7 @@ There's also a convenience constructor for ADC:
 let model = GeminiRealtimeModel::vertex_adc(
     "us-central1",
     "my-project-id",
-    "models/gemini-live-2.5-flash-native-audio",
+    "models/gemini-3.1-flash-live-preview",
 ).await?;
 ```
 

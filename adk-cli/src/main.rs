@@ -111,10 +111,7 @@ fn resolve_model_id(
     cli_model: Option<String>,
 ) -> (ModelProvider, String) {
     let provider = cli_provider.unwrap_or(ModelProvider::Gemini);
-    let model_id = cli_model.unwrap_or_else(|| match provider {
-        ModelProvider::Gemini => "gemini-3.1-flash-lite".to_string(),
-        _ => provider.default_model().to_string(),
-    });
+    let model_id = cli_model.unwrap_or_else(|| provider.default_model().to_string());
     (provider, model_id)
 }
 

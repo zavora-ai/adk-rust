@@ -200,11 +200,10 @@ impl Llm for OllamaModel {
             chat_request = chat_request.tools(tools);
         }
 
-        if let Some(config) = &request.config {
-            if let Some(response_schema) = &config.response_schema {
-                chat_request =
-                    chat_request.format(map_json_value_to_ollama_schema(response_schema)?);
-            }
+        if let Some(config) = &request.config
+            && let Some(response_schema) = &config.response_schema
+        {
+            chat_request = chat_request.format(map_json_value_to_ollama_schema(response_schema)?);
         }
 
         let response_stream = try_stream! {

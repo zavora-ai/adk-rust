@@ -1,0 +1,20 @@
+name: Model catalog freshness
+
+on:
+  schedule:
+    - cron: "17 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisory-check:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check documented provider defaults
+        run: bash scripts/check-model-catalog-freshness.sh
+      - name: Check encoded per-token rates
+        run: bash scripts/check-model-pricing.sh

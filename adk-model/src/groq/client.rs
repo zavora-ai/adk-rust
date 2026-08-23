@@ -33,6 +33,7 @@ pub struct GroqClient {
 impl GroqClient {
     /// Create a new Groq client.
     pub fn new(config: GroqConfig) -> Result<Self, AdkError> {
+        crate::catalog::warn_if_obsolete("groq", &config.model);
         let client = Client::builder()
             .build()
             .map_err(|e| AdkError::model(format!("Failed to create HTTP client: {e}")))?;

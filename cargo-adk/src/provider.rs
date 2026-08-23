@@ -26,24 +26,24 @@ static PROVIDERS: &[ProviderConfig] = &[
         name: "gemini",
         feature_flag: "gemini",
         env_var: "GOOGLE_API_KEY",
-        model_init_code: "adk_rust::model::GeminiModel::new(&api_key, \"gemini-3.5-flash\")?",
-        default_model: "gemini-3.5-flash",
+        model_init_code: "adk_rust::model::GeminiModel::new(&api_key, \"gemini-3.7-flash\")?",
+        default_model: adk_model::catalog::GEMINI_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
         name: "openai",
         feature_flag: "openai",
         env_var: "OPENAI_API_KEY",
-        model_init_code: "adk_rust::model::openai::OpenAIClient::new(\n        adk_rust::model::openai::OpenAIConfig::new(&api_key, \"gpt-5.5\"),\n    )?",
-        default_model: "gpt-5.5",
+        model_init_code: "adk_rust::model::openai::OpenAIClient::new(\n        adk_rust::model::openai::OpenAIConfig::new(&api_key, \"gpt-5.6-terra\"),\n    )?",
+        default_model: adk_model::catalog::OPENAI_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
         name: "anthropic",
         feature_flag: "anthropic",
         env_var: "ANTHROPIC_API_KEY",
-        model_init_code: "adk_rust::model::anthropic::AnthropicClient::new(\n        adk_rust::model::anthropic::AnthropicConfig::new(&api_key, \"claude-sonnet-4-6\"),\n    )?",
-        default_model: "claude-sonnet-4-6",
+        model_init_code: "adk_rust::model::anthropic::AnthropicClient::new(\n        adk_rust::model::anthropic::AnthropicConfig::new(&api_key, \"claude-sonnet-5\"),\n    )?",
+        default_model: adk_model::catalog::ANTHROPIC_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
@@ -51,23 +51,23 @@ static PROVIDERS: &[ProviderConfig] = &[
         feature_flag: "deepseek",
         env_var: "DEEPSEEK_API_KEY",
         model_init_code: "adk_rust::model::deepseek::DeepSeekClient::new(\n        adk_rust::model::deepseek::DeepSeekConfig::new(&api_key, \"deepseek-v4-flash\"),\n    )?",
-        default_model: "deepseek-v4-flash",
+        default_model: adk_model::catalog::DEEPSEEK_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
         name: "ollama",
         feature_flag: "ollama",
         env_var: "",
-        model_init_code: "adk_rust::model::ollama::OllamaModel::new(\n        adk_rust::model::ollama::OllamaConfig::new(\"gemma4\"),\n    )?",
-        default_model: "gemma4",
+        model_init_code: "adk_rust::model::ollama::OllamaModel::new(\n        adk_rust::model::ollama::OllamaConfig::new(\"qwen3.5\"),\n    )?",
+        default_model: adk_model::catalog::OLLAMA_DEFAULT,
         requires_api_key: false,
     },
     ProviderConfig {
         name: "groq",
         feature_flag: "groq",
         env_var: "GROQ_API_KEY",
-        model_init_code: "adk_rust::model::groq::GroqClient::new(\n        adk_rust::model::groq::GroqConfig::new(&api_key, \"llama-3.3-70b-versatile\"),\n    )?",
-        default_model: "llama-3.3-70b-versatile",
+        model_init_code: "adk_rust::model::groq::GroqClient::new(\n        adk_rust::model::groq::GroqConfig::new(&api_key, \"openai/gpt-oss-120b\"),\n    )?",
+        default_model: adk_model::catalog::GROQ_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
@@ -75,7 +75,39 @@ static PROVIDERS: &[ProviderConfig] = &[
         feature_flag: "openrouter",
         env_var: "OPENROUTER_API_KEY",
         model_init_code: "adk_rust::model::openrouter::OpenRouterClient::new(\n        adk_rust::model::openrouter::OpenRouterConfig::new(&api_key, \"qwen/qwen3.7-max\"),\n    )?",
-        default_model: "qwen/qwen3.7-max",
+        default_model: adk_model::catalog::OPENROUTER_DEFAULT,
+        requires_api_key: true,
+    },
+    ProviderConfig {
+        name: "fireworks",
+        feature_flag: "openai",
+        env_var: "FIREWORKS_API_KEY",
+        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::fireworks(&api_key, \"accounts/fireworks/models/kimi-k2p6\"),\n    )?",
+        default_model: adk_model::catalog::FIREWORKS_DEFAULT,
+        requires_api_key: true,
+    },
+    ProviderConfig {
+        name: "together",
+        feature_flag: "openai",
+        env_var: "TOGETHER_API_KEY",
+        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::together(&api_key, \"MiniMaxAI/MiniMax-M2.7\"),\n    )?",
+        default_model: adk_model::catalog::TOGETHER_DEFAULT,
+        requires_api_key: true,
+    },
+    ProviderConfig {
+        name: "cerebras",
+        feature_flag: "openai",
+        env_var: "CEREBRAS_API_KEY",
+        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::cerebras(&api_key, \"gpt-oss-120b\"),\n    )?",
+        default_model: adk_model::catalog::CEREBRAS_DEFAULT,
+        requires_api_key: true,
+    },
+    ProviderConfig {
+        name: "sambanova",
+        feature_flag: "openai",
+        env_var: "SAMBANOVA_API_KEY",
+        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::sambanova(&api_key, \"gpt-oss-120b\"),\n    )?",
+        default_model: adk_model::catalog::SAMBANOVA_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
@@ -98,16 +130,16 @@ static PROVIDERS: &[ProviderConfig] = &[
         name: "xai",
         feature_flag: "openai",
         env_var: "XAI_API_KEY",
-        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::xai(&api_key, \"grok-4.3\"),\n    )?",
-        default_model: "grok-4.3",
+        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::xai(&api_key, \"grok-4.6\"),\n    )?",
+        default_model: adk_model::catalog::XAI_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
         name: "mistral",
         feature_flag: "openai",
         env_var: "MISTRAL_API_KEY",
-        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::mistral(&api_key, \"mistral-large-latest\"),\n    )?",
-        default_model: "mistral-large-latest",
+        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::mistral(&api_key, \"mistral-medium-latest\"),\n    )?",
+        default_model: adk_model::catalog::MISTRAL_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
@@ -115,15 +147,15 @@ static PROVIDERS: &[ProviderConfig] = &[
         feature_flag: "openai",
         env_var: "PERPLEXITY_API_KEY",
         model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::perplexity(&api_key, \"sonar-pro\"),\n    )?",
-        default_model: "sonar-pro",
+        default_model: adk_model::catalog::PERPLEXITY_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
         name: "minimax",
         feature_flag: "openai",
         env_var: "MINIMAX_API_KEY",
-        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::minimax(&api_key, \"minimax-m2.7\"),\n    )?",
-        default_model: "minimax-m2.7",
+        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::minimax(&api_key, \"MiniMax-M2.7\"),\n    )?",
+        default_model: adk_model::catalog::MINIMAX_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
@@ -138,16 +170,16 @@ static PROVIDERS: &[ProviderConfig] = &[
         name: "zhipu",
         feature_flag: "openai",
         env_var: "ZHIPU_API_KEY",
-        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::zhipu(&api_key, \"glm-5.1\"),\n    )?",
-        default_model: "glm-5.1",
+        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::zhipu(&api_key, \"glm-5.2\"),\n    )?",
+        default_model: adk_model::catalog::ZHIPU_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
         name: "baidu",
         feature_flag: "openai",
         env_var: "QIANFAN_API_KEY",
-        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::baidu(&api_key, \"ernie-5\"),\n    )?",
-        default_model: "ernie-5",
+        model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::baidu(&api_key, \"ernie-5.1\"),\n    )?",
+        default_model: adk_model::catalog::BAIDU_DEFAULT,
         requires_api_key: true,
     },
     ProviderConfig {
@@ -155,7 +187,7 @@ static PROVIDERS: &[ProviderConfig] = &[
         feature_flag: "openai",
         env_var: "COHERE_API_KEY",
         model_init_code: "adk_rust::model::OpenAICompatible::new(\n        adk_rust::model::OpenAICompatibleConfig::cohere(&api_key, \"command-a-plus-05-2026\"),\n    )?",
-        default_model: "command-a-plus-05-2026",
+        default_model: adk_model::catalog::COHERE_DEFAULT,
         requires_api_key: true,
     },
 ];
@@ -175,4 +207,28 @@ pub fn get_provider_config(provider: &str) -> Result<&'static ProviderConfig, St
 /// Returns all registered provider configurations.
 pub fn all_providers() -> &'static [ProviderConfig] {
     PROVIDERS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn portable_defaults_are_catalogued_and_not_obsolete() {
+        for provider in PROVIDERS {
+            if adk_model::catalog::requires_explicit_model(provider.name) {
+                continue;
+            }
+            let entry = adk_model::catalog::lookup_model(provider.name, provider.default_model)
+                .unwrap_or_else(|| panic!("missing catalog entry for {}", provider.name));
+            assert!(
+                matches!(
+                    entry.lifecycle,
+                    adk_model::catalog::ModelLifecycle::Active
+                        | adk_model::catalog::ModelLifecycle::Preview
+                ),
+                "obsolete scaffold default: {entry:?}"
+            );
+        }
+    }
 }

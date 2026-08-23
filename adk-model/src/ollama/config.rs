@@ -5,7 +5,7 @@
 pub struct OllamaConfig {
     /// Ollama server host URL. Default: `http://localhost:11434`
     pub host: String,
-    /// Model name to use (e.g., "llama3.2", "mistral", "qwen2.5")
+    /// Model name to use (e.g., "qwen3.5", "mistral", "gemma4")
     pub model: String,
     /// Context window size (num_ctx). None uses model default.
     pub num_ctx: Option<u32>,
@@ -21,7 +21,7 @@ impl Default for OllamaConfig {
     fn default() -> Self {
         Self {
             host: "http://localhost:11434".to_string(),
-            model: "llama3.2".to_string(),
+            model: crate::catalog::OLLAMA_DEFAULT.to_string(),
             num_ctx: None,
             temperature: None,
             top_p: None,

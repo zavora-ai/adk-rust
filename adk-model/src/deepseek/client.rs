@@ -1,7 +1,8 @@
 //! DeepSeek client implementation.
 //!
-//! Supports DeepSeek V4 models (`deepseek-v4-pro`, `deepseek-v4-flash`) and
-//! legacy models (`deepseek-chat`, `deepseek-reasoner`).
+//! Supports the DeepSeek V4 models (`deepseek-v4-flash`, `deepseek-v4-pro`,
+//! `deepseek-v4-flash-vision-exp`). The `deepseek-chat` and
+//! `deepseek-reasoner` aliases were retired on 2026-07-24.
 
 use super::config::{DeepSeekConfig, ThinkingMode};
 use super::convert::{
@@ -51,6 +52,7 @@ pub struct DeepSeekClient {
 impl DeepSeekClient {
     /// Create a new DeepSeek client.
     pub fn new(config: DeepSeekConfig) -> Result<Self, AdkError> {
+        crate::catalog::warn_if_obsolete("deepseek", &config.model);
         let client = Client::builder()
             .build()
             .map_err(|e| AdkError::model(format!("failed to create HTTP client: {e}")))?;
@@ -68,12 +70,12 @@ impl DeepSeekClient {
         Self::new(DeepSeekConfig::v4_flash(api_key))
     }
 
-    /// Create a client for `deepseek-chat` model (legacy).
+    /// Create a client for DeepSeek's balanced chat model.
     pub fn chat(api_key: impl Into<String>) -> Result<Self, AdkError> {
         Self::new(DeepSeekConfig::chat(api_key))
     }
 
-    /// Create a client for `deepseek-reasoner` model with thinking enabled (legacy).
+    /// Create a client for DeepSeek's reasoning model with thinking enabled.
     pub fn reasoner(api_key: impl Into<String>) -> Result<Self, AdkError> {
         Self::new(DeepSeekConfig::reasoner(api_key))
     }
@@ -495,7 +497,7 @@ mod response_format_tests {
 
     fn request_with(config: Option<GenerateContentConfig>, prompt: &str) -> LlmRequest {
         let mut request =
-            LlmRequest::new("deepseek-chat", vec![Content::new("user").with_text(prompt)]);
+            LlmRequest::new("deepseek-v4-flash", vec![Content::new("user").with_text(prompt)]);
         request.config = config;
         request
     }

@@ -144,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\n=== 5. An LlmAgent calling both tools ===\n");
     let model_id = std::env::var("GEMINI_MODEL")
-        .unwrap_or_else(|_| "gemini-3.1-flash-lite-preview".to_string());
+        .unwrap_or_else(|_| "gemini-3.7-flash".to_string());
     println!("  model: {model_id}\n");
     let model = GeminiModel::new(&api_key, &model_id)?;
     let mut builder = LlmAgentBuilder::new("warehouse_agent")

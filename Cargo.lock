@@ -3958,6 +3958,7 @@ dependencies = [
  "adk-bench",
  "adk-deploy",
  "adk-eval",
+ "adk-model",
  "chrono",
  "clap",
  "flate2",

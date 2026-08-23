@@ -91,7 +91,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5-mini"))?;
+    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5.6-terra"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -269,7 +269,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-6"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -285,7 +285,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
 
 // Extended thinking with token budget
-let config = AnthropicConfig::new(api_key, "claude-sonnet-4-6")
+let config = AnthropicConfig::new(api_key, "claude-sonnet-5")
     .with_thinking(8192)
     .with_prompt_caching(true)
     .with_beta_feature("prompt-caching-2024-07-31");
@@ -543,13 +543,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Model | Description |
 |-------|-------------|
-| `gemini-3.1-pro` | Most intelligent AI model, enhancing reasoning and multimodal capabilities. (1M context) |
-| `gemini-3-pro` | Intelligent model for complex agentic workflows (1M context) |
-| `gemini-3-flash` | Fast and efficient for most tasks (1M context) |
-| `gemini-2.5-pro` | Advanced reasoning and multimodal understanding |
-| `gemini-2.5-flash` | Balanced speed and capability (recommended) |
-| `gemini-2.5-flash-lite` | Ultra-fast for high-volume tasks |
-| `gemini-2.0-flash` | Previous generation (retiring March 2026) |
+| `gemini-3.7-flash` | Current balanced default (1M context) |
+| `gemini-3.6-flash` | Previous balanced generation (1M context) |
+| `gemini-3.5-flash-lite` | Cost-efficient high-volume model (1M context) |
+| `gemini-3.1-pro-preview` | Preview reasoning model (2M context) |
 
 See [Gemini models documentation](https://ai.google.dev/gemini-api/docs/models/gemini) for the full list.
 
@@ -557,11 +554,9 @@ See [Gemini models documentation](https://ai.google.dev/gemini-api/docs/models/g
 
 | Model | Description |
 |-------|-------------|
-| `gpt-5.1` | Latest iteration with improved performance (256K context) |
-| `gpt-5` | State-of-the-art unified model with adaptive thinking |
-| `gpt-5-mini` | Efficient version for most tasks (128K context) |
-| `gpt-4o` | Multimodal model (deprecated August 2025) |
-| `gpt-4o-mini` | Fast and affordable (deprecated August 2025) |
+| `gpt-5.6-terra` | Balanced default for agents |
+| `gpt-5.6-sol` | Flagship reasoning and coding |
+| `gpt-5.6-luna` | Cost-efficient high-volume model |
 
 See [OpenAI models documentation](https://platform.openai.com/docs/models) for the full list.
 
@@ -569,13 +564,10 @@ See [OpenAI models documentation](https://platform.openai.com/docs/models) for t
 
 | Model | Description |
 |-------|-------------|
-| `claude-opus-4-8` | Latest and most capable model for complex autonomous tasks (200K context) |
-| `claude-opus-4-7` | Previous flagship for complex autonomous tasks (200K context) |
-| `claude-opus-4-6` | Capable model for autonomous tasks (200K context) |
-| `claude-sonnet-4-6` | Balanced intelligence and cost for production (1M context) |
-| `claude-haiku-4-5-20251001` | Ultra-efficient for high-volume workloads |
-| `claude-opus-4-5-20251101` | Previous generation hybrid model with extended thinking |
-| `claude-sonnet-4-5-20250929` | Previous generation balanced model |
+| `claude-sonnet-5` | Balanced production default (1M context) |
+| `claude-opus-5` | Flagship autonomous-agent capability (1M context) |
+| `claude-fable-5` | Premium creative and long-form work (1M context) |
+| `claude-haiku-4-5` | Cost-efficient previous generation |
 
 See [Anthropic models documentation](https://docs.anthropic.com/claude/docs/models-overview) for the full list.
 
@@ -583,11 +575,8 @@ See [Anthropic models documentation](https://docs.anthropic.com/claude/docs/mode
 
 | Model | Description |
 |-------|-------------|
-| `deepseek-r1-0528` | Latest reasoning model with enhanced thinking depth (128K context) |
-| `deepseek-r1` | Advanced reasoning comparable to o1 |
-| `deepseek-v3.1` | Latest 671B MoE model for general tasks |
-| `deepseek-chat` | 671B MoE model, excellent for code (V3) |
-| `deepseek-vl2` | Vision-language model (32K context) |
+| `deepseek-v4-flash` | Fast balanced default |
+| `deepseek-v4-pro` | Advanced reasoning |
 
 **Features:**
 - **Thinking Mode** - Chain-of-thought reasoning with `<thinking>` tags
@@ -600,12 +589,8 @@ See [DeepSeek API documentation](https://api-docs.deepseek.com/) for the full li
 
 | Model | Description |
 |-------|-------------|
-| `llama-4-scout` | Llama 4 Scout (17Bx16E) - Fast via Groq LPU (128K context) |
-| `llama-3.2-90b-text-preview` | Large text model |
-| `llama-3.2-11b-text-preview` | Balanced text model |
-| `llama-3.1-70b-versatile` | Versatile large model |
-| `llama-3.1-8b-instant` | Ultra-fast instruction model |
-| `mixtral-8x7b-32768` | MoE model with 32K context |
+| `openai/gpt-oss-120b` | Production default via Groq LPU |
+| `openai/gpt-oss-20b` | Lower-latency economy model |
 
 **Features:**
 - **Ultra-Fast** - LPU-based inference (fastest in the industry)
@@ -643,13 +628,13 @@ See [Ollama library](https://ollama.com/library) for all available models.
 
 | Provider | Feature Flag | Default Model | API Key Env Var |
 |----------|-------------|---------------|-----------------|
-| Fireworks AI | `fireworks` | `accounts/fireworks/models/llama-v3p1-8b-instruct` | `FIREWORKS_API_KEY` |
-| Together AI | `together` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | `TOGETHER_API_KEY` |
-| Mistral AI | `mistral` | `mistral-small-latest` | `MISTRAL_API_KEY` |
-| Perplexity | `perplexity` | `sonar` | `PERPLEXITY_API_KEY` |
-| Cerebras | `cerebras` | `llama-3.3-70b` | `CEREBRAS_API_KEY` |
-| SambaNova | `sambanova` | `Meta-Llama-3.3-70B-Instruct` | `SAMBANOVA_API_KEY` |
-| Amazon Bedrock | `bedrock` | `us.anthropic.claude-sonnet-4-6` | AWS IAM credentials |
+| Fireworks AI | `openai` preset | `accounts/fireworks/models/kimi-k2p6` | `FIREWORKS_API_KEY` |
+| Together AI | `openai` preset | `MiniMaxAI/MiniMax-M2.7` | `TOGETHER_API_KEY` |
+| Mistral AI | `openai` preset | `mistral-medium-latest` | `MISTRAL_API_KEY` |
+| Perplexity | `openai` preset | `sonar-pro` | `PERPLEXITY_API_KEY` |
+| Cerebras | `openai` preset | `gpt-oss-120b` | `CEREBRAS_API_KEY` |
+| SambaNova | `openai` preset | `gpt-oss-120b` | `SAMBANOVA_API_KEY` |
+| Amazon Bedrock | `bedrock` | account/region-specific | AWS IAM credentials |
 | Azure AI Inference | `azure-ai` | (endpoint-specific) | `AZURE_AI_API_KEY` |
 
 ## Features

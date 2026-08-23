@@ -12,16 +12,16 @@ A flexible framework for developing AI agents with simplicity and power. Model-a
 
 | Provider | Feature Flag | Default Model |
 |----------|-------------|---------------|
-| Gemini | `gemini` (default) | `gemini-2.5-flash` |
-| OpenAI | `openai` | `gpt-5-mini` |
-| Anthropic | `anthropic` | `claude-sonnet-4-6` |
-| DeepSeek | `deepseek` | `deepseek-chat` |
-| Groq | `groq` | `llama-3.3-70b-versatile` |
-| Ollama | `ollama` | `llama3.2` |
-| Fireworks AI | `fireworks` | `accounts/fireworks/models/llama-v3p1-8b-instruct` |
-| Together AI | `together` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` |
-| Mistral AI | `mistral` | `mistral-small-latest` |
-| Perplexity | `perplexity` | `sonar` |
+| Gemini | `gemini` (default) | `gemini-3.7-flash` |
+| OpenAI | `openai` | `gpt-5.6-terra` |
+| Anthropic | `anthropic` | `claude-sonnet-5` |
+| DeepSeek | `deepseek` | `deepseek-v4-flash` |
+| Groq | `groq` | `openai/gpt-oss-120b` |
+| Ollama | `ollama` | `qwen3.5` |
+| Fireworks AI | `openai` preset | `accounts/fireworks/models/kimi-k2p6` |
+| Together AI | `openai` preset | `MiniMaxAI/MiniMax-M2.7` |
+| Mistral AI | `openai` preset | `mistral-medium-latest` |
+| Perplexity | `openai` preset | `sonar-pro` |
 | Cerebras | `cerebras` | `llama-3.3-70b` |
 | SambaNova | `sambanova` | `Meta-Llama-3.3-70B-Instruct` |
 | Amazon Bedrock | `bedrock` | `us.anthropic.claude-sonnet-4-6` |

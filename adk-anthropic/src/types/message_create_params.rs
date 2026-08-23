@@ -571,12 +571,10 @@ impl MessageCreateParams {
 
 impl Default for MessageCreateParams {
     fn default() -> Self {
-        use crate::types::KnownModel;
-
         Self {
             max_tokens: 1024,
             messages: vec![],
-            model: Model::Known(KnownModel::ClaudeSonnet46),
+            model: Model::claude_sonnet_5(),
             metadata: None,
             output_format: None,
             stop_sequences: None,

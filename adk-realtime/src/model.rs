@@ -19,7 +19,7 @@ use async_trait::async_trait;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<()> {
-///     let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime");
+///     let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1");
 ///
 ///     let config = RealtimeConfig::default()
 ///         .with_instruction("You are a helpful assistant.")

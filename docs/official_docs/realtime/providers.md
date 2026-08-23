@@ -13,14 +13,13 @@ use std::sync::Arc;
 
 let model: BoxedModel = Arc::new(OpenAIRealtimeModel::new(
     std::env::var("OPENAI_API_KEY")?,
-    "gpt-realtime",        // or "gpt-realtime-2" (reasoning)
+    "gpt-realtime-2.1",
 ));
 ```
 
 | Model | Use |
 |-------|-----|
-| `gpt-realtime` | The GA speech-to-speech model. Fast, strong tool use. Default choice. |
-| `gpt-realtime-2` | Reasoning variant — better at complex multi-step requests. |
+| `gpt-realtime-2.1` | Current production speech-to-speech model and default choice. |
 | `gpt-realtime-translate` | Dedicated **translation** interpreter (different endpoint; see [Live Translation example](examples.md#live_translation)). |
 
 - **Transport**: WebSocket (`openai` feature) or WebRTC (`openai-webrtc`, needs `cmake`).
@@ -59,12 +58,12 @@ let model: BoxedModel = Arc::new(GeminiRealtimeModel::new(
 
 ## Choosing a model
 
-- **General voice + tools** → `gpt-realtime` or `gemini-3.1-flash-live-preview`.
+- **General voice + tools** → `gpt-realtime-2.1` or `gemini-3.1-flash-live-preview`.
   Both call tools reliably. Gemini is the better fit for **continuous video**.
 - **Most natural voice / emotion-aware** → Gemini native-audio
   (`gemini-2.5-flash-native-audio-*`) with [affective dialogue](affective-dialogue.md) —
   at some cost to tool-calling reliability.
-- **Reasoning-heavy** → `gpt-realtime-2`.
+- **Reasoning-heavy** → `gpt-realtime-2.1`.
 - **Translation** → the dedicated translate models (their own protocol).
 
 ## Selecting a provider per session

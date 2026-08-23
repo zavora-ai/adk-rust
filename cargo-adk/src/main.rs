@@ -178,7 +178,7 @@ enum AdkCommand {
         /// Path to eval set file or directory
         path: PathBuf,
 
-        /// Model override (e.g., "gemini-2.5-flash")
+        /// Model override (e.g., "gemini-3.7-flash")
         #[arg(long)]
         model: Option<String>,
 
@@ -209,8 +209,8 @@ enum AdkCommand {
 
     /// Run performance benchmarks against real LLM APIs
     Bench {
-        /// LLM model identifier (e.g., "gemini-2.5-flash")
-        #[arg(long, default_value = "gemini-2.5-flash")]
+        /// LLM model identifier (e.g., "gemini-3.7-flash")
+        #[arg(long, default_value = "gemini-3.7-flash")]
         model: String,
 
         /// Number of measurement iterations per workload
@@ -787,21 +787,18 @@ fn validate_yaml(
                 }
                 // Validate provider is known
                 if let Some(provider) = model.get("provider").and_then(|v| v.as_str()) {
-                    let known = [
-                        "gemini",
-                        "openai",
-                        "anthropic",
-                        "deepseek",
-                        "groq",
-                        "ollama",
-                        "bedrock",
-                        "azure-ai",
-                    ];
+                    let known = adk_model::catalog::KNOWN_PROVIDERS;
                     if !known.contains(&provider) {
                         warnings.push(format!(
                             "unknown model provider: '{provider}'. Known providers: {}",
                             known.join(", ")
                         ));
+                    }
+                    if let Some(model_id) = model.get("model_id").and_then(|v| v.as_str())
+                        && let Err(error) =
+                            adk_model::catalog::validate_model_selection(provider, model_id)
+                    {
+                        errors.push(error.to_string());
                     }
                 }
             }
@@ -1646,7 +1643,7 @@ fn get_builtin_templates() -> Vec<TemplateInfo> {
         },
         TemplateInfo {
             name: "openai",
-            description: "OpenAI-powered agent (gpt-5.5)",
+            description: "OpenAI-powered agent (gpt-5.6-terra)",
             default_provider: "openai",
             features: vec!["agents", "models", "openai", "runner", "sessions"],
         },
@@ -1879,7 +1876,7 @@ fn create_project(
 
     // Generate YAML agent definition if requested
     if with_yaml {
-        let yaml_content = generate_yaml_definition(name, provider, template);
+        let yaml_content = generate_yaml_definition(name, provider, template, model_override);
         fs::create_dir_all(project_path.join("agents")).map_err(|e| e.to_string())?;
         let yaml_filename = format!("agents/{name}.yaml");
         fs::write(project_path.join(&yaml_filename), &yaml_content).map_err(|e| e.to_string())?;
@@ -1956,8 +1953,16 @@ fn create_project_composable(
     let mut manifest = resolve_composition(&registry, &base_template, &addon_refs, provider)
         .map_err(|e| e.to_string())?;
 
+    if adk_model::catalog::requires_explicit_model(provider) && model_override.is_none() {
+        return Err(format!(
+            "provider '{provider}' uses account-, region-, or deployment-scoped model IDs; pass --model with an ID available to your endpoint"
+        ));
+    }
+
     // Apply model override if provided
     if let Some(model_id) = model_override {
+        adk_model::catalog::validate_model_selection(provider, model_id)
+            .map_err(|error| error.to_string())?;
         manifest.model_override = Some(model_id.to_string());
     }
 
@@ -1968,7 +1973,12 @@ fn create_project_composable(
     if with_yaml {
         files.push(cargo_adk::composition::GeneratedFile {
             path: format!("agents/{name}.yaml"),
-            content: generate_yaml_definition(name, provider, &manifest.template_name),
+            content: generate_yaml_definition(
+                name,
+                provider,
+                &manifest.template_name,
+                model_override,
+            ),
         });
     }
 
@@ -2060,26 +2070,35 @@ fn create_project_composable(
 
 // ── YAML generation ─────────────────────────────────────────────
 
-fn generate_yaml_definition(name: &str, provider: &str, template: &str) -> String {
-    let model_id = match provider {
-        "openai" => "gpt-5.5",
-        "anthropic" => "claude-sonnet-4-6",
+fn generate_yaml_definition(
+    name: &str,
+    provider: &str,
+    template: &str,
+    model_override: Option<&str>,
+) -> String {
+    let model_id = model_override.unwrap_or(match provider {
+        "openai" => adk_model::catalog::OPENAI_DEFAULT,
+        "anthropic" => adk_model::catalog::ANTHROPIC_DEFAULT,
         "deepseek" => "deepseek-v4-flash",
-        "ollama" => "gemma4",
-        "groq" => "meta-llama/llama-4-scout-17b-16e-instruct",
+        "ollama" => adk_model::catalog::OLLAMA_DEFAULT,
+        "groq" => adk_model::catalog::GROQ_DEFAULT,
         "openrouter" => "qwen/qwen3.7-max",
+        "fireworks" => adk_model::catalog::FIREWORKS_DEFAULT,
+        "together" => adk_model::catalog::TOGETHER_DEFAULT,
+        "cerebras" => adk_model::catalog::CEREBRAS_DEFAULT,
+        "sambanova" => adk_model::catalog::SAMBANOVA_DEFAULT,
         "bedrock" => "anthropic.claude-opus-4-6-v1",
         "azure-ai" => "gpt-5.5",
-        "xai" => "grok-4.3",
-        "mistral" => "mistral-large-latest",
+        "xai" => adk_model::catalog::XAI_DEFAULT,
+        "mistral" => adk_model::catalog::MISTRAL_DEFAULT,
         "perplexity" => "sonar-pro",
-        "minimax" => "minimax-m2.7",
+        "minimax" => adk_model::catalog::MINIMAX_DEFAULT,
         "bytedance" => "doubao-1-5-pro-256k",
-        "zhipu" => "glm-5.1",
-        "baidu" => "ernie-5",
+        "zhipu" => adk_model::catalog::ZHIPU_DEFAULT,
+        "baidu" => adk_model::catalog::BAIDU_DEFAULT,
         "cohere" => "command-a-plus-05-2026",
-        _ => "gemini-3.5-flash",
-    };
+        _ => adk_model::catalog::GEMINI_DEFAULT,
+    });
 
     let tools_section = match template {
         "tools" => "\ntools:\n  - name: greet\n",
@@ -2130,20 +2149,20 @@ fn provider_dep(provider: &str) -> (String, &str, &str) {
         "openai" => (
             adk_rust_dep(&provider_features(provider)),
             r#"let model = adk_rust::model::openai::OpenAIClient::new(
-        adk_rust::model::openai::OpenAIConfig::new(&api_key, "gpt-5.5"),
+        adk_rust::model::openai::OpenAIConfig::new(&api_key, "gpt-5.6-terra"),
     )?;"#,
             "OPENAI_API_KEY",
         ),
         "anthropic" => (
             adk_rust_dep(&provider_features(provider)),
             r#"let model = adk_rust::model::anthropic::AnthropicClient::new(
-        adk_rust::model::anthropic::AnthropicConfig::new(&api_key, "claude-sonnet-4-6"),
+        adk_rust::model::anthropic::AnthropicConfig::new(&api_key, "claude-sonnet-5"),
     )?;"#,
             "ANTHROPIC_API_KEY",
         ),
         _ => (
             adk_rust_dep(&provider_features("gemini")),
-            r#"let model = adk_rust::model::GeminiModel::new(&api_key, "gemini-3.5-flash")?;"#,
+            r#"let model = adk_rust::model::GeminiModel::new(&api_key, "gemini-3.7-flash")?;"#,
             "GOOGLE_API_KEY",
         ),
     }
@@ -2560,7 +2579,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
     let agent = client
         .create_agent(CreateAgentParams {{
             name: "{name}".to_string(),
-            model: serde_json::json!("claude-sonnet-4-6"),
+            model: serde_json::json!("claude-sonnet-5"),
             system: Some("You are a helpful assistant. Be concise.".to_string()),
             description: None,
             tools: vec![ToolConfig::agent_toolset()],
@@ -2716,7 +2735,7 @@ mod tests {
             fs::read_to_string(tmp.join("yaml-agent/agents/yaml-agent.yaml")).unwrap();
         assert!(yaml_content.contains("name: yaml-agent"));
         assert!(yaml_content.contains("provider: gemini"));
-        assert!(yaml_content.contains("model_id: gemini-3.5-flash"));
+        assert!(yaml_content.contains("model_id: gemini-3.7-flash"));
         assert!(yaml_content.contains("- name: greet"));
 
         let _ = fs::remove_dir_all(&tmp);
@@ -2762,20 +2781,55 @@ mod tests {
 
     #[test]
     fn yaml_generation_providers() {
-        let gemini_yaml = generate_yaml_definition("test", "gemini", "basic");
-        assert!(gemini_yaml.contains("model_id: gemini-3.5-flash"));
+        let gemini_yaml = generate_yaml_definition("test", "gemini", "basic", None);
+        assert!(gemini_yaml.contains("model_id: gemini-3.7-flash"));
 
-        let openai_yaml = generate_yaml_definition("test", "openai", "basic");
-        assert!(openai_yaml.contains("model_id: gpt-5.5"));
+        let openai_yaml = generate_yaml_definition("test", "openai", "basic", None);
+        assert!(openai_yaml.contains("model_id: gpt-5.6-terra"));
 
-        let anthropic_yaml = generate_yaml_definition("test", "anthropic", "basic");
-        assert!(anthropic_yaml.contains("model_id: claude-sonnet-4-6"));
+        let anthropic_yaml = generate_yaml_definition("test", "anthropic", "basic", None);
+        assert!(anthropic_yaml.contains("model_id: claude-sonnet-5"));
     }
 
     #[test]
     fn yaml_generation_tools_template() {
-        let yaml = generate_yaml_definition("my-agent", "gemini", "tools");
+        let yaml = generate_yaml_definition("my-agent", "gemini", "tools", None);
         assert!(yaml.contains("- name: greet"));
+    }
+
+    #[test]
+    fn deployment_scoped_provider_requires_model_override() {
+        let tmp = std::env::temp_dir().join("cargo-adk-test-explicit-model");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let error = create_project_composable(
+            "azure-agent",
+            "llm",
+            "azure-ai",
+            None,
+            Some(&tmp),
+            false,
+            false,
+            &[],
+            None,
+            false,
+        )
+        .expect_err("deployment-scoped provider must not guess a model");
+        assert!(error.contains("pass --model"));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn yaml_uses_exact_model_override() {
+        let yaml = generate_yaml_definition(
+            "my-agent",
+            "azure-ai",
+            "llm",
+            Some("my-production-deployment"),
+        );
+        assert!(yaml.contains("model_id: my-production-deployment"));
     }
 
     #[test]

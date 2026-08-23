@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = client
         .create_agent(CreateAgentParams {
             name: "Weather Agent".to_string(),
-            model: serde_json::json!("claude-sonnet-4-6"),
+            model: serde_json::json!("claude-sonnet-5"),
             system: Some(
                 "You are a helpful weather assistant. Use the get_weather tool \
                  to look up weather information when asked."

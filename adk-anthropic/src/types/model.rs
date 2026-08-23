@@ -99,6 +99,32 @@ impl fmt::Display for KnownModel {
     }
 }
 
+impl Model {
+    /// Return the current balanced Claude Sonnet 5 model identifier.
+    ///
+    /// Claude 5 models use future-proof custom identifiers here so adding a
+    /// model generation does not add variants to the public exhaustive
+    /// [`KnownModel`] enum and break downstream matches.
+    pub fn claude_sonnet_5() -> Self {
+        Self::Custom("claude-sonnet-5".to_string())
+    }
+
+    /// Return the current Claude Opus 5 model identifier.
+    pub fn claude_opus_5() -> Self {
+        Self::Custom("claude-opus-5".to_string())
+    }
+
+    /// Return the current Claude Fable 5 model identifier.
+    pub fn claude_fable_5() -> Self {
+        Self::Custom("claude-fable-5".to_string())
+    }
+
+    /// Return the Claude Mythos 5 model identifier (limited availability).
+    pub fn claude_mythos_5() -> Self {
+        Self::Custom("claude-mythos-5".to_string())
+    }
+}
+
 impl Serialize for Model {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -180,6 +206,13 @@ mod tests {
             let back: Model = serde_json::from_str(&json).unwrap();
             assert_eq!(back, model);
         }
+    }
+
+    #[test]
+    fn claude_5_factories_use_current_wire_ids() {
+        assert_eq!(Model::claude_sonnet_5().to_string(), "claude-sonnet-5");
+        assert_eq!(Model::claude_opus_5().to_string(), "claude-opus-5");
+        assert_eq!(Model::claude_fable_5().to_string(), "claude-fable-5");
     }
 
     #[test]

@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Constructor | Description |
 |-------------|-------------|
-| `Gemini::new(api_key)` | Default model (gemini-2.5-flash) via v1beta |
+| `Gemini::new(api_key)` | Default model (`gemini-3.7-flash`) via v1beta |
 | `Gemini::pro(api_key)` | Gemini 2.5 Pro | Gemini 3 Pro
 | `Gemini::with_model(api_key, model)` | Specific model |
 | `Gemini::with_v1(api_key)` | Stable v1 API |

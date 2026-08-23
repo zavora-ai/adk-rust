@@ -12,7 +12,7 @@ cargo run --manifest-path examples/gemini3_builtin_tools/Cargo.toml
 Optional:
 
 ```bash
-export GEMINI_MODEL=gemini-3.1-flash-lite-preview
+export GEMINI_MODEL=gemini-3.7-flash
 export GEMINI_FILE_SEARCH_STORE=stores/your-store
 ```
 

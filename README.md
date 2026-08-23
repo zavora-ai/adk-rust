@@ -145,7 +145,7 @@ use adk_rust::Launcher;
 #[tokio::main]
 async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
-    let model = GeminiModel::new(&std::env::var("GOOGLE_API_KEY")?, "gemini-3.1-flash-lite-preview")?;
+    let model = GeminiModel::new(&std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant. Be concise and accurate.")
@@ -166,7 +166,7 @@ Swap the provider by swapping the client. The agent, runner and tools are unchan
 | OpenAI Responses | `OpenAIResponsesClient::new(OpenAIResponsesConfig::new(key, model))` | `openai` | `OPENAI_API_KEY` |
 | Anthropic | `AnthropicClient::new(AnthropicConfig::new(key, model))` | `anthropic` | `ANTHROPIC_API_KEY` |
 | DeepSeek | `DeepSeekClient::chat(key)` | `deepseek` | `DEEPSEEK_API_KEY` |
-| Groq | `GroqClient::new(GroqConfig::llama70b(key))` | `groq` | `GROQ_API_KEY` |
+| Groq | `GroqClient::new(GroqConfig::gpt_oss_120b(key))` | `groq` | `GROQ_API_KEY` |
 | Ollama | `OllamaModel::new(OllamaConfig::new(model))` | `ollama` | none |
 | Bedrock | `BedrockClient::new(BedrockConfig::new(region, model_id)).await?` | `bedrock` | AWS credential chain |
 | mistral.rs | `MistralRsModel::new(config)` | `adk-mistralrs` | none, local |
@@ -178,26 +178,32 @@ environment, among those you compiled in.
 
 | Provider | Model Examples | Feature Flag |
 |----------|---------------|--------------|
-| Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`, `gemini-3.1-pro-preview` | (default) |
-| OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano` | `openai` |
-| OpenAI Responses API | `gpt-4.1`, `o3`, `o4-mini` | `openai` |
-| Anthropic | `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5` | `anthropic` |
-| DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
-| Groq | `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile` | `groq` |
+| Gemini | `gemini-3.7-flash` (default), `gemini-3.6-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview` | (default) |
+| OpenAI | `gpt-5.6-terra` (default), `gpt-5.6-sol`, `gpt-5.6-luna` | `openai` |
+| OpenAI Responses API | `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna` | `openai` |
+| Anthropic | `claude-sonnet-5` (default), `claude-opus-5`, `claude-fable-5` | `anthropic` |
+| DeepSeek | `deepseek-v4-flash`, `deepseek-v4-pro` | `deepseek` |
+| Groq | `openai/gpt-oss-120b`, `openai/gpt-oss-20b` | `groq` |
 | Ollama | `qwen3.6:35b-a3b`, `qwen3.5`, `llama3.2:3b` | `ollama` |
-| Fireworks AI | `accounts/fireworks/models/llama-v3p1-8b-instruct` | `openai` (preset) |
-| Together AI | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | `openai` (preset) |
-| Mistral AI | `mistral-small-latest` | `openai` (preset) |
-| Perplexity | `sonar` | `openai` (preset) |
-| Cerebras | `llama-3.3-70b` | `openai` (preset) |
-| SambaNova | `Meta-Llama-3.3-70B-Instruct` | `openai` (preset) |
-| xAI (Grok) | `grok-3-mini` | `openai` (preset) |
+| Fireworks AI | `accounts/fireworks/models/kimi-k2p6` | `openai` (preset) |
+| Together AI | `MiniMaxAI/MiniMax-M2.7` | `openai` (preset) |
+| Mistral AI | `mistral-medium-latest` | `openai` (preset) |
+| Perplexity | `sonar-pro` | `openai` (preset) |
+| Cerebras | `gpt-oss-120b` | `openai` (preset) |
+| SambaNova | `gpt-oss-120b` | `openai` (preset) |
+| xAI (Grok) | `grok-4.6` | `openai` (preset) |
 | Amazon Bedrock | `anthropic.claude-sonnet-4-20250514-v1:0` | `bedrock` |
 | Azure AI Inference | (endpoint-specific) | `azure-ai` |
 | mistral.rs | **Gemma 4**, Phi-3, Llama, Qwen 3.5, Voxtral, FLUX | `adk-mistralrs` |
 
-Use current-generation models. `gemini-2.0-flash` and `gemini-2.0-flash-lite` shut
-down on 31 March 2026.
+Defaults are curated in `adk_model::catalog` and were checked on 23 August 2026.
+Deployment-scoped providers such as Bedrock and Azure AI still require the model
+or deployment identifier available in your own account and region.
+
+Use `adk_model::catalog::recommended_model(provider)` for ADK's portable default,
+`MODEL_CATALOG` for user-facing pickers, and `validate_model_selection` when
+accepting configuration. Unknown IDs remain valid for private deployments and
+new releases; known retired IDs include an actionable replacement.
 
 ## What you can build
 

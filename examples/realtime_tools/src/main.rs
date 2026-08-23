@@ -54,7 +54,8 @@ async fn main() -> anyhow::Result<()> {
 
     let api_key = std::env::var("OPENAI_API_KEY")?;
     let model_id =
-        std::env::var("OPENAI_REALTIME_MODEL").unwrap_or_else(|_| "gpt-realtime-2".to_string());
+        std::env::var("OPENAI_REALTIME_MODEL")
+            .unwrap_or_else(|_| "gpt-realtime-2.1".to_string());
 
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║  Realtime Tools — Function Calling via IntegratedRunner      ║");

@@ -253,6 +253,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `init_json_logging` emits Cloud Logging structured JSON (severity mapping,
   `logging.googleapis.com/trace` correlation). A collector-sidecar fallback is
   documented in `docs/official_docs/observability/gcp.md`.
+### Fixed
+
+- **Model pricing corrected across every provider table.** All rates are now the
+  vendors' published standard-tier list prices, verified 2026-08-23, and each
+  module records the source URL and verification date.
+  - `adk-model` (OpenAI): every GPT-5.x rate was wrong, in both directions.
+    `gpt-5` was overstated 2× on input, `gpt-5-mini` 2.4×, `gpt-5-nano` 3×;
+    `gpt-5.5-pro` was understated 5× and `gpt-5.4-pro` 7.5×. `gpt-5`,
+    `gpt-5-mini`, `gpt-5-nano`, `gpt-5.1`, `gpt-5.2`, `gpt-5.4`, `gpt-5.4-mini`,
+    `gpt-5.4-nano`, `gpt-5.4-pro`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5-pro` and
+    `gpt-5.3-codex` are corrected. `gpt-image-2` image output was $32, now $30.
+  - `adk-gemini`: Gemini 2.5 Flash-Lite was documented as having no cache
+    support and priced cache reads at $0, when Google charges $0.01/MTok.
+    `cache_input_long` on 2.5 Flash and 3 Flash Preview held audio cache rates
+    ($0.10) rather than long-context rates, inflating cached cost on long
+    prompts by 2–3.3×; those models have no long-context tier and now report the
+    base rate.
+  - `adk-eval`: `default_pricing()` contained no current model and understated
+    Gemini 2.5 Flash output 4× and 2.5 Pro output 2×. Replaced with the current
+    Gemini, OpenAI, Anthropic and DeepSeek line-ups.
+- **Gemini 2.0 shutdown date** corrected in `AGENTS.md` from March 31 2026 to
+  June 1 2026, the date Google published.
+
+### Changed
+
+- **`adk_gemini::Model::default()` is now Gemini 3.7 Flash**, not Gemini 2.5
+  Flash. This changes per-token cost for anyone relying on `Default`: 3.7 Flash
+  is $0.75/$3.75 per MTok against 2.5 Flash's $0.30/$2.50, so input is 2.5× and
+  output 1.5× the previous rate per token. Pin `Model::Gemini25Flash` explicitly
+  to keep the old behaviour.
+- **`lookup_pricing` and the new resolvers return `None` for models the vendor
+  publishes no rate for**, rather than a fabricated rate. Five OpenAI constants
+  (`GPT_55_INSTANT`, `GPT_52_CODEX`, `GPT_51_CODEX`, `GPT_51_CODEX_MAX`,
+  `GPT_51_CODEX_MINI`), `GPT_53_CHAT_LATEST` and both deep-research constants are
+  deprecated and no longer answer lookups. Treat `None` as unpriced, never free.
+- Introductory Gemini rates are marked with their expiry: Gemini 3.7 and 3.6
+  Flash double on 2027-01-01, and GPT-5.6 Sol's promotional rate runs at least
+  to 2026-11-21.
+
+### Added
+
+- **`ModelPricing::for_model` / `for_model_id`** (`adk-anthropic`) and
+  **`GeminiPricing::for_model_id`** (`adk-gemini`) resolve pricing from a wire
+  model ID, including the `Custom(..)` identifiers returned by the model
+  factories and Anthropic's dated aliases. Previously `adk-anthropic` had no
+  model-to-pricing mapping at all and `adk-gemini` special-cased one ID.
+- Anthropic Claude Mythos 5 and fast-mode rates (`ModelPricing::MYTHOS_5`,
+  `OPUS_5_FAST`), Haiku 3.5, and a `Model::claude_mythos_5()` factory.
+- Gemini 3.6 Flash and 3.5 Flash-Lite pricing plus a
+  `Model::gemini_3_5_flash_lite()` factory. Gemini 3.6 Flash previously had a
+  factory but no pricing entry, so it resolved as unpriced.
+- OpenAI GPT-5.6 Cyber, GPT-5.5 Cyber, GPT-5.2 Pro, `chat-latest`,
+  `gpt-5-search-api`, `gpt-5.3-codex` fast mode, and long-context constants for
+  the GPT-5.4, GPT-5.5 and GPT-5.6 families.
+- `scripts/check-model-pricing.sh` checks the encoded rates against the vendor
+  pricing pages and runs in the nightly CI tier.
+
 ### Changed
 
 - **`provider_from_env()` now consults the Vertex opt-in flags before any API

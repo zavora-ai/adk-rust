@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Cheapest, fastest current model — good enough for three parallel opinions.
-const MODEL: &str = "gemini-3.1-flash-lite-preview";
+const MODEL: &str = "gemini-3.7-flash";
 
 const QUESTION: &str = "Should a startup adopt WebAssembly for their web app?";
 

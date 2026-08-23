@@ -18,7 +18,7 @@ use crate::providers::stt::frame_to_wav_bytes;
 use crate::traits::{SttOptions, SttProvider, Transcript};
 
 /// Default model for Gemini STT (audio understanding).
-const DEFAULT_MODEL: &str = "gemini-3-flash-preview";
+const DEFAULT_MODEL: &str = "gemini-3.7-flash";
 
 /// Gemini STT provider using `generateContent` with audio input.
 ///

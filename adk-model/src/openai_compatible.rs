@@ -95,7 +95,7 @@ impl OpenAICompatibleConfig {
 
     /// Fireworks AI preset.
     ///
-    /// Default model: `accounts/fireworks/models/llama-v3p1-8b-instruct`
+    /// Default model: `accounts/fireworks/models/kimi-k2p6`
     pub fn fireworks(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("fireworks")
@@ -104,7 +104,7 @@ impl OpenAICompatibleConfig {
 
     /// Together AI preset.
     ///
-    /// Default model: `meta-llama/Llama-3.3-70B-Instruct-Turbo`
+    /// Default model: `MiniMaxAI/MiniMax-M2.7`
     pub fn together(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("together")
@@ -113,7 +113,7 @@ impl OpenAICompatibleConfig {
 
     /// Mistral AI preset.
     ///
-    /// Default model: `mistral-small-latest`
+    /// Default model: `mistral-medium-latest`
     pub fn mistral(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("mistral")
@@ -122,7 +122,7 @@ impl OpenAICompatibleConfig {
 
     /// Perplexity preset.
     ///
-    /// Default model: `sonar`
+    /// Default model: `sonar-pro`
     pub fn perplexity(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("perplexity")
@@ -131,7 +131,7 @@ impl OpenAICompatibleConfig {
 
     /// Cerebras preset.
     ///
-    /// Default model: `llama-3.3-70b`
+    /// Default model: `gpt-oss-120b`
     pub fn cerebras(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("cerebras")
@@ -140,7 +140,7 @@ impl OpenAICompatibleConfig {
 
     /// SambaNova preset.
     ///
-    /// Default model: `Meta-Llama-3.3-70B-Instruct`
+    /// Default model: `gpt-oss-120b`
     pub fn sambanova(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("sambanova")
@@ -149,7 +149,7 @@ impl OpenAICompatibleConfig {
 
     /// xAI (Grok) preset.
     ///
-    /// Default model: `grok-3-mini`
+    /// Default model: `grok-4.6`
     pub fn xai(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model).with_provider_name("xai").with_base_url("https://api.x.ai/v1")
     }
@@ -157,7 +157,7 @@ impl OpenAICompatibleConfig {
     /// Google Gemini (OpenAI-compatible) preset.
     ///
     /// Targets Gemini's OpenAI-compatibility endpoint, letting you use a Gemini
-    /// API key and a Gemini model (e.g. `gemini-3.5-flash`) through the OpenAI
+    /// API key and a Gemini model (e.g. `gemini-3.7-flash`) through the OpenAI
     /// Chat Completions wire format. Use a `GEMINI_API_KEY` for the `api_key`.
     ///
     /// For native Gemini features (thinking levels, server-side tools, the
@@ -165,7 +165,7 @@ impl OpenAICompatibleConfig {
     /// This preset is for callers who want a single OpenAI-compatible code path
     /// across providers.
     ///
-    /// Default model suggestion: `gemini-3.5-flash`.
+    /// Default model suggestion: `gemini-3.7-flash`.
     pub fn gemini(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("gemini")
@@ -174,7 +174,7 @@ impl OpenAICompatibleConfig {
 
     /// MiniMax preset.
     ///
-    /// Default model: `minimax-m2.7`
+    /// Default model: `MiniMax-M2.7` (case-sensitive)
     pub fn minimax(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("minimax")
@@ -192,7 +192,7 @@ impl OpenAICompatibleConfig {
 
     /// Zhipu AI (GLM) preset.
     ///
-    /// Default model: `glm-5.1`
+    /// Default model: `glm-5.2`
     pub fn zhipu(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("zhipu")
@@ -201,7 +201,7 @@ impl OpenAICompatibleConfig {
 
     /// Baidu ERNIE (Qianfan) preset via OpenAI-compatible endpoint.
     ///
-    /// Default model: `ernie-5`
+    /// Default model: `ernie-5.1`
     ///
     /// Note: Uses the Qianfan OpenAI-compatible endpoint. For the native
     /// Qianfan API with OAuth2 token exchange, use a dedicated client.
@@ -240,6 +240,7 @@ pub struct OpenAICompatible {
 impl OpenAICompatible {
     /// Create a new OpenAI-compatible client.
     pub fn new(config: OpenAICompatibleConfig) -> Result<Self, AdkError> {
+        crate::catalog::warn_if_obsolete(&config.provider_name, &config.model);
         let base_url = config.base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
         Ok(Self {
@@ -286,6 +287,23 @@ pub(crate) fn build_request_json(
     adapter: &dyn SchemaAdapter,
     cache: &SchemaCache,
 ) -> Result<serde_json::Value, AdkError> {
+    let bare_model = model.strip_prefix("models/").unwrap_or(model);
+    if matches!(bare_model, "gemini-3.6-flash" | "gemini-3.7-flash")
+        && request.config.as_ref().is_some_and(|config| {
+            config.temperature.is_some() || config.top_p.is_some() || config.top_k.is_some()
+        })
+    {
+        return Err(AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::InvalidInput,
+            "model.gemini.sampling_unsupported",
+            format!(
+                "{bare_model} does not accept temperature, top_p, or top_k; remove explicit sampling parameters"
+            ),
+        )
+        .with_provider("gemini"));
+    }
+
     let messages: Vec<_> = request.contents.iter().map(convert::content_to_message).collect();
 
     let mut request_builder = CreateChatCompletionRequestArgs::default();
@@ -334,6 +352,14 @@ pub(crate) fn build_request_json(
 
     let mut body = serde_json::to_value(&openai_request)
         .map_err(|e| AdkError::model(format!("failed to serialize request: {e}")))?;
+
+    // GPT-5.6 defaults to medium reasoning, while Chat Completions function
+    // tools require effective reasoning `none`. ADK's public reasoning enum
+    // predates that value, so preserve source compatibility and make the safe
+    // effective setting explicit only for this otherwise-invalid combination.
+    if model.starts_with("gpt-5.6") && !request.tools.is_empty() && reasoning_effort.is_none() {
+        body["reasoning_effort"] = serde_json::Value::String("none".to_string());
+    }
 
     // Merge provider-specific extensions from config.extensions["openai"] into
     // the request body.  This allows users to pass provider-specific fields
@@ -824,6 +850,8 @@ impl Llm for OpenAICompatible {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adk_core::{GenericSchemaAdapter, LlmRequest, SchemaCache};
+    use std::sync::Arc;
 
     #[test]
     fn test_parallel_tool_calls_config() {
@@ -844,6 +872,83 @@ mod tests {
 
         let client = OpenAICompatible::new(config).expect("client creation failed");
         assert!(client.parallel_tool_calls, "parallel_tool_calls should default to true in client");
+    }
+
+    #[test]
+    fn gpt_56_chat_tools_default_to_no_reasoning() {
+        let adapter = GenericSchemaAdapter;
+        let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
+        let mut request = LlmRequest {
+            model: crate::catalog::OPENAI_DEFAULT.to_string(),
+            contents: Vec::new(),
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        };
+        request.tools.insert(
+            "lookup".to_string(),
+            serde_json::json!({
+                "description": "Look up a record",
+                "parameters": {"type": "object", "properties": {}}
+            }),
+        );
+
+        let body = build_request_json(
+            crate::catalog::OPENAI_DEFAULT,
+            &request,
+            &None,
+            true,
+            &adapter,
+            &cache,
+        )
+        .expect("request should build");
+
+        assert_eq!(body["reasoning_effort"], "none");
+    }
+
+    #[test]
+    fn gpt_56_without_tools_keeps_server_reasoning_default() {
+        let adapter = GenericSchemaAdapter;
+        let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
+        let request = LlmRequest {
+            model: crate::catalog::OPENAI_DEFAULT.to_string(),
+            contents: Vec::new(),
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        };
+
+        let body = build_request_json(
+            crate::catalog::OPENAI_DEFAULT,
+            &request,
+            &None,
+            true,
+            &adapter,
+            &cache,
+        )
+        .expect("request should build");
+
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn gemini_37_compatible_path_rejects_sampling_locally() {
+        let mut request = LlmRequest::new("gemini-3.7-flash", Vec::new());
+        request.config =
+            Some(adk_core::GenerateContentConfig { top_p: Some(0.9), ..Default::default() });
+        let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
+
+        let error = build_request_json(
+            "gemini-3.7-flash",
+            &request,
+            &None,
+            true,
+            &GenericSchemaAdapter,
+            &cache,
+        )
+        .expect_err("sampling should be rejected before network I/O");
+
+        assert_eq!(error.code, "model.gemini.sampling_unsupported");
     }
 
     #[test]

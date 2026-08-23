@@ -38,7 +38,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 const APP_NAME: &str = "gemini3-builtin-tools-example";
-const MODEL_NAME: &str = "gemini-3-pro-preview";
+const MODEL_NAME: &str = "gemini-3.7-flash";
 const MAPS_MODEL_NAME: &str = "gemini-2.5-flash";
 const COMPUTER_USE_MODEL_NAME: &str = "gemini-2.5-computer-use-preview-10-2025";
 

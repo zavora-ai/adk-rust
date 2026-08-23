@@ -104,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = client
         .create_agent(CreateAgentParams {
             name: "Memory Agent".to_string(),
-            model: serde_json::json!("claude-sonnet-4-6"),
+            model: serde_json::json!("claude-sonnet-5"),
             system: Some(
                 "You are a personalized assistant with persistent memory. \
                  At the start of each conversation, check /mnt/memory/ for user preferences. \

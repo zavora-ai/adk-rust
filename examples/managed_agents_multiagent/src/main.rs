@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let researcher = client
         .create_agent(CreateAgentParams {
             name: "Researcher".to_string(),
-            model: serde_json::json!("claude-sonnet-4-6"),
+            model: serde_json::json!("claude-sonnet-5"),
             system: Some(
                 "You are a research specialist. When given a topic, provide \
                  well-structured factual information with key points. \
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let writer = client
         .create_agent(CreateAgentParams {
             name: "Writer".to_string(),
-            model: serde_json::json!("claude-sonnet-4-6"),
+            model: serde_json::json!("claude-sonnet-5"),
             system: Some(
                 "You are a creative writer. Take research material and transform it \
                  into engaging, well-written prose. Use clear structure with headers, \
@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let coordinator = client
         .create_agent(CreateAgentParams {
             name: "Content Coordinator".to_string(),
-            model: serde_json::json!("claude-sonnet-4-6"),
+            model: serde_json::json!("claude-sonnet-5"),
             system: Some(
                 "You are a content production coordinator. You manage a team of specialists:\n\
                  - Researcher: gathers factual information on topics\n\

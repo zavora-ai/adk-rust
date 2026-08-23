@@ -55,11 +55,8 @@ pub const OPENAI_VOICES: &[&str] =
 
 /// Default model for OpenAI Realtime.
 ///
-/// `gpt-realtime` is the GA speech-to-speech model. The earlier
-/// `gpt-4o-realtime-preview-*` models were deprecated in September 2025 and
-/// removed from the API in March 2026, so they are no longer valid defaults.
-/// For the reasoning-capable successor, pass `gpt-realtime-2` explicitly.
-pub const DEFAULT_MODEL: &str = "gpt-realtime";
+/// `gpt-realtime-2.1` is the current production speech-to-speech model.
+pub const DEFAULT_MODEL: &str = "gpt-realtime-2.1";
 
 /// Transport type for OpenAI Realtime connections.
 ///

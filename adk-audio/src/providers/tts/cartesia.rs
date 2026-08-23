@@ -36,7 +36,7 @@ impl CartesiaTts {
         Self {
             config,
             client: reqwest::Client::new(),
-            model: "sonic-2".into(),
+            model: "sonic-3.5".into(),
             voices: vec![
                 Voice {
                     id: "a0e99841-438c-4a64-b679-ae501e7d6091".into(),

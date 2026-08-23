@@ -20,7 +20,10 @@ use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 /// identifiers, the request's `model` field is set. Any identifier outside
 /// this list (and [`AGENT_TARGETS`]) is rejected with an `InvalidInput` error.
 pub const MODEL_TARGETS: &[&str] = &[
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
     "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-3.1-pro-preview",
     "gemini-3-flash-preview",

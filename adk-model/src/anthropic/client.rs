@@ -35,8 +35,13 @@ pub struct AnthropicClient {
 }
 
 impl AnthropicClient {
+    fn uses_claude_5_contract(model: &str) -> bool {
+        matches!(model, "claude-sonnet-5" | "claude-opus-5" | "claude-fable-5")
+    }
+
     /// Create a new Anthropic client.
     pub fn new(config: AnthropicConfig) -> Result<Self, AdkError> {
+        crate::catalog::warn_if_obsolete("anthropic", &config.model);
         let mut client = Anthropic::new(Some(config.api_key.clone()))
             .map_err(|e| AdkError::model(format!("Failed to create Anthropic client: {e}")))?;
         if let Some(base_url) = &config.base_url {
@@ -57,7 +62,7 @@ impl AnthropicClient {
 
     /// Create a client with just an API key (uses default model).
     pub fn from_api_key(api_key: impl Into<String>) -> Result<Self, AdkError> {
-        Self::new(AnthropicConfig::new(api_key, "claude-sonnet-4-6"))
+        Self::new(AnthropicConfig::new(api_key, crate::catalog::ANTHROPIC_DEFAULT))
     }
 
     /// Access the underlying `adk_anthropic::Anthropic` HTTP client.
@@ -111,6 +116,47 @@ impl AnthropicClient {
         request: &LlmRequest,
         anthropic_config: &super::config::AnthropicConfig,
     ) -> Result<adk_anthropic::MessageCreateParams, AdkError> {
+        if Self::uses_claude_5_contract(model) {
+            let sampling = request.config.as_ref().is_some_and(|config| {
+                config.temperature.is_some() || config.top_p.is_some() || config.top_k.is_some()
+            });
+            if sampling {
+                return Err(AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::InvalidInput,
+                    "model.anthropic.claude5_sampling_unsupported",
+                    format!(
+                        "model '{model}' rejects explicit temperature, top_p, and top_k values; remove sampling parameters and use adaptive thinking effort instead"
+                    ),
+                )
+                .with_provider("anthropic"));
+            }
+            if matches!(
+                anthropic_config.thinking,
+                Some(super::config::ThinkingMode::Enabled { .. })
+            ) {
+                return Err(AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::InvalidInput,
+                    "model.anthropic.claude5_manual_thinking_unsupported",
+                    format!(
+                        "model '{model}' rejects budget-based extended thinking; use ThinkingMode::Adaptive with an effort level"
+                    ),
+                )
+                .with_provider("anthropic"));
+            }
+            if model == "claude-sonnet-5" && anthropic_config.fast_mode {
+                return Err(AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::InvalidInput,
+                    "model.anthropic.claude5_fast_mode_unsupported",
+                    "Claude Sonnet 5 does not support Anthropic fast mode; disable fast_mode"
+                        .to_string(),
+                )
+                .with_provider("anthropic"));
+            }
+        }
+
         let mut system_parts: Vec<String> = Vec::new();
         let mut messages = Vec::new();
 
@@ -224,7 +270,9 @@ impl AnthropicClient {
         }
 
         // Requirement 7.3: Force temperature to 1.0 when thinking is enabled
-        let temperature = if anthropic_config.thinking.is_some() {
+        let temperature = if Self::uses_claude_5_contract(model) {
+            None
+        } else if anthropic_config.thinking.is_some() {
             Some(1.0)
         } else {
             request.config.as_ref().and_then(|c| c.temperature)
@@ -810,6 +858,51 @@ mod tests {
         .unwrap();
 
         assert_eq!(client.client.base_url(), "https://gateway.example.test/anthropic");
+    }
+
+    #[test]
+    fn claude_5_rejects_sampling_before_network_io() {
+        let mut request = make_request(vec![Content::new("user").with_text("hello")]);
+        request.config =
+            Some(GenerateContentConfig { temperature: Some(0.2), ..Default::default() });
+
+        let error = AnthropicClient::build_message_params(
+            "claude-sonnet-5",
+            4096,
+            &request,
+            &AnthropicConfig::default(),
+        )
+        .expect_err("Claude 5 sampling parameters should be rejected locally");
+
+        assert_eq!(error.code, "model.anthropic.claude5_sampling_unsupported");
+    }
+
+    #[test]
+    fn claude_5_rejects_budget_thinking_before_network_io() {
+        let request = make_request(vec![Content::new("user").with_text("hello")]);
+        let config = AnthropicConfig::new("test", "claude-sonnet-5").with_thinking_mode(
+            super::super::config::ThinkingMode::Enabled { budget_tokens: 2048 },
+        );
+
+        let error =
+            AnthropicClient::build_message_params("claude-sonnet-5", 4096, &request, &config)
+                .expect_err("Claude 5 budget thinking should be rejected locally");
+
+        assert_eq!(error.code, "model.anthropic.claude5_manual_thinking_unsupported");
+    }
+
+    #[test]
+    fn claude_5_adaptive_thinking_omits_sampling() {
+        let request = make_request(vec![Content::new("user").with_text("hello")]);
+        let config = AnthropicConfig::new("test", "claude-sonnet-5")
+            .with_thinking_mode(super::super::config::ThinkingMode::Adaptive);
+
+        let params =
+            AnthropicClient::build_message_params("claude-sonnet-5", 4096, &request, &config)
+                .expect("adaptive thinking should be supported");
+
+        assert!(params.temperature.is_none());
+        assert!(matches!(params.thinking, Some(adk_anthropic::ThinkingConfig::Adaptive { .. })));
     }
 
     /// Requirement 1.1: System-role content extracted to system parameter.
