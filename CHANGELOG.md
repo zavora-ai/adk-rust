@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ADK-Rust runtime UI** (`adk-server`): replaces the opaque copied Angular
+  bundle with an owned React/TypeScript frontend using the Studio Next design
+  language. The responsive system/light/dark interface streams conversations,
+  tool activity, failures, and handoffs, and inspects event timelines, session
+  and shared state, artifacts, prior sessions, runtime capabilities, and UI
+  protocols. `Agent::topology()` is an additive provider-neutral metadata hook;
+  `CompiledTeam` exposes its exact members and delegation-versus-handoff edges,
+  and `/api/ui/agents/{name}` serves that data without coupling the server to
+  `TeamSpec`. The embedded build uses local assets only and ships with CSP,
+  no-sniff, referrer, and immutable-cache headers. Strict TypeScript and
+  provider-free SSE parser tests accompany the existing Rust server tests.
+  Model responses render safe GitHub-flavored Markdown, and live team runs
+  animate the active member and incoming edge using Studio Next's directional
+  flow pattern while honoring reduced-motion preferences. Transcript messages
+  keep a readable minimum height instead of collapsing around long responses.
+  `GraphAgent` also exports its entry and declared control-flow edges through
+  the same portable topology contract, allowing the UI to render workflow nodes
+  by execution level. `examples/runtime_ui_showcase` documents and illustrates
+  tool-calling, graph, and team runs through the embedded interface. Realtime
+  agents now declare their interaction mode through the shared `Agent` contract;
+  the interface coalesces their transcript stream and exposes completed PCM16
+  output as playable WAV audio. Dedicated **Telemetry** and **Protocols** views
+  make spans, configured artifact/memory services, A2A discovery, and UI/MCP
+  Apps support explicit. The ADK Runtime brand links to adk-rust.com.
+  `examples/advanced_agents` runs OpenAI chat, an ambient schedule, OpenAI
+  Realtime voice, A2A, and MCP `2026-07-28`/SEP-2663 tasks through one server.
+
 - **Anthropic request customization and server-side refusal fallback**
   (`adk-anthropic`): additive client methods now support caller-selected beta
   headers, exact per-request header replacement, bearer-only authentication,

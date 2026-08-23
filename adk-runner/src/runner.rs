@@ -3,7 +3,7 @@ use crate::cache::CacheManager;
 #[cfg(feature = "artifacts")]
 use adk_artifact::ArtifactService;
 use adk_core::{
-    Agent, AppName, CacheCapable, Content, ContextCacheConfig, EventStream, Memory,
+    Agent, AppName, CacheCapable, Content, ContextCacheConfig, Event, EventStream, Memory,
     ReadonlyContext, Result, RunConfig, SessionId, UserId,
 };
 #[cfg(feature = "plugins")]
@@ -12,7 +12,7 @@ use adk_session::SessionService;
 #[cfg(feature = "skills")]
 use adk_skill::{SkillInjector, SkillInjectorConfig};
 use async_stream::stream;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 /// A run currently in flight, tracked so it can be interrupted.
@@ -27,6 +27,21 @@ struct ActiveRun {
 
 /// Registry of in-flight runs, keyed by run ID.
 type ActiveRuns = Arc<std::sync::Mutex<std::collections::HashMap<u64, ActiveRun>>>;
+
+fn preserve_streamed_content(accumulated: &mut HashMap<String, Content>, event: &mut Event) {
+    if event.llm_response.partial {
+        if let Some(chunk) = &event.llm_response.content {
+            accumulated
+                .entry(event.id.clone())
+                .and_modify(|content| content.parts.extend(chunk.parts.clone()))
+                .or_insert_with(|| chunk.clone());
+        }
+    } else if event.llm_response.content.is_none() {
+        event.llm_response.content = accumulated.remove(&event.id);
+    } else {
+        accumulated.remove(&event.id);
+    }
+}
 
 /// Deregisters a run when its event stream is dropped.
 ///
@@ -829,6 +844,7 @@ impl Runner {
             // Stream events and check for transfers
             use futures::StreamExt;
             let mut transfer_target: Option<(String, String)> = None;
+            let mut streamed_content = HashMap::new();
 
             while let Some(result) = {
                 // Race the next event against cancellation so an in-flight
@@ -854,10 +870,7 @@ impl Runner {
                 }
             } {
                 match result {
-                    Ok(event) => {
-                        #[cfg(feature = "plugins")]
-                        let mut event = event;
-
+                    Ok(mut event) => {
                         #[cfg(feature = "plugins")]
                         if let Some(manager) = plugin_manager.as_ref() {
                             match manager
@@ -878,6 +891,8 @@ impl Runner {
                                 }
                             }
                         }
+
+                        preserve_streamed_content(&mut streamed_content, &mut event);
 
                         // Check for transfer action
                         if let Some(target) = &event.actions.transfer_to_agent {
@@ -1134,9 +1149,7 @@ impl Runner {
                     }
                 } {
                     match result {
-                        Ok(event) => {
-                            #[cfg(feature = "plugins")]
-                            let mut event = event;
+                        Ok(mut event) => {
                             #[cfg(feature = "plugins")]
                             if let Some(manager) = plugin_manager.as_ref() {
                                 match manager
@@ -1157,6 +1170,8 @@ impl Runner {
                                     }
                                 }
                             }
+
+                            preserve_streamed_content(&mut streamed_content, &mut event);
 
                             // Capture further transfer requests
                             if let Some(target) = &event.actions.transfer_to_agent {
@@ -1555,5 +1570,40 @@ impl Runner {
             }
             None => (None, Vec::new()),
         }
+    }
+}
+
+#[cfg(test)]
+mod streamed_content_tests {
+    use super::preserve_streamed_content;
+    use adk_core::{Content, Event, Part};
+    use std::collections::HashMap;
+
+    fn text(event: &Event) -> String {
+        event
+            .content()
+            .map(|content| content.parts.iter().filter_map(Part::text).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn final_empty_event_preserves_streamed_text_for_persistence() {
+        let mut accumulated = HashMap::new();
+        let mut first = Event::with_id("response-1", "inv-1");
+        first.llm_response.partial = true;
+        first.llm_response.content = Some(Content::new("model").with_text("Verify "));
+        preserve_streamed_content(&mut accumulated, &mut first);
+
+        let mut second = Event::with_id("response-1", "inv-1");
+        second.llm_response.partial = true;
+        second.llm_response.content = Some(Content::new("model").with_text("the invoice."));
+        preserve_streamed_content(&mut accumulated, &mut second);
+
+        let mut final_event = Event::with_id("response-1", "inv-1");
+        final_event.llm_response.turn_complete = true;
+        preserve_streamed_content(&mut accumulated, &mut final_event);
+
+        assert_eq!(text(&final_event), "Verify the invoice.");
+        assert!(accumulated.is_empty());
     }
 }

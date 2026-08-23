@@ -21,7 +21,11 @@ use std::time::Duration;
 use google_cloud_auth::credentials::{self, CacheableResource, Credentials};
 use opentelemetry::KeyValue;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    EnvFilter,
+    layer::{Layer, SubscriberExt},
+    util::SubscriberInitExt,
+};
 
 use crate::init::{INIT, TelemetryError, otlp_pipeline};
 
@@ -320,11 +324,11 @@ pub async fn init_with_gcp(service_name: &str) -> Result<(), TelemetryError> {
             .unwrap_or_else(|_| EnvFilter::new("info"));
 
         tracing_subscriber::registry()
-            .with(filter)
             .with(
                 tracing_subscriber::fmt::layer()
                     .json()
-                    .event_format(CloudLoggingJsonFormat::new(Some(project_id))),
+                    .event_format(CloudLoggingJsonFormat::new(Some(project_id)))
+                    .with_filter(filter),
             )
             .with(tracing_opentelemetry::OpenTelemetryLayer::new(tracer))
             .init();

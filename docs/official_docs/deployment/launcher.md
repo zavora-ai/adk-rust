@@ -176,9 +176,10 @@ See the [Server API](server.md) documentation for detailed endpoint specificatio
 The server includes a built-in web UI accessible at `http://localhost:8080/ui/`. The UI provides:
 
 - Interactive chat interface
-- Session management
-- Real-time streaming responses
-- Multi-agent visualization
+- Session, state, artifact, and event-timeline inspection
+- Real-time streaming responses and tool activity
+- Exact team delegation and handoff topology
+- Agent and UI-protocol capability discovery
 
 ## CLI Arguments
 

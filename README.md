@@ -17,7 +17,9 @@ and async, across 43 publishable crates for agent orchestration.
 > deployment, Vertex sessions and Memory Bank, GCS artifacts, Example Store,
 > Cloud telemetry, and managed code sandboxes; hardened ambient scheduling,
 > runtime skill writing, and argument-level tool guardrails; plus Anthropic
-> request customization and typed safety-refusal fallback. crates.io remains on
+> request customization and typed safety-refusal fallback; and a new ADK-Rust-owned
+> responsive runtime UI for conversations, exact team topology, event timelines,
+> shared state, artifacts, sessions, and UI-protocol discovery. crates.io remains on
 > 2.0.0 until the release is published.
 >
 > Coming from 1.x: six APIs changed shape and the fan-in default changed behaviour
@@ -107,16 +109,40 @@ The episode 3 video and slides are not in the repository: the video alone is abo
 
 ---
 
-## Start
+## Build and test an agent in five minutes
+
+Scaffold an OpenAI agent with the HTTP runtime and embedded UI:
 
 ```bash
 cargo install cargo-adk
-cargo adk new my-agent
-cd my-agent && cp .env.example .env   # add GOOGLE_API_KEY
+cargo adk new quickstart_agent --template api --provider openai
+cd quickstart_agent
+cp .env.example .env
+# Open .env and replace the OPENAI_API_KEY placeholder, then:
 cargo run
 ```
 
-Or add it to an existing project:
+Open [http://127.0.0.1:8080/ui/](http://127.0.0.1:8080/ui/), enter a prompt,
+and press <kbd>Enter</kbd>. The UI creates the session, streams the run, renders
+Markdown and tool results, animates the active agent or workflow edge, and keeps
+the event timeline, state, artifacts, and telemetry beside the conversation.
+
+![Prompting an ADK-Rust team, watching its handoff topology, and opening runtime telemetry](docs/official_docs/images/adk-runtime-five-minute.gif)
+
+The animation uses the richer team showcase so the topology is visible; the
+single-agent project you just generated uses the same UI with a one-node graph.
+Confirm the server independently with:
+
+```bash
+curl -fsS http://127.0.0.1:8080/api/health
+```
+
+The [five-minute quickstart](docs/official_docs/quickstart.md) explains the
+generated files and the console-only alternative. The runnable
+[`runtime_ui_showcase`](examples/runtime_ui_showcase) reproduces the UI above
+with tool, graph, and team agents.
+
+### Add ADK-Rust to an existing project
 
 ```toml
 [dependencies]
@@ -211,6 +237,7 @@ Each row links to its guide and a runnable example.
 
 | Capability | Guide | Example |
 |------------|-------|---------|
+| Embedded runtime UI — conversations, Markdown, tools, workflow/team topology, realtime playback, protocols, state and telemetry | [deployment](docs/official_docs/deployment/server.md#web-ui) | [`examples/advanced_agents`](examples/advanced_agents) |
 | Tools — `#[tool]` derives the JSON schema from your argument type | [tools](docs/official_docs/tools/function-tools.md) | [`examples/coding_agent`](examples/coding_agent) |
 | MCP clients and servers on `rmcp 3.1` — tools, resources, prompts, elicitation, tasks | [mcp](docs/official_docs/mcp/index.md) | [`examples/mcp_protocol_revisions`](examples/mcp_protocol_revisions) |
 | Workflow agents — sequential, parallel, loop | [agents](docs/official_docs/agents/workflow-agents.md) | [`examples/multi_perspective_analysis`](examples/multi_perspective_analysis) |
@@ -229,7 +256,7 @@ Each row links to its guide and a runnable example.
 | Browser automation — 46 WebDriver tools | [browser-tools](docs/official_docs/tools/browser-tools.md) | — |
 | Evaluation — trajectory, rubric, LLM-judge, A/B, CI output | [evaluation](docs/official_docs/evaluation/evaluation.md) | [`examples/eval_showcase`](examples/eval_showcase) |
 | Guardrails, RBAC, SSO, audit logging | [security](docs/official_docs/security/access-control.md) | — |
-| Observability — OpenTelemetry tracing, structured logging | [observability](docs/official_docs/observability/telemetry.md) | — |
+| Observability — OpenTelemetry tracing, structured logging | [observability](docs/official_docs/observability/telemetry.md) | [`examples/advanced_agents`](examples/advanced_agents) |
 
 ### Scaffold a project
 
@@ -383,7 +410,7 @@ per-platform tool matrix and the CI cost tiers.
 - [Official docs](docs/official_docs/) — guides for every capability above
 - [Wiki](https://github.com/zavora-ai/adk-rust/wiki) — tutorials and quickstarts
 - [docs.rs](https://docs.rs/adk-rust) — API reference
-- [Examples](examples/) — 104 standalone crates, plus 120+ in the
+- [Examples](examples/) — 110 standalone crates, plus 120+ in the
   [playground](https://github.com/zavora-ai/adk-playground)
 
 ## Companion projects

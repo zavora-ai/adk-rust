@@ -40,7 +40,7 @@ use std::time::Duration;
 use rusqlite::{Connection, OpenFlags, params};
 
 use crate::init::TelemetryError;
-use crate::span_exporter::SpanSink;
+use crate::span_exporter::{SpanSink, is_runtime_span};
 
 /// Maximum spans per write transaction.
 const BATCH_SIZE: usize = 64;
@@ -159,20 +159,13 @@ impl std::fmt::Debug for SqliteSpanExporter {
 
 impl SpanSink for SqliteSpanExporter {
     fn export_span(&self, span_name: &str, attributes: HashMap<String, String>) {
-        if !self.record_all && !is_agent_loop_span(span_name) {
+        if !self.record_all && !is_runtime_span(span_name) {
             return;
         }
         // Unbounded channel: never blocks the traced thread. If the writer
         // died, dropping the span is the only safe option.
         let _ = self.tx.send(WriterMsg::Span { name: span_name.to_string(), attributes });
     }
-}
-
-fn is_agent_loop_span(span_name: &str) -> bool {
-    span_name == "agent.execute"
-        || span_name == "call_llm"
-        || span_name == "send_data"
-        || span_name.starts_with("execute_tool")
 }
 
 fn open_writer_connection(path: &Path) -> Result<Connection, TelemetryError> {

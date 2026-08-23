@@ -11,7 +11,10 @@ use crate::node::{ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput};
 use crate::state::{State, StateSchema};
 use crate::stream::{StreamEvent, StreamMode};
 use crate::timeout::TimeoutPolicy;
-use adk_core::{Agent, Content, Event, EventStream, InvocationContext};
+use adk_core::{
+    Agent, AgentCapabilities, AgentRelationshipKind, AgentTopology, AgentTopologyMember,
+    AgentTopologyRelationship, Content, Event, EventStream, InvocationContext,
+};
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;
@@ -120,6 +123,77 @@ impl Agent for GraphAgent {
 
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
         &[]
+    }
+
+    fn supports_agent_transfer(&self) -> bool {
+        false
+    }
+
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities {
+            checkpoint_resume: self.graph.has_checkpointer(),
+            shared_state: true,
+            invocation_metadata: true,
+            ..AgentCapabilities::default()
+        }
+    }
+
+    fn topology(&self) -> Option<AgentTopology> {
+        let mut nodes = self.graph.nodes.values().collect::<Vec<_>>();
+        nodes.sort_by_key(|node| node.name().to_string());
+        let mut members = vec![AgentTopologyMember {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            coordinator: true,
+            capabilities: self.capabilities(),
+        }];
+        members.extend(nodes.into_iter().map(|node| AgentTopologyMember {
+            name: node.name().to_string(),
+            description: node.description().to_string(),
+            coordinator: false,
+            capabilities: node.capabilities(),
+        }));
+
+        let mut relationships = self
+            .graph
+            .get_entry_nodes()
+            .into_iter()
+            .map(|entry| AgentTopologyRelationship {
+                from: self.name.clone(),
+                to: entry,
+                kind: AgentRelationshipKind::Flow,
+            })
+            .collect::<Vec<_>>();
+        for edge in &self.graph.edges {
+            match edge {
+                Edge::Direct { source, target: EdgeTarget::Node(target) } => {
+                    relationships.push(AgentTopologyRelationship {
+                        from: source.clone(),
+                        to: target.clone(),
+                        kind: AgentRelationshipKind::Flow,
+                    });
+                }
+                Edge::Conditional { source, targets, .. } => {
+                    relationships.extend(targets.values().filter_map(|target| {
+                        target.node_name().map(|target| AgentTopologyRelationship {
+                            from: source.clone(),
+                            to: target.to_string(),
+                            kind: AgentRelationshipKind::Flow,
+                        })
+                    }));
+                }
+                Edge::Direct { target: EdgeTarget::End, .. } | Edge::Entry { .. } => {}
+            }
+        }
+        relationships.sort_by(|left, right| (&left.from, &left.to).cmp(&(&right.from, &right.to)));
+        relationships.dedup_by(|left, right| left.from == right.from && left.to == right.to);
+
+        Some(AgentTopology {
+            root: self.name.clone(),
+            coordinator: self.name.clone(),
+            members,
+            relationships,
+        })
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_core::Result<EventStream> {
@@ -706,5 +780,14 @@ mod tests {
         let result = agent.invoke(State::new(), ExecutionConfig::new("test")).await.unwrap();
 
         assert_eq!(result.get("value"), Some(&json!(42)));
+
+        let topology = agent.topology().expect("graph topology");
+        assert_eq!(topology.root, "test");
+        assert_eq!(topology.coordinator, "test");
+        assert_eq!(topology.members.len(), 2);
+        assert_eq!(topology.relationships.len(), 1);
+        assert_eq!(topology.relationships[0].from, "test");
+        assert_eq!(topology.relationships[0].to, "set");
+        assert_eq!(topology.relationships[0].kind, AgentRelationshipKind::Flow);
     }
 }

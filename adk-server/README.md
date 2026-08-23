@@ -13,7 +13,7 @@ HTTP server and A2A v1.0.0 protocol for Rust Agent Development Kit (ADK-Rust) ag
 - **REST API** - Standard HTTP endpoints for agent interaction
 - **A2A Protocol** - Agent-to-Agent v1.0.0 communication (JSON-RPC 2.0, all 11 operations)
 - **SSE Streaming** - Server-Sent Events for real-time responses
-- **Web UI** - Built-in chat interface for testing
+- **Runtime UI** - Built-in responsive interface for agent and team execution
 - **RemoteA2aAgent** - Connect to remote agents as sub-agents
 - **Auth Bridge** - Flow authenticated identity from HTTP headers into agent execution
 - **Artifacts** - Binary artifact storage and retrieval per session
@@ -333,6 +333,7 @@ deployment across several needs a shared store; implement `RunPersistence` for o
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/ui/capabilities` | GET | Supported UI protocols plus capability metadata (`versions`, `features`, `implementationTier`, `specTrack`, `summary`, `limitations`) |
+| `/api/ui/agents/{name}` | GET | Agent capabilities, hierarchy, and exact portable team topology |
 | `/api/ui/initialize` | POST | Additive MCP Apps host-bridge initialize helper (direct body or JSON-RPC-like envelope) |
 | `/api/ui/message` | POST | Additive MCP Apps host-bridge message helper |
 | `/api/ui/update-model-context` | POST | Additive MCP Apps host-bridge model-context helper |
@@ -387,10 +388,22 @@ For embedded-host mappings, the additive HTTP bridge corresponds to MCP Apps hos
 
 ### Web UI
 
+The ADK-Rust-owned interface uses the Studio Next visual language while staying
+focused on execution. It displays Markdown-formatted conversations and multimodal attachments,
+streaming tool activity, handoffs, animated exact team delegation/handoff topology, realtime
+transcripts and completed audio, event timelines, dedicated telemetry spans, session and shared
+state, artifacts, prior sessions, configured runtime services, A2A discovery, and negotiated UI
+and MCP Apps protocols. It is responsive, keyboard accessible, supports system/light/dark themes,
+and has no external font or asset dependency. The **ADK Runtime** brand links to
+[adk-rust.com](https://adk-rust.com).
+
+See [`examples/advanced_agents/`](../examples/advanced_agents/) for one OpenAI-backed server
+demonstrating ambient scheduling, realtime voice, A2A, MCP discovery/tasks, and telemetry.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Redirect to `/ui/` |
-| `/ui/` | GET | Built-in chat interface |
+| `/ui/` | GET | Built-in agent and team runtime interface |
 | `/ui/assets/config/runtime-config.json` | GET | Runtime configuration |
 | `/ui/{*path}` | GET | Static UI assets |
 

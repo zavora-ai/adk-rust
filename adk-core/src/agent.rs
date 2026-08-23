@@ -31,6 +31,78 @@ pub struct AgentCapabilities {
     pub invocation_metadata: bool,
 }
 
+/// Primary interaction pattern exposed by an [`Agent`].
+///
+/// This describes how a runtime should present the agent, not how the agent is
+/// composed. Teams and workflows therefore retain their existing agent
+/// primitives while a realtime implementation can advertise audio-oriented
+/// interaction to generic servers and user interfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentInteractionMode {
+    /// A bounded request produces a bounded stream of response events.
+    #[default]
+    RequestResponse,
+    /// A long-lived bidirectional session may emit audio and transcript events.
+    Realtime,
+}
+
+/// Portable description of a member in an agent composition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTopologyMember {
+    /// Stable member name used by the runtime.
+    pub name: String,
+    /// Human-readable member purpose.
+    pub description: String,
+    /// Whether this member receives the initial request.
+    pub coordinator: bool,
+    /// Runtime capabilities declared by the bound member.
+    pub capabilities: AgentCapabilities,
+}
+
+/// Control-flow semantics for one portable composition relationship.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentRelationshipKind {
+    /// Deterministic workflow control flows from the source node to the target node.
+    Flow,
+    /// Invoke the target and return its result to the caller.
+    Delegate,
+    /// Transfer active control to the target.
+    Handoff,
+}
+
+/// One exact directed relationship in a portable agent composition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTopologyRelationship {
+    /// Calling or transferring member.
+    pub from: String,
+    /// Exact target member.
+    pub to: String,
+    /// Relationship execution semantics.
+    pub kind: AgentRelationshipKind,
+}
+
+/// Portable topology metadata for a composed agent root.
+///
+/// The metadata is deliberately execution-provider neutral. Runtimes and user
+/// interfaces can inspect a composition without depending on a concrete team,
+/// graph, workflow, or model implementation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTopology {
+    /// Stable executable root name.
+    pub root: String,
+    /// Member that receives the initial request.
+    pub coordinator: String,
+    /// Members bound to the composition.
+    pub members: Vec<AgentTopologyMember>,
+    /// Exact directed relationships between members.
+    pub relationships: Vec<AgentTopologyRelationship>,
+}
+
 /// One proposed agent-to-agent transfer presented to a composite root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +145,15 @@ pub trait Agent: Send + Sync {
     /// Returns the child agents managed by this agent.
     fn sub_agents(&self) -> &[Arc<dyn Agent>];
 
+    /// Returns the agent's primary interaction pattern.
+    ///
+    /// Existing agents remain request/response by default. Realtime agents
+    /// override this without introducing a new atomic agent kind or changing
+    /// composition semantics.
+    fn interaction_mode(&self) -> AgentInteractionMode {
+        AgentInteractionMode::RequestResponse
+    }
+
     /// Whether this agent participates in LLM-driven agent transfer and may be
     /// resumed directly across conversation turns.
     ///
@@ -106,6 +187,14 @@ pub trait Agent: Send + Sync {
             shared_state: true,
             invocation_metadata: true,
         }
+    }
+
+    /// Returns portable composition metadata when this agent owns an explicit topology.
+    ///
+    /// Leaf agents and legacy composites return `None`. The default keeps this
+    /// additive API backward compatible for existing [`Agent`] implementations.
+    fn topology(&self) -> Option<AgentTopology> {
+        None
     }
 
     /// Applies agent-composition policy to a run before the runtime creates the
@@ -320,6 +409,8 @@ mod tests {
         assert_eq!(agent.description(), "test agent");
         assert!(agent.capabilities().handoff);
         assert!(!agent.capabilities().runtime_tools);
+        assert_eq!(agent.interaction_mode(), AgentInteractionMode::RequestResponse);
+        assert_eq!(agent.topology(), None);
     }
 
     #[tokio::test]

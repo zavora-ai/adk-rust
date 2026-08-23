@@ -62,6 +62,10 @@ RUST_LOG=adk=debug cargo run
 RUST_LOG=adk_agent=trace,adk_model=debug cargo run
 ```
 
+`RUST_LOG` controls console verbosity. Runtime span collection configured by
+`init_with_adk_exporter` is independent, so production settings such as
+`RUST_LOG=warn` do not disable the server's session telemetry.
+
 ## OpenTelemetry Export
 
 Configure OTLP export for distributed tracing:
@@ -101,10 +105,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Spans are written by a background thread (batched transactions, WAL mode), so
-the traced code path never blocks on I/O. By default only agent-loop spans are
-stored (`agent.execute`, `call_llm`, `send_data`, `execute_tool*`);
+the traced code path never blocks on I/O. By default agent-loop and portable
+team spans are stored (`agent.execute`, `call_llm`, `send_data`,
+`execute_tool*`, and `team.*`);
 `SqliteSpanExporter::new(path)?.record_all_spans(true)` keeps everything the
-`RUST_LOG` filter lets through.
+subscriber's telemetry-layer filter lets through.
 
 Read traces back with `SqliteTraceReader` (or any SQLite client — the schema
 is one `spans` table with an `attributes` JSON column):

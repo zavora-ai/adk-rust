@@ -1314,6 +1314,36 @@ impl Agent for CompiledTeam {
         self.coordinator.capabilities()
     }
 
+    fn topology(&self) -> Option<adk_core::AgentTopology> {
+        Some(adk_core::AgentTopology {
+            root: self.name.clone(),
+            coordinator: self.coordinator_name.clone(),
+            members: self
+                .members
+                .iter()
+                .map(|member| adk_core::AgentTopologyMember {
+                    name: member.name().to_string(),
+                    description: member.description().to_string(),
+                    coordinator: member.name() == self.coordinator_name,
+                    capabilities: member.capabilities(),
+                })
+                .collect(),
+            relationships: self
+                .spec
+                .relationships
+                .iter()
+                .map(|relationship| adk_core::AgentTopologyRelationship {
+                    from: relationship.from.clone(),
+                    to: relationship.to.clone(),
+                    kind: match relationship.kind {
+                        RelationshipKind::Delegate => adk_core::AgentRelationshipKind::Delegate,
+                        RelationshipKind::Handoff => adk_core::AgentRelationshipKind::Handoff,
+                    },
+                })
+                .collect(),
+        })
+    }
+
     fn configure_run(&self, agent_name: &str, config: &mut RunConfig) {
         let member_name =
             if agent_name == self.name { self.coordinator_name.as_str() } else { agent_name };
@@ -1374,8 +1404,12 @@ impl Agent for CompiledTeam {
             kind: None,
             attempt: None,
         };
-        let team_span =
-            adk_telemetry::team_run_span(&self.name, &root_invocation_id, &self.coordinator_name);
+        let team_span = adk_telemetry::team_run_span_with_context(
+            &self.name,
+            &root_invocation_id,
+            ctx.session_id(),
+            &self.coordinator_name,
+        );
         if let TeamLifecycleDecision::Terminate { reason } =
             self.runtime.before_lifecycle(&lifecycle).instrument(team_span.clone()).await?
         {
@@ -1655,10 +1689,11 @@ impl Agent for TeamMemberAgent {
             kind: None,
             attempt: None,
         };
-        let member_span = adk_telemetry::team_member_span(
+        let member_span = adk_telemetry::team_member_span_with_context(
             self.runtime.team_name(),
             &self.name,
             &root_invocation_id,
+            ctx.session_id(),
         );
         if let TeamLifecycleDecision::Terminate { reason } =
             self.runtime.before_lifecycle(&member_lifecycle).instrument(member_span.clone()).await?
@@ -1695,12 +1730,14 @@ impl Agent for TeamMemberAgent {
         });
         let incoming = self.incoming_execution(ctx.as_ref(), &root_invocation_id);
         let incoming_relationship_span = incoming.as_ref().map(|(relationship, edge)| {
-            adk_telemetry::team_relationship_span(
+            adk_telemetry::team_relationship_span_with_context(
                 self.runtime.team_name(),
                 &relationship.from,
                 &relationship.to,
                 "handoff",
                 &edge.id,
+                &root_invocation_id,
+                ctx.session_id(),
             )
         });
         let incoming_lifecycle =
@@ -2391,12 +2428,14 @@ impl Tool for BoundedDelegateTool {
             kind: Some(RelationshipKind::Delegate),
             attempt: Some(1),
         };
-        let relationship_span = adk_telemetry::team_relationship_span(
+        let relationship_span = adk_telemetry::team_relationship_span_with_context(
             self.runtime.team_name(),
             &self.relationship.from,
             &self.relationship.to,
             "delegate",
             &execution_id,
+            &root_invocation_id,
+            ctx.session_id(),
         );
         let relationship_started = std::time::Instant::now();
         if let TeamLifecycleDecision::Terminate { reason } =
@@ -2813,6 +2852,16 @@ mod tests {
         );
         assert_eq!(team.transfer_targets_for("billing"), Some(Vec::new()));
         assert!(team.strict_transfer_policy());
+        let topology = team.topology().unwrap();
+        assert_eq!(topology.root, "support_team");
+        assert_eq!(topology.coordinator, "supervisor");
+        assert_eq!(topology.members.len(), 3);
+        assert!(topology.members[0].coordinator);
+        assert_eq!(topology.relationships.len(), 2);
+        assert!(topology.relationships.iter().all(|relationship| {
+            relationship.kind == adk_core::AgentRelationshipKind::Handoff
+                && relationship.from == "supervisor"
+        }));
     }
 
     #[test]

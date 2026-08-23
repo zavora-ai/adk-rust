@@ -1,41 +1,17 @@
-# ADK Web UI Assets
+# ADK Runtime UI assets
 
-This directory contains the pre-built frontend assets for the ADK Web UI.
+This directory contains the production build embedded by `adk-server`. The
+maintained React and TypeScript source lives in [`../webui`](../webui); these
+files are checked in so crate consumers do not need Node.js.
 
-## Source
+Regenerate the assets after changing the frontend:
 
-These assets are compiled from the Angular application located in:
+```bash
+cd adk-server/webui
+npm ci
+npm run verify
 ```
-adk-go/cmd/launcher/web/webui/
-```
 
-## Contents
-
-- `index.html` - Main HTML entry point
-- `*.js` - Compiled JavaScript bundles
-- `*.css` - Stylesheets
-- `assets/` - Images, fonts, and configuration
-- `adk_favicon.svg` - ADK favicon
-
-## Updating Assets
-
-To update the Web UI (when upstream changes):
-
-1. Navigate to the adk-go repository
-2. Build the Web UI:
-   ```bash
-   cd cmd/launcher/web/webui
-   npm install
-   npm run build
-   ```
-3. Copy the built assets:
-   ```bash
-   cp -r distr/* ../../../../adk-rust/adk-server/assets/webui/
-   ```
-
-## License
-
-Copyright 2025 Google LLC
-
-Licensed under the Apache License, Version 2.0.
-See the main LICENSE file in the repository root.
+The Vite build writes directly to `adk-server/assets/webui`. Commit source and
+generated assets together. The interface is owned by ADK-Rust and uses the ADK
+Studio Next design language; it is not copied from the Google ADK Web UI.

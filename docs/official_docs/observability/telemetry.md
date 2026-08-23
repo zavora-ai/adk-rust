@@ -97,7 +97,32 @@ export RUST_LOG=adk_agent=debug,adk_model=info
 export RUST_LOG=warn,adk_agent=debug
 ```
 
-The telemetry system defaults to `info` level if `RUST_LOG` is not set.
+Console logging defaults to `info` if `RUST_LOG` is not set. Runtime span
+collection configured by `init_with_adk_exporter` is independent of this
+console filter: `RUST_LOG=warn` still retains agent, model, tool, and portable
+team spans for the server's session telemetry interface.
+
+### In-process session telemetry
+
+Servers can expose zero-infrastructure traces through the embedded runtime UI:
+
+```rust
+let exporter = adk_telemetry::init_with_adk_exporter("my-agent")?;
+let config = ServerConfig::new(agent_loader, session_service)
+    .with_span_exporter(exporter);
+```
+
+The agent-details response preserves the existing `services.telemetry` boolean
+and adds `services.telemetryStatus`:
+
+- `disabled` — no exporter is configured;
+- `configured` — the exporter is ready but has not retained a supported span;
+- `collecting` — at least one supported runtime span has been retained.
+
+Calling `init_with_adk_exporter` more than once returns the same registered
+exporter. If another global telemetry mode was initialized first, it returns an
+actionable error instead of a disconnected exporter that can never receive
+spans.
 
 ## Logging Macros
 
@@ -524,7 +549,7 @@ export RUST_LOG=warn,my_app=info
 
 1. Check `RUST_LOG` environment variable is set
 2. Ensure `init_telemetry()` is called before any logging
-3. Verify telemetry is initialized only once (uses `Once` internally)
+3. Initialize the intended global telemetry mode before constructing the server
 
 ### Traces Not Exported
 
@@ -532,6 +557,10 @@ export RUST_LOG=warn,my_app=info
 2. Check collector is running and accepting connections
 3. Call `shutdown_telemetry()` before application exit to flush pending spans
 4. Check for network/firewall issues
+
+For the embedded runtime UI, check `services.telemetryStatus`. `configured`
+means the exporter is attached but the selected session has not produced a
+retained runtime span; `collecting` confirms the collector has received data.
 
 ### Missing Context in Spans
 

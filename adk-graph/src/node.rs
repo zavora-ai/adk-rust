@@ -348,6 +348,16 @@ pub trait Node: Send + Sync {
     /// Node identifier
     fn name(&self) -> &str;
 
+    /// Human-readable purpose shown by generic workflow inspectors.
+    fn description(&self) -> &str {
+        "Graph workflow node"
+    }
+
+    /// Runtime capabilities inherited by portable graph topology metadata.
+    fn capabilities(&self) -> adk_core::AgentCapabilities {
+        adk_core::AgentCapabilities::default()
+    }
+
     /// Execute the node and return state updates
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput>;
 
@@ -626,6 +636,14 @@ fn default_output_mapper(events: &[adk_core::Event]) -> HashMap<String, Value> {
 impl Node for AgentNode {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn description(&self) -> &str {
+        self.agent.description()
+    }
+
+    fn capabilities(&self) -> adk_core::AgentCapabilities {
+        self.agent.capabilities()
     }
 
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput> {

@@ -73,6 +73,8 @@ Standalone crates demonstrating current ADK-Rust features. Each has its own `Car
 
 | Example | Feature | Run |
 |---------|---------|-----|
+| `examples/advanced_agents` | One embedded Runtime gallery for OpenAI chat, AmbientAgent scheduling, Realtime voice, A2A, MCP `2026-07-28` tasks, and telemetry | `cargo build --manifest-path examples/advanced_agents/Cargo.toml --bins && cargo run --manifest-path examples/advanced_agents/Cargo.toml --bin advanced-runtime` |
+| `examples/runtime_ui_showcase` | Embedded runtime UI gallery for a tool-calling agent, graph workflow, and portable team, with screenshots and walkthroughs | `cargo run --manifest-path examples/runtime_ui_showcase/Cargo.toml --bin runtime-ui-tools` |
 | `examples/team_architectures` | Portable `TeamSpec` examples for handoff, delegation, parallel shared-state swarms, and hybrid workflows | `cargo run --manifest-path examples/team_architectures/Cargo.toml --bin team-supervisor-handoff` |
 
 **Requires Google Cloud ADC (`gcloud auth application-default login`):**

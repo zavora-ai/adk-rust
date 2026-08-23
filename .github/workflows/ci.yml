@@ -43,6 +43,29 @@ jobs:
     - name: Check formatting
       run: cargo fmt --all -- --check
 
+  # ── Built-in runtime UI: source, tests, and embedded build ─────
+  webui:
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: adk-server/webui/package-lock.json
+
+    - name: Verify runtime UI
+      working-directory: adk-server/webui
+      run: |
+        npm ci
+        npm run verify
+
+    - name: Require generated assets to match source
+      run: git diff --exit-code -- adk-server/assets/webui
+
   # ── Lint: clippy (parallel with test) ──────────────────────────
   clippy:
     needs: fmt
@@ -505,6 +528,7 @@ jobs:
     if: always()
     needs:
       - fmt
+      - webui
       - clippy
       - test
       - feature-coverage
