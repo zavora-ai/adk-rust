@@ -38,13 +38,13 @@ pub struct GeminiEmbeddingProvider {
 }
 
 impl GeminiEmbeddingProvider {
-    /// Default embedding dimensions for `gemini-embedding-001`.
+    /// Default embedding dimensions for `gemini-embedding-2`.
     const DEFAULT_DIMENSIONS: usize = 3072;
 
     /// Create a new provider using the given API key and the default
-    /// `gemini-embedding-001` model.
+    /// `gemini-embedding-2` model.
     pub fn new(api_key: impl AsRef<str>) -> Result<Self> {
-        let client = Gemini::with_model(api_key, Model::GeminiEmbedding001).map_err(|e| {
+        let client = Gemini::with_model(api_key, Model::GeminiEmbedding2).map_err(|e| {
             RagError::EmbeddingError {
                 provider: "Gemini".into(),
                 message: format!("failed to create Gemini client: {e}"),

@@ -33,10 +33,10 @@ export ANTHROPIC_API_KEY=sk-ant-...
 ## Direct Client Usage
 
 ```rust
-use adk_anthropic::{Anthropic, KnownModel, MessageCreateParams};
+use adk_anthropic::{Anthropic, MessageCreateParams, Model};
 
 let client = Anthropic::new(None)?; // reads ANTHROPIC_API_KEY
-let params = MessageCreateParams::simple("Hello!", KnownModel::ClaudeSonnet46);
+let params = MessageCreateParams::simple("Hello!", Model::claude_sonnet_5());
 let response = client.send(params).await?;
 ```
 
@@ -87,20 +87,22 @@ validated when `AnthropicClient::new` builds the underlying client.
 
 ## Key Features
 
-### Adaptive Thinking (4.6+ models)
+### Adaptive Thinking
 
 Opus 4.7 **only** supports adaptive thinking — `budget_tokens` is rejected.
 
 ```rust
-use adk_anthropic::{ThinkingConfig, OutputConfig, EffortLevel};
+use adk_anthropic::{
+    EffortLevel, KnownModel, MessageCreateParams, Model, OutputConfig, ThinkingConfig,
+};
 
 // Opus 4.7: use xhigh effort (recommended for coding/agentic)
 let mut params = MessageCreateParams::simple("Solve this...", KnownModel::ClaudeOpus47)
     .with_thinking(ThinkingConfig::adaptive());
 params.output_config = Some(OutputConfig::with_effort(EffortLevel::XHigh));
 
-// Sonnet 4.6: any effort level works
-let mut params = MessageCreateParams::simple("Solve this...", KnownModel::ClaudeSonnet46)
+// Sonnet 5: balanced default for agentic workloads
+let mut params = MessageCreateParams::simple("Solve this...", Model::claude_sonnet_5())
     .with_thinking(ThinkingConfig::adaptive());
 params.output_config = Some(OutputConfig::with_effort(EffortLevel::High));
 ```
@@ -108,9 +110,9 @@ params.output_config = Some(OutputConfig::with_effort(EffortLevel::High));
 ### Prompt Caching
 
 ```rust
-use adk_anthropic::CacheControlEphemeral;
+use adk_anthropic::{CacheControlEphemeral, MessageCreateParams, Model};
 
-let mut params = MessageCreateParams::simple("Question", KnownModel::ClaudeSonnet46)
+let mut params = MessageCreateParams::simple("Question", Model::claude_sonnet_5())
     .with_system("Large system prompt...");
 params.cache_control = Some(CacheControlEphemeral::new());
 ```
@@ -118,9 +120,9 @@ params.cache_control = Some(CacheControlEphemeral::new());
 ### Structured Output
 
 ```rust
-use adk_anthropic::{OutputConfig, OutputFormat};
+use adk_anthropic::{MessageCreateParams, Model, OutputConfig, OutputFormat};
 
-let mut params = MessageCreateParams::simple("Extract data", KnownModel::ClaudeSonnet46);
+let mut params = MessageCreateParams::simple("Extract data", Model::claude_sonnet_5());
 params.output_config = Some(OutputConfig::new(OutputFormat::json_schema(schema)));
 ```
 
@@ -129,7 +131,7 @@ params.output_config = Some(OutputConfig::new(OutputFormat::json_schema(schema))
 ```rust
 use adk_anthropic::pricing::{ModelPricing, estimate_cost};
 
-let cost = estimate_cost(ModelPricing::SONNET_46, &response.usage);
+let cost = estimate_cost(ModelPricing::SONNET_5, &response.usage);
 println!("${:.6}", cost.total());
 ```
 

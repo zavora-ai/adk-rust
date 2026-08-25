@@ -182,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
 name: bad_temp_agent
 model:
   provider: gemini
-  model_id: gemini-2.0-flash
+  model_id: gemini-3.7-flash
   temperature: 5.0
 "#;
     let bad_temp_path = temp_dir.path().join("bad_temp.yaml");

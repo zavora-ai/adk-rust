@@ -30,11 +30,10 @@ name: researcher
 description: "A research assistant"
 model:
   provider: gemini
-  model_id: gemini-2.0-flash
+  model_id: gemini-3.7-flash
 instructions: |
   You are a research assistant.
 config:
-  temperature: 0.3
   max_tokens: 1024
 ```
 

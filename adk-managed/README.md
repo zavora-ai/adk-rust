@@ -159,7 +159,7 @@ The central async trait defining the full agent lifecycle:
 Declarative agent definition with a builder API:
 
 ```rust,ignore
-let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-2.5-flash".into()))
+let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.7-flash".into()))
     .with_system("You are a helpful assistant.")
     .with_description("Research agent with web search")
     .with_tools(vec![ToolConfig::WebSearch {}]);
@@ -196,15 +196,15 @@ Provider-neutral model reference:
 
 ```rust,ignore
 // Shorthand (provider inferred from name prefix)
-ModelRef::Shorthand("gemini-2.5-flash".into())   // → Gemini
-ModelRef::Shorthand("gpt-4.1".into())            // → OpenAI
-ModelRef::Shorthand("claude-3.5-sonnet".into())  // → Anthropic
+ModelRef::Shorthand("gemini-3.7-flash".into()) // → Gemini
+ModelRef::Shorthand("gpt-5.6-terra".into())    // → OpenAI
+ModelRef::Shorthand("claude-sonnet-5".into())  // → Anthropic
 
 // Structured (explicit provider)
 ModelRef::Structured {
     provider: Provider::OpenaiCompatible,
     model: ModelConfig::Compatible {
-        model: "deepseek-chat".into(),
+        model: "deepseek-v4-flash".into(),
         base_url: "https://api.deepseek.com/v1".into(),
         api_key: "sk-...".into(),
     },

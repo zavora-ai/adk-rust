@@ -91,7 +91,7 @@ use axum::routing::post;
 use tokio::sync::RwLock;
 
 // 1. Create your agent
-let model = adk_model::GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+let model = adk_model::GeminiModel::new(&api_key, "gemini-3.7-flash")?;
 let agent = LlmAgentBuilder::new("my-agent")
     .description("A helpful agent")
     .model(Arc::new(model))

@@ -48,7 +48,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Using custom model strings for specific versions or preview models
     let client_custom_string =
-        Gemini::with_model(api_key.clone(), "models/gemini-2.5-flash-image-preview".to_string())?;
+        Gemini::with_model(api_key.clone(), "models/gemini-3.1-flash-image".to_string())?;
     info!("created client with custom model string for image generation");
 
     // 5. Using Model::Custom for any other model

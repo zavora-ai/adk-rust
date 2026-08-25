@@ -60,7 +60,7 @@ Each `Llm` implementation returns its adapter via `schema_adapter()`:
 ```rust
 use adk_core::Llm;
 
-let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
 let adapter = model.schema_adapter(); // Returns &GeminiSchemaAdapter
 ```
 

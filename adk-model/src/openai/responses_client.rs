@@ -1,6 +1,6 @@
 //! OpenAI Responses API client implementation.
 
-use super::config::{OpenAIResponsesConfig, ReasoningEffort, ReasoningSummary};
+use super::config::{OpenAIReasoningEffort, OpenAIResponsesConfig, ReasoningSummary};
 use super::responses_convert;
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
@@ -28,7 +28,7 @@ use futures::StreamExt;
 pub struct OpenAIResponsesClient {
     client: async_openai::Client<async_openai::config::OpenAIConfig>,
     model: String,
-    reasoning_effort: Option<ReasoningEffort>,
+    reasoning_effort: Option<OpenAIReasoningEffort>,
     reasoning_summary: Option<ReasoningSummary>,
     retry_config: RetryConfig,
     /// HTTP client for direct API calls (compaction, polling, etc.).
@@ -52,6 +52,26 @@ impl OpenAIResponsesClient {
     /// Returns `AdkError` with `InvalidInput` if `api_key` is empty and
     /// Open Responses mode is not enabled with a custom base URL.
     pub fn new(config: OpenAIResponsesConfig) -> Result<Self, AdkError> {
+        let reasoning_effort = config.reasoning_effort.map(OpenAIReasoningEffort::from);
+        Self::new_inner(config, reasoning_effort)
+    }
+
+    /// Create a Responses API client with the complete reasoning-effort vocabulary.
+    ///
+    /// This constructor supports the `none`, `minimal`, `xhigh`, and `max` values
+    /// used across current OpenAI model generations while retaining the original
+    /// configuration field for backward compatibility.
+    pub fn new_with_reasoning_effort(
+        config: OpenAIResponsesConfig,
+        reasoning_effort: OpenAIReasoningEffort,
+    ) -> Result<Self, AdkError> {
+        Self::new_inner(config, Some(reasoning_effort))
+    }
+
+    fn new_inner(
+        config: OpenAIResponsesConfig,
+        reasoning_effort: Option<OpenAIReasoningEffort>,
+    ) -> Result<Self, AdkError> {
         let open_responses_mode = config.open_responses_mode.unwrap_or(false);
 
         // In Open Responses mode with a custom base URL, allow empty API keys
@@ -86,6 +106,11 @@ impl OpenAIResponsesClient {
             openai_config = openai_config.with_api_base(base_url);
         }
         let client = async_openai::Client::with_config(openai_config);
+        let client = if matches!(reasoning_effort, Some(OpenAIReasoningEffort::Max)) {
+            with_max_reasoning_middleware(client)
+        } else {
+            client
+        };
 
         let base_url =
             config.base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
@@ -93,7 +118,7 @@ impl OpenAIResponsesClient {
         Ok(Self {
             client,
             model: config.model,
-            reasoning_effort: config.reasoning_effort,
+            reasoning_effort,
             reasoning_summary: config.reasoning_summary,
             retry_config: RetryConfig::default(),
             http: reqwest::Client::new(),
@@ -149,6 +174,132 @@ impl OpenAIResponsesClient {
     pub fn is_open_responses_mode(&self) -> bool {
         self.open_responses_mode
     }
+}
+
+fn with_max_reasoning_middleware(
+    client: async_openai::Client<async_openai::config::OpenAIConfig>,
+) -> async_openai::Client<async_openai::config::OpenAIConfig> {
+    use async_openai::error::OpenAIError;
+    use async_openai::middleware::retry::OpenAIRetryLayer;
+    use async_openai::middleware::{HttpRequestFactory, ReqwestService};
+    use tower::ServiceExt;
+
+    let transport = tower::ServiceBuilder::new()
+        .layer(OpenAIRetryLayer::default())
+        .service(ReqwestService::default());
+    let service = tower::service_fn(move |factory: HttpRequestFactory| {
+        let transport = transport.clone();
+        async move {
+            let original = factory.clone();
+            let rewritten = HttpRequestFactory::new(move || {
+                let original = original.clone();
+                async move {
+                    let mut request = original.build().await?;
+                    if request.url().path().ends_with("/responses") {
+                        let body =
+                            request.body().and_then(|body| body.as_bytes()).ok_or_else(|| {
+                                OpenAIError::InvalidArgument(
+                                    "Responses request body was not replayable".to_string(),
+                                )
+                            })?;
+                        let body_text = String::from_utf8_lossy(body).into_owned();
+                        let mut value: serde_json::Value = serde_json::from_slice(body)
+                            .map_err(|error| OpenAIError::JSONDeserialize(error, body_text))?;
+                        set_max_reasoning_effort(&mut value)?;
+                        let encoded = serde_json::to_vec(&value).map_err(|error| {
+                            OpenAIError::InvalidArgument(format!(
+                                "failed to serialize max-reasoning request: {error}"
+                            ))
+                        })?;
+                        *request.body_mut() = Some(encoded.into());
+                    }
+                    Ok(request)
+                }
+            });
+            let response = transport.oneshot(rewritten).await?;
+            normalize_max_reasoning_response(response).await
+        }
+    });
+
+    client.with_http_service(service)
+}
+
+async fn normalize_max_reasoning_response(
+    response: reqwest_openai::Response,
+) -> Result<reqwest_openai::Response, async_openai::error::OpenAIError> {
+    use reqwest_openai::ResponseBuilderExt;
+
+    if !response.status().is_success() {
+        return Ok(response);
+    }
+
+    let is_event_stream = response
+        .headers()
+        .get(reqwest_openai::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/event-stream"));
+    let status = response.status();
+    let version = response.version();
+    let url = response.url().clone();
+    let mut headers = response.headers().clone();
+    headers.remove(reqwest_openai::header::CONTENT_LENGTH);
+
+    let body = if is_event_stream {
+        let mut upstream = response.bytes_stream();
+        let normalized = async_stream::stream! {
+            let mut pending = Vec::new();
+            while let Some(chunk) = upstream.next().await {
+                match chunk {
+                    Ok(chunk) => {
+                        pending.extend_from_slice(&chunk);
+                        while let Some(line_end) = pending.iter().position(|byte| *byte == b'\n') {
+                            let line: Vec<u8> = pending.drain(..=line_end).collect();
+                            yield Ok::<Vec<u8>, reqwest_openai::Error>(normalize_max_reasoning_bytes(&line));
+                        }
+                    }
+                    Err(error) => yield Err(error),
+                }
+            }
+            if !pending.is_empty() {
+                yield Ok::<Vec<u8>, reqwest_openai::Error>(normalize_max_reasoning_bytes(&pending));
+            }
+        };
+        reqwest_openai::Body::wrap_stream(normalized)
+    } else {
+        let bytes = response.bytes().await.map_err(async_openai::error::OpenAIError::Reqwest)?;
+        reqwest_openai::Body::from(normalize_max_reasoning_bytes(&bytes))
+    };
+
+    let mut rebuilt =
+        http::Response::builder().status(status).version(version).url(url).body(body).map_err(
+            |error| {
+                async_openai::error::OpenAIError::InvalidArgument(format!(
+                    "failed to rebuild max-reasoning response: {error}"
+                ))
+            },
+        )?;
+    *rebuilt.headers_mut() = headers;
+    Ok(reqwest_openai::Response::from(rebuilt))
+}
+
+fn normalize_max_reasoning_bytes(bytes: &[u8]) -> Vec<u8> {
+    String::from_utf8_lossy(bytes)
+        .replace("\"effort\":\"max\"", "\"effort\":\"xhigh\"")
+        .replace("\"effort\": \"max\"", "\"effort\": \"xhigh\"")
+        .into_bytes()
+}
+
+fn set_max_reasoning_effort(
+    value: &mut serde_json::Value,
+) -> Result<(), async_openai::error::OpenAIError> {
+    let reasoning =
+        value.get_mut("reasoning").and_then(serde_json::Value::as_object_mut).ok_or_else(|| {
+            async_openai::error::OpenAIError::InvalidArgument(
+                "max reasoning requires a Responses reasoning object".to_string(),
+            )
+        })?;
+    reasoning.insert("effort".to_string(), serde_json::Value::String("max".to_string()));
+    Ok(())
 }
 
 /// Map an `async_openai::error::OpenAIError` to an `AdkError`.
@@ -437,6 +588,30 @@ mod tests {
                 code: None,
             },
         })
+    }
+
+    #[test]
+    fn max_reasoning_rewrites_the_responses_wire_value() {
+        let mut body = serde_json::json!({
+            "model": "gpt-5.6-terra",
+            "reasoning": {"effort": "xhigh"}
+        });
+
+        set_max_reasoning_effort(&mut body).expect("max reasoning should be applied");
+
+        assert_eq!(body["reasoning"]["effort"], "max");
+    }
+
+    #[test]
+    fn max_reasoning_response_is_normalized_for_the_upstream_sdk() {
+        let compact = br#"{"reasoning":{"effort":"max"}}"#;
+        let spaced = br#"data: {"response":{"reasoning":{"effort": "max"}}}\n\n"#;
+
+        assert_eq!(normalize_max_reasoning_bytes(compact), br#"{"reasoning":{"effort":"xhigh"}}"#);
+        assert_eq!(
+            normalize_max_reasoning_bytes(spaced),
+            br#"data: {"response":{"reasoning":{"effort": "xhigh"}}}\n\n"#
+        );
     }
 
     #[test]

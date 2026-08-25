@@ -143,7 +143,7 @@ struct WeatherParams {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
 
     // Weather tool with proper schema
     let weather_tool = FunctionTool::new(
@@ -725,7 +725,8 @@ let frd = FunctionResponseData::with_file_data(
 let frd = FunctionResponseData::with_multimodal("tool", json, inline_parts, file_parts);
 ```
 
-> **Note**: Multimodal function responses require Gemini 3 series models (`gemini-3-flash-preview`, `gemini-3-pro-preview`). Earlier models return a 400 error.
+> **Note**: Multimodal function responses require Gemini 3 series models such as
+> `gemini-3.7-flash`. Earlier models return a 400 error.
 
 See `examples/multimodal_function_response/` for a complete working example.
 

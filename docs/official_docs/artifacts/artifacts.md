@@ -354,7 +354,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
 
     // Create artifact service and save an image
     let artifact_service = Arc::new(InMemoryArtifactService::new());

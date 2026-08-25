@@ -1,13 +1,14 @@
 //! Shared OpenAI-compatible provider implementation.
 
-use crate::openai::convert;
+use crate::openai::{OpenAIReasoningEffort, convert};
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
     AdkError, Content, ErrorCategory, ErrorComponent, FinishReason, GenericSchemaAdapter, Llm,
     LlmRequest, LlmResponse, LlmResponseStream, Part, SchemaAdapter, SchemaCache, UsageMetadata,
 };
 use async_openai::types::chat::{
-    CreateChatCompletionRequestArgs, ReasoningEffort, ResponseFormat, ResponseFormatJsonSchema,
+    CreateChatCompletionRequestArgs, ReasoningEffort as OaiReasoningEffort, ResponseFormat,
+    ResponseFormatJsonSchema,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -35,7 +36,7 @@ pub struct OpenAICompatibleConfig {
     pub project_id: Option<String>,
     /// Optional reasoning effort for OpenAI reasoning models.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_effort: Option<OaiReasoningEffort>,
     /// Whether to allow the model to call multiple tools in a single turn.
     pub parallel_tool_calls: bool,
 }
@@ -80,7 +81,7 @@ impl OpenAICompatibleConfig {
     }
 
     /// Set reasoning effort for reasoning models.
-    pub fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+    pub fn with_reasoning_effort(mut self, effort: OaiReasoningEffort) -> Self {
         self.reasoning_effort = Some(effort);
         self
     }
@@ -232,7 +233,7 @@ pub struct OpenAICompatible {
     model: String,
     provider_name: String,
     retry_config: RetryConfig,
-    reasoning_effort: Option<ReasoningEffort>,
+    reasoning_effort: Option<OpenAIReasoningEffort>,
     organization_id: Option<String>,
     parallel_tool_calls: bool,
 }
@@ -240,6 +241,25 @@ pub struct OpenAICompatible {
 impl OpenAICompatible {
     /// Create a new OpenAI-compatible client.
     pub fn new(config: OpenAICompatibleConfig) -> Result<Self, AdkError> {
+        let reasoning_effort = config.reasoning_effort.clone().map(|effort| match effort {
+            OaiReasoningEffort::None => OpenAIReasoningEffort::None,
+            OaiReasoningEffort::Minimal => OpenAIReasoningEffort::Minimal,
+            OaiReasoningEffort::Low => OpenAIReasoningEffort::Low,
+            OaiReasoningEffort::Medium => OpenAIReasoningEffort::Medium,
+            OaiReasoningEffort::High => OpenAIReasoningEffort::High,
+            OaiReasoningEffort::Xhigh => OpenAIReasoningEffort::XHigh,
+        });
+        Self::new_with_reasoning_effort(config, reasoning_effort)
+    }
+
+    /// Create an OpenAI-compatible client with the complete OpenAI reasoning vocabulary.
+    ///
+    /// This supports newer values such as `none`, `xhigh`, and `max` without changing
+    /// the backward-compatible [`OpenAICompatibleConfig::reasoning_effort`] field type.
+    pub fn new_with_reasoning_effort(
+        config: OpenAICompatibleConfig,
+        reasoning_effort: Option<OpenAIReasoningEffort>,
+    ) -> Result<Self, AdkError> {
         crate::catalog::warn_if_obsolete(&config.provider_name, &config.model);
         let base_url = config.base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
@@ -250,7 +270,7 @@ impl OpenAICompatible {
             model: config.model,
             provider_name: config.provider_name,
             retry_config: RetryConfig::default(),
-            reasoning_effort: config.reasoning_effort,
+            reasoning_effort,
             organization_id: config.organization_id,
             parallel_tool_calls: config.parallel_tool_calls,
         })
@@ -282,7 +302,7 @@ impl OpenAICompatible {
 pub(crate) fn build_request_json(
     model: &str,
     request: &LlmRequest,
-    reasoning_effort: &Option<ReasoningEffort>,
+    reasoning_effort: &Option<OpenAIReasoningEffort>,
     parallel_tool_calls: bool,
     adapter: &dyn SchemaAdapter,
     cache: &SchemaCache,
@@ -303,7 +323,6 @@ pub(crate) fn build_request_json(
         )
         .with_provider("gemini"));
     }
-
     let messages: Vec<_> = request.contents.iter().map(convert::content_to_message).collect();
 
     let mut request_builder = CreateChatCompletionRequestArgs::default();
@@ -316,8 +335,8 @@ pub(crate) fn build_request_json(
         request_builder.parallel_tool_calls(parallel_tool_calls);
     }
 
-    if let Some(effort) = reasoning_effort {
-        request_builder.reasoning_effort(effort.clone());
+    if let Some(effort) = reasoning_effort.and_then(to_oai_reasoning_effort) {
+        request_builder.reasoning_effort(effort);
     }
 
     if let Some(config) = &request.config {
@@ -353,6 +372,10 @@ pub(crate) fn build_request_json(
     let mut body = serde_json::to_value(&openai_request)
         .map_err(|e| AdkError::model(format!("failed to serialize request: {e}")))?;
 
+    if matches!(reasoning_effort, Some(OpenAIReasoningEffort::Max)) {
+        body["reasoning_effort"] = serde_json::Value::String("max".to_string());
+    }
+
     // GPT-5.6 defaults to medium reasoning, while Chat Completions function
     // tools require effective reasoning `none`. ADK's public reasoning enum
     // predates that value, so preserve source compatibility and make the safe
@@ -375,6 +398,18 @@ pub(crate) fn build_request_json(
     }
 
     Ok(body)
+}
+
+fn to_oai_reasoning_effort(effort: OpenAIReasoningEffort) -> Option<OaiReasoningEffort> {
+    match effort {
+        OpenAIReasoningEffort::None => Some(OaiReasoningEffort::None),
+        OpenAIReasoningEffort::Minimal => Some(OaiReasoningEffort::Minimal),
+        OpenAIReasoningEffort::Low => Some(OaiReasoningEffort::Low),
+        OpenAIReasoningEffort::Medium => Some(OaiReasoningEffort::Medium),
+        OpenAIReasoningEffort::High => Some(OaiReasoningEffort::High),
+        OpenAIReasoningEffort::XHigh => Some(OaiReasoningEffort::Xhigh),
+        OpenAIReasoningEffort::Max => None,
+    }
 }
 
 /// Send an HTTP POST and handle error status codes.
@@ -506,7 +541,7 @@ impl Llm for OpenAICompatible {
         let api_key = self.api_key.clone();
         let base_url = self.base_url.clone();
         let retry_config = self.retry_config.clone();
-        let reasoning_effort = self.reasoning_effort.clone();
+        let reasoning_effort = self.reasoning_effort;
         let organization_id = self.organization_id.clone();
 
         // Normalize tool schemas at request time using the schema adapter.
@@ -786,7 +821,7 @@ impl Llm for OpenAICompatible {
                         finish_reason: if is_tool { Some(adk_core::FinishReason::Stop) } else { None },
                         citation_metadata: None,
                         partial: !is_tool,
-                        turn_complete: is_tool,
+                        turn_complete: false,
                         interrupted: false,
                         error_code: None,
                         error_message: None,
@@ -932,6 +967,31 @@ mod tests {
     }
 
     #[test]
+    fn gpt_56_chat_serializes_max_reasoning() {
+        let adapter = GenericSchemaAdapter;
+        let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
+        let request = LlmRequest {
+            model: crate::catalog::OPENAI_DEFAULT.to_string(),
+            contents: Vec::new(),
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        };
+
+        let body = build_request_json(
+            crate::catalog::OPENAI_DEFAULT,
+            &request,
+            &Some(OpenAIReasoningEffort::Max),
+            true,
+            &adapter,
+            &cache,
+        )
+        .expect("request should build");
+
+        assert_eq!(body["reasoning_effort"], "max");
+    }
+
+    #[test]
     fn gemini_37_compatible_path_rejects_sampling_locally() {
         let mut request = LlmRequest::new("gemini-3.7-flash", Vec::new());
         request.config =
@@ -967,8 +1027,8 @@ mod tests {
     fn gemini_preset_supports_reasoning_effort() {
         // Gemini's OpenAI-compat layer maps reasoning_effort onto thinking levels.
         let config = OpenAICompatibleConfig::gemini("k", "gemini-3.5-flash")
-            .with_reasoning_effort(ReasoningEffort::Low);
-        assert_eq!(config.reasoning_effort, Some(ReasoningEffort::Low));
+            .with_reasoning_effort(OaiReasoningEffort::Low);
+        assert_eq!(config.reasoning_effort, Some(OaiReasoningEffort::Low));
     }
 
     #[test]

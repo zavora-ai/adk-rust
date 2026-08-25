@@ -199,7 +199,10 @@ mod preservation {
 
         let resp = &responses[0];
         assert!(!resp.partial);
-        assert!(resp.turn_complete);
+        assert!(
+            !resp.turn_complete,
+            "a tool-call response must keep the turn open for tool execution"
+        );
 
         let content = resp.content.as_ref().expect("response should have content");
 

@@ -1,4 +1,4 @@
-use adk_gemini::{Gemini, GenerationConfig};
+use adk_gemini::{Gemini, GenerationConfig, Model};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use display_error_chain::DisplayErrorChain;
 use std::env;
@@ -33,8 +33,8 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY environment variable not set");
 
     // Create client with the image generation model
-    // Use Gemini 2.5 Flash Image Preview for image generation
-    let client = Gemini::with_model(api_key, "models/gemini-2.5-flash-image-preview".to_string())
+    // Use the current Gemini Flash Image model for image generation.
+    let client = Gemini::with_model(api_key, Model::Gemini31FlashImage)
         .expect("unable to create Gemini API client");
 
     info!("starting image generation example");

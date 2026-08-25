@@ -121,7 +121,7 @@ const chat = document.getElementById("chat");
 const promptEl = document.getElementById("prompt");
 const sendBtn = document.getElementById("send");
 const statusDot = document.getElementById("status");
-const sessionId = "web-" + Math.random().toString(36).slice(2, 10);
+const sessionId = "web-" + crypto.randomUUID();
 
 let ws, wsReady = false, assistantBubble = null;
 
@@ -143,7 +143,7 @@ function scroll() {
   scrollQueued = true;
   requestAnimationFrame(() => {
     scrollQueued = false;
-    const c = lastCardKey && cards[lastCardKey];
+    const c = lastCardKey && cards.get(lastCardKey);
     if (c) c.body.scrollTop = c.body.scrollHeight;
     chat.scrollTop = chat.scrollHeight;
   });
@@ -171,7 +171,7 @@ function ensureAssistantBubble() {
 // into the body live; one-shot tools (read_file/grep/glob) render their result.
 // Either way the card is finalized when its `tool_result` arrives — so every
 // tool, streaming or not, shows its output.
-const cards = {};
+const cards = new Map();
 let lastCardKey = null;
 let cardSeq = 0;
 
@@ -200,7 +200,7 @@ function openCard(key, name, args) {
   term.append(head); term.append(body);
   chat.append(term); scroll();
   const card = { body, live, streamed: false };
-  cards[key] = card;
+  cards.set(key, card);
   lastCardKey = key;
   return card;
 }
@@ -208,8 +208,8 @@ function openCard(key, name, args) {
 // Resolve a card by call_id, falling back to the most recent one (progress
 // frames may omit an id for providers like Gemini).
 function cardFor(key) {
-  if (key && cards[key]) return cards[key];
-  if (lastCardKey && cards[lastCardKey]) return cards[lastCardKey];
+  if (key && cards.has(key)) return cards.get(key);
+  if (lastCardKey && cards.has(lastCardKey)) return cards.get(lastCardKey);
   return openCard("auto-" + (cardSeq++), "tool", null);
 }
 

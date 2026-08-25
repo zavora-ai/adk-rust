@@ -1,4 +1,4 @@
-//! Sample rate resampler using rubato.
+//! Sample rate resampler using bounded linear interpolation.
 
 use async_trait::async_trait;
 use bytes::Bytes;
