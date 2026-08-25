@@ -43,11 +43,6 @@ pub enum Tool {
         /// The computer use configuration
         computer_use: Value,
     },
-    /// Server-side retrieval tool (Vertex AI RAG grounding)
-    Retrieval {
-        /// The retrieval configuration
-        retrieval: RetrievalConfig,
-    },
     /// MCP server tool
     McpServer {
         /// The MCP server configuration
@@ -64,24 +59,6 @@ pub struct GoogleSearchConfig {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct URLContextConfig {}
 
-/// Configuration for the server-side retrieval tool.
-///
-/// Grounds generation in an external retrieval source. Currently the only
-/// supported source is a Vertex AI RAG store, so this tool is accepted by
-/// the Vertex AI backend only — the AI Studio API rejects it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct RetrievalConfig {
-    /// The Vertex AI RAG store to ground generation in
-    pub vertex_rag_store: VertexRagStore,
-}
-
-impl From<VertexRagStore> for RetrievalConfig {
-    fn from(vertex_rag_store: VertexRagStore) -> Self {
-        Self { vertex_rag_store }
-    }
-}
-
 /// A Vertex AI RAG store declaration for server-side retrieval grounding.
 ///
 /// References one or more RAG corpora (`projects/{project}/locations/{location}/ragCorpora/{id}`)
@@ -89,15 +66,19 @@ impl From<VertexRagStore> for RetrievalConfig {
 /// [`RagRetrievalConfig`] — the deprecated store-level `similarityTopK` and
 /// `vectorDistanceThreshold` wire fields are not exposed.
 ///
+/// Attach the store to a request with `ContentBuilder::with_vertex_rag_store`;
+/// the Vertex AI backend declares it as a `retrieval` tool at send time.
+/// Vertex AI backend only — the AI Studio backend rejects the request before
+/// dispatch.
+///
 /// # Example
 ///
 /// ```
-/// use adk_gemini::{Tool, VertexRagStore};
+/// use adk_gemini::VertexRagStore;
 ///
 /// let store = VertexRagStore::corpus("projects/p/locations/us-central1/ragCorpora/123")
 ///     .with_top_k(5)
 ///     .with_vector_distance_threshold(0.7);
-/// let tool = Tool::retrieval(store);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -252,23 +233,6 @@ impl Tool {
     /// Create a new computer use tool
     pub fn computer_use(config: Value) -> Self {
         Self::ComputerUse { computer_use: config }
-    }
-
-    /// Create a new server-side retrieval tool grounded in a Vertex AI RAG store.
-    ///
-    /// Vertex AI backend only — the AI Studio API rejects this tool.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use adk_gemini::{Tool, VertexRagStore};
-    ///
-    /// let tool = Tool::retrieval(
-    ///     VertexRagStore::corpus("projects/p/locations/us-central1/ragCorpora/123").with_top_k(5),
-    /// );
-    /// ```
-    pub fn retrieval(config: impl Into<RetrievalConfig>) -> Self {
-        Self::Retrieval { retrieval: config.into() }
     }
 
     /// Create a new MCP server tool
@@ -648,75 +612,60 @@ mod tests {
     }
 
     #[test]
-    fn retrieval_tool_serializes_exact_vertex_rag_store_wire_shape() {
+    fn vertex_rag_store_serializes_exact_wire_shape() {
         let corpus = "projects/p/locations/us-central1/ragCorpora/123";
-        let tool = Tool::retrieval(VertexRagStore::corpus(corpus).with_top_k(5));
+        let store = VertexRagStore::corpus(corpus).with_top_k(5);
 
-        let json = serde_json::to_value(&tool).unwrap();
+        let json = serde_json::to_value(&store).unwrap();
         assert_eq!(
             json,
             serde_json::json!({
-                "retrieval": {
-                    "vertexRagStore": {
-                        "ragResources": [{"ragCorpus": corpus}],
-                        "ragRetrievalConfig": {"topK": 5}
-                    }
-                }
+                "ragResources": [{"ragCorpus": corpus}],
+                "ragRetrievalConfig": {"topK": 5}
             })
         );
 
-        let deserialized: Tool = serde_json::from_value(json).unwrap();
-        assert_eq!(deserialized, tool);
+        let deserialized: VertexRagStore = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, store);
     }
 
     #[test]
-    fn retrieval_tool_with_file_ids_and_filter_serde_round_trip() {
+    fn vertex_rag_store_with_file_ids_and_filter_serde_round_trip() {
         let store = VertexRagStore::new(vec![
             RagResource::new("projects/p/locations/l/ragCorpora/1")
                 .with_file_ids(vec!["file-1".to_string(), "file-2".to_string()]),
         ])
         .with_top_k(3)
         .with_vector_distance_threshold(0.7);
-        let tool = Tool::retrieval(store);
 
-        let json = serde_json::to_value(&tool).unwrap();
+        let json = serde_json::to_value(&store).unwrap();
         assert_eq!(
             json,
             serde_json::json!({
-                "retrieval": {
-                    "vertexRagStore": {
-                        "ragResources": [{
-                            "ragCorpus": "projects/p/locations/l/ragCorpora/1",
-                            "ragFileIds": ["file-1", "file-2"]
-                        }],
-                        "ragRetrievalConfig": {
-                            "topK": 3,
-                            "filter": {"vectorDistanceThreshold": 0.7}
-                        }
-                    }
+                "ragResources": [{
+                    "ragCorpus": "projects/p/locations/l/ragCorpora/1",
+                    "ragFileIds": ["file-1", "file-2"]
+                }],
+                "ragRetrievalConfig": {
+                    "topK": 3,
+                    "filter": {"vectorDistanceThreshold": 0.7}
                 }
             })
         );
 
-        let deserialized: Tool = serde_json::from_value(json).unwrap();
-        assert_eq!(deserialized, tool);
+        let deserialized: VertexRagStore = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, store);
     }
 
     #[test]
-    fn retrieval_tool_similarity_threshold_serializes_into_filter() {
+    fn vertex_rag_store_similarity_threshold_serializes_into_filter() {
         let store = VertexRagStore::corpus("projects/p/locations/l/ragCorpora/1")
             .with_vector_similarity_threshold(0.8);
-        let json = serde_json::to_value(Tool::retrieval(store)).unwrap();
+        let json = serde_json::to_value(&store).unwrap();
         assert_eq!(
-            json["retrieval"]["vertexRagStore"]["ragRetrievalConfig"]["filter"],
+            json["ragRetrievalConfig"]["filter"],
             serde_json::json!({"vectorSimilarityThreshold": 0.8})
         );
-    }
-
-    #[test]
-    fn retrieval_tool_is_server_side() {
-        let tool = Tool::retrieval(VertexRagStore::corpus("projects/p/locations/l/ragCorpora/1"));
-        assert!(tool.is_server_side());
     }
 
     #[test]

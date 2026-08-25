@@ -989,14 +989,6 @@ impl GeminiModel {
         Ok((gemini_tools, tool_config))
     }
 
-    /// Maps the configured Vertex RAG store to the `retrieval` tool
-    /// declaration attached to outgoing requests. `None` when no store is
-    /// configured. This is the single seam the request path and tests share.
-    #[cfg(feature = "gemini-vertex")]
-    fn vertex_rag_tool(&self) -> Option<adk_gemini::Tool> {
-        self.vertex_rag_store.as_ref().map(|store| adk_gemini::Tool::retrieval(store.clone()))
-    }
-
     fn stream_chunks_from_response(
         mut response: LlmResponse,
         saw_partial_chunk: bool,
@@ -1306,11 +1298,12 @@ impl GeminiModel {
             }
         }
 
-        // Declare server-side RAG grounding (validate_request_contract has
+        // Declare server-side RAG grounding; the Vertex backend injects it
+        // as a `retrieval` tool at send time (validate_request_contract has
         // already rejected the Studio backend at this point).
         #[cfg(feature = "gemini-vertex")]
-        if let Some(tool) = self.vertex_rag_tool() {
-            builder = builder.with_tool(tool);
+        if let Some(store) = &self.vertex_rag_store {
+            builder = builder.with_vertex_rag_store(store.clone());
         }
 
         if stream {
@@ -2653,28 +2646,17 @@ mod vertex_rag_tests {
     // The Vertex constructor builds credential plumbing that requires a
     // current Tokio runtime, so this test is async.
     #[tokio::test]
-    async fn with_vertex_rag_store_threads_retrieval_tool_into_request() {
+    async fn vertex_backend_accepts_and_stores_the_rag_store() {
         let model = vertex_model().with_vertex_rag_store(test_store());
 
         model
             .validate_request_contract(&LlmRequest::new("gemini-3.7-flash", Vec::new()))
             .expect("vertex backend must accept the rag store");
 
-        let tool = model.vertex_rag_tool().expect("store must map to a retrieval tool");
-        assert_eq!(tool, adk_gemini::Tool::retrieval(test_store()));
-        assert_eq!(
-            serde_json::to_value(&tool).expect("serialize tool"),
-            serde_json::json!({
-                "retrieval": {
-                    "vertexRagStore": {
-                        "ragResources": [
-                            {"ragCorpus": "projects/p/locations/us-central1/ragCorpora/123"}
-                        ],
-                        "ragRetrievalConfig": {"topK": 5}
-                    }
-                }
-            })
-        );
+        // The stored store is handed to adk-gemini's ContentBuilder per
+        // request; the exact wire-shape injection is asserted in adk-gemini's
+        // backend tests.
+        assert_eq!(model.vertex_rag_store(), Some(&test_store()));
     }
 
     #[test]
@@ -2692,10 +2674,9 @@ mod vertex_rag_tests {
     }
 
     #[test]
-    fn no_rag_store_means_no_retrieval_tool_and_no_gate() {
+    fn no_rag_store_means_no_gate() {
         let model = GeminiModel::new("test-key", "gemini-3.7-flash").expect("construct model");
         assert_eq!(model.vertex_rag_store(), None);
-        assert_eq!(model.vertex_rag_tool(), None);
         model
             .validate_request_contract(&LlmRequest::new("gemini-3.7-flash", Vec::new()))
             .expect("no store configured, nothing to reject");

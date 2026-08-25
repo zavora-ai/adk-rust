@@ -26,6 +26,7 @@ use crate::{
     files::model::{File, ListFilesResponse},
     generation::{GenerateContentRequest, GenerationResponse},
     model_info::{ListModelsResponse, ModelInfo},
+    tools::model::VertexRagStore,
 };
 use async_trait::async_trait;
 use futures::Stream;
@@ -55,6 +56,36 @@ pub trait GeminiBackend: Send + Sync + std::fmt::Debug {
         &self,
         request: GenerateContentRequest,
     ) -> Result<BackendStream<GenerationResponse>, Error>;
+
+    // ── Vertex RAG grounding (Vertex AI only) ──────────────────────────
+
+    /// Generate content with a server-side Vertex RAG grounding declaration
+    /// (non-streaming).
+    ///
+    /// The Vertex AI backend declares `store` as a `retrieval` tool on the
+    /// outgoing request. The default implementation rejects the request —
+    /// `vertexRagStore` retrieval is a Vertex AI capability.
+    async fn generate_content_with_vertex_rag(
+        &self,
+        _request: GenerateContentRequest,
+        _store: VertexRagStore,
+    ) -> Result<GenerationResponse, Error> {
+        Err(Error::Validation {
+            message: "vertexRagStore retrieval requires the Vertex AI backend; construct the client with a Google Cloud configuration (e.g. Gemini::with_google_cloud_adc_model)".to_string(),
+        })
+    }
+
+    /// Streaming variant of
+    /// [`generate_content_with_vertex_rag`](Self::generate_content_with_vertex_rag).
+    async fn generate_content_stream_with_vertex_rag(
+        &self,
+        _request: GenerateContentRequest,
+        _store: VertexRagStore,
+    ) -> Result<BackendStream<GenerationResponse>, Error> {
+        Err(Error::Validation {
+            message: "vertexRagStore retrieval requires the Vertex AI backend; construct the client with a Google Cloud configuration (e.g. Gemini::with_google_cloud_adc_model)".to_string(),
+        })
+    }
 
     /// Embed content.
     async fn embed_content(

@@ -104,8 +104,7 @@ pub use generation::{
     model::GenerationConfig, model::GenerationResponse, model::GroundingChunk,
     model::GroundingMetadata, model::GroundingSegment, model::GroundingSupport,
     model::MultiSpeakerVoiceConfig, model::PrebuiltVoiceConfig, model::PromptFeedback,
-    model::PromptTokenDetails, model::RagChunk, model::RagChunkPageSpan,
-    model::RetrievedContextGroundingChunk, model::SpeakerVoiceConfig, model::SpeechConfig,
+    model::PromptTokenDetails, model::SpeakerVoiceConfig, model::SpeechConfig,
     model::ThinkingConfig, model::ThinkingLevel, model::UsageMetadata, model::VoiceConfig,
     model::WebGroundingChunk,
 };
@@ -132,7 +131,7 @@ pub use safety::model::{
 pub use tools::model::{
     FunctionCall, FunctionCallingConfig, FunctionCallingMode, FunctionDeclaration,
     FunctionResponse, FunctionResponsePart, RagResource, RagRetrievalConfig, RagRetrievalFilter,
-    RetrievalConfig, Tool, ToolConfig, VertexRagStore,
+    Tool, ToolConfig, VertexRagStore,
 };
 
 // ========== Batch Processing ==========
