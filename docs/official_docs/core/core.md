@@ -801,7 +801,7 @@ The trait that all LLM providers implement:
 ```rust
 #[async_trait]
 pub trait Llm: Send + Sync {
-    /// Model identifier (e.g., "gemini-2.5-flash", "gpt-5-mini")
+    /// Model identifier (e.g., "gemini-3.7-flash", "gpt-5.6-terra")
     fn name(&self) -> &str;
     
     /// Generate content (streaming or non-streaming)
@@ -886,7 +886,7 @@ All providers (Gemini, OpenAI, Anthropic, Ollama, etc.) implement this trait, ma
 
 ```rust
 // Switch providers by changing one line
-let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&key, "gemini-2.5-flash")?);
+let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&key, "gemini-3.7-flash")?);
 // let model: Arc<dyn Llm> = Arc::new(OpenAIClient::new(config)?);
 // let model: Arc<dyn Llm> = Arc::new(AnthropicClient::new(config)?);
 

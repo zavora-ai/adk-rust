@@ -36,6 +36,14 @@ README_ROADMAP_PATTERN = re.compile(
     r"\*\*v(\d+\.\d+\.\d+)\*\*\s*\((release candidate|current)\)",
     re.IGNORECASE,
 )
+CHANGELOG_RELEASE_PATTERN = re.compile(
+    r"^## \[(\d+\.\d+\.\d+)\]\s*-\s*(\d{4}-\d{2}-\d{2})\s*$",
+    re.MULTILINE,
+)
+CHANGELOG_UNRELEASED_PATTERN = re.compile(r"^## \[Unreleased\]\s*$", re.MULTILINE)
+CHANGELOG_LINK_PATTERN = re.compile(
+    r"^\[(Unreleased|\d+\.\d+\.\d+)\]:\s*(\S+)\s*$", re.MULTILINE
+)
 
 
 def workspace_version() -> str:
@@ -45,14 +53,21 @@ def workspace_version() -> str:
     return manifest["workspace"]["package"]["version"]
 
 
-def changelog_heading_version() -> tuple[str, str] | None:
-    """The version and date of the topmost changelog release heading."""
-    pattern = re.compile(r"^## \[(\d+\.\d+\.\d+)\]\s*-\s*(\d{4}-\d{2}-\d{2})\s*$")
-    for line in (ROOT / "CHANGELOG.md").read_text().splitlines():
-        match = pattern.match(line)
-        if match:
-            return match.group(1), match.group(2)
-    return None
+def repository_url() -> str:
+    """The repository used by generated changelog comparison links."""
+    with (ROOT / "Cargo.toml").open("rb") as handle:
+        manifest = tomllib.load(handle)
+    return manifest["workspace"]["package"]["repository"].rstrip("/")
+
+
+def changelog_release_headings(text: str) -> list[tuple[str, str]]:
+    """All dated changelog releases, newest first."""
+    return CHANGELOG_RELEASE_PATTERN.findall(text)
+
+
+def changelog_links(text: str) -> dict[str, str]:
+    """Reference-style comparison links at the end of the changelog."""
+    return dict(CHANGELOG_LINK_PATTERN.findall(text))
 
 
 def readme_banner() -> tuple[str, str] | None:
@@ -99,7 +114,9 @@ def main() -> None:
     version = workspace_version()
     failures: list[str] = []
 
-    heading = changelog_heading_version()
+    changelog = (ROOT / "CHANGELOG.md").read_text()
+    headings = changelog_release_headings(changelog)
+    heading = headings[0] if headings else None
     if heading is None:
         failures.append("CHANGELOG.md has no `## [x.y.z] - YYYY-MM-DD` release heading")
     elif heading[0] != version:
@@ -107,6 +124,31 @@ def main() -> None:
             f"CHANGELOG.md's newest release heading is {heading[0]}, "
             f"but the workspace version is {version}"
         )
+
+    unreleased_heading = CHANGELOG_UNRELEASED_PATTERN.search(changelog)
+    release_heading = CHANGELOG_RELEASE_PATTERN.search(changelog)
+    if unreleased_heading is None:
+        failures.append("CHANGELOG.md has no `## [Unreleased]` section")
+    elif release_heading is not None and unreleased_heading.start() > release_heading.start():
+        failures.append("CHANGELOG.md's `Unreleased` section must precede dated releases")
+
+    links = changelog_links(changelog)
+    expected_unreleased = f"{repository_url()}/compare/v{version}...HEAD"
+    if links.get("Unreleased") != expected_unreleased:
+        failures.append(
+            "CHANGELOG.md's `Unreleased` comparison must be "
+            f"{expected_unreleased}, found {links.get('Unreleased', 'no link')}"
+        )
+    if len(headings) < 2:
+        failures.append("CHANGELOG.md needs a previous release to define the comparison baseline")
+    else:
+        previous = headings[1][0]
+        expected_release = f"{repository_url()}/compare/v{previous}...v{version}"
+        if links.get(version) != expected_release:
+            failures.append(
+                f"CHANGELOG.md's `{version}` comparison must be {expected_release}, "
+                f"found {links.get(version, 'no link')}"
+            )
 
     banner = readme_banner()
     if banner is None:
@@ -139,8 +181,13 @@ def main() -> None:
     tag = f"v{version}"
     tag_type = git("cat-file", "-t", tag)
     tag_commit = git("rev-list", "-n", "1", tag)
+    head = git("rev-parse", "HEAD") or "unknown"
     if tag_type == "tag" and tag_commit:
         print(f"release baseline: {tag} -> {tag_commit}")
+        if args.release and tag_commit != head:
+            failures.append(
+                f"{tag} points to {tag_commit}, but the checked-out release commit is {head}"
+            )
     elif tag_type:
         if args.release:
             failures.append(
@@ -157,7 +204,6 @@ def main() -> None:
             f"Create it with: git tag -a {tag} -m 'Release {version}'"
         )
     else:
-        head = git("rev-parse", "HEAD") or "unknown"
         print(
             f"note: no {tag} tag yet; a release from this commit would be {head}. "
             f"Run with --release to make this a failure."

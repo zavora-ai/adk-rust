@@ -19,7 +19,10 @@ use adk_model::groq::{GroqClient, GroqConfig};
 #[cfg(feature = "ollama")]
 use adk_model::ollama::{OllamaConfig, OllamaModel};
 #[cfg(feature = "openai")]
-use adk_model::openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig};
+use adk_model::openai::{
+    AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig, OpenAIReasoningEffort,
+    OpenAIResponsesClient, OpenAIResponsesConfig,
+};
 #[cfg(feature = "openrouter")]
 use adk_model::openrouter::{OpenRouterApiMode, OpenRouterClient, OpenRouterConfig};
 
@@ -172,6 +175,25 @@ fn assert_response_invariants(spec: ProviderSpec, mode: &str, responses: &[LlmRe
         .enumerate()
         .filter_map(|(index, response)| response.turn_complete.then_some(index))
         .collect();
+
+    let has_function_calls = responses.iter().any(|response| {
+        response.content.as_ref().is_some_and(|content| content.has_function_calls())
+    });
+    if mode == "tools" && has_function_calls {
+        assert!(
+            final_indices.is_empty(),
+            "{} tool-call turn must remain open for tool execution",
+            spec.name
+        );
+        let last = responses.last().expect("responses are non-empty");
+        assert!(!last.partial, "{} tool-call protocol chunk must not be partial", spec.name);
+        assert!(
+            last.finish_reason.is_some(),
+            "{} tool-call protocol chunk should include finish_reason",
+            spec.name
+        );
+        return;
+    }
 
     assert_eq!(final_indices.len(), 1, "{} {mode} should have exactly one final chunk", spec.name);
 
@@ -335,11 +357,11 @@ macro_rules! provider_contract_tests {
 }
 
 #[cfg(feature = "gemini")]
-fn gemini_cheapest_spec() -> ProviderSpec {
+fn gemini_default_spec() -> ProviderSpec {
     ProviderSpec {
-        name: "gemini-cheapest",
-        model_env_candidates: &["GEMINI_CHEAPEST_MODEL", "GEMINI_MODEL"],
-        default_model: "gemini-2.5-flash-lite",
+        name: "gemini-default",
+        model_env_candidates: &["GEMINI_MODEL", "GEMINI_CHEAPEST_MODEL"],
+        default_model: adk_model::catalog::GEMINI_DEFAULT,
         required_envs: &["GEMINI_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -350,11 +372,11 @@ fn gemini_cheapest_spec() -> ProviderSpec {
 }
 
 #[cfg(feature = "openai")]
-fn openai_cheapest_spec() -> ProviderSpec {
+fn openai_default_spec() -> ProviderSpec {
     ProviderSpec {
-        name: "openai-cheapest",
-        model_env_candidates: &["OPENAI_CHEAPEST_MODEL", "OPENAI_MODEL"],
-        default_model: "gpt-5-mini",
+        name: "openai-default",
+        model_env_candidates: &["OPENAI_MODEL", "OPENAI_CHEAPEST_MODEL"],
+        default_model: adk_model::catalog::OPENAI_DEFAULT,
         required_envs: &["OPENAI_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -365,11 +387,11 @@ fn openai_cheapest_spec() -> ProviderSpec {
 }
 
 #[cfg(feature = "openai")]
-fn xai_cheapest_spec() -> ProviderSpec {
+fn xai_default_spec() -> ProviderSpec {
     ProviderSpec {
-        name: "xai-cheapest",
-        model_env_candidates: &["XAI_CHEAPEST_MODEL", "XAI_MODEL"],
-        default_model: "grok-3-fast",
+        name: "xai-default",
+        model_env_candidates: &["XAI_MODEL", "XAI_CHEAPEST_MODEL"],
+        default_model: adk_model::catalog::XAI_DEFAULT,
         required_envs: &["XAI_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -380,11 +402,11 @@ fn xai_cheapest_spec() -> ProviderSpec {
 }
 
 #[cfg(feature = "anthropic")]
-fn anthropic_cheapest_spec() -> ProviderSpec {
+fn anthropic_default_spec() -> ProviderSpec {
     ProviderSpec {
-        name: "anthropic-cheapest",
-        model_env_candidates: &["ANTHROPIC_CHEAPEST_MODEL", "ANTHROPIC_MODEL"],
-        default_model: "claude-haiku-3.5",
+        name: "anthropic-default",
+        model_env_candidates: &["ANTHROPIC_MODEL", "ANTHROPIC_CHEAPEST_MODEL"],
+        default_model: adk_model::catalog::ANTHROPIC_DEFAULT,
         required_envs: &["ANTHROPIC_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -395,11 +417,11 @@ fn anthropic_cheapest_spec() -> ProviderSpec {
 }
 
 #[cfg(feature = "deepseek")]
-fn deepseek_cheapest_spec() -> ProviderSpec {
+fn deepseek_default_spec() -> ProviderSpec {
     ProviderSpec {
-        name: "deepseek-cheapest",
-        model_env_candidates: &["DEEPSEEK_CHEAPEST_MODEL", "DEEPSEEK_MODEL"],
-        default_model: "deepseek-chat",
+        name: "deepseek-default",
+        model_env_candidates: &["DEEPSEEK_MODEL", "DEEPSEEK_CHEAPEST_MODEL"],
+        default_model: adk_model::catalog::DEEPSEEK_DEFAULT,
         required_envs: &["DEEPSEEK_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -410,11 +432,11 @@ fn deepseek_cheapest_spec() -> ProviderSpec {
 }
 
 #[cfg(feature = "groq")]
-fn groq_cheapest_spec() -> ProviderSpec {
+fn groq_default_spec() -> ProviderSpec {
     ProviderSpec {
-        name: "groq-cheapest",
-        model_env_candidates: &["GROQ_CHEAPEST_MODEL", "GROQ_MODEL"],
-        default_model: "llama-3.1-8b-instant",
+        name: "groq-default",
+        model_env_candidates: &["GROQ_MODEL", "GROQ_CHEAPEST_MODEL"],
+        default_model: adk_model::catalog::GROQ_DEFAULT,
         required_envs: &["GROQ_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -429,7 +451,7 @@ fn ollama_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "ollama-cheapest",
         model_env_candidates: &["OLLAMA_CHEAPEST_MODEL", "OLLAMA_MODEL"],
-        default_model: "qwen2.5:7b",
+        default_model: adk_model::catalog::OLLAMA_DEFAULT,
         required_envs: &["OLLAMA_HOST"],
         supports_tools: true,
         build_model: |model_name| {
@@ -444,7 +466,7 @@ fn openrouter_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "openrouter-cheapest",
         model_env_candidates: &["OPENROUTER_CHEAPEST_MODEL", "OPENROUTER_MODEL"],
-        default_model: "openai/gpt-4.1-mini",
+        default_model: adk_model::catalog::OPENROUTER_DEFAULT,
         required_envs: &["OPENROUTER_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -460,9 +482,70 @@ fn openrouter_cheapest_spec() -> ProviderSpec {
 }
 
 #[cfg(feature = "gemini")]
-provider_contract_tests!(gemini_cheapest_provider, gemini_cheapest_spec);
+provider_contract_tests!(gemini_default_provider, gemini_default_spec);
 #[cfg(feature = "openai")]
-provider_contract_tests!(openai_cheapest_provider, openai_cheapest_spec);
+provider_contract_tests!(openai_default_provider, openai_default_spec);
+
+#[cfg(feature = "openai")]
+mod openai_current_reasoning_contract {
+    use super::*;
+
+    async fn assert_reasoning_response(
+        model: Box<dyn Llm>,
+        api_name: &str,
+        effort: &str,
+        stream: bool,
+    ) {
+        let request =
+            base_request(adk_model::catalog::OPENAI_DEFAULT, "Reply with exactly the word OK.");
+        let mut stream = model
+            .generate_content(request, stream)
+            .await
+            .unwrap_or_else(|error| panic!("OpenAI {api_name} {effort} request failed: {error}"));
+        let mut responses = Vec::new();
+        while let Some(response) = stream.next().await {
+            responses.push(response.unwrap_or_else(|error| {
+                panic!("OpenAI {api_name} {effort} chunk failed: {error}")
+            }));
+        }
+        assert!(
+            responses.iter().any(response_has_text),
+            "OpenAI {api_name} {effort} request should return text"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "live contract test; requires OpenAI credentials"]
+    async fn chat_completions_accepts_xhigh() {
+        let api_key = required_env("OPENAI_API_KEY").expect("OPENAI_API_KEY is required");
+        let config = OpenAIConfig::new(api_key, adk_model::catalog::OPENAI_DEFAULT);
+        let model = OpenAIClient::new_with_reasoning_effort(config, OpenAIReasoningEffort::XHigh)
+            .expect("OpenAI Chat client should build");
+        assert_reasoning_response(Box::new(model), "Chat Completions", "xhigh", false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "live contract test; requires OpenAI credentials"]
+    async fn responses_accepts_max() {
+        let api_key = required_env("OPENAI_API_KEY").expect("OPENAI_API_KEY is required");
+        let config = OpenAIResponsesConfig::new(api_key, adk_model::catalog::OPENAI_DEFAULT);
+        let model =
+            OpenAIResponsesClient::new_with_reasoning_effort(config, OpenAIReasoningEffort::Max)
+                .expect("OpenAI Responses client should build");
+        assert_reasoning_response(Box::new(model), "Responses", "max", false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "live contract test; requires OpenAI credentials"]
+    async fn responses_streaming_accepts_max() {
+        let api_key = required_env("OPENAI_API_KEY").expect("OPENAI_API_KEY is required");
+        let config = OpenAIResponsesConfig::new(api_key, adk_model::catalog::OPENAI_DEFAULT);
+        let model =
+            OpenAIResponsesClient::new_with_reasoning_effort(config, OpenAIReasoningEffort::Max)
+                .expect("OpenAI Responses client should build");
+        assert_reasoning_response(Box::new(model), "streaming Responses", "max", true).await;
+    }
+}
 
 #[cfg(feature = "openai")]
 fn azure_openai_spec() -> ProviderSpec {
@@ -490,13 +573,13 @@ fn azure_openai_spec() -> ProviderSpec {
 #[cfg(feature = "openai")]
 provider_contract_tests!(azure_openai_provider, azure_openai_spec);
 #[cfg(feature = "openai")]
-provider_contract_tests!(xai_cheapest_provider, xai_cheapest_spec);
+provider_contract_tests!(xai_default_provider, xai_default_spec);
 #[cfg(feature = "anthropic")]
-provider_contract_tests!(anthropic_cheapest_provider, anthropic_cheapest_spec);
+provider_contract_tests!(anthropic_default_provider, anthropic_default_spec);
 #[cfg(feature = "deepseek")]
-provider_contract_tests!(deepseek_cheapest_provider, deepseek_cheapest_spec);
+provider_contract_tests!(deepseek_default_provider, deepseek_default_spec);
 #[cfg(feature = "groq")]
-provider_contract_tests!(groq_cheapest_provider, groq_cheapest_spec);
+provider_contract_tests!(groq_default_provider, groq_default_spec);
 #[cfg(feature = "ollama")]
 provider_contract_tests!(ollama_cheapest_provider, ollama_cheapest_spec);
 #[cfg(feature = "openrouter")]
@@ -507,7 +590,7 @@ fn fireworks_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "fireworks-cheapest",
         model_env_candidates: &["FIREWORKS_CHEAPEST_MODEL", "FIREWORKS_MODEL"],
-        default_model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
+        default_model: adk_model::catalog::FIREWORKS_DEFAULT,
         required_envs: &["FIREWORKS_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -524,7 +607,7 @@ fn together_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "together-cheapest",
         model_env_candidates: &["TOGETHER_CHEAPEST_MODEL", "TOGETHER_MODEL"],
-        default_model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        default_model: adk_model::catalog::TOGETHER_DEFAULT,
         required_envs: &["TOGETHER_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -541,7 +624,7 @@ fn mistral_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "mistral-cheapest",
         model_env_candidates: &["MISTRAL_CHEAPEST_MODEL", "MISTRAL_MODEL"],
-        default_model: "mistral-small-latest",
+        default_model: adk_model::catalog::MISTRAL_DEFAULT,
         required_envs: &["MISTRAL_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -558,7 +641,7 @@ fn perplexity_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "perplexity-cheapest",
         model_env_candidates: &["PERPLEXITY_CHEAPEST_MODEL", "PERPLEXITY_MODEL"],
-        default_model: "sonar",
+        default_model: adk_model::catalog::PERPLEXITY_DEFAULT,
         required_envs: &["PERPLEXITY_API_KEY"],
         supports_tools: false,
         build_model: |model_name| {
@@ -575,7 +658,7 @@ fn cerebras_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "cerebras-cheapest",
         model_env_candidates: &["CEREBRAS_CHEAPEST_MODEL", "CEREBRAS_MODEL"],
-        default_model: "llama-3.3-70b",
+        default_model: adk_model::catalog::CEREBRAS_DEFAULT,
         required_envs: &["CEREBRAS_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {
@@ -592,7 +675,7 @@ fn sambanova_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "sambanova-cheapest",
         model_env_candidates: &["SAMBANOVA_CHEAPEST_MODEL", "SAMBANOVA_MODEL"],
-        default_model: "Meta-Llama-3.3-70B-Instruct",
+        default_model: adk_model::catalog::SAMBANOVA_DEFAULT,
         required_envs: &["SAMBANOVA_API_KEY"],
         supports_tools: true,
         build_model: |model_name| {

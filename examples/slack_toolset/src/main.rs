@@ -168,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
         let slack_toolset = SlackToolset::new(&token);
 
         // Create the Gemini model for the agent.
-        let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+        let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
 
         // Build an LlmAgent with the Slack toolset and instructions that
         // demonstrate all three primary tools.

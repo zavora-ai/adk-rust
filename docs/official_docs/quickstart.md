@@ -153,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
     let api_key = std::env::var("OPENAI_API_KEY")?;
 
     let model = adk_rust::model::openai::OpenAIClient::new(
-        adk_rust::model::openai::OpenAIConfig::new(&api_key, "gpt-5.5"),
+        adk_rust::model::openai::OpenAIConfig::new(&api_key, "gpt-5.6-terra"),
     )?;
 
     let agent: Arc<dyn Agent> = Arc::new(
@@ -274,14 +274,14 @@ Or scaffold with a provider: `cargo adk new my-agent --provider openai`
 
 ```rust
 let api_key = std::env::var("OPENAI_API_KEY")?;
-let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5-mini"))?;
+let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5.6-terra"))?;
 ```
 
 ### Anthropic
 
 ```rust
 let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-6"))?;
+let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5"))?;
 ```
 
 ### DeepSeek
@@ -296,7 +296,7 @@ let model = DeepSeekClient::chat(api_key)?;         // standard
 
 ```rust
 let api_key = std::env::var("GROQ_API_KEY")?;
-let model = GroqClient::new(GroqConfig::llama70b(api_key))?;
+let model = GroqClient::new(GroqConfig::gpt_oss_120b(api_key))?;
 ```
 
 ### Ollama (Local)

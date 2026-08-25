@@ -18,11 +18,10 @@ ignore = [
     "RUSTSEC-2026-0195",
     "RUSTSEC-2026-0194",
 
-    # pyo3 0.28: iterator out-of-bounds read and missing Sync bound. The crate
-    # appears only as jiter 0.15's disabled `python` feature in monty 0.0.19;
-    # no workspace feature enables it. See the security advisory review.
-    "RUSTSEC-2026-0176",
-    "RUSTSEC-2026-0177",
+    # rkyv 0.7 is present only as rust_decimal's disabled optional `rkyv`
+    # feature. No workspace feature activates it; active archive consumers use
+    # rkyv 0.8.18. See the security advisory review.
+    "RUSTSEC-2026-0235",
 
     # rsa: Marvin timing side-channel (no upstream fix, accepted risk)
     "RUSTSEC-2023-0071",

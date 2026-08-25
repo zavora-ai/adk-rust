@@ -22,9 +22,12 @@ futures.workspace = true
 async-stream.workspace = true
 serde_json.workspace = true
 serde = { workspace = true }
-async-openai = { version = "0.41", optional = true, default-features = false, features = ["rustls", "chat-completion", "responses"] }
+async-openai = { version = "0.41", optional = true, default-features = false, features = ["rustls", "chat-completion", "responses", "middleware"] }
 adk-anthropic = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+reqwest-openai = { package = "reqwest", version = "0.13", optional = true, default-features = false, features = ["rustls", "stream"] }
+http = { version = "1", optional = true }
+tower = { version = "0.5", optional = true, features = ["util"] }
 tokio-tungstenite = { workspace = true, optional = true }
 anyhow.workspace = true
 tracing.workspace = true
@@ -41,7 +44,7 @@ default = ["gemini"]
 gemini = ["dep:adk-gemini"]
 gemini-vertex = ["gemini", "adk-gemini/vertex"]
 gemini-interactions = ["gemini", "adk-gemini/interactions"]
-openai = ["dep:async-openai", "dep:reqwest"]
+openai = ["dep:async-openai", "dep:reqwest", "dep:reqwest-openai", "dep:http", "dep:tower"]
 openai-ws = ["openai", "dep:tokio-tungstenite"]
 openai-conversations = ["openai"]
 # openai-webhooks feature removed: it only forwarded a dep on adk-server, creating the

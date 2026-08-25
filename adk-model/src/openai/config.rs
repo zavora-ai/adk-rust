@@ -17,6 +17,42 @@ pub enum ReasoningEffort {
     High,
 }
 
+/// Complete reasoning-effort vocabulary supported across OpenAI model generations.
+///
+/// This additive type preserves the original exhaustive [`ReasoningEffort`] enum while
+/// exposing the `none`, `minimal`, `xhigh`, and `max` values used by newer models.
+/// GPT-5.6 supports every value except `minimal` through the Responses API;
+/// Chat Completions supports up to `xhigh`. Older GPT-5 models may support
+/// `minimal` but not `max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OpenAIReasoningEffort {
+    /// Disable reasoning for the lowest latency.
+    None,
+    /// Use minimal reasoning on models that retain the legacy setting.
+    Minimal,
+    /// Use low reasoning effort.
+    Low,
+    /// Use balanced reasoning effort.
+    Medium,
+    /// Use high reasoning effort.
+    High,
+    /// Use extra-high reasoning effort.
+    XHigh,
+    /// Use maximum reasoning effort on models that support it through Responses.
+    Max,
+}
+
+impl From<ReasoningEffort> for OpenAIReasoningEffort {
+    fn from(value: ReasoningEffort) -> Self {
+        match value {
+            ReasoningEffort::Low => Self::Low,
+            ReasoningEffort::Medium => Self::Medium,
+            ReasoningEffort::High => Self::High,
+        }
+    }
+}
+
 /// Configuration for OpenAI API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAIConfig {

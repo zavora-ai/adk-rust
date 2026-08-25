@@ -109,7 +109,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Create an agent with RAG as a tool
     let agent = LlmAgentBuilder::new("support_agent")
         .instruction("Answer questions using the rag_search tool. Cite your sources.")
-        .model(Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?))
+        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?))
         .tool(Arc::new(RagTool::new(pipeline, "kb")))
         .build()?;
 
@@ -146,7 +146,7 @@ The `RagPipeline` wires these together. The `RagTool` wraps the pipeline as an `
 
 ### Gemini (recommended)
 
-Uses Google's `gemini-embedding-001` model (3072 dimensions). Free tier available.
+Uses Google's `gemini-embedding-2` model (3072 dimensions). Free tier available.
 
 ```toml
 adk-rag = { version = "2.1.0", features = ["gemini"] }
