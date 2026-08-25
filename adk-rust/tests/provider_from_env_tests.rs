@@ -7,7 +7,7 @@
 //! test's values, and restores the previous state on drop.
 #![cfg(feature = "gemini")]
 
-use adk_rust::provider_from_env;
+use adk_rust::{model::catalog::GEMINI_DEFAULT, provider_from_env};
 use std::sync::{Mutex, MutexGuard};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -69,7 +69,7 @@ fn no_flags_no_keys_errors() {
 fn no_flags_google_api_key_selects_gemini() {
     let _guard = EnvGuard::new(&[("GOOGLE_API_KEY", "test-key")]);
     let model = provider_from_env().expect("expected the gemini studio provider");
-    assert_eq!(model.name(), "gemini-2.5-flash");
+    assert_eq!(model.name(), GEMINI_DEFAULT);
 }
 
 #[cfg(feature = "gemini-vertex")]
@@ -88,7 +88,7 @@ mod vertex_enabled {
             ("GOOGLE_CLOUD_LOCATION", "us-central1"),
         ]);
         let model = provider_from_env().expect("expected the vertex provider");
-        assert_eq!(model.name(), "gemini-2.5-flash");
+        assert_eq!(model.name(), GEMINI_DEFAULT);
     }
 
     #[test]
@@ -115,7 +115,7 @@ mod vertex_enabled {
             ("GOOGLE_API_KEY", "test-key"),
         ]);
         let model = provider_from_env().expect("expected the gemini studio provider");
-        assert_eq!(model.name(), "gemini-2.5-flash");
+        assert_eq!(model.name(), GEMINI_DEFAULT);
     }
 }
 
@@ -132,7 +132,7 @@ mod vertex_disabled {
         // The residual Studio path: flag set, feature missing → warn + fall
         // through to API-key detection.
         let model = provider_from_env().expect("expected the api-key fallback provider");
-        assert_eq!(model.name(), "gemini-2.5-flash");
+        assert_eq!(model.name(), GEMINI_DEFAULT);
     }
 
     #[test]

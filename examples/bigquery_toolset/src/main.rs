@@ -167,7 +167,7 @@ async fn main() -> anyhow::Result<()> {
         let bq_toolset = BigQueryToolset::with_project(&project_id);
 
         // Create the Gemini model for the agent.
-        let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+        let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
 
         // Build an LlmAgent with the BigQuery toolset and instructions that
         // demonstrate the full discovery-to-query workflow.

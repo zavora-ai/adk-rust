@@ -301,6 +301,8 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
         StopReason::ToolUse => FinishReason::Stop,
         _ => FinishReason::Stop,
     });
+    let tool_call_turn = matches!(message.stop_reason, Some(StopReason::ToolUse))
+        || content.as_ref().is_some_and(Content::has_function_calls);
 
     let cache_meta = extract_cache_usage(&message.usage);
 
@@ -311,7 +313,7 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
             finish_reason,
             citation_metadata: None,
             partial: false,
-            turn_complete: true,
+            turn_complete: !tool_call_turn,
             interrupted: false,
             error_code: None,
             error_message: None,
@@ -800,5 +802,37 @@ mod tests {
         // Empty thinking block should be skipped
         assert_eq!(content.parts.len(), 1);
         assert_eq!(content.parts[0].text(), Some("Just text."));
+    }
+
+    #[test]
+    fn test_from_anthropic_tool_call_keeps_turn_open() {
+        use adk_anthropic::{ToolUseBlock, Usage};
+
+        let message = Message {
+            id: "msg_tool".to_string(),
+            model: Model::Custom("claude-sonnet-5".to_string()),
+            role: MessageRole::Assistant,
+            container: None,
+            content: vec![ContentBlock::ToolUse(ToolUseBlock::new(
+                "tool_123",
+                "get_weather",
+                serde_json::json!({"city": "Paris"}),
+            ))],
+            stop_reason: Some(StopReason::ToolUse),
+            stop_sequence: None,
+            r#type: "message".to_string(),
+            usage: Usage {
+                input_tokens: 10,
+                output_tokens: 12,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens_1h: None,
+                server_tool_use: None,
+            },
+        };
+
+        let (response, _) = from_anthropic_message(&message);
+        assert!(!response.turn_complete, "tool-call turns must remain open for execution");
+        assert!(response.content.is_some_and(|content| content.has_function_calls()));
     }
 }

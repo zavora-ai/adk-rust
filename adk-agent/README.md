@@ -52,7 +52,7 @@ use adk_agent::LlmAgentBuilder;
 use adk_model::GeminiModel;
 use std::sync::Arc;
 
-let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
+let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
 
 let agent = LlmAgentBuilder::new("assistant")
     .description("Helpful AI assistant")
@@ -120,10 +120,9 @@ Control LLM generation parameters per-agent. Use the shorthand methods for commo
 ```rust
 use adk_core::GenerateContentConfig;
 
-// Shorthand
-let agent = LlmAgentBuilder::new("creative")
+// Provider-portable shorthand
+let agent = LlmAgentBuilder::new("assistant")
     .model(model)
-    .temperature(0.9)
     .max_output_tokens(4096)
     .build()?;
 
@@ -131,14 +130,15 @@ let agent = LlmAgentBuilder::new("creative")
 let agent = LlmAgentBuilder::new("precise")
     .model(model)
     .generate_content_config(GenerateContentConfig {
-        temperature: Some(0.2),
-        top_p: Some(0.95),
-        top_k: Some(40),
         max_output_tokens: Some(2048),
         ..Default::default()
     })
     .build()?;
 ```
+
+Sampling controls such as `temperature`, `top_p`, and `top_k` are
+model-specific. Gemini 3.6 and 3.7 reject explicit sampling parameters, while
+Gemini 3.5 Flash Lite and many non-Gemini providers accept them.
 
 ### Skills
 

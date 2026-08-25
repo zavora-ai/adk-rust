@@ -207,7 +207,10 @@ mod azure_preservation {
 
         let resp = &responses[0];
         assert!(!resp.partial, "response should have partial=false");
-        assert!(resp.turn_complete, "response should have turn_complete=true");
+        assert!(
+            !resp.turn_complete,
+            "a tool-call response must keep the turn open for tool execution"
+        );
 
         let content = resp.content.as_ref().expect("response should have content");
 

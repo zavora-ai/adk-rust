@@ -4,7 +4,8 @@
 //! [`MontyRun::start`] runs a script until it calls an external function, hands
 //! the host a [`FunctionCall`] it can inspect, run a tool for, and resume — and
 //! the whole suspended continuation can be serialized to bytes with
-//! [`RunProgress::dump`] and restored later with [`RunProgress::load`]. That is
+//! [`monty::dump`](adk_code::embedded_python::monty::dump) and restored later
+//! with [`Dump::load`](adk_code::embedded_python::monty::Dump::load). That is
 //! exactly what [`PendingCall::dump`] / [`CodeRuntime::resume`] need to persist a
 //! paused run to session state and continue it on a later invocation.
 //!
@@ -49,10 +50,12 @@ use std::time::Duration;
 use adk_agent::codeact::{
     CodeRuntime, PendingCall, ResumeWith, RunStep, RuntimeCapabilities, RuntimeError,
 };
-use adk_code::embedded_python::monty::{FunctionCall, MontyRun, RunProgress};
+use adk_code::embedded_python::monty::{
+    Dump, FunctionCall, MontyRun, RunProgress, Session, SessionRef, dump,
+};
 use adk_code::embedded_python::monty_types::{
-    CompileOptions, ExcType, ExtFunctionResult, LimitedTracker, MontyException, MontyObject,
-    NameLookupResult, PrintWriter, ResourceLimits,
+    CompileOptions, ExcType, ExtFunctionResult, MontyException, MontyObject, NameLookupResult,
+    PrintWriter, ResourceLimits, ResourceTracker,
 };
 use adk_code::embedded_python::{json_to_monty, monty_to_json};
 use adk_core::Tool;
@@ -61,13 +64,13 @@ use serde_json::Value;
 use crate::os_access::{OsAccess, OsAccessBuilder, PathAccess};
 use crate::prompt::{MONTY_PROMPT, TOOL_DISPATCH_FN, tool_entry};
 
-/// The resource tracker every run is created with. `LimitedTracker` serializes
+/// The resource tracker every run is created with. `ResourceTracker` serializes
 /// cleanly (so it rides along inside a dumped continuation) and enforces the
 /// configured [`ResourceLimits`].
-type Tracker = LimitedTracker;
+type Tracker = ResourceTracker;
 
-/// A suspended/finished Monty run, parameterised on our tracker.
-type Progress = RunProgress<Tracker>;
+/// A suspended or finished Monty run.
+type Progress = RunProgress;
 
 /// A Python [`CodeRuntime`] for the [`CodeActAgent`](adk_agent::codeact::CodeActAgent),
 /// backed by the Monty interpreter.
@@ -109,7 +112,7 @@ pub struct MontyRuntime {
 /// Defaults: 5s wall-clock per advance, 256 MiB memory. Recursion keeps Monty's
 /// own default guard (1000 frames).
 fn default_resource_limits() -> ResourceLimits {
-    ResourceLimits::new().max_duration(Duration::from_secs(5)).max_memory(256 * 1024 * 1024)
+    ResourceLimits::default().max_duration(Duration::from_secs(5)).max_memory(256 * 1024 * 1024)
 }
 
 impl MontyRuntime {
@@ -133,7 +136,7 @@ impl MontyRuntime {
 
     /// A fresh tracker for a new run, carrying the configured limits.
     fn tracker(&self) -> Tracker {
-        LimitedTracker::new(self.limits.clone())
+        ResourceTracker::new(self.limits.clone())
     }
 }
 
@@ -171,7 +174,7 @@ impl MontyRuntimeBuilder {
     /// Use this only for *trusted* scripts. LLM-generated code should keep the
     /// default time/memory caps so an accidental infinite loop or runaway
     /// allocation cannot block the calling task. Equivalent to
-    /// `resource_limits(ResourceLimits::new())`.
+    /// `resource_limits(ResourceLimits::default())`.
     ///
     /// # Example
     ///
@@ -183,7 +186,7 @@ impl MontyRuntimeBuilder {
     /// ```
     #[must_use]
     pub fn unlimited(mut self) -> Self {
-        self.limits = ResourceLimits::new();
+        self.limits = ResourceLimits::default();
         self
     }
 
@@ -312,7 +315,7 @@ impl CodeRuntime for MontyRuntime {
         };
         let mut stdout = String::new();
         match run.start(Vec::new(), self.tracker(), PrintWriter::collect_string(&mut stdout)) {
-            Ok(progress) => drive(progress, stdout, &self.os),
+            Ok(progress) => drive(progress, stdout, script_name, &self.os),
             // An exception raised during the first stretch of execution is a
             // script error: surface it as a Raised traceback, not a host error.
             Err(exc) => Ok(RunStep::raised(render_exception(&exc)).with_stdout(stdout)),
@@ -320,12 +323,18 @@ impl CodeRuntime for MontyRuntime {
     }
 
     fn resume(&self, snapshot: &[u8], with: ResumeWith) -> Result<RunStep, RuntimeError> {
-        let progress =
-            Progress::load(snapshot).map_err(|err| RuntimeError::Snapshot(err.to_string()))?;
+        let restored =
+            Dump::load(snapshot).map_err(|err| RuntimeError::Snapshot(err.to_string()))?;
+        let script_name = restored.script_name;
+        let Session::Running(progress) = restored.state else {
+            return Err(RuntimeError::Snapshot(
+                "snapshot does not contain a paused one-shot run".to_string(),
+            ));
+        };
         let call = progress.into_function_call().ok_or_else(|| {
             RuntimeError::Snapshot("snapshot is not a paused external function call".to_string())
         })?;
-        resume_call(call, with, &self.os)
+        resume_call(call, with, &script_name, &self.os)
     }
 
     fn capabilities(&self) -> RuntimeCapabilities {
@@ -381,6 +390,7 @@ impl CodeRuntime for MontyRuntime {
 fn drive(
     mut progress: Progress,
     mut stdout: String,
+    script_name: &str,
     os: &Arc<OsAccess>,
 ) -> Result<RunStep, RuntimeError> {
     let mut mounts = os.build_mount_table()?;
@@ -391,7 +401,8 @@ fn drive(
             }
             RunProgress::FunctionCall(call) => match resolve_dispatch(&call) {
                 Ok((name, keyword)) => {
-                    let pending = MontyPendingCall::from_call(call, name, keyword, os.clone());
+                    let pending =
+                        MontyPendingCall::from_call(call, name, keyword, script_name, os.clone());
                     return Ok(RunStep::call(Box::new(pending)).with_stdout(stdout));
                 }
                 // Not a well-formed `call_tool(...)` dispatch: raise a corrective
@@ -468,6 +479,8 @@ struct MontyPendingCall {
     call_id: u64,
     /// Always the [`RunProgress::FunctionCall`] variant for this call.
     progress: Progress,
+    /// Script name retained in the versioned Monty dump for accurate tracebacks.
+    script_name: String,
     /// OS-access policy to apply when the resumed run hits an OS call. Carried
     /// here so an in-process resume keeps the same policy without a runtime
     /// reference.
@@ -484,13 +497,21 @@ impl MontyPendingCall {
     /// onto the tool's parameters by name — exactly, with no positional
     /// inference.
     fn from_call(
-        call: FunctionCall<Tracker>,
+        call: FunctionCall,
         name: String,
         keyword: Vec<(String, Value)>,
+        script_name: &str,
         os: Arc<OsAccess>,
     ) -> Self {
         let call_id = u64::from(call.call_id);
-        Self { name, keyword, call_id, progress: RunProgress::FunctionCall(call), os }
+        Self {
+            name,
+            keyword,
+            call_id,
+            progress: RunProgress::FunctionCall(call),
+            script_name: script_name.to_string(),
+            os,
+        }
     }
 }
 
@@ -506,9 +527,7 @@ impl MontyPendingCall {
 ///
 /// On success returns the real tool name and the dict's entries as exact
 /// name→value pairs.
-fn resolve_dispatch(
-    call: &FunctionCall<Tracker>,
-) -> Result<(String, Vec<(String, Value)>), String> {
+fn resolve_dispatch(call: &FunctionCall) -> Result<(String, Vec<(String, Value)>), String> {
     if call.function_name != TOOL_DISPATCH_FN {
         return Err(format!(
             "'{}' is not defined. Call tools only via {TOOL_DISPATCH_FN}(\"<tool-name>\", {{...}}).",
@@ -582,7 +601,8 @@ impl PendingCall for MontyPendingCall {
     }
 
     fn dump(&self) -> Result<Vec<u8>, RuntimeError> {
-        self.progress.dump().map_err(|err| RuntimeError::Snapshot(err.to_string()))
+        dump(&self.script_name, None, SessionRef::Running(&self.progress))
+            .map_err(|err| RuntimeError::Snapshot(err.to_string()))
     }
 
     fn resume(self: Box<Self>, with: ResumeWith) -> Result<RunStep, RuntimeError> {
@@ -591,15 +611,16 @@ impl PendingCall for MontyPendingCall {
             .progress
             .into_function_call()
             .expect("MontyPendingCall always wraps a function call");
-        resume_call(call, with, &os)
+        resume_call(call, with, &self.script_name, &os)
     }
 }
 
 /// Feed a tool result (or a raised error) back into a paused [`FunctionCall`]
 /// and drive the interpreter onward, capturing any `print` output.
 fn resume_call(
-    call: FunctionCall<Tracker>,
+    call: FunctionCall,
     with: ResumeWith,
+    script_name: &str,
     os: &Arc<OsAccess>,
 ) -> Result<RunStep, RuntimeError> {
     let result = match with {
@@ -610,7 +631,7 @@ fn resume_call(
     };
     let mut stdout = String::new();
     match call.resume(result, PrintWriter::collect_string(&mut stdout)) {
-        Ok(progress) => drive(progress, stdout, os),
+        Ok(progress) => drive(progress, stdout, script_name, os),
         Err(exc) => Ok(RunStep::raised(render_exception(&exc)).with_stdout(stdout)),
     }
 }
