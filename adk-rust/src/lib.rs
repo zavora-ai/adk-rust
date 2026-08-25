@@ -1126,7 +1126,9 @@ pub fn provider_from_env() -> Result<std::sync::Arc<dyn Llm>> {
         if model::gemini::vertex_env_requested() {
             #[cfg(feature = "gemini-vertex")]
             {
-                return Ok(std::sync::Arc::new(model::GeminiModel::from_env("gemini-2.5-flash")?));
+                return Ok(std::sync::Arc::new(model::GeminiModel::from_env(
+                    model::catalog::GEMINI_DEFAULT,
+                )?));
             }
             #[cfg(not(feature = "gemini-vertex"))]
             tracing::warn!(
@@ -1146,7 +1148,7 @@ pub fn provider_from_env() -> Result<std::sync::Arc<dyn Llm>> {
     #[cfg(feature = "openai")]
     {
         if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            let config = model::openai::OpenAIConfig::new(key, "gpt-5-mini");
+            let config = model::openai::OpenAIConfig::new(key, model::catalog::OPENAI_DEFAULT);
             return Ok(std::sync::Arc::new(model::openai::OpenAIClient::new(config)?));
         }
     }
@@ -1154,7 +1156,10 @@ pub fn provider_from_env() -> Result<std::sync::Arc<dyn Llm>> {
     #[cfg(feature = "gemini")]
     {
         if let Ok(key) = std::env::var("GOOGLE_API_KEY") {
-            return Ok(std::sync::Arc::new(model::GeminiModel::new(key, "gemini-2.5-flash")?));
+            return Ok(std::sync::Arc::new(model::GeminiModel::new(
+                key,
+                model::catalog::GEMINI_DEFAULT,
+            )?));
         }
     }
 
@@ -1221,7 +1226,7 @@ pub async fn run(instructions: &str, input: &str) -> Result<String> {
             if result.is_none()
                 && let Ok(key) = std::env::var("OPENAI_API_KEY")
             {
-                let config = model::openai::OpenAIConfig::new(key, "gpt-4o-mini");
+                let config = model::openai::OpenAIConfig::new(key, model::catalog::OPENAI_DEFAULT);
                 let m = model::openai::OpenAIClient::new(config)?;
                 result = Some((Arc::new(m), None));
             }
@@ -1232,7 +1237,7 @@ pub async fn run(instructions: &str, input: &str) -> Result<String> {
             if result.is_none()
                 && let Ok(key) = std::env::var("GOOGLE_API_KEY")
             {
-                let m = Arc::new(model::GeminiModel::new(key, "gemini-2.5-flash")?);
+                let m = Arc::new(model::GeminiModel::new(key, model::catalog::GEMINI_DEFAULT)?);
                 let cc: Arc<dyn CacheCapable> = m.clone();
                 result = Some((m, Some(cc)));
             }

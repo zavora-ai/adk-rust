@@ -34,21 +34,19 @@ This project is an **unofficial** community-maintained library. It is not affili
 
 | Model | API ID | Generation |
 |-------|--------|------------|
-| Claude Opus 4.8 | `claude-opus-4-8` | Latest |
-| Claude Opus 4.7 | `claude-opus-4-7` | Current |
-| Claude Opus 4.6 | `claude-opus-4-6` | Current |
-| Claude Sonnet 4.6 | `claude-sonnet-4-6` | Current |
-| Claude Haiku 4.5 | `claude-haiku-4-5` | Current (fastest) |
-| Claude Opus 4.5 | `claude-opus-4-5` | Previous |
-| Claude Sonnet 4.5 | `claude-sonnet-4-5` | Previous |
-| Claude Sonnet 4 | `claude-sonnet-4-0` | Legacy (retiring June 2026) |
-| Claude Opus 4 | `claude-opus-4-0` | Legacy (retiring June 2026) |
+| Claude Opus 5 | `claude-opus-5` | Current flagship |
+| Claude Sonnet 5 | `claude-sonnet-5` | Recommended default |
+| Claude Fable 5 | `claude-fable-5` | Creative and long-form |
+| Claude Opus 4.8 | `claude-opus-4-8` | Previous flagship; fast mode supported |
+| Claude Opus 4.7 | `claude-opus-4-7` | Previous generation |
+| Claude Sonnet 4.6 | `claude-sonnet-4-6` | Previous generation |
+| Claude Haiku 4.5 | `claude-haiku-4-5` | Economy |
 
 Any model string not matching a known variant deserializes as `Model::Custom(String)`.
 
-### Opus 4.8 / Opus 4.7 Breaking Changes
+### Current Model Request Contracts
 
-Opus 4.8 and Opus 4.7 introduce API breaking changes versus Opus 4.6:
+Claude 5, Opus 4.8, and Opus 4.7 use stricter request contracts than older models:
 
 - **Adaptive thinking only** — `thinking: {type: "enabled", budget_tokens: N}` returns 400. Use `ThinkingConfig::adaptive()`.
 - **No custom sampling** — `temperature` and `top_p` parameters are rejected.
@@ -256,7 +254,7 @@ When integrated with `AnthropicConfig` in `adk-model`, only tools matching the p
 use adk_model::anthropic::AnthropicConfig;
 use adk_anthropic::ToolSearchConfig;
 
-let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-6")
+let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-5")
     .with_tool_search(ToolSearchConfig::new("^safe_.*"));
 ```
 

@@ -26,7 +26,7 @@ pub(crate) enum ModeWording {
 /// when any path is mounted (anything else raises `AttributeError`).
 ///
 /// Hand-maintained against the `monty` release pinned in `Cargo.toml`
-/// (0.0.19) — re-check this list whenever that pin is bumped, or the prompt
+/// (0.0.21) — re-check this list whenever that pin is bumped, or the prompt
 /// silently drifts from interpreter behavior. Public so other Monty
 /// integrations (`adk-codeact-monty`) render the same list from the same
 /// source.

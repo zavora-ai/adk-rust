@@ -123,10 +123,13 @@ dependencies = [
  "base64",
  "chrono",
  "futures",
+ "http",
  "reqwest 0.12.28",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tracing",
 ]
 

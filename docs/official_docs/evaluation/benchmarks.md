@@ -71,7 +71,7 @@ Requirements:
 
 ### Test Environment
 
-- Model: Gemini 2.5 Flash (`gemini-2.5-flash`)
+- Model: Gemini 3.5 Flash-Lite (`gemini-3.5-flash-lite`)
 - Temperature: 0 (deterministic)
 - Fixed random seed for reproducibility
 - 10 measurement iterations after 2 warmup runs
