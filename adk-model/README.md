@@ -112,13 +112,13 @@ use futures::StreamExt;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENROUTER_API_KEY")?;
     let client = OpenRouterClient::new(
-        OpenRouterConfig::new(api_key, "openai/gpt-4.1-mini")
+        OpenRouterConfig::new(api_key, "qwen/qwen3.7-max")
             .with_http_referer("https://github.com/zavora-ai/adk-rust")
             .with_title("ADK-Rust"),
     )?;
 
     let request = LlmRequest::new(
-        "openai/gpt-4.1-mini",
+        "qwen/qwen3.7-max",
         vec![Content::new("user").with_text("Reply in one short sentence.")],
     );
     let mut stream = client.generate_content(request, true).await?;
@@ -140,7 +140,7 @@ use adk_model::openrouter::{OpenRouterClient, OpenRouterConfig};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENROUTER_API_KEY")?;
     let client = OpenRouterClient::new(
-        OpenRouterConfig::new(api_key, "openai/gpt-4.1-mini")
+        OpenRouterConfig::new(api_key, "qwen/qwen3.7-max")
             .with_http_referer("https://github.com/zavora-ai/adk-rust")
             .with_title("ADK-Rust"),
     )?;
@@ -189,7 +189,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let config = OpenAIResponsesConfig::new(api_key, "gpt-4.1-mini");
+    let config = OpenAIResponsesConfig::new(api_key, "gpt-5.6-terra");
     let model = OpenAIResponsesClient::new(config)?;
 
     let agent = LlmAgentBuilder::new("assistant")
@@ -247,17 +247,26 @@ Six standalone example crates demonstrate specific features:
 
 #### OpenAI Reasoning Effort
 
-For reasoning models (o1, o3, etc.), control how much reasoning effort the model applies:
+For current reasoning models, use the complete OpenAI reasoning vocabulary:
 
 ```rust
-use adk_model::openai::{OpenAIClient, OpenAIConfig, ReasoningEffort};
+use adk_model::openai::{
+    OpenAIReasoningEffort, OpenAIResponsesClient, OpenAIResponsesConfig,
+};
 
-let config = OpenAIConfig::new(api_key, "o3-mini")
-    .with_reasoning_effort(ReasoningEffort::High);
-let model = OpenAIClient::new(config)?;
+let config = OpenAIResponsesConfig::new(api_key, "gpt-5.6-terra");
+let model = OpenAIResponsesClient::new_with_reasoning_effort(
+    config,
+    OpenAIReasoningEffort::Max,
+)?;
 ```
 
-Available levels: `Low`, `Medium`, `High`.
+Available values are `None`, `Minimal`, `Low`, `Medium`, `High`, `XHigh`, and
+`Max`. Model and API support varies: GPT-5.6 supports every value except
+`Minimal` through the Responses API, while Chat Completions supports up to
+`XHigh`.
+The original `ReasoningEffort::{Low, Medium, High}` configuration remains
+available for backward compatibility.
 
 ### Anthropic (Claude)
 
@@ -282,11 +291,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #### Anthropic Advanced Features
 
 ```rust
-use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig, ThinkingMode};
 
-// Extended thinking with token budget
+// Current Claude models use adaptive thinking rather than token budgets.
 let config = AnthropicConfig::new(api_key, "claude-sonnet-5")
-    .with_thinking(8192)
+    .with_thinking_mode(ThinkingMode::Adaptive)
     .with_prompt_caching(true)
     .with_beta_feature("prompt-caching-2024-07-31");
 let client = AnthropicClient::new(config)?;
@@ -296,7 +305,7 @@ let count = client.count_tokens(&request).await?;
 
 // Model discovery
 let models = client.list_models().await?;
-let info = client.get_model("claude-sonnet-4-6").await?;
+let info = client.get_model("claude-sonnet-5").await?;
 
 // Rate limit inspection
 let rate_info = client.latest_rate_limit_info().await;
@@ -337,7 +346,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GROQ_API_KEY")?;
-    let model = GroqClient::new(GroqConfig::llama70b(api_key))?;
+    let model = GroqClient::new(GroqConfig::gpt_oss_120b(api_key))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -441,7 +450,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("PERPLEXITY_API_KEY")?;
-    let model = PerplexityClient::new(PerplexityConfig::new(api_key, "sonar"))?;
+    let model = PerplexityClient::new(PerplexityConfig::new(api_key, "sonar-pro"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -461,7 +470,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("CEREBRAS_API_KEY")?;
-    let model = CerebrasClient::new(CerebrasConfig::new(api_key, "llama-3.3-70b"))?;
+    let model = CerebrasClient::new(CerebrasConfig::new(api_key, "gpt-oss-120b"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -481,7 +490,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("SAMBANOVA_API_KEY")?;
-    let model = SambaNovaClient::new(SambaNovaConfig::new(api_key, "Meta-Llama-3.3-70B-Instruct"))?;
+    let model = SambaNovaClient::new(SambaNovaConfig::new(api_key, "gpt-oss-120b"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -500,8 +509,9 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Uses AWS IAM credentials from the environment (no API key needed)
-    let config = BedrockConfig::new("us-east-1", "us.anthropic.claude-sonnet-4-6");
+    // Uses AWS IAM credentials. Model IDs are account- and region-specific.
+    let model_id = std::env::var("BEDROCK_MODEL")?;
+    let config = BedrockConfig::new("us-east-1", model_id);
     let model = BedrockClient::new(config).await?;
 
     let agent = LlmAgentBuilder::new("assistant")

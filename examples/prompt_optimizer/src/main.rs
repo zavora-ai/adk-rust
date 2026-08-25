@@ -165,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
     println!("   (intentionally vague — the optimizer will improve these)\n");
 
     // Build the agent under test using LlmAgent
-    let agent_model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+    let agent_model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
     let agent: Arc<dyn adk_core::Agent> = Arc::new(
         adk_agent::LlmAgentBuilder::new("rust-tutor")
             .model(agent_model)
@@ -205,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
     // improvements. The evaluator scores the agent against the eval set.
 
     let optimizer_llm: Arc<dyn Llm> =
-        Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+        Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
 
     let evaluator = Evaluator::new(EvaluationConfig {
         criteria: adk_eval::EvaluationCriteria {

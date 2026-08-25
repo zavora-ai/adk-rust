@@ -26,7 +26,7 @@ Affective dialogue is a **Gemini-only** feature with two hard requirements:
 
 1. **A native-audio model.** It is **not** supported on the half-cascade
    `gemini-3.1-flash-live-preview`. Use a native-audio model such as
-   `models/gemini-2.5-flash-native-audio-preview-12-2025`.
+   `models/gemini-live-2.5-flash-native-audio`.
 2. **The `v1alpha` endpoint.** The crate's `GeminiLiveBackend::studio(...)`
    already connects over `v1alpha`, so this is handled for you.
 
@@ -36,7 +36,7 @@ session closes. So switch the model when you enable it:
 
 ```rust
 let (default_model, voice) = if affective {
-    ("models/gemini-2.5-flash-native-audio-preview-12-2025", "Kore")
+    ("models/gemini-live-2.5-flash-native-audio", "Kore")
 } else {
     ("models/gemini-3.1-flash-live-preview", "Kore")
 };

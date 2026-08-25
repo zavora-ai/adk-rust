@@ -21,7 +21,7 @@ use async_openai::types::responses::{
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 
-use super::config::{ReasoningEffort, ReasoningSummary};
+use super::config::{OpenAIReasoningEffort, ReasoningSummary};
 
 /// Convert a list of ADK `Content` items to Responses API `InputItem` list.
 pub fn contents_to_input_items(contents: &[Content]) -> Vec<InputItem> {
@@ -290,11 +290,14 @@ fn convert_native_tool(
 }
 
 /// Map our config `ReasoningEffort` to `async_openai`'s `ReasoningEffort`.
-fn map_reasoning_effort(effort: &ReasoningEffort) -> OaiReasoningEffort {
+fn map_reasoning_effort(effort: &OpenAIReasoningEffort) -> OaiReasoningEffort {
     match effort {
-        ReasoningEffort::Low => OaiReasoningEffort::Low,
-        ReasoningEffort::Medium => OaiReasoningEffort::Medium,
-        ReasoningEffort::High => OaiReasoningEffort::High,
+        OpenAIReasoningEffort::None => OaiReasoningEffort::None,
+        OpenAIReasoningEffort::Minimal => OaiReasoningEffort::Minimal,
+        OpenAIReasoningEffort::Low => OaiReasoningEffort::Low,
+        OpenAIReasoningEffort::Medium => OaiReasoningEffort::Medium,
+        OpenAIReasoningEffort::High => OaiReasoningEffort::High,
+        OpenAIReasoningEffort::XHigh | OpenAIReasoningEffort::Max => OaiReasoningEffort::Xhigh,
     }
 }
 
@@ -314,7 +317,7 @@ fn map_reasoning_summary(summary: &ReasoningSummary) -> OaiReasoningSummary {
 pub fn build_create_response(
     model: &str,
     request: &LlmRequest,
-    reasoning_effort: Option<ReasoningEffort>,
+    reasoning_effort: Option<OpenAIReasoningEffort>,
     reasoning_summary: Option<ReasoningSummary>,
 ) -> Result<CreateResponse, AdkError> {
     let config = request.config.as_ref();
@@ -412,9 +415,12 @@ pub fn build_create_response(
     if let Some(reasoning_ext) = openai_ext.and_then(|o| o.get("reasoning")) {
         if let Some(effort_str) = reasoning_ext.get("effort").and_then(|v| v.as_str()) {
             effective_effort = match effort_str {
-                "low" => Some(ReasoningEffort::Low),
-                "medium" => Some(ReasoningEffort::Medium),
-                "high" => Some(ReasoningEffort::High),
+                "none" => Some(OpenAIReasoningEffort::None),
+                "minimal" => Some(OpenAIReasoningEffort::Minimal),
+                "low" => Some(OpenAIReasoningEffort::Low),
+                "medium" => Some(OpenAIReasoningEffort::Medium),
+                "high" => Some(OpenAIReasoningEffort::High),
+                "xhigh" => Some(OpenAIReasoningEffort::XHigh),
                 _ => effective_effort,
             };
         }

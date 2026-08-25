@@ -46,12 +46,12 @@ dashmap = { version = "6", optional = true }
 base64 = { version = "0.22", optional = true }
 
 # AWS Secrets Manager (optional)
-aws-sdk-secretsmanager = { version = "1", optional = true }
+aws-sdk-secretsmanager = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
 
 # Azure Key Vault (optional)
 azure_security_keyvault_secrets = { version = "0.1", optional = true }
-azure_identity = { version = "0.1", optional = true }
+azure_identity = { version = "0.22", optional = true }
 azure_core = { version = "0.22", optional = true }
 
 # GCP Secret Manager (optional)

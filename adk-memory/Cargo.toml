@@ -21,7 +21,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tracing.workspace = true
 sqlx = { version = "0.8", features = ["runtime-tokio", "chrono", "json"], optional = true }
-pgvector = { version = "0.4", features = ["sqlx"], optional = true }
+# 0.4.2 moved its SQLx integration to 0.9, while the workspace uses SQLx 0.8.
+pgvector = { version = "=0.4.1", features = ["sqlx"], optional = true }
 mongodb = { version = "3", optional = true }
 neo4rs = { version = "0.8", optional = true }
 fred = { version = "10", optional = true }

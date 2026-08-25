@@ -10,7 +10,7 @@ use crate::{
         handle::FileHandle,
         model::{File, ListFilesResponse},
     },
-    generation::{ContentBuilder, GenerateContentRequest, GenerationResponse},
+    generation::{ContentBuilder, GenerateContentRequest, GenerationConfig, GenerationResponse},
 };
 use eventsource_stream::EventStreamError;
 use futures::Stream;
@@ -516,6 +516,66 @@ pub struct GeminiClient {
     backend: Box<dyn backend::GeminiBackend>,
 }
 
+pub(crate) fn validate_generation_config_for_model(
+    model: &Model,
+    config: &GenerationConfig,
+) -> Result<(), Error> {
+    config.validate().map_err(|message| Error::InvalidGenerationConfig { message })?;
+
+    let model = model.to_string();
+    let model = model.rsplit('/').next().unwrap_or(&model);
+    if !matches!(model, "gemini-3.6-flash" | "gemini-3.7-flash") {
+        return Ok(());
+    }
+
+    if config.temperature.is_some() || config.top_p.is_some() || config.top_k.is_some() {
+        return Err(Error::InvalidGenerationConfig {
+            message: format!(
+                "{model} does not accept temperature, top_p, or top_k; remove explicit sampling parameters"
+            ),
+        });
+    }
+    if config.candidate_count.is_some() {
+        return Err(Error::InvalidGenerationConfig {
+            message: format!(
+                "{model} does not accept candidate_count; remove it and request one candidate"
+            ),
+        });
+    }
+    if config.thinking_config.as_ref().is_some_and(|thinking| thinking.thinking_budget.is_some()) {
+        return Err(Error::InvalidGenerationConfig {
+            message: format!(
+                "{model} uses thinking levels instead of token budgets; set thinking_level and clear thinking_budget"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "interactions")]
+pub(crate) fn validate_interaction_generation_config_for_model(
+    model: Option<&str>,
+    config: &crate::interactions::GenerationConfig,
+) -> Result<(), Error> {
+    config.validate().map_err(|message| Error::InvalidGenerationConfig { message })?;
+
+    let Some(model) = model.map(|model| model.rsplit('/').next().unwrap_or(model)) else {
+        return Ok(());
+    };
+    if matches!(model, "gemini-3.6-flash" | "gemini-3.7-flash")
+        && (config.temperature.is_some() || config.top_p.is_some())
+    {
+        return Err(Error::InvalidGenerationConfig {
+            message: format!(
+                "{model} does not accept temperature or top_p; remove explicit sampling parameters"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 impl std::fmt::Debug for GeminiClient {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("GeminiClient")
@@ -537,6 +597,10 @@ impl GeminiClient {
         Self { model, backend: Box::new(vertex) }
     }
 
+    fn validate_generation_config(&self, config: &GenerationConfig) -> Result<(), Error> {
+        validate_generation_config_for_model(&self.model, config)
+    }
+
     // ── Delegating methods ──────────────────────────────────────────────
 
     #[instrument(skip_all, fields(
@@ -556,7 +620,7 @@ impl GeminiClient {
         request: GenerateContentRequest,
     ) -> Result<GenerationResponse, Error> {
         if let Some(ref gc) = request.generation_config {
-            gc.validate().map_err(|message| Error::InvalidGenerationConfig { message })?;
+            self.validate_generation_config(gc)?;
         }
 
         let response = self.backend.generate_content(request).await?;
@@ -587,7 +651,7 @@ impl GeminiClient {
         request: GenerateContentRequest,
     ) -> Result<backend::BackendStream<GenerationResponse>, Error> {
         if let Some(ref gc) = request.generation_config {
-            gc.validate().map_err(|message| Error::InvalidGenerationConfig { message })?;
+            self.validate_generation_config(gc)?;
         }
 
         self.backend.generate_content_stream(request).await
@@ -756,7 +820,7 @@ impl GeminiClient {
         request: crate::interactions::CreateInteractionRequest,
     ) -> Result<crate::interactions::Interaction, Error> {
         if let Some(ref gc) = request.generation_config {
-            gc.validate().map_err(|message| Error::InvalidGenerationConfig { message })?;
+            validate_interaction_generation_config_for_model(request.model.as_deref(), gc)?;
         }
         self.backend.create_interaction(request).await
     }
@@ -771,7 +835,7 @@ impl GeminiClient {
         request: crate::interactions::CreateInteractionRequest,
     ) -> Result<backend::BackendStream<crate::interactions::InteractionSseEvent>, Error> {
         if let Some(ref gc) = request.generation_config {
-            gc.validate().map_err(|message| Error::InvalidGenerationConfig { message })?;
+            validate_interaction_generation_config_for_model(request.model.as_deref(), gc)?;
         }
         self.backend.create_interaction_stream(request).await
     }

@@ -311,13 +311,15 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         meta
     });
 
+    let turn_complete = content.as_ref().is_none_or(|value| !value.has_function_calls());
+
     LlmResponse {
         content,
         usage_metadata: usage,
         finish_reason,
         citation_metadata: None,
         partial: false,
-        turn_complete: true,
+        turn_complete,
         interrupted: false,
         error_code: None,
         error_message: None,
@@ -347,7 +349,8 @@ pub fn create_tool_call_response(
         finish_reason,
         citation_metadata: None,
         partial: false,
-        turn_complete: true,
+        // A tool-call response keeps the turn open so the Runner can execute it.
+        turn_complete: false,
         interrupted: false,
         error_code: None,
         error_message: None,
@@ -359,6 +362,17 @@ pub fn create_tool_call_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_call_response_keeps_the_turn_open() {
+        let response = create_tool_call_response(
+            vec![("call-1".to_string(), "lookup".to_string(), serde_json::json!({}))],
+            Some(FinishReason::Stop),
+        );
+
+        assert!(!response.turn_complete);
+        assert!(response.content.as_ref().is_some_and(Content::has_function_calls));
+    }
 
     #[test]
     fn content_to_message_keeps_inline_attachment_payload() {

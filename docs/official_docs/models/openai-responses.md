@@ -1,6 +1,6 @@
 # OpenAI Responses API
 
-ADK-Rust provides a dedicated client for OpenAI's [Responses API](https://platform.openai.com/docs/api-reference/responses) (`/v1/responses` endpoint) — the successor to the Chat Completions API. The Responses API is the recommended way to interact with OpenAI's latest models, including reasoning models (o3, o4-mini) and GPT-4.1 series.
+ADK-Rust provides a dedicated client for OpenAI's [Responses API](https://platform.openai.com/docs/api-reference/responses) (`/v1/responses` endpoint) — the successor to the Chat Completions API. The Responses API is the recommended way to use current GPT-5.6 models, including their full reasoning-effort range.
 
 ## Overview
 
@@ -16,12 +16,12 @@ ADK-Rust provides a dedicated client for OpenAI's [Responses API](https://platfo
 │                                                                     │
 │   Capabilities:                                                     │
 │   • Streaming and non-streaming                                     │
-│   • Reasoning summaries (o-series models)                           │
+│   • Reasoning summaries                                             │
 │   • Tool / function calling                                         │
 │   • Multi-turn via previous_response_id                             │
 │   • Built-in tools (web search, file search, code interpreter)      │
 │   • System instructions                                             │
-│   • Temperature, top_p, max_output_tokens                           │
+│   • Model-aware sampling controls and max_output_tokens             │
 │   • Automatic retry with exponential backoff                        │
 │                                                                     │
 │   vs Chat Completions (OpenAIClient):                               │
@@ -38,7 +38,7 @@ ADK-Rust provides a dedicated client for OpenAI's [Responses API](https://platfo
 | Feature | `OpenAIClient` (Chat Completions) | `OpenAIResponsesClient` (Responses) |
 |---------|-----------------------------------|--------------------------------------|
 | Endpoint | `/v1/chat/completions` | `/v1/responses` |
-| Models | All GPT models | All GPT + o-series reasoning models |
+| Models | Chat-compatible models | Current GPT and reasoning models |
 | Reasoning summaries | Not available | Native support |
 | Built-in tools | Not available | Web search, file search, code interpreter |
 | Server-side state | Manual message history | `previous_response_id` |
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
     let api_key = std::env::var("OPENAI_API_KEY")?;
 
     // 1. Create the Responses API client
-    let config = OpenAIResponsesConfig::new(&api_key, "gpt-4.1-nano");
+    let config = OpenAIResponsesConfig::new(&api_key, "gpt-5.6-terra");
     let model = Arc::new(OpenAIResponsesClient::new(config)?);
 
     // 2. Build an agent
@@ -144,43 +144,52 @@ async fn main() -> anyhow::Result<()> {
 ### Basic Configuration
 
 ```rust
-use adk_model::openai::{OpenAIResponsesConfig, ReasoningEffort, ReasoningSummary};
+use adk_model::openai::OpenAIResponsesConfig;
 
 // Minimal — just API key and model
-let config = OpenAIResponsesConfig::new("sk-...", "gpt-4.1-nano");
+let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-luna");
 
 // With organization and project
-let config = OpenAIResponsesConfig::new("sk-...", "gpt-4.1-mini")
+let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
     .with_organization("org-...")
     .with_project("proj-...");
 
 // Custom base URL (for proxies or compatible APIs)
-let config = OpenAIResponsesConfig::new("sk-...", "gpt-4.1-mini")
+let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
     .with_base_url("https://my-proxy.example.com/v1");
 ```
 
 ### Reasoning Models
 
-For o-series models (o3, o4-mini), configure reasoning effort and summary:
+For GPT-5.6 reasoning models, configure reasoning effort and summary:
 
 ```rust
 use adk_model::openai::{
-    OpenAIResponsesClient, OpenAIResponsesConfig,
-    ReasoningEffort, ReasoningSummary,
+    OpenAIReasoningEffort, OpenAIResponsesClient,
+    OpenAIResponsesConfig, ReasoningSummary,
 };
 
-let config = OpenAIResponsesConfig::new("sk-...", "o4-mini")
-    .with_reasoning_effort(ReasoningEffort::Medium)
+let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
     .with_reasoning_summary(ReasoningSummary::Detailed);
 
-let model = OpenAIResponsesClient::new(config)?;
+let model = OpenAIResponsesClient::new_with_reasoning_effort(
+    config,
+    OpenAIReasoningEffort::Max,
+)?;
 ```
 
 | Reasoning Effort | Description |
 |-----------------|-------------|
-| `Low` | Minimal reasoning — fastest, cheapest |
-| `Medium` | Balanced reasoning (default for most tasks) |
-| `High` | Maximum reasoning — most thorough |
+| `None` | Disable reasoning for the lowest latency |
+| `Minimal` | Legacy minimal reasoning on models that support it |
+| `Low` | Low reasoning effort |
+| `Medium` | Balanced reasoning |
+| `High` | High reasoning effort |
+| `XHigh` | Extra-high reasoning effort |
+| `Max` | Maximum reasoning on supported models |
+
+GPT-5.6 supports `None`, `Low`, `Medium`, `High`, `XHigh`, and `Max` through the
+Responses API. Chat Completions supports up to `XHigh`.
 
 | Reasoning Summary | Description |
 |------------------|-------------|
@@ -210,14 +219,13 @@ Retries are automatic for rate limits (429), server errors (500/502/503/504), an
 
 | Model | Type | Description |
 |-------|------|-------------|
-| `gpt-4.1` | Chat | Latest GPT-4.1 with improved instruction following |
-| `gpt-4.1-mini` | Chat | Balanced speed and capability |
-| `gpt-4.1-nano` | Chat | Ultra-fast, cheapest option |
-| `o3` | Reasoning | Full reasoning model |
-| `o3-mini` | Reasoning | Efficient reasoning model |
-| `o4-mini` | Reasoning | Latest efficient reasoning model |
-| `gpt-5` | Chat | State-of-the-art unified model |
-| `gpt-5-mini` | Chat | Efficient version of GPT-5 |
+| `gpt-5.6-terra` | Reasoning | Balanced default for production agents |
+| `gpt-5.6-sol` | Reasoning | Flagship reasoning and coding |
+| `gpt-5.6-luna` | Reasoning | Cost-efficient, high-volume workloads |
+| `gpt-5.6` | Reasoning | Flagship alias |
+| `gpt-5` | Reasoning | Previous-generation compatibility |
+| `gpt-4.1` family | Chat | Compatibility and explicit sampling controls |
+| `o3` / `o4-mini` | Reasoning | Previous-generation reasoning compatibility |
 
 ---
 
@@ -251,7 +259,7 @@ let weather_tool = FunctionTool::new(
     get_weather,
 );
 
-let config = OpenAIResponsesConfig::new(&api_key, "gpt-4.1-nano");
+let config = OpenAIResponsesConfig::new(&api_key, "gpt-5.6-terra");
 let model = Arc::new(OpenAIResponsesClient::new(config)?);
 
 let agent = LlmAgentBuilder::new("weather_agent")
@@ -431,11 +439,11 @@ cargo run --manifest-path examples/openai_responses/Cargo.toml
 Scenarios covered:
 1. Basic non-streaming chat
 2. Basic streaming chat
-3. Reasoning model with summary (o4-mini)
+3. Reasoning model with summary (`o4-mini` compatibility path)
 4. Tool calling with function tools
 5. Multi-turn conversation
 6. System instructions
-7. Temperature and generation config
+7. Temperature and generation config (`gpt-4.1-nano` compatibility path)
 
 ### Additional Examples
 

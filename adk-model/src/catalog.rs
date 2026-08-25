@@ -226,7 +226,13 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ModelCatalogEntry::active("gemini", "gemini-3.6-flash", ModelRole::Balanced),
     ModelCatalogEntry::active("gemini", "gemini-3.5-flash", ModelRole::Balanced),
     ModelCatalogEntry::active("gemini", "gemini-3.5-flash-lite", ModelRole::Economy),
-    ModelCatalogEntry::active("gemini", "gemini-3.1-flash-lite", ModelRole::Economy),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-3.1-flash-lite",
+        ModelLifecycle::Deprecated,
+        "gemini-3.5-flash-lite",
+        Some("2027-05-07"),
+    ),
     ModelCatalogEntry::preview("gemini", "gemini-3.1-pro-preview", ModelRole::Flagship),
     ModelCatalogEntry::active("gemini", "gemini-3.1-flash-image", ModelRole::Image),
     ModelCatalogEntry::active("gemini", "gemini-3-pro-image", ModelRole::Image),
@@ -263,6 +269,11 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ModelCatalogEntry::default("cohere", COHERE_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("openai-realtime", OPENAI_REALTIME_DEFAULT, ModelRole::Realtime),
     ModelCatalogEntry::default_preview("gemini-live", GEMINI_LIVE_DEFAULT, ModelRole::Realtime),
+    ModelCatalogEntry::active(
+        "gemini-live",
+        "gemini-live-2.5-flash-native-audio",
+        ModelRole::Realtime,
+    ),
     ModelCatalogEntry::default(
         "openai-transcription",
         OPENAI_LIVE_TRANSCRIPTION_DEFAULT,
@@ -283,6 +294,13 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
         ModelLifecycle::Retired,
         "gemini-3.1-flash-lite",
         Some("2026-05-25"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-3-flash-preview",
+        ModelLifecycle::Deprecated,
+        "gemini-3.6-flash",
+        None,
     ),
     ModelCatalogEntry::obsolete(
         "gemini",
@@ -314,10 +332,31 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ),
     ModelCatalogEntry::obsolete(
         "gemini",
+        "gemini-2.0-flash-001",
+        ModelLifecycle::Retired,
+        "gemini-3.6-flash",
+        Some("2026-06-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
         "gemini-2.0-flash-lite",
         ModelLifecycle::Retired,
         "gemini-3.1-flash-lite",
         Some("2026-06-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-2.0-flash-lite-001",
+        ModelLifecycle::Retired,
+        "gemini-3.1-flash-lite",
+        Some("2026-06-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-2.5-flash-image-preview",
+        ModelLifecycle::Retired,
+        "gemini-3.1-flash-image",
+        Some("2026-01-15"),
     ),
     ModelCatalogEntry::obsolete(
         "groq",
@@ -336,6 +375,13 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ModelCatalogEntry::obsolete(
         "groq",
         "meta-llama/llama-4-scout-17b-16e-instruct",
+        ModelLifecycle::Deprecated,
+        GROQ_DEFAULT,
+        Some("2026-07-17"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "groq",
+        "qwen/qwen3-32b",
         ModelLifecycle::Deprecated,
         GROQ_DEFAULT,
         Some("2026-07-17"),
@@ -370,7 +416,14 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ),
     ModelCatalogEntry::obsolete(
         "gemini-live",
-        "gemini-live-2.5-flash-native-audio",
+        "gemini-2.5-flash-native-audio-preview-12-2025",
+        ModelLifecycle::Deprecated,
+        GEMINI_LIVE_DEFAULT,
+        None,
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini-live",
+        "gemini-live-2.5-flash-preview",
         ModelLifecycle::Retired,
         GEMINI_LIVE_DEFAULT,
         Some("2025-12-09"),
@@ -538,6 +591,17 @@ mod tests {
         let error = validate_model_selection("gemini", "models/gemini-2.0-flash")
             .expect_err("retired model must be rejected by explicit validation");
         assert!(error.to_string().contains("gemini-3.6-flash"));
+    }
+
+    #[test]
+    fn live_catalog_distinguishes_vertex_ga_from_retired_studio_model() {
+        let vertex = lookup_model("gemini-live", "models/gemini-live-2.5-flash-native-audio")
+            .expect("Vertex Live GA model should be catalogued");
+        assert_eq!(vertex.lifecycle, ModelLifecycle::Active);
+
+        let error = validate_model_selection("gemini-live", "gemini-live-2.5-flash-preview")
+            .expect_err("retired AI Studio Live model must be rejected");
+        assert!(error.to_string().contains(GEMINI_LIVE_DEFAULT));
     }
 
     #[test]

@@ -32,10 +32,6 @@ pin-project-lite = "0.2"
 reqwest = { workspace = true, features = ["multipart"], optional = true }
 base64 = { version = "0.22", optional = true }
 
-# DSP (optional)
-rubato = { version = "4.0", optional = true }
-dasp = { version = "0.11", features = ["signal"], optional = true }
-
 # VAD
 #
 # There is deliberately no VAD backend dependency here. `webrtc-vad` used to be
@@ -89,7 +85,8 @@ default = ["tts", "stt"]
 tts = ["dep:reqwest", "dep:base64"]
 stt = ["dep:reqwest", "dep:tokio-tungstenite"]
 music = ["dep:reqwest"]
-fx = ["dep:rubato", "dep:dasp"]
+# Built-in DSP processors use no external dependencies.
+fx = []
 # The `VadProcessor` trait is compiled unconditionally, so this feature has
 # never gated any code (`#[cfg(feature = "vad")]` appears nowhere in the crate).
 # It is retained as a no-op so existing consumers and `desktop-audio` keep

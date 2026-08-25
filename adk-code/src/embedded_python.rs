@@ -334,7 +334,7 @@ impl MontyExecutorBuilder {
         os_access::validate_mounts(&self.os.mounts)?;
         let registry = FunctionRegistry::build(self.functions)?;
         let prompt_snippet = prompt::render_prompt_snippet(&self.os, &registry, mode);
-        let mut base_limits = ResourceLimits::new();
+        let mut base_limits = ResourceLimits::default();
         if let Some(bytes) = self.max_memory {
             base_limits = base_limits.max_memory(bytes);
         }
