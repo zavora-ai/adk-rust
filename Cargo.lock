@@ -764,9 +764,12 @@ name = "adk-rag"
 version = "2.1.0"
 dependencies = [
  "adk-core",
+ "adk-gcp",
  "adk-gemini",
  "async-trait",
+ "axum 0.8.9",
  "futures",
+ "google-cloud-auth 1.12.0",
  "lancedb",
  "proptest",
  "qdrant-client",

@@ -1,0 +1,24 @@
+[package]
+name = "vertex-rag-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+# ADK crates (path deps to workspace)
+adk-rag = { path = "../../adk-rag", features = ["vertex-rag"] }
+adk-core = { path = "../../adk-core" }
+adk-model = { path = "../../adk-model", features = ["gemini"] }
+adk-agent = { path = "../../adk-agent" }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+
+# Common dependencies
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

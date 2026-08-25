@@ -22,7 +22,8 @@
 //! | `lancedb`    | `LanceDBVectorStore` via lancedb          |
 //! | `pgvector`   | `PgVectorStore` via sqlx                  |
 //! | `surrealdb`  | `SurrealVectorStore` via surrealdb        |
-//! | `full`       | All of the above                          |
+//! | `vertex-rag` | Vertex AI RAG Engine client + retrieval tool |
+//! | `full`       | All of the above except `vertex-rag` (external infrastructure) |
 
 pub mod chunking;
 pub mod config;
@@ -47,6 +48,8 @@ pub mod pgvector;
 pub mod qdrant;
 #[cfg(feature = "surrealdb")]
 pub mod surrealdb;
+#[cfg(feature = "vertex-rag")]
+pub mod vertex_rag;
 
 pub use chunking::{Chunker, FixedSizeChunker, MarkdownChunker, RecursiveChunker};
 pub use config::{RagConfig, RagConfigBuilder};
@@ -71,3 +74,7 @@ pub use pgvector::PgVectorStore;
 pub use qdrant::QdrantVectorStore;
 #[cfg(feature = "surrealdb")]
 pub use surrealdb::SurrealVectorStore;
+#[cfg(feature = "vertex-rag")]
+pub use vertex_rag::{
+    RetrieveContextsRequest, VertexAiRagRetrievalTool, VertexRagConfig, VertexRagEngineClient,
+};
