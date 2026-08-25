@@ -148,7 +148,7 @@ async fn main() -> anyhow::Result<()> {
     // Wrap pipeline as a tool and attach to an agent
     let agent = LlmAgentBuilder::new("support")
         .instruction("Answer questions using the rag_search tool. Cite your sources.")
-        .model(Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?))
+        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?))
         .tool(Arc::new(RagTool::new(pipeline, "kb")))
         .build()?;
 
@@ -221,7 +221,7 @@ let config = RagConfig::builder()
 
 | Provider | Feature flag | Model | Requires |
 |----------|-------------|-------|----------|
-| `GeminiEmbeddingProvider` | `gemini` | gemini-embedding-001 | `GOOGLE_API_KEY` |
+| `GeminiEmbeddingProvider` | `gemini` | gemini-embedding-2 | `GOOGLE_API_KEY` |
 | `OpenAIEmbeddingProvider` | `openai` | text-embedding-3-small | `OPENAI_API_KEY` |
 
 ```rust

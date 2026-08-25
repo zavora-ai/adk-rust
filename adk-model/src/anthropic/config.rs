@@ -92,8 +92,8 @@ pub struct AnthropicConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<Effort>,
 
-    /// Enable fast mode (Opus 4.6+ only, beta).
-    /// Delivers up to 2.5× higher output tokens/sec at 6× pricing.
+    /// Enable fast mode for Claude Opus 5 or Claude Opus 4.8 (research preview).
+    /// Delivers up to 2.5× higher output tokens/sec at premium pricing.
     #[serde(default)]
     pub fast_mode: bool,
 
@@ -201,7 +201,7 @@ impl AnthropicConfig {
         self
     }
 
-    /// Enable fast mode (Opus 4.6+ only, beta).
+    /// Enable fast mode for Claude Opus 5 or Claude Opus 4.8.
     pub fn with_fast_mode(mut self, enabled: bool) -> Self {
         self.fast_mode = enabled;
         self

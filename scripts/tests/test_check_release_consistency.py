@@ -48,5 +48,35 @@ class ReleaseStatePatternTests(unittest.TestCase):
         )
 
 
+class ChangelogBoundaryTests(unittest.TestCase):
+    """Covers the release headings and comparison links used at publication."""
+
+    CHANGELOG = """\
+## [Unreleased]
+
+## [2.1.0] - 2026-08-25
+
+## [2.0.0] - 2026-08-09
+
+[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/zavora-ai/adk-rust/compare/v2.0.0...v2.1.0
+"""
+
+    def test_release_headings_are_newest_first(self) -> None:
+        self.assertEqual(
+            CHECKER.changelog_release_headings(self.CHANGELOG),
+            [("2.1.0", "2026-08-25"), ("2.0.0", "2026-08-09")],
+        )
+
+    def test_comparison_links_are_parsed(self) -> None:
+        self.assertEqual(
+            CHECKER.changelog_links(self.CHANGELOG),
+            {
+                "Unreleased": "https://github.com/zavora-ai/adk-rust/compare/v2.1.0...HEAD",
+                "2.1.0": "https://github.com/zavora-ai/adk-rust/compare/v2.0.0...v2.1.0",
+            },
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -85,7 +85,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let model = Arc::new(OpenAIRealtimeModel::new(&api_key, "gpt-realtime"));
+    let model = Arc::new(OpenAIRealtimeModel::new(&api_key, "gpt-realtime-2.1"));
 
     let agent = RealtimeAgent::builder("voice_assistant")
         .model(model)
@@ -109,7 +109,7 @@ use adk_realtime::openai::OpenAIRealtimeModel;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = OpenAIRealtimeModel::new(
         std::env::var("OPENAI_API_KEY")?,
-        "gpt-realtime",
+        "gpt-realtime-2.1",
     );
 
     let config = RealtimeConfig::default()
@@ -174,7 +174,7 @@ adk-realtime = { version = "2.1.0", features = ["openai-webrtc"] }
 ```rust
 use adk_realtime::openai::{OpenAIRealtimeModel, OpenAITransport};
 
-let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime")
+let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1")
     .with_transport(OpenAITransport::WebRTC);
 let session = model.connect(config).await?;
 ```

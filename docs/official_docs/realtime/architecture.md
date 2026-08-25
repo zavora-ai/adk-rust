@@ -140,7 +140,7 @@ direction**:
 
 | Provider | Input (mic → model) | Output (model → you) |
 |----------|--------------------:|---------------------:|
-| OpenAI `gpt-realtime` | 24 kHz | 24 kHz |
+| OpenAI `gpt-realtime-2.1` | 24 kHz | 24 kHz |
 | Gemini Live | 16 kHz | 24 kHz |
 
 Because the rates differ, a bridge **negotiates them to the browser** before any

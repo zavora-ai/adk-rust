@@ -11,7 +11,7 @@
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
 and async, across 43 publishable crates for agent orchestration.
 
-> **v2.1.0 release candidate — unpublished.** This API-compatible minor release
+> **v2.1.0 Released!** This API-compatible minor release
 > adds portable, validated teams with exact handoff and delegation semantics; a
 > Gemini Enterprise Agent Platform path spanning Agent Engine runtime and BYOC
 > deployment, Vertex sessions and Memory Bank, GCS artifacts, Example Store,
@@ -19,8 +19,8 @@ and async, across 43 publishable crates for agent orchestration.
 > runtime skill writing, and argument-level tool guardrails; plus Anthropic
 > request customization and typed safety-refusal fallback; and a new ADK-Rust-owned
 > responsive runtime UI for conversations, exact team topology, event timelines,
-> shared state, artifacts, sessions, and UI-protocol discovery. crates.io remains on
-> 2.0.0 until the release is published.
+> shared state, artifacts, sessions, and UI-protocol discovery. All 43 crates are
+> available on [crates.io](https://crates.io/crates/adk-rust/2.1.0).
 >
 > Coming from 1.x: six APIs changed shape and the fan-in default changed behaviour
 > without an API change. See the [migration guide](docs/official_docs/migration/1.0-to-2.0.md)
@@ -423,7 +423,7 @@ per-platform tool matrix and the CI cost tiers.
 
 ## Project
 
-- [ROADMAP.md](ROADMAP.md) — **v2.1.0** (release candidate). Longer-term direction and
+- [ROADMAP.md](ROADMAP.md) — **v2.1.0** (current). Longer-term direction and
   why both orchestration APIs are supported
 - [CHANGELOG.md](CHANGELOG.md) — every release
 - [CONTRIBUTORS.md](CONTRIBUTORS.md) — the people who built this

@@ -31,21 +31,21 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "process", "time", "io-util", "sync", "macros"] }
 tracing = { workspace = true }
 # Pydantic Monty — a minimal, secure, Rust-native Python interpreter for AI.
-# `"0.0.19"` resolves to exactly the release monty itself was built against, so
+# `"0.0.21"` resolves to exactly the release monty itself was built against, so
 # the three crates can never diverge (Cargo treats every `0.0.x` as its own
 # compatibility range). This is the single place the Monty release is stated:
 # `embedded_python` re-exports the three crates, and `adk-codeact-monty`
 # consumes them through that re-export.
 #
-# monty 0.0.19 pulls `ruff_python_ast 0.0.3`, whose `get-size` feature derives
+# monty 0.0.21 pulls `ruff_python_ast 0.0.3`, whose `get-size` feature derives
 # `get_size2::GetSize` on `compact_str 0.9` fields; `get-size2 0.10.2+` moved to
 # `compact_str ^0.10`, so the derive stops resolving. `ruff_python_ast` accepts
 # `get-size2 ^0.10`, so the committed workspace Cargo.lock pins `get-size2` to
 # `0.10.1` (the last `compact_str ^0.9` release). Remove the pin once monty
 # upgrades past ruff_python_ast 0.0.3.
-monty = { version = "0.0.19", optional = true }
-monty-types = { version = "0.0.19", optional = true }
-monty-fs = { version = "0.0.19", optional = true }
+monty = { version = "0.0.21", optional = true }
+monty-types = { version = "0.0.21", optional = true }
+monty-fs = { version = "0.0.21", optional = true }
 # `date.today()` / `datetime.now()` OS calls are serviced from the host clock
 # (see `embedded_python::os_access`). `clock` pulls in the local-timezone
 # lookup. `default-features = false` because standalone `adk-code` builds do

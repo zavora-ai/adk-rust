@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// use adk_bench::BenchConfig;
 ///
 /// let config = BenchConfig {
-///     model: "gemini-2.5-flash".to_string(),
+///     model: "gemini-3.5-flash-lite".to_string(),
 ///     runs: 10,
 ///     concurrency: 4,
 ///     ..Default::default()
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BenchConfig {
-    /// Model identifier (e.g., "gemini-2.5-flash").
+    /// Model identifier (e.g., "gemini-3.5-flash-lite").
     pub model: String,
 
     /// Number of measurement iterations per workload.
@@ -96,7 +96,7 @@ pub struct BenchConfig {
 impl Default for BenchConfig {
     /// Creates a `BenchConfig` with documented defaults:
     ///
-    /// - `model`: `"gemini-2.5-flash"`
+    /// - `model`: `"gemini-3.5-flash-lite"`
     /// - `runs`: 5
     /// - `concurrency`: 1 (sequential)
     /// - `warmup`: 3
@@ -111,7 +111,7 @@ impl Default for BenchConfig {
     /// - `experimental`: false
     fn default() -> Self {
         Self {
-            model: "gemini-2.5-flash".to_string(),
+            model: "gemini-3.5-flash-lite".to_string(),
             runs: 5,
             concurrency: 1,
             workload: None,

@@ -328,6 +328,12 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         OaiFinishReason::ContentFilter => FinishReason::Safety,
         OaiFinishReason::FunctionCall => FinishReason::Stop,
     });
+    let tool_call_turn = resp.choices.first().is_some_and(|choice| {
+        matches!(
+            choice.finish_reason,
+            Some(OaiFinishReason::ToolCalls | OaiFinishReason::FunctionCall)
+        )
+    }) || content.as_ref().is_some_and(Content::has_function_calls);
 
     LlmResponse {
         content,
@@ -335,7 +341,7 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         finish_reason,
         citation_metadata: None,
         partial: false,
-        turn_complete: true,
+        turn_complete: !tool_call_turn,
         interrupted: false,
         error_code: None,
         error_message: None,
@@ -449,6 +455,11 @@ pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
             "function_call" => FinishReason::Stop,
             _ => FinishReason::Stop,
         });
+    let tool_call_turn = choice
+        .and_then(|choice| choice.get("finish_reason"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|reason| matches!(reason, "tool_calls" | "function_call"))
+        || content.as_ref().is_some_and(Content::has_function_calls);
 
     LlmResponse {
         content,
@@ -456,7 +467,7 @@ pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
         finish_reason,
         citation_metadata: None,
         partial: false,
-        turn_complete: true,
+        turn_complete: !tool_call_turn,
         interrupted: false,
         error_code: None,
         error_message: None,
@@ -754,6 +765,7 @@ mod tests {
         } else {
             panic!("Expected FunctionCall part");
         }
+        assert!(!resp.turn_complete, "tool-call turns must remain open for execution");
     }
 
     #[test]

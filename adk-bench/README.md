@@ -6,7 +6,10 @@ A comprehensive benchmarking framework for ADK-Rust that measures framework-leve
 
 ### Framework Comparison: simple_tool_call
 
-All frameworks execute the same workload (weather tool call) against `gemini-2.5-flash` with identical prompts and deterministic config (temperature=0).
+The historical results below used `gemini-2.5-flash` with identical prompts and
+deterministic sampling. New runs default to the current economy model,
+`gemini-3.5-flash-lite`; do not compare results across model generations as a
+framework regression.
 
 | Framework | Cold Start | Agent Loop Overhead (mean) | Agent Loop Overhead (P95) | Peak RSS |
 |-----------|-----------|---------------------------|--------------------------|----------|
@@ -136,7 +139,7 @@ cargo adk bench --format table --confirm-cost
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model` | `gemini-2.5-flash` | LLM model identifier |
+| `--model` | `gemini-3.5-flash-lite` | LLM model identifier |
 | `--runs` | `5` | Measurement iterations per workload |
 | `--warmup` | `3` | Warm-up iterations (discarded) |
 | `--concurrency` | `1` | Agent concurrency level |

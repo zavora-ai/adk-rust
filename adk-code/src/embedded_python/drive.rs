@@ -24,10 +24,12 @@
 
 use std::borrow::Cow;
 
-use monty::{MontyRepl, MontyRun, ReplProgress, ReplStartError, RunProgress};
+use monty::{
+    Dump, MontyRepl, MontyRun, ReplProgress, ReplStartError, RunProgress, Session, SessionRef, dump,
+};
 use monty_types::{
-    CompileOptions, ExcType, ExtFunctionResult, LimitedTracker, MontyException, MontyObject,
-    NameLookupResult, PrintWriter, PrintWriterCallback,
+    CompileOptions, ExcType, ExtFunctionResult, MontyException, MontyObject, NameLookupResult,
+    PrintWriter, PrintWriterCallback, ResourceTracker,
 };
 use serde_json::{Map, Value};
 use tracing::debug;
@@ -37,10 +39,10 @@ use super::host_fn::{FunctionRegistry, INPUT_BINDING};
 use super::os_access::OsAccess;
 use crate::ExecutionError;
 
-/// The resource tracker every drive uses. `LimitedTracker` serializes cleanly
+/// The resource tracker every drive uses. `ResourceTracker` serializes cleanly
 /// (so it rides along inside dumped progress and REPL state) and enforces the
 /// configured `ResourceLimits`.
-pub(crate) type Tracker = LimitedTracker;
+pub(crate) type Tracker = ResourceTracker;
 
 /// The stdout collector every drive segment writes through: a `String` with a
 /// hard byte cap taken from `SandboxPolicy::max_stdout_bytes`.
@@ -241,7 +243,7 @@ pub(crate) fn start_run(
         Err(exc) => return Ok(RunSegment::Finished(DriveEnd::raised(&exc))),
     };
     match run.start(inputs, tracker, PrintWriter::Callback(stdout)) {
-        Ok(progress) => drive_run(progress, os, registry, stdout),
+        Ok(progress) => drive_run(progress, script_name, os, registry, stdout),
         Err(exc) => Ok(RunSegment::Finished(DriveEnd::raised(&exc))),
     }
 }
@@ -254,22 +256,30 @@ pub(crate) fn resume_run(
     registry: &FunctionRegistry,
     stdout: &mut CappedStdout,
 ) -> Result<RunSegment, ExecutionError> {
-    let progress = RunProgress::<Tracker>::load(progress_bytes)
+    let restored = Dump::load(progress_bytes)
         .map_err(|err| internal("failed to deserialize paused run progress", err))?;
+    let script_name = restored.script_name;
+    let Session::Running(progress) = restored.state else {
+        return Err(ExecutionError::InternalError(
+            "paused run dump does not contain run progress".to_string(),
+        ));
+    };
+    let progress = *progress;
     let Some(call) = progress.into_function_call() else {
         return Err(ExecutionError::InternalError(
             "paused run progress is not a function call".to_string(),
         ));
     };
     match call.resume(host_result(outcome), PrintWriter::Callback(stdout)) {
-        Ok(progress) => drive_run(progress, os, registry, stdout),
+        Ok(progress) => drive_run(progress, &script_name, os, registry, stdout),
         Err(exc) => Ok(RunSegment::Finished(DriveEnd::raised(&exc))),
     }
 }
 
 /// Drive a one-shot run to the next segment boundary (pause) or the end.
 fn drive_run(
-    mut progress: RunProgress<Tracker>,
+    mut progress: RunProgress,
+    script_name: &str,
     os: &OsAccess,
     registry: &FunctionRegistry,
     stdout: &mut CappedStdout,
@@ -286,8 +296,7 @@ fn drive_run(
                     let args = call.args.iter().map(monty_to_json).collect();
                     let kwargs = kwargs_to_json(&call.kwargs);
                     let paused = RunProgress::FunctionCall(call);
-                    let progress_bytes = paused
-                        .dump()
+                    let progress_bytes = dump(script_name, None, SessionRef::Running(&paused))
                         .map_err(|err| internal("failed to serialize paused run progress", err))?;
                     debug!(
                         host_fn.name = %name,
@@ -349,8 +358,8 @@ pub(crate) fn fresh_repl_bytes(
     script_name: &str,
     tracker: Tracker,
 ) -> Result<Vec<u8>, ExecutionError> {
-    MontyRepl::new(script_name, tracker, CompileOptions::default())
-        .dump()
+    let repl = MontyRepl::new(script_name, tracker, CompileOptions::default());
+    dump(script_name, None, SessionRef::Idle(&repl))
         .map_err(|err| internal("failed to serialize fresh REPL state", err))
 }
 
@@ -374,15 +383,26 @@ pub(crate) fn feed_repl(
     registry: &FunctionRegistry,
     stdout: &mut CappedStdout,
 ) -> Result<ReplSegment, ExecutionError> {
-    let mut repl = match repl_bytes {
-        Some(bytes) => MontyRepl::<Tracker>::load(bytes)
-            .map_err(|err| internal("failed to deserialize REPL session state", err))?,
-        None => MontyRepl::new(script_name, tracker, CompileOptions::default()),
+    let (mut repl, active_script_name) = match repl_bytes {
+        Some(bytes) => {
+            let restored = Dump::load(bytes)
+                .map_err(|err| internal("failed to deserialize REPL session state", err))?;
+            let Session::Idle(repl) = restored.state else {
+                return Err(ExecutionError::InternalError(
+                    "REPL session dump is not idle".to_string(),
+                ));
+            };
+            (*repl, restored.script_name)
+        }
+        None => (
+            MontyRepl::new(script_name, tracker, CompileOptions::default()),
+            script_name.to_string(),
+        ),
     };
     repl.tracker_mut().set_max_duration(timeout);
     match repl.feed_start(code, input_bindings(input), PrintWriter::Callback(stdout)) {
-        Ok(progress) => drive_repl(progress, os, registry, stdout),
-        Err(err) => repl_raised(*err),
+        Ok(progress) => drive_repl(progress, &active_script_name, os, registry, stdout),
+        Err(err) => repl_raised(*err, &active_script_name),
     }
 }
 
@@ -394,30 +414,38 @@ pub(crate) fn resume_repl(
     registry: &FunctionRegistry,
     stdout: &mut CappedStdout,
 ) -> Result<ReplSegment, ExecutionError> {
-    let progress = ReplProgress::<Tracker>::load(progress_bytes)
+    let restored = Dump::load(progress_bytes)
         .map_err(|err| internal("failed to deserialize paused REPL progress", err))?;
+    let script_name = restored.script_name;
+    let Session::Suspended(progress) = restored.state else {
+        return Err(ExecutionError::InternalError(
+            "paused REPL dump does not contain suspended progress".to_string(),
+        ));
+    };
+    let progress = *progress;
     let Some(call) = progress.into_function_call() else {
         return Err(ExecutionError::InternalError(
             "paused REPL progress is not a function call".to_string(),
         ));
     };
     match call.resume(host_result(outcome), PrintWriter::Callback(stdout)) {
-        Ok(progress) => drive_repl(progress, os, registry, stdout),
-        Err(err) => repl_raised(*err),
+        Ok(progress) => drive_repl(progress, &script_name, os, registry, stdout),
+        Err(err) => repl_raised(*err, &script_name),
     }
 }
 
 /// A Python-level raise preserves the REPL session (`ReplStartError` returns
 /// it), so serialize the surviving state alongside the rendered traceback.
-fn repl_raised(err: ReplStartError<Tracker>) -> Result<ReplSegment, ExecutionError> {
-    let repl_bytes =
-        err.repl.dump().map_err(|err| internal("failed to serialize REPL session state", err))?;
+fn repl_raised(err: ReplStartError, script_name: &str) -> Result<ReplSegment, ExecutionError> {
+    let repl_bytes = dump(script_name, None, SessionRef::Idle(&err.repl))
+        .map_err(|err| internal("failed to serialize REPL session state", err))?;
     Ok(ReplSegment::Finished { end: DriveEnd::raised(&err.error), repl_bytes })
 }
 
 /// Drive a REPL feed to the next segment boundary (pause) or the end.
 fn drive_repl(
-    mut progress: ReplProgress<Tracker>,
+    mut progress: ReplProgress,
+    script_name: &str,
     os: &OsAccess,
     registry: &FunctionRegistry,
     stdout: &mut CappedStdout,
@@ -426,8 +454,7 @@ fn drive_repl(
     loop {
         match progress {
             ReplProgress::Complete { repl, value } => {
-                let repl_bytes = repl
-                    .dump()
+                let repl_bytes = dump(script_name, None, SessionRef::Idle(&repl))
                     .map_err(|err| internal("failed to serialize REPL session state", err))?;
                 debug!(repl.state_bytes = repl_bytes.len(), "repl snippet complete");
                 return Ok(ReplSegment::Finished { end: DriveEnd::complete(&value), repl_bytes });
@@ -438,8 +465,7 @@ fn drive_repl(
                     let args = call.args.iter().map(monty_to_json).collect();
                     let kwargs = kwargs_to_json(&call.kwargs);
                     let paused = ReplProgress::FunctionCall(call);
-                    let progress_bytes = paused
-                        .dump()
+                    let progress_bytes = dump(script_name, None, SessionRef::Suspended(&paused))
                         .map_err(|err| internal("failed to serialize paused REPL progress", err))?;
                     debug!(
                         host_fn.name = %name,
@@ -459,7 +485,7 @@ fn drive_repl(
                     PrintWriter::Callback(stdout),
                 ) {
                     Ok(next) => next,
-                    Err(err) => return repl_raised(*err),
+                    Err(err) => return repl_raised(*err, script_name),
                 };
             }
             ReplProgress::OsCall(call) => {
@@ -467,14 +493,14 @@ fn drive_repl(
                     os.resolve(call, &mut mounts)
                 }) {
                     Ok(next) => next,
-                    Err(err) => return repl_raised(*err),
+                    Err(err) => return repl_raised(*err, script_name),
                 };
             }
             ReplProgress::NameLookup(lookup) => {
                 let result = lookup_result(registry, &lookup.name);
                 progress = match lookup.resume(result, PrintWriter::Callback(stdout)) {
                     Ok(next) => next,
-                    Err(err) => return repl_raised(*err),
+                    Err(err) => return repl_raised(*err, script_name),
                 };
             }
             ReplProgress::ResolveFutures(futures) => {
@@ -485,7 +511,7 @@ fn drive_repl(
                     .collect();
                 progress = match futures.resume(denied, PrintWriter::Callback(stdout)) {
                     Ok(next) => next,
-                    Err(err) => return repl_raised(*err),
+                    Err(err) => return repl_raised(*err, script_name),
                 };
             }
         }
@@ -503,7 +529,7 @@ mod tests {
     use super::*;
 
     fn tracker() -> Tracker {
-        Tracker::new(ResourceLimits::new())
+        Tracker::new(ResourceLimits::default())
     }
 
     fn registry_with(name: &str) -> FunctionRegistry {
@@ -630,7 +656,7 @@ mod tests {
             .unwrap();
         let progress =
             run.start(Vec::new(), tracker(), PrintWriter::Callback(&mut stdout)).unwrap();
-        let bytes = progress.dump().unwrap();
+        let bytes = dump("test", None, SessionRef::Running(&progress)).unwrap();
         let err = resume_run(&bytes, Ok(json!(1)), &os, &registry, &mut stdout)
             .expect_err("a completed progress must not resume");
         match err {
@@ -647,7 +673,7 @@ mod tests {
         let repl = MontyRepl::new("test", tracker(), CompileOptions::default());
         let progress =
             repl.feed_start("1 + 1", Vec::new(), PrintWriter::Callback(&mut stdout)).unwrap();
-        let bytes = progress.dump().unwrap();
+        let bytes = dump("test", None, SessionRef::Suspended(&progress)).unwrap();
         let err = resume_repl(&bytes, Ok(json!(1)), &os, &registry, &mut stdout)
             .expect_err("a completed progress must not resume");
         match err {
@@ -694,7 +720,7 @@ mod tests {
             };
         }
 
-        let segment = drive_run(progress, &os, &registry, &mut stdout).unwrap();
+        let segment = drive_run(progress, "test", &os, &registry, &mut stdout).unwrap();
         match segment {
             RunSegment::Finished(end) => {
                 let error = end.error.expect("the denied await raises");
