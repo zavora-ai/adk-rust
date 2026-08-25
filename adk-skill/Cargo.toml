@@ -12,8 +12,20 @@ readme = "README.md"
 keywords = ["adk", "skills", "agent", "prompt"]
 categories = ["development-tools", "asynchronous"]
 
+[features]
+# Read-only Vertex AI Skill Registry client (Build pillar, aiplatform v1beta1)
+# with safe archive extraction. Lifecycle operations are platform-owned.
+vertex-skill-registry = [
+    "dep:adk-gcp",
+    "dep:google-cloud-auth",
+    "dep:reqwest",
+    "dep:base64",
+    "dep:zip",
+]
+
 [dependencies]
 adk-core.workspace = true
+adk-gcp = { workspace = true, optional = true }
 adk-plugin.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -23,7 +35,16 @@ serde_yaml = "0.9"
 walkdir = "2.5"
 sha2 = "0.10"
 tempfile = "3"
+base64 = { version = "0.22", optional = true }
+google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
+reqwest = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
 
 [dev-dependencies]
 async-trait.workspace = true
 tokio = { workspace = true, features = ["full"] }
+axum = "0.8"
+
+[[test]]
+name = "skill_registry_contract"
+required-features = ["vertex-skill-registry"]

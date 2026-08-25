@@ -1036,8 +1036,13 @@ name = "adk-skill"
 version = "2.1.0"
 dependencies = [
  "adk-core",
+ "adk-gcp",
  "adk-plugin",
  "async-trait",
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "google-cloud-auth 1.12.0",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1047,6 +1052,7 @@ dependencies = [
  "tokio",
  "tracing",
  "walkdir",
+ "zip 7.2.0",
 ]
 
 [[package]]
@@ -21893,9 +21899,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
 dependencies = [
  "crc32fast",
+ "flate2",
  "indexmap 2.14.0",
  "memchr",
  "typed-path",
+ "zopfli",
 ]
 
 [[package]]
