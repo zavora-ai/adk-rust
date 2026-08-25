@@ -26,6 +26,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **JUnit XML Output**: CI-friendly report generation (feature: `ci-helpers`)
 - **Human Annotation**: JSONL export/import workflow for human review
 - **A/B Comparison**: Statistical significance testing with Wilcoxon signed-rank (feature: `statistics`)
+- **Vertex AI Gen AI Evaluation Service**: Service-backed judge and trajectory metrics via `evaluateInstances` (feature: `vertex-eval`)
 - **Test Case Generation**: LLM-driven or event-based eval case creation
 - **Conversation Metrics**: Multi-turn scoring for context retention, goal completion, coherence, topic drift
 - **CLI Integration**: `cargo adk eval` with baselines, regression checks, and parallel execution
@@ -267,6 +268,7 @@ adk-eval = { version = "2.1.0", features = ["embedding", "ci-helpers", "statisti
 | `embedding` | `adk-memory` | Embedding-based semantic similarity |
 | `ci-helpers` | `quick-xml` | JUnit XML report generation |
 | `statistics` | `statrs` | Wilcoxon signed-rank for A/B comparison |
+| `vertex-eval` | `adk-gcp` | Vertex AI Gen AI Evaluation Service bridge (`VertexEvalClient`, `VertexEvalJudge`) |
 
 All other features (structured judge, cost tracker, trace analyzer, baselines, annotations, test generator, conversation scorer) work without extra feature flags.
 
