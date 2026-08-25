@@ -184,6 +184,13 @@ jobs:
           # The Memory Bank backend (vertex-memory) is opt-in; its mock contract tests
           # only run with the feature on.
           - { package: adk-memory, features: vertex-memory }
+          # Wave 4 EAP integrations are opt-in; their mock contract tests only run
+          # with each feature on.
+          - { package: adk-eval, features: vertex-eval }
+          - { package: adk-rag, features: vertex-rag }
+          - { package: adk-rag, features: agent-retrieval }
+          - { package: adk-tool, features: vertex-agent-registry }
+          - { package: adk-skill, features: vertex-skill-registry }
           # The Agent Engine deployment client (gcp) is opt-in; its golden DTO and
           # mock contract tests only run with the feature on.
           - { package: adk-deploy, features: gcp }
