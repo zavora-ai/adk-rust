@@ -383,6 +383,46 @@ fn parse_grounding_metadata_response() {
     assert_eq!(queries, &["example query"]);
 }
 
+#[test]
+fn parse_retrieved_context_grounding_chunk() {
+    let json = json!({
+        "candidates": [{
+            "content": {"parts": [{"text": "Grounded answer"}], "role": "model"},
+            "finishReason": "STOP",
+            "groundingMetadata": {
+                "groundingChunks": [{
+                    "retrievedContext": {
+                        "uri": "gs://bucket/handbook.pdf",
+                        "title": "Employee Handbook",
+                        "text": "Vacation accrues at 1.5 days per month.",
+                        "ragChunk": {
+                            "chunkId": "chunk-42",
+                            "fileId": "file-7",
+                            "text": "Vacation accrues at 1.5 days per month.",
+                            "pageSpan": {"firstPage": 12, "lastPage": 13}
+                        }
+                    }
+                }]
+            }
+        }]
+    });
+
+    let resp: GenerationResponse = serde_json::from_value(json).unwrap();
+    let grounding = resp.candidates[0].grounding_metadata.as_ref().unwrap();
+    let chunks = grounding.grounding_chunks.as_ref().unwrap();
+    assert_eq!(chunks.len(), 1);
+
+    let context = chunks[0].retrieved_context.as_ref().unwrap();
+    assert_eq!(context.uri.as_deref(), Some("gs://bucket/handbook.pdf"));
+    assert_eq!(context.title.as_deref(), Some("Employee Handbook"));
+
+    let rag_chunk = context.rag_chunk.as_ref().unwrap();
+    assert_eq!(rag_chunk.chunk_id.as_deref(), Some("chunk-42"));
+    assert_eq!(rag_chunk.file_id.as_deref(), Some("file-7"));
+    let page_span = rag_chunk.page_span.as_ref().unwrap();
+    assert_eq!((page_span.first_page, page_span.last_page), (Some(12), Some(13)));
+}
+
 // ── Usage metadata with thinking tokens ─────────────────────────────
 
 #[test]

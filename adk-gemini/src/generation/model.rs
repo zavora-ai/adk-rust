@@ -218,6 +218,57 @@ pub struct GroundingChunk {
     /// Web-specific grounding information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web: Option<WebGroundingChunk>,
+    /// Retrieved-context grounding information (Vertex AI RAG retrieval)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieved_context: Option<RetrievedContextGroundingChunk>,
+}
+
+/// Retrieved-context grounding chunk from a Vertex AI RAG store
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievedContextGroundingChunk {
+    /// The URI of the retrieved source
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    /// The title of the retrieved source
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The text of the retrieved context
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The RAG chunk the context was retrieved from
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rag_chunk: Option<RagChunk>,
+}
+
+/// A chunk retrieved from a Vertex AI RAG corpus file
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RagChunk {
+    /// The id of the chunk within its RAG file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_id: Option<String>,
+    /// The id of the RAG file the chunk belongs to
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
+    /// The text of the chunk
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The page range the chunk spans in the source document
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_span: Option<RagChunkPageSpan>,
+}
+
+/// The page range a RAG chunk spans in its source document
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RagChunkPageSpan {
+    /// The first page of the span (1-based)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_page: Option<i32>,
+    /// The last page of the span (1-based, inclusive)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_page: Option<i32>,
 }
 
 /// Maps-specific grounding chunk information
