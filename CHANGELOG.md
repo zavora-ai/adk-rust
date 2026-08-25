@@ -302,6 +302,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Gemini, OpenAI, Anthropic and DeepSeek line-ups.
 - **Gemini 2.0 shutdown date** corrected in `AGENTS.md` from March 31 2026 to
   June 1 2026, the date Google published.
+- **Current provider request contracts are validated before dispatch.** Direct
+  `adk-gemini` calls reject sampling, `candidate_count`, and token-based thinking
+  settings removed by Gemini 3.7. Anthropic rejects restricted sampling and
+  budget-based thinking on the current Claude families, and limits fast mode to
+  Claude Opus 5 and Opus 4.8.
+- **Gemini Live catalog lifecycle metadata is endpoint-aware.** The Vertex GA
+  `gemini-live-2.5-flash-native-audio` remains active through December 2026,
+  while the retired AI Studio `gemini-live-2.5-flash-preview` is rejected. The
+  catalog also covers additional retired Gemini aliases and Groq's Qwen 3 32B
+  deprecation.
+- **Runnable examples and crate README quickstarts no longer target superseded
+  provider defaults.** Gemini examples now use Gemini 3.7 Flash (or 3.5 Flash
+  Lite for deterministic benchmarks), image examples use the GA Gemini 3.1
+  Flash Image model, and provider-specific READMEs align with the shared model
+  catalog.
 
 ### Changed
 
@@ -310,6 +325,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is $0.75/$3.75 per MTok against 2.5 Flash's $0.30/$2.50, so input is 2.5× and
   output 1.5× the previous rate per token. Pin `Model::Gemini25Flash` explicitly
   to keep the old behaviour.
+- The umbrella `provider_from_env()` and `run()` helpers now use the same shared
+  Gemini and OpenAI catalog defaults as CLI-generated projects.
 - **`lookup_pricing` and the new resolvers return `None` for models the vendor
   publishes no rate for**, rather than a fabricated rate. Five OpenAI constants
   (`GPT_55_INSTANT`, `GPT_52_CODEX`, `GPT_51_CODEX`, `GPT_51_CODEX_MAX`,
@@ -334,8 +351,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenAI GPT-5.6 Cyber, GPT-5.5 Cyber, GPT-5.2 Pro, `chat-latest`,
   `gpt-5-search-api`, `gpt-5.3-codex` fast mode, and long-context constants for
   the GPT-5.4, GPT-5.5 and GPT-5.6 families.
+- `OpenAIReasoningEffort` and additive Chat Completions / Responses constructors
+  expose `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` without
+  adding variants to the existing exhaustive `ReasoningEffort` enum.
 - `scripts/check-model-pricing.sh` checks the encoded rates against the vendor
-  pricing pages and runs in the nightly CI tier.
+  pricing pages and runs in the monthly advisory model-freshness workflow.
 
 ### Changed
 

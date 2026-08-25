@@ -73,7 +73,7 @@ use adk_model::gemini::GeminiModel;
 async fn main() -> adk_core::Result<()> {
     // Vertex AI when a flag is truthy; errors instead of falling back to
     // Studio when the Vertex configuration is incomplete.
-    let model = GeminiModel::from_env("gemini-2.5-flash")?;
+    let model = GeminiModel::from_env("gemini-3.7-flash")?;
     Ok(())
 }
 ```

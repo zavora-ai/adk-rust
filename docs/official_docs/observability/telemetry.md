@@ -230,7 +230,7 @@ let _enter = span.enter();
 ```rust
 use adk_telemetry::model_call_span;
 
-let span = model_call_span("gemini-2.5-flash");
+let span = model_call_span("gemini-3.7-flash");
 let _enter = span.enter();
 
 // Model API call here
@@ -275,7 +275,7 @@ Track token consumption across all LLM providers with OpenTelemetry GenAI semant
 ```rust
 use adk_telemetry::{llm_generate_span, record_llm_usage, LlmUsage};
 
-let span = llm_generate_span("openai", "gpt-5-mini", true);
+let span = llm_generate_span("openai", "gpt-5.6-terra", true);
 let _enter = span.enter();
 
 // After receiving the LLM response with usage metadata:
@@ -389,7 +389,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     init_telemetry("my-agent-app")?;
     
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
     
     let agent = LlmAgentBuilder::new("support_agent")
         .model(model)

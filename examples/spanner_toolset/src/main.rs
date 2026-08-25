@@ -173,7 +173,7 @@ async fn main() -> anyhow::Result<()> {
         let spanner_toolset = SpannerToolset::new(&project_id, &instance_id, &database_id);
 
         // Create the Gemini model for the agent.
-        let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+        let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
 
         // Build an LlmAgent with the Spanner toolset and instructions that
         // demonstrate the full discovery-to-query workflow.

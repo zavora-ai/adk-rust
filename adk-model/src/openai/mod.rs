@@ -32,8 +32,8 @@ pub mod ws_transport;
 pub use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
 pub use client::{AzureOpenAIClient, OpenAIClient};
 pub use config::{
-    AzureConfig, OpenAIConfig, OpenAIResponsesConfig, PromptCacheRetention, ReasoningEffort,
-    ReasoningSummary, ResponsesTransport, ServiceTier,
+    AzureConfig, OpenAIConfig, OpenAIReasoningEffort, OpenAIResponsesConfig, PromptCacheRetention,
+    ReasoningEffort, ReasoningSummary, ResponsesTransport, ServiceTier,
 };
 #[cfg(feature = "openai-conversations")]
 pub use conversations::ConversationsClient;

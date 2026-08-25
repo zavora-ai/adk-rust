@@ -180,11 +180,11 @@ async fn main() -> anyhow::Result<()> {
         println!("═══════════════════════════════════════════\n");
 
         // Each persona gets its own LLM instance for the simulator
-        let simulator_llm: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+        let simulator_llm: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
         let simulator = UserSimulator::new(simulator_llm, (*persona).clone());
 
         // The agent under test also gets its own LLM instance
-        let agent_llm: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+        let agent_llm: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
 
         run_conversation(&simulator, agent_llm, agent_instructions).await?;
 

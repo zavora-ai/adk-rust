@@ -37,7 +37,7 @@ OPTIONS:
     --iterations <N>           Number of iterations per workload [default: 10]
     --warmup <N>               Warmup iterations before measurement [default: 2]
     --provider <NAME>          LLM provider to benchmark [default: gemini]
-    --model <MODEL>            Model ID to use [default: gemini-2.5-flash]
+    --model <MODEL>            Model ID to use [default: gemini-3.5-flash-lite]
     --output <FORMAT>          Output format: table, json, csv [default: table]
     --output-file <PATH>       Write results to file instead of stdout
 
@@ -122,7 +122,7 @@ Published results comparing ADK-Rust against other frameworks (deterministic con
 | **parallel_tool_invocation** | 2.3s total | 3.7s total | 4.8s total |
 
 **Methodology:**
-- Real Gemini 2.5 Flash calls (not mocked)
+- Real Gemini 3.5 Flash-Lite calls (not mocked)
 - Deterministic config: `temperature=0`, fixed seed
 - 10 iterations after 2 warmup runs
 - Overhead isolation: total time minus measured LLM latency
@@ -151,7 +151,7 @@ let config = BenchConfig::builder()
     .iterations(10)
     .warmup(2)
     .provider("gemini")
-    .model("gemini-2.5-flash")
+    .model("gemini-3.5-flash-lite")
     .build()?;
 
 let suite = BenchmarkSuite::new(config);

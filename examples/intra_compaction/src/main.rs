@@ -102,8 +102,8 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\n--- Step 2: Create Agent and Summarizer ---\n");
 
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
-    println!("  ✓ Created Gemini model (gemini-2.0-flash)");
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    println!("  ✓ Created Gemini model (gemini-3.7-flash)");
 
     // The LlmEventSummarizer reuses the BaseEventsSummarizer trait from adk-core.
     // It formats conversation events into a prompt and asks the LLM to summarize.

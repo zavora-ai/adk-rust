@@ -220,12 +220,15 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "futures",
+ "http",
  "ollama-rs",
  "reqwest 0.12.28",
+ "reqwest 0.13.4",
  "schemars",
  "serde",
  "serde_json",
  "tokio",
+ "tower 0.5.3",
  "tracing",
 ]
 
