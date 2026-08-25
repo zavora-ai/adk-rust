@@ -800,6 +800,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **PostgreSQL vector memory remains aligned with SQLx 0.8.** `pgvector` is
+  pinned to `0.4.1`, the latest release whose SQLx integration uses the
+  workspace's SQLx 0.8 line. `pgvector 0.4.2` moved that integration to SQLx
+  0.9 and is intentionally excluded until the workspace upgrades SQLx.
 - **adk-codeact-monty joined the root workspace.** Monty is on crates.io since
   `0.0.19`, so the crate's git dependency (and the empty `[workspace]` table it
   forced) is gone: it now depends on `monty`, `monty-types`, and `monty-fs`
