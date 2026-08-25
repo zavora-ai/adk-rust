@@ -435,6 +435,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (parsed JSON plus decoded body size, for aggregate pagination bounds) and
   a post-construction `with_max_response_bytes` override.
 
+### Contributors
+
+Thank you to [@joseph-wortmann](https://github.com/joseph-wortmann),
+[@1111mp](https://github.com/1111mp), and
+[@jkmaina](https://github.com/jkmaina) for their contributions to v2.1.0.
+
 ## [2.0.0] - 2026-08-09
 
 ### Breaking
