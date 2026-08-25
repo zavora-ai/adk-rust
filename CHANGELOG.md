@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a structured error, and grounding responses surface
   `retrievedContext` including `ragChunk` provenance.
 
-## [2.1.0] - 2026-08-22
+## [2.1.0] - 2026-08-25
 
 ### Added
 
@@ -336,6 +336,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Gemini, OpenAI, Anthropic and DeepSeek line-ups.
 - **Gemini 2.0 shutdown date** corrected in `AGENTS.md` from March 31 2026 to
   June 1 2026, the date Google published.
+- **Current provider request contracts are validated before dispatch.** Direct
+  `adk-gemini` calls reject sampling, `candidate_count`, and token-based thinking
+  settings removed by Gemini 3.7. Anthropic rejects restricted sampling and
+  budget-based thinking on the current Claude families, and limits fast mode to
+  Claude Opus 5 and Opus 4.8.
+- **Gemini Live catalog lifecycle metadata is endpoint-aware.** The Vertex GA
+  `gemini-live-2.5-flash-native-audio` remains active through December 2026,
+  while the retired AI Studio `gemini-live-2.5-flash-preview` is rejected. The
+  catalog also covers additional retired Gemini aliases and Groq's Qwen 3 32B
+  deprecation.
+- **Runnable examples and crate README quickstarts no longer target superseded
+  provider defaults.** Gemini examples now use Gemini 3.7 Flash (or 3.5 Flash
+  Lite for deterministic benchmarks), image examples use the GA Gemini 3.1
+  Flash Image model, and provider-specific READMEs align with the shared model
+  catalog.
 
 ### Changed
 
@@ -344,6 +359,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is $0.75/$3.75 per MTok against 2.5 Flash's $0.30/$2.50, so input is 2.5× and
   output 1.5× the previous rate per token. Pin `Model::Gemini25Flash` explicitly
   to keep the old behaviour.
+- The umbrella `provider_from_env()` and `run()` helpers now use the same shared
+  Gemini and OpenAI catalog defaults as CLI-generated projects.
 - **`lookup_pricing` and the new resolvers return `None` for models the vendor
   publishes no rate for**, rather than a fabricated rate. Five OpenAI constants
   (`GPT_55_INSTANT`, `GPT_52_CODEX`, `GPT_51_CODEX`, `GPT_51_CODEX_MAX`,
@@ -368,8 +385,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenAI GPT-5.6 Cyber, GPT-5.5 Cyber, GPT-5.2 Pro, `chat-latest`,
   `gpt-5-search-api`, `gpt-5.3-codex` fast mode, and long-context constants for
   the GPT-5.4, GPT-5.5 and GPT-5.6 families.
+- `OpenAIReasoningEffort` and additive Chat Completions / Responses constructors
+  expose `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` without
+  adding variants to the existing exhaustive `ReasoningEffort` enum.
 - `scripts/check-model-pricing.sh` checks the encoded rates against the vendor
-  pricing pages and runs in the nightly CI tier.
+  pricing pages and runs in the monthly advisory model-freshness workflow.
 
 ### Changed
 
@@ -446,6 +466,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `invalid_response` literal); `GcpHttpClient` gains `send_value_counted`
   (parsed JSON plus decoded body size, for aggregate pagination bounds) and
   a post-construction `with_max_response_bytes` override.
+
+### Contributors
+
+Thank you to [@joseph-wortmann](https://github.com/joseph-wortmann),
+[@1111mp](https://github.com/1111mp), and
+[@jkmaina](https://github.com/jkmaina) for their contributions to v2.1.0.
 
 ## [2.0.0] - 2026-08-09
 
@@ -787,30 +813,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Wasmtime is updated to 46.0.2.** This resolves RUSTSEC-2026-0222 and
-  RUSTSEC-2026-0223. The PyO3 0.28 advisories are documented as unreachable:
-  PyO3 exists only in the lockfile through jiter's disabled `python` feature,
-  and no workspace feature compiles it. The supply-chain license policy now
+- **Wasmtime is updated to 46.0.3 and Monty to 0.0.21.** Wasmtime resolves
+  RUSTSEC-2026-0222 and RUSTSEC-2026-0223. Monty moves to `jiter 0.16` and
+  PyO3 0.29, resolving GHSA-36hh-v3qg-5jq4 and GHSA-chgr-c6px-7xpp even though
+  PyO3 remains behind jiter's disabled `python` feature. The Monty update also
+  brings descriptor-based mount confinement and fixes for Windows mount escape
+  and cached-overlay path revalidation. The supply-chain license policy
   recognizes Monty's OSI-approved Unicode-DFS-2016 data license.
+- **Example web interfaces no longer build DOM from untrusted HTML.** The
+  realtime voice example renders provider, memory, and pipeline data with DOM
+  text nodes, while the streaming bash example uses a cryptographic session ID
+  and a `Map` for untrusted tool-call keys. This resolves the five open CodeQL
+  XSS, prototype-pollution, and insecure-randomness findings.
+- **The audio `fx` feature drops unused `rubato` and `dasp` dependencies.** Its
+  processors already use ADK-Rust's internal bounded implementations and never
+  called either crate, so the public feature and behavior are unchanged while
+  the unnecessary dependency surface is removed.
+- **HTTP and cloud SDK dependencies are refreshed for RUSTSEC-2026-0258.** The
+  active HTTP/2 stack now uses `h2 0.4.19`; Azure Identity is aligned with the
+  0.22 Azure Core generation already used by Key Vault, and AWS Secrets Manager
+  no longer enables its legacy Hyper 0.14 TLS transport. The lockfile-only
+  `rkyv 0.7` advisory is documented as unreachable because no workspace feature
+  enables `rust_decimal`'s optional archive integration.
 
 ### Changed
 
+- **PostgreSQL vector memory remains aligned with SQLx 0.8.** `pgvector` is
+  pinned to `0.4.1`, the latest release whose SQLx integration uses the
+  workspace's SQLx 0.8 line. `pgvector 0.4.2` moved that integration to SQLx
+  0.9 and is intentionally excluded until the workspace upgrades SQLx.
 - **adk-codeact-monty joined the root workspace.** Monty is on crates.io since
   `0.0.19`, so the crate's git dependency (and the empty `[workspace]` table it
   forced) is gone: it now depends on `monty`, `monty-types`, and `monty-fs`
-  `0.0.19` from crates.io and is covered by the standard workspace gates
+  `0.0.21` from crates.io and is covered by the standard workspace gates
   (`clippy`, `nextest`, docs) on every PR. The dedicated out-of-workspace CI
   (`codeact-monty.yml`, the `out-of-workspace-monty` merge-tier job) is retired,
   and `examples/codeact_monty_agent` compiles in the PR-tier examples gate. The
-  workspace `Cargo.lock` pins `get-size2` to `0.10.1` — `monty 0.0.19` pulls
+  workspace `Cargo.lock` pins `get-size2` to `0.10.1` — `monty 0.0.21` pulls
   `ruff_python_ast 0.0.3`, which derives `GetSize` on `compact_str 0.9` fields
   while `get-size2 0.10.2+` moved to `compact_str 0.10`; the pin keeps the two
   aligned until monty upgrades past `ruff_python_ast 0.0.3`. Porting to the
-  0.0.19 API: `MontyRuntimeBuilder::max_allocations` is removed (Monty's
+  0.0.21 API: `MontyRuntimeBuilder::max_allocations` is removed (Monty's
   `ResourceLimits` no longer counts allocations — the time/memory caps remain),
   and per-step `print()` capture is capped at Monty's 10 MiB collector default
-  (exceeding it raises `MemoryError` in the script). The crate stays
-  `publish = false`.
+  (exceeding it raises `MemoryError` in the script). The crate is published on
+  the workspace release train.
 
 ### Breaking
 
@@ -4222,7 +4269,8 @@ Initial release - Published to crates.io.
 - Tokio async runtime
 - Google API key for Gemini
 
-[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/zavora-ai/adk-rust/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/zavora-ai/adk-rust/compare/v1.0.0...v2.0.0
 [0.3.0]: https://github.com/zavora-ai/adk-rust/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/zavora-ai/adk-rust/compare/v0.1.9...v0.2.0

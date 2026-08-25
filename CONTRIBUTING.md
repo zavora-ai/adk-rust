@@ -198,7 +198,7 @@ Need to bypass a hook in an emergency? Use `LEFTHOOK=0 git commit ...` or `git c
 
 ## Project Structure
 
-ADK-Rust is a Cargo workspace with 32 publishable crates organized by responsibility.
+ADK-Rust is a Cargo workspace with 43 publishable crates organized by responsibility.
 
 ### Core Crates (publishable to crates.io)
 
@@ -210,8 +210,9 @@ adk-agent/         Agent implementations: LlmAgent, SequentialAgent, ParallelAge
 adk-model/         LLM provider facade: Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama,
                    OpenRouter, Bedrock, Azure AI, and OpenAI-compatible presets
 adk-gemini/        Dedicated Gemini client with GeminiBackend trait (Studio + Vertex AI)
+adk-gcp/           Shared Google Cloud authentication, REST, and LRO plumbing
 adk-anthropic/     Dedicated Anthropic client with thinking, caching, citations, vision
-adk-tool/          Tool utilities, built-in tools, MCP integration (rmcp 1.3)
+adk-tool/          Tool utilities, built-in tools, MCP integration (rmcp 3.1)
 adk-runner/        Agent execution runtime with event streaming
 adk-server/        REST API server and A2A (Agent-to-Agent) protocol
 adk-session/       Session management and state persistence, encrypted sessions
@@ -225,25 +226,73 @@ adk-telemetry/     OpenTelemetry 0.32 integration for agent observability
 adk-guardrail/     Input/output guardrails for agent safety
 adk-auth/          Authentication: API keys, JWT, OAuth2, OIDC, SSO
 adk-plugin/        Plugin system for agent lifecycle hooks
+adk-retry-reflect/ Retry and reflection plugin for failed tool calls
 adk-skill/         Skill discovery and convention-based agent capabilities
 adk-cli/           Command-line launcher for agents
 adk-code/          Code generation and execution (experimental)
+adk-codeact-monty/ Sandboxed Python runtime for CodeAct agents (experimental)
+adk-devtools/      Sandboxed file, search, edit, and shell tools for coding agents
+adk-mistralrs/     Local LLM inference through mistral.rs (GPU features opt in)
 adk-sandbox/       Sandboxed execution environments (experimental)
 adk-audio/         Audio processing, STT/TTS providers (experimental)
 adk-rag/           Retrieval-augmented generation pipelines
 adk-action/        Action node execution for deterministic workflow operations
 adk-deploy/        Deployment utilities
 adk-payments/      Payment integration for agent services
+adk-computer-use/  Governed computer-use orchestration and evaluation receipts
+adk-managed/       Provider-neutral managed-agent runtime (experimental)
+adk-enterprise/    Enterprise managed-agent service client (experimental)
+adk-bench/         Runtime and cross-framework benchmarking
+awp-types/         Agentic Web Protocol types
+adk-awp/           Agentic Web Protocol server implementation
+adk-acp/           Agent Client Protocol client and server integration
 cargo-adk/         Cargo subcommand for project scaffolding
 adk-rust/          Umbrella crate re-exporting all of the above
 ```
 
+## Release Process
+
+Release from a clean checkout after the release-preparation pull request and all
+other intended changes have merged. The root workspace version is the source of
+truth for every publishable crate.
+
+1. If the workspace is not already at the target version, run
+   `python3 scripts/bump-version.py <version>`. Add an empty `## [Unreleased]`
+   section above the dated release, and make the changelog comparison links point
+   from the new version to `HEAD` and from the previous tag to the new tag.
+2. Keep the README marked `release candidate — unpublished` until every crate is
+   visible on crates.io. Run the normal quality gates plus:
+
+   ```bash
+   bash scripts/check-release-consistency.sh
+   bash scripts/check-publish-order.sh
+   cargo xtask publish --dry-run
+   ```
+
+   The publish dry-run must run from a clean checkout without ignored build
+   artifacts inside crate directories. A warning about yanked `spin 0.9.x` is
+   currently expected through upstream `flume/sqlx` and `heapless/postcard`
+   dependency chains; it does not prevent packaging.
+3. Merge the preparation pull request and wait for both the PR tier and the
+   post-merge macOS/Windows tier to pass on the exact release commit.
+4. Create an annotated tag and validate the tagged checkout before pushing it:
+
+   ```bash
+   git tag -a v<version> -m "Release <version>"
+   bash scripts/check-release-consistency.sh --release
+   git push origin v<version>
+   ```
+
+5. Publish with `cargo xtask publish`. If crates.io indexing interrupts the
+   workspace publish, resume safely with `cargo xtask publish --resume`; it uses
+   the computed dependency order and skips versions that already exist.
+6. Confirm all 43 crate versions and their docs.rs builds. Only then change the
+   README banner to `Released!`, mark the roadmap version `(current)`, and create
+   the GitHub release from the annotated tag using the matching changelog entry.
+
 ### Excluded from Workspace
 
 ```
-adk-mistralrs/     Local LLM inference via mistral.rs (GPU deps — build explicitly)
-                   Excluded so `--all-features` works without CUDA toolkit.
-                   Has its own CI workflow.
 adk-studio/        Visual agent builder — extracted to standalone repo.
                    Repo: https://github.com/zavora-ai/adk-studio
 adk-ui/            Dynamic UI generation — extracted to standalone repo.

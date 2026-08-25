@@ -746,6 +746,7 @@ impl GeminiModel {
         } else {
             Some(Content { role: "model".to_string(), parts: converted_parts })
         };
+        let tool_call_turn = content.as_ref().is_some_and(Content::has_function_calls);
 
         let usage_metadata = resp.usage_metadata.as_ref().map(|u| UsageMetadata {
             prompt_token_count: u.prompt_token_count.unwrap_or(0),
@@ -797,7 +798,7 @@ impl GeminiModel {
             finish_reason,
             citation_metadata,
             partial: false,
-            turn_complete: true,
+            turn_complete: !tool_call_turn,
             interrupted: false,
             error_code: None,
             error_message: None,
@@ -931,7 +932,8 @@ impl GeminiModel {
         }
 
         response.partial = false;
-        response.turn_complete = true;
+        response.turn_complete =
+            response.content.as_ref().is_none_or(|content| !content.has_function_calls());
 
         if saw_partial_chunk {
             return (vec![response], true);
@@ -1959,6 +1961,30 @@ mod tests {
         assert!(chunks[0].turn_complete);
     }
 
+    #[test]
+    fn stream_chunks_from_response_keeps_tool_call_turn_open() {
+        let response = LlmResponse {
+            content: Some(Content {
+                role: "model".to_string(),
+                parts: vec![Part::FunctionCall {
+                    name: "get_weather".to_string(),
+                    args: serde_json::json!({"city": "Boston"}),
+                    id: Some("call-1".to_string()),
+                    thought_signature: None,
+                }],
+            }),
+            finish_reason: Some(FinishReason::Stop),
+            turn_complete: true,
+            ..Default::default()
+        };
+
+        let (chunks, _) = GeminiModel::stream_chunks_from_response(response, true);
+
+        assert_eq!(chunks.len(), 1);
+        assert!(!chunks[0].partial);
+        assert!(!chunks[0].turn_complete);
+    }
+
     #[tokio::test]
     async fn execute_with_retry_retries_retryable_errors() {
         let retry_config = RetryConfig::default()
@@ -2065,6 +2091,41 @@ mod tests {
         assert_eq!(metadata.citation_sources[0].uri.as_deref(), Some("https://example.com"));
         assert_eq!(metadata.citation_sources[0].start_index, Some(0));
         assert_eq!(metadata.citation_sources[0].end_index, Some(5));
+    }
+
+    #[test]
+    fn convert_response_keeps_function_call_turn_open() {
+        let response = adk_gemini::GenerationResponse {
+            candidates: vec![adk_gemini::Candidate {
+                content: adk_gemini::Content {
+                    role: Some(adk_gemini::Role::Model),
+                    parts: Some(vec![adk_gemini::Part::FunctionCall {
+                        function_call: adk_gemini::FunctionCall {
+                            name: "get_weather".to_string(),
+                            args: serde_json::json!({"city": "Boston"}),
+                            id: Some("call-1".to_string()),
+                            thought_signature: None,
+                        },
+                        thought_signature: None,
+                    }]),
+                },
+                safety_ratings: None,
+                citation_metadata: None,
+                grounding_metadata: None,
+                finish_reason: Some(adk_gemini::FinishReason::Stop),
+                index: Some(0),
+            }],
+            prompt_feedback: None,
+            usage_metadata: None,
+            model_version: None,
+            response_id: None,
+        };
+
+        let converted =
+            GeminiModel::convert_response(&response).expect("conversion should succeed");
+
+        assert!(!converted.turn_complete);
+        assert!(converted.content.is_some_and(|content| content.has_function_calls()));
     }
 
     #[test]

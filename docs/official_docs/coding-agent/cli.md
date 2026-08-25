@@ -76,6 +76,6 @@ revise steps, ending in `finalize`.
 
 All three commands accept the global `--model` / `--provider` / `--api-key`
 flags. The default is `gemini-3.1-flash-lite` (fast, reliable multi-step tool
-use). For OpenAI: `--provider openai --model gpt-5-mini` (with `OPENAI_API_KEY`).
+use). For OpenAI: `--provider openai --model gpt-5.6-terra` (with `OPENAI_API_KEY`).
 
 Next: [Workflows →](workflows.md)

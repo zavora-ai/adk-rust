@@ -155,7 +155,7 @@ async fn delete_file(args: DeleteArgs) -> Result<serde_json::Value, adk_core::Ad
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
 
     let agent = LlmAgentBuilder::new("file-manager")
         .model(Arc::new(model))

@@ -1,6 +1,6 @@
 //! OpenAI client implementation.
 
-use super::config::{AzureConfig, OpenAIConfig};
+use super::config::{AzureConfig, OpenAIConfig, OpenAIReasoningEffort};
 use super::convert;
 use super::schema_adapter::OpenAiSchemaAdapter;
 use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig, build_request_json};
@@ -9,7 +9,6 @@ use adk_core::{
     AdkError, ErrorCategory, ErrorComponent, Llm, LlmRequest, LlmResponseStream, SchemaAdapter,
     SchemaCache,
 };
-use async_openai::types::chat::ReasoningEffort;
 use async_stream::try_stream;
 use async_trait::async_trait;
 
@@ -22,12 +21,39 @@ impl OpenAIClient {
     /// Create a new OpenAI client.
     pub fn new(config: OpenAIConfig) -> Result<Self, AdkError> {
         crate::catalog::warn_if_obsolete("openai", &config.model);
-        let reasoning_effort = config.reasoning_effort.map(|e| match e {
-            super::config::ReasoningEffort::Low => ReasoningEffort::Low,
-            super::config::ReasoningEffort::Medium => ReasoningEffort::Medium,
-            super::config::ReasoningEffort::High => ReasoningEffort::High,
-        });
+        let reasoning_effort = config.reasoning_effort.map(OpenAIReasoningEffort::from);
 
+        Self::new_inner(config, reasoning_effort)
+    }
+
+    /// Create a client with the complete OpenAI reasoning-effort vocabulary.
+    ///
+    /// Use this constructor for newer Chat Completions values such as
+    /// [`OpenAIReasoningEffort::None`] or [`OpenAIReasoningEffort::XHigh`].
+    /// [`OpenAIReasoningEffort::Max`] is supported by the Responses API, not
+    /// Chat Completions. The original [`OpenAIConfig::reasoning_effort`] field
+    /// remains available for backward compatibility.
+    pub fn new_with_reasoning_effort(
+        config: OpenAIConfig,
+        reasoning_effort: OpenAIReasoningEffort,
+    ) -> Result<Self, AdkError> {
+        crate::catalog::warn_if_obsolete("openai", &config.model);
+        if reasoning_effort == OpenAIReasoningEffort::Max {
+            return Err(AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::InvalidInput,
+                "model.openai.reasoning_effort_unsupported",
+                "OpenAI Chat Completions does not support reasoning effort `max`; use OpenAIResponsesClient for `max`, or use `xhigh` with OpenAIClient",
+            )
+            .with_provider("openai"));
+        }
+        Self::new_inner(config, Some(reasoning_effort))
+    }
+
+    fn new_inner(
+        config: OpenAIConfig,
+        reasoning_effort: Option<OpenAIReasoningEffort>,
+    ) -> Result<Self, AdkError> {
         let mut compat_config =
             OpenAICompatibleConfig::new(config.api_key, config.model).with_provider_name("openai");
         if let Some(base_url) = config.base_url {
@@ -39,11 +65,9 @@ impl OpenAIClient {
         if let Some(project_id) = config.project_id {
             compat_config = compat_config.with_project(project_id);
         }
-        if let Some(effort) = reasoning_effort {
-            compat_config = compat_config.with_reasoning_effort(effort);
-        }
-
-        Ok(Self { inner: OpenAICompatible::new(compat_config)? })
+        Ok(Self {
+            inner: OpenAICompatible::new_with_reasoning_effort(compat_config, reasoning_effort)?,
+        })
     }
 
     /// Create a client for an OpenAI-compatible API.
@@ -270,5 +294,23 @@ impl Llm for AzureOpenAIClient {
         };
 
         Ok(crate::usage_tracking::with_usage_tracking(Box::pin(stream), usage_span))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_completions_rejects_responses_only_max_effort() {
+        let config = OpenAIConfig::new("test-key", "gpt-5.6-terra");
+        let error =
+            match OpenAIClient::new_with_reasoning_effort(config, OpenAIReasoningEffort::Max) {
+                Ok(_) => panic!("Chat Completions must reject max reasoning effort"),
+                Err(error) => error,
+            };
+
+        assert_eq!(error.code, "model.openai.reasoning_effort_unsupported");
+        assert!(error.to_string().contains("OpenAIResponsesClient"));
     }
 }

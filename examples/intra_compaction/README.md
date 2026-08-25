@@ -62,7 +62,7 @@ cargo run --manifest-path examples/intra_compaction/Cargo.toml
 
 --- Step 2: Create Agent and Summarizer ---
 
-  ✓ Created Gemini model (gemini-2.0-flash)
+  ✓ Created Gemini model (gemini-3.7-flash)
   ✓ Created LlmEventSummarizer (uses same model for summaries)
   ✓ Created LlmAgent 'compaction-demo'
 

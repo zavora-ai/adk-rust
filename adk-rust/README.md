@@ -22,9 +22,9 @@ A flexible framework for developing AI agents with simplicity and power. Model-a
 | Together AI | `openai` preset | `MiniMaxAI/MiniMax-M2.7` |
 | Mistral AI | `openai` preset | `mistral-medium-latest` |
 | Perplexity | `openai` preset | `sonar-pro` |
-| Cerebras | `cerebras` | `llama-3.3-70b` |
-| SambaNova | `sambanova` | `Meta-Llama-3.3-70B-Instruct` |
-| Amazon Bedrock | `bedrock` | `us.anthropic.claude-sonnet-4-6` |
+| Cerebras | `cerebras` | `gpt-oss-120b` |
+| SambaNova | `sambanova` | `gpt-oss-120b` |
+| Amazon Bedrock | `bedrock` | (account/region-specific) |
 | Azure AI Inference | `azure-ai` | (endpoint-specific) |
 
 ## Quick Start
@@ -61,7 +61,7 @@ use std::sync::Arc;
 async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant.")
@@ -96,7 +96,10 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-`provider_from_env()` checks `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GOOGLE_API_KEY` in order.
+`provider_from_env()` first honors the Vertex opt-in flags
+`GOOGLE_GENAI_USE_ENTERPRISE` / `GOOGLE_GENAI_USE_VERTEXAI`, then checks
+`ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GOOGLE_API_KEY`. It uses the shared
+catalog defaults for the selected provider.
 
 ## Adding Tools
 
@@ -141,7 +144,7 @@ Build voice-enabled AI assistants with bidirectional audio streaming:
 use adk_realtime::{RealtimeAgent, openai::OpenAIRealtimeModel, RealtimeModel};
 
 let model: Arc<dyn RealtimeModel> = Arc::new(
-    OpenAIRealtimeModel::new(&api_key, "gpt-realtime")
+    OpenAIRealtimeModel::new(&api_key, "gpt-realtime-2.1")
 );
 
 let agent = RealtimeAgent::builder("voice_assistant")

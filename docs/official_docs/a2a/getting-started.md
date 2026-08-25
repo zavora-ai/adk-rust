@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
 
-    let model = GeminiModel::new(api_key, "gemini-2.5-flash")?;
+    let model = GeminiModel::new(api_key, "gemini-3.7-flash")?;
 
     let agent: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("my-agent")
@@ -103,7 +103,7 @@ use std::sync::Arc;
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(api_key, "gemini-2.5-flash")?;
+    let model = GeminiModel::new(api_key, "gemini-3.7-flash")?;
 
     let agent: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("my-agent")
