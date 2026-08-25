@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.1.0] - 2026-08-22
+## [Unreleased]
+
+## [2.1.0] - 2026-08-25
 
 ### Added
 
@@ -773,30 +775,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Wasmtime is updated to 46.0.2.** This resolves RUSTSEC-2026-0222 and
-  RUSTSEC-2026-0223. The PyO3 0.28 advisories are documented as unreachable:
-  PyO3 exists only in the lockfile through jiter's disabled `python` feature,
-  and no workspace feature compiles it. The supply-chain license policy now
+- **Wasmtime is updated to 46.0.3 and Monty to 0.0.21.** Wasmtime resolves
+  RUSTSEC-2026-0222 and RUSTSEC-2026-0223. Monty moves to `jiter 0.16` and
+  PyO3 0.29, resolving GHSA-36hh-v3qg-5jq4 and GHSA-chgr-c6px-7xpp even though
+  PyO3 remains behind jiter's disabled `python` feature. The Monty update also
+  brings descriptor-based mount confinement and fixes for Windows mount escape
+  and cached-overlay path revalidation. The supply-chain license policy
   recognizes Monty's OSI-approved Unicode-DFS-2016 data license.
+- **Example web interfaces no longer build DOM from untrusted HTML.** The
+  realtime voice example renders provider, memory, and pipeline data with DOM
+  text nodes, while the streaming bash example uses a cryptographic session ID
+  and a `Map` for untrusted tool-call keys. This resolves the five open CodeQL
+  XSS, prototype-pollution, and insecure-randomness findings.
+- **The audio `fx` feature drops unused `rubato` and `dasp` dependencies.** Its
+  processors already use ADK-Rust's internal bounded implementations and never
+  called either crate, so the public feature and behavior are unchanged while
+  the unnecessary dependency surface is removed.
+- **HTTP and cloud SDK dependencies are refreshed for RUSTSEC-2026-0258.** The
+  active HTTP/2 stack now uses `h2 0.4.19`; Azure Identity is aligned with the
+  0.22 Azure Core generation already used by Key Vault, and AWS Secrets Manager
+  no longer enables its legacy Hyper 0.14 TLS transport. The lockfile-only
+  `rkyv 0.7` advisory is documented as unreachable because no workspace feature
+  enables `rust_decimal`'s optional archive integration.
 
 ### Changed
 
 - **adk-codeact-monty joined the root workspace.** Monty is on crates.io since
   `0.0.19`, so the crate's git dependency (and the empty `[workspace]` table it
   forced) is gone: it now depends on `monty`, `monty-types`, and `monty-fs`
-  `0.0.19` from crates.io and is covered by the standard workspace gates
+  `0.0.21` from crates.io and is covered by the standard workspace gates
   (`clippy`, `nextest`, docs) on every PR. The dedicated out-of-workspace CI
   (`codeact-monty.yml`, the `out-of-workspace-monty` merge-tier job) is retired,
   and `examples/codeact_monty_agent` compiles in the PR-tier examples gate. The
-  workspace `Cargo.lock` pins `get-size2` to `0.10.1` — `monty 0.0.19` pulls
+  workspace `Cargo.lock` pins `get-size2` to `0.10.1` — `monty 0.0.21` pulls
   `ruff_python_ast 0.0.3`, which derives `GetSize` on `compact_str 0.9` fields
   while `get-size2 0.10.2+` moved to `compact_str 0.10`; the pin keeps the two
   aligned until monty upgrades past `ruff_python_ast 0.0.3`. Porting to the
-  0.0.19 API: `MontyRuntimeBuilder::max_allocations` is removed (Monty's
+  0.0.21 API: `MontyRuntimeBuilder::max_allocations` is removed (Monty's
   `ResourceLimits` no longer counts allocations — the time/memory caps remain),
   and per-step `print()` capture is capped at Monty's 10 MiB collector default
-  (exceeding it raises `MemoryError` in the script). The crate stays
-  `publish = false`.
+  (exceeding it raises `MemoryError` in the script). The crate is published on
+  the workspace release train.
 
 ### Breaking
 
@@ -4208,7 +4227,8 @@ Initial release - Published to crates.io.
 - Tokio async runtime
 - Google API key for Gemini
 
-[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/zavora-ai/adk-rust/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/zavora-ai/adk-rust/compare/v1.0.0...v2.0.0
 [0.3.0]: https://github.com/zavora-ai/adk-rust/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/zavora-ai/adk-rust/compare/v0.1.9...v0.2.0

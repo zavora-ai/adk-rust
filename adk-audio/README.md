@@ -25,7 +25,7 @@ adk-rust = { version = "2.1.0", features = ["audio"] }
 | `tts` (default) | Cloud TTS providers (ElevenLabs, OpenAI, Gemini, Cartesia) | `reqwest`, `base64` |
 | `stt` (default) | Cloud STT providers (Whisper API, Deepgram, AssemblyAI) | `reqwest`, `tokio-tungstenite` |
 | `music` | Music generation providers | `reqwest` |
-| `fx` | DSP processors (normalizer, resampler, noise, compressor, trimmer, pitch) | `rubato`, `dasp` |
+| `fx` | DSP processors (normalizer, resampler, noise, compressor, trimmer, pitch) | None |
 | `vad` | Voice Activity Detection | `webrtc-vad` |
 | `mlx` | Local inference model loading (tokenizers + HF Hub, cross-platform) | `tokenizers`, `hf-hub` |
 | `onnx` | ONNX Runtime local inference (cross-platform) | `ort`, `tokenizers`, `hf-hub` |

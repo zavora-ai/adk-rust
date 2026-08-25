@@ -839,9 +839,11 @@
         document.getElementById('contextCount').textContent = `${insights.length} LOADED CONTEXTS`;
     }
 
-    function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, c =>
-            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    function element(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
     }
 
     // ─── Memory (knowledge graph) ────────────────────────────────────────────
@@ -869,9 +871,16 @@
         const pref = entities.find(e => (e.name || '').toLowerCase() === 'coaching preference');
         const items = (pref && pref.observations) || [];
         const box = document.getElementById('guidelinesList');
-        if (box) box.innerHTML = items.length
-            ? items.map(o => `<div class="item">• ${escapeHtml(o)}</div>`).join('')
-            : '<div class="item" style="color:var(--faint)">None yet — add one with “Configure Guidelines”.</div>';
+        if (box) {
+            box.replaceChildren();
+            if (items.length) {
+                items.forEach(item => box.append(element('div', 'item', `• ${item}`)));
+            } else {
+                const empty = element('div', 'item', 'None yet — add one with “Configure Guidelines”.');
+                empty.style.color = 'var(--faint)';
+                box.append(empty);
+            }
+        }
         // The Coaching Strategy tab reflects the same live preferences.
         const strat = document.getElementById('strategyBody');
         if (strat) strat.textContent = items.length
@@ -881,24 +890,24 @@
 
     function renderInsights() {
         const grid = document.getElementById('insightsGrid');
-        grid.innerHTML = insights.map(i => `
-            <div class="insight-card">
-                <div class="category">${escapeHtml(i.category)}</div>
-                <div class="date">${escapeHtml(i.date)}</div>
-                <div class="content">${escapeHtml(i.content)}</div>
-            </div>
-        `).join('');
+        grid.replaceChildren(...insights.map(insight => {
+            const card = element('div', 'insight-card');
+            card.append(element('div', 'category', insight.category));
+            card.append(element('div', 'date', insight.date));
+            card.append(element('div', 'content', insight.content));
+            return card;
+        }));
     }
 
     // Left-panel cache mirrors the same graph (top few current facts).
     function renderMemoryCache() {
         const box = document.getElementById('memoryItems');
-        box.innerHTML = insights.slice(0, 6).map(i => `
-            <div class="memory-item">
-                <span class="tag">${escapeHtml(i.category)}:</span>
-                <span>${escapeHtml(i.content)}</span>
-            </div>
-        `).join('');
+        box.replaceChildren(...insights.slice(0, 6).map(insight => {
+            const item = element('div', 'memory-item');
+            item.append(element('span', 'tag', `${insight.category}:`));
+            item.append(element('span', null, insight.content));
+            return item;
+        }));
     }
 
     // Write a new observation to the graph; the selected category is the entity
@@ -979,14 +988,18 @@
         document.getElementById('connectBtn').style.display = 'none';
         document.getElementById('providerRow').style.display = 'none';
         document.getElementById('sessionControls').style.display = 'flex';
-        document.getElementById('voiceStatus').innerHTML =
-            `<span class="dot"></span> VOICE SESSION ACTIVE — ${provider.toUpperCase()}`;
+        setVoiceStatus(`VOICE SESSION ACTIVE — ${provider.toUpperCase()}`);
         document.getElementById('voiceStatus').classList.remove('inactive');
         document.getElementById('transcript').classList.add('visible');
 
         playbackCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: outputRate });
         nextPlayTime = 0;
         startMicCapture();
+    }
+
+    function setVoiceStatus(text) {
+        const status = document.getElementById('voiceStatus');
+        status.replaceChildren(element('span', 'dot'), document.createTextNode(` ${text}`));
     }
 
     // ─── Mic capture → PCM16 → WebSocket ─────────────────────────────────────
@@ -1194,7 +1207,7 @@
         document.getElementById('connectBtn').textContent = '🎤 START VOICE SESSION';
         document.getElementById('providerRow').style.display = 'flex';
         document.getElementById('sessionControls').style.display = 'none';
-        document.getElementById('voiceStatus').innerHTML = '<span class="dot"></span> SESSION ENDED';
+        setVoiceStatus('SESSION ENDED');
         document.getElementById('voiceStatus').classList.add('inactive');
         addDecision('Session ended.');
     }
@@ -1250,20 +1263,19 @@
         const empty = document.getElementById('decisionsEmpty');
         if (empty) empty.style.display = 'none';
         const log = document.getElementById('decisionsLog');
-        const card = document.createElement('div');
-        card.className = 'insight-card';
+        const card = element('div', 'insight-card');
         card.style.marginTop = '16px';
-        card.innerHTML = `
-            <div class="category">PIPELINE DECISION</div>
-            <div class="date">${new Date().toLocaleTimeString()}</div>
-            <div class="content" style="font-style: normal;">${text}</div>
-        `;
+        card.append(element('div', 'category', 'PIPELINE DECISION'));
+        card.append(element('div', 'date', new Date().toLocaleTimeString()));
+        const content = element('div', 'content', text);
+        content.style.fontStyle = 'normal';
+        card.append(content);
         log.insertBefore(card, log.firstChild);
     }
 
     // Clear the session-scoped Pipeline Decisions log (used by Reset System).
     function clearDecisions() {
-        document.getElementById('decisionsLog').innerHTML = '';
+        document.getElementById('decisionsLog').replaceChildren();
         document.getElementById('decisionCount').textContent = '0';
         const empty = document.getElementById('decisionsEmpty');
         if (empty) empty.style.display = '';

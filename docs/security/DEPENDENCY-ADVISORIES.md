@@ -8,7 +8,7 @@ The purpose of this file is to provide transparency to consumers about the secur
 
 These accepted advisories are also configured in [`.cargo/audit.toml`](../../.cargo/audit.toml) so that `cargo audit` passes in CI while still surfacing new, unreviewed advisories.
 
-**Last reviewed:** 2026-08-01 (2.0.0 release review)
+**Last reviewed:** 2026-08-25 (2.1.0 release review)
 
 ---
 
@@ -21,23 +21,28 @@ These accepted advisories are also configured in [`.cargo/audit.toml`](../../.ca
 | RUSTSEC-2026-0194, RUSTSEC-2026-0195 | `quick-xml` (declared) | `adk-eval` now requires quick-xml 0.41. The transitive 0.26 copy is covered below. |
 | RUSTSEC-2026-0222, RUSTSEC-2026-0223 | `wasmtime` | Lockfile updated from 46.0.1 to 46.0.2. |
 
+## Resolved in 2.1.0
+
+| Advisory | Crate | Resolution |
+|---|---|---|
+| RUSTSEC-2026-0176, RUSTSEC-2026-0177 | `pyo3` | Monty updated to 0.0.21, which selects jiter 0.16 and PyO3 0.29.2. The old advisory exceptions were removed from both audit policies. |
+| RUSTSEC-2026-0258 | `h2` | Updated the HTTP/2 1.x stack to h2 0.4.19, moved Azure Identity to its matching 0.22 SDK generation, and disabled the AWS Secrets Manager legacy Hyper 0.14 TLS feature. The vulnerable h2 0.3 line is no longer in the lockfile. |
+
 ---
 
 ## Active Advisories
 
-### RUSTSEC-2026-0176, RUSTSEC-2026-0177 — pyo3 0.28: memory and thread safety
+---
 
-- **Crate:** `pyo3` (0.28.3)
-- **Severity:** Memory safety
-- **Advisories:**
-  - [RUSTSEC-2026-0176](https://rustsec.org/advisories/RUSTSEC-2026-0176) — out-of-bounds reads in list and tuple iterator skipping
-  - [RUSTSEC-2026-0177](https://rustsec.org/advisories/RUSTSEC-2026-0177) — missing `Sync` bound on Python-callable closures
-- **ADK Impact:** `adk-codeact-monty` → `monty 0.0.19` → `jiter 0.15`. Jiter declares PyO3 as an optional dependency for its `python` feature, so Cargo records it in `Cargo.lock` even when that feature is disabled.
-- **Status:** Patched in PyO3 0.29. Monty 0.0.19 requires jiter 0.15, whose Python feature requires PyO3 0.28; the compatible jiter 0.16 line is outside Monty's version constraint.
+### RUSTSEC-2026-0235 — rkyv 0.7 archive validation
+
+- **Crate:** `rkyv` (0.7.46)
+- **Severity:** Memory safety when validating malicious archives containing shared pointers
+- **ADK Impact:** The package is recorded only through `rust_decimal`'s optional `rkyv` feature. `rust_decimal` is used by SurrealDB, but neither SurrealDB nor any ADK-Rust feature enables that archive integration.
+- **Status:** rkyv fixed the issue on its 0.8 line. `rust_decimal` 1.42.1 still declares rkyv 0.7 as its optional compatibility dependency.
 - **Disposition:** Accepted risk — dependency feature is unreachable
-- **Conditions:** Both advisories require PyO3 code to be compiled and the affected Python APIs to be called.
-- **ADK-Specific Context:** No workspace feature enables `jiter/python`; `cargo tree --workspace --all-features -i pyo3@0.28.3` has no reachable package. CodeAct uses jiter's pure-Rust parser through Monty.
-- **Mitigation:** Keep the advisory exceptions synchronized in `.cargo/audit.toml` and `deny.toml`. Remove them when Monty upgrades to a jiter release using PyO3 0.29 or later.
+- **ADK-Specific Context:** `cargo tree --workspace --all-features --target all -e features -i rkyv@0.7.46` has no reachable package. Active rkyv users in the lockfile resolve to 0.8.18.
+- **Mitigation:** Keep the exception only until `rust_decimal` moves or removes its rkyv 0.7 compatibility feature. Never enable `rust_decimal/rkyv`; use the current rkyv 0.8 integration directly for archive handling.
 
 ---
 
