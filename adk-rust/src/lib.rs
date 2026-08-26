@@ -442,6 +442,11 @@
 //! | `agent-engine` | Agent Engine runtime contract: dispatch endpoints + `serve_agent_engine` entrypoint | (opt-in, any preset) |
 //! | `example-store` | Vertex AI Example Store client + few-shot retrieval provider | (opt-in, any preset) |
 //! | `vertex-sandbox` | Vertex AI Agent Engine managed code-execution sandbox (adk-code) | (opt-in, any preset) |
+//! | `vertex-eval` | Gen AI Evaluation Service bridge (adk-eval) | (opt-in, any preset) |
+//! | `vertex-rag` | Vertex AI RAG Engine retrieval client + tool (adk-rag) | (opt-in, any preset) |
+//! | `agent-retrieval` | Agent Retrieval (Vector Search 2.0) store backend (adk-rag) | (opt-in, any preset) |
+//! | `vertex-agent-registry` | Agent Registry client + discovery tool (adk-tool) | (opt-in, any preset) |
+//! | `vertex-skill-registry` | Skill Registry read client + remote skills (adk-skill) | (opt-in, any preset) |
 //! | `gemini-agent-platform` | Gemini Enterprise Agent Platform integrations (Vertex model backend, managed Sessions, GCP Secret Manager, GCS artifacts, Cloud telemetry, Agent Engine runtime contract, Example Store, code-execution Sandbox); excludes realtime transports and host-side deploy tooling | (opt-in, any preset) |
 //! | `vertex-memory` | Vertex AI Memory Bank backend for adk-memory | (opt-in, any preset) |
 //! | `gcp-deploy` | Agent Engine deployment client (host-side; not part of `gemini-agent-platform`) | (opt-in, any preset) |
