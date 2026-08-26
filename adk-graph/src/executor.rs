@@ -7,7 +7,7 @@ use crate::cache::{NodeCache, compute_cache_key};
 use crate::deferred::FanInTracker;
 use crate::error::{GraphError, InterruptedExecution, Result};
 use crate::graph::CompiledGraph;
-use crate::interrupt::Interrupt;
+use crate::interrupt::{GraphToolConfirmationPause, Interrupt};
 use crate::node::{ExecutionConfig, NodeContext};
 use crate::state::{Checkpoint, State};
 use crate::stream::{StreamEvent, StreamMode};
@@ -46,6 +46,8 @@ pub struct GraphOutcome {
 pub struct PregelExecutor<'a> {
     graph: &'a CompiledGraph,
     config: ExecutionConfig,
+    /// ADK configuration supplied through an additive direct-graph API.
+    run_config: Option<adk_core::RunConfig>,
     state: State,
     step: usize,
     pending_nodes: Vec<String>,
@@ -74,6 +76,14 @@ pub struct PregelExecutor<'a> {
 impl<'a> PregelExecutor<'a> {
     /// Create a new executor
     pub fn new(graph: &'a CompiledGraph, config: ExecutionConfig) -> Self {
+        Self::new_with_run_config(graph, config, None)
+    }
+
+    pub(crate) fn new_with_run_config(
+        graph: &'a CompiledGraph,
+        config: ExecutionConfig,
+        run_config: Option<adk_core::RunConfig>,
+    ) -> Self {
         #[cfg(feature = "node-cache")]
         let node_caches = graph
             .cache_policies
@@ -84,6 +94,7 @@ impl<'a> PregelExecutor<'a> {
         Self {
             graph,
             config,
+            run_config,
             state: State::new(),
             step: 0,
             pending_nodes: vec![],
@@ -192,6 +203,13 @@ impl<'a> PregelExecutor<'a> {
                     let next = self.next_frontier(&result.executed_nodes, &result.goto)?;
                     self.pending_nodes =
                         self.filter_deferred_nodes(next, &result.executed_nodes)?;
+                } else if !matches!(interrupt, Interrupt::Before(_)) {
+                    // A dynamic or tool-confirmation pause occurs inside a
+                    // frontier. Nodes that had already completed must not run
+                    // again after the caller answers the pause, especially when
+                    // they have side effects. The interrupted node itself stays
+                    // pending because it produced no updates.
+                    self.pending_nodes.retain(|node| !result.executed_nodes.contains(node));
                 }
                 // For `Before`, the frontier saved is deliberately the one that
                 // was executing: the node produced no updates, so resuming must
@@ -301,6 +319,9 @@ impl<'a> PregelExecutor<'a> {
                         }
                         if let Some(node) = self.graph.nodes.get(node_name) {
                             let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
+                            if let Some(run_config) = self.run_config.clone() {
+                                ctx.set_run_config(run_config);
+                            }
                             ctx.set_parent_schema(Arc::new(self.graph.schema.clone()));
                             ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
                                 self.graph.nodes.clone(),
@@ -434,24 +455,25 @@ impl<'a> PregelExecutor<'a> {
                             }
 
                             let duration_ms = start.elapsed().as_millis() as u64;
-                            result.executed_nodes.push(node_name.clone());
                             result.events.push(StreamEvent::node_end(node_name, self.step, duration_ms));
                             result.events.extend(collected_events);
 
-                            if let Some((source, targets)) = streamed_goto {
-                                result.goto.insert(source, targets);
-                            }
-                            if let Some(interrupt) = streamed_interrupt {
+                            let node_interrupt = streamed_interrupt;
+                            if let Some(interrupt) = node_interrupt {
                                 result.interrupt = Some(interrupt);
-                            }
-
-                            for updates in streamed_updates {
-                                self.ensure_channels_declared(
-                                    node_name,
-                                    updates.keys().map(String::as_str),
-                                )?;
-                                for (key, value) in updates {
-                                    self.graph.schema.apply_update(&mut self.state, &key, value);
+                            } else {
+                                result.executed_nodes.push(node_name.clone());
+                                if let Some((source, targets)) = streamed_goto {
+                                    result.goto.insert(source, targets);
+                                }
+                                for updates in streamed_updates {
+                                    self.ensure_channels_declared(
+                                        node_name,
+                                        updates.keys().map(String::as_str),
+                                    )?;
+                                    for (key, value) in updates {
+                                        self.graph.schema.apply_update(&mut self.state, &key, value);
+                                    }
                                 }
                             }
                         }
@@ -490,12 +512,33 @@ impl<'a> PregelExecutor<'a> {
                                     return;
                                 }
                             }
+                        } else if !matches!(interrupt, Interrupt::Before(_)) {
+                            self.pending_nodes
+                                .retain(|node| !result.executed_nodes.contains(node));
                         }
                         // Persist before reporting: without this the pause cannot be
                         // resumed and the work already done is lost.
-                        if let Err(error) = self.save_checkpoint().await {
-                            yield Err(error);
-                            return;
+                        let checkpoint_id = match self.save_checkpoint().await {
+                            Ok(checkpoint_id) => checkpoint_id,
+                            Err(error) => {
+                                yield Err(error);
+                                return;
+                            }
+                        };
+                        if let Some(pause) = GraphToolConfirmationPause::from_interrupted_execution(
+                            &InterruptedExecution::new(
+                                self.config.thread_id.clone(),
+                                checkpoint_id,
+                                interrupt.clone(),
+                                self.state.clone(),
+                                self.step,
+                            ),
+                        ) {
+                            yield Ok(StreamEvent::custom(
+                                &pause.node,
+                                GraphToolConfirmationPause::KIND,
+                                serde_json::to_value(&pause).unwrap_or(serde_json::Value::Null),
+                            ));
                         }
                         yield Ok(StreamEvent::interrupted(
                             result.executed_nodes.first().map(|s| s.as_str()).unwrap_or("unknown"),
@@ -584,14 +627,35 @@ impl<'a> PregelExecutor<'a> {
                                 return;
                             }
                         }
+                    } else if !matches!(interrupt, Interrupt::Before(_)) {
+                        self.pending_nodes
+                            .retain(|node| !result.executed_nodes.contains(node));
                     }
                     // Persist before reporting: without this the interrupt is
                     // unresumable, because resuming loads the checkpoint for the
                     // thread. The frontier saved is the one that was executing,
                     // since an interrupted node still owes its updates.
-                    if let Err(e) = self.save_checkpoint().await {
-                        yield Err(e);
-                        return;
+                    let checkpoint_id = match self.save_checkpoint().await {
+                        Ok(checkpoint_id) => checkpoint_id,
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    };
+                    if let Some(pause) = GraphToolConfirmationPause::from_interrupted_execution(
+                        &InterruptedExecution::new(
+                            self.config.thread_id.clone(),
+                            checkpoint_id,
+                            interrupt.clone(),
+                            self.state.clone(),
+                            self.step,
+                        ),
+                    ) {
+                        yield Ok(StreamEvent::custom(
+                            &pause.node,
+                            GraphToolConfirmationPause::KIND,
+                            serde_json::to_value(&pause).unwrap_or(serde_json::Value::Null),
+                        ));
                     }
                     yield Ok(StreamEvent::interrupted(
                         result.executed_nodes.first().map(|s| s.as_str()).unwrap_or("unknown"),
@@ -880,6 +944,9 @@ impl<'a> PregelExecutor<'a> {
             .zip(prior_attempts)
             .map(|((((name, node), policy), retry), spent)| {
                 let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
+                if let Some(run_config) = self.run_config.clone() {
+                    ctx.set_run_config(run_config);
+                }
                 // A node body may invoke other nodes. The invoker carries the
                 // graph's nodes and the shared ledger, so a resumed parent serves
                 // children that already finished. These invocations are awaited
@@ -946,10 +1013,16 @@ impl<'a> PregelExecutor<'a> {
             .max_concurrency
             .map_or(pending_for_execution.len(), |limit| limit.min(pending_for_execution.len()))
             .max(1);
-        let outputs: Vec<_> = stream::iter(futures).buffer_unordered(concurrency).collect().await;
+        let mut outputs: Vec<_> =
+            stream::iter(futures).buffer_unordered(concurrency).collect().await;
+        // Completion order is intentionally nondeterministic under parallelism,
+        // but selecting which of several simultaneous pauses to report cannot
+        // be. Keep node event order stable and make the first node name win.
+        outputs.sort_by(|left, right| left.0.cmp(&right.0));
 
         // Collect all updates and check for errors/interrupts
         let mut all_updates = Vec::new();
+        let mut interrupt = None;
 
         for (node_name, output_result, duration_ms, step, attempts) in outputs {
             // Record the budget spent, so a resumed run does not restart it. A
@@ -960,20 +1033,18 @@ impl<'a> PregelExecutor<'a> {
             } else {
                 self.attempts.remove(&node_name);
             }
-            result.executed_nodes.push(node_name.clone());
             result.events.push(StreamEvent::node_end(&node_name, step, duration_ms));
 
             match output_result {
                 Ok(output) => {
                     // Check for dynamic interrupt
-                    if let Some(interrupt) = output.interrupt {
-                        return Ok(SuperStepResult {
-                            interrupt: Some(interrupt),
-                            executed_nodes: result.executed_nodes,
-                            events: result.events,
-                            goto: result.goto,
-                        });
+                    if let Some(node_interrupt) = output.interrupt {
+                        if interrupt.is_none() {
+                            interrupt = Some(node_interrupt);
+                        }
+                        continue;
                     }
+                    result.executed_nodes.push(node_name.clone());
 
                     // Collect custom events
                     result.events.extend(output.events);
@@ -1047,6 +1118,10 @@ impl<'a> PregelExecutor<'a> {
                     self.graph.schema.apply_update(&mut self.state, &key, value.clone());
                 }
             }
+        }
+
+        if let Some(interrupt) = interrupt {
+            return Ok(SuperStepResult { interrupt: Some(interrupt), ..result });
         }
 
         if let Some(interrupt) = self.gate_after(&result.executed_nodes) {
@@ -1185,6 +1260,21 @@ impl CompiledGraph {
         self.invoke_detailed(input, config).await.map(|outcome| outcome.state)
     }
 
+    /// Execute with ADK run configuration for agents inside a directly run graph.
+    ///
+    /// Use this to resume a tool-confirmation pause with decisions in
+    /// [`adk_core::RunConfig`]. Existing [`Self::invoke`] callers remain
+    /// standalone and use default ADK run configuration.
+    pub async fn invoke_with_run_config(
+        &self,
+        input: State,
+        config: ExecutionConfig,
+        run_config: adk_core::RunConfig,
+    ) -> Result<State> {
+        let mut executor = PregelExecutor::new_with_run_config(self, config, Some(run_config));
+        executor.run(input).await
+    }
+
     /// Executes and reports what the run asked of its caller.
     ///
     /// Only a graph run as a [`SubgraphNode`](crate::subgraph::SubgraphNode) has
@@ -1200,6 +1290,18 @@ impl CompiledGraph {
         Ok(GraphOutcome { state, goto_parent: executor.goto_parent })
     }
 
+    /// Execute with run configuration and retain a subgraph's parent routing outcome.
+    pub async fn invoke_detailed_with_run_config(
+        &self,
+        input: State,
+        config: ExecutionConfig,
+        run_config: adk_core::RunConfig,
+    ) -> Result<GraphOutcome> {
+        let mut executor = PregelExecutor::new_with_run_config(self, config, Some(run_config));
+        let state = executor.run(input).await?;
+        Ok(GraphOutcome { state, goto_parent: executor.goto_parent })
+    }
+
     /// Execute with streaming
     pub fn stream(
         &self,
@@ -1209,6 +1311,22 @@ impl CompiledGraph {
     ) -> impl futures::Stream<Item = Result<StreamEvent>> + '_ {
         tracing::debug!("CompiledGraph::stream called with mode {:?}", mode);
         let executor = PregelExecutor::new(self, config);
+        executor.run_stream(input, mode)
+    }
+
+    /// Stream with ADK run configuration for agents inside a directly run graph.
+    ///
+    /// A resumed tool-confirmation request can be approved or denied by passing
+    /// [`adk_core::RunConfig::tool_confirmation_decisions`].
+    pub fn stream_with_run_config(
+        &self,
+        input: State,
+        config: ExecutionConfig,
+        mode: StreamMode,
+        run_config: adk_core::RunConfig,
+    ) -> impl futures::Stream<Item = Result<StreamEvent>> + '_ {
+        tracing::debug!("CompiledGraph::stream_with_run_config called with mode {:?}", mode);
+        let executor = PregelExecutor::new_with_run_config(self, config, Some(run_config));
         executor.run_stream(input, mode)
     }
 

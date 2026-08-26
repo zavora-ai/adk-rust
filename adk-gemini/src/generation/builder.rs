@@ -9,6 +9,7 @@ use crate::{
     client::{Error as ClientError, GeminiClient},
     generation::model::ThinkingLevel,
     generation::{GenerateContentRequest, SpeakerVoiceConfig, SpeechConfig, ThinkingConfig},
+    tools::model::VertexRagStore,
     tools::{FunctionCallingConfig, ToolConfig},
 };
 
@@ -22,6 +23,7 @@ pub struct ContentBuilder {
     tool_config: Option<ToolConfig>,
     system_instruction: Option<Content>,
     cached_content: Option<String>,
+    vertex_rag_store: Option<VertexRagStore>,
 }
 
 impl ContentBuilder {
@@ -35,6 +37,7 @@ impl ContentBuilder {
             tool_config: None,
             system_instruction: None,
             cached_content: None,
+            vertex_rag_store: None,
         }
     }
 
@@ -237,6 +240,38 @@ impl ContentBuilder {
         self
     }
 
+    /// Grounds the request in a Vertex AI RAG store (server-side retrieval).
+    ///
+    /// The store is declared as a `retrieval` tool on the outgoing request at
+    /// send time. Vertex AI backend only — on the AI Studio backend the
+    /// request fails with [`Error::Validation`](crate::client::Error::Validation)
+    /// before dispatch.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_gemini::{Gemini, VertexRagStore};
+    ///
+    /// // `client` must be Vertex AI-backed, e.g. built with
+    /// // `Gemini::with_google_cloud_adc_model` (requires the `vertex` feature).
+    /// # async fn example(client: Gemini) -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = VertexRagStore::corpus("projects/p/locations/us-central1/ragCorpora/123")
+    ///     .with_top_k(5);
+    /// let response = client
+    ///     .generate_content()
+    ///     .with_user_message("What does the handbook say about vacation?")
+    ///     .with_vertex_rag_store(store)
+    ///     .execute()
+    ///     .await?;
+    /// # let _ = response;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_vertex_rag_store(mut self, store: VertexRagStore) -> Self {
+        self.vertex_rag_store = Some(store);
+        self
+    }
+
     /// Adds a function declaration as a tool.
     ///
     /// This is a convenience method for creating a `Tool` from a `FunctionDeclaration`.
@@ -403,8 +438,9 @@ impl ContentBuilder {
     ))]
     pub async fn execute(self) -> Result<GenerationResponse, ClientError> {
         let client = self.client.clone();
+        let vertex_rag_store = self.vertex_rag_store.clone();
         let request = self.build();
-        client.generate_content_raw(request).await
+        client.generate_content_raw(request, vertex_rag_store).await
     }
 
     /// Executes the content generation request as a stream.
@@ -419,7 +455,8 @@ impl ContentBuilder {
     ) -> Result<impl TryStream<Ok = GenerationResponse, Error = ClientError> + Send, ClientError>
     {
         let client = self.client.clone();
+        let vertex_rag_store = self.vertex_rag_store.clone();
         let request = self.build();
-        client.generate_content_stream(request).await
+        client.generate_content_stream(request, vertex_rag_store).await
     }
 }

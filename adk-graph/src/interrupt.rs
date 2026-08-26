@@ -1,5 +1,6 @@
 //! Human-in-the-loop interrupt types
 
+use adk_core::ToolConfirmationRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -37,6 +38,76 @@ pub fn interrupt(message: &str) -> Interrupt {
 /// Helper to create a dynamic interrupt with data
 pub fn interrupt_with_data(message: &str, data: Value) -> Interrupt {
     Interrupt::Dynamic { message: message.to_string(), data: Some(data) }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingGraphToolConfirmation {
+    node: String,
+    request: ToolConfirmationRequest,
+}
+
+/// A persisted tool-authorization pause emitted by a graph.
+///
+/// Use [`Self::from_stream_event`] when directly streaming a graph, or
+/// [`GraphInterruptPayload::tool_confirmation`] when the graph runs as a
+/// [`crate::agent::GraphAgent`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphToolConfirmationPause {
+    /// Graph node whose agent requested authorization.
+    pub node: String,
+    /// The exact tool call the caller must approve or deny.
+    pub request: ToolConfirmationRequest,
+    /// Thread to resume after a decision.
+    pub thread_id: String,
+    /// Checkpoint saved before the pause was reported.
+    pub checkpoint_id: String,
+}
+
+impl GraphToolConfirmationPause {
+    /// Reserved custom-event and dynamic-interrupt marker for tool confirmation.
+    pub const KIND: &str = "tool_confirmation";
+
+    /// Read a tool-confirmation pause from a graph stream event.
+    pub fn from_stream_event(event: &crate::stream::StreamEvent) -> Option<Self> {
+        let crate::stream::StreamEvent::Custom { event_type, data, .. } = event else {
+            return None;
+        };
+        (event_type == Self::KIND).then(|| serde_json::from_value(data.clone()).ok()).flatten()
+    }
+
+    /// Read a tool-confirmation pause from an interrupted graph execution.
+    pub fn from_interrupted_execution(
+        interrupted: &crate::error::InterruptedExecution,
+    ) -> Option<Self> {
+        let (node, request) = pending_from_interrupt(&interrupted.interrupt)?;
+        Some(Self {
+            node,
+            request,
+            thread_id: interrupted.thread_id.clone(),
+            checkpoint_id: interrupted.checkpoint_id.clone(),
+        })
+    }
+
+    pub(crate) fn pending_interrupt(node: String, request: ToolConfirmationRequest) -> Interrupt {
+        Interrupt::Dynamic {
+            message: Self::KIND.to_string(),
+            data: Some(Self::pending_data(node, request)),
+        }
+    }
+
+    pub(crate) fn pending_data(node: String, request: ToolConfirmationRequest) -> Value {
+        serde_json::to_value(PendingGraphToolConfirmation { node, request }).unwrap_or(Value::Null)
+    }
+}
+
+fn pending_from_interrupt(interrupt: &Interrupt) -> Option<(String, ToolConfirmationRequest)> {
+    let Interrupt::Dynamic { message, data } = interrupt else { return None };
+    if message != GraphToolConfirmationPause::KIND {
+        return None;
+    }
+    let pending: PendingGraphToolConfirmation = serde_json::from_value(data.clone()?).ok()?;
+    Some((pending.node, pending.request))
 }
 
 /// The reserved `Event::provider_metadata` key carrying a graph interrupt.
@@ -111,6 +182,28 @@ impl GraphInterruptPayload {
     pub fn from_event(event: &adk_core::Event) -> Option<Self> {
         let raw = event.provider_metadata.get(INTERRUPT_METADATA_KEY)?;
         serde_json::from_str(raw).ok()
+    }
+
+    /// Build a graph-agent interrupt payload for a tool-confirmation pause.
+    pub fn from_tool_confirmation_pause(pause: GraphToolConfirmationPause) -> Self {
+        let thread_id = pause.thread_id.clone();
+        let checkpoint_id = pause.checkpoint_id.clone();
+        Self {
+            kind: GraphToolConfirmationPause::KIND.to_string(),
+            node: Some(pause.node.clone()),
+            message: None,
+            data: serde_json::to_value(pause).ok(),
+            thread_id,
+            checkpoint_id,
+        }
+    }
+
+    /// Read the structured tool-confirmation pause, if this payload represents one.
+    pub fn tool_confirmation(&self) -> Option<GraphToolConfirmationPause> {
+        if self.kind != GraphToolConfirmationPause::KIND {
+            return None;
+        }
+        serde_json::from_value(self.data.clone()?).ok()
     }
 
     /// Serialize for transport in `Event::provider_metadata`.

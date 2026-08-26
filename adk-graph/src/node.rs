@@ -99,12 +99,22 @@ pub struct NodeContext {
     children: Option<std::sync::Arc<crate::child::ChildInvoker>>,
     /// The schema of the graph running this node, for a node that projects state.
     parent_schema: Option<std::sync::Arc<crate::state::StateSchema>>,
+    /// ADK configuration supplied through an additive `CompiledGraph` API.
+    run_config: Option<adk_core::RunConfig>,
 }
 
 impl NodeContext {
     /// Create a new node context
     pub fn new(state: State, config: ExecutionConfig, step: usize) -> Self {
-        Self { state, config, step, progress_handle: None, children: None, parent_schema: None }
+        Self {
+            state,
+            config,
+            step,
+            progress_handle: None,
+            children: None,
+            parent_schema: None,
+            run_config: None,
+        }
     }
 
     /// The machinery for invoking other nodes, if this context has it.
@@ -119,6 +129,15 @@ impl NodeContext {
     /// Attaches the running graph's schema.
     pub fn set_parent_schema(&mut self, schema: std::sync::Arc<crate::state::StateSchema>) {
         self.parent_schema = Some(schema);
+    }
+
+    /// Attach per-run ADK configuration for an agent node.
+    pub(crate) fn set_run_config(&mut self, run_config: adk_core::RunConfig) {
+        self.run_config = Some(run_config);
+    }
+
+    pub(crate) fn run_config(&self) -> Option<adk_core::RunConfig> {
+        self.run_config.clone()
     }
 
     pub(crate) fn child_invoker(&self) -> Option<std::sync::Arc<crate::child::ChildInvoker>> {
@@ -468,6 +487,9 @@ impl Node for FunctionNode {
         if let Some(schema) = ctx.parent_schema() {
             ctx_owned.set_parent_schema(schema);
         }
+        if let Some(run_config) = ctx.run_config() {
+            ctx_owned.set_run_config(run_config);
+        }
         (self.func)(ctx_owned).await
     }
 }
@@ -658,6 +680,7 @@ impl Node for AgentNode {
             content,
             self.agent.clone(),
             ctx.config.parent_context.clone(),
+            ctx.run_config(),
         ));
 
         // Run the agent and collect events
@@ -669,6 +692,17 @@ impl Node for AgentNode {
         })?;
 
         let events: Vec<adk_core::Event> = stream.filter_map(|r| async { r.ok() }).collect().await;
+
+        if let Some(request) =
+            events.iter().find_map(|event| event.actions.tool_confirmation.clone())
+        {
+            return Ok(NodeOutput::new().with_interrupt(
+                crate::interrupt::GraphToolConfirmationPause::pending_interrupt(
+                    self.name.clone(),
+                    request,
+                ),
+            ));
+        }
 
         // Map events to state updates
         let updates = (self.output_mapper)(&events);
@@ -709,6 +743,7 @@ impl Node for AgentNode {
                 content,
                 agent.clone(),
                 parent_context,
+                ctx.run_config(),
             ));
 
             let stream = match agent.run(invocation_ctx).await {
@@ -728,6 +763,17 @@ impl Node for AgentNode {
             while let Some(result) = stream.next().await {
                 match result {
                     Ok(event) => {
+                        if let Some(request) = event.actions.tool_confirmation.clone() {
+                            yield Ok(StreamEvent::node_interrupt(
+                                &name,
+                                crate::interrupt::GraphToolConfirmationPause::KIND,
+                                Some(crate::interrupt::GraphToolConfirmationPause::pending_data(
+                                    name.clone(),
+                                    request,
+                                )),
+                            ));
+                            return;
+                        }
                         // Emit streaming event immediately
                         if let Some(content) = event.content() {
                             let text: String = content.parts.iter().filter_map(|p| p.text()).collect();
@@ -802,6 +848,7 @@ impl GraphInvocationContext {
         user_content: adk_core::Content,
         agent: Arc<dyn adk_core::Agent>,
         parent: Option<Arc<dyn adk_core::InvocationContext>>,
+        explicit_run_config: Option<adk_core::RunConfig>,
     ) -> Self {
         let invocation_id = uuid::Uuid::new_v4().to_string();
         let session = Arc::new(GraphSession::new(session_id));
@@ -810,7 +857,7 @@ impl GraphInvocationContext {
 
         // A node runs on its own branch below the caller's, so events it produces are
         // attributable and do not read as the parent agent's own turn.
-        let (user_id, app_name, branch, run_config) = match parent.as_ref() {
+        let (user_id, app_name, branch, inherited_run_config) = match parent.as_ref() {
             Some(parent) => (
                 parent.user_id().to_string(),
                 parent.app_name().to_string(),
@@ -833,7 +880,7 @@ impl GraphInvocationContext {
             user_content,
             agent,
             session,
-            run_config,
+            run_config: explicit_run_config.unwrap_or(inherited_run_config),
             ended: std::sync::atomic::AtomicBool::new(false),
             parent,
             user_id,

@@ -45,6 +45,8 @@ spanner = ["dep:google-cloud-spanner"]
 mcp-sampling = ["mcp"]
 # Enable the Vertex AI Example Store client and few-shot retrieval provider
 example-store = ["adk-gcp", "google-cloud-auth", "reqwest"]
+# Enable the Google Agent Registry client and the agent discovery tool
+vertex-agent-registry = ["adk-gcp", "google-cloud-auth", "reqwest"]
 
 [dependencies]
 adk-core.workspace = true
@@ -77,9 +79,9 @@ reqwest-mcp = { package = "reqwest", version = "0.13", default-features = false,
 gcp-bigquery-client = { version = "0.28", optional = true }
 # Optional: Spanner toolset
 google-cloud-spanner = { version = "0.33", optional = true }
-# Optional: ADC credentials for the Vertex AI Example Store client
+# Optional: ADC credentials for the Vertex AI Example Store and Agent Registry clients
 google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
-# Optional: shared Google Cloud REST plumbing for the Example Store client
+# Optional: shared Google Cloud REST plumbing for the Example Store and Agent Registry clients
 adk-gcp = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -111,3 +113,7 @@ required-features = ["example-store"]
 [[test]]
 name = "example_store_live"
 required-features = ["example-store"]
+
+[[test]]
+name = "agent_registry_contract"
+required-features = ["vertex-agent-registry"]

@@ -704,4 +704,35 @@ mod tests {
         let url = Url::parse("https://my-proxy.example.com/gemini/").unwrap();
         assert!(!StudioBackend::detect_vertex_url(&url));
     }
+
+    #[tokio::test]
+    async fn vertex_rag_store_is_rejected_before_dispatch() {
+        let backend = StudioBackend::new(
+            "test-key",
+            Model::default(),
+            Url::parse("https://generativelanguage.googleapis.com/v1beta/").unwrap(),
+        )
+        .unwrap();
+        let request = GenerateContentRequest {
+            contents: Vec::new(),
+            generation_config: None,
+            safety_settings: None,
+            tools: None,
+            tool_config: None,
+            system_instruction: None,
+            cached_content: None,
+        };
+        let store = crate::tools::model::VertexRagStore::corpus(
+            "projects/p/locations/us-central1/ragCorpora/123",
+        );
+
+        let error = backend
+            .generate_content_with_vertex_rag(request, store)
+            .await
+            .expect_err("the studio backend must reject vertexRagStore retrieval");
+        assert!(
+            matches!(&error, Error::Validation { message } if message.contains("Vertex AI backend")),
+            "expected a validation error naming the Vertex AI backend, got {error:?}"
+        );
+    }
 }

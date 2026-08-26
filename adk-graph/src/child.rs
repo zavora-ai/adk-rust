@@ -114,7 +114,10 @@ impl ChildInvoker {
                 state.insert(key, value);
             }
         }
-        let child_ctx = NodeContext::new(state, parent.config.clone(), parent.step);
+        let mut child_ctx = NodeContext::new(state, parent.config.clone(), parent.step);
+        if let Some(run_config) = parent.run_config() {
+            child_ctx.set_run_config(run_config);
+        }
 
         let output = node.execute(&child_ctx).await?;
 

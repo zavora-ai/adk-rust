@@ -153,6 +153,7 @@ sha2 = "0.10"
 hex = "0.4"
 flate2 = "1.0"
 tar = "0.4"
+zip = { version = "7.2", default-features = false, features = ["deflate"] }
 livekit = { version = "=0.8.1", default-features = false, features = ["tokio", "native-tls"] }
 livekit-api = { version = "=0.6.1", default-features = false, features = ["services-tokio", "access-token"] }
 livekit-datatrack = { version = "=0.1.13", default-features = false }

@@ -609,6 +609,7 @@ impl GeminiClient {
         tools.present = request.tools.is_some(),
         system.instruction.present = request.system_instruction.is_some(),
         cached.content.present = request.cached_content.is_some(),
+        vertex.rag_store.present = vertex_rag_store.is_some(),
         usage.prompt_tokens,
         usage.candidates_tokens,
         usage.thoughts_tokens,
@@ -618,12 +619,16 @@ impl GeminiClient {
     pub(crate) async fn generate_content_raw(
         &self,
         request: GenerateContentRequest,
+        vertex_rag_store: Option<crate::tools::model::VertexRagStore>,
     ) -> Result<GenerationResponse, Error> {
         if let Some(ref gc) = request.generation_config {
             self.validate_generation_config(gc)?;
         }
 
-        let response = self.backend.generate_content(request).await?;
+        let response = match vertex_rag_store {
+            Some(store) => self.backend.generate_content_with_vertex_rag(request, store).await?,
+            None => self.backend.generate_content(request).await?,
+        };
 
         if let Some(usage) = &response.usage_metadata {
             #[rustfmt::skip]
@@ -645,16 +650,23 @@ impl GeminiClient {
         tools.present = request.tools.is_some(),
         system.instruction.present = request.system_instruction.is_some(),
         cached.content.present = request.cached_content.is_some(),
+        vertex.rag_store.present = vertex_rag_store.is_some(),
     ), err)]
     pub(crate) async fn generate_content_stream(
         &self,
         request: GenerateContentRequest,
+        vertex_rag_store: Option<crate::tools::model::VertexRagStore>,
     ) -> Result<backend::BackendStream<GenerationResponse>, Error> {
         if let Some(ref gc) = request.generation_config {
             self.validate_generation_config(gc)?;
         }
 
-        self.backend.generate_content_stream(request).await
+        match vertex_rag_store {
+            Some(store) => {
+                self.backend.generate_content_stream_with_vertex_rag(request, store).await
+            }
+            None => self.backend.generate_content_stream(request).await,
+        }
     }
 
     #[instrument(skip_all, fields(

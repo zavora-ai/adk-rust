@@ -130,7 +130,8 @@ pub use safety::model::{
 
 pub use tools::model::{
     FunctionCall, FunctionCallingConfig, FunctionCallingMode, FunctionDeclaration,
-    FunctionResponse, FunctionResponsePart, Tool, ToolConfig,
+    FunctionResponse, FunctionResponsePart, RagResource, RagRetrievalConfig, RagRetrievalFilter,
+    Tool, ToolConfig, VertexRagStore,
 };
 
 // ========== Batch Processing ==========

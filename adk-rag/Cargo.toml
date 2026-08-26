@@ -14,6 +14,7 @@ readme = "README.md"
 
 [dependencies]
 adk-core.workspace = true
+adk-gcp = { workspace = true, optional = true }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -23,6 +24,7 @@ tokio = { workspace = true, features = ["sync"] }
 
 # Feature-gated dependencies
 adk-gemini = { workspace = true, optional = true }
+google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
 reqwest = { workspace = true, optional = true }
 qdrant-client = { version = "1.13", optional = true }
 # lancedb's public API takes and returns arrow types, so our arrow types must come from
@@ -38,6 +40,7 @@ surrealdb-types = { version = "3.0.1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+axum = "0.8"
 proptest = "1.6"
 tempfile = "3"
 
@@ -48,5 +51,7 @@ openai = ["dep:reqwest"]
 qdrant = ["dep:qdrant-client"]
 lancedb = ["dep:lancedb", "dep:futures"]
 pgvector = ["dep:sqlx"]
+agent-retrieval = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]
 surrealdb = ["dep:surrealdb", "dep:surrealdb-types"]
+vertex-rag = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]
 full = ["gemini", "openai", "qdrant", "lancedb", "pgvector", "surrealdb"]

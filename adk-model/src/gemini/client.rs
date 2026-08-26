@@ -114,6 +114,14 @@ pub struct GeminiModel {
     /// Faithful-to-API options for the Interactions transport.
     #[cfg(feature = "gemini-interactions")]
     interaction_options: InteractionOptions,
+    /// Server-side RAG grounding declaration attached to every request.
+    /// Vertex AI backend only; see [`GeminiModel::with_vertex_rag_store`].
+    #[cfg(feature = "gemini-vertex")]
+    vertex_rag_store: Option<adk_gemini::VertexRagStore>,
+    /// Whether the wrapped client targets the Vertex AI backend (as opposed
+    /// to AI Studio). Set by the `new_google_cloud*` constructors.
+    #[cfg(feature = "gemini-vertex")]
+    vertex_backend: bool,
 }
 
 /// Convert a Gemini client error to a structured `AdkError` with proper category and retry hints.
@@ -280,6 +288,20 @@ impl GeminiModel {
     }
 
     fn validate_request_contract(&self, req: &LlmRequest) -> Result<()> {
+        // Server-side RAG grounding is a Vertex AI capability; reject it on
+        // the AI Studio backend before any network IO (mirrors the request-
+        // time gating the Vertex backend applies to Studio-only fields).
+        #[cfg(feature = "gemini-vertex")]
+        if self.vertex_rag_store.is_some() && !self.vertex_backend {
+            return Err(adk_core::AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Unsupported,
+                "model.gemini.rag_store_requires_vertex",
+                "Vertex RAG store grounding requires the Vertex AI backend. Construct the model with new_google_cloud/new_google_cloud_adc (or set GOOGLE_GENAI_USE_VERTEXAI with GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION) instead of an AI Studio API key.",
+            )
+            .with_provider("gemini"));
+        }
+
         let model = self.model_name.strip_prefix("models/").unwrap_or(&self.model_name);
         if !matches!(model, "gemini-3.6-flash" | "gemini-3.7-flash") {
             return Ok(());
@@ -329,6 +351,10 @@ impl GeminiModel {
             interaction_target: None,
             #[cfg(feature = "gemini-interactions")]
             interaction_options: InteractionOptions::default(),
+            #[cfg(feature = "gemini-vertex")]
+            vertex_rag_store: None,
+            #[cfg(feature = "gemini-vertex")]
+            vertex_backend: false,
         }
     }
 
@@ -361,7 +387,9 @@ impl GeminiModel {
         )
         .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
-        Ok(Self::from_client(client, model_name))
+        let mut model = Self::from_client(client, model_name);
+        model.vertex_backend = true;
+        Ok(model)
     }
 
     /// Create a Gemini model via Vertex AI with service account JSON.
@@ -383,7 +411,9 @@ impl GeminiModel {
         )
         .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
-        Ok(Self::from_client(client, model_name))
+        let mut model = Self::from_client(client, model_name);
+        model.vertex_backend = true;
+        Ok(model)
     }
 
     /// Create a Gemini model via Vertex AI with Application Default Credentials.
@@ -403,7 +433,9 @@ impl GeminiModel {
         )
         .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
-        Ok(Self::from_client(client, model_name))
+        let mut model = Self::from_client(client, model_name);
+        model.vertex_backend = true;
+        Ok(model)
     }
 
     /// Create a Gemini model via Vertex AI with Workload Identity Federation.
@@ -425,7 +457,9 @@ impl GeminiModel {
         )
         .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
-        Ok(Self::from_client(client, model_name))
+        let mut model = Self::from_client(client, model_name);
+        model.vertex_backend = true;
+        Ok(model)
     }
 
     /// Create a Gemini model from environment variables.
@@ -550,6 +584,42 @@ impl GeminiModel {
     /// Returns the current thinking configuration, if set.
     pub fn thinking_config(&self) -> Option<&adk_gemini::ThinkingConfig> {
         self.thinking_config.as_ref()
+    }
+
+    /// Ground every request in a Vertex AI RAG store (server-side retrieval).
+    ///
+    /// Declares a `retrieval` tool on each outgoing `generateContent` request
+    /// so Vertex AI retrieves grounding context from the referenced RAG
+    /// corpora before generating. Requires a Vertex AI backend — requests on
+    /// an AI Studio model fail with the structured error
+    /// `model.gemini.rag_store_requires_vertex` before any network IO.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_gemini::VertexRagStore;
+    /// use adk_model::gemini::GeminiModel;
+    ///
+    /// # fn main() -> adk_core::Result<()> {
+    /// let store = VertexRagStore::corpus("projects/p/locations/us-central1/ragCorpora/123")
+    ///     .with_top_k(5);
+    /// let model =
+    ///     GeminiModel::new_google_cloud("api-key", "p", "us-central1", "gemini-3.7-flash")?
+    ///         .with_vertex_rag_store(store);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "gemini-vertex")]
+    #[must_use]
+    pub fn with_vertex_rag_store(mut self, store: adk_gemini::VertexRagStore) -> Self {
+        self.vertex_rag_store = Some(store);
+        self
+    }
+
+    /// Returns the configured Vertex RAG store, if set.
+    #[cfg(feature = "gemini-vertex")]
+    pub fn vertex_rag_store(&self) -> Option<&adk_gemini::VertexRagStore> {
+        self.vertex_rag_store.as_ref()
     }
 
     /// Enable (or disable) the Interactions API transport.
@@ -1226,6 +1296,14 @@ impl GeminiModel {
             if tool_config != adk_gemini::ToolConfig::default() {
                 builder = builder.with_tool_config(tool_config);
             }
+        }
+
+        // Declare server-side RAG grounding; the Vertex backend injects it
+        // as a `retrieval` tool at send time (validate_request_contract has
+        // already rejected the Studio backend at this point).
+        #[cfg(feature = "gemini-vertex")]
+        if let Some(store) = &self.vertex_rag_store {
+            builder = builder.with_vertex_rag_store(store.clone());
         }
 
         if stream {
@@ -2548,5 +2626,59 @@ mod interactions_transport_tests {
             .validate_request_contract(&LlmRequest::new("gemini-3.7-flash", Vec::new()))
             .expect_err("token budgets must be rejected locally");
         assert_eq!(error.code, "model.gemini.thinking_budget_unsupported");
+    }
+}
+
+#[cfg(all(test, feature = "gemini-vertex"))]
+mod vertex_rag_tests {
+    use super::*;
+    use adk_gemini::VertexRagStore;
+
+    fn test_store() -> VertexRagStore {
+        VertexRagStore::corpus("projects/p/locations/us-central1/ragCorpora/123").with_top_k(5)
+    }
+
+    fn vertex_model() -> GeminiModel {
+        GeminiModel::new_google_cloud("test-key", "p", "us-central1", "gemini-3.7-flash")
+            .expect("construct vertex model")
+    }
+
+    // The Vertex constructor builds credential plumbing that requires a
+    // current Tokio runtime, so this test is async.
+    #[tokio::test]
+    async fn vertex_backend_accepts_and_stores_the_rag_store() {
+        let model = vertex_model().with_vertex_rag_store(test_store());
+
+        model
+            .validate_request_contract(&LlmRequest::new("gemini-3.7-flash", Vec::new()))
+            .expect("vertex backend must accept the rag store");
+
+        // The stored store is handed to adk-gemini's ContentBuilder per
+        // request; the exact wire-shape injection is asserted in adk-gemini's
+        // backend tests.
+        assert_eq!(model.vertex_rag_store(), Some(&test_store()));
+    }
+
+    #[test]
+    fn studio_backend_rejects_rag_store_before_network_io() {
+        let model = GeminiModel::new("test-key", "gemini-3.7-flash")
+            .expect("construct studio model")
+            .with_vertex_rag_store(test_store());
+
+        let error = model
+            .validate_request_contract(&LlmRequest::new("gemini-3.7-flash", Vec::new()))
+            .expect_err("studio backend must reject the rag store locally");
+        assert_eq!(error.code, "model.gemini.rag_store_requires_vertex");
+        assert_eq!(error.category, adk_core::ErrorCategory::Unsupported);
+        assert_eq!(error.details.provider.as_deref(), Some("gemini"));
+    }
+
+    #[test]
+    fn no_rag_store_means_no_gate() {
+        let model = GeminiModel::new("test-key", "gemini-3.7-flash").expect("construct model");
+        assert_eq!(model.vertex_rag_store(), None);
+        model
+            .validate_request_contract(&LlmRequest::new("gemini-3.7-flash", Vec::new()))
+            .expect("no store configured, nothing to reject");
     }
 }

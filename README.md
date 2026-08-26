@@ -22,6 +22,9 @@ and async, across 43 publishable crates for agent orchestration.
 > shared state, artifacts, sessions, and UI-protocol discovery. All 43 crates are
 > available on [crates.io](https://crates.io/crates/adk-rust/2.1.0).
 >
+> **Milestone:** ADK-Rust has crossed **500K total crates.io downloads** across
+> the workspace crates.
+>
 > Coming from 1.x: six APIs changed shape and the fan-in default changed behaviour
 > without an API change. See the [migration guide](docs/official_docs/migration/1.0-to-2.0.md)
 > and the [CHANGELOG](CHANGELOG.md).

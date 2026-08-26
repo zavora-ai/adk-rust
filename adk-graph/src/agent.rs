@@ -235,12 +235,21 @@ impl Agent for GraphAgent {
                     // returned as an error without ending the invocation. Emit one
                     // event carrying the structured pause so a caller can read the
                     // node, the payload, and the checkpoint to resume from.
-                    let payload = crate::interrupt::GraphInterruptPayload::new(
-                        &interrupt.interrupt,
-                        &interrupt.thread_id,
-                        &interrupt.checkpoint_id,
+                    let tool_confirmation = crate::interrupt::GraphToolConfirmationPause::from_interrupted_execution(&interrupt);
+                    let payload = tool_confirmation.clone().map_or_else(
+                        || crate::interrupt::GraphInterruptPayload::new(
+                            &interrupt.interrupt,
+                            &interrupt.thread_id,
+                            &interrupt.checkpoint_id,
+                        ),
+                        crate::interrupt::GraphInterruptPayload::from_tool_confirmation_pause,
                     );
                     let mut event = Event::new("graph_interrupted");
+                    if let Some(pause) = tool_confirmation {
+                        event.llm_response.interrupted = true;
+                        event.llm_response.turn_complete = true;
+                        event.actions.tool_confirmation = Some(pause.request);
+                    }
                     event.set_content(
                         Content::new("assistant").with_text(interrupt.interrupt.to_string()),
                     );

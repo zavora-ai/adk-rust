@@ -59,6 +59,141 @@ pub struct GoogleSearchConfig {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct URLContextConfig {}
 
+/// A Vertex AI RAG store declaration for server-side retrieval grounding.
+///
+/// References one or more RAG corpora (`projects/{project}/locations/{location}/ragCorpora/{id}`)
+/// and an optional retrieval configuration. Retrieval tuning is expressed via
+/// [`RagRetrievalConfig`] — the deprecated store-level `similarityTopK` and
+/// `vectorDistanceThreshold` wire fields are not exposed.
+///
+/// Attach the store to a request with `ContentBuilder::with_vertex_rag_store`;
+/// the Vertex AI backend declares it as a `retrieval` tool at send time.
+/// Vertex AI backend only — the AI Studio backend rejects the request before
+/// dispatch.
+///
+/// # Example
+///
+/// ```
+/// use adk_gemini::VertexRagStore;
+///
+/// let store = VertexRagStore::corpus("projects/p/locations/us-central1/ragCorpora/123")
+///     .with_top_k(5)
+///     .with_vector_distance_threshold(0.7);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VertexRagStore {
+    /// The RAG corpora (and optional per-corpus file restrictions) to retrieve from
+    pub rag_resources: Vec<RagResource>,
+    /// Retrieval tuning: result count and vector filtering
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rag_retrieval_config: Option<RagRetrievalConfig>,
+}
+
+impl VertexRagStore {
+    /// Create a store backed by the given RAG resources.
+    pub fn new(rag_resources: Vec<RagResource>) -> Self {
+        Self { rag_resources, rag_retrieval_config: None }
+    }
+
+    /// Create a store backed by a single RAG corpus.
+    ///
+    /// `rag_corpus` is a full resource name:
+    /// `projects/{project}/locations/{location}/ragCorpora/{id}`.
+    pub fn corpus(rag_corpus: impl Into<String>) -> Self {
+        Self::new(vec![RagResource::new(rag_corpus)])
+    }
+
+    /// Set the full retrieval configuration.
+    #[must_use]
+    pub fn with_retrieval_config(mut self, config: RagRetrievalConfig) -> Self {
+        self.rag_retrieval_config = Some(config);
+        self
+    }
+
+    /// Set the number of contexts to retrieve (serialized as `ragRetrievalConfig.topK`).
+    #[must_use]
+    pub fn with_top_k(mut self, top_k: i32) -> Self {
+        self.rag_retrieval_config.get_or_insert_with(RagRetrievalConfig::default).top_k =
+            Some(top_k);
+        self
+    }
+
+    /// Only return contexts with a vector distance below the threshold
+    /// (serialized as `ragRetrievalConfig.filter.vectorDistanceThreshold`).
+    #[must_use]
+    pub fn with_vector_distance_threshold(mut self, threshold: f64) -> Self {
+        self.rag_retrieval_config
+            .get_or_insert_with(RagRetrievalConfig::default)
+            .filter
+            .get_or_insert_with(RagRetrievalFilter::default)
+            .vector_distance_threshold = Some(threshold);
+        self
+    }
+
+    /// Only return contexts with a vector similarity above the threshold
+    /// (serialized as `ragRetrievalConfig.filter.vectorSimilarityThreshold`).
+    #[must_use]
+    pub fn with_vector_similarity_threshold(mut self, threshold: f64) -> Self {
+        self.rag_retrieval_config
+            .get_or_insert_with(RagRetrievalConfig::default)
+            .filter
+            .get_or_insert_with(RagRetrievalFilter::default)
+            .vector_similarity_threshold = Some(threshold);
+        self
+    }
+}
+
+/// A single RAG corpus reference, optionally restricted to specific files.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RagResource {
+    /// Full corpus resource name: `projects/{project}/locations/{location}/ragCorpora/{id}`
+    pub rag_corpus: String,
+    /// Restrict retrieval to these RAG file ids within the corpus
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rag_file_ids: Option<Vec<String>>,
+}
+
+impl RagResource {
+    /// Create a resource referencing an entire corpus.
+    pub fn new(rag_corpus: impl Into<String>) -> Self {
+        Self { rag_corpus: rag_corpus.into(), rag_file_ids: None }
+    }
+
+    /// Restrict retrieval to the given RAG file ids.
+    #[must_use]
+    pub fn with_file_ids(mut self, rag_file_ids: Vec<String>) -> Self {
+        self.rag_file_ids = Some(rag_file_ids);
+        self
+    }
+}
+
+/// Retrieval tuning for a [`VertexRagStore`].
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RagRetrievalConfig {
+    /// The number of contexts to retrieve
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i32>,
+    /// Vector-based filtering of retrieved contexts
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<RagRetrievalFilter>,
+}
+
+/// Vector filter for retrieved contexts. Set at most one threshold —
+/// distance and similarity are mutually exclusive on the wire.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RagRetrievalFilter {
+    /// Only return contexts with a vector distance below this threshold
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_distance_threshold: Option<f64>,
+    /// Only return contexts with a vector similarity above this threshold
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_similarity_threshold: Option<f64>,
+}
+
 impl Tool {
     /// Create a new tool with a single function declaration
     pub fn new(function_declaration: FunctionDeclaration) -> Self {
@@ -474,6 +609,63 @@ mod tests {
         let json = serde_json::to_value(&tool).unwrap();
         assert!(json.get("functionDeclarations").is_some());
         assert!(json.get("function_declarations").is_none());
+    }
+
+    #[test]
+    fn vertex_rag_store_serializes_exact_wire_shape() {
+        let corpus = "projects/p/locations/us-central1/ragCorpora/123";
+        let store = VertexRagStore::corpus(corpus).with_top_k(5);
+
+        let json = serde_json::to_value(&store).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "ragResources": [{"ragCorpus": corpus}],
+                "ragRetrievalConfig": {"topK": 5}
+            })
+        );
+
+        let deserialized: VertexRagStore = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, store);
+    }
+
+    #[test]
+    fn vertex_rag_store_with_file_ids_and_filter_serde_round_trip() {
+        let store = VertexRagStore::new(vec![
+            RagResource::new("projects/p/locations/l/ragCorpora/1")
+                .with_file_ids(vec!["file-1".to_string(), "file-2".to_string()]),
+        ])
+        .with_top_k(3)
+        .with_vector_distance_threshold(0.7);
+
+        let json = serde_json::to_value(&store).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "ragResources": [{
+                    "ragCorpus": "projects/p/locations/l/ragCorpora/1",
+                    "ragFileIds": ["file-1", "file-2"]
+                }],
+                "ragRetrievalConfig": {
+                    "topK": 3,
+                    "filter": {"vectorDistanceThreshold": 0.7}
+                }
+            })
+        );
+
+        let deserialized: VertexRagStore = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, store);
+    }
+
+    #[test]
+    fn vertex_rag_store_similarity_threshold_serializes_into_filter() {
+        let store = VertexRagStore::corpus("projects/p/locations/l/ragCorpora/1")
+            .with_vector_similarity_threshold(0.8);
+        let json = serde_json::to_value(&store).unwrap();
+        assert_eq!(
+            json["ragRetrievalConfig"]["filter"],
+            serde_json::json!({"vectorSimilarityThreshold": 0.8})
+        );
     }
 
     #[test]

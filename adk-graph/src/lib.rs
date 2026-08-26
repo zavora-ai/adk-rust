@@ -120,7 +120,7 @@ pub use edge::{END, Edge, EdgeTarget, Router, START};
 pub use error::{GraphError, InterruptedExecution, Result};
 pub use executor::PregelExecutor;
 pub use graph::{CompiledGraph, StateGraph};
-pub use interrupt::{Interrupt, interrupt, interrupt_with_data};
+pub use interrupt::{GraphToolConfirmationPause, Interrupt, interrupt, interrupt_with_data};
 pub use node::{AgentNode, ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput};
 pub use state::{Channel, Checkpoint, Reducer, State, StateSchema, StateSchemaBuilder};
 pub use stream::{StreamEvent, StreamMode};
@@ -148,7 +148,9 @@ pub mod prelude {
     pub use crate::edge::{END, Edge, EdgeTarget, Router, START};
     pub use crate::error::{GraphError, InterruptedExecution, Result};
     pub use crate::graph::{CompiledGraph, StateGraph};
-    pub use crate::interrupt::{Interrupt, interrupt, interrupt_with_data};
+    pub use crate::interrupt::{
+        GraphToolConfirmationPause, Interrupt, interrupt, interrupt_with_data,
+    };
     pub use crate::node::{
         AgentNode, ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput,
     };

@@ -269,9 +269,19 @@ impl Node for SubgraphNode {
 
         let input = self.project_in(&ctx.state, &parent_schema);
         let thread = self.child_thread(&ctx.config.thread_id);
-        let config = ExecutionConfig::new(&thread);
+        let mut config = ExecutionConfig::new(&thread);
+        if let Some(parent) = ctx.config.parent_context.clone() {
+            config = config.with_parent_context(parent);
+        }
 
-        match self.graph.invoke_detailed(input, config).await {
+        let outcome = match ctx.run_config() {
+            Some(run_config) => {
+                self.graph.invoke_detailed_with_run_config(input, config, run_config).await
+            }
+            None => self.graph.invoke_detailed(input, config).await,
+        };
+
+        match outcome {
             Ok(outcome) => {
                 let mut output = NodeOutput::new()
                     .with_updates(self.project_out(&outcome.state, &parent_schema));
@@ -288,6 +298,16 @@ impl Node for SubgraphNode {
             // where it happened, and the subgraph's own thread holds the state to
             // resume from.
             Err(GraphError::Interrupted(inner)) => {
+                if let Some(pause) =
+                    crate::interrupt::GraphToolConfirmationPause::from_interrupted_execution(&inner)
+                {
+                    return Ok(NodeOutput::new().with_interrupt(
+                        crate::interrupt::GraphToolConfirmationPause::pending_interrupt(
+                            format!("{}.{}", self.name, pause.node),
+                            pause.request,
+                        ),
+                    ));
+                }
                 let message = match &inner.interrupt {
                     Interrupt::Dynamic { message, .. } => message.clone(),
                     other => other.to_string(),

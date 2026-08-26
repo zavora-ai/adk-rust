@@ -21,8 +21,10 @@
 //! | `qdrant`     | `QdrantVectorStore` via qdrant-client     |
 //! | `lancedb`    | `LanceDBVectorStore` via lancedb          |
 //! | `pgvector`   | `PgVectorStore` via sqlx                  |
+//! | `agent-retrieval` | `AgentRetrievalStore` via Agent Retrieval (Vector Search 2.0) |
 //! | `surrealdb`  | `SurrealVectorStore` via surrealdb        |
-//! | `full`       | All of the above                          |
+//! | `vertex-rag` | Vertex AI RAG Engine client + retrieval tool |
+//! | `full`       | All of the above except `vertex-rag` (external infrastructure) |
 
 pub mod chunking;
 pub mod config;
@@ -35,6 +37,8 @@ pub mod reranker;
 pub mod tool;
 pub mod vectorstore;
 
+#[cfg(feature = "agent-retrieval")]
+pub mod agent_retrieval;
 #[cfg(feature = "gemini")]
 pub mod gemini;
 #[cfg(feature = "lancedb")]
@@ -47,7 +51,11 @@ pub mod pgvector;
 pub mod qdrant;
 #[cfg(feature = "surrealdb")]
 pub mod surrealdb;
+#[cfg(feature = "vertex-rag")]
+pub mod vertex_rag;
 
+#[cfg(feature = "agent-retrieval")]
+pub use agent_retrieval::{AgentRetrievalConfig, AgentRetrievalStore};
 pub use chunking::{Chunker, FixedSizeChunker, MarkdownChunker, RecursiveChunker};
 pub use config::{RagConfig, RagConfigBuilder};
 pub use document::{Chunk, Document, SearchResult};
@@ -71,3 +79,7 @@ pub use pgvector::PgVectorStore;
 pub use qdrant::QdrantVectorStore;
 #[cfg(feature = "surrealdb")]
 pub use surrealdb::SurrealVectorStore;
+#[cfg(feature = "vertex-rag")]
+pub use vertex_rag::{
+    RetrieveContextsRequest, VertexAiRagRetrievalTool, VertexRagConfig, VertexRagEngineClient,
+};
