@@ -142,6 +142,13 @@ pub enum Commands {
         command: DeployCommands,
     },
 
+    /// Google Agent Registry registration and discovery
+    #[cfg(feature = "vertex-agent-registry")]
+    Registry {
+        #[command(subcommand)]
+        command: RegistryCommands,
+    },
+
     /// Graph time-travel debugging commands
     Graph {
         #[command(subcommand)]
@@ -392,4 +399,159 @@ pub enum DeploySecretCommands {
         env: String,
         key: String,
     },
+}
+
+/// `adk-rust registry` — register self-hosted agents, external MCP servers,
+/// and bare endpoints in the Google Agent Registry, and search it.
+///
+/// Registrations are idempotent: re-running a `register-*` command patches
+/// the existing service instead of duplicating it. Manual registrations are
+/// **not lifecycle-synced** — Agent Runtime deployments register themselves
+/// automatically, so never register an engine you deployed with
+/// `deploy agent-engine`; doing so would duplicate it under a different URN
+/// namespace.
+#[cfg(feature = "vertex-agent-registry")]
+#[derive(Subcommand, Clone)]
+pub enum RegistryCommands {
+    /// Register (or idempotently update) a self-hosted agent
+    RegisterAgent(RegistryRegisterAgentArgs),
+    /// Register (or idempotently update) an external MCP server
+    RegisterMcp(RegistryRegisterMcpArgs),
+    /// Register (or idempotently update) a bare endpoint
+    RegisterEndpoint(RegistryRegisterEndpointArgs),
+    /// Search registered agents or MCP servers
+    Search(RegistrySearchArgs),
+}
+
+/// Project/location scope shared by every `registry` subcommand.
+#[cfg(feature = "vertex-agent-registry")]
+#[derive(clap::Args, Clone, Debug)]
+pub struct RegistryScopeArgs {
+    /// GCP project ID (falls back to GOOGLE_CLOUD_PROJECT). Cross-project
+    /// governance registration is supported by pointing this at the
+    /// governed project.
+    #[arg(long)]
+    pub project: Option<String>,
+    /// Registry location, e.g. `global` or a region (falls back to
+    /// GOOGLE_CLOUD_LOCATION). The `us`/`eu` multi-regions are unsupported.
+    #[arg(long)]
+    pub location: Option<String>,
+    /// Override the API origin. Advanced: for private endpoints and tests;
+    /// loopback HTTP is allowed, anything else must be HTTPS.
+    #[arg(long, hide = true)]
+    pub endpoint: Option<String>,
+}
+
+/// Arguments for `adk-rust registry register-agent`.
+#[cfg(feature = "vertex-agent-registry")]
+#[derive(clap::Args, Clone, Debug)]
+pub struct RegistryRegisterAgentArgs {
+    /// Service ID to create or update (4-63 characters)
+    #[arg(long)]
+    pub service_id: String,
+    /// Path to an A2A agent card JSON file (A2A_AGENT_CARD registration;
+    /// the registry derives the interfaces from the card)
+    #[arg(long, conflicts_with_all = ["url", "protocol"], required_unless_present = "url")]
+    pub card: Option<String>,
+    /// Agent endpoint URL (NO_SPEC registration)
+    #[arg(long, required_unless_present = "card")]
+    pub url: Option<String>,
+    /// Protocol binding served at --url
+    #[arg(long, value_enum, requires = "url")]
+    pub protocol: Option<RegistryProtocol>,
+    /// Display name (defaults to the service ID)
+    #[arg(long)]
+    pub display_name: Option<String>,
+    /// Description (omit to leave an existing description unchanged)
+    #[arg(long)]
+    pub description: Option<String>,
+    #[command(flatten)]
+    pub scope: RegistryScopeArgs,
+}
+
+/// Arguments for `adk-rust registry register-mcp`.
+#[cfg(feature = "vertex-agent-registry")]
+#[derive(clap::Args, Clone, Debug)]
+pub struct RegistryRegisterMcpArgs {
+    /// Service ID to create or update (4-63 characters)
+    #[arg(long)]
+    pub service_id: String,
+    /// Path to the server's tools/list result JSON (TOOL_SPEC registration;
+    /// the file is sent as-is, no server introspection is performed)
+    #[arg(long)]
+    pub tool_spec: String,
+    /// MCP endpoint URL
+    #[arg(long)]
+    pub url: String,
+    /// Protocol binding served at --url
+    #[arg(long, value_enum)]
+    pub protocol: Option<RegistryProtocol>,
+    /// Display name (defaults to the service ID)
+    #[arg(long)]
+    pub display_name: Option<String>,
+    /// Description (omit to leave an existing description unchanged)
+    #[arg(long)]
+    pub description: Option<String>,
+    #[command(flatten)]
+    pub scope: RegistryScopeArgs,
+}
+
+/// Arguments for `adk-rust registry register-endpoint`.
+#[cfg(feature = "vertex-agent-registry")]
+#[derive(clap::Args, Clone, Debug)]
+pub struct RegistryRegisterEndpointArgs {
+    /// Service ID to create or update (4-63 characters)
+    #[arg(long)]
+    pub service_id: String,
+    /// Endpoint URL
+    #[arg(long)]
+    pub url: String,
+    /// Protocol binding served at --url
+    #[arg(long, value_enum)]
+    pub protocol: Option<RegistryProtocol>,
+    /// Display name (defaults to the service ID)
+    #[arg(long)]
+    pub display_name: Option<String>,
+    /// Description (omit to leave an existing description unchanged)
+    #[arg(long)]
+    pub description: Option<String>,
+    #[command(flatten)]
+    pub scope: RegistryScopeArgs,
+}
+
+/// Arguments for `adk-rust registry search`.
+#[cfg(feature = "vertex-agent-registry")]
+#[derive(clap::Args, Clone, Debug)]
+pub struct RegistrySearchArgs {
+    /// Search expression (bare words match word-contains, field="value"
+    /// matches exactly, NOT/AND/OR and parentheses combine, `*` suffix
+    /// matches prefixes)
+    pub query: String,
+    /// Which registry component to search
+    #[arg(long = "type", value_enum, default_value = "agent")]
+    pub component_type: RegistrySearchType,
+    #[command(flatten)]
+    pub scope: RegistryScopeArgs,
+}
+
+/// Protocol bindings accepted by `--protocol`.
+#[cfg(feature = "vertex-agent-registry")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RegistryProtocol {
+    /// JSON-RPC over HTTP
+    Jsonrpc,
+    /// gRPC
+    Grpc,
+    /// REST-style JSON over HTTP
+    HttpJson,
+}
+
+/// Searchable registry components (endpoints have no search).
+#[cfg(feature = "vertex-agent-registry")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RegistrySearchType {
+    /// Search agents
+    Agent,
+    /// Search MCP servers
+    McpServer,
 }

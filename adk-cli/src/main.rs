@@ -1,6 +1,8 @@
 mod cli;
 mod deploy;
 mod graph;
+#[cfg(feature = "vertex-agent-registry")]
+mod registry;
 mod setup;
 mod skills;
 mod ultra;
@@ -95,6 +97,8 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Skills { command }) => skills::run(command),
         Some(Commands::Deploy { command }) => deploy::run(command).await,
+        #[cfg(feature = "vertex-agent-registry")]
+        Some(Commands::Registry { command }) => registry::run(command).await,
         Some(Commands::Graph { command }) => graph::run(command).await,
     }
 }

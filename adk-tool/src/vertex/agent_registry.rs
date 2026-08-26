@@ -18,10 +18,19 @@
 //!   with an AIP-160 filter.
 //!
 //! There is no content-level deduplication: registering the same agent twice
-//! under different service IDs creates two entries. For idempotent
-//! re-registration, search or get first, then patch the existing service with
-//! an `updateMask` (patching arbitrary entries is deliberately not exposed
-//! here).
+//! under different service IDs creates two entries.
+//! [`AgentRegistryClient::register_or_update_service`] is the sanctioned
+//! idempotent path over the client's **own** service ID: it fetches
+//! `services/{service_id}` first and patches only the changed fields.
+//! General mutation of arbitrary registry entries remains deliberately
+//! unexposed.
+//!
+//! > **Note:** manual registrations are **not lifecycle-synced** — the
+//! > registry never updates or removes them when the registered system
+//! > changes. Agent Runtime deployments register themselves automatically
+//! > with lifecycle sync; manually registering one would duplicate it under
+//! > a different URN namespace. The `us`/`eu` multi-regions are unsupported
+//! > as locations — use `global` or a specific region.
 //!
 //! [`AgentSearchTool`] packages discovery as an [`adk_core::Tool`] so an LLM
 //! agent can look up other agents, MCP servers, and endpoints at runtime.
@@ -54,7 +63,7 @@ use google_cloud_auth::credentials::Credentials;
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -285,17 +294,30 @@ pub enum McpServerSpecType {
     TypeUnspecified,
 }
 
-/// The MCP server spec carried by a writable service (read back only; this
-/// client registers agents, not MCP servers).
+/// The MCP server spec carried by a writable service.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerSpec {
     /// The spec kind.
     #[serde(rename = "type")]
     pub spec_type: McpServerSpecType,
-    /// The spec payload.
+    /// The spec payload — for [`McpServerSpecType::ToolSpec`], the server's
+    /// `tools/list` result JSON (at most 10 KB serialized).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<Value>,
+}
+
+impl McpServerSpec {
+    /// Creates a `TOOL_SPEC` spec from a caller-supplied `tools/list` result
+    /// JSON. The registry performs no introspection of the server.
+    pub fn tool_spec(content: Value) -> Self {
+        Self { spec_type: McpServerSpecType::ToolSpec, content: Some(content) }
+    }
+
+    /// Creates a `NO_SPEC` spec; interfaces are declared on the service.
+    pub fn no_spec() -> Self {
+        Self { spec_type: McpServerSpecType::NoSpec, content: None }
+    }
 }
 
 /// The declared kind of an endpoint spec on a service.
@@ -310,13 +332,21 @@ pub enum EndpointSpecType {
     TypeUnspecified,
 }
 
-/// The endpoint spec carried by a writable service (read back only).
+/// The endpoint spec carried by a writable service.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EndpointSpec {
     /// The spec kind.
     #[serde(rename = "type")]
     pub spec_type: EndpointSpecType,
+}
+
+impl EndpointSpec {
+    /// Creates a `NO_SPEC` spec — the only kind endpoints support;
+    /// interfaces are declared on the service.
+    pub fn no_spec() -> Self {
+        Self { spec_type: EndpointSpecType::NoSpec }
+    }
 }
 
 /// The writable service resource at `projects/*/locations/*/services/*`,
@@ -408,17 +438,142 @@ impl ServiceRegistration {
     }
 }
 
-/// The service fields sent on `services.create`; `serviceId` and `requestId`
-/// travel as query parameters, and output-only fields are never sent.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ServiceWriteBody {
-    display_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    interfaces: Vec<Interface>,
-    agent_spec: AgentSpec,
+/// The spec a [`ServiceUpsert`] registers — exactly one kind per service.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ServiceSpec {
+    /// Registers an agent (A2A agent card, or `NO_SPEC` plus interfaces).
+    Agent(AgentSpec),
+    /// Registers an external MCP server (`TOOL_SPEC` or `NO_SPEC`).
+    McpServer(McpServerSpec),
+    /// Registers a bare endpoint (`NO_SPEC` only).
+    Endpoint(EndpointSpec),
+}
+
+impl ServiceSpec {
+    /// The service field this spec serializes into.
+    fn wire_field(&self) -> &'static str {
+        match self {
+            Self::Agent(_) => "agentSpec",
+            Self::McpServer(_) => "mcpServerSpec",
+            Self::Endpoint(_) => "endpointSpec",
+        }
+    }
+
+    fn wire_value(&self) -> Value {
+        match self {
+            Self::Agent(spec) => json!(spec),
+            Self::McpServer(spec) => json!(spec),
+            Self::Endpoint(spec) => json!(spec),
+        }
+    }
+}
+
+/// A prepared service write for
+/// [`AgentRegistryClient::register_or_update_service`]: an agent, MCP
+/// server, or endpoint registration under one service ID.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServiceUpsert {
+    /// The service ID to create or update (4–63 characters; the last
+    /// resource-name segment).
+    pub service_id: String,
+    /// Human-readable display name (at most 63 characters).
+    pub display_name: String,
+    /// Human-readable description (at most 2048 characters). `None` leaves
+    /// an existing description untouched on update.
+    pub description: Option<String>,
+    /// Interfaces the service is reachable on. Must be empty when the spec
+    /// is an `A2A_AGENT_CARD` (the registry derives them from the card). An
+    /// empty list leaves existing interfaces untouched on update.
+    pub interfaces: Vec<Interface>,
+    /// The spec to register.
+    pub spec: ServiceSpec,
+}
+
+impl ServiceUpsert {
+    /// Creates an agent upsert with the given service ID, display name, and
+    /// agent spec.
+    pub fn agent(
+        service_id: impl Into<String>,
+        display_name: impl Into<String>,
+        spec: AgentSpec,
+    ) -> Self {
+        Self::new(service_id, display_name, ServiceSpec::Agent(spec))
+    }
+
+    /// Creates an MCP server upsert with the given service ID, display name,
+    /// and MCP server spec.
+    pub fn mcp_server(
+        service_id: impl Into<String>,
+        display_name: impl Into<String>,
+        spec: McpServerSpec,
+    ) -> Self {
+        Self::new(service_id, display_name, ServiceSpec::McpServer(spec))
+    }
+
+    /// Creates a bare-endpoint upsert with the given service ID and display
+    /// name. Endpoints support only `NO_SPEC`; add the URL via
+    /// [`with_interfaces`](Self::with_interfaces).
+    pub fn endpoint(service_id: impl Into<String>, display_name: impl Into<String>) -> Self {
+        Self::new(service_id, display_name, ServiceSpec::Endpoint(EndpointSpec::no_spec()))
+    }
+
+    fn new(
+        service_id: impl Into<String>,
+        display_name: impl Into<String>,
+        spec: ServiceSpec,
+    ) -> Self {
+        Self {
+            service_id: service_id.into(),
+            display_name: display_name.into(),
+            description: None,
+            interfaces: Vec::new(),
+            spec,
+        }
+    }
+
+    /// Sets the description.
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Sets the interfaces. Not valid with an `A2A_AGENT_CARD` spec, which
+    /// derives interfaces from the card.
+    #[must_use]
+    pub fn with_interfaces(mut self, interfaces: Vec<Interface>) -> Self {
+        self.interfaces = interfaces;
+        self
+    }
+
+    /// The service fields sent on writes; `serviceId`, `requestId`, and
+    /// `updateMask` travel as query parameters, and output-only fields are
+    /// never sent.
+    fn wire_fields(&self) -> Vec<(&'static str, Value)> {
+        let mut fields = vec![("displayName", json!(self.display_name))];
+        if let Some(description) = &self.description {
+            fields.push(("description", json!(description)));
+        }
+        if !self.interfaces.is_empty() {
+            fields.push(("interfaces", json!(self.interfaces)));
+        }
+        fields.push((self.spec.wire_field(), self.spec.wire_value()));
+        fields
+    }
+}
+
+impl From<ServiceRegistration> for ServiceUpsert {
+    fn from(registration: ServiceRegistration) -> Self {
+        let ServiceRegistration { service_id, display_name, description, interfaces, agent_spec } =
+            registration;
+        Self {
+            service_id,
+            display_name,
+            description,
+            interfaces,
+            spec: ServiceSpec::Agent(agent_spec),
+        }
+    }
 }
 
 /// A skill advertised by an [`Agent`].
@@ -1018,40 +1173,204 @@ impl AgentRegistryClient {
     /// transport failure, a non-success HTTP status, a failed or timed-out
     /// operation, or an unparseable response.
     pub async fn register_agent(&self, registration: ServiceRegistration) -> Result<Service> {
-        self.validate_registration(&registration)?;
+        let upsert = ServiceUpsert::from(registration);
+        self.validate_upsert(&upsert)?;
+        self.create_service(&upsert).await
+    }
+
+    /// Fetches the writable service at `{parent}/services/{service_id}`.
+    ///
+    /// Accepts a bare service ID or a full
+    /// `projects/*/locations/*/services/*` resource name. Returns `Ok(None)`
+    /// when the service does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on transport failure, a non-success HTTP status
+    /// other than 404, or an unparseable response.
+    pub async fn get_service(&self, service_id: &str) -> Result<Option<Service>> {
+        let path = if service_id.contains('/') {
+            self.validated_name(service_id, "/services/")?
+        } else {
+            format!("{}/services/{service_id}", self.parent())
+        };
+        let request = self.client.request(Method::GET, &path).await?;
+        match self.client.send_value_allow_not_found(request).await? {
+            Some(value) => Ok(Some(self.parse(value, "service")?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Registers a service, or idempotently updates it when it already
+    /// exists.
+    ///
+    /// Fetches `services/{service_id}` first. When absent, the service is
+    /// created exactly like [`register_agent`](Self::register_agent). When
+    /// present, only the changed fields are sent as
+    /// `PATCH {v1}/{name}?updateMask=...&requestId={uuid}` followed by an
+    /// operation wait — and when nothing changed, no write is issued at all
+    /// and the existing service is returned. A `None` description and an
+    /// empty interface list leave the existing values untouched.
+    ///
+    /// This is the sanctioned exception to the client's no-general-mutation
+    /// scoping: it only ever rewrites the service ID the caller supplied.
+    /// Changing the spec kind of an existing service (say, from an agent to
+    /// an MCP server) is rejected — delete the service through other tooling
+    /// and re-create it.
+    ///
+    /// > **Note:** manual registrations are **not lifecycle-synced**; re-run
+    /// > this upsert whenever the registered system changes.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use adk_tool::vertex::agent_registry::{
+    ///     AgentRegistryClient, AgentRegistryConfig, Interface, McpServerSpec, ProtocolBinding,
+    ///     ServiceUpsert,
+    /// };
+    /// use serde_json::json;
+    ///
+    /// # async fn demo() -> adk_core::Result<()> {
+    /// let client = AgentRegistryClient::new_with_adc(
+    ///     AgentRegistryConfig::new("my-project", "global"),
+    /// )?;
+    /// let service = client
+    ///     .register_or_update_service(
+    ///         ServiceUpsert::mcp_server(
+    ///             "ledger-mcp",
+    ///             "Ledger",
+    ///             McpServerSpec::tool_spec(json!({ "tools": [] })),
+    ///         )
+    ///         .with_interfaces(vec![
+    ///             Interface::new("https://ledger.example.com/mcp")
+    ///                 .with_protocol_binding(ProtocolBinding::HttpJson),
+    ///         ]),
+    ///     )
+    ///     .await?;
+    /// println!("registered {}", service.name);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error when the upsert violates the
+    /// documented constraints (see [`register_agent`](Self::register_agent))
+    /// or changes the spec kind of an existing service, and an error on
+    /// transport failure, a non-success HTTP status, a failed or timed-out
+    /// operation, or an unparseable response.
+    pub async fn register_or_update_service(
+        &self,
+        upsert: impl Into<ServiceUpsert>,
+    ) -> Result<Service> {
+        let upsert = upsert.into();
+        self.validate_upsert(&upsert)?;
+        match self.get_service(&upsert.service_id).await? {
+            None => self.create_service(&upsert).await,
+            Some(existing) => self.patch_service(existing, &upsert).await,
+        }
+    }
+
+    async fn create_service(&self, upsert: &ServiceUpsert) -> Result<Service> {
         let request_id = uuid::Uuid::new_v4().to_string();
         tracing::info!(
-            agent_registry.service_id = %registration.service_id,
+            agent_registry.service_id = %upsert.service_id,
             agent_registry.request_id = %request_id,
-            "registering agent service"
+            "registering service"
         );
-        let ServiceRegistration { service_id, display_name, description, interfaces, agent_spec } =
-            registration;
-        let body = ServiceWriteBody { display_name, description, interfaces, agent_spec };
+        let body: Map<String, Value> =
+            upsert.wire_fields().into_iter().map(|(key, value)| (key.to_string(), value)).collect();
         let request = self
             .client
             .request(Method::POST, &format!("{}/services", self.parent()))
             .await?
-            .query(&[("serviceId", service_id.as_str()), ("requestId", request_id.as_str())])
+            .query(&[("serviceId", upsert.service_id.as_str()), ("requestId", request_id.as_str())])
             .json(&body);
         let operation = self.client.send_value(request).await?;
+        self.wait_for_service(operation, "service create").await
+    }
+
+    async fn patch_service(&self, existing: Service, upsert: &ServiceUpsert) -> Result<Service> {
+        let changed = self.changed_fields(&existing, upsert)?;
+        if changed.is_empty() {
+            tracing::info!(
+                agent_registry.service_id = %upsert.service_id,
+                "service already matches; skipping update"
+            );
+            return Ok(existing);
+        }
+        let update_mask = changed.iter().map(|(key, _)| *key).collect::<Vec<_>>().join(",");
+        let request_id = uuid::Uuid::new_v4().to_string();
+        tracing::info!(
+            agent_registry.service_id = %upsert.service_id,
+            agent_registry.update_mask = %update_mask,
+            agent_registry.request_id = %request_id,
+            "updating service"
+        );
+        let body: Map<String, Value> =
+            changed.into_iter().map(|(key, value)| (key.to_string(), value)).collect();
+        let name = self.validated_name(&existing.name, "/services/")?;
+        let request = self
+            .client
+            .request(Method::PATCH, &name)
+            .await?
+            .query(&[("updateMask", update_mask.as_str()), ("requestId", request_id.as_str())])
+            .json(&body);
+        let operation = self.client.send_value(request).await?;
+        self.wait_for_service(operation, "service update").await
+    }
+
+    /// The subset of the upsert's wire fields that differ from the existing
+    /// service, or an error when the upsert changes the spec kind.
+    fn changed_fields(
+        &self,
+        existing: &Service,
+        upsert: &ServiceUpsert,
+    ) -> Result<Vec<(&'static str, Value)>> {
+        let existing_spec = match &upsert.spec {
+            ServiceSpec::Agent(_) => existing.agent_spec.as_ref().map(|spec| json!(spec)),
+            ServiceSpec::McpServer(_) => existing.mcp_server_spec.as_ref().map(|spec| json!(spec)),
+            ServiceSpec::Endpoint(_) => existing.endpoint_spec.as_ref().map(|spec| json!(spec)),
+        };
+        if existing_spec.is_none() {
+            return Err(self.client.errors().invalid_input(format!(
+                "service '{}' is registered with a different spec kind; the registry requires exactly one spec per service, so delete the service and re-register it instead of patching across kinds",
+                upsert.service_id,
+            )));
+        }
+        let mut changed = Vec::new();
+        for (key, value) in upsert.wire_fields() {
+            let matches_existing = match key {
+                "displayName" => existing.display_name.as_deref() == Some(&upsert.display_name),
+                "description" => existing.description == upsert.description,
+                "interfaces" => existing.interfaces == upsert.interfaces,
+                _ => existing_spec.as_ref() == Some(&value),
+            };
+            if !matches_existing {
+                changed.push((key, value));
+            }
+        }
+        Ok(changed)
+    }
+
+    async fn wait_for_service(&self, operation: Value, operation_kind: &str) -> Result<Service> {
         let response = self
             .poller
             .wait_for_operation(
                 &self.client,
                 operation,
-                "service create",
+                operation_kind,
                 true,
                 &self.operation_project,
                 &self.location,
             )
             .await?;
         let value = response.ok_or_else(|| {
-            self.client.errors().invalid_response(
-                "agent registry service create operation completed without a service payload",
-            )
+            self.client.errors().invalid_response(format!(
+                "agent registry {operation_kind} operation completed without a service payload",
+            ))
         })?;
-        self.parse(value, "created service")
+        self.parse(value, "service")
     }
 
     /// Fetches an agent by full resource name or by URN.
@@ -1217,21 +1536,21 @@ impl AgentRegistryClient {
         Ok(name.to_string())
     }
 
-    fn validate_registration(&self, registration: &ServiceRegistration) -> Result<()> {
+    fn validate_upsert(&self, upsert: &ServiceUpsert) -> Result<()> {
         let errors = self.client.errors();
-        let id_chars = registration.service_id.chars().count();
+        let id_chars = upsert.service_id.chars().count();
         if !(MIN_SERVICE_ID_CHARS..=MAX_SERVICE_ID_CHARS).contains(&id_chars) {
             return Err(errors.invalid_input(format!(
                 "service ID must be {MIN_SERVICE_ID_CHARS}-{MAX_SERVICE_ID_CHARS} characters, got {id_chars}",
             )));
         }
-        let display_name_chars = registration.display_name.chars().count();
+        let display_name_chars = upsert.display_name.chars().count();
         if display_name_chars > MAX_DISPLAY_NAME_CHARS {
             return Err(errors.invalid_input(format!(
                 "display name must be at most {MAX_DISPLAY_NAME_CHARS} characters, got {display_name_chars}",
             )));
         }
-        if let Some(description) = &registration.description {
+        if let Some(description) = &upsert.description {
             let description_chars = description.chars().count();
             if description_chars > MAX_DESCRIPTION_CHARS {
                 return Err(errors.invalid_input(format!(
@@ -1239,37 +1558,67 @@ impl AgentRegistryClient {
                 )));
             }
         }
-        match registration.agent_spec.spec_type {
-            AgentSpecType::A2aAgentCard => {
-                if !registration.interfaces.is_empty() {
+        let (content, content_expected) = match &upsert.spec {
+            ServiceSpec::Agent(spec) => match spec.spec_type {
+                AgentSpecType::A2aAgentCard => {
+                    if !upsert.interfaces.is_empty() {
+                        return Err(errors.invalid_input(
+                            "interfaces must be empty when the agent spec is A2A_AGENT_CARD; the registry derives them from the agent card",
+                        ));
+                    }
+                    if spec.content.is_none() {
+                        return Err(errors
+                            .invalid_input("an A2A_AGENT_CARD agent spec requires card content"));
+                    }
+                    (spec.content.as_ref(), true)
+                }
+                AgentSpecType::NoSpec => (spec.content.as_ref(), false),
+                AgentSpecType::TypeUnspecified => {
                     return Err(errors.invalid_input(
-                        "interfaces must be empty when the agent spec is A2A_AGENT_CARD; the registry derives them from the agent card",
+                        "agent spec type must be NO_SPEC or A2A_AGENT_CARD; construct it with AgentSpec::no_spec or AgentSpec::a2a_agent_card",
                     ));
                 }
-                let Some(content) = &registration.agent_spec.content else {
-                    return Err(
-                        errors.invalid_input("an A2A_AGENT_CARD agent spec requires card content")
-                    );
-                };
+            },
+            ServiceSpec::McpServer(spec) => match spec.spec_type {
+                McpServerSpecType::ToolSpec => {
+                    if spec.content.is_none() {
+                        return Err(errors.invalid_input(
+                            "a TOOL_SPEC MCP server spec requires the server's tools/list result as content",
+                        ));
+                    }
+                    (spec.content.as_ref(), true)
+                }
+                McpServerSpecType::NoSpec => (spec.content.as_ref(), false),
+                McpServerSpecType::TypeUnspecified => {
+                    return Err(errors.invalid_input(
+                        "MCP server spec type must be NO_SPEC or TOOL_SPEC; construct it with McpServerSpec::no_spec or McpServerSpec::tool_spec",
+                    ));
+                }
+            },
+            ServiceSpec::Endpoint(spec) => match spec.spec_type {
+                EndpointSpecType::NoSpec => (None, false),
+                EndpointSpecType::TypeUnspecified => {
+                    return Err(errors.invalid_input(
+                        "endpoint spec type must be NO_SPEC; construct it with EndpointSpec::no_spec",
+                    ));
+                }
+            },
+        };
+        match (content, content_expected) {
+            (Some(content), true) => {
                 let content_bytes = content.to_string().len();
                 if content_bytes > MAX_SPEC_CONTENT_BYTES {
                     return Err(errors.invalid_input(format!(
-                        "agent spec content must serialize to at most {MAX_SPEC_CONTENT_BYTES} bytes, got {content_bytes}",
+                        "spec content must serialize to at most {MAX_SPEC_CONTENT_BYTES} bytes, got {content_bytes}; trim the card or tool list (descriptions count toward the limit) and retry",
                     )));
                 }
             }
-            AgentSpecType::NoSpec => {
-                if registration.agent_spec.content.is_some() {
-                    return Err(errors.invalid_input(
-                        "agent spec content is only valid with an A2A_AGENT_CARD spec",
-                    ));
-                }
-            }
-            AgentSpecType::TypeUnspecified => {
+            (Some(_), false) => {
                 return Err(errors.invalid_input(
-                    "agent spec type must be NO_SPEC or A2A_AGENT_CARD; construct it with AgentSpec::no_spec or AgentSpec::a2a_agent_card",
+                    "spec content is only valid with an A2A_AGENT_CARD or TOOL_SPEC spec",
                 ));
             }
+            (None, _) => {}
         }
         Ok(())
     }
@@ -1541,13 +1890,58 @@ mod tests {
             ),
         ];
         for (registration, expected) in cases {
-            let error = client.validate_registration(&registration).unwrap_err();
+            let error = client.validate_upsert(&registration.into()).unwrap_err();
             assert!(
                 error.message.contains(expected),
                 "expected '{expected}' in: {}",
                 error.message,
             );
         }
+
+        // The MCP and endpoint kinds enforce the same spec rules.
+        let mcp_cases = [
+            (
+                ServiceUpsert::mcp_server(
+                    "abcd",
+                    "Server",
+                    McpServerSpec { spec_type: McpServerSpecType::ToolSpec, content: None },
+                ),
+                "requires the server's tools/list result",
+            ),
+            (
+                ServiceUpsert::mcp_server(
+                    "abcd",
+                    "Server",
+                    McpServerSpec::tool_spec(json!({ "pad": "x".repeat(11 * 1024) })),
+                ),
+                "10240 bytes",
+            ),
+            (
+                ServiceUpsert::mcp_server(
+                    "abcd",
+                    "Server",
+                    McpServerSpec {
+                        spec_type: McpServerSpecType::NoSpec,
+                        content: Some(json!({})),
+                    },
+                ),
+                "only valid with an A2A_AGENT_CARD or TOOL_SPEC",
+            ),
+        ];
+        for (upsert, expected) in mcp_cases {
+            let error = client.validate_upsert(&upsert).unwrap_err();
+            assert!(
+                error.message.contains(expected),
+                "expected '{expected}' in: {}",
+                error.message,
+            );
+        }
+        client
+            .validate_upsert(
+                &ServiceUpsert::endpoint("abcd", "Endpoint")
+                    .with_interfaces(vec![Interface::new("https://a.example.com")]),
+            )
+            .expect("a NO_SPEC endpoint with interfaces is valid");
     }
 
     #[test]

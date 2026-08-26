@@ -68,6 +68,9 @@ all-providers = ["gemini", "openai", "anthropic", "deepseek", "groq", "ollama"]
 # `adk-rust deploy agent-engine`: deploy a BYOC container as a Gemini
 # Enterprise Agent Platform engine (host-side tooling)
 gcp-deploy = ["adk-deploy/gcp"]
+# `adk-rust registry ...`: register self-hosted agents, external MCP servers,
+# and bare endpoints in the Google Agent Registry (host-side tooling)
+vertex-agent-registry = ["adk-tool/vertex-agent-registry"]
 telemetry-otlp = ["adk-telemetry/otlp"]
 # Prompt optimization CLI command (adk optimize)
 optimize = []

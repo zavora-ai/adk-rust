@@ -12,8 +12,8 @@ use adk_core::ToolContext;
 use adk_tool::vertex::agent_registry::{
     Agent, AgentCard, AgentProtocol, AgentRegistryClient, AgentRegistryConfig, AgentSearchTool,
     AgentSkill, AgentSpec, AgentSpecType, Interface, ListEndpointsRequest, McpServer,
-    McpServerTool, McpToolAnnotations, ProtocolBinding, SearchComponent, SearchRequest, Service,
-    ServiceRegistration,
+    McpServerSpec, McpServerTool, McpToolAnnotations, ProtocolBinding, SearchComponent,
+    SearchRequest, Service, ServiceRegistration, ServiceUpsert,
 };
 use adk_tool::{SimpleToolContext, Tool};
 use axum::{
@@ -676,6 +676,305 @@ async fn test_list_endpoints_paginates_with_filter() {
     );
     assert!(response.endpoints.is_empty());
     assert_eq!(response.next_page_token.as_deref(), Some("page-2"));
+
+    server.abort();
+    let _ = server.await;
+}
+
+// ===== register_or_update_service (idempotent upsert) =====
+
+const LEDGER_SERVICE_PATH: &str = "/v1/projects/test-project/locations/global/services/ledger-mcp";
+
+fn ledger_upsert() -> ServiceUpsert {
+    ServiceUpsert::mcp_server(
+        "ledger-mcp",
+        "Ledger",
+        McpServerSpec::tool_spec(json!({ "tools": [{ "name": "post_entry" }] })),
+    )
+    .with_description("Bookkeeping tools.")
+    .with_interfaces(vec![
+        Interface::new("https://ledger.example.com/mcp")
+            .with_protocol_binding(ProtocolBinding::HttpJson),
+    ])
+}
+
+/// The wire form of [`ledger_upsert`], as stored and returned by the mock.
+fn ledger_service_json() -> Value {
+    json!({
+        "name": "projects/test-project/locations/global/services/ledger-mcp",
+        "displayName": "Ledger",
+        "description": "Bookkeeping tools.",
+        "interfaces": [
+            { "url": "https://ledger.example.com/mcp", "protocolBinding": "HTTP_JSON" },
+        ],
+        "mcpServerSpec": {
+            "type": "TOOL_SPEC",
+            "content": { "tools": [{ "name": "post_entry" }] },
+        },
+        "registryResource": "projects/test-project/locations/global/mcpServers/ledger",
+        "createTime": "2026-01-01T00:00:00Z",
+        "updateTime": "2026-01-01T00:00:00Z",
+    })
+}
+
+fn ledger_service() -> Service {
+    Service {
+        name: "projects/test-project/locations/global/services/ledger-mcp".into(),
+        display_name: Some("Ledger".into()),
+        description: Some("Bookkeeping tools.".into()),
+        interfaces: vec![
+            Interface::new("https://ledger.example.com/mcp")
+                .with_protocol_binding(ProtocolBinding::HttpJson),
+        ],
+        mcp_server_spec: Some(McpServerSpec::tool_spec(
+            json!({ "tools": [{ "name": "post_entry" }] }),
+        )),
+        registry_resource: Some("projects/test-project/locations/global/mcpServers/ledger".into()),
+        create_time: Some("2026-01-01T00:00:00Z".into()),
+        update_time: Some("2026-01-01T00:00:00Z".into()),
+        ..Service::default()
+    }
+}
+
+#[tokio::test]
+async fn test_upsert_creates_when_the_service_is_absent() {
+    let (state, client, server) = test_client().await;
+    // No GET fixture registered: the mock's 404 is the "absent" signal.
+    let operation_path = "/v1/projects/test-project/locations/global/operations/op-2";
+    register_fixture(
+        &state,
+        "POST",
+        SERVICES_PATH,
+        StatusCode::OK,
+        json!({
+            "name": "projects/test-project/locations/global/operations/op-2",
+            "done": false,
+        }),
+    )
+    .await;
+    register_fixture(
+        &state,
+        "GET",
+        operation_path,
+        StatusCode::OK,
+        json!({
+            "name": "projects/test-project/locations/global/operations/op-2",
+            "done": true,
+            "response": ledger_service_json(),
+        }),
+    )
+    .await;
+
+    let service = client
+        .register_or_update_service(ledger_upsert())
+        .await
+        .expect("create-path upsert should succeed");
+
+    let requests = captured(&state).await;
+    assert_eq!(requests.len(), 3, "expected get + create + poll, got {requests:?}");
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, LEDGER_SERVICE_PATH);
+    let create = &requests[1];
+    assert_eq!(create.method, "POST");
+    assert_eq!(create.path, SERVICES_PATH);
+    assert_eq!(create.query.get("serviceId").map(String::as_str), Some("ledger-mcp"));
+    uuid::Uuid::parse_str(create.query.get("requestId").expect("requestId query param"))
+        .expect("requestId must be a UUID");
+    assert_eq!(
+        create.body,
+        Some(json!({
+            "displayName": "Ledger",
+            "description": "Bookkeeping tools.",
+            "interfaces": [
+                { "url": "https://ledger.example.com/mcp", "protocolBinding": "HTTP_JSON" },
+            ],
+            "mcpServerSpec": {
+                "type": "TOOL_SPEC",
+                "content": { "tools": [{ "name": "post_entry" }] },
+            },
+        })),
+    );
+    assert_eq!(requests[2].path, operation_path);
+
+    assert_eq!(service, ledger_service());
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn test_upsert_patches_only_the_changed_fields() {
+    let (state, client, server) = test_client().await;
+    // The stored service has a stale description and tool list; display name
+    // and interfaces already match the upsert.
+    let mut stored = ledger_service_json();
+    stored["description"] = json!("Old description.");
+    stored["mcpServerSpec"]["content"] = json!({ "tools": [] });
+    register_fixture(&state, "GET", LEDGER_SERVICE_PATH, StatusCode::OK, stored).await;
+
+    let operation_path = "/v1/projects/test-project/locations/global/operations/op-3";
+    register_fixture(
+        &state,
+        "PATCH",
+        LEDGER_SERVICE_PATH,
+        StatusCode::OK,
+        json!({
+            "name": "projects/test-project/locations/global/operations/op-3",
+            "done": false,
+        }),
+    )
+    .await;
+    register_fixture(
+        &state,
+        "GET",
+        operation_path,
+        StatusCode::OK,
+        json!({
+            "name": "projects/test-project/locations/global/operations/op-3",
+            "done": true,
+            "response": ledger_service_json(),
+        }),
+    )
+    .await;
+
+    let service = client
+        .register_or_update_service(ledger_upsert())
+        .await
+        .expect("patch-path upsert should succeed");
+
+    let requests = captured(&state).await;
+    assert_eq!(requests.len(), 3, "expected get + patch + poll, got {requests:?}");
+    let patch = &requests[1];
+    assert_eq!(patch.method, "PATCH");
+    assert_eq!(patch.path, LEDGER_SERVICE_PATH);
+    assert_eq!(
+        patch.query.get("updateMask").map(String::as_str),
+        Some("description,mcpServerSpec"),
+    );
+    uuid::Uuid::parse_str(patch.query.get("requestId").expect("requestId query param"))
+        .expect("requestId must be a UUID");
+    // Only the changed fields ride in the patch body.
+    assert_eq!(
+        patch.body,
+        Some(json!({
+            "description": "Bookkeeping tools.",
+            "mcpServerSpec": {
+                "type": "TOOL_SPEC",
+                "content": { "tools": [{ "name": "post_entry" }] },
+            },
+        })),
+    );
+
+    assert_eq!(service, ledger_service());
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn test_upsert_skips_the_write_when_nothing_changed() {
+    let (state, client, server) = test_client().await;
+    register_fixture(&state, "GET", LEDGER_SERVICE_PATH, StatusCode::OK, ledger_service_json())
+        .await;
+
+    let service = client
+        .register_or_update_service(ledger_upsert())
+        .await
+        .expect("no-op upsert should succeed");
+
+    let requests = captured(&state).await;
+    assert_eq!(requests.len(), 1, "an unchanged upsert must issue no write, got {requests:?}");
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(service, ledger_service());
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn test_upsert_rejects_spec_kind_changes() {
+    let (state, client, server) = test_client().await;
+    // The stored service is an agent; the upsert tries to make it an MCP server.
+    register_fixture(
+        &state,
+        "GET",
+        LEDGER_SERVICE_PATH,
+        StatusCode::OK,
+        json!({
+            "name": "projects/test-project/locations/global/services/ledger-mcp",
+            "displayName": "Ledger",
+            "agentSpec": { "type": "A2A_AGENT_CARD", "content": { "name": "Ledger" } },
+        }),
+    )
+    .await;
+
+    let error = client
+        .register_or_update_service(ledger_upsert())
+        .await
+        .expect_err("spec kind changes must be rejected");
+    assert!(error.message.contains("different spec kind"), "unexpected error: {}", error.message,);
+    assert_eq!(captured(&state).await.len(), 1, "no write may be issued");
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn test_get_service_maps_absent_services_to_none() {
+    let (state, client, server) = test_client().await;
+
+    let missing = client.get_service("ledger-mcp").await.expect("get should succeed");
+    assert!(missing.is_none());
+
+    register_fixture(&state, "GET", LEDGER_SERVICE_PATH, StatusCode::OK, ledger_service_json())
+        .await;
+    let found = client.get_service("ledger-mcp").await.expect("get should succeed");
+    assert_eq!(found, Some(ledger_service()));
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn test_register_agent_still_creates_unconditionally() {
+    // register_agent keeps its create-only contract: no lookup first.
+    let (state, client, server) = test_client().await;
+    let operation_path = "/v1/projects/test-project/locations/global/operations/op-4";
+    register_fixture(
+        &state,
+        "POST",
+        SERVICES_PATH,
+        StatusCode::OK,
+        json!({
+            "name": "projects/test-project/locations/global/operations/op-4",
+            "done": false,
+        }),
+    )
+    .await;
+    register_fixture(
+        &state,
+        "GET",
+        operation_path,
+        StatusCode::OK,
+        json!({
+            "name": "projects/test-project/locations/global/operations/op-4",
+            "done": true,
+            "response": { "name": "projects/test-project/locations/global/services/a-svc" },
+        }),
+    )
+    .await;
+
+    client
+        .register_agent(ServiceRegistration::new(
+            "a-svc",
+            "Agent",
+            AgentSpec::a2a_agent_card(json!({ "name": "Agent" })),
+        ))
+        .await
+        .expect("register should succeed");
+
+    let requests = captured(&state).await;
+    assert_eq!(requests[0].method, "POST", "register_agent must not look up first");
 
     server.abort();
     let _ = server.await;
