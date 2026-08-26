@@ -79,6 +79,9 @@ pub mod junit_reporter;
 #[cfg(feature = "statistics")]
 pub mod ab_comparator;
 
+#[cfg(feature = "vertex-eval")]
+pub mod vertex;
+
 // Re-exports
 pub use criteria::{
     EvaluationCriteria, ResponseMatchConfig, Rubric, RubricConfig, ToolTrajectoryConfig,
@@ -117,6 +120,12 @@ pub use junit_reporter::JunitReporter;
 
 #[cfg(feature = "statistics")]
 pub use ab_comparator::AbComparator;
+
+#[cfg(feature = "vertex-eval")]
+pub use vertex::{
+    AutoraterConfig, PointwiseMetricResult, PointwiseMetricSpec, TrajectoryMetric,
+    VertexEvalClient, VertexEvalConfig, VertexEvalJudge,
+};
 
 /// Prelude for convenient imports
 pub mod prelude {

@@ -31,6 +31,8 @@ mod index;
 mod injector;
 mod model;
 mod parser;
+#[cfg(feature = "vertex-skill-registry")]
+pub mod registry;
 mod select;
 mod writer;
 

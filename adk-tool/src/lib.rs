@@ -102,6 +102,9 @@ pub mod sampling;
 #[cfg(feature = "example-store")]
 pub mod example_store;
 
+#[cfg(feature = "vertex-agent-registry")]
+pub mod vertex;
+
 pub use adk_core::{AdkError, Result, Tool, ToolContext, Toolset};
 pub use adk_rust_macros::tool;
 
@@ -136,6 +139,8 @@ pub use stateful_tool::StatefulTool;
 pub use toolset::{
     BasicToolset, FilteredToolset, MergedToolset, PrefixedToolset, string_predicate,
 };
+#[cfg(feature = "vertex-agent-registry")]
+pub use vertex::agent_registry::{AgentRegistryClient, AgentRegistryConfig, AgentSearchTool};
 
 #[cfg(feature = "code")]
 pub use code_execution::CodeTool;
