@@ -256,6 +256,54 @@ pub enum SkillsCommands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Search the Vertex AI Skill Registry (read-only, v1beta1 Preview)
+    #[cfg(feature = "vertex-skill-registry")]
+    Search {
+        /// Query text for semantic search over skill names and descriptions
+        query: String,
+        /// Maximum results (server default 10, max 100)
+        #[arg(long)]
+        top_k: Option<u32>,
+        /// Google Cloud project ID (defaults to $GOOGLE_CLOUD_PROJECT)
+        #[arg(long)]
+        project: Option<String>,
+        /// GCP region: us-central1, europe-west4, or us-east5 (defaults to
+        /// $GOOGLE_CLOUD_LOCATION)
+        #[arg(long)]
+        location: Option<String>,
+        /// Override the API origin. Advanced: for private endpoints and
+        /// tests; must be a bare HTTPS (or loopback HTTP) origin.
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// Output as JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Pull a skill package from the Vertex AI Skill Registry into a local
+    /// skills directory (read-only against the registry; never publishes)
+    #[cfg(feature = "vertex-skill-registry")]
+    Pull {
+        /// Skill ID or full projects/*/locations/*/skills/* resource name
+        name: String,
+        /// Revision ID to pin (default: the latest revision)
+        #[arg(long)]
+        revision: Option<String>,
+        /// Directory to materialize the skill under (one subdirectory per
+        /// skill)
+        #[arg(long, default_value = ".skills")]
+        dir: String,
+        /// Google Cloud project ID (defaults to $GOOGLE_CLOUD_PROJECT)
+        #[arg(long)]
+        project: Option<String>,
+        /// GCP region: us-central1, europe-west4, or us-east5 (defaults to
+        /// $GOOGLE_CLOUD_LOCATION)
+        #[arg(long)]
+        location: Option<String>,
+        /// Override the API origin. Advanced: for private endpoints and
+        /// tests; must be a bare HTTPS (or loopback HTTP) origin.
+        #[arg(long)]
+        endpoint: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Clone)]

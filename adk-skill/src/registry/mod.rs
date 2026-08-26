@@ -35,6 +35,8 @@
 
 mod client;
 pub mod extract;
+mod load;
+mod tool;
 
 pub use client::{
     ListSkillRevisionsResponse, ListSkillsResponse, RetrievedSkill, Skill, SkillContent,
@@ -44,3 +46,7 @@ pub use extract::{
     MAX_ARCHIVE_BYTES, MAX_COMPRESSION_RATIO, MAX_DIRECTORY_DEPTH, MAX_ENTRIES,
     MAX_UNCOMPRESSED_BYTES, extract_skill_archive, extract_skill_archive_to_dir,
 };
+pub use load::{
+    RegistrySkillFilter, RegistrySkillSelector, load_skill_index_from_registry, merge_skill_indexes,
+};
+pub use tool::SkillSearchTool;

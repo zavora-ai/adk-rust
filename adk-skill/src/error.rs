@@ -24,6 +24,12 @@ pub enum SkillError {
     IndexError(String),
 
     // ===== Skill Registry payloads (feature `vertex-skill-registry`) =====
+    /// A Skill Registry request failed; the inner error carries the
+    /// `skill.registry.*` code and category.
+    #[cfg(feature = "vertex-skill-registry")]
+    #[error("skill registry request failed: {0}")]
+    Registry(Box<adk_core::AdkError>),
+
     /// The `zippedFilesystem` field was not valid standard base64.
     #[cfg(feature = "vertex-skill-registry")]
     #[error(
@@ -111,9 +117,23 @@ pub enum SkillError {
 
 pub type SkillResult<T> = Result<T, SkillError>;
 
+#[cfg(feature = "vertex-skill-registry")]
+impl From<adk_core::AdkError> for SkillError {
+    fn from(err: adk_core::AdkError) -> Self {
+        SkillError::Registry(Box::new(err))
+    }
+}
+
 impl From<SkillError> for adk_core::AdkError {
     fn from(err: SkillError) -> Self {
         use adk_core::{ErrorCategory, ErrorComponent};
+        // Registry errors already carry their component, category, and
+        // `skill.registry.*` code; pass them through unchanged.
+        #[cfg(feature = "vertex-skill-registry")]
+        let err = match err {
+            SkillError::Registry(inner) => return *inner,
+            other => other,
+        };
         let (category, code) = match &err {
             SkillError::Io(_) => (ErrorCategory::Internal, "skill.io"),
             SkillError::Yaml(_) => (ErrorCategory::InvalidInput, "skill.yaml_parse"),
@@ -126,6 +146,8 @@ impl From<SkillError> for adk_core::AdkError {
             }
             SkillError::Validation(_) => (ErrorCategory::InvalidInput, "skill.validation"),
             SkillError::IndexError(_) => (ErrorCategory::Internal, "skill.index"),
+            #[cfg(feature = "vertex-skill-registry")]
+            SkillError::Registry(_) => unreachable!("Registry errors return early above"),
             // Decode and checksum failures are corrupt upstream payloads;
             // archive-rule violations are rejected input data.
             #[cfg(feature = "vertex-skill-registry")]

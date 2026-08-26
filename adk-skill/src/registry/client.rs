@@ -411,6 +411,11 @@ impl SkillRegistryClient {
         &self.parent
     }
 
+    /// The consumer-branded error context (for sibling registry modules).
+    pub(crate) fn error_context(&self) -> &GcpErrorContext {
+        self.client.errors()
+    }
+
     /// Resolves a bare skill ID or full resource name to a full name.
     fn skill_path(&self, skill: &str) -> String {
         if skill.contains('/') {
@@ -579,7 +584,45 @@ impl SkillRegistryClient {
     /// status, an unparseable response body, a missing or undecodable
     /// payload, a digest mismatch, or any archive-safety violation.
     pub async fn fetch_skill_content(&self, skill: &str) -> Result<SkillContent> {
-        let mut skill = self.get_skill(skill).await?;
+        let skill = self.get_skill(skill).await?;
+        self.content_from_skill(skill)
+    }
+
+    /// Downloads, verifies, and safely extracts a pinned revision's content.
+    ///
+    /// Runs [`get_skill_revision`](Self::get_skill_revision) and applies the
+    /// same decode → SHA-256 verify → safe-extract pipeline as
+    /// [`fetch_skill_content`](Self::fetch_skill_content) to the embedded
+    /// skill snapshot.
+    ///
+    /// > **Note:** whether revision snapshots carry `zippedFilesystem` is
+    /// > undocumented (see [`SkillRevision::skill`]). When the snapshot has
+    /// > no payload this returns an invalid-response error; fall back to
+    /// > [`fetch_skill_content`](Self::fetch_skill_content) for the latest
+    /// > revision's payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on transport failure, timeout, a non-success HTTP
+    /// status, an unparseable response body, a missing or undecodable
+    /// payload, a digest mismatch, or any archive-safety violation.
+    pub async fn fetch_skill_revision_content(
+        &self,
+        skill: &str,
+        revision: &str,
+    ) -> Result<SkillContent> {
+        let revision = self.get_skill_revision(skill, revision).await?;
+        let snapshot = revision.skill.ok_or_else(|| {
+            self.client.errors().invalid_response(format!(
+                "revision `{}` carried no embedded skill snapshot; fetch the latest payload with fetch_skill_content instead",
+                revision.name,
+            ))
+        })?;
+        self.content_from_skill(snapshot)
+    }
+
+    /// Decodes, digest-verifies, and safely extracts a skill's payload.
+    fn content_from_skill(&self, mut skill: Skill) -> Result<SkillContent> {
         let encoded = skill
             .zipped_filesystem
             .take()

@@ -1,11 +1,50 @@
 use crate::discovery::{discover_instruction_files, discover_instruction_files_with_extras};
 use crate::error::SkillResult;
-use crate::model::{SkillDocument, SkillIndex};
+use crate::model::{ParsedSkill, SkillDocument, SkillIndex};
 use crate::parser::parse_instruction_markdown;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
+
+/// Builds an indexed [`SkillDocument`] from a parsed skill and its raw
+/// content, assigning the content-hash-based identifier.
+///
+/// Shared by the filesystem loaders and the registry loader so documents
+/// from both sources are constructed identically.
+pub(crate) fn build_document(
+    parsed: ParsedSkill,
+    path: PathBuf,
+    content: &str,
+    last_modified: Option<i64>,
+) -> SkillDocument {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+
+    let id =
+        format!("{}-{}", normalize_id(&parsed.name), &hash.chars().take(12).collect::<String>());
+
+    SkillDocument {
+        id,
+        name: parsed.name,
+        description: parsed.description,
+        version: parsed.version,
+        license: parsed.license,
+        compatibility: parsed.compatibility,
+        tags: parsed.tags,
+        allowed_tools: parsed.allowed_tools,
+        references: parsed.references,
+        trigger: parsed.trigger,
+        hint: parsed.hint,
+        metadata: parsed.metadata,
+        body: parsed.body,
+        path,
+        hash,
+        last_modified,
+        triggers: parsed.triggers,
+    }
+}
 
 /// Loads a [`SkillIndex`] by discovering and parsing all instruction files under `root`.
 ///
@@ -26,41 +65,13 @@ pub fn load_skill_index(root: impl AsRef<Path>) -> SkillResult<SkillIndex> {
             Err(_) => continue,
         };
 
-        let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
-        let hash = format!("{:x}", hasher.finalize());
-
         let last_modified = fs::metadata(&path)
             .ok()
             .and_then(|meta| meta.modified().ok())
             .and_then(|ts| ts.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64);
 
-        let id = format!(
-            "{}-{}",
-            normalize_id(&parsed.name),
-            &hash.chars().take(12).collect::<String>()
-        );
-
-        skills.push(SkillDocument {
-            id,
-            name: parsed.name,
-            description: parsed.description,
-            version: parsed.version,
-            license: parsed.license,
-            compatibility: parsed.compatibility,
-            tags: parsed.tags,
-            allowed_tools: parsed.allowed_tools,
-            references: parsed.references,
-            trigger: parsed.trigger,
-            hint: parsed.hint,
-            metadata: parsed.metadata,
-            body: parsed.body,
-            path,
-            hash,
-            last_modified,
-            triggers: parsed.triggers,
-        });
+        skills.push(build_document(parsed, path, &content, last_modified));
     }
 
     skills.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
@@ -93,41 +104,13 @@ pub fn load_skill_index_with_extras(
             Err(_) => continue,
         };
 
-        let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
-        let hash = format!("{:x}", hasher.finalize());
-
         let last_modified = fs::metadata(&path)
             .ok()
             .and_then(|meta| meta.modified().ok())
             .and_then(|ts| ts.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64);
 
-        let id = format!(
-            "{}-{}",
-            normalize_id(&parsed.name),
-            &hash.chars().take(12).collect::<String>()
-        );
-
-        skills.push(SkillDocument {
-            id,
-            name: parsed.name,
-            description: parsed.description,
-            version: parsed.version,
-            license: parsed.license,
-            compatibility: parsed.compatibility,
-            tags: parsed.tags,
-            allowed_tools: parsed.allowed_tools,
-            references: parsed.references,
-            trigger: parsed.trigger,
-            hint: parsed.hint,
-            metadata: parsed.metadata,
-            body: parsed.body,
-            path,
-            hash,
-            last_modified,
-            triggers: parsed.triggers,
-        });
+        skills.push(build_document(parsed, path, &content, last_modified));
     }
 
     // Deduplicate by name, preferring project-local skills (.skills/, .claude/skills/)

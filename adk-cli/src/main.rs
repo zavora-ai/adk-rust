@@ -93,7 +93,7 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Some(Commands::Skills { command }) => skills::run(command),
+        Some(Commands::Skills { command }) => skills::run(command).await,
         Some(Commands::Deploy { command }) => deploy::run(command).await,
         Some(Commands::Graph { command }) => graph::run(command).await,
     }

@@ -71,6 +71,9 @@ gcp-deploy = ["adk-deploy/gcp"]
 telemetry-otlp = ["adk-telemetry/otlp"]
 # Prompt optimization CLI command (adk optimize)
 optimize = []
+# `adk-rust skills search` / `skills pull`: read-only Vertex AI Skill
+# Registry commands (lifecycle stays with platform tooling)
+vertex-skill-registry = ["adk-skill/vertex-skill-registry"]
 # SQLite checkpointer for graph time-travel commands
 graph-sqlite = ["adk-graph/sqlite"]
 
@@ -79,3 +82,7 @@ async-trait.workspace = true
 tower = { version = "0.5", features = ["util"] }
 axum = "0.8"
 google-cloud-auth = { version = "1.8", default-features = false, features = ["default-rustls-provider"] }
+tempfile = "3"
+zip = { workspace = true }
+base64 = "0.22"
+sha2 = "0.10"
