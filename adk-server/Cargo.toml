@@ -22,6 +22,9 @@ adk-skill.workspace = true
 adk-artifact.workspace = true
 # Optional: Agent Engine dispatch surface (memory class methods)
 adk-memory = { workspace = true, optional = true }
+adk-gcp = { workspace = true, optional = true }
+adk-tool = { workspace = true, optional = true }
+google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
 adk-telemetry.workspace = true
 tokio = { workspace = true, features = ["sync", "signal", "macros", "rt", "time"] }
 tokio-stream.workspace = true
@@ -74,6 +77,15 @@ background = ["dep:cron"]
 # Enable the Gemini Enterprise Agent Platform (ReasoningEngine) dispatch surface
 # and the turnkey serve_agent_engine entrypoint (tokio/net for the listener)
 agent-engine = ["dep:adk-memory", "tokio/net"]
+# Remote ReasoningEngine invocation: call other deployed Agent Engine agents
+# as sub-agents over reasoningEngines:streamQuery (alt=sse)
+vertex-remote-engine = [
+    "agent-engine",
+    "dep:adk-gcp",
+    "dep:adk-tool",
+    "adk-tool/vertex-agent-registry",
+    "dep:google-cloud-auth",
+]
 
 [dev-dependencies]
 async-stream.workspace = true

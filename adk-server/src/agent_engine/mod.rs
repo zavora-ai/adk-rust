@@ -29,6 +29,9 @@ mod entrypoint;
 mod envelope;
 mod operations;
 
+#[cfg(feature = "vertex-remote-engine")]
+pub mod remote;
+
 pub use entrypoint::{AgentEngineOptions, build_agent_engine_app, serve_agent_engine};
 pub use envelope::DispatchRequest;
 pub use operations::{
