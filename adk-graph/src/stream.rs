@@ -1,7 +1,6 @@
 //! Streaming types for graph execution
 
 use crate::state::State;
-use adk_core::ToolConfirmationRequest;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -53,31 +52,12 @@ pub enum StreamEvent {
     /// Execution was interrupted
     Interrupted { node: String, message: String },
 
-    /// A persisted graph pause caused by a tool that requires authorization.
-    ToolConfirmationRequired {
-        /// Graph node whose agent requested authorization.
-        node: String,
-        /// The exact tool call the caller must approve or deny.
-        request: ToolConfirmationRequest,
-        /// Thread to resume after a decision.
-        thread_id: String,
-        /// Checkpoint saved before this event was emitted.
-        checkpoint_id: String,
-    },
-
     /// A node asked to pause, reported by `Node::execute_stream`.
     ///
     /// The streamed path yields events rather than a `NodeOutput`, so a node's own
     /// interrupt request needs a way through. The executor turns this into the
     /// pause and does not forward it, so a caller sees only `Interrupted`.
     NodeInterrupt { node: String, message: String, data: Option<serde_json::Value> },
-
-    /// An agent node emitted a tool-authorization request.
-    ///
-    /// This is an executor-internal event. The executor checkpoints the run and
-    /// reports [`ToolConfirmationRequired`](Self::ToolConfirmationRequired) to
-    /// callers instead.
-    NodeToolConfirmation { node: String, request: ToolConfirmationRequest },
 
     /// Execution resumed from a checkpoint
     Resumed { step: usize, pending_nodes: Vec<String> },
@@ -138,21 +118,6 @@ impl StreamEvent {
         Self::Interrupted { node: node.to_string(), message: message.to_string() }
     }
 
-    /// Create a persisted tool confirmation event for graph callers.
-    pub fn tool_confirmation_required(
-        node: &str,
-        request: ToolConfirmationRequest,
-        thread_id: &str,
-        checkpoint_id: &str,
-    ) -> Self {
-        Self::ToolConfirmationRequired {
-            node: node.to_string(),
-            request,
-            thread_id: thread_id.to_string(),
-            checkpoint_id: checkpoint_id.to_string(),
-        }
-    }
-
     /// Create a resumed event
     pub fn resumed(step: usize, pending_nodes: Vec<String>) -> Self {
         Self::Resumed { step, pending_nodes }
@@ -171,11 +136,6 @@ impl StreamEvent {
     /// Create an event reporting that a node asked to pause.
     pub fn node_interrupt(node: &str, message: &str, data: Option<serde_json::Value>) -> Self {
         Self::NodeInterrupt { node: node.to_string(), message: message.to_string(), data }
-    }
-
-    /// Create an executor-internal tool confirmation event from a node.
-    pub fn node_tool_confirmation(node: &str, request: ToolConfirmationRequest) -> Self {
-        Self::NodeToolConfirmation { node: node.to_string(), request }
     }
 
     /// Create a route dispatched event

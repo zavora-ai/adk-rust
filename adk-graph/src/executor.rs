@@ -7,7 +7,7 @@ use crate::cache::{NodeCache, compute_cache_key};
 use crate::deferred::FanInTracker;
 use crate::error::{GraphError, InterruptedExecution, Result};
 use crate::graph::CompiledGraph;
-use crate::interrupt::Interrupt;
+use crate::interrupt::{GraphToolConfirmationPause, Interrupt};
 use crate::node::{ExecutionConfig, NodeContext};
 use crate::state::{Checkpoint, State};
 use crate::stream::{StreamEvent, StreamMode};
@@ -46,6 +46,8 @@ pub struct GraphOutcome {
 pub struct PregelExecutor<'a> {
     graph: &'a CompiledGraph,
     config: ExecutionConfig,
+    /// ADK configuration supplied through an additive direct-graph API.
+    run_config: Option<adk_core::RunConfig>,
     state: State,
     step: usize,
     pending_nodes: Vec<String>,
@@ -74,6 +76,14 @@ pub struct PregelExecutor<'a> {
 impl<'a> PregelExecutor<'a> {
     /// Create a new executor
     pub fn new(graph: &'a CompiledGraph, config: ExecutionConfig) -> Self {
+        Self::new_with_run_config(graph, config, None)
+    }
+
+    pub(crate) fn new_with_run_config(
+        graph: &'a CompiledGraph,
+        config: ExecutionConfig,
+        run_config: Option<adk_core::RunConfig>,
+    ) -> Self {
         #[cfg(feature = "node-cache")]
         let node_caches = graph
             .cache_policies
@@ -84,6 +94,7 @@ impl<'a> PregelExecutor<'a> {
         Self {
             graph,
             config,
+            run_config,
             state: State::new(),
             step: 0,
             pending_nodes: vec![],
@@ -308,6 +319,9 @@ impl<'a> PregelExecutor<'a> {
                         }
                         if let Some(node) = self.graph.nodes.get(node_name) {
                             let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
+                            if let Some(run_config) = self.run_config.clone() {
+                                ctx.set_run_config(run_config);
+                            }
                             ctx.set_parent_schema(Arc::new(self.graph.schema.clone()));
                             ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
                                 self.graph.nodes.clone(),
@@ -335,7 +349,6 @@ impl<'a> PregelExecutor<'a> {
                             let mut streamed_updates = Vec::new();
                             let mut streamed_goto: Option<(String, Vec<String>)> = None;
                             let mut streamed_interrupt: Option<Interrupt> = None;
-                            let mut streamed_tool_confirmation = None;
                             let mut timed_out_after;
                             let mut attempt = 0;
 
@@ -399,14 +412,6 @@ impl<'a> PregelExecutor<'a> {
                                                         data: data.clone(),
                                                     });
                                             }
-                                            if let StreamEvent::NodeToolConfirmation {
-                                                ref node,
-                                                ref request,
-                                            } = event
-                                            {
-                                                streamed_tool_confirmation =
-                                                    Some((node.clone(), request.clone()));
-                                            }
                                             collected_events.push(event);
                                         }
                                         Some(Err(e)) => {
@@ -453,9 +458,7 @@ impl<'a> PregelExecutor<'a> {
                             result.events.push(StreamEvent::node_end(node_name, self.step, duration_ms));
                             result.events.extend(collected_events);
 
-                            let node_interrupt = streamed_tool_confirmation
-                                .map(|(node, request)| Interrupt::ToolConfirmation { node, request })
-                                .or(streamed_interrupt);
+                            let node_interrupt = streamed_interrupt;
                             if let Some(interrupt) = node_interrupt {
                                 result.interrupt = Some(interrupt);
                             } else {
@@ -522,22 +525,25 @@ impl<'a> PregelExecutor<'a> {
                                 return;
                             }
                         };
-                        match interrupt {
-                            Interrupt::ToolConfirmation { node, request } => {
-                                yield Ok(StreamEvent::tool_confirmation_required(
-                                    &node,
-                                    request,
-                                    &self.config.thread_id,
-                                    &checkpoint_id,
-                                ));
-                            }
-                            other => {
-                                yield Ok(StreamEvent::interrupted(
-                                    result.executed_nodes.first().map(|s| s.as_str()).unwrap_or("unknown"),
-                                    &other.to_string(),
-                                ));
-                            }
+                        if let Some(pause) = GraphToolConfirmationPause::from_interrupted_execution(
+                            &InterruptedExecution::new(
+                                self.config.thread_id.clone(),
+                                checkpoint_id,
+                                interrupt.clone(),
+                                self.state.clone(),
+                                self.step,
+                            ),
+                        ) {
+                            yield Ok(StreamEvent::custom(
+                                &pause.node,
+                                GraphToolConfirmationPause::KIND,
+                                serde_json::to_value(&pause).unwrap_or(serde_json::Value::Null),
+                            ));
                         }
+                        yield Ok(StreamEvent::interrupted(
+                            result.executed_nodes.first().map(|s| s.as_str()).unwrap_or("unknown"),
+                            &interrupt.to_string(),
+                        ));
                         return;
                     }
 
@@ -636,22 +642,25 @@ impl<'a> PregelExecutor<'a> {
                             return;
                         }
                     };
-                    match interrupt {
-                        Interrupt::ToolConfirmation { node, request } => {
-                            yield Ok(StreamEvent::tool_confirmation_required(
-                                &node,
-                                request,
-                                &self.config.thread_id,
-                                &checkpoint_id,
-                            ));
-                        }
-                        other => {
-                            yield Ok(StreamEvent::interrupted(
-                                result.executed_nodes.first().map(|s| s.as_str()).unwrap_or("unknown"),
-                                &other.to_string(),
-                            ));
-                        }
+                    if let Some(pause) = GraphToolConfirmationPause::from_interrupted_execution(
+                        &InterruptedExecution::new(
+                            self.config.thread_id.clone(),
+                            checkpoint_id,
+                            interrupt.clone(),
+                            self.state.clone(),
+                            self.step,
+                        ),
+                    ) {
+                        yield Ok(StreamEvent::custom(
+                            &pause.node,
+                            GraphToolConfirmationPause::KIND,
+                            serde_json::to_value(&pause).unwrap_or(serde_json::Value::Null),
+                        ));
                     }
+                    yield Ok(StreamEvent::interrupted(
+                        result.executed_nodes.first().map(|s| s.as_str()).unwrap_or("unknown"),
+                        &interrupt.to_string(),
+                    ));
                     return;
                 }
 
@@ -935,6 +944,9 @@ impl<'a> PregelExecutor<'a> {
             .zip(prior_attempts)
             .map(|((((name, node), policy), retry), spent)| {
                 let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
+                if let Some(run_config) = self.run_config.clone() {
+                    ctx.set_run_config(run_config);
+                }
                 // A node body may invoke other nodes. The invoker carries the
                 // graph's nodes and the shared ledger, so a resumed parent serves
                 // children that already finished. These invocations are awaited
@@ -1248,6 +1260,21 @@ impl CompiledGraph {
         self.invoke_detailed(input, config).await.map(|outcome| outcome.state)
     }
 
+    /// Execute with ADK run configuration for agents inside a directly run graph.
+    ///
+    /// Use this to resume a tool-confirmation pause with decisions in
+    /// [`adk_core::RunConfig`]. Existing [`Self::invoke`] callers remain
+    /// standalone and use default ADK run configuration.
+    pub async fn invoke_with_run_config(
+        &self,
+        input: State,
+        config: ExecutionConfig,
+        run_config: adk_core::RunConfig,
+    ) -> Result<State> {
+        let mut executor = PregelExecutor::new_with_run_config(self, config, Some(run_config));
+        executor.run(input).await
+    }
+
     /// Executes and reports what the run asked of its caller.
     ///
     /// Only a graph run as a [`SubgraphNode`](crate::subgraph::SubgraphNode) has
@@ -1263,6 +1290,18 @@ impl CompiledGraph {
         Ok(GraphOutcome { state, goto_parent: executor.goto_parent })
     }
 
+    /// Execute with run configuration and retain a subgraph's parent routing outcome.
+    pub async fn invoke_detailed_with_run_config(
+        &self,
+        input: State,
+        config: ExecutionConfig,
+        run_config: adk_core::RunConfig,
+    ) -> Result<GraphOutcome> {
+        let mut executor = PregelExecutor::new_with_run_config(self, config, Some(run_config));
+        let state = executor.run(input).await?;
+        Ok(GraphOutcome { state, goto_parent: executor.goto_parent })
+    }
+
     /// Execute with streaming
     pub fn stream(
         &self,
@@ -1272,6 +1311,22 @@ impl CompiledGraph {
     ) -> impl futures::Stream<Item = Result<StreamEvent>> + '_ {
         tracing::debug!("CompiledGraph::stream called with mode {:?}", mode);
         let executor = PregelExecutor::new(self, config);
+        executor.run_stream(input, mode)
+    }
+
+    /// Stream with ADK run configuration for agents inside a directly run graph.
+    ///
+    /// A resumed tool-confirmation request can be approved or denied by passing
+    /// [`adk_core::RunConfig::tool_confirmation_decisions`].
+    pub fn stream_with_run_config(
+        &self,
+        input: State,
+        config: ExecutionConfig,
+        mode: StreamMode,
+        run_config: adk_core::RunConfig,
+    ) -> impl futures::Stream<Item = Result<StreamEvent>> + '_ {
+        tracing::debug!("CompiledGraph::stream_with_run_config called with mode {:?}", mode);
+        let executor = PregelExecutor::new_with_run_config(self, config, Some(run_config));
         executor.run_stream(input, mode)
     }
 

@@ -8,9 +8,11 @@ use adk_graph::agent::GraphAgent;
 use adk_graph::checkpoint::MemoryCheckpointer;
 use adk_graph::edge::{END, START};
 use adk_graph::graph::StateGraph;
+use adk_graph::interrupt::GraphToolConfirmationPause;
 use adk_graph::node::{AgentNode, ExecutionConfig};
 use adk_graph::state::State;
 use adk_graph::stream::{StreamEvent, StreamMode};
+use adk_graph::subgraph::SubgraphNode;
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::json;
@@ -80,30 +82,34 @@ async fn graph_streams_a_persisted_tool_confirmation_and_resumes_with_a_decision
         StreamMode::Debug,
     ));
     let pause = loop {
-        if let StreamEvent::ToolConfirmationRequired { node, request, thread_id, checkpoint_id } =
-            stream.next().await.expect("stream event").expect("graph event")
-        {
-            break (node, request, thread_id, checkpoint_id);
+        let event = stream.next().await.expect("stream event").expect("graph event");
+        if let Some(pause) = GraphToolConfirmationPause::from_stream_event(&event) {
+            break pause;
         }
     };
 
-    assert_eq!(pause.0, "sensitive_agent");
-    assert_eq!(pause.1.tool_name, "delete_file");
-    assert_eq!(pause.1.function_call_id.as_deref(), Some("call-1"));
-    assert_eq!(pause.2, "confirmation-thread");
-    assert!(!pause.3.is_empty(), "a confirmation event must be resumable");
+    assert_eq!(pause.node, "sensitive_agent");
+    assert_eq!(pause.request.tool_name, "delete_file");
+    assert_eq!(pause.request.function_call_id.as_deref(), Some("call-1"));
+    assert_eq!(pause.thread_id, "confirmation-thread");
+    assert!(!pause.checkpoint_id.is_empty(), "a confirmation event must be resumable");
     assert_eq!(runs.load(Ordering::SeqCst), 1);
 
     let decisions = HashMap::from([(String::from("call-1"), ToolConfirmationDecision::Approve)]);
-    let config = ExecutionConfig::new("confirmation-thread")
-        .with_run_config(RunConfig::builder().tool_confirmation_decisions(decisions).build());
-    let events = graph.stream(State::new(), config, StreamMode::Debug).collect::<Vec<_>>().await;
+    let config = ExecutionConfig::new("confirmation-thread");
+    let events = graph
+        .stream_with_run_config(
+            State::new(),
+            config,
+            StreamMode::Debug,
+            RunConfig::builder().tool_confirmation_decisions(decisions).build(),
+        )
+        .collect::<Vec<_>>()
+        .await;
 
-    assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event, Ok(StreamEvent::ToolConfirmationRequired { .. })))
-    );
+    assert!(events.iter().all(|event| {
+        event.as_ref().ok().and_then(GraphToolConfirmationPause::from_stream_event).is_none()
+    }));
     assert!(events.iter().any(|event| matches!(event, Ok(StreamEvent::Done { .. }))));
     assert_eq!(runs.load(Ordering::SeqCst), 2);
 }
@@ -164,19 +170,18 @@ async fn a_confirmation_pause_does_not_replay_completed_frontier_nodes() {
         )
         .collect::<Vec<_>>()
         .await;
-    assert!(
-        first.iter().any(|event| matches!(event, Ok(StreamEvent::ToolConfirmationRequired { .. })))
-    );
+    assert!(first.iter().any(|event| {
+        event.as_ref().ok().and_then(GraphToolConfirmationPause::from_stream_event).is_some()
+    }));
     assert_eq!(completed_runs.load(Ordering::SeqCst), 1);
 
     let decisions = HashMap::from([(String::from("call-1"), ToolConfirmationDecision::Approve)]);
     let resumed = graph
-        .stream(
+        .stream_with_run_config(
             State::new(),
-            ExecutionConfig::new("parallel-confirmation-thread").with_run_config(
-                RunConfig::builder().tool_confirmation_decisions(decisions).build(),
-            ),
+            ExecutionConfig::new("parallel-confirmation-thread"),
             StreamMode::Debug,
+            RunConfig::builder().tool_confirmation_decisions(decisions).build(),
         )
         .collect::<Vec<_>>()
         .await;
@@ -184,4 +189,47 @@ async fn a_confirmation_pause_does_not_replay_completed_frontier_nodes() {
     assert!(resumed.iter().any(|event| matches!(event, Ok(StreamEvent::Done { .. }))));
     assert_eq!(completed_runs.load(Ordering::SeqCst), 1, "completed node must not replay");
     assert_eq!(agent_runs.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_nested_confirmation_keeps_its_request_in_messages_mode() {
+    let inner = Arc::new(
+        StateGraph::with_channels(&["messages"])
+            .add_node(AgentNode::new(Arc::new(ConfirmationAgent {
+                runs: Arc::new(AtomicUsize::new(0)),
+            })))
+            .add_edge(START, "sensitive_agent")
+            .add_edge("sensitive_agent", END)
+            .compile()
+            .expect("compile inner")
+            .with_checkpointer(MemoryCheckpointer::new()),
+    );
+    let outer = StateGraph::with_channels(&["messages"])
+        .add_node(SubgraphNode::new("review", inner))
+        .add_edge(START, "review")
+        .add_edge("review", END)
+        .compile()
+        .expect("compile outer")
+        .with_checkpointer(MemoryCheckpointer::new());
+
+    let events = outer
+        .stream(
+            State::new(),
+            ExecutionConfig::new("nested-confirmation-thread"),
+            StreamMode::Messages,
+        )
+        .collect::<Vec<_>>()
+        .await;
+    let pause = events
+        .iter()
+        .filter_map(|event| event.as_ref().ok())
+        .find_map(GraphToolConfirmationPause::from_stream_event)
+        .expect("messages mode must preserve the structured confirmation request");
+
+    assert_eq!(pause.node, "review.sensitive_agent");
+    assert_eq!(pause.request.tool_name, "delete_file");
+    assert_eq!(pause.request.function_call_id.as_deref(), Some("call-1"));
+    assert_eq!(pause.request.args, json!({ "path": "/tmp/report.txt" }));
+    assert_eq!(pause.thread_id, "nested-confirmation-thread");
+    assert!(!pause.checkpoint_id.is_empty());
 }

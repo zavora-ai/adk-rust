@@ -438,8 +438,8 @@ Graph agents support checkpoint-based interrupts where execution pauses at a nod
 
 An `AgentNode` preserves the standard tool-confirmation policy when it runs in
 a `CompiledGraph`. Instead of flattening the graph into a `Runner` event stream,
-the graph checkpoints its own frontier and emits a structured
-`StreamEvent::ToolConfirmationRequired` event.
+the graph checkpoints its own frontier and emits a structured custom event that
+can be read with `GraphToolConfirmationPause::from_stream_event`.
 
 ```rust,no_run
 use adk_agent::LlmAgentBuilder;
@@ -450,7 +450,8 @@ use adk_graph::{
     graph::StateGraph,
     node::{AgentNode, ExecutionConfig},
     state::State,
-    stream::{StreamEvent, StreamMode},
+    interrupt::GraphToolConfirmationPause,
+    stream::StreamMode,
 };
 use futures::StreamExt;
 use std::{collections::HashMap, sync::Arc};
@@ -474,30 +475,33 @@ let mut events = Box::pin(graph.stream(
     StreamMode::Debug,
 ));
 
-let (request, checkpoint_id) = loop {
+let pause = loop {
     match events.next().await.transpose()? {
-        Some(StreamEvent::ToolConfirmationRequired { request, checkpoint_id, .. }) => {
-            break (request, checkpoint_id);
+        Some(event) => {
+            if let Some(pause) = GraphToolConfirmationPause::from_stream_event(&event) {
+                break pause;
+            }
         }
-        Some(_) => {}
         None => unreachable!("the graph must pause before the tool runs"),
     }
 };
 
-// Present `request.tool_name` and `request.args` to the approver. A decision
+// Present `pause.request.tool_name` and `pause.request.args` to the approver. A decision
 // is scoped to this exact function call ID; bind its arguments as well when it
 // crosses an untrusted boundary.
-let call_id = request.function_call_id.expect("LLM tool calls have an ID");
+let call_id = pause.request.function_call_id.expect("LLM tool calls have an ID");
 let decisions = HashMap::from([(call_id, ToolConfirmationDecision::Approve)]);
-let config = ExecutionConfig::new("delete-report").with_run_config(
-    RunConfig::builder().tool_confirmation_decisions(decisions).build(),
-);
 
-// The checkpoint is selected automatically by thread ID. `checkpoint_id` is
+// The checkpoint is selected automatically by thread ID. `pause.checkpoint_id` is
 // available for audit records or an explicit `with_resume_from` call.
 drop(events);
-let final_events = graph.stream(State::new(), config, StreamMode::Debug);
-# let _ = checkpoint_id;
+let final_events = graph.stream_with_run_config(
+    State::new(),
+    ExecutionConfig::new("delete-report"),
+    StreamMode::Debug,
+    RunConfig::builder().tool_confirmation_decisions(decisions).build(),
+);
+# let _ = pause;
 # let _ = final_events;
 ```
 
