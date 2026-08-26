@@ -1,5 +1,6 @@
 //! Human-in-the-loop interrupt types
 
+use adk_core::ToolConfirmationRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -17,6 +18,13 @@ pub enum Interrupt {
         /// Optional data for the interrupt
         data: Option<Value>,
     },
+    /// A tool invoked by an agent node needs authorization before it can run.
+    ToolConfirmation {
+        /// The graph node whose agent requested authorization.
+        node: String,
+        /// The exact tool call the caller must approve or deny.
+        request: ToolConfirmationRequest,
+    },
 }
 
 impl std::fmt::Display for Interrupt {
@@ -25,6 +33,11 @@ impl std::fmt::Display for Interrupt {
             Self::Before(node) => write!(f, "Interrupt before '{}'", node),
             Self::After(node) => write!(f, "Interrupt after '{}'", node),
             Self::Dynamic { message, .. } => write!(f, "Dynamic interrupt: {}", message),
+            Self::ToolConfirmation { node, request } => write!(
+                f,
+                "Tool confirmation required for '{}' in node '{}'",
+                request.tool_name, node
+            ),
         }
     }
 }
@@ -80,6 +93,10 @@ pub struct GraphInterruptPayload {
     /// The data a node attached with `NodeOutput::interrupt_with_data`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+    /// The tool call awaiting authorization, for a `"tool_confirmation"`
+    /// pause. Absent for ordinary graph interrupts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_confirmation: Option<ToolConfirmationRequest>,
     /// The thread to resume.
     pub thread_id: String,
     /// The checkpoint the run stopped at.
@@ -89,11 +106,14 @@ pub struct GraphInterruptPayload {
 impl GraphInterruptPayload {
     /// Build a payload from an interrupt and the run it stopped.
     pub fn new(interrupt: &Interrupt, thread_id: &str, checkpoint_id: &str) -> Self {
-        let (kind, node, message, data) = match interrupt {
-            Interrupt::Before(node) => ("before", Some(node.clone()), None, None),
-            Interrupt::After(node) => ("after", Some(node.clone()), None, None),
+        let (kind, node, message, data, tool_confirmation) = match interrupt {
+            Interrupt::Before(node) => ("before", Some(node.clone()), None, None, None),
+            Interrupt::After(node) => ("after", Some(node.clone()), None, None, None),
             Interrupt::Dynamic { message, data } => {
-                ("dynamic", None, Some(message.clone()), data.clone())
+                ("dynamic", None, Some(message.clone()), data.clone(), None)
+            }
+            Interrupt::ToolConfirmation { node, request } => {
+                ("tool_confirmation", Some(node.clone()), None, None, Some(request.clone()))
             }
         };
         Self {
@@ -101,6 +121,7 @@ impl GraphInterruptPayload {
             node,
             message,
             data,
+            tool_confirmation,
             thread_id: thread_id.to_string(),
             checkpoint_id: checkpoint_id.to_string(),
         }

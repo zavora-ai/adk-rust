@@ -34,6 +34,11 @@ pub struct ExecutionConfig {
     /// [`ExecutionConfig::with_parent_context`] to carry them through; leaving it
     /// unset is standalone mode and is what a graph invoked outside a `Runner` gets.
     pub parent_context: Option<Arc<dyn adk_core::InvocationContext>>,
+    /// Per-run ADK configuration for nodes that invoke agents directly.
+    ///
+    /// When absent, an agent node inherits its parent invocation's configuration
+    /// or uses ADK defaults in standalone graph mode.
+    pub run_config: Option<adk_core::RunConfig>,
 }
 
 impl ExecutionConfig {
@@ -45,6 +50,7 @@ impl ExecutionConfig {
             recursion_limit: 50,
             metadata: HashMap::new(),
             parent_context: None,
+            run_config: None,
         }
     }
 
@@ -56,6 +62,16 @@ impl ExecutionConfig {
     #[must_use]
     pub fn with_parent_context(mut self, parent: Arc<dyn adk_core::InvocationContext>) -> Self {
         self.parent_context = Some(parent);
+        self
+    }
+
+    /// Set ADK configuration for agents run inside this graph.
+    ///
+    /// This is primarily useful for a directly invoked graph: supply a
+    /// confirmation decision when resuming a paused tool call.
+    #[must_use]
+    pub fn with_run_config(mut self, run_config: adk_core::RunConfig) -> Self {
+        self.run_config = Some(run_config);
         self
     }
 
@@ -658,6 +674,7 @@ impl Node for AgentNode {
             content,
             self.agent.clone(),
             ctx.config.parent_context.clone(),
+            ctx.config.run_config.clone(),
         ));
 
         // Run the agent and collect events
@@ -669,6 +686,13 @@ impl Node for AgentNode {
         })?;
 
         let events: Vec<adk_core::Event> = stream.filter_map(|r| async { r.ok() }).collect().await;
+
+        if let Some(request) =
+            events.iter().find_map(|event| event.actions.tool_confirmation.clone())
+        {
+            return Ok(NodeOutput::new()
+                .with_interrupt(Interrupt::ToolConfirmation { node: self.name.clone(), request }));
+        }
 
         // Map events to state updates
         let updates = (self.output_mapper)(&events);
@@ -709,6 +733,7 @@ impl Node for AgentNode {
                 content,
                 agent.clone(),
                 parent_context,
+                ctx.config.run_config.clone(),
             ));
 
             let stream = match agent.run(invocation_ctx).await {
@@ -728,6 +753,10 @@ impl Node for AgentNode {
             while let Some(result) = stream.next().await {
                 match result {
                     Ok(event) => {
+                        if let Some(request) = event.actions.tool_confirmation.clone() {
+                            yield Ok(StreamEvent::node_tool_confirmation(&name, request));
+                            return;
+                        }
                         // Emit streaming event immediately
                         if let Some(content) = event.content() {
                             let text: String = content.parts.iter().filter_map(|p| p.text()).collect();
@@ -802,6 +831,7 @@ impl GraphInvocationContext {
         user_content: adk_core::Content,
         agent: Arc<dyn adk_core::Agent>,
         parent: Option<Arc<dyn adk_core::InvocationContext>>,
+        explicit_run_config: Option<adk_core::RunConfig>,
     ) -> Self {
         let invocation_id = uuid::Uuid::new_v4().to_string();
         let session = Arc::new(GraphSession::new(session_id));
@@ -810,7 +840,7 @@ impl GraphInvocationContext {
 
         // A node runs on its own branch below the caller's, so events it produces are
         // attributable and do not read as the parent agent's own turn.
-        let (user_id, app_name, branch, run_config) = match parent.as_ref() {
+        let (user_id, app_name, branch, inherited_run_config) = match parent.as_ref() {
             Some(parent) => (
                 parent.user_id().to_string(),
                 parent.app_name().to_string(),
@@ -833,7 +863,7 @@ impl GraphInvocationContext {
             user_content,
             agent,
             session,
-            run_config,
+            run_config: explicit_run_config.unwrap_or(inherited_run_config),
             ended: std::sync::atomic::AtomicBool::new(false),
             parent,
             user_id,

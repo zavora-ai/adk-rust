@@ -434,6 +434,78 @@ For complex approval workflows where execution needs to persist state and resume
 
 Graph agents support checkpoint-based interrupts where execution pauses at a node, persists state to a checkpoint store, and resumes after human input — even across server restarts.
 
+### Graph-Native Tool Confirmation
+
+An `AgentNode` preserves the standard tool-confirmation policy when it runs in
+a `CompiledGraph`. Instead of flattening the graph into a `Runner` event stream,
+the graph checkpoints its own frontier and emits a structured
+`StreamEvent::ToolConfirmationRequired` event.
+
+```rust,no_run
+use adk_agent::LlmAgentBuilder;
+use adk_core::{RunConfig, ToolConfirmationDecision};
+use adk_graph::{
+    checkpoint::MemoryCheckpointer,
+    edge::{END, START},
+    graph::StateGraph,
+    node::{AgentNode, ExecutionConfig},
+    state::State,
+    stream::{StreamEvent, StreamMode},
+};
+use futures::StreamExt;
+use std::{collections::HashMap, sync::Arc};
+
+let agent = LlmAgentBuilder::new("file_manager")
+    .model(model)
+    .tool(delete_file_tool)
+    .require_tool_confirmation("delete_file")
+    .build()?;
+
+let graph = StateGraph::with_channels(&["messages"])
+    .add_node(AgentNode::new(Arc::new(agent)))
+    .add_edge(START, "file_manager")
+    .add_edge("file_manager", END)
+    .compile()?
+    .with_checkpointer(MemoryCheckpointer::new());
+
+let mut events = Box::pin(graph.stream(
+    State::new(),
+    ExecutionConfig::new("delete-report"),
+    StreamMode::Debug,
+));
+
+let (request, checkpoint_id) = loop {
+    match events.next().await.transpose()? {
+        Some(StreamEvent::ToolConfirmationRequired { request, checkpoint_id, .. }) => {
+            break (request, checkpoint_id);
+        }
+        Some(_) => {}
+        None => unreachable!("the graph must pause before the tool runs"),
+    }
+};
+
+// Present `request.tool_name` and `request.args` to the approver. A decision
+// is scoped to this exact function call ID; bind its arguments as well when it
+// crosses an untrusted boundary.
+let call_id = request.function_call_id.expect("LLM tool calls have an ID");
+let decisions = HashMap::from([(call_id, ToolConfirmationDecision::Approve)]);
+let config = ExecutionConfig::new("delete-report").with_run_config(
+    RunConfig::builder().tool_confirmation_decisions(decisions).build(),
+);
+
+// The checkpoint is selected automatically by thread ID. `checkpoint_id` is
+// available for audit records or an explicit `with_resume_from` call.
+drop(events);
+let final_events = graph.stream(State::new(), config, StreamMode::Debug);
+# let _ = checkpoint_id;
+# let _ = final_events;
+```
+
+The graph retains node lifecycle, intermediate state, nested subgraphs, and
+the pending frontier. Nodes that completed alongside the confirmation request
+are checkpointed and are not replayed after approval. The agent itself uses the
+same `RunConfig` decision semantics as a normal ADK run.
+
 ## Combining Mechanisms
 
 These mechanisms compose naturally:

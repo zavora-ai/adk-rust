@@ -269,7 +269,13 @@ impl Node for SubgraphNode {
 
         let input = self.project_in(&ctx.state, &parent_schema);
         let thread = self.child_thread(&ctx.config.thread_id);
-        let config = ExecutionConfig::new(&thread);
+        let mut config = ExecutionConfig::new(&thread);
+        if let Some(parent) = ctx.config.parent_context.clone() {
+            config = config.with_parent_context(parent);
+        }
+        if let Some(run_config) = ctx.config.run_config.clone() {
+            config = config.with_run_config(run_config);
+        }
 
         match self.graph.invoke_detailed(input, config).await {
             Ok(outcome) => {
@@ -288,6 +294,12 @@ impl Node for SubgraphNode {
             // where it happened, and the subgraph's own thread holds the state to
             // resume from.
             Err(GraphError::Interrupted(inner)) => {
+                if let Interrupt::ToolConfirmation { node, request } = &inner.interrupt {
+                    return Ok(NodeOutput::new().with_interrupt(Interrupt::ToolConfirmation {
+                        node: format!("{}.{}", self.name, node),
+                        request: request.clone(),
+                    }));
+                }
                 let message = match &inner.interrupt {
                     Interrupt::Dynamic { message, .. } => message.clone(),
                     other => other.to_string(),

@@ -241,6 +241,13 @@ impl Agent for GraphAgent {
                         &interrupt.checkpoint_id,
                     );
                     let mut event = Event::new("graph_interrupted");
+                    if let crate::interrupt::Interrupt::ToolConfirmation { request, .. } =
+                        &interrupt.interrupt
+                    {
+                        event.llm_response.interrupted = true;
+                        event.llm_response.turn_complete = true;
+                        event.actions.tool_confirmation = Some(request.clone());
+                    }
                     event.set_content(
                         Content::new("assistant").with_text(interrupt.interrupt.to_string()),
                     );
