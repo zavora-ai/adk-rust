@@ -88,13 +88,13 @@ gemini-agent-platform = [
     "vertex-memory",  # Memory Bank (adk-memory)
     "example-store",  # Example Store few-shot retrieval (adk-tool)
     "vertex-sandbox", # managed code-execution sandbox (adk-code)
+    "vertex-eval",    # Gen AI Evaluation bridge (adk-eval)
+    "vertex-rag",     # RAG Engine retrieval (adk-rag)
+    "agent-retrieval", # Agent Retrieval store (adk-rag)
+    "vertex-agent-registry", # Agent Registry discovery (adk-tool)
+    "vertex-skill-registry", # Skill Registry consumption (adk-skill)
     # target end-state — appended by the PR that introduces each flag:
-    # "vertex-eval",            Gen AI Evaluation bridge (adk-eval)
-    # "vertex-rag",             RAG Engine retrieval (adk-rag)
-    # "agent-retrieval",        Agent Retrieval store (adk-rag)
-    # "vertex-agent-registry",  Agent Registry discovery (adk-tool)
     # "vertex-remote-engine",   remote ReasoningEngine sub-agents (adk-server)
-    # "vertex-skill-registry",  Skill Registry consumption (adk-skill)
 ]
 
 # gemini-agent-platform + realtime: adds the Vertex AI Live API (bidirectional
@@ -214,6 +214,17 @@ example-store = ["tools", "adk-tool/example-store"]
 # sandboxEnvironments lifecycle, :execute chunk protocol, SandboxCodeExecutor,
 # VertexSandboxTool
 vertex-sandbox = ["code", "adk-code/vertex-sandbox"]
+# Gen AI Evaluation Service bridge (forwarded to adk-eval)
+vertex-eval = ["eval", "adk-eval/vertex-eval"]
+# Vertex AI RAG Engine retrieval client + tool (forwarded to adk-rag)
+vertex-rag = ["rag", "adk-rag/vertex-rag"]
+# Agent Retrieval (Vector Search 2.0) VectorStore backend (forwarded to adk-rag)
+agent-retrieval = ["rag", "adk-rag/agent-retrieval"]
+# Agent Registry client + discovery tool (forwarded to adk-tool); unrelated to
+# the local YAML `agent-registry` feature below
+vertex-agent-registry = ["tools", "adk-tool/vertex-agent-registry"]
+# Skill Registry read-only client + safe extraction (forwarded to adk-skill)
+vertex-skill-registry = ["skills", "adk-skill/vertex-skill-registry"]
 # Agent Engine (ReasoningEngine) deployment client — host-side tooling, so
 # deliberately NOT part of gemini-agent-platform (the agent container never
 # deploys itself)

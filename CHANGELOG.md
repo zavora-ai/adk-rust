@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Wave 4 platform services (round one)** — five opt-in Gemini Enterprise
+  Agent Platform integrations, all composable with any preset and appended
+  to `gemini-agent-platform`:
+  - `vertex-eval` (adk-eval): Gen AI Evaluation Service bridge —
+    `VertexEvalClient` for `evaluateInstances` (pointwise + trajectory
+    metrics, autorater config) and `VertexEvalJudge` mirroring `LlmJudge`'s
+    surface with service-side scoring.
+  - `vertex-rag` (adk-rag): Vertex AI RAG Engine retrieval —
+    `VertexRagEngineClient` (corpus discovery, `retrieveContexts` via the
+    current `ragRetrievalConfig` wire path) and `VertexAiRagRetrievalTool`
+    (read-only, concurrency-safe). Ships `examples/vertex_rag`.
+  - `agent-retrieval` (adk-rag): Agent Retrieval (formerly Vector Search
+    2.0) as a full `VectorStore` backend — BYOE dense vectors, chunk text
+    and metadata stored in the Data Object, atomic batched writes,
+    dot-product search, and a `hybrid_search` RRF extra. Passes the shared
+    `VectorStore` contract/property suite.
+  - `vertex-agent-registry` (adk-tool): Agent Registry client
+    (registration for custom deployments, URN-aware get, search across
+    agents and MCP servers) and `AgentSearchTool` for agent-driven
+    discovery.
+  - `vertex-skill-registry` (adk-skill): read-only Skill Registry client
+    (get/list/semantic search/revisions, sha256-verified inline zip
+    payloads) with defense-in-depth archive extraction limits.
+- **Vertex RAG grounding declaration** (adk-gemini `vertex`, adk-model
+  `gemini-vertex`, no new flag): `Tool::Retrieval` with `VertexRagStore`
+  (current `ragRetrievalConfig` path; deprecated fields not exposed),
+  `GeminiModel::with_vertex_rag_store(...)`, Studio-backend requests fail
+  with a structured error, and grounding responses surface
+  `retrievedContext` including `ragChunk` provenance.
+
 ## [2.1.0] - 2026-08-25
 
 ### Added
