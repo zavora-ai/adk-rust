@@ -422,7 +422,7 @@ Four tiered presets control which crates are compiled:
 Domain add-ons are composable with any tier: `features = ["minimal", "audio"]`.
 
 Platform meta-features (composable with any tier):
-- `gemini-agent-platform` — every Gemini Enterprise Agent Platform (Vertex/EAP) integration except realtime transports: `gemini-vertex`, `vertex-session`, `gcp-secrets`, `gcs-artifacts`, `gcp-telemetry`, `agent-engine`, `vertex-memory`, `example-store`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-agent-registry`, `vertex-skill-registry` (grows as later integrations land). The right default for ReasoningEngine BYOC deployments. Deploy-time tooling is host-side and excluded.
+- `gemini-agent-platform` — every Gemini Enterprise Agent Platform (Vertex/EAP) integration except realtime transports: `gemini-vertex`, `vertex-session`, `gcp-secrets`, `gcs-artifacts`, `gcp-telemetry`, `agent-engine`, `vertex-memory`, `example-store`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-agent-registry`, `vertex-skill-registry`, `vertex-remote-engine` (grows as later integrations land). The right default for ReasoningEngine BYOC deployments. Deploy-time tooling is host-side and excluded.
 - `gemini-agent-platform-full` — `gemini-agent-platform` + `vertex-live` (Vertex AI Live API, pulls in the adk-realtime stack)
 
 Graph capability features (forwarded to `adk-graph`, which has no default features):
@@ -452,6 +452,7 @@ Specialist opt-in features:
 - `agent-retrieval` — Agent Retrieval / Vector Search 2.0 (adk-rag): managed `VectorStore` backend with hybrid RRF search extras
 - `vertex-agent-registry` — Agent Registry (adk-tool): registration for custom deployments, search/discovery client, and `AgentSearchTool` (unrelated to the local YAML `agent-registry` feature)
 - `vertex-skill-registry` — Skill Registry read side (adk-skill): get/list/semantic-search clients and hardened skill-payload extraction
+- `vertex-remote-engine` — remote ReasoningEngine invocation (adk-server): `RemoteReasoningEngineAgent` sub-agents over `:streamQuery?alt=sse`, URN resolution via Agent Registry
 - `gemini-interactions` — Gemini Interactions API (Beta): wire client surface (server-side history, step timeline) plus the runtime transport on `GeminiModel` (`use_interactions_api`) driving the standard `LlmAgent`/`Runner`
 - `mcp`, `mcp-http`, `mcp-sampling` — MCP transport and sampling support
 - `code-tools` — Code execution tools over the adk-code substrate (`CodeTool`, `PythonCodeTool`, `JavaScriptCodeTool`, `MontyPythonCodeTool`; forwarded to adk-tool; included in `full`)

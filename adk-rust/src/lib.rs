@@ -447,6 +447,7 @@
 //! | `agent-retrieval` | Agent Retrieval (Vector Search 2.0) store backend (adk-rag) | (opt-in, any preset) |
 //! | `vertex-agent-registry` | Agent Registry client + discovery tool (adk-tool) | (opt-in, any preset) |
 //! | `vertex-skill-registry` | Skill Registry read client + remote skills (adk-skill) | (opt-in, any preset) |
+//! | `vertex-remote-engine` | Remote ReasoningEngine agent invocation (adk-server) | (opt-in, any preset) |
 //! | `gemini-agent-platform` | Gemini Enterprise Agent Platform integrations (Vertex model backend, managed Sessions, GCP Secret Manager, GCS artifacts, Cloud telemetry, Agent Engine runtime contract, Example Store, code-execution Sandbox); excludes realtime transports and host-side deploy tooling | (opt-in, any preset) |
 //! | `vertex-memory` | Vertex AI Memory Bank backend for adk-memory | (opt-in, any preset) |
 //! | `gcp-deploy` | Agent Engine deployment client (host-side; not part of `gemini-agent-platform`) | (opt-in, any preset) |

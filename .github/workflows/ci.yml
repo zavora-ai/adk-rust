@@ -191,6 +191,9 @@ jobs:
           - { package: adk-rag, features: agent-retrieval }
           - { package: adk-tool, features: vertex-agent-registry }
           - { package: adk-skill, features: vertex-skill-registry }
+          - { package: adk-server, features: vertex-remote-engine }
+          - { package: adk-cli, features: vertex-agent-registry }
+          - { package: adk-cli, features: vertex-skill-registry }
           # The Agent Engine deployment client (gcp) is opt-in; its golden DTO and
           # mock contract tests only run with the feature on.
           - { package: adk-deploy, features: gcp }

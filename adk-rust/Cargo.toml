@@ -93,8 +93,7 @@ gemini-agent-platform = [
     "agent-retrieval", # Agent Retrieval store (adk-rag)
     "vertex-agent-registry", # Agent Registry discovery (adk-tool)
     "vertex-skill-registry", # Skill Registry consumption (adk-skill)
-    # target end-state — appended by the PR that introduces each flag:
-    # "vertex-remote-engine",   remote ReasoningEngine sub-agents (adk-server)
+    "vertex-remote-engine", # remote ReasoningEngine sub-agents (adk-server)
 ]
 
 # gemini-agent-platform + realtime: adds the Vertex AI Live API (bidirectional
@@ -225,6 +224,9 @@ agent-retrieval = ["rag", "adk-rag/agent-retrieval"]
 vertex-agent-registry = ["tools", "adk-tool/vertex-agent-registry"]
 # Skill Registry read-only client + safe extraction (forwarded to adk-skill)
 vertex-skill-registry = ["skills", "adk-skill/vertex-skill-registry"]
+# Remote ReasoningEngine invocation — call other deployed Agent Engine agents
+# as sub-agents (forwarded to adk-server)
+vertex-remote-engine = ["server", "adk-server/vertex-remote-engine"]
 # Agent Engine (ReasoningEngine) deployment client — host-side tooling, so
 # deliberately NOT part of gemini-agent-platform (the agent container never
 # deploys itself)

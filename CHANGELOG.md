@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Wave 4 platform services (round two)** — the Govern-pillar invocation
+  and consumption features, closing out the Agent Engine plan:
+  - `vertex-remote-engine` (adk-server): `RemoteReasoningEngineAgent` —
+    invoke other deployed Agent Engine agents as sub-agents over
+    `reasoningEngines:streamQuery` (`?alt=sse`, canonical camelCase
+    envelope), with `stream_query` fallback, mid-stream error events, and
+    URN resolution via the Agent Registry. Wire compatibility with the
+    server-side dispatcher is pinned by the shared fixture round-trip.
+  - Registry registration CLI (adk-cli `vertex-agent-registry`):
+    `adk-rust registry register-agent|register-mcp|register-endpoint|search`
+    with idempotent create-or-patch upsert
+    (`AgentRegistryClient::register_or_update_service`). Agent Engine
+    deployments auto-register and are deliberately not re-registered.
+  - Remote skills (adk-skill `vertex-skill-registry` + adk-cli):
+    `load_skill_index_from_registry` (registry-sourced skills are
+    byte-equivalent to disk-sourced ones through the unchanged
+    `SkillDocument` path), `SkillSearchTool`, and
+    `adk-rust skills search|pull`.
+  - `examples/agent_orchestrator`: discover a registered agent with
+    `AgentSearchTool`, then delegate to it via
+    `RemoteReasoningEngineAgent`.
 - **Wave 4 platform services (round one)** — five opt-in Gemini Enterprise
   Agent Platform integrations, all composable with any preset and appended
   to `gemini-agent-platform`:

@@ -29,6 +29,15 @@ meta-feature):
 adk-rust = { version = "2.1.0", features = ["minimal", "agent-engine"] }
 ```
 
+For an agent that uses the full platform — managed sessions, Memory Bank,
+Example Store, the code-execution sandbox, RAG, evaluation, and the Agent
+and Skill Registries — one feature brings every integration:
+
+```toml
+[dependencies]
+adk-rust = { version = "2.1.0", features = ["minimal", "gemini-agent-platform"] }
+```
+
 `serve_agent_engine` is the whole `main` of a deployable engine. It binds
 `0.0.0.0:$PORT` (fallback `8080`) and serves until stopped:
 
