@@ -321,7 +321,7 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@v2.86.4
+      uses: taiki-e/install-action@v2.87.0
       with:
         tool: cargo-nextest
 

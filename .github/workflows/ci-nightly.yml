@@ -182,7 +182,7 @@ jobs:
         neutralize-wild: 'true'
 
     - name: Install cargo-audit and cargo-deny
-      uses: taiki-e/install-action@v2.86.4
+      uses: taiki-e/install-action@v2.87.0
       with:
         tool: cargo-audit,cargo-deny
 
@@ -231,7 +231,7 @@ jobs:
         sudo apt-get install -y cmake protobuf-compiler
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@v2.86.4
+      uses: taiki-e/install-action@v2.87.0
       with:
         tool: cargo-nextest
 
