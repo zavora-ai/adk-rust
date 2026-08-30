@@ -2671,7 +2671,16 @@ impl Agent for LlmAgent {
                         "gcp.vertex.agent.llm_request" = %trace_request_json,
                         "gcp.vertex.agent.llm_response" = tracing::field::Empty  // Placeholder for later recording
                     );
-                    let _llm_guard = llm_span.enter();
+                    // NOTE: do not `llm_span.enter()` here. This is an
+                    // `async_stream` generator body: an entered guard is tied to the
+                    // current thread, not the task, so it is neither exited when the
+                    // generator suspends at an `.await`/`yield` nor re-entered when
+                    // it resumes (possibly on another worker thread). That both
+                    // detaches everything after the first suspension point from
+                    // `call_llm` and leaks the entry onto the worker thread, where
+                    // unrelated tasks then inherit it as a parent. Instrument the
+                    // individual futures instead — `Instrumented::poll` enters the
+                    // span per poll, so it is correct across suspension.
 
                     // Check streaming mode from run config
                     use adk_core::StreamingMode;
@@ -2680,7 +2689,10 @@ impl Agent for LlmAgent {
                         && output_guardrails.is_empty();
 
                     // Always use streaming internally for LLM calls
-                    let mut response_stream = model.generate_content(request, true).await?;
+                    let mut response_stream = model
+                        .generate_content(request, true)
+                        .instrument(llm_span.clone())
+                        .await?;
 
                     use futures::StreamExt;
 
@@ -2688,12 +2700,16 @@ impl Agent for LlmAgent {
                     let mut last_chunk: Option<LlmResponse> = None;
 
                     // Stream and process chunks with AfterModel callbacks
-                    while let Some(chunk_result) = response_stream.next().await {
+                    while let Some(chunk_result) =
+                        response_stream.next().instrument(llm_span.clone()).await
+                    {
                         // Cooperative cancellation: stop consuming the model
                         // stream promptly when the invocation is cancelled. This
                         // drops `response_stream`, releasing the provider connection.
                         if ctx.is_cancelled() {
-                            tracing::info!(agent.name = %agent_name, "invocation cancelled during LLM streaming");
+                            llm_span.in_scope(|| {
+                                tracing::info!(agent.name = %agent_name, "invocation cancelled during LLM streaming")
+                            });
                             return;
                         }
                         let mut chunk = match chunk_result {
@@ -2707,7 +2723,10 @@ impl Agent for LlmAgent {
                         // ===== AFTER MODEL CALLBACKS (per chunk) =====
                         // Callbacks can modify each streaming chunk
                         for callback in after_model_callbacks.as_ref() {
-                            match callback(ctx.clone() as Arc<dyn CallbackContext>, chunk.clone()).await {
+                            match callback(ctx.clone() as Arc<dyn CallbackContext>, chunk.clone())
+                                .instrument(llm_span.clone())
+                                .await
+                            {
                                 Ok(Some(modified_chunk)) => {
                                     // Callback modified this chunk
                                     chunk = modified_chunk;
@@ -2779,7 +2798,9 @@ impl Agent for LlmAgent {
                             let content = if has_function_calls {
                                 content
                             } else {
-                                Self::apply_output_guardrails(output_guardrails.as_ref(), content).await?
+                                Self::apply_output_guardrails(output_guardrails.as_ref(), content)
+                                    .instrument(llm_span.clone())
+                                    .await?
                             };
                             accumulated_content = Some(content);
                         }
@@ -2819,12 +2840,14 @@ impl Agent for LlmAgent {
                             .error_message
                             .clone()
                             .unwrap_or_else(|| "provider reported a terminal error".to_string());
-                        tracing::error!(
-                            error.code = %code,
-                            error.message = %message,
-                            agent = %agent_name,
-                            "model reported a terminal error"
-                        );
+                        llm_span.in_scope(|| {
+                            tracing::error!(
+                                error.code = %code,
+                                error.message = %message,
+                                agent = %agent_name,
+                                "model reported a terminal error"
+                            )
+                        });
                         // The provider's own code is preserved in the ADK error code
                         // so retry policy and telemetry can key on it.
                         // Built before the yield point: a borrow may not cross it.

@@ -71,4 +71,9 @@ anyhow = "1"
 dotenvy = "0.15"
 proptest = "1.5"
 tempfile = "3"
-tokio = { workspace = true, features = ["rt", "macros"] }
+# `rt-multi-thread`: the span-parenting regression test must run on a
+# multi-threaded runtime — a current-thread runtime can mask the thread-affinity
+# half of the bug it covers.
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
+# Capture layer for the span-parenting regression test.
+tracing-subscriber = { workspace = true }
