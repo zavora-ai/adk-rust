@@ -7,6 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.95%2B-orange.svg)
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
+[![Sponsors](https://img.shields.io/github/sponsors/zavora-ai?logo=githubsponsors&color=EA4AAA)](https://github.com/sponsors/zavora-ai)
 
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
 and async, across 43 publishable crates for agent orchestration.
@@ -436,6 +437,19 @@ per-platform tool matrix and the CI cost tiers.
 Related: [Google's ADK](https://google.github.io/adk-docs/) ·
 [MCP](https://modelcontextprotocol.io/) ·
 [Gemini API](https://ai.google.dev/gemini-api/docs)
+
+## Sponsors
+
+ADK-Rust is Apache 2.0 and developed in the open. Sponsorship pays for the CI minutes,
+model-provider credits, and benchmark hardware the project runs on.
+
+Thank you to our sponsors:
+
+<a href="https://github.com/JohnsGain"><img src="https://github.com/JohnsGain.png" width="56" height="56" alt="JohnsGain" title="JohnsGain"></a>
+
+[**Become a sponsor**](https://github.com/sponsors/zavora-ai) — monthly tiers from $5, or a one-off
+contribution. Sponsors are listed here and on the
+[sponsors page](https://github.com/sponsors/zavora-ai).
 
 ## Star History
 
