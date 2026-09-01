@@ -97,7 +97,7 @@ pub trait ReadonlyContext: Send + Sync {
     ///
     /// The default keeps lightweight contexts and third-party implementations
     /// source-compatible. Consumers must gracefully handle contexts without
-    /// session state. Dynamic [`Toolset`](crate::Toolset) implementations use
+    /// session state. Dynamic [`Toolset`] implementations use
     /// this to determine their context-specific tool surface without requiring
     /// mutable access to the session.
     fn state(&self) -> Option<&dyn State> {
