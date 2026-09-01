@@ -27,10 +27,10 @@ not mean ACP protocol v2.
 
 ```toml
 [dependencies]
-adk-acp = "2.1.0"
+adk-acp = "2.2.0"
 
 # Add the server feature only when exposing an ADK-Rust agent to a client.
-adk-acp = { version = "2.1.0", features = ["server"] }
+adk-acp = { version = "2.2.0", features = ["server"] }
 ```
 
 ## Use an ACP agent as an ADK-Rust tool

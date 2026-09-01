@@ -6,7 +6,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! adk-rust = { version = "2.1.0", features = ["enterprise"] }
+//! adk-rust = { version = "2.2.0", features = ["enterprise"] }
 //! ```
 
 use adk_rust::prelude::*;

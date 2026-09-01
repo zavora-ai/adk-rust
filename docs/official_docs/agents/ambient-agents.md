@@ -90,7 +90,7 @@ Requires the `ambient` feature:
 
 ```toml
 [dependencies]
-adk-agent = { version = "2.1.0", features = ["ambient"] }
+adk-agent = { version = "2.2.0", features = ["ambient"] }
 ```
 
 ## Event sources

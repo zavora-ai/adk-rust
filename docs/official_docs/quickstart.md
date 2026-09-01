@@ -191,7 +191,7 @@ The fastest way to add tools is the `#[tool]` macro. Add `adk-tool` to your depe
 
 ```toml
 [dependencies]
-adk-tool = "2.1.0"
+adk-tool = "2.2.0"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 ```
@@ -265,7 +265,7 @@ Enable providers via feature flags. The default build stays Gemini-only for fast
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["openai"] }
+adk-rust = { version = "2.2.0", features = ["openai"] }
 ```
 
 Or scaffold with a provider: `cargo adk new my-agent --provider openai`

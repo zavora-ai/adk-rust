@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-01
+
 ### Added
 
 - **Wave 4 platform services (round two)** — the Govern-pillar invocation
@@ -59,6 +61,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GeminiModel::with_vertex_rag_store(...)`, Studio-backend requests fail
   with a structured error, and grounding responses surface
   `retrievedContext` including `ragChunk` provenance.
+
+### Fixed
+
+- **Span parenting across suspension points** (`adk-agent`, `adk-runner`): one
+  logical invocation was exported as several disconnected traces. `LlmAgent`
+  held a `call_llm` span guard across the `.await`/`yield` points of its
+  `async_stream` generator — an entered guard is bound to the thread, not the
+  task, so it was neither exited on suspension nor re-entered on resumption, and
+  everything after the first suspension detached from `call_llm`. `Runner`
+  instrumented only the future that constructs the agent stream, not the
+  draining of it, so every span the agent produced was created outside
+  `agent.execute`. Both now instrument the individual futures, which is correct
+  across suspension by construction. Span names, attributes and durations are
+  unchanged — only parentage.
+- **`adk-realtime` with `livekit` compiles again**: livekit 0.8.1 requires
+  `livekit-data-stream = "0.1"`, and 0.1.2 changed `incoming::Manager::new`'s
+  arity and added a `topic` field, which broke livekit's own source. The
+  workspace now pins `=0.1.1`.
+- **`adk-audio` ONNX features compile again**: `ort` 2.0.0-rc.13 moved the CUDA
+  and CoreML execution providers out of `ort::execution_providers`, so the
+  floating pre-release requirement broke every ONNX model feature. Pinned to
+  `=2.0.0-rc.11`.
 
 ## [2.1.0] - 2026-08-25
 
@@ -4290,7 +4314,8 @@ Initial release - Published to crates.io.
 - Tokio async runtime
 - Google API key for Gemini
 
-[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/zavora-ai/adk-rust/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/zavora-ai/adk-rust/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/zavora-ai/adk-rust/compare/v1.0.0...v2.0.0
 [0.3.0]: https://github.com/zavora-ai/adk-rust/compare/v0.2.0...v0.3.0

@@ -56,10 +56,10 @@ transcript-style recall or a clean, queryable model of the user.
 
 ```toml
 # Semantic store — pick the backend you need
-adk-memory = { version = "2.1.0", features = ["sqlite-memory"] }
+adk-memory = { version = "2.2.0", features = ["sqlite-memory"] }
 
 # Bi-temporal knowledge graph
-adk-memory = { version = "2.1.0", features = ["graph-memory"] }
+adk-memory = { version = "2.2.0", features = ["graph-memory"] }
 ```
 
 | Feature | Adds |

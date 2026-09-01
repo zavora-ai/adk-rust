@@ -155,7 +155,7 @@ cargo run --manifest-path examples/realtime_voice/Cargo.toml -- probe gemini
 ## Feature Flags
 
 ```toml
-adk-realtime = { version = "2.1.0", features = ["openai", "gemini", "integration"] }
-adk-memory   = { version = "2.1.0", features = ["graph-memory"] }
-adk-tool     = { version = "2.1.0", features = ["graph-memory-tools"] }
+adk-realtime = { version = "2.2.0", features = ["openai", "gemini", "integration"] }
+adk-memory   = { version = "2.2.0", features = ["graph-memory"] }
+adk-tool     = { version = "2.2.0", features = ["graph-memory-tools"] }
 ```

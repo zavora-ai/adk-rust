@@ -114,7 +114,7 @@ error[E0432]: unresolved import `adk_tool`
 
 ```toml
 [dependencies]
-adk-tool = { version = "2.1.0", features = ["mcp"] }
+adk-tool = { version = "2.2.0", features = ["mcp"] }
 ```
 
 ### Invalid project structure

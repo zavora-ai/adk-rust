@@ -6,14 +6,14 @@ Browser automation tools for ADK-Rust agents using WebDriver (via [thirtyfour](h
 
 ```toml
 [dependencies]
-adk-browser = "2.1.0"
+adk-browser = "2.2.0"
 ```
 
 Or via the umbrella crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["browser"] }
+adk-rust = { version = "2.2.0", features = ["browser"] }
 ```
 
 ## Overview

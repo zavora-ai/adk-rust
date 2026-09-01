@@ -5,8 +5,8 @@
 //!
 //! ```toml
 //! [dependencies]
-//! adk-rust = "2.1.0"
-//! adk-tool = "2.1.0"
+//! adk-rust = "2.2.0"
+//! adk-tool = "2.2.0"
 //! ```
 
 use adk_rust::Launcher;

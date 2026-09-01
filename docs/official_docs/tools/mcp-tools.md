@@ -63,13 +63,13 @@ Local stdio MCP support is opt-in:
 
 ```toml
 [dependencies]
-adk-tool = { version = "2.1.0", features = ["mcp"] }
+adk-tool = { version = "2.2.0", features = ["mcp"] }
 ```
 
 Add Streamable HTTP when connecting to remote services:
 
 ```toml
-adk-tool = { version = "2.1.0", features = ["mcp", "http-transport"] }
+adk-tool = { version = "2.2.0", features = ["mcp", "http-transport"] }
 ```
 
 Legacy sampling callbacks require the separate `mcp-sampling` feature. The MCP

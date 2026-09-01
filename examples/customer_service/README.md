@@ -87,7 +87,7 @@ Then **Connect**, press **Start mic** and/or **Start camera**, and try:
 ## Feature flags
 
 ```toml
-adk-realtime = { version = "2.1.0", features = ["openai", "gemini", "integration"] }
+adk-realtime = { version = "2.2.0", features = ["openai", "gemini", "integration"] }
 ```
 
 > Multimodal video input is provided by `RealtimeSession::send_video_frame`

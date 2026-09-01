@@ -19,14 +19,14 @@ construction.
 
 ```toml
 [dependencies]
-adk-tool = { version = "2.1.0", features = ["code-embedded-python"] }
+adk-tool = { version = "2.2.0", features = ["code-embedded-python"] }
 ```
 
 Or through the umbrella crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["minimal", "code-embedded-python"] }
+adk-rust = { version = "2.2.0", features = ["minimal", "code-embedded-python"] }
 ```
 
 ## One-shot vs. REPL

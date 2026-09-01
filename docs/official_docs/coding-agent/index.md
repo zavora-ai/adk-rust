@@ -35,11 +35,11 @@ This is assembled from a few focused pieces rather than a monolithic framework:
 
 ```toml
 # The harness (pulls in the dev tools) + a model provider
-adk-agent = { version = "2.1.0", features = ["coding"] }
-adk-devtools = "2.1.0"
-adk-model = { version = "2.1.0", features = ["gemini"] }
-adk-runner = "2.1.0"
-adk-session = "2.1.0"
+adk-agent = { version = "2.2.0", features = ["coding"] }
+adk-devtools = "2.2.0"
+adk-model = { version = "2.2.0", features = ["gemini"] }
+adk-runner = "2.2.0"
+adk-session = "2.2.0"
 ```
 
 The dev tools are sandbox-first and have no heavy dependencies, so the footprint

@@ -28,14 +28,14 @@ Compile the Vertex backend in — without it, the flag cannot be honored:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["minimal", "gemini-vertex"] }
+adk-rust = { version = "2.2.0", features = ["minimal", "gemini-vertex"] }
 ```
 
 Or use the platform preset, which includes it:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["minimal", "gemini-agent-platform"] }
+adk-rust = { version = "2.2.0", features = ["minimal", "gemini-agent-platform"] }
 ```
 
 ### 2. Set the environment flags

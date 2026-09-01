@@ -26,14 +26,14 @@ OpenTelemetry integration for Rust Agent Development Kit (ADK-Rust) agent observ
 
 ```toml
 [dependencies]
-adk-telemetry = "2.1.0"
+adk-telemetry = "2.2.0"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["telemetry"] }
+adk-rust = { version = "2.2.0", features = ["telemetry"] }
 ```
 
 ## Quick Start
@@ -88,7 +88,7 @@ deploy. Enable the `sqlite` feature (`adk-rust` forwards it as
 `telemetry-sqlite`):
 
 ```toml
-adk-telemetry = { version = "2.1.0", features = ["sqlite"] }
+adk-telemetry = { version = "2.2.0", features = ["sqlite"] }
 ```
 
 ```rust
@@ -133,7 +133,7 @@ Logging-parseable JSON logs. `adk-rust` forwards it as `gcp-telemetry`,
 and the `gemini-agent-platform` meta-feature includes it:
 
 ```toml
-adk-telemetry = { version = "2.1.0", features = ["gcp"] }
+adk-telemetry = { version = "2.2.0", features = ["gcp"] }
 ```
 
 ```rust

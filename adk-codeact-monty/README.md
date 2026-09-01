@@ -25,8 +25,8 @@ read-only or read-write paths and an explicit environment map (see
 
 ```toml
 [dependencies]
-adk-agent = { version = "2.1.0", features = ["codeact"] }
-adk-codeact-monty = "2.1.0"
+adk-agent = { version = "2.2.0", features = ["codeact"] }
+adk-codeact-monty = "2.2.0"
 ```
 
 > **Note:** this crate is **Experimental** (see [STABILITY.md](../STABILITY.md)) —

@@ -78,7 +78,7 @@ See `examples/agent_orchestrator` for the full pattern — registry search plus 
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["minimal", "gemini-agent-platform"] }
+adk-rust = { version = "2.2.0", features = ["minimal", "gemini-agent-platform"] }
 ```
 
 The `gemini-agent-platform` meta-feature includes `vertex-agent-registry` and `vertex-remote-engine` along with every other platform integration.

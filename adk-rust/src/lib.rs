@@ -40,7 +40,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! adk-rust = "2.1.0"
+//! adk-rust = "2.2.0"
 //! tokio = { version = "1.40", features = ["full"] }
 //! dotenvy = "0.15"  # For loading .env files
 //! ```
@@ -49,20 +49,20 @@
 //!
 //! ```toml
 //! # Minimal (default) — agents, Gemini, runner, sessions (fastest build)
-//! adk-rust = "2.1.0"
+//! adk-rust = "2.2.0"
 //!
 //! # Standard — minimal + tools, memory, OpenAI, Anthropic, server, auth,
 //! # graph, eval, guardrails, skills, plugins, artifacts, telemetry
-//! adk-rust = { version = "2.1.0", features = ["standard"] }
+//! adk-rust = { version = "2.2.0", features = ["standard"] }
 //!
 //! # Enterprise — standard + realtime, browser, rag, payments, awp
-//! adk-rust = { version = "2.1.0", features = ["enterprise"] }
+//! adk-rust = { version = "2.2.0", features = ["enterprise"] }
 //!
 //! # Full — enterprise + experimental crates (audio, code, sandbox)
-//! adk-rust = { version = "2.1.0", features = ["full"] }
+//! adk-rust = { version = "2.2.0", features = ["full"] }
 //!
 //! # Custom — pick exactly what you need
-//! adk-rust = { version = "2.1.0", default-features = false, features = [
+//! adk-rust = { version = "2.2.0", default-features = false, features = [
 //!     "agents", "gemini", "tools", "sessions", "openai", "openrouter"
 //! ] }
 //! ```

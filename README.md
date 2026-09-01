@@ -11,16 +11,16 @@
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
 and async, across 43 publishable crates for agent orchestration.
 
-> **v2.1.0 Released!** This API-compatible minor release
-> adds portable, validated teams with exact handoff and delegation semantics; a
-> Gemini Enterprise Agent Platform path spanning Agent Engine runtime and BYOC
-> deployment, Vertex sessions and Memory Bank, GCS artifacts, Example Store,
-> Cloud telemetry, and managed code sandboxes; hardened ambient scheduling,
-> runtime skill writing, and argument-level tool guardrails; plus Anthropic
-> request customization and typed safety-refusal fallback; and a new ADK-Rust-owned
-> responsive runtime UI for conversations, exact team topology, event timelines,
-> shared state, artifacts, sessions, and UI-protocol discovery. All 43 crates are
-> available on [crates.io](https://crates.io/crates/adk-rust/2.1.0).
+> **v2.2.0 Released!** This API-compatible minor release completes the Gemini
+> Enterprise Agent Platform consumption path: the Gen AI Evaluation Service
+> bridge, Vertex AI RAG Engine retrieval and grounding, an Agent Retrieval
+> vector store, Agent Registry discovery and registration, Skill Registry
+> consumption with remote skill loading, and remote ReasoningEngine agents you
+> can call as sub-agents — every one opt-in and composable with any preset, and
+> all appended to `gemini-agent-platform`. Graph workflows gain native tool
+> confirmation pauses. Tracing is fixed so one invocation exports as one trace
+> rather than several disconnected ones. All 43 crates are available on
+> [crates.io](https://crates.io/crates/adk-rust/2.2.0).
 >
 > **Milestone:** ADK-Rust has crossed **500K total crates.io downloads** across
 > the workspace crates.
@@ -149,8 +149,8 @@ with tool, graph, and team agents.
 
 ```toml
 [dependencies]
-adk-rust = "2.1.0"                                        # Gemini, agents, runner, sessions
-# adk-rust = { version = "2.1.0", features = ["standard"] }  # + server, auth, graph, eval
+adk-rust = "2.2.0"                                        # Gemini, agents, runner, sessions
+# adk-rust = { version = "2.2.0", features = ["standard"] }  # + server, auth, graph, eval
 ```
 
 | Tier | Includes | Use case |
@@ -426,7 +426,7 @@ per-platform tool matrix and the CI cost tiers.
 
 ## Project
 
-- [ROADMAP.md](ROADMAP.md) — **v2.1.0** (current). Longer-term direction and
+- [ROADMAP.md](ROADMAP.md) — **v2.2.0** (current). Longer-term direction and
   why both orchestration APIs are supported
 - [CHANGELOG.md](CHANGELOG.md) — every release
 - [CONTRIBUTORS.md](CONTRIBUTORS.md) — the people who built this

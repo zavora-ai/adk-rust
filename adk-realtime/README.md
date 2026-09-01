@@ -73,7 +73,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-realtime = { version = "2.1.0", features = ["openai"] }
+adk-realtime = { version = "2.2.0", features = ["openai"] }
 ```
 
 ### Using RealtimeAgent (Recommended)
@@ -138,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Connect to Gemini Live API via Vertex AI with Application Default Credentials:
 
 ```toml
-adk-realtime = { version = "2.1.0", features = ["vertex-live"] }
+adk-realtime = { version = "2.2.0", features = ["vertex-live"] }
 ```
 
 ```rust
@@ -168,7 +168,7 @@ Prerequisites:
 Lower-latency audio transport using Sans-IO WebRTC with Opus codec:
 
 ```toml
-adk-realtime = { version = "2.1.0", features = ["openai-webrtc"] }
+adk-realtime = { version = "2.2.0", features = ["openai-webrtc"] }
 ```
 
 ```rust
@@ -190,7 +190,7 @@ export CMAKE_POLICY_VERSION_MINIMUM=3.5
 Bridge any `EventHandler` to a LiveKit room for production voice apps:
 
 ```toml
-adk-realtime = { version = "2.1.0", features = ["livekit", "openai"] }
+adk-realtime = { version = "2.2.0", features = ["livekit", "openai"] }
 ```
 
 #### LiveKitConfig and LiveKitRoomBuilder

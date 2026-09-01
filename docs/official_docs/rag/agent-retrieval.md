@@ -4,7 +4,7 @@ Agent Retrieval (formerly Vector Search 2.0) is Google's managed vector database
 
 ```toml
 [dependencies]
-adk-rag = { version = "2.1.0", features = ["agent-retrieval"] }
+adk-rag = { version = "2.2.0", features = ["agent-retrieval"] }
 ```
 
 ## Quick start

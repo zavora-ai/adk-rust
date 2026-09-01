@@ -69,6 +69,9 @@ google-cloud-auth = { version = "1.4", optional = true, default-features = false
 livekit = { workspace = true, optional = true }
 livekit-api = { workspace = true, optional = true }
 livekit-datatrack = { workspace = true, optional = true }
+# Not used directly: declared only so the workspace pin constrains what
+# livekit 0.8.1 resolves for its own `livekit-data-stream = "0.1"` requirement.
+livekit-data-stream = { workspace = true, optional = true }
 libwebrtc = { workspace = true, optional = true }
 webrtc-sys = { workspace = true, optional = true }
 
@@ -166,7 +169,7 @@ gemini = ["dep:tokio-tungstenite", "dep:adk-gemini"]
 # Enable Vertex AI Live API support (requires gemini + OAuth2/ADC auth)
 vertex-live = ["gemini", "dep:google-cloud-auth"]
 # Enable LiveKit WebRTC bridge
-livekit = ["dep:livekit", "dep:livekit-api", "dep:tokio-tungstenite", "dep:libwebrtc", "dep:webrtc-sys", "dep:livekit-datatrack"]
+livekit = ["dep:livekit", "dep:livekit-api", "dep:tokio-tungstenite", "dep:libwebrtc", "dep:webrtc-sys", "dep:livekit-datatrack", "dep:livekit-data-stream"]
 # Enable OpenAI WebRTC transport (requires openai + Sans-IO WebRTC + Opus codec)
 openai-webrtc = ["openai", "dep:str0m", "dep:audiopus", "dep:reqwest"]
 # Enable video avatar support for realtime sessions

@@ -91,6 +91,6 @@ have the agent remember the user across process restarts.
 ## Feature flags
 
 ```toml
-adk-memory = { version = "2.1.0", features = ["graph-memory"] }
-adk-tool   = { version = "2.1.0", features = ["graph-memory-tools"] }
+adk-memory = { version = "2.2.0", features = ["graph-memory"] }
+adk-tool   = { version = "2.2.0", features = ["graph-memory-tools"] }
 ```

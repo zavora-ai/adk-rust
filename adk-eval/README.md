@@ -260,7 +260,7 @@ async fn test_my_agent() {
 
 ```toml
 [dependencies]
-adk-eval = { version = "2.1.0", features = ["embedding", "ci-helpers", "statistics"] }
+adk-eval = { version = "2.2.0", features = ["embedding", "ci-helpers", "statistics"] }
 ```
 
 | Feature | Dependency | Capability |

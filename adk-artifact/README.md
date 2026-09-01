@@ -31,9 +31,9 @@ Auto-assigned versions start at `0` (matching adk-python; the in-memory and file
 
 ```toml
 [dependencies]
-adk-artifact = { version = "2.1.0", features = ["gcs"] }
+adk-artifact = { version = "2.2.0", features = ["gcs"] }
 # or via the umbrella crate:
-adk-rust = { version = "2.1.0", features = ["minimal", "gcs-artifacts"] }
+adk-rust = { version = "2.2.0", features = ["minimal", "gcs-artifacts"] }
 ```
 
 ```rust,no_run
@@ -49,14 +49,14 @@ fn main() -> adk_core::Result<()> {
 
 ```toml
 [dependencies]
-adk-artifact = "2.1.0"
+adk-artifact = "2.2.0"
 ```
 
 Or via the umbrella crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["artifacts"] }
+adk-rust = { version = "2.2.0", features = ["artifacts"] }
 ```
 
 ## Quick Start

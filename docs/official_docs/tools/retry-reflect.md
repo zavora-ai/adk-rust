@@ -16,10 +16,10 @@ When a tool call fails, the default behavior is to return the error to the LLM a
 
 ```toml
 [dependencies]
-adk-retry-reflect = "2.1.0"
+adk-retry-reflect = "2.2.0"
 
 # Or via umbrella crate (included in standard tier)
-adk-rust = { version = "2.1.0", features = ["standard"] }
+adk-rust = { version = "2.2.0", features = ["standard"] }
 ```
 
 ## Quick Start

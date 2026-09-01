@@ -76,7 +76,7 @@ impl AdkSpanExporter {
         let trace_dict = self.trace_dict.read().unwrap_or_else(|e| e.into_inner());
 
         let mut spans = Vec::new();
-        for (_event_id, attributes) in trace_dict.iter() {
+        for attributes in trace_dict.values() {
             // Check if this span belongs to the session
             if let Some(span_session_id) = attributes.get("gcp.vertex.agent.session_id")
                 && span_session_id == session_id

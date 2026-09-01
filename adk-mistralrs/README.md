@@ -10,26 +10,26 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-mistralrs = "2.1.0"
+adk-mistralrs = "2.2.0"
 ```
 
 ### With Hardware Acceleration
 
 ```toml
 # macOS with Metal
-adk-mistralrs = { version = "2.1.0", features = ["metal"] }
+adk-mistralrs = { version = "2.2.0", features = ["metal"] }
 
 # NVIDIA GPU with CUDA
-adk-mistralrs = { version = "2.1.0", features = ["cuda"] }
+adk-mistralrs = { version = "2.2.0", features = ["cuda"] }
 
 # CUDA with Flash Attention
-adk-mistralrs = { version = "2.1.0", features = ["flash-attn"] }
+adk-mistralrs = { version = "2.2.0", features = ["flash-attn"] }
 
 # Multi-GPU via NCCL
-adk-mistralrs = { version = "2.1.0", features = ["nccl"] }
+adk-mistralrs = { version = "2.2.0", features = ["nccl"] }
 
 # Intel MKL
-adk-mistralrs = { version = "2.1.0", features = ["mkl"] }
+adk-mistralrs = { version = "2.2.0", features = ["mkl"] }
 ```
 
 ## Features
@@ -50,9 +50,9 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-core = "2.1.0"
-adk-agent = "2.1.0"
-adk-mistralrs = "2.1.0"
+adk-core = "2.2.0"
+adk-agent = "2.2.0"
+adk-mistralrs = "2.2.0"
 ```
 
 ### Feature Flags

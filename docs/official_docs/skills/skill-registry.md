@@ -17,7 +17,7 @@ Enable the feature on `adk-skill` (and on `adk-cli` for the commands):
 
 ```toml
 [dependencies]
-adk-skill = { version = "2.1.0", features = ["vertex-skill-registry"] }
+adk-skill = { version = "2.2.0", features = ["vertex-skill-registry"] }
 ```
 
 Authentication uses Application Default Credentials
@@ -111,7 +111,7 @@ The `adk-rust` binary gains two read-only subcommands behind the
 
 ```toml
 [dependencies]
-adk-cli = { version = "2.1.0", features = ["vertex-skill-registry"] }
+adk-cli = { version = "2.2.0", features = ["vertex-skill-registry"] }
 ```
 
 ```bash

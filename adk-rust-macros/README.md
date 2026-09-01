@@ -10,8 +10,8 @@ This crate provides the `#[tool]` attribute macro that turns an async function i
 
 ```toml
 [dependencies]
-adk-rust-macros = "2.1.0"
-adk-tool = "2.1.0"
+adk-rust-macros = "2.2.0"
+adk-tool = "2.2.0"
 schemars = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

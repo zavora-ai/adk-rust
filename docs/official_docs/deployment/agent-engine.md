@@ -26,7 +26,7 @@ meta-feature):
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["minimal", "agent-engine"] }
+adk-rust = { version = "2.2.0", features = ["minimal", "agent-engine"] }
 ```
 
 For an agent that uses the full platform — managed sessions, Memory Bank,
@@ -35,7 +35,7 @@ and Skill Registries — one feature brings every integration:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["minimal", "gemini-agent-platform"] }
+adk-rust = { version = "2.2.0", features = ["minimal", "gemini-agent-platform"] }
 ```
 
 `serve_agent_engine` is the whole `main` of a deployable engine. It binds

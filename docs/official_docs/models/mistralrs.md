@@ -31,9 +31,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-adk-mistralrs = "2.1.0"
-adk-agent = "2.1.0"
-adk-rust = "2.1.0"
+adk-mistralrs = "2.2.0"
+adk-agent = "2.2.0"
+adk-rust = "2.2.0"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1.0"
 ```
@@ -42,10 +42,10 @@ For hardware acceleration, add feature flags:
 
 ```toml
 # macOS with Apple Silicon
-adk-mistralrs = { version = "2.1.0", features = ["metal"] }
+adk-mistralrs = { version = "2.2.0", features = ["metal"] }
 
 # NVIDIA GPU (requires CUDA toolkit)
-adk-mistralrs = { version = "2.1.0", features = ["cuda"] }
+adk-mistralrs = { version = "2.2.0", features = ["cuda"] }
 ```
 
 ---
@@ -282,7 +282,7 @@ ModelSource::gguf("/path/to/model.Q4_K_M.gguf")
 ### macOS (Apple Silicon)
 
 ```toml
-adk-mistralrs = { version = "2.1.0", features = ["metal"] }
+adk-mistralrs = { version = "2.2.0", features = ["metal"] }
 ```
 
 Metal acceleration is automatic on M1/M2/M3 Macs.
@@ -290,7 +290,7 @@ Metal acceleration is automatic on M1/M2/M3 Macs.
 ### NVIDIA GPU
 
 ```toml
-adk-mistralrs = { version = "2.1.0", features = ["cuda"] }
+adk-mistralrs = { version = "2.2.0", features = ["cuda"] }
 ```
 
 Requires CUDA toolkit 11.8+.

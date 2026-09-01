@@ -24,14 +24,14 @@ Agent execution runtime for ADK-Rust.
 
 ```toml
 [dependencies]
-adk-runner = "2.1.0"
+adk-runner = "2.2.0"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["runner"] }
+adk-rust = { version = "2.2.0", features = ["runner"] }
 ```
 
 ## Quick Start

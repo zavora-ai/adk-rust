@@ -15,10 +15,10 @@ Action nodes are the building blocks of visual and programmatic workflow graphs.
 
 ```toml
 [dependencies]
-adk-action = "2.1.0"
+adk-action = "2.2.0"
 
 # Or specific action features via umbrella crate
-adk-rust = { version = "2.1.0", features = ["action"] }
+adk-rust = { version = "2.2.0", features = ["action"] }
 ```
 
 ## Node Types (14)

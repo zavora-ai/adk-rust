@@ -6,14 +6,14 @@ The `gcp` feature of `adk-telemetry` exports traces directly to Google Cloud Obs
 
 ```toml
 [dependencies]
-adk-telemetry = { version = "2.1.0", features = ["gcp"] }
+adk-telemetry = { version = "2.2.0", features = ["gcp"] }
 ```
 
 Or through the umbrella crate (`gcp-telemetry` is also part of the `gemini-agent-platform` meta-feature):
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["minimal", "gcp-telemetry"] }
+adk-rust = { version = "2.2.0", features = ["minimal", "gcp-telemetry"] }
 ```
 
 ## Direct Export to Google Cloud

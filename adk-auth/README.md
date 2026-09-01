@@ -20,13 +20,13 @@ Access control and authentication for Rust Agent Development Kit (ADK-Rust).
 
 ```toml
 [dependencies]
-adk-auth = "2.1.0"
+adk-auth = "2.2.0"
 
 # With SSO/JWT validation
-adk-auth = { version = "2.1.0", features = ["sso"] }
+adk-auth = { version = "2.2.0", features = ["sso"] }
 
 # With auth bridge for adk-server identity flow (implies sso)
-adk-auth = { version = "2.1.0", features = ["auth-bridge"] }
+adk-auth = { version = "2.2.0", features = ["auth-bridge"] }
 ```
 
 ## Features

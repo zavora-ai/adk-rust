@@ -93,11 +93,11 @@ let result = backend.execute(request).await?;
 ```toml
 [dependencies]
 # Auto-detect platform enforcer
-adk-sandbox = { version = "2.1.0", features = ["process", "sandbox-native"] }
+adk-sandbox = { version = "2.2.0", features = ["process", "sandbox-native"] }
 
 # Or pick a specific platform
-adk-sandbox = { version = "2.1.0", features = ["process", "sandbox-macos"] }
-adk-sandbox = { version = "2.1.0", features = ["process", "sandbox-linux"] }
+adk-sandbox = { version = "2.2.0", features = ["process", "sandbox-macos"] }
+adk-sandbox = { version = "2.2.0", features = ["process", "sandbox-linux"] }
 ```
 
 ### SandboxPolicy

@@ -57,10 +57,10 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-graph = { version = "2.1.0", features = ["sqlite"] }
-adk-agent = "2.1.0"
-adk-model = "2.1.0"
-adk-core = "2.1.0"
+adk-graph = { version = "2.2.0", features = ["sqlite"] }
+adk-agent = "2.2.0"
+adk-model = "2.2.0"
+adk-core = "2.2.0"
 ```
 
 ### Basic Graph with AgentNode
@@ -641,7 +641,7 @@ The Functional API (feature: `functional`) provides a higher-level programming m
 
 ```toml
 [dependencies]
-adk-graph = { version = "2.1.0", features = ["functional"] }
+adk-graph = { version = "2.2.0", features = ["functional"] }
 ```
 
 ```rust

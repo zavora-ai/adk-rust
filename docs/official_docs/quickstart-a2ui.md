@@ -7,8 +7,8 @@ This guide shows how to emit A2UI JSONL from an ADK agent and render it with the
 ```toml
 [dependencies]
 adk-ui = { git = "https://github.com/zavora-ai/adk-ui" }
-adk-agent = "2.1.0"
-adk-model = "2.1.0"
+adk-agent = "2.2.0"
+adk-model = "2.2.0"
 ```
 
 React renderer:

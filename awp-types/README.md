@@ -78,7 +78,7 @@ Use `awp-types` when you need to:
 
 ```toml
 [dependencies]
-awp-types = "2.1.0"
+awp-types = "2.2.0"
 ```
 
 ```rust

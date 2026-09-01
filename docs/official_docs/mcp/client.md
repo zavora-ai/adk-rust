@@ -8,13 +8,13 @@ workflow.
 
 ```toml
 [dependencies]
-adk-tool = { version = "2.1.0", features = ["mcp"] }
+adk-tool = { version = "2.2.0", features = ["mcp"] }
 ```
 
 For remote Streamable HTTP:
 
 ```toml
-adk-tool = { version = "2.1.0", features = ["mcp", "http-transport"] }
+adk-tool = { version = "2.2.0", features = ["mcp", "http-transport"] }
 ```
 
 ## Local stdio connection

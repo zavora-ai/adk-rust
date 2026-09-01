@@ -15,7 +15,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "2.1.0"
+adk-rust = "2.2.0"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"
@@ -297,7 +297,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.1.0", features = ["tools"] }
+adk-rust = { version = "2.2.0", features = ["tools"] }
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"

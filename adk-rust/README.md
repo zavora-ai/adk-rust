@@ -39,7 +39,7 @@ cargo new my_agent && cd my_agent
 
 ```toml
 [dependencies]
-adk-rust = "2.1.0"
+adk-rust = "2.2.0"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -308,32 +308,32 @@ cargo run -- serve --port 8080
 
 ```toml
 # Minimal (default) — agents, Gemini, runner, sessions (fastest build)
-adk-rust = "2.1.0"
+adk-rust = "2.2.0"
 
 # Standard — minimal + tools, memory, OpenAI, Anthropic, server, auth,
 # graph, eval, guardrails, skills, plugins, artifacts, telemetry
-adk-rust = { version = "2.1.0", features = ["standard"] }
+adk-rust = { version = "2.2.0", features = ["standard"] }
 
 # Enterprise — standard + realtime, browser, rag, payments, awp
-adk-rust = { version = "2.1.0", features = ["enterprise"] }
+adk-rust = { version = "2.2.0", features = ["enterprise"] }
 
 # Full — enterprise + experimental crates (audio, code, sandbox, code-tools)
-adk-rust = { version = "2.1.0", features = ["full"] }
+adk-rust = { version = "2.2.0", features = ["full"] }
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except
 # realtime transports; composable with any tier. The right default for
 # ReasoningEngine BYOC deployments. Deploy-time tooling is host-side and
 # not included.
-adk-rust = { version = "2.1.0", features = ["standard", "gemini-agent-platform"] }
+adk-rust = { version = "2.2.0", features = ["standard", "gemini-agent-platform"] }
 
 # gemini-agent-platform + Vertex AI Live API (pulls in the realtime WebSocket/audio stack)
-adk-rust = { version = "2.1.0", features = ["standard", "gemini-agent-platform-full"] }
+adk-rust = { version = "2.2.0", features = ["standard", "gemini-agent-platform-full"] }
 
 # Custom
-adk-rust = { version = "2.1.0", default-features = false, features = ["agents", "gemini", "tools"] }
+adk-rust = { version = "2.2.0", default-features = false, features = ["agents", "gemini", "tools"] }
 
 # With new providers (forwarded to adk-model)
-adk-model = { version = "2.1.0", features = ["fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova", "bedrock", "azure-ai"] }
+adk-model = { version = "2.2.0", features = ["fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova", "bedrock", "azure-ai"] }
 ```
 
 ## Documentation

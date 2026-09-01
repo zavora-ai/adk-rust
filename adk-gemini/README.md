@@ -34,14 +34,14 @@ Rust client library for Google's Gemini API — content generation, streaming, f
 
 ```toml
 [dependencies]
-adk-gemini = "2.1.0"
+adk-gemini = "2.2.0"
 ```
 
 Or through `adk-model`:
 
 ```toml
 [dependencies]
-adk-model = { version = "2.1.0", features = ["gemini"] }
+adk-model = { version = "2.2.0", features = ["gemini"] }
 ```
 
 ## Quick Start
