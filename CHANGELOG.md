@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Progressive skill disclosure** (`adk-skill`, `skills-progressive-disclosure`):
+  a Google ADK-style `SkillToolset` exposing `list_skills`, `load_skill` and
+  `load_skill_resource`, so an agent discovers a skill index first and pulls full
+  skill bodies and resources only when it needs them, rather than carrying every
+  skill in the prompt. `ResourceAccessPolicy` bounds which resources a loaded
+  skill may read, and `ReadonlyContext::state()` is a new defaulted trait method
+  letting dynamic toolsets read session state without mutable access —
+  third-party context implementations stay source-compatible.
+
 - **Wave 4 platform services (round two)** — the Govern-pillar invocation
   and consumption features, closing out the Agent Engine plan:
   - `vertex-remote-engine` (adk-server): `RemoteReasoningEngineAgent` —
