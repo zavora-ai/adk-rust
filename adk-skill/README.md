@@ -354,6 +354,46 @@ let plugin_manager = injector.build_plugin_manager("skills");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+## Progressive Disclosure (Google ADK-style)
+
+Enable the optional `progressive-disclosure` feature to expose skills as a
+context-aware `Toolset` rather than injecting an instruction body into every
+matching user message. It provides three always-available tools:
+
+1. `list_skills` — L1: names and descriptions only.
+2. `load_skill` — L2: loads one skill's instructions and activates its declared
+   `allowed-tools` for the next model turn.
+3. `load_skill_resource` — L3: reads a file from an activated skill's
+   `references/`, `assets/`, or `scripts/` directory.
+
+The activation record contains the skill's content ID and hash, so a changed or
+removed skill cannot silently retain its old permissions. Resources require
+activation by default and reject path traversal. Set
+`ResourceAccessPolicy::GoogleCompatible` only when direct resource reads are
+required for interoperability.
+
+```rust,ignore
+use adk_core::ToolRegistry;
+use adk_skill::{SkillToolset, SkillToolsetConfig, load_skill_index};
+use std::sync::Arc;
+
+let index = Arc::new(load_skill_index(".")?);
+let skills = SkillToolset::new(index, Arc::new(my_tool_registry), SkillToolsetConfig::default());
+let agent = LlmAgent::builder().toolset(Arc::new(skills)).build()?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Existing `SkillInjector` and `ContextCoordinator` APIs remain unchanged. The
+new toolset is opt-in and can coexist with them while applications migrate.
+
+When both `progressive-disclosure` and `vertex-skill-registry` are enabled,
+attach an existing `SkillRegistryClient` through
+`SkillToolset::with_registry_client`. This adds the registry's semantic
+`search_skills` tool and fetches a selected package only on `load_skill`.
+Local names still take precedence. Registry activations retain their fully
+qualified resource name and content hash, so they can be validated on later
+model turns.
+
 ## Error Model
 
 Main error type: `SkillError`
@@ -370,8 +410,9 @@ Type alias: `SkillResult<T> = Result<T, SkillError>`
 
 - No embedding/vector retrieval (lexical matching only).
 - No incremental file reload API yet.
-- No remote catalog (`skills-ref`/MCP) in this crate yet.
-- No script/file reference execution layer in this crate (selection + injection only).
+- Script execution is not provided by progressive disclosure yet; use an
+  `adk-sandbox` or `adk-code` integration rather than executing skill scripts
+  directly.
 - No standard CLI for skill management (use `adk-cli` wrapper if available).
 
 ## Application Integration Patterns

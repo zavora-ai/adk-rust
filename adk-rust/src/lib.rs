@@ -1386,6 +1386,8 @@ pub mod prelude {
     // Skills
     #[cfg(feature = "skills")]
     pub use crate::skill::{SelectionPolicy, SkillInjector, SkillInjectorConfig, load_skill_index};
+    #[cfg(feature = "skills-progressive-disclosure")]
+    pub use crate::skill::{SkillToolset, SkillToolsetConfig};
 
     // Sessions
     #[cfg(feature = "sessions")]

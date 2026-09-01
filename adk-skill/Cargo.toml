@@ -23,11 +23,15 @@ vertex-skill-registry = [
     "dep:base64",
     "dep:zip",
 ]
+# Google ADK-style skill discovery and on-demand loading tools. This stays
+# opt-in so existing prompt-injection users retain their current behavior.
+progressive-disclosure = ["dep:async-trait", "dep:tokio"]
 
 [dependencies]
 adk-core.workspace = true
 adk-gcp = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["sync"] }
 adk-plugin.workspace = true
 serde.workspace = true
 serde_json.workspace = true

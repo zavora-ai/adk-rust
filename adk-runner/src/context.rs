@@ -508,6 +508,12 @@ impl ReadonlyContext for InvocationContext {
     fn user_content(&self) -> &Content {
         &self.user_content
     }
+
+    fn state(&self) -> Option<&dyn adk_core::State> {
+        // Expose the runner's mutable session view so a toolset can observe a
+        // state delta emitted by an earlier tool result on the next model turn.
+        Some(adk_core::Session::state(self.session.as_ref()))
+    }
 }
 
 #[async_trait]

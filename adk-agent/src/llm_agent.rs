@@ -116,6 +116,24 @@ fn collect_function_calls(content: &Content, invocation_id: &str) -> Vec<Pending
         .collect()
 }
 
+fn collect_long_running_tool_ids(
+    tool_map: &HashMap<String, Arc<dyn Tool>>,
+    content: &Content,
+) -> Vec<String> {
+    content
+        .parts
+        .iter()
+        .filter_map(|part| {
+            if let Part::FunctionCall { name, .. } = part
+                && tool_map.get(name).is_some_and(|tool| tool.is_long_running())
+            {
+                return Some(name.clone());
+            }
+            None
+        })
+        .collect()
+}
+
 fn build_partial_llm_event(
     event_id: &str,
     invocation_id: &str,
@@ -2479,26 +2497,9 @@ impl Agent for LlmAgent {
                     return;
                 }
             };
-            let tool_map = resolved_tools.map;
-            let tool_declarations = resolved_tools.declarations;
-            let valid_transfer_targets = resolved_tools.transfer_targets;
-
-            let collect_long_running_ids = |content: &Content| -> Vec<String> {
-                content
-                    .parts
-                    .iter()
-                    .filter_map(|part| {
-                        if let Part::FunctionCall { name, .. } = part
-                            && let Some(tool) = tool_map.get(name)
-                            && tool.is_long_running()
-                        {
-                            return Some(name.clone());
-                        }
-                        None
-                    })
-                    .collect()
-            };
-
+            let mut tool_map = resolved_tools.map;
+            let mut tool_declarations = resolved_tools.declarations;
+            let mut valid_transfer_targets = resolved_tools.transfer_targets;
 
             // ===== CIRCUIT BREAKER STATE =====
             // Created fresh per invocation so it resets between runs.
@@ -2643,7 +2644,8 @@ impl Agent for LlmAgent {
 
                     // Populate long_running_tool_ids for function calls from long-running tools
                     if let Some(ref content) = accumulated_content {
-                        cached_event.long_running_tool_ids = collect_long_running_ids(content);
+                        cached_event.long_running_tool_ids =
+                            collect_long_running_tool_ids(&tool_map, content);
                     }
 
                     yield Ok(cached_event);
@@ -2741,7 +2743,7 @@ impl Agent for LlmAgent {
                             let long_running_tool_ids = chunk
                                 .content
                                 .as_ref()
-                                .map(&collect_long_running_ids)
+                                .map(|content| collect_long_running_tool_ids(&tool_map, content))
                                 .unwrap_or_default();
                             yield Ok(build_partial_llm_event(
                                 &llm_event_id,
@@ -2789,7 +2791,7 @@ impl Agent for LlmAgent {
                         }
                         let long_running_tool_ids = accumulated_content
                             .as_ref()
-                            .map(&collect_long_running_ids)
+                            .map(|content| collect_long_running_tool_ids(&tool_map, content))
                             .unwrap_or_default();
                         yield Ok(build_final_llm_event(
                             &llm_event_id,
@@ -3305,6 +3307,21 @@ impl Agent for LlmAgent {
 
                         conversation_history.push(result.content);
                     }
+
+                    // A tool can update session state as part of its response. Resolve
+                    // toolsets again before the next model turn so context-sensitive
+                    // toolsets (notably progressive skills) can expose newly activated
+                    // capabilities in the same invocation.
+                    let refreshed_tools = match tool_setup.resolve(&ctx).await {
+                        Ok(tools) => tools,
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    };
+                    tool_map = refreshed_tools.map;
+                    tool_declarations = refreshed_tools.declarations;
+                    valid_transfer_targets = refreshed_tools.transfer_targets;
                 }
 
                 // If all function calls were from long-running tools, we need ONE more model call

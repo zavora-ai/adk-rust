@@ -119,6 +119,8 @@ record-payloads = ["agents", "adk-agent/record-payloads"]
 models = ["dep:adk-model"]
 tools = ["dep:adk-tool", "adk-agent?/team-tools"]
 skills = ["dep:adk-skill"]
+# Google ADK-style progressive skill discovery and activation tools.
+skills-progressive-disclosure = ["skills", "adk-skill/progressive-disclosure", "adk-agent?/skills-progressive-disclosure"]
 sessions = ["dep:adk-session"]
 artifacts = ["dep:adk-artifact"]
 # GCS artifact backend, blob-name compatible with adk-python (forwarded to adk-artifact)

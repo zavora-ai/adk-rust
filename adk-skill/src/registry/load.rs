@@ -198,7 +198,11 @@ pub fn merge_skill_indexes(local: SkillIndex, remote: SkillIndex) -> SkillIndex 
 }
 
 /// Builds a [`SkillDocument`] from a fetched skill package.
-fn document_from_content(content: &SkillContent) -> SkillResult<SkillDocument> {
+/// Builds a document from a verified registry payload.
+///
+/// This is shared by eager index loading and progressive, invocation-scoped
+/// loading so both paths preserve the same parser and content-hash semantics.
+pub(crate) fn document_from_content(content: &SkillContent) -> SkillResult<SkillDocument> {
     let skill_md = content.skill_md().ok_or_else(|| {
         SkillError::Validation(format!(
             "skill `{}` package has no SKILL.md at its root; repackage the skill with SKILL.md at the top level",

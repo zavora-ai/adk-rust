@@ -45,6 +45,9 @@ default = ["skills"]
 guardrails = ["adk-guardrail"]
 enhanced-plugins = ["dep:adk-plugin"]
 skills = ["dep:adk-skill"]
+# Google ADK-style L1/L2/L3 skill tools. Existing `skills` continues to use
+# prompt injection unless callers explicitly register a SkillToolset.
+skills-progressive-disclosure = ["skills", "adk-skill/progressive-disclosure"]
 sandbox = ["dep:adk-sandbox", "adk-sandbox/workspace"]
 coding = ["dep:adk-devtools"]
 codeact = []

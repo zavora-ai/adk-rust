@@ -5,7 +5,7 @@ use adk_agent::{
 use adk_core::{
     Agent, CallbackContext, Content, Event, EventStream, FinishReason, InvocationContext, Llm,
     LlmRequest, LlmResponse, LlmResponseStream, Part, Result, RunConfig, Session, State, Tool,
-    ToolContext,
+    ToolContext, Toolset,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -245,6 +245,70 @@ impl Tool for IdCapturingTool {
     }
 }
 
+/// A test-only dynamic toolset whose second capability becomes available after
+/// its activation tool runs. This models progressive skill disclosure without
+/// coupling the agent runtime test to a particular skill storage backend.
+struct ActivatingToolset {
+    activated: Arc<AtomicBool>,
+    business_calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Toolset for ActivatingToolset {
+    fn name(&self) -> &str {
+        "activating"
+    }
+
+    async fn tools(&self, _ctx: Arc<dyn adk_core::ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
+        let mut tools: Vec<Arc<dyn Tool>> =
+            vec![Arc::new(ActivateCapabilityTool { activated: self.activated.clone() })];
+        if self.activated.load(Ordering::SeqCst) {
+            tools.push(Arc::new(ActivatedCapabilityTool { calls: self.business_calls.clone() }));
+        }
+        Ok(tools)
+    }
+}
+
+struct ActivateCapabilityTool {
+    activated: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Tool for ActivateCapabilityTool {
+    fn name(&self) -> &str {
+        "activate_capability"
+    }
+
+    fn description(&self) -> &str {
+        "Activates a deferred capability."
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        self.activated.store(true, Ordering::SeqCst);
+        Ok(json!({ "activated": true }))
+    }
+}
+
+struct ActivatedCapabilityTool {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Tool for ActivatedCapabilityTool {
+    fn name(&self) -> &str {
+        "activated_capability"
+    }
+
+    fn description(&self) -> &str {
+        "A capability exposed after activation."
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(json!({ "ok": true }))
+    }
+}
+
 struct ConcurrencyProbeTool {
     active: Arc<AtomicUsize>,
     max_active: Arc<AtomicUsize>,
@@ -416,6 +480,42 @@ async fn drain_stream(mut stream: EventStream) -> Result<Vec<Event>> {
         events.push(result?);
     }
     Ok(events)
+}
+
+#[tokio::test]
+async fn toolsets_are_refreshed_between_model_turns_after_a_tool_call() {
+    let model = Arc::new(RecordingModel::new(vec![
+        RecordingModel::function_calls(vec![Part::FunctionCall {
+            name: "activate_capability".to_string(),
+            args: json!({}),
+            id: Some("activate".to_string()),
+            thought_signature: None,
+        }]),
+        RecordingModel::function_calls(vec![Part::FunctionCall {
+            name: "activated_capability".to_string(),
+            args: json!({}),
+            id: Some("use-activated".to_string()),
+            thought_signature: None,
+        }]),
+        RecordingModel::text_response("done"),
+    ]));
+    let activated = Arc::new(AtomicBool::new(false));
+    let business_calls = Arc::new(AtomicUsize::new(0));
+    let toolset = Arc::new(ActivatingToolset { activated, business_calls: business_calls.clone() });
+    let agent = LlmAgentBuilder::new("refresh-agent")
+        .model(model.clone())
+        .toolset(toolset)
+        .build()
+        .expect("agent builds");
+
+    let stream = agent.run(Arc::new(TestContext::new("activate and use it"))).await.expect("run");
+    drain_stream(stream).await.expect("agent stream");
+
+    assert_eq!(business_calls.load(Ordering::SeqCst), 1);
+    let requests = model.requests.lock().unwrap_or_else(|error| error.into_inner());
+    assert_eq!(requests.len(), 3);
+    assert!(!requests[0].tools.contains_key("activated_capability"));
+    assert!(requests[1].tools.contains_key("activated_capability"));
 }
 
 #[tokio::test]

@@ -35,7 +35,7 @@
 
 mod client;
 pub mod extract;
-mod load;
+pub(crate) mod load;
 mod tool;
 
 pub use client::{

@@ -93,6 +93,17 @@ pub trait ReadonlyContext: Send + Sync {
     /// Returns the user's input content for this invocation.
     fn user_content(&self) -> &Content;
 
+    /// Returns the session state when the runtime exposes it to dynamic toolsets.
+    ///
+    /// The default keeps lightweight contexts and third-party implementations
+    /// source-compatible. Consumers must gracefully handle contexts without
+    /// session state. Dynamic [`Toolset`](crate::Toolset) implementations use
+    /// this to determine their context-specific tool surface without requiring
+    /// mutable access to the session.
+    fn state(&self) -> Option<&dyn State> {
+        None
+    }
+
     /// Returns the application name as a typed [`AppName`].
     ///
     /// Parses the value returned by [`app_name()`](Self::app_name). Returns an
