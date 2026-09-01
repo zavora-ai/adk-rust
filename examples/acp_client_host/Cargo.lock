@@ -15,7 +15,7 @@ dependencies = [
 
 [[package]]
 name = "adk-acp"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "agent-client-protocol",
@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "adk-core"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "async-trait",
  "chrono",

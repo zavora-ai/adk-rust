@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adk-agent"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "adk-telemetry",
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "adk-core"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "adk-gemini"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -65,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "adk-model"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "adk-gemini",
@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "adk-runner"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "adk-session",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rust"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-agent",
  "adk-core",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rust-macros"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "adk-session"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "adk-telemetry"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "thiserror",
  "tracing",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "adk-tool"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "adk-rust-macros",

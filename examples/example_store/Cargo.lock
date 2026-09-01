@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adk-core"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "adk-gcp"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "google-cloud-auth",
@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rust-macros"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "adk-telemetry"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "thiserror",
  "tracing",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "adk-tool"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "adk-gcp",

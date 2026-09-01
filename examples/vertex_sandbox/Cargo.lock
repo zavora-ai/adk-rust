@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adk-code"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "adk-gcp",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "adk-core"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -38,7 +38,7 @@ dependencies = [
 
 [[package]]
 name = "adk-gcp"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "google-cloud-auth",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "adk-sandbox"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "async-trait",

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adk-anthropic"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "base64",
  "bytes",
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "adk-core"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "adk-gemini"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -65,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "adk-model"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-anthropic",
  "adk-core",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "adk-realtime"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "adk-telemetry"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "thiserror",
  "tracing",

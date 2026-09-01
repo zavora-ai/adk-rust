@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adk-artifact"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "adk-auth"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "adk-core"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -46,7 +46,7 @@ dependencies = [
 
 [[package]]
 name = "adk-guardrail"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "adk-memory"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "adk-payments"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-artifact",
  "adk-auth",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "adk-session"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "adk-core",
  "async-trait",
