@@ -809,7 +809,7 @@ impl Runner {
                             ctx.mutable_session().replace_events(compacted);
                             tracing::info!("context compaction succeeded after token limit error, retrying agent");
                             // Retry the agent call with compacted context
-                            match agent_to_run.run(ctx.clone()).instrument(agent_span).await {
+                            match agent_to_run.run(ctx.clone()).instrument(agent_span.clone()).await {
                                 Ok(s) => s,
                                 Err(retry_err) => {
                                     #[cfg(feature = "plugins")]
@@ -863,10 +863,15 @@ impl Runner {
                                 }
                                 return;
                             }
-                            result = agent_stream.next() => result,
+                            // Instrument the poll, not just the construction of the
+                            // stream: `agent_to_run.run(..)` merely builds the
+                            // stream, so without this every span created while the
+                            // stream is drained — i.e. the whole agent execution —
+                            // is created outside `agent_span`.
+                            result = agent_stream.next().instrument(agent_span.clone()) => result,
                         }
                     }
-                    None => agent_stream.next().await,
+                    None => agent_stream.next().instrument(agent_span.clone()).await,
                 }
             } {
                 match result {
