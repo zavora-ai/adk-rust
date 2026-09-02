@@ -242,9 +242,20 @@ async fn test_streaming_chunks() {
     let mut stream = agent.run(ctx).await.unwrap();
 
     let mut received_chunks = Vec::new();
+    let mut terminal_payloads = 0;
 
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
+        if event.llm_response.partial {
+            assert!(event.llm_request.is_none());
+            assert!(!event.provider_metadata.contains_key("gcp.vertex.agent.llm_request"));
+            assert!(!event.provider_metadata.contains_key("gcp.vertex.agent.llm_response"));
+        } else {
+            terminal_payloads += 1;
+            assert!(event.llm_request.is_some());
+            assert!(event.provider_metadata.contains_key("gcp.vertex.agent.llm_request"));
+            assert!(event.provider_metadata.contains_key("gcp.vertex.agent.llm_response"));
+        }
         if let Some(content) = event.llm_response.content
             && let Some(Part::Text { text }) = content.parts.first()
         {
@@ -253,4 +264,5 @@ async fn test_streaming_chunks() {
     }
 
     assert_eq!(received_chunks, vec!["Hello", " ", "World", "!"]);
+    assert_eq!(terminal_payloads, 1);
 }

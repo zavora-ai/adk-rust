@@ -144,14 +144,20 @@ fn build_partial_llm_event(
 ) -> Event {
     let mut event = Event::with_id(event_id, invocation_id);
     event.author = agent_name.to_string();
-    event.llm_request = Some(request_json.to_string());
-    event
-        .provider_metadata
-        .insert("gcp.vertex.agent.llm_request".to_string(), request_json.to_string());
-    event.provider_metadata.insert(
-        "gcp.vertex.agent.llm_response".to_string(),
-        serde_json::to_string(chunk).unwrap_or_default(),
-    );
+    // Keep payload snapshots on the terminal chunk for backwards-compatible
+    // debug tooling, but never repeat the full request and response on every
+    // incremental chunk. Large histories otherwise turn streaming into
+    // O(request_size * chunk_count) serialization and transport work.
+    if !chunk.partial {
+        event.llm_request = Some(request_json.to_string());
+        event
+            .provider_metadata
+            .insert("gcp.vertex.agent.llm_request".to_string(), request_json.to_string());
+        event.provider_metadata.insert(
+            "gcp.vertex.agent.llm_response".to_string(),
+            serde_json::to_string(chunk).unwrap_or_default(),
+        );
+    }
     event.llm_response.partial = chunk.partial;
     event.llm_response.turn_complete = chunk.turn_complete;
     event.llm_response.finish_reason = chunk.finish_reason;
@@ -3434,5 +3440,40 @@ mod run_helper_tests {
         assert_eq!(calls[1].index, 1);
         assert_eq!(calls[1].name, "second");
         assert_eq!(calls[1].function_call_id, "provider-id");
+    }
+
+    #[test]
+    fn partial_stream_events_do_not_repeat_large_payloads() {
+        let marker = "PRIVATE-REQUEST-PAYLOAD";
+        let request_json = format!("{marker}{}", "x".repeat(128 * 1024));
+        let chunk = LlmResponse {
+            content: Some(Content::new("model").with_text("x")),
+            partial: true,
+            ..Default::default()
+        };
+        let mut serialized_bytes = 0;
+
+        for index in 0..64 {
+            let event = build_partial_llm_event(
+                &format!("event-{index}"),
+                "invocation",
+                "agent",
+                &request_json,
+                &chunk,
+                Vec::new(),
+            );
+            let serialized = serde_json::to_string(&event).expect("event should serialize");
+
+            assert!(!serialized.contains(marker));
+            assert!(event.llm_request.is_none());
+            assert!(!event.provider_metadata.contains_key("gcp.vertex.agent.llm_request"));
+            assert!(!event.provider_metadata.contains_key("gcp.vertex.agent.llm_response"));
+            serialized_bytes += serialized.len();
+        }
+
+        assert!(
+            serialized_bytes < 1024 * 1024,
+            "64 tiny chunks unexpectedly serialized to {serialized_bytes} bytes"
+        );
     }
 }
