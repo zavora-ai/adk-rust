@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Runtime SSE errors** (`adk-server`): ADK UI and legacy wrapped transports
+  emit structured runtime error events instead of ending the stream silently;
+  protocol-native AG-UI continues to emit `RUN_ERROR`.
 - **OpenAI-compatible streaming usage** (`adk-model`): usage-only terminal
   chunks with empty `choices` attach token counts to the final response.
 - **Span parenting across suspension points** (`adk-agent`, `adk-runner`): one
