@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **DeepSeek streaming emitted every response twice** (`adk-model`): the
+  terminal SSE chunk replayed the accumulated text and reasoning buffers on top
+  of the deltas it had already yielded as partial chunks. Consumers accumulate
+  the parts of every chunk — `LlmAgent` does, to build conversation history — so
+  they saw the whole response twice. With `output_schema` set that is
+  `{...}{...}`, which fails JSON parsing ("Response is not valid JSON: trailing
+  characters") and burns every schema-validation retry, so structured output was
+  unusable on DeepSeek. The terminal chunk now contributes only its own `delta`,
+  plus reasoning that was buffered but never streamed (thinking disabled), and a
+  `delta.content` arriving in the same chunk as `finish_reason` is no longer
+  dropped.
+
 ## [2.2.0] - 2026-09-01
 
 ### Added
