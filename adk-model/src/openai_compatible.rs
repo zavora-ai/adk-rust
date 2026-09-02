@@ -294,6 +294,31 @@ impl OpenAICompatible {
     }
 }
 
+/// Add structured assistant reasoning to both commonly used
+/// OpenAI-compatible history fields without exposing it as visible content.
+fn inject_assistant_reasoning_content(body: &mut serde_json::Value, contents: &[Content]) {
+    let Some(messages) = body.get_mut("messages").and_then(serde_json::Value::as_array_mut) else {
+        return;
+    };
+
+    for (message, content) in messages.iter_mut().zip(contents) {
+        if !matches!(content.role.as_str(), "model" | "assistant") {
+            continue;
+        }
+        let Some(reasoning_content) = convert::extract_reasoning_content(&content.parts) else {
+            continue;
+        };
+        let Some(message) = message.as_object_mut() else {
+            continue;
+        };
+
+        message
+            .insert("reasoning".to_string(), serde_json::Value::String(reasoning_content.clone()));
+        message
+            .insert("reasoning_content".to_string(), serde_json::Value::String(reasoning_content));
+    }
+}
+
 /// Build the serialized JSON request body from an `LlmRequest`.
 ///
 /// This is shared between the streaming and non-streaming paths so that
@@ -383,6 +408,8 @@ pub(crate) fn build_request_json(
     if model.starts_with("gpt-5.6") && !request.tools.is_empty() && reasoning_effort.is_none() {
         body["reasoning_effort"] = serde_json::Value::String("none".to_string());
     }
+
+    inject_assistant_reasoning_content(&mut body, &request.contents);
 
     // Merge provider-specific extensions from config.extensions["openai"] into
     // the request body.  This allows users to pass provider-specific fields
@@ -1066,5 +1093,72 @@ mod tests {
         let config = OpenAICompatibleConfig::gemini("k", "gemini-3.5-flash");
         let client = OpenAICompatible::new(config).expect("client builds");
         assert_eq!(client.name(), "gemini-3.5-flash");
+    }
+
+    #[test]
+    fn request_json_keeps_reasoning_separate_from_assistant_content() {
+        let request = LlmRequest {
+            model: "test-model".to_string(),
+            contents: vec![Content {
+                role: "model".to_string(),
+                parts: vec![
+                    Part::Thinking { thinking: "private reasoning".to_string(), signature: None },
+                    Part::Text { text: "visible answer".to_string() },
+                ],
+            }],
+            config: None,
+            tools: Default::default(),
+            previous_response_id: None,
+        };
+        let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
+
+        let body =
+            build_request_json("test-model", &request, &None, true, &GenericSchemaAdapter, &cache)
+                .expect("request builds");
+        let message = &body["messages"][0];
+
+        assert_eq!(message["role"], "assistant");
+        assert_eq!(message["content"], "visible answer");
+        assert_eq!(message["reasoning"], "private reasoning");
+        assert_eq!(message["reasoning_content"], "private reasoning");
+        assert!(!message["content"].as_str().unwrap().contains("private reasoning"));
+    }
+
+    #[test]
+    fn request_json_replays_reasoning_for_assistant_tool_calls() {
+        let request = LlmRequest {
+            model: "test-model".to_string(),
+            contents: vec![Content {
+                role: "assistant".to_string(),
+                parts: vec![
+                    Part::Thinking {
+                        thinking: "I should call the tool".to_string(),
+                        signature: None,
+                    },
+                    Part::FunctionCall {
+                        name: "lookup".to_string(),
+                        args: serde_json::json!({"query": "value"}),
+                        id: Some("call_1".to_string()),
+                        thought_signature: None,
+                    },
+                ],
+            }],
+            config: None,
+            tools: Default::default(),
+            previous_response_id: None,
+        };
+        let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
+
+        let body =
+            build_request_json("test-model", &request, &None, true, &GenericSchemaAdapter, &cache)
+                .expect("request builds");
+        let message = &body["messages"][0];
+
+        assert_eq!(message["role"], "assistant");
+        assert_eq!(message["reasoning"], "I should call the tool");
+        assert_eq!(message["reasoning_content"], "I should call the tool");
+        assert!(message.get("content").is_none() || message["content"].is_null());
+        assert_eq!(message["tool_calls"][0]["id"], "call_1");
+        assert_eq!(message["tool_calls"][0]["function"]["name"], "lookup");
     }
 }

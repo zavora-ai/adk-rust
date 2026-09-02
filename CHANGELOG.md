@@ -73,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **OpenAI message conversion** (`adk-model`): `Part::Thinking` is excluded
+  from visible user, assistant, and system message content instead of being
+  serialized as ordinary text in subsequent requests, and assistant history
+  preserves it under both `reasoning` and `reasoning_content`.
 - **OpenAI-compatible streaming usage** (`adk-model`): usage-only terminal
   chunks with empty `choices` attach token counts to the final response.
 - **Span parenting across suspension points** (`adk-agent`, `adk-runner`): one

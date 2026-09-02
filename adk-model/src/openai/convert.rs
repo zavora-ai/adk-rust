@@ -35,13 +35,6 @@ pub fn content_to_message(content: &Content) -> ChatCompletionRequestMessage {
                                 ChatCompletionRequestMessageContentPartText { text: text.clone() },
                             ))
                         }
-                        Part::Thinking { thinking, .. } => {
-                            Some(ChatCompletionRequestUserMessageContentPart::Text(
-                                ChatCompletionRequestMessageContentPartText {
-                                    text: thinking.clone(),
-                                },
-                            ))
-                        }
                         Part::InlineData { mime_type, data, .. } => {
                             Some(inline_data_part_to_openai(mime_type, data))
                         }
@@ -200,11 +193,26 @@ fn extract_text(parts: &[Part]) -> String {
         .iter()
         .filter_map(|p| match p {
             Part::Text { text } => Some(text.clone()),
-            Part::Thinking { thinking, .. } => Some(thinking.clone()),
             _ => None,
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Extract reasoning content without mixing it into the visible message body.
+pub(crate) fn extract_reasoning_content(parts: &[Part]) -> Option<String> {
+    let reasoning = parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::Thinking { thinking, .. } if !thinking.trim().is_empty() => {
+                Some(thinking.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if reasoning.is_empty() { None } else { Some(reasoning) }
 }
 
 /// Get text content if any exists.
@@ -490,6 +498,32 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_text_excludes_thinking() {
+        let parts = vec![
+            Part::Thinking { thinking: "private reasoning".to_string(), signature: None },
+            Part::Text { text: "visible answer".to_string() },
+        ];
+
+        assert_eq!(extract_text(&parts), "visible answer");
+        assert_eq!(extract_reasoning_content(&parts).as_deref(), Some("private reasoning"));
+    }
+
+    #[test]
+    fn test_assistant_message_does_not_expose_thinking() {
+        let content = Content {
+            role: "assistant".to_string(),
+            parts: vec![
+                Part::Thinking { thinking: "private reasoning".to_string(), signature: None },
+                Part::Text { text: "visible answer".to_string() },
+            ],
+        };
+
+        let message = serde_json::to_value(content_to_message(&content)).unwrap();
+        assert_eq!(message["content"], "visible answer");
+        assert!(!message.to_string().contains("private reasoning"));
+    }
+
+    #[test]
     fn test_user_message_with_inline_data_produces_array_content() {
         let content = Content {
             role: "user".to_string(),
@@ -525,6 +559,37 @@ mod tests {
         } else {
             panic!("Expected User message");
         }
+    }
+
+    #[test]
+    fn test_user_message_with_attachment_does_not_expose_thinking() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![
+                Part::Thinking { thinking: "private reasoning".to_string(), signature: None },
+                Part::Text { text: "Describe this".to_string() },
+                Part::inline_data("image/png", vec![0x89, 0x50, 0x4E, 0x47]),
+            ],
+        };
+        let message = content_to_message(&content);
+
+        let ChatCompletionRequestMessage::User(user_message) = message else {
+            panic!("Expected User message");
+        };
+        let ChatCompletionRequestUserMessageContent::Array(parts) = user_message.content else {
+            panic!("Expected Array content");
+        };
+
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(
+            &parts[0],
+            ChatCompletionRequestUserMessageContentPart::Text(text) if text.text == "Describe this"
+        ));
+        assert!(!parts.iter().any(|part| matches!(
+            part,
+            ChatCompletionRequestUserMessageContentPart::Text(text)
+                if text.text.contains("private reasoning")
+        )));
     }
 
     #[test]
