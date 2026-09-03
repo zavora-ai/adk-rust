@@ -12,7 +12,9 @@ use adk_core::{
 };
 use adk_runner::Runner;
 use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
-use adk_skill::{SkillToolset, SkillToolsetConfig, load_skill_index};
+use adk_skill::{
+    SkillToolset, SkillToolsetConfig, build_skill_system_instruction, load_skill_index,
+};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -169,6 +171,17 @@ async fn runner_persists_skill_activation_before_the_next_model_turn() {
     {
         let requests = model.requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 3);
+        let expected_skill_instruction = build_skill_system_instruction(
+            None,
+            Some(&["list_skills", "load_skill", "load_skill_resource"]),
+            None,
+            false,
+        );
+        assert!(requests[0].contents.iter().any(|content| {
+            content.parts.iter().any(
+                |part| matches!(part, Part::Text { text } if text == &expected_skill_instruction),
+            )
+        }));
         assert!(!requests[0].tools.contains_key("weather_lookup"));
         assert!(requests[1].tools.contains_key("weather_lookup"));
     }

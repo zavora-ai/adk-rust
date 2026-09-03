@@ -485,6 +485,20 @@ impl ToolSetup {
 
         Ok(ResolvedTools { map, declarations, transfer_targets })
     }
+
+    /// Lets static and invocation-scoped toolsets enrich each LLM request.
+    async fn process_llm_request(
+        &self,
+        ctx: &Arc<dyn InvocationContext>,
+        request: &mut LlmRequest,
+    ) -> Result<()> {
+        for toolset in self.toolsets.iter().map(AsRef::as_ref).chain(
+            ctx.run_config().runtime_toolsets.iter().map(|runtime| runtime.toolset().as_ref()),
+        ) {
+            toolset.process_llm_request(ctx.clone() as Arc<dyn ReadonlyContext>, request).await?;
+        }
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for LlmAgent {
@@ -2540,7 +2554,7 @@ impl Agent for LlmAgent {
                     ctx.run_config().cached_content.as_deref(),
                 );
 
-                let request = LlmRequest {
+                let mut request = LlmRequest {
                     model: model.name().to_string(),
                     contents: conversation_history.clone(),
                     tools: tool_declarations.clone(),
@@ -2553,6 +2567,11 @@ impl Agent for LlmAgent {
                     // for providers that never populate `interaction_id`.
                     previous_response_id: last_interaction_id.clone(),
                 };
+
+                if let Err(error) = tool_setup.process_llm_request(&ctx, &mut request).await {
+                    yield Err(error);
+                    return;
+                }
 
                 // ===== ENHANCED PLUGIN: BEFORE MODEL CALL =====
                 // Enhanced plugins can modify the request or short-circuit the model call.

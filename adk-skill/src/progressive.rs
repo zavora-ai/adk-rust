@@ -13,14 +13,16 @@
 //! ADK-Rust's strict [`ValidationMode`] and content-hash provenance guarantees.
 
 use crate::{SkillDocument, SkillIndex, SkillSummary, ToolRegistry, ValidationMode};
-use adk_core::{AdkError, ReadonlyContext, Result, Tool, ToolContext, Toolset};
+use adk_core::{
+    AdkError, Content, LlmRequest, ReadonlyContext, Result, Tool, ToolContext, Toolset,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "vertex-skill-registry")]
 use crate::registry::{SkillContent, SkillRegistryClient, SkillSearchTool};
@@ -33,18 +35,121 @@ const STATE_KEY_PREFIX: &str = "skill:active:";
 #[cfg(feature = "vertex-skill-registry")]
 const MAX_REMOTE_CACHE_INVOCATIONS: usize = 16;
 
+const LIST_SKILLS_TOOL_NAME: &str = "list_skills";
+const LOAD_SKILL_TOOL_NAME: &str = "load_skill";
+const LOAD_SKILL_RESOURCE_TOOL_NAME: &str = "load_skill_resource";
+const RUN_SKILL_SCRIPT_TOOL_NAME: &str = "run_skill_script";
+
+/// Builds the progressive-skill instructions injected into an LLM request.
+///
+/// This mirrors Google ADK Python's `_build_skill_system_instruction`: the
+/// text follows the tools actually exposed by the host, rather than assuming
+/// every skill capability is available.
+///
+/// `script_execution_enabled` must only be `true` when the host exposes a
+/// matching `run_skill_script` tool. ADK-Rust currently reads bundled scripts
+/// but does not execute them, so [`SkillToolset`] passes `false`.
+pub fn build_skill_system_instruction(
+    prefix: Option<&str>,
+    allowed_tools: Option<&[&str]>,
+    skills_folder: Option<&Path>,
+    script_execution_enabled: bool,
+) -> String {
+    let prefix = prefix.map_or(String::new(), |prefix| format!("{prefix}_"));
+    let scripts_bullet = if script_execution_enabled {
+        "- **scripts/** (Optional): Executable scripts that can be run via bash.\n\n".to_string()
+    } else {
+        format!(
+            "- **scripts/** (Optional): Scripts bundled with the skill. You cannot run them; use `{}{}` to read one and follow it yourself.\n\n",
+            prefix, LOAD_SKILL_RESOURCE_TOOL_NAME
+        )
+    };
+    let mut steps = vec![
+        format!(
+            "If a skill seems relevant to the current user query, you MUST use the `{}{}` tool with `skill_name=\"<SKILL_NAME>\"` to read its full instructions before proceeding.",
+            prefix, LOAD_SKILL_TOOL_NAME
+        ),
+        "Once you have read the instructions, follow them exactly as documented before replying to the user. For example, if the instruction lists multiple steps, make sure you complete all of them in order.".to_string(),
+        format!(
+            "The `{}{}` tool is for viewing files within a skill's directory (e.g., `references/*`, `assets/*`, `scripts/*`). It is ONLY for skill-bundled files — do NOT use it to access documents or files provided by the user at runtime. Do NOT use other tools to access skill files.",
+            prefix, LOAD_SKILL_RESOURCE_TOOL_NAME
+        ),
+    ];
+    if script_execution_enabled {
+        steps.push(format!(
+            "Use `{}{}` to run scripts from a skill's `scripts/` directory. Use `{}{}` to view script content first if needed.",
+            prefix, RUN_SKILL_SCRIPT_TOOL_NAME, prefix, LOAD_SKILL_RESOURCE_TOOL_NAME
+        ));
+    }
+    steps.push(format!(
+        "If `{}{}` returns any error, do not retry any path. Report the error to the user and stop.",
+        prefix, LOAD_SKILL_RESOURCE_TOOL_NAME
+    ));
+    if script_execution_enabled {
+        steps.push(format!(
+            "If `{}{}` returns an error (for example `SCRIPT_NOT_FOUND`), do not retry the same script or guess a different script path. Report the error to the user and stop.",
+            prefix, RUN_SKILL_SCRIPT_TOOL_NAME
+        ));
+    }
+    steps.push(format!(
+        "Loading a skill only retrieves its instructions; it does NOT complete your turn. After a `{}{}` call returns, continue in the SAME turn: call whatever tools the skill's steps require (search, data retrieval, render), then write your reply. Never end your turn with an empty response right after loading a skill.",
+        prefix, LOAD_SKILL_TOOL_NAME
+    ));
+    if script_execution_enabled && let Some(folder) = skills_folder {
+        let folder = folder.to_string_lossy();
+        steps.push(format!(
+            "NOTE ON ENVIRONMENT EXECUTION: When using `{}{}` with the `command` parameter, all skill resources (including scripts and assets) are materialized in the execution environment under `{}/<skill_name>/`. Always specify file and script paths relative to or starting with `{}/<skill_name>/` (e.g., `{}/<skill_name>/scripts/<script_name>`).",
+            prefix, RUN_SKILL_SCRIPT_TOOL_NAME, folder, folder, folder
+        ));
+    }
+
+    let mut instruction = format!(
+        "You can use specialized 'skills' to help you with complex tasks. You MUST use the skill tools to interact with these skills.\n\nSkills are folders of instructions and resources that extend your capabilities for specialized tasks. Each skill folder contains:\n- **SKILL.md** (required): The main instruction file with skill metadata and detailed markdown instructions.\n- **references/** (Optional): Additional documentation or examples for skill usage.\n- **assets/** (Optional): Templates, scripts or other resources used by the skill.\n\n{scripts_bullet}This is very important:\n\n{}",
+        steps
+            .iter()
+            .enumerate()
+            .map(|(index, step)| format!("{}. {step}\n", index + 1))
+            .collect::<String>()
+    );
+    if let Some(allowed_tools) = allowed_tools {
+        let banned = [
+            RUN_SKILL_SCRIPT_TOOL_NAME,
+            LOAD_SKILL_RESOURCE_TOOL_NAME,
+            LOAD_SKILL_TOOL_NAME,
+            LIST_SKILLS_TOOL_NAME,
+        ]
+        .into_iter()
+        .filter(|tool_name| !allowed_tools.contains(tool_name))
+        .map(|tool_name| format!("`{prefix}{tool_name}`"))
+        .collect::<Vec<_>>();
+        if !banned.is_empty() {
+            instruction.push_str(&format!(
+                "\n\nNote: The following tools are NOT available: {}. Do NOT call them. After loading a skill (if available), apply its instructions in context and write your final reply as normal model text. Never wrap the user-facing answer inside a tool call.\n",
+                banned.join(", ")
+            ));
+        }
+    }
+    instruction
+}
+
+/// Default progressive-skill instruction for ADK-Rust's supported discovery
+/// and resource-reading tools.
+pub static DEFAULT_SKILL_SYSTEM_INSTRUCTION: LazyLock<String> =
+    LazyLock::new(|| build_skill_system_instruction(None, None, None, false));
+
 /// Rules for reading bundled skill resources.
 ///
-/// [`ActivatedOnly`](Self::ActivatedOnly) is the secure default: a model must
-/// first receive the skill's instructions before it can inspect its auxiliary
-/// files. [`GoogleCompatible`](Self::GoogleCompatible) exists for applications
-/// that need the more permissive behavior of Google ADK's current toolset.
+/// [`GoogleCompatible`](Self::GoogleCompatible) is the default and matches
+/// Google ADK Python: a model may read a bundled resource directly when it
+/// knows the skill name. [`ActivatedOnly`](Self::ActivatedOnly) is an opt-in
+/// stricter policy for hosts that require the model to receive a skill's
+/// instructions before inspecting auxiliary files.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ResourceAccessPolicy {
     /// Require an earlier successful `load_skill` call for this agent.
-    #[default]
     ActivatedOnly,
-    /// Permit direct reads of a known skill, matching Google ADK's current behavior.
+    /// Permit direct reads of a known skill, matching Google ADK Python.
+    #[default]
     GoogleCompatible,
 }
 
@@ -74,9 +179,10 @@ pub struct ActivatedSkill {
 
 /// Configuration for [`SkillToolset`].
 ///
-/// Defaults favor safe, bounded disclosure: resources require activation,
-/// missing declared tools reject an activation, and instructions/resources are
-/// character-limited before being returned to the model.
+/// Defaults mirror Google ADK Python resource access while retaining bounded
+/// instruction/resource output and strict declared-tool validation. Set
+/// [`ResourceAccessPolicy::ActivatedOnly`] when resource reads must require
+/// activation first.
 ///
 /// # Example
 ///
@@ -107,7 +213,7 @@ pub struct SkillToolsetConfig {
 impl Default for SkillToolsetConfig {
     fn default() -> Self {
         Self {
-            resource_access: ResourceAccessPolicy::ActivatedOnly,
+            resource_access: ResourceAccessPolicy::GoogleCompatible,
             validation_mode: ValidationMode::Strict,
             max_active_skills: 8,
             max_instruction_chars: 8_000,
@@ -516,6 +622,28 @@ impl Toolset for SkillToolset {
         tools.extend(self.resolve_business_tools(ctx.as_ref()).await?);
         Ok(tools)
     }
+
+    async fn process_llm_request(
+        &self,
+        _ctx: Arc<dyn ReadonlyContext>,
+        request: &mut LlmRequest,
+    ) -> Result<()> {
+        // LlmAgent instructions use user-role content for compatibility with
+        // providers that do not support a system role. Keep this protocol in
+        // the same request preamble, without persisting it to session history.
+        let available_tools =
+            [LIST_SKILLS_TOOL_NAME, LOAD_SKILL_TOOL_NAME, LOAD_SKILL_RESOURCE_TOOL_NAME];
+        request.contents.insert(
+            0,
+            Content::new("user").with_text(build_skill_system_instruction(
+                None,
+                Some(&available_tools),
+                None,
+                false,
+            )),
+        );
+        Ok(())
+    }
 }
 
 struct ListSkillsTool {
@@ -620,9 +748,11 @@ impl Tool for LoadSkillResourceTool {
                 .iter()
                 .any(|item| item.document().id == document.id)
         {
-            return Err(AdkError::tool(format!(
-                "skill '{name}' must be loaded before reading its resources"
-            )));
+            return Ok(json!({
+                "error": format!("skill '{name}' must be loaded before reading its resources"),
+                "errorCode": "SKILL_NOT_ACTIVATED",
+                "nextStep": format!("Call load_skill with skill_name '{name}' before calling load_skill_resource."),
+            }));
         }
         let content = skill.resource_content(path)?;
         Ok(json!({
@@ -777,6 +907,24 @@ mod tests {
         tools.iter().find(|tool| tool.name() == name).expect("tool present").clone()
     }
 
+    #[test]
+    fn skill_system_instruction_reflects_available_tools() {
+        let default_instruction = build_skill_system_instruction(None, None, None, false);
+        assert_eq!(&*DEFAULT_SKILL_SYSTEM_INSTRUCTION, &default_instruction);
+        assert!(default_instruction.contains("`load_skill`"));
+        assert!(default_instruction.contains("You cannot run them"));
+
+        let filtered = build_skill_system_instruction(
+            Some("workspace"),
+            Some(&[LIST_SKILLS_TOOL_NAME, LOAD_SKILL_TOOL_NAME]),
+            None,
+            false,
+        );
+        assert!(filtered.contains("`workspace_load_skill`"));
+        assert!(filtered.contains("`workspace_load_skill_resource`"));
+        assert!(filtered.contains("The following tools are NOT available"));
+    }
+
     #[tokio::test]
     async fn loading_a_skill_activates_its_declared_tool_and_resource_access() {
         let (_temp, toolset) = setup();
@@ -812,20 +960,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resources_require_activation_and_reject_path_traversal() {
+    async fn google_compatible_default_reads_resources_without_activation() {
         let (_temp, toolset) = setup();
+        let context = Arc::new(TestContext::new());
+        let resource = tool_by_name(
+            &toolset.tools(context.clone()).await.expect("tools"),
+            "load_skill_resource",
+        );
+        let loaded_resource = resource
+            .execute(context, json!({"skill_name": "weather", "file_path": "references/units.md"}))
+            .await
+            .expect("Google-compatible resource read");
+        assert_eq!(loaded_resource["content"], "Use Celsius.");
+    }
+
+    #[tokio::test]
+    async fn resources_require_activation_and_reject_path_traversal() {
+        let (_temp, mut toolset) = setup();
+        toolset.config.resource_access = ResourceAccessPolicy::ActivatedOnly;
         let context = Arc::new(TestContext::new());
         let tools = toolset.tools(context.clone()).await.expect("tools");
         let resource = tool_by_name(&tools, "load_skill_resource");
-        assert!(
-            resource
-                .execute(
-                    context.clone(),
-                    json!({"skill_name": "weather", "file_path": "references/units.md"})
-                )
-                .await
-                .is_err()
-        );
+        let not_activated = resource
+            .execute(
+                context.clone(),
+                json!({"skill_name": "weather", "file_path": "references/units.md"}),
+            )
+            .await
+            .expect("activation guidance");
+        assert_eq!(not_activated["errorCode"], "SKILL_NOT_ACTIVATED");
+        assert!(not_activated["nextStep"].as_str().expect("next step").contains("load_skill"));
 
         let load = tool_by_name(&tools, "load_skill");
         load.execute(context.clone(), json!({"skill_name": "weather"})).await.expect("load skill");
