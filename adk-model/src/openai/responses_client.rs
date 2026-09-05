@@ -44,6 +44,25 @@ pub struct OpenAIResponsesClient {
     open_responses_mode: bool,
 }
 
+fn completed_stream_response(full: LlmResponse) -> LlmResponse {
+    let trailing_parts = full
+        .content
+        .as_ref()
+        .map(|content| {
+            content
+                .parts
+                .iter()
+                .filter(|part| !matches!(part, Part::Text { .. } | Part::Thinking { .. }))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let content = (!trailing_parts.is_empty())
+        .then_some(Content { role: "model".to_string(), parts: trailing_parts });
+
+    LlmResponse { content, partial: false, turn_complete: true, ..full }
+}
+
 impl OpenAIResponsesClient {
     /// Create a new Responses API client from the given config.
     ///
@@ -106,8 +125,9 @@ impl OpenAIResponsesClient {
             openai_config = openai_config.with_api_base(base_url);
         }
         let client = async_openai::Client::with_config(openai_config);
-        let client = if matches!(reasoning_effort, Some(OpenAIReasoningEffort::Max)) {
-            with_max_reasoning_middleware(client)
+        let uses_max_reasoning = matches!(reasoning_effort, Some(OpenAIReasoningEffort::Max));
+        let client = if uses_max_reasoning || open_responses_mode {
+            with_responses_compatibility_middleware(client, uses_max_reasoning, open_responses_mode)
         } else {
             client
         };
@@ -176,8 +196,10 @@ impl OpenAIResponsesClient {
     }
 }
 
-fn with_max_reasoning_middleware(
+fn with_responses_compatibility_middleware(
     client: async_openai::Client<async_openai::config::OpenAIConfig>,
+    uses_max_reasoning: bool,
+    open_responses_mode: bool,
 ) -> async_openai::Client<async_openai::config::OpenAIConfig> {
     use async_openai::error::OpenAIError;
     use async_openai::middleware::retry::OpenAIRetryLayer;
@@ -195,7 +217,7 @@ fn with_max_reasoning_middleware(
                 let original = original.clone();
                 async move {
                     let mut request = original.build().await?;
-                    if request.url().path().ends_with("/responses") {
+                    if uses_max_reasoning && request.url().path().ends_with("/responses") {
                         let body =
                             request.body().and_then(|body| body.as_bytes()).ok_or_else(|| {
                                 OpenAIError::InvalidArgument(
@@ -217,15 +239,17 @@ fn with_max_reasoning_middleware(
                 }
             });
             let response = transport.oneshot(rewritten).await?;
-            normalize_max_reasoning_response(response).await
+            normalize_responses_response(response, uses_max_reasoning, open_responses_mode).await
         }
     });
 
     client.with_http_service(service)
 }
 
-async fn normalize_max_reasoning_response(
+async fn normalize_responses_response(
     response: reqwest_openai::Response,
+    uses_max_reasoning: bool,
+    open_responses_mode: bool,
 ) -> Result<reqwest_openai::Response, async_openai::error::OpenAIError> {
     use reqwest_openai::ResponseBuilderExt;
 
@@ -248,26 +272,42 @@ async fn normalize_max_reasoning_response(
         let mut upstream = response.bytes_stream();
         let normalized = async_stream::stream! {
             let mut pending = Vec::new();
+            let mut stream_state = OpenResponsesStreamState::default();
             while let Some(chunk) = upstream.next().await {
                 match chunk {
                     Ok(chunk) => {
                         pending.extend_from_slice(&chunk);
                         while let Some(line_end) = pending.iter().position(|byte| *byte == b'\n') {
                             let line: Vec<u8> = pending.drain(..=line_end).collect();
-                            yield Ok::<Vec<u8>, reqwest_openai::Error>(normalize_max_reasoning_bytes(&line));
+                            yield Ok::<Vec<u8>, reqwest_openai::Error>(normalize_responses_bytes(
+                                &line,
+                                uses_max_reasoning,
+                                open_responses_mode,
+                                Some(&mut stream_state),
+                            ));
                         }
                     }
                     Err(error) => yield Err(error),
                 }
             }
             if !pending.is_empty() {
-                yield Ok::<Vec<u8>, reqwest_openai::Error>(normalize_max_reasoning_bytes(&pending));
+                yield Ok::<Vec<u8>, reqwest_openai::Error>(normalize_responses_bytes(
+                    &pending,
+                    uses_max_reasoning,
+                    open_responses_mode,
+                    Some(&mut stream_state),
+                ));
             }
         };
         reqwest_openai::Body::wrap_stream(normalized)
     } else {
         let bytes = response.bytes().await.map_err(async_openai::error::OpenAIError::Reqwest)?;
-        reqwest_openai::Body::from(normalize_max_reasoning_bytes(&bytes))
+        reqwest_openai::Body::from(normalize_responses_bytes(
+            &bytes,
+            uses_max_reasoning,
+            open_responses_mode,
+            None,
+        ))
     };
 
     let mut rebuilt =
@@ -282,11 +322,217 @@ async fn normalize_max_reasoning_response(
     Ok(reqwest_openai::Response::from(rebuilt))
 }
 
-fn normalize_max_reasoning_bytes(bytes: &[u8]) -> Vec<u8> {
-    String::from_utf8_lossy(bytes)
-        .replace("\"effort\":\"max\"", "\"effort\":\"xhigh\"")
-        .replace("\"effort\": \"max\"", "\"effort\": \"xhigh\"")
-        .into_bytes()
+fn normalize_responses_bytes(
+    bytes: &[u8],
+    uses_max_reasoning: bool,
+    open_responses_mode: bool,
+    stream_state: Option<&mut OpenResponsesStreamState>,
+) -> Vec<u8> {
+    let normalized = if uses_max_reasoning {
+        String::from_utf8_lossy(bytes)
+            .replace("\"effort\":\"max\"", "\"effort\":\"xhigh\"")
+            .replace("\"effort\": \"max\"", "\"effort\": \"xhigh\"")
+            .into_bytes()
+    } else {
+        bytes.to_vec()
+    };
+    if !open_responses_mode {
+        return normalized;
+    }
+    // Empty SSE data fields are heartbeats, not JSON model events.
+    if normalized.strip_prefix(b"data:").is_some_and(|payload| payload.trim_ascii().is_empty()) {
+        return Vec::new();
+    }
+
+    let payload_start = normalized
+        .strip_prefix(b"data:")
+        .map_or(0, |payload| normalized.len() - payload.trim_ascii_start().len());
+    let payload_end = normalized.trim_ascii_end().len();
+    let Some(payload) = normalized.get(payload_start..payload_end) else {
+        return normalized;
+    };
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(payload) else {
+        return normalized;
+    };
+    let message_status = value
+        .pointer("/response/status")
+        .or_else(|| value.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|status| matches!(*status, "in_progress" | "completed" | "incomplete"))
+        .unwrap_or("in_progress")
+        .to_string();
+    if let Some(stream_state) = stream_state {
+        stream_state.normalize_event(&mut value);
+    }
+    add_open_responses_defaults(&mut value, &message_status);
+
+    let Ok(encoded) = serde_json::to_vec(&value) else {
+        return normalized;
+    };
+    let mut rebuilt = Vec::with_capacity(normalized.len().max(encoded.len()));
+    rebuilt.extend_from_slice(&normalized[..payload_start]);
+    rebuilt.extend_from_slice(&encoded);
+    rebuilt.extend_from_slice(&normalized[payload_end..]);
+    rebuilt
+}
+
+#[derive(Default)]
+struct OpenResponsesStreamState {
+    function_calls: std::collections::BTreeMap<u64, StreamedFunctionCall>,
+}
+
+#[derive(Default)]
+struct StreamedFunctionCall {
+    item_id: Option<String>,
+    call_id: Option<String>,
+    arguments: Option<String>,
+}
+
+impl OpenResponsesStreamState {
+    fn normalize_event(&mut self, event: &mut serde_json::Value) {
+        let event_type = event.get("type").and_then(serde_json::Value::as_str);
+        match event_type {
+            Some("response.output_item.added" | "response.output_item.done") => {
+                let is_done = event_type == Some("response.output_item.done");
+                if let Some(output_index) =
+                    event.get("output_index").and_then(serde_json::Value::as_u64)
+                    && let Some(item) = event.get_mut("item")
+                    && item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
+                {
+                    let call = self.function_calls.entry(output_index).or_default();
+                    if let Some(id) = item.get("id").and_then(serde_json::Value::as_str) {
+                        call.item_id = Some(id.to_string());
+                    }
+                    if let Some(id) = item.get("call_id").and_then(serde_json::Value::as_str) {
+                        call.call_id = Some(id.to_string());
+                    }
+                    if is_done
+                        && let Some(arguments) =
+                            item.get("arguments").and_then(serde_json::Value::as_str)
+                        && (!arguments.trim().is_empty() || call.arguments.is_none())
+                    {
+                        call.arguments = Some(arguments.to_string());
+                    } else if is_done
+                        && let Some(arguments) = &call.arguments
+                        && item.get("arguments").is_none_or(|value| {
+                            value.as_str().is_some_and(|arguments| arguments.trim().is_empty())
+                        })
+                    {
+                        item["arguments"] = arguments.clone().into();
+                    }
+                }
+            }
+            Some("response.function_call_arguments.delta") => {
+                if let (Some(output_index), Some(delta)) = (
+                    event.get("output_index").and_then(serde_json::Value::as_u64),
+                    event.get("delta").and_then(serde_json::Value::as_str),
+                ) {
+                    let call = self.function_calls.entry(output_index).or_default();
+                    if let Some(id) = event.get("item_id").and_then(serde_json::Value::as_str) {
+                        call.item_id = Some(id.to_string());
+                    }
+                    call.arguments.get_or_insert_default().push_str(delta);
+                }
+            }
+            Some("response.function_call_arguments.done") => {
+                if let Some(output_index) =
+                    event.get("output_index").and_then(serde_json::Value::as_u64)
+                {
+                    let call = self.function_calls.entry(output_index).or_default();
+                    if let Some(id) = event.get("item_id").and_then(serde_json::Value::as_str) {
+                        call.item_id = Some(id.to_string());
+                    }
+                    if let Some(arguments) =
+                        event.get("arguments").and_then(serde_json::Value::as_str)
+                        && (!arguments.trim().is_empty() || call.arguments.is_none())
+                    {
+                        call.arguments = Some(arguments.to_string());
+                    } else if let Some(arguments) = &call.arguments
+                        && event.get("arguments").is_none_or(|value| {
+                            value.as_str().is_some_and(|arguments| arguments.trim().is_empty())
+                        })
+                    {
+                        event["arguments"] = serde_json::Value::String(arguments.clone());
+                    }
+                }
+            }
+            Some("response.completed") => {
+                if let Some(output) =
+                    event.pointer_mut("/response/output").and_then(serde_json::Value::as_array_mut)
+                {
+                    for (output_index, item) in output.iter_mut().enumerate() {
+                        let is_function_call = item.get("type").and_then(serde_json::Value::as_str)
+                            == Some("function_call");
+                        if !is_function_call || item.get("arguments").is_some() {
+                            continue;
+                        }
+                        let item_id = item.get("id").and_then(serde_json::Value::as_str);
+                        let call_id = item.get("call_id").and_then(serde_json::Value::as_str);
+                        let call = self
+                            .function_calls
+                            .values()
+                            .find(|call| {
+                                ((item_id.is_some() && item_id == call.item_id.as_deref())
+                                    || (call_id.is_some() && call_id == call.call_id.as_deref()))
+                                    && item_id
+                                        .zip(call.item_id.as_deref())
+                                        .is_none_or(|(left, right)| left == right)
+                                    && call_id
+                                        .zip(call.call_id.as_deref())
+                                        .is_none_or(|(left, right)| left == right)
+                            })
+                            .or_else(|| {
+                                self.function_calls.get(&(output_index as u64)).filter(|call| {
+                                    // An index must not override a contradictory item identity.
+                                    item_id
+                                        .zip(call.item_id.as_deref())
+                                        .is_none_or(|(left, right)| left == right)
+                                        && call_id
+                                            .zip(call.call_id.as_deref())
+                                            .is_none_or(|(left, right)| left == right)
+                                })
+                            });
+                        if let Some(arguments) = call.and_then(|call| call.arguments.as_ref()) {
+                            item["arguments"] = arguments.clone().into();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn add_open_responses_defaults(value: &mut serde_json::Value, message_status: &str) {
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                add_open_responses_defaults(item, message_status);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            match fields.get("type").and_then(serde_json::Value::as_str) {
+                Some("message") => {
+                    fields.entry("id").or_insert_with(|| {
+                        serde_json::Value::String("msg_open_responses".to_string())
+                    });
+                    fields
+                        .entry("status")
+                        .or_insert_with(|| serde_json::Value::String(message_status.to_string()));
+                }
+                Some("output_text") => {
+                    fields
+                        .entry("annotations")
+                        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+                }
+                _ => {}
+            }
+            for field in fields.values_mut() {
+                add_open_responses_defaults(field, message_status);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn set_max_reasoning_effort(
@@ -458,43 +704,7 @@ impl Llm for OpenAIResponsesClient {
                             // via delta events) and mark the turn complete.
                             ResponseStreamEvent::ResponseCompleted(evt) => {
                                 let full = responses_convert::from_response(&evt.response);
-                                // Extract only non-textual protocol parts (text/thinking were already
-                                // streamed via delta events, but tool protocol items need to survive).
-                                let trailing_parts: Vec<Part> = full
-                                    .content
-                                    .as_ref()
-                                    .map(|c| {
-                                        c.parts
-                                            .iter()
-                                            .filter(|part| {
-                                                !matches!(
-                                                    part,
-                                                    Part::Text { .. } | Part::Thinking { .. }
-                                                )
-                                            })
-                                            .cloned()
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
-
-                                let content = if trailing_parts.is_empty() {
-                                    None
-                                } else {
-                                    Some(Content {
-                                        role: "model".to_string(),
-                                        parts: trailing_parts,
-                                    })
-                                };
-
-                                Some(Ok(LlmResponse {
-                                    content,
-                                    usage_metadata: full.usage_metadata,
-                                    finish_reason: full.finish_reason,
-                                    provider_metadata: full.provider_metadata,
-                                    partial: false,
-                                    turn_complete: true,
-                                    ..Default::default()
-                                }))
+                                Some(Ok(completed_stream_response(full)))
                             }
 
                             ResponseStreamEvent::ResponseFailed(evt) => {
@@ -577,6 +787,138 @@ mod tests {
     use crate::openai::config::OpenAIResponsesConfig;
     use async_openai::error::{ApiError, ApiErrorResponse, OpenAIError};
 
+    #[test]
+    fn completed_stream_response_preserves_errors() {
+        let full = LlmResponse {
+            error_code: Some("model.openai_responses.invalid_tool_arguments".to_string()),
+            error_message: Some("invalid function arguments".to_string()),
+            ..Default::default()
+        };
+        let expected = LlmResponse { turn_complete: true, ..full.clone() };
+
+        assert_eq!(
+            serde_json::to_value(completed_stream_response(full)).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn open_responses_mode_ignores_empty_sse_payloads() {
+        for frame in ["data:\n", "data: \r\n", "data:"] {
+            assert!(normalize_responses_bytes(frame.as_bytes(), false, true, None).is_empty());
+        }
+        for frame in ["\n", ": keepalive\n"] {
+            assert_eq!(
+                normalize_responses_bytes(frame.as_bytes(), false, true, None),
+                frame.as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn open_responses_mode_restores_sparse_arguments_by_output_index() {
+        for first_arguments in [None, Some("{}"), Some(r#"{"path":"first.txt"}"#)] {
+            let mut state = OpenResponsesStreamState::default();
+            state.normalize_event(&mut serde_json::json!({
+                "type": "response.function_call_arguments.delta", "output_index": 1,
+                "item_id": "fc_b", "delta": r#"{"path":"second.txt"}"#
+            }));
+            let mut event = serde_json::json!({
+                "type": "response.completed", "response": {"output": [
+                    {"type": "function_call", "call_id": "call_a", "name": "read_file"},
+                    {"type": "function_call", "call_id": "call_b", "name": "read_file"}
+                ]}
+            });
+            if let Some(arguments) = first_arguments {
+                event["response"]["output"][0]["arguments"] = arguments.into();
+            }
+            let mut expected = event.clone();
+            expected["response"]["output"][1]["arguments"] = r#"{"path":"second.txt"}"#.into();
+
+            state.normalize_event(&mut event);
+
+            assert_eq!(event, expected);
+        }
+    }
+
+    #[test]
+    fn open_responses_mode_matches_item_identity_in_sparse_completed_output() {
+        let mut state = OpenResponsesStreamState::default();
+        for (index, id, path) in [(1, "fc_a", "first.txt"), (3, "fc_b", "second.txt")] {
+            state.normalize_event(&mut serde_json::json!({
+                "type": "response.function_call_arguments.delta", "output_index": index,
+                "item_id": id, "delta": serde_json::json!({"path": path}).to_string()
+            }));
+        }
+        let mut event = serde_json::json!({
+            "type": "response.completed", "response": {"output": [
+                {"type": "function_call", "id": "fc_b", "call_id": "call_b", "name": "read_file"}
+            ]}
+        });
+        let mut expected = event.clone();
+        expected["response"]["output"][0]["arguments"] = r#"{"path":"second.txt"}"#.into();
+
+        state.normalize_event(&mut event);
+
+        assert_eq!(event, expected);
+    }
+
+    #[test]
+    fn open_responses_mode_matches_call_identity_from_output_item_events() {
+        let mut state = OpenResponsesStreamState::default();
+        state.normalize_event(&mut serde_json::json!({
+            "type": "response.output_item.added", "output_index": 2,
+            "item": {"type": "function_call", "id": "fc_b", "call_id": "call_b",
+                "name": "read_file", "arguments": "{}"}
+        }));
+        state.normalize_event(&mut serde_json::json!({
+            "type": "response.function_call_arguments.delta", "output_index": 2,
+            "item_id": "fc_b", "delta": r#"{"path":"second.txt"}"#
+        }));
+        let mut event = serde_json::json!({
+            "type": "response.completed", "response": {"output": [
+                {"type": "function_call", "call_id": "call_b", "name": "read_file"}
+            ]}
+        });
+        let mut expected = event.clone();
+        expected["response"]["output"][0]["arguments"] = r#"{"path":"second.txt"}"#.into();
+
+        state.normalize_event(&mut event);
+
+        assert_eq!(event, expected);
+    }
+
+    #[test]
+    fn completed_stream_response_preserves_citations() {
+        let full = LlmResponse {
+            content: Some(Content::new("model").with_text("answer")),
+            citation_metadata: Some(adk_core::CitationMetadata {
+                citation_sources: vec![adk_core::CitationSource {
+                    uri: Some("https://example.test".to_string()),
+                    title: Some("Example".to_string()),
+                    start_index: Some(0),
+                    end_index: Some(6),
+                    license: None,
+                    publication_date: None,
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let completed = completed_stream_response(full);
+
+        assert!(completed.content.is_none());
+        assert_eq!(
+            completed
+                .citation_metadata
+                .expect("citations should survive stream completion")
+                .citation_sources[0]
+                .uri
+                .as_deref(),
+            Some("https://example.test")
+        );
+    }
+
     fn api_error(status_code: u16) -> OpenAIError {
         OpenAIError::ApiError(ApiErrorResponse {
             status_code: reqwest::StatusCode::from_u16(status_code)
@@ -607,11 +949,143 @@ mod tests {
         let compact = br#"{"reasoning":{"effort":"max"}}"#;
         let spaced = br#"data: {"response":{"reasoning":{"effort": "max"}}}\n\n"#;
 
-        assert_eq!(normalize_max_reasoning_bytes(compact), br#"{"reasoning":{"effort":"xhigh"}}"#);
         assert_eq!(
-            normalize_max_reasoning_bytes(spaced),
+            normalize_responses_bytes(compact, true, false, None),
+            br#"{"reasoning":{"effort":"xhigh"}}"#
+        );
+        assert_eq!(
+            normalize_responses_bytes(spaced, true, false, None),
             br#"data: {"response":{"reasoning":{"effort": "xhigh"}}}\n\n"#
         );
+    }
+
+    #[test]
+    fn open_responses_mode_defaults_omitted_output_message_fields() {
+        let event = br#"data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}}
+
+"#;
+
+        let normalized = normalize_responses_bytes(event, false, true, None);
+        let payload = normalized
+            .strip_prefix(b"data: ")
+            .expect("SSE data prefix should survive")
+            .trim_ascii_end();
+        let value: serde_json::Value =
+            serde_json::from_slice(payload).expect("normalized event should remain JSON");
+
+        assert_eq!(
+            value["response"]["output"][0]["content"][0]["annotations"],
+            serde_json::json!([])
+        );
+        assert_eq!(value["response"]["output"][0]["id"], "msg_open_responses");
+        assert_eq!(value["response"]["output"][0]["status"], "completed");
+    }
+
+    #[test]
+    fn open_responses_mode_restores_streamed_function_arguments() {
+        let events = [
+            br#"data: {"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc_1","delta":"{\"command\":"}
+
+"#
+            .as_slice(),
+            br#"data: {"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc_1","delta":"\"pwd\"}"}
+
+"#
+            .as_slice(),
+            br#"data: {"type":"response.function_call_arguments.done","output_index":1,"item_id":"fc_1"}
+
+"#
+            .as_slice(),
+            br#"data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"bash"}]}}
+
+"#
+            .as_slice(),
+        ];
+        let mut stream_state = OpenResponsesStreamState::default();
+        let normalized: Vec<Vec<u8>> = events
+            .iter()
+            .map(|event| normalize_responses_bytes(event, false, true, Some(&mut stream_state)))
+            .collect();
+
+        let done: serde_json::Value = serde_json::from_slice(
+            normalized[2]
+                .strip_prefix(b"data: ")
+                .expect("SSE data prefix should survive")
+                .trim_ascii_end(),
+        )
+        .expect("normalized arguments event should remain JSON");
+        let completed: serde_json::Value = serde_json::from_slice(
+            normalized[3]
+                .strip_prefix(b"data: ")
+                .expect("SSE data prefix should survive")
+                .trim_ascii_end(),
+        )
+        .expect("normalized completion event should remain JSON");
+
+        assert_eq!(done["arguments"], r#"{"command":"pwd"}"#);
+        assert_eq!(completed["response"]["output"][0]["arguments"], r#"{"command":"pwd"}"#);
+    }
+
+    #[test]
+    fn open_responses_mode_preserves_deltas_after_blank_done_snapshots() {
+        for event_type in ["response.function_call_arguments.done", "response.output_item.done"] {
+            for blank_arguments in ["", " \t\r\n"] {
+                let mut state = OpenResponsesStreamState::default();
+                state.normalize_event(&mut serde_json::json!({
+                    "type": "response.function_call_arguments.delta", "output_index": 0,
+                    "item_id": "fc_a", "delta": r#"{"path":"first.txt"}"#
+                }));
+                let mut done = serde_json::json!({
+                    "type": event_type, "output_index": 0, "item_id": "fc_a",
+                    "arguments": blank_arguments,
+                    "item": {"type": "function_call", "id": "fc_a", "arguments": blank_arguments}
+                });
+                state.normalize_event(&mut done);
+                let restored_done_arguments =
+                    if event_type == "response.function_call_arguments.done" {
+                        &done["arguments"]
+                    } else {
+                        &done["item"]["arguments"]
+                    };
+                assert_eq!(
+                    restored_done_arguments, r#"{"path":"first.txt"}"#,
+                    "{event_type} should restore deltas into a whitespace-only done snapshot"
+                );
+                let mut completed = serde_json::json!({
+                    "type": "response.completed", "response": {"output": [
+                        {"type": "function_call", "id": "fc_a", "call_id": "call_a", "name": "read_file"}
+                    ]}
+                });
+                state.normalize_event(&mut completed);
+                assert_eq!(
+                    completed["response"]["output"][0]["arguments"], r#"{"path":"first.txt"}"#,
+                    "{event_type} should ignore a whitespace-only done snapshot"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn open_responses_mode_never_restores_arguments_from_conflicting_ids() {
+        let mut state = OpenResponsesStreamState::default();
+        for (index, id, call_id, arguments) in
+            [(0, "fc_a", "call_a", "1"), (1, "fc_b", "call_b", "2")]
+        {
+            state.normalize_event(&mut serde_json::json!({
+                "type": "response.output_item.done", "output_index": index,
+                "item": {"type": "function_call", "id": id, "call_id": call_id, "arguments": arguments}
+            }));
+        }
+        for (id, call_id) in [("fc_b", "call_a"), ("fc_a", "call_b")] {
+            let mut event = serde_json::json!({
+                "type": "response.completed", "response": {"output": [
+                    {"type": "function_call", "id": id, "call_id": call_id, "name": "read_file"}
+                ]}
+            });
+            let expected = event.clone();
+            state.normalize_event(&mut event);
+            assert_eq!(event, expected);
+        }
     }
 
     #[test]

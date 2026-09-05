@@ -376,14 +376,6 @@ pub(crate) fn build_request_json(
         body["reasoning_effort"] = serde_json::Value::String("max".to_string());
     }
 
-    // GPT-5.6 defaults to medium reasoning, while Chat Completions function
-    // tools require effective reasoning `none`. ADK's public reasoning enum
-    // predates that value, so preserve source compatibility and make the safe
-    // effective setting explicit only for this otherwise-invalid combination.
-    if model.starts_with("gpt-5.6") && !request.tools.is_empty() && reasoning_effort.is_none() {
-        body["reasoning_effort"] = serde_json::Value::String("none".to_string());
-    }
-
     // Merge provider-specific extensions from config.extensions["openai"] into
     // the request body.  This allows users to pass provider-specific fields
     // that the typed builder doesn't cover (e.g. provider-specific parameters
@@ -480,38 +472,44 @@ fn parse_finish_reason(fr: &str) -> FinishReason {
     }
 }
 
+/// Accumulate string deltas while treating structured values as complete snapshots.
+fn append_tool_call_arguments(accumulator: &mut String, arguments: &serde_json::Value) {
+    match arguments {
+        serde_json::Value::String(fragment) => accumulator.push_str(fragment),
+        serde_json::Value::Null => {}
+        structured => {
+            let empty_snapshot = matches!(structured, serde_json::Value::Object(fields) if fields.is_empty())
+                || matches!(structured, serde_json::Value::Array(items) if items.is_empty());
+            if !empty_snapshot {
+                accumulator.clear();
+                accumulator.push_str(&structured.to_string());
+            }
+        }
+    }
+}
+
+fn parse_tool_call_arguments(
+    provider_name: &str,
+    tool_name: &str,
+    arguments: &str,
+) -> Result<serde_json::Value, AdkError> {
+    let encoded = serde_json::Value::String(arguments.to_owned());
+    convert::decode_tool_call_arguments(Some(&encoded)).map_err(|error| {
+        AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::Internal,
+            "model.openai_compat.invalid_tool_arguments",
+            format!(
+                "{provider_name} returned invalid JSON arguments for tool '{tool_name}': {error}"
+            ),
+        )
+        .with_provider(provider_name)
+    })
+}
+
 /// Parse usage metadata from a raw SSE chunk JSON value.
 fn parse_usage_from_chunk(chunk: &serde_json::Value) -> Option<UsageMetadata> {
-    let u = chunk.get("usage")?.as_object()?;
-    let prompt_tokens = u.get("prompt_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let completion_tokens = u.get("completion_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let total_tokens = u.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-
-    let prompt_details = u.get("prompt_tokens_details");
-    let completion_details = u.get("completion_tokens_details");
-
-    Some(UsageMetadata {
-        prompt_token_count: prompt_tokens,
-        candidates_token_count: completion_tokens,
-        total_token_count: total_tokens,
-        cache_read_input_token_count: prompt_details
-            .and_then(|d| d.get("cached_tokens"))
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32),
-        thinking_token_count: completion_details
-            .and_then(|d| d.get("reasoning_tokens"))
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32),
-        audio_input_token_count: prompt_details
-            .and_then(|d| d.get("audio_tokens"))
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32),
-        audio_output_token_count: completion_details
-            .and_then(|d| d.get("audio_tokens"))
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32),
-        ..Default::default()
-    })
+    chunk.get("usage").and_then(convert::usage_metadata_from_raw)
 }
 
 #[async_trait]
@@ -678,10 +676,8 @@ impl Llm for OpenAICompatible {
                                         if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
                                             entry.1 = name.to_string();
                                         }
-                                        if let Some(args_chunk) =
-                                            func.get("arguments").and_then(|v| v.as_str())
-                                        {
-                                            entry.2.push_str(args_chunk);
+                                        if let Some(arguments) = func.get("arguments") {
+                                            append_tool_call_arguments(&mut entry.2, arguments);
                                         }
                                     }
                                 }
@@ -700,17 +696,19 @@ impl Llm for OpenAICompatible {
                                     let parts: Vec<Part> = sorted_calls
                                         .into_iter()
                                         .map(|(_, (id, name, args_str))| {
-                                            let args: serde_json::Value =
-                                                serde_json::from_str(&args_str)
-                                                    .unwrap_or(serde_json::json!({}));
-                                            Part::FunctionCall {
+                                            let args = parse_tool_call_arguments(
+                                                &provider_name,
+                                                &name,
+                                                &args_str,
+                                            )?;
+                                            Ok(Part::FunctionCall {
                                                 name,
                                                 args,
                                                 id: Some(id),
                                                 thought_signature: None,
-                                            }
+                                            })
                                         })
-                                        .collect();
+                                        .collect::<Result<Vec<_>, AdkError>>()?;
 
                                     let response = LlmResponse {
                                         content: Some(Content {
@@ -903,7 +901,15 @@ impl Llm for OpenAICompatible {
                 })
                 .await?;
 
-                let adk_response = convert::from_raw_openai_response(&response);
+                let adk_response = convert::from_raw_openai_response(&response).map_err(|error| {
+                    AdkError::new(
+                        ErrorComponent::Model,
+                        ErrorCategory::Internal,
+                        "model.openai_compat.invalid_tool_arguments",
+                        format!("{provider_name} returned {error}"),
+                    )
+                    .with_provider(&provider_name)
+                })?;
                 yield adk_response;
             };
 
@@ -940,7 +946,76 @@ mod tests {
     }
 
     #[test]
-    fn gpt_56_chat_tools_default_to_no_reasoning() {
+    fn streamed_tool_arguments_require_valid_json() {
+        let parsed =
+            parse_tool_call_arguments("compatible-provider", "bash", r#"{"command":"pwd"}"#)
+                .expect("valid arguments should parse");
+        assert_eq!(parsed["command"], "pwd");
+
+        assert_eq!(
+            parse_tool_call_arguments("compatible-provider", "no_args", "")
+                .expect("an empty compatible payload should normalize"),
+            serde_json::json!({})
+        );
+        assert_eq!(
+            parse_tool_call_arguments("compatible-provider", "no_args", "   ")
+                .expect("a whitespace-only compatible payload should normalize"),
+            serde_json::json!({})
+        );
+        assert_eq!(
+            parse_tool_call_arguments("compatible-provider", "no_args", "[]")
+                .expect("an empty array compatible payload should normalize"),
+            serde_json::json!({})
+        );
+
+        let error = parse_tool_call_arguments("compatible-provider", "bash", r#"{"command":"#)
+            .expect_err("truncated arguments must remain invalid");
+        assert_eq!(error.component, ErrorComponent::Model);
+        assert_eq!(error.category, ErrorCategory::Internal);
+        assert_eq!(error.code, "model.openai_compat.invalid_tool_arguments");
+        assert_eq!(error.details.provider.as_deref(), Some("compatible-provider"));
+
+        let error = parse_tool_call_arguments("compatible-provider", "bash", r#"["pwd"]"#)
+            .expect_err("non-empty array arguments must remain invalid");
+        assert_eq!(error.code, "model.openai_compat.invalid_tool_arguments");
+    }
+
+    #[test]
+    fn streamed_structured_tool_arguments_are_canonicalized() {
+        let mut arguments = String::new();
+        append_tool_call_arguments(&mut arguments, &serde_json::json!({"command": "pwd"}));
+
+        assert_eq!(
+            parse_tool_call_arguments("compatible-provider", "bash", &arguments)
+                .expect("a structured object should normalize"),
+            serde_json::json!({"command": "pwd"})
+        );
+    }
+
+    #[test]
+    fn streamed_empty_snapshot_before_string_fragments_is_ignored() {
+        for placeholder in [serde_json::json!({}), serde_json::json!([])] {
+            let mut arguments = String::new();
+            append_tool_call_arguments(&mut arguments, &placeholder);
+            assert_eq!(
+                parse_tool_call_arguments("compatible-provider", "no_args", &arguments)
+                    .expect("an empty snapshot should remain a no-argument call"),
+                serde_json::json!({})
+            );
+
+            append_tool_call_arguments(&mut arguments, &serde_json::json!(r#"{"command""#));
+            append_tool_call_arguments(&mut arguments, &serde_json::json!(r#": "pwd"}"#));
+
+            assert_eq!(
+                parse_tool_call_arguments("compatible-provider", "bash", &arguments)
+                    .expect("empty snapshots must not prefix string fragments"),
+                serde_json::json!({"command": "pwd"})
+            );
+        }
+    }
+
+    #[test]
+    fn gpt_56_chat_tools_preserve_configured_reasoning() {
         let adapter = GenericSchemaAdapter;
         let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
         let mut request = LlmRequest {
@@ -958,17 +1033,23 @@ mod tests {
             }),
         );
 
-        let body = build_request_json(
-            crate::catalog::OPENAI_DEFAULT,
-            &request,
-            &None,
-            true,
-            &adapter,
-            &cache,
-        )
-        .expect("request should build");
+        for (configured_effort, expected) in [
+            (None, None),
+            (Some(OpenAIReasoningEffort::Medium), Some("medium")),
+            (Some(OpenAIReasoningEffort::Max), Some("max")),
+        ] {
+            let body = build_request_json(
+                crate::catalog::OPENAI_DEFAULT,
+                &request,
+                &configured_effort,
+                true,
+                &adapter,
+                &cache,
+            )
+            .expect("request should build");
 
-        assert_eq!(body["reasoning_effort"], "none");
+            assert_eq!(body.get("reasoning_effort").and_then(serde_json::Value::as_str), expected);
+        }
     }
 
     #[test]

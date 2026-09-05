@@ -239,8 +239,10 @@ pub fn convert_tools(
     adapter: &dyn SchemaAdapter,
     cache: &SchemaCache,
 ) -> Vec<ChatCompletionTools> {
+    let mut tools = tools.iter().collect::<Vec<_>>();
+    tools.sort_unstable_by_key(|(name, _)| *name);
     tools
-        .iter()
+        .into_iter()
         .map(|(name, decl)| {
             let description = decl.get("description").and_then(|d| d.as_str()).map(String::from);
 
@@ -273,35 +275,48 @@ pub fn convert_tools(
 /// goes through `async-openai`'s typed client.
 #[allow(dead_code)]
 pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse {
-    let content = resp.choices.first().map(|choice| {
-        let mut parts = Vec::new();
+    let content = resp
+        .choices
+        .first()
+        .map(|choice| -> Result<Content, String> {
+            let mut parts = Vec::new();
 
-        // Add text content (skip empty strings from reasoning models)
-        if let Some(text) = &choice.message.content
-            && !text.is_empty()
-        {
-            parts.push(Part::Text { text: text.clone() });
-        }
+            // Add text content (skip empty strings from reasoning models)
+            if let Some(text) = &choice.message.content
+                && !text.is_empty()
+            {
+                parts.push(Part::Text { text: text.clone() });
+            }
 
-        // Add tool calls with IDs
-        if let Some(tool_calls) = &choice.message.tool_calls {
-            for tc in tool_calls {
-                if let ChatCompletionMessageToolCalls::Function(func_call) = tc {
-                    let args: serde_json::Value =
-                        serde_json::from_str(&func_call.function.arguments)
-                            .unwrap_or(serde_json::json!({}));
-                    parts.push(Part::FunctionCall {
-                        name: func_call.function.name.clone(),
-                        args,
-                        id: Some(func_call.id.clone()),
-                        thought_signature: None,
-                    });
+            // Add tool calls with IDs
+            if let Some(tool_calls) = &choice.message.tool_calls {
+                for tc in tool_calls {
+                    if let ChatCompletionMessageToolCalls::Function(func_call) = tc {
+                        let encoded =
+                            serde_json::Value::String(func_call.function.arguments.clone());
+                        let args = decode_tool_call_arguments(Some(&encoded)).map_err(|error| {
+                            format!(
+                                "invalid arguments for tool '{}': {error}",
+                                func_call.function.name
+                            )
+                        })?;
+                        parts.push(Part::FunctionCall {
+                            name: func_call.function.name.clone(),
+                            args,
+                            id: Some(func_call.id.clone()),
+                            thought_signature: None,
+                        });
+                    }
                 }
             }
-        }
 
-        Content { role: "model".to_string(), parts }
-    });
+            Ok(Content { role: "model".to_string(), parts })
+        })
+        .transpose();
+    let (content, argument_error) = match content {
+        Ok(content) => (content, None),
+        Err(error) => (None, Some(error)),
+    };
 
     let usage_metadata = resp.usage.as_ref().map(|u| {
         let mut meta = UsageMetadata {
@@ -328,12 +343,13 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         OaiFinishReason::ContentFilter => FinishReason::Safety,
         OaiFinishReason::FunctionCall => FinishReason::Stop,
     });
-    let tool_call_turn = resp.choices.first().is_some_and(|choice| {
-        matches!(
-            choice.finish_reason,
-            Some(OaiFinishReason::ToolCalls | OaiFinishReason::FunctionCall)
-        )
-    }) || content.as_ref().is_some_and(Content::has_function_calls);
+    let tool_call_turn = argument_error.is_none()
+        && (resp.choices.first().is_some_and(|choice| {
+            matches!(
+                choice.finish_reason,
+                Some(OaiFinishReason::ToolCalls | OaiFinishReason::FunctionCall)
+            )
+        }) || content.as_ref().is_some_and(Content::has_function_calls));
 
     LlmResponse {
         content,
@@ -341,13 +357,45 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         finish_reason,
         citation_metadata: None,
         partial: false,
-        turn_complete: !tool_call_turn,
+        turn_complete: argument_error.is_some() || !tool_call_turn,
         interrupted: false,
-        error_code: None,
-        error_message: None,
+        error_code: argument_error
+            .as_ref()
+            .map(|_| "model.openai.invalid_tool_arguments".to_owned()),
+        error_message: argument_error,
         provider_metadata: None,
         interaction_id: None,
     }
+}
+
+/// Normalize one raw Chat Completions `usage` object while retaining the
+/// provider payload for diagnostics and future provider-specific projections.
+pub(crate) fn usage_metadata_from_raw(usage: &serde_json::Value) -> Option<UsageMetadata> {
+    let usage = usage.as_object()?;
+    let prompt_details = usage.get("prompt_tokens_details");
+    let completion_details = usage.get("completion_tokens_details");
+
+    Some(UsageMetadata {
+        prompt_token_count: json_i32(usage.get("prompt_tokens")).unwrap_or_default(),
+        candidates_token_count: json_i32(usage.get("completion_tokens")).unwrap_or_default(),
+        total_token_count: json_i32(usage.get("total_tokens")).unwrap_or_default(),
+        cache_read_input_token_count: prompt_details
+            .and_then(|details| json_i32(details.get("cached_tokens"))),
+        cache_creation_input_token_count: prompt_details
+            .and_then(|details| json_i32(details.get("cache_write_tokens"))),
+        thinking_token_count: completion_details
+            .and_then(|details| json_i32(details.get("reasoning_tokens"))),
+        audio_input_token_count: prompt_details
+            .and_then(|details| json_i32(details.get("audio_tokens"))),
+        audio_output_token_count: completion_details
+            .and_then(|details| json_i32(details.get("audio_tokens"))),
+        provider_usage: Some(serde_json::Value::Object(usage.clone())),
+        ..Default::default()
+    })
+}
+
+fn json_i32(value: Option<&serde_json::Value>) -> Option<i32> {
+    i32::try_from(value?.as_i64()?).ok()
 }
 
 /// Convert a raw OpenAI JSON response to ADK LlmResponse.
@@ -355,95 +403,65 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
 /// Unlike [`from_openai_response`], this parses the raw JSON directly so it can
 /// extract fields that `async-openai` does not model, such as `reasoning_content`
 /// returned by reasoning models (o3, gpt-5-mini, etc.).
-pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
+pub(crate) fn from_raw_openai_response(json: &serde_json::Value) -> Result<LlmResponse, String> {
     let choice = json.get("choices").and_then(|c| c.get(0));
 
-    let content = choice.map(|choice| {
-        let message = &choice["message"];
-        let mut parts = Vec::new();
+    let content = choice
+        .map(|choice| -> Result<Content, String> {
+            let message = &choice["message"];
+            let mut parts = Vec::new();
 
-        // Extract reasoning_content (returned by reasoning models like o3, gpt-5-mini)
-        // Fallback to "reasoning" field for OpenRouter, Kilo Gateway, SambaNova, Cerebras, Groq
-        let reasoning = message
-            .get("reasoning_content")
-            .or_else(|| message.get("reasoning"))
-            .and_then(|v| v.as_str());
-        if let Some(reasoning) = reasoning
-            && !reasoning.is_empty()
-        {
-            parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
-        }
-
-        // Extract visible text content (skip empty strings)
-        if let Some(text) = message.get("content").and_then(|v| v.as_str())
-            && !text.is_empty()
-        {
-            // Check for text-based tool calls (Qwen, Llama, Mistral Nemo format)
-            // before adding as plain text
-            if let Some(parsed_parts) = crate::tool_call_parser::parse_text_tool_calls(text) {
-                parts.extend(parsed_parts);
-            } else {
-                parts.push(Part::Text { text: text.to_string() });
+            // Extract reasoning_content (returned by reasoning models like o3, gpt-5-mini)
+            // Fallback to "reasoning" field for OpenRouter, Kilo Gateway, SambaNova, Cerebras, Groq
+            let reasoning = message
+                .get("reasoning_content")
+                .or_else(|| message.get("reasoning"))
+                .and_then(|v| v.as_str());
+            if let Some(reasoning) = reasoning
+                && !reasoning.is_empty()
+            {
+                parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
             }
-        }
 
-        // Extract structured tool calls (OpenAI native format)
-        if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
-            for tc in tool_calls {
-                let func = &tc["function"];
-                if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                    let args: serde_json::Value = func
-                        .get("arguments")
-                        .and_then(|a| a.as_str())
-                        .and_then(|a| serde_json::from_str(a).ok())
-                        .unwrap_or(serde_json::json!({}));
-                    let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
-                    parts.push(Part::FunctionCall {
-                        name: name.to_string(),
-                        args,
-                        id,
-                        thought_signature: None,
-                    });
+            // Extract visible text content (skip empty strings)
+            if let Some(text) = message.get("content").and_then(|v| v.as_str())
+                && !text.is_empty()
+            {
+                // Check for text-based tool calls (Qwen, Llama, Mistral Nemo format)
+                // before adding as plain text
+                if let Some(parsed_parts) = crate::tool_call_parser::parse_text_tool_calls(text) {
+                    parts.extend(parsed_parts);
+                } else {
+                    parts.push(Part::Text { text: text.to_string() });
                 }
             }
-        }
 
-        Content { role: "model".to_string(), parts }
-    });
+            // Extract structured tool calls (OpenAI native format)
+            if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
+                for tc in tool_calls {
+                    let func = &tc["function"];
+                    if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                        let args =
+                            decode_tool_call_arguments(func.get("arguments")).map_err(|error| {
+                                format!("invalid arguments for tool '{name}': {error}")
+                            })?;
+                        let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
+                        parts.push(Part::FunctionCall {
+                            name: name.to_string(),
+                            args,
+                            id,
+                            thought_signature: None,
+                        });
+                    }
+                }
+            }
+
+            Ok(Content { role: "model".to_string(), parts })
+        })
+        .transpose()?;
 
     // Parse usage metadata
-    let usage_metadata = json.get("usage").map(|u| {
-        let prompt_tokens = u.get("prompt_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        let completion_tokens =
-            u.get("completion_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        let total_tokens = u.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-
-        let prompt_details = u.get("prompt_tokens_details");
-        let completion_details = u.get("completion_tokens_details");
-
-        UsageMetadata {
-            prompt_token_count: prompt_tokens,
-            candidates_token_count: completion_tokens,
-            total_token_count: total_tokens,
-            cache_read_input_token_count: prompt_details
-                .and_then(|d| d.get("cached_tokens"))
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32),
-            thinking_token_count: completion_details
-                .and_then(|d| d.get("reasoning_tokens"))
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32),
-            audio_input_token_count: prompt_details
-                .and_then(|d| d.get("audio_tokens"))
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32),
-            audio_output_token_count: completion_details
-                .and_then(|d| d.get("audio_tokens"))
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32),
-            ..Default::default()
-        }
-    });
+    let usage_metadata = json.get("usage").and_then(usage_metadata_from_raw);
 
     // Parse finish reason
     let finish_reason =
@@ -461,7 +479,7 @@ pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
         .is_some_and(|reason| matches!(reason, "tool_calls" | "function_call"))
         || content.as_ref().is_some_and(Content::has_function_calls);
 
-    LlmResponse {
+    Ok(LlmResponse {
         content,
         usage_metadata,
         finish_reason,
@@ -473,6 +491,52 @@ pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
         error_message: None,
         provider_metadata: None,
         interaction_id: None,
+    })
+}
+
+/// Normalizes tool arguments returned by OpenAI-compatible wire protocols.
+///
+/// Compatible providers sometimes encode a no-argument call as a missing value,
+/// `null`, an empty string, or an empty array. These representations are all
+/// equivalent to an empty JSON object. Non-empty arguments must still resolve
+/// to an object so malformed payloads cannot silently invoke a tool.
+pub(crate) fn decode_tool_call_arguments(
+    arguments: Option<&serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let decoded = match arguments {
+        None | Some(serde_json::Value::Null) => serde_json::json!({}),
+        Some(serde_json::Value::String(encoded)) if encoded.trim().is_empty() => {
+            serde_json::json!({})
+        }
+        Some(serde_json::Value::String(encoded)) => {
+            let decoded: serde_json::Value = serde_json::from_str(encoded)
+                .map_err(|error| format!("arguments are not valid JSON: {error}"))?;
+            match decoded {
+                serde_json::Value::Null => serde_json::json!({}),
+                serde_json::Value::Array(items) if items.is_empty() => serde_json::json!({}),
+                decoded => decoded,
+            }
+        }
+        Some(serde_json::Value::Object(fields)) => serde_json::Value::Object(fields.clone()),
+        Some(serde_json::Value::Array(items)) if items.is_empty() => serde_json::json!({}),
+        Some(other) => {
+            return Err(format!(
+                "arguments must be a JSON object or an encoded JSON object, got {}",
+                match other {
+                    serde_json::Value::Array(_) => "array",
+                    serde_json::Value::Bool(_) => "boolean",
+                    serde_json::Value::Number(_) => "number",
+                    serde_json::Value::String(_) => "string",
+                    serde_json::Value::Null => "null",
+                    serde_json::Value::Object(_) => "object",
+                }
+            ));
+        }
+    };
+    if decoded.is_object() {
+        Ok(decoded)
+    } else {
+        Err("arguments must decode to a JSON object".to_owned())
     }
 }
 
@@ -682,6 +746,68 @@ mod tests {
     }
 
     #[test]
+    fn typed_response_normalizes_empty_tool_arguments() {
+        let response: CreateChatCompletionResponse = serde_json::from_value(serde_json::json!({
+            "id": "chatcmpl_empty",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "compatible-model",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_empty",
+                        "type": "function",
+                        "function": {"name": "no_args", "arguments": "null"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }))
+        .expect("typed response should deserialize");
+
+        let converted = from_openai_response(&response);
+        let parts = converted.content.expect("tool content").parts;
+        assert!(matches!(
+            &parts[0],
+            Part::FunctionCall { args, .. } if args == &serde_json::json!({})
+        ));
+        assert!(converted.error_code.is_none());
+        assert!(!converted.turn_complete);
+    }
+
+    #[test]
+    fn typed_response_surfaces_malformed_tool_arguments() {
+        let response: CreateChatCompletionResponse = serde_json::from_value(serde_json::json!({
+            "id": "chatcmpl_invalid",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "compatible-model",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_invalid",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{\"command\":\""}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }))
+        .expect("typed response should deserialize");
+
+        let converted = from_openai_response(&response);
+        assert_eq!(converted.error_code.as_deref(), Some("model.openai.invalid_tool_arguments"));
+        assert!(converted.content.is_none());
+        assert!(converted.turn_complete);
+    }
+
+    #[test]
     fn test_raw_response_extracts_reasoning_content() {
         let json = serde_json::json!({
             "choices": [{
@@ -700,7 +826,7 @@ mod tests {
             }
         });
 
-        let resp = from_raw_openai_response(&json);
+        let resp = from_raw_openai_response(&json).expect("response should parse");
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 2);
         assert!(
@@ -728,7 +854,7 @@ mod tests {
             }
         });
 
-        let resp = from_raw_openai_response(&json);
+        let resp = from_raw_openai_response(&json).expect("response should parse");
         let content = resp.content.unwrap();
         assert!(content.parts.is_empty(), "empty text should be filtered out");
         assert_eq!(resp.finish_reason, Some(FinishReason::MaxTokens));
@@ -755,7 +881,7 @@ mod tests {
             "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 }
         });
 
-        let resp = from_raw_openai_response(&json);
+        let resp = from_raw_openai_response(&json).expect("response should parse");
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 1);
         if let Part::FunctionCall { name, args, id, .. } = &content.parts[0] {
@@ -769,6 +895,114 @@ mod tests {
     }
 
     #[test]
+    fn test_raw_response_accepts_structured_and_empty_tool_arguments() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                        {
+                            "id": "call_structured",
+                            "type": "function",
+                            "function": {
+                                "name": "bash",
+                                "arguments": {"command": "pwd"}
+                            }
+                        },
+                        {
+                            "id": "call_empty",
+                            "type": "function",
+                            "function": {
+                                "name": "no_args",
+                                "arguments": "   "
+                            }
+                        },
+                        {
+                            "id": "call_empty_array",
+                            "type": "function",
+                            "function": {
+                                "name": "no_args_array",
+                                "arguments": []
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let response = from_raw_openai_response(&json).expect("compatible arguments should parse");
+        let parts = response.content.expect("tool content").parts;
+        assert!(matches!(
+            &parts[0],
+            Part::FunctionCall { name, args, .. }
+                if name == "bash" && args == &serde_json::json!({"command": "pwd"})
+        ));
+        assert!(matches!(
+            &parts[1],
+            Part::FunctionCall { name, args, .. }
+                if name == "no_args" && args == &serde_json::json!({})
+        ));
+        assert!(matches!(
+            &parts[2],
+            Part::FunctionCall { name, args, .. }
+                if name == "no_args_array" && args == &serde_json::json!({})
+        ));
+    }
+
+    #[test]
+    fn test_raw_response_rejects_truncated_tool_arguments() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_invalid",
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "arguments": "{\"command\":\""
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let error = from_raw_openai_response(&json)
+            .expect_err("truncated tool arguments must remain invalid");
+        assert!(error.contains("bash"));
+    }
+
+    #[test]
+    fn test_raw_response_rejects_non_empty_array_tool_arguments() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_invalid",
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "arguments": ["pwd"]
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let error = from_raw_openai_response(&json)
+            .expect_err("non-empty array arguments must remain invalid");
+        assert!(error.contains("bash"));
+        assert!(error.contains("array"));
+    }
+
+    #[test]
     fn test_raw_response_standard_text() {
         let json = serde_json::json!({
             "choices": [{
@@ -778,7 +1012,7 @@ mod tests {
             "usage": { "prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8 }
         });
 
-        let resp = from_raw_openai_response(&json);
+        let resp = from_raw_openai_response(&json).expect("response should parse");
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 1);
         assert!(matches!(&content.parts[0], Part::Text { text } if text == "Hello there!"));
@@ -786,6 +1020,45 @@ mod tests {
         let usage = resp.usage_metadata.unwrap();
         assert_eq!(usage.prompt_token_count, 5);
         assert_eq!(usage.candidates_token_count, 3);
+    }
+
+    #[test]
+    fn raw_response_preserves_complete_provider_usage() {
+        let provider_usage = serde_json::json!({
+            "prompt_tokens": 120,
+            "completion_tokens": 30,
+            "total_tokens": 150,
+            "prompt_tokens_details": {
+                "cached_tokens": 80,
+                "cache_write_tokens": 12,
+                "audio_tokens": 4
+            },
+            "completion_tokens_details": {
+                "reasoning_tokens": 18,
+                "audio_tokens": 2
+            },
+            "provider_meter": {"units": 9}
+        });
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": "stop"
+            }],
+            "usage": provider_usage.clone()
+        });
+
+        let response = from_raw_openai_response(&json).expect("response should parse");
+        let usage = response.usage_metadata.expect("usage should be parsed");
+
+        assert_eq!(usage.prompt_token_count, 120);
+        assert_eq!(usage.candidates_token_count, 30);
+        assert_eq!(usage.total_token_count, 150);
+        assert_eq!(usage.cache_read_input_token_count, Some(80));
+        assert_eq!(usage.cache_creation_input_token_count, Some(12));
+        assert_eq!(usage.thinking_token_count, Some(18));
+        assert_eq!(usage.audio_input_token_count, Some(4));
+        assert_eq!(usage.audio_output_token_count, Some(2));
+        assert_eq!(usage.provider_usage, Some(provider_usage));
     }
 
     #[test]
@@ -814,6 +1087,30 @@ mod tests {
             assert_eq!(tool.function.name, "get_weather");
         } else {
             panic!("Expected Function variant");
+        }
+    }
+
+    #[test]
+    fn convert_tools_has_deterministic_name_order() {
+        use super::super::schema_adapter::OpenAiSchemaAdapter;
+
+        let adapter = OpenAiSchemaAdapter;
+        let cache = SchemaCache::for_adapter(std::sync::Arc::new(OpenAiSchemaAdapter));
+        for _ in 0..32 {
+            let tools = HashMap::from([
+                ("zeta".to_string(), serde_json::json!({})),
+                ("alpha".to_string(), serde_json::json!({})),
+                ("middle".to_string(), serde_json::json!({})),
+            ]);
+            let names = convert_tools(&tools, &adapter, &cache)
+                .into_iter()
+                .map(|tool| match tool {
+                    ChatCompletionTools::Function(tool) => tool.function.name,
+                    ChatCompletionTools::Custom(_) => panic!("expected a function tool"),
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(names, ["alpha", "middle", "zeta"]);
         }
     }
 

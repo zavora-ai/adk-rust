@@ -533,6 +533,10 @@ impl Tool for AgentTool {
         false
     }
 
+    fn is_agent_delegation(&self) -> bool {
+        true
+    }
+
     #[adk_telemetry::instrument(
         skip(self, ctx, args),
         fields(

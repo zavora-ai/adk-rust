@@ -2,7 +2,7 @@
 //!
 //! Showcases all seven ergonomics improvements introduced in ADK-Rust 0.5.x:
 //!
-//! 1. **ToolExecutionStrategy** — Sequential, Parallel, Auto dispatch
+//! 1. **ToolExecutionStrategy** — Sequential, Parallel, and Auto dispatch
 //! 2. **Tool metadata** — `is_read_only()` / `is_concurrency_safe()` on Tool trait
 //! 3. **RunnerConfigBuilder** — typestate builder for Runner construction
 //! 4. **SimpleToolContext** — lightweight ToolContext for non-agent callers

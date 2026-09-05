@@ -3,8 +3,8 @@ use crate::cache::CacheManager;
 #[cfg(feature = "artifacts")]
 use adk_artifact::ArtifactService;
 use adk_core::{
-    Agent, AppName, CacheCapable, Content, ContextCacheConfig, Event, EventStream, Memory,
-    ReadonlyContext, Result, RunConfig, SessionId, UserId,
+    Agent, AppName, CacheCapable, Content, ContextCacheConfig, Event, EventStream, InvocationId,
+    Memory, ReadonlyContext, Result, RunConfig, SessionId, UserId,
 };
 #[cfg(feature = "plugins")]
 use adk_plugin::PluginManager;
@@ -50,6 +50,36 @@ fn preserve_streamed_content(accumulated: &mut HashMap<String, Content>, event: 
 struct ActiveRunCleanup {
     active_runs: ActiveRuns,
     run_id: u64,
+}
+
+/// A newly registered runner invocation and its event stream.
+///
+/// The invocation identity is available before the stream is polled, so hosts
+/// can durably correlate failures that happen before the first agent event.
+pub struct RunnerInvocation {
+    invocation_id: InvocationId,
+    events: EventStream,
+}
+
+impl RunnerInvocation {
+    /// Returns the identity assigned to this invocation.
+    pub fn invocation_id(&self) -> &InvocationId {
+        &self.invocation_id
+    }
+
+    /// Consumes the invocation and returns its event stream.
+    pub fn into_events(self) -> EventStream {
+        self.events
+    }
+}
+
+impl std::fmt::Debug for RunnerInvocation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RunnerInvocation")
+            .field("invocation_id", &self.invocation_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for ActiveRunCleanup {
@@ -328,6 +358,31 @@ impl Runner {
         user_content: Content,
         run_config: Option<RunConfig>,
     ) -> Result<EventStream> {
+        Ok(self
+            .start_with_config(user_id, session_id, user_content, run_config)
+            .await?
+            .into_events())
+    }
+
+    /// Registers one invocation and returns its identity with the event stream.
+    ///
+    /// Prefer this method when a host must durably associate its own turn or
+    /// operation record before the first agent event can be produced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if invocation setup fails before the stream is created.
+    /// Session lookup and agent execution failures are yielded by the returned
+    /// stream.
+    pub async fn start_with_config(
+        &self,
+        user_id: UserId,
+        session_id: SessionId,
+        user_content: Content,
+        run_config: Option<RunConfig>,
+    ) -> Result<RunnerInvocation> {
+        let invocation_id = InvocationId::try_from(format!("inv-{}", uuid::Uuid::new_v4()))?;
+        let stream_invocation_id = invocation_id.to_string();
         let app_name = self.app_name.clone();
         let typed_app_name = AppName::try_from(app_name.clone())?;
         let session_service = self.session_service.clone();
@@ -437,7 +492,7 @@ impl Runner {
             let memory_service_clone = memory_service.clone();
 
             // Create invocation context with MutableSession
-            let invocation_id = format!("inv-{}", uuid::Uuid::new_v4());
+            let invocation_id = stream_invocation_id;
             #[cfg(any(feature = "skills", feature = "plugins"))]
             let mut effective_user_content = user_content.clone();
             #[cfg(not(any(feature = "skills", feature = "plugins")))]
@@ -1319,7 +1374,7 @@ impl Runner {
             }
         };
 
-        Ok(Box::pin(s))
+        Ok(RunnerInvocation { invocation_id, events: Box::pin(s) })
     }
 
     /// Convenience method that accepts string arguments.

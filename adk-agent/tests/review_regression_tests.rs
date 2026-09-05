@@ -451,6 +451,59 @@ struct CountingTool {
     calls: Arc<Mutex<usize>>,
 }
 
+#[derive(Default)]
+struct DelegationDispatchState {
+    delegation_active: AtomicUsize,
+    delegation_max_active: AtomicUsize,
+    ordinary_active: AtomicUsize,
+    ordinary_max_active: AtomicUsize,
+    delegation_overlapped_ordinary: AtomicBool,
+    ordinary_overlapped_delegation: AtomicBool,
+}
+
+struct DelegationDispatchTool {
+    name: &'static str,
+    delegation: bool,
+    state: Arc<DelegationDispatchState>,
+}
+
+#[async_trait]
+impl Tool for DelegationDispatchTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn description(&self) -> &str {
+        "Records delegation-only dispatch behavior"
+    }
+
+    fn is_agent_delegation(&self) -> bool {
+        self.delegation
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        if self.delegation {
+            if self.state.ordinary_active.load(Ordering::SeqCst) != 0 {
+                self.state.delegation_overlapped_ordinary.store(true, Ordering::SeqCst);
+            }
+            let active = self.state.delegation_active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.state.delegation_max_active.fetch_max(active, Ordering::SeqCst);
+            let delay_ms = args.get("delay_ms").and_then(Value::as_u64).unwrap_or(50);
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            self.state.delegation_active.fetch_sub(1, Ordering::SeqCst);
+        } else {
+            if self.state.delegation_active.load(Ordering::SeqCst) != 0 {
+                self.state.ordinary_overlapped_delegation.store(true, Ordering::SeqCst);
+            }
+            let active = self.state.ordinary_active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.state.ordinary_max_active.fetch_max(active, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.state.ordinary_active.fetch_sub(1, Ordering::SeqCst);
+        }
+        Ok(json!({ "ok": true }))
+    }
+}
+
 impl CountingTool {
     fn new() -> Self {
         Self { calls: Arc::new(Mutex::new(0)) }
@@ -715,6 +768,79 @@ async fn test_parallel_is_explicit_tool_metadata_override() {
         max_concurrent_tool_calls(adk_core::ToolExecutionStrategy::Parallel, false).await;
 
     assert_eq!(max_active, 2);
+}
+
+#[tokio::test]
+async fn test_parallel_delegations_only_overlaps_consecutive_agent_tools() {
+    let model = Arc::new(RecordingModel::new(vec![
+        RecordingModel::function_calls(vec![
+            Part::FunctionCall {
+                name: "ordinary_probe".to_string(),
+                args: json!({}),
+                id: Some("ordinary-before".to_string()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "delegate_probe".to_string(),
+                args: json!({ "delay_ms": 80 }),
+                id: Some("delegate-a".to_string()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "delegate_probe".to_string(),
+                args: json!({ "delay_ms": 10 }),
+                id: Some("delegate-b".to_string()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "ordinary_probe".to_string(),
+                args: json!({}),
+                id: Some("ordinary-after".to_string()),
+                thought_signature: None,
+            },
+        ]),
+        RecordingModel::text_response("done"),
+    ]));
+    let state = Arc::new(DelegationDispatchState::default());
+    let delegate_tool = Arc::new(DelegationDispatchTool {
+        name: "delegate_probe",
+        delegation: true,
+        state: state.clone(),
+    });
+    let ordinary_tool = Arc::new(DelegationDispatchTool {
+        name: "ordinary_probe",
+        delegation: false,
+        state: state.clone(),
+    });
+    let agent = LlmAgentBuilder::new("delegation-dispatch-agent")
+        .model(model.clone())
+        .tool(delegate_tool)
+        .tool(ordinary_tool)
+        .parallelize_agent_delegations(true)
+        .build()
+        .unwrap();
+
+    let stream = agent.run(Arc::new(TestContext::new("delegate safely"))).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), drain_stream(stream))
+        .await
+        .expect("delegation dispatch timed out")
+        .unwrap();
+
+    assert_eq!(state.delegation_max_active.load(Ordering::SeqCst), 2);
+    assert_eq!(state.ordinary_max_active.load(Ordering::SeqCst), 1);
+    assert!(!state.delegation_overlapped_ordinary.load(Ordering::SeqCst));
+    assert!(!state.ordinary_overlapped_delegation.load(Ordering::SeqCst));
+    let requests = model.requests.lock().unwrap_or_else(|error| error.into_inner());
+    let response_ids = requests[1]
+        .contents
+        .iter()
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse { id, .. } => id.as_deref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(response_ids, ["ordinary-before", "delegate-a", "delegate-b", "ordinary-after"]);
 }
 
 #[tokio::test]

@@ -289,7 +289,15 @@ impl Llm for AzureOpenAIClient {
             })
             .await?;
 
-            let adk_response = convert::from_raw_openai_response(&response);
+            let adk_response = convert::from_raw_openai_response(&response).map_err(|error| {
+                AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::Internal,
+                    "model.azure_openai.invalid_tool_arguments",
+                    format!("Azure OpenAI returned {error}"),
+                )
+                .with_provider("azure-openai")
+            })?;
             yield adk_response;
         };
 

@@ -32,7 +32,7 @@ pub trait Tool: Send + Sync {
     ///         "name": self.name(),
     ///         "description": self.description(),
     ///         "x-adk-openai-tool": {
-    ///             "type": "web_search_2025_08_26"
+    ///             "type": "web_search"
     ///         }
     ///     })
     /// }
@@ -117,6 +117,15 @@ pub trait Tool: Send + Sync {
     /// [`Tool::is_read_only`]. [`ToolExecutionStrategy::Parallel`] is an
     /// explicit caller override and does not inspect either signal.
     fn is_concurrency_safe(&self) -> bool {
+        false
+    }
+
+    /// Indicates whether this tool delegates work to another agent.
+    ///
+    /// Agent implementations can use this marker to overlap consecutive
+    /// delegation calls while preserving sequential execution for ordinary
+    /// tools.
+    fn is_agent_delegation(&self) -> bool {
         false
     }
 

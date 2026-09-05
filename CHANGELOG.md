@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Overlapping and interrupted tool history** (`adk-runner`): model requests
+  retain actual tool results from overlapping turns and omit unresolved calls
+  from earlier turns without fabricating interruption results. Persisted events
+  remain unchanged.
+- **OpenAI Responses stream completion** (`adk-model`): completion events retain
+  model errors and usage metadata. Open Responses mode ignores empty SSE data
+  frames, restores missing arguments by tool identity or output index, and keeps
+  streamed arguments when a terminal snapshot is blank.
+- **OpenAI-compatible structured tool arguments** (`adk-model`): Chat
+  Completions streaming now preserves structured JSON `function.arguments`
+  emitted by compatible intermediaries, including repeated and empty snapshot
+  chunks, instead of converting the tool call to empty arguments.
+- **OpenAI Responses web search** (`adk-tool`): the stable built-in tool now
+  serializes as `web_search`, matching the OpenAI Responses API. The explicit
+  preview variant remains `web_search_preview_2025_03_11`. URL annotations from
+  response text are preserved as ADK citation metadata. Open Responses mode now
+  also accepts compatible endpoints that omit output-message IDs, statuses, or
+  empty `output_text.annotations`, and reconstructs final function arguments
+  from their streaming events when the completed response omits them.
+- **OpenAI-compatible usage metadata** (`adk-model`): Chat Completions
+  streaming and non-streaming responses now use one normalization path,
+  preserve the complete provider-native `usage` object in `provider_usage`,
+  and project reported cache-write tokens alongside cache reads.
+- **OpenAI tool request stability** (`adk-model`): Chat Completions and
+  Responses requests now serialize function tools in deterministic name order,
+  preserving identical cacheable prefixes across repeated executions.
+
 ## [2.2.0] - 2026-09-01
 
 ### Added

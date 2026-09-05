@@ -62,7 +62,7 @@ pub use callbacks::{
 };
 pub use context::{InvocationContext, MutableSession};
 pub use launcher::Launcher;
-pub use runner::{Runner, RunnerConfig};
+pub use runner::{Runner, RunnerConfig, RunnerInvocation};
 
 // Re-export RequestContext for convenience
 pub use adk_core::RequestContext;

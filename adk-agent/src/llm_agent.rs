@@ -261,6 +261,8 @@ pub struct LlmAgent {
     /// Per-agent tool execution strategy override. When `Some`, overrides the
     /// `RunConfig` strategy for this agent's dispatch loop.
     tool_execution_strategy: Option<ToolExecutionStrategy>,
+    /// Whether consecutive agent-delegation calls may execute concurrently.
+    parallelize_agent_delegations: bool,
     input_guardrails: Arc<GuardrailSet>,
     output_guardrails: Arc<GuardrailSet>,
     tool_guardrails: Arc<ToolGuardrailSet>,
@@ -705,6 +707,7 @@ pub struct LlmAgentBuilder {
     circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
     tool_execution_strategy: Option<ToolExecutionStrategy>,
+    parallelize_agent_delegations: bool,
     input_guardrails: GuardrailSet,
     output_guardrails: GuardrailSet,
     tool_guardrails: ToolGuardrailSet,
@@ -756,6 +759,7 @@ impl LlmAgentBuilder {
             circuit_breaker_threshold: None,
             tool_confirmation_policy: ToolConfirmationPolicy::Never,
             tool_execution_strategy: None,
+            parallelize_agent_delegations: false,
             input_guardrails: GuardrailSet::new(),
             output_guardrails: GuardrailSet::new(),
             tool_guardrails: ToolGuardrailSet::new(),
@@ -1136,6 +1140,16 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Allow consecutive agent-delegation calls to execute concurrently.
+    ///
+    /// Ordinary tools remain sequential and retain their position relative to
+    /// each delegation batch. This setting takes precedence over the general
+    /// tool execution strategy for the agent.
+    pub fn parallelize_agent_delegations(mut self, parallelize: bool) -> Self {
+        self.parallelize_agent_delegations = parallelize;
+        self
+    }
+
     /// Set input guardrails to validate user input before processing.
     ///
     /// Input guardrails run before the agent processes the request and can:
@@ -1364,6 +1378,7 @@ impl LlmAgentBuilder {
             circuit_breaker_threshold: self.circuit_breaker_threshold,
             tool_confirmation_policy: self.tool_confirmation_policy,
             tool_execution_strategy: self.tool_execution_strategy,
+            parallelize_agent_delegations: self.parallelize_agent_delegations,
             input_guardrails: Arc::new(self.input_guardrails),
             output_guardrails: Arc::new(self.output_guardrails),
             tool_guardrails: Arc::new(self.tool_guardrails),
@@ -1783,6 +1798,27 @@ struct ToolExecutionResult {
     content: Content,
     actions: EventActions,
     escalate_or_skip: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ToolDispatchMode {
+    Sequential,
+    Parallel,
+    ParallelDelegations,
+    Auto,
+}
+
+impl ToolDispatchMode {
+    fn resolve(strategy: ToolExecutionStrategy, parallelize_agent_delegations: bool) -> Self {
+        if parallelize_agent_delegations {
+            return Self::ParallelDelegations;
+        }
+        match strategy {
+            ToolExecutionStrategy::Sequential => Self::Sequential,
+            ToolExecutionStrategy::Parallel => Self::Parallel,
+            ToolExecutionStrategy::Auto => Self::Auto,
+        }
+    }
 }
 
 struct ToolExecutor<'a> {
@@ -2423,6 +2459,7 @@ impl Agent for LlmAgent {
         let tool_guardrails = Arc::clone(&self.tool_guardrails);
         let output_guardrails = self.output_guardrails.clone();
         let agent_tool_execution_strategy = self.tool_execution_strategy;
+        let parallelize_agent_delegations = self.parallelize_agent_delegations;
         #[cfg(feature = "enhanced-plugins")]
         let enhanced_plugin_manager = self.enhanced_plugin_manager.clone();
 
@@ -3028,8 +3065,10 @@ impl Agent for LlmAgent {
                 if let Some(content) = &accumulated_content {
                     // ===== RESOLVE TOOL EXECUTION STRATEGY =====
                     // Per-agent override; defaults to Sequential if not set.
-                    let strategy = agent_tool_execution_strategy
-                        .unwrap_or(ToolExecutionStrategy::Sequential);
+                    let strategy = ToolDispatchMode::resolve(
+                        agent_tool_execution_strategy.unwrap_or(ToolExecutionStrategy::Sequential),
+                        parallelize_agent_delegations,
+                    );
 
                     let fc_parts = collect_function_calls(content, &invocation_id);
 
@@ -3228,14 +3267,14 @@ impl Agent for LlmAgent {
                     let mut results = {
                         let dispatch = async {
                             let results: Vec<ToolExecutionResult> = match strategy {
-                                ToolExecutionStrategy::Sequential => {
+                                ToolDispatchMode::Sequential => {
                                     let mut results = Vec::with_capacity(fc_parts.len());
                                     for call in fc_parts {
                                         results.push(executor.execute(call).await);
                                     }
                                     results
                                 }
-                                ToolExecutionStrategy::Parallel => {
+                                ToolDispatchMode::Parallel => {
                                     use futures::StreamExt as _;
                                     // Parallel is an explicit caller override. Tool
                                     // safety metadata is intentionally not inspected.
@@ -3251,7 +3290,46 @@ impl Agent for LlmAgent {
                                     .collect()
                                     .await
                                 }
-                                ToolExecutionStrategy::Auto => {
+                                ToolDispatchMode::ParallelDelegations => {
+                                    use futures::StreamExt as _;
+
+                                    let mut all_results = Vec::with_capacity(fc_parts.len());
+                                    let mut calls = fc_parts.into_iter().peekable();
+                                    while let Some(call) = calls.next() {
+                                        let is_delegation = tool_map
+                                            .get(&call.name)
+                                            .is_some_and(|tool| tool.is_agent_delegation());
+                                        if !is_delegation {
+                                            all_results.push(executor.execute(call).await);
+                                            continue;
+                                        }
+
+                                        let mut delegation_batch = vec![call];
+                                        while calls.peek().is_some_and(|next| {
+                                            tool_map.get(&next.name).is_some_and(|tool| {
+                                                tool.is_agent_delegation()
+                                            })
+                                        }) {
+                                            if let Some(next) = calls.next() {
+                                                delegation_batch.push(next);
+                                            }
+                                        }
+
+                                        let buffer_size = delegation_batch.len();
+                                        all_results.extend(
+                                            futures::stream::iter(
+                                                delegation_batch
+                                                    .into_iter()
+                                                    .map(|call| executor.execute(call)),
+                                            )
+                                            .buffer_unordered(buffer_size)
+                                            .collect::<Vec<_>>()
+                                            .await,
+                                        );
+                                    }
+                                    all_results
+                                }
+                                ToolDispatchMode::Auto => {
                                     // A call may overlap another only when its tool is
                                     // read-only *and* declares concurrency safety.
                                     let (concurrent_fcs, sequential_fcs): (Vec<_>, Vec<_>) =
