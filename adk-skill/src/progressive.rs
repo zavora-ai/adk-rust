@@ -49,6 +49,22 @@ const RUN_SKILL_SCRIPT_TOOL_NAME: &str = "run_skill_script";
 /// `script_execution_enabled` must only be `true` when the host exposes a
 /// matching `run_skill_script` tool. ADK-Rust currently reads bundled scripts
 /// but does not execute them, so [`SkillToolset`] passes `false`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_skill::build_skill_system_instruction;
+///
+/// let instruction = build_skill_system_instruction(
+///     Some("workspace"),
+///     Some(&["list_skills", "load_skill"]),
+///     None,
+///     false,
+/// );
+/// assert!(instruction.contains("`workspace_load_skill`"));
+/// assert!(instruction.contains("`workspace_load_skill_resource`"));
+/// assert!(!instruction.contains("The `workspace_load_skill_resource` tool is for viewing"));
+/// ```
 pub fn build_skill_system_instruction(
     prefix: Option<&str>,
     allowed_tools: Option<&[&str]>,
@@ -56,46 +72,71 @@ pub fn build_skill_system_instruction(
     script_execution_enabled: bool,
 ) -> String {
     let prefix = prefix.map_or(String::new(), |prefix| format!("{prefix}_"));
-    let scripts_bullet = if script_execution_enabled {
+    let tool_is_available =
+        |tool_name| allowed_tools.is_none_or(|tools| tools.contains(&tool_name));
+    let can_load_skill = tool_is_available(LOAD_SKILL_TOOL_NAME);
+    let can_load_resource = tool_is_available(LOAD_SKILL_RESOURCE_TOOL_NAME);
+    let can_run_script = script_execution_enabled && tool_is_available(RUN_SKILL_SCRIPT_TOOL_NAME);
+    let scripts_bullet = if can_run_script {
         "- **scripts/** (Optional): Executable scripts that can be run via bash.\n\n".to_string()
-    } else {
+    } else if can_load_resource {
         format!(
             "- **scripts/** (Optional): Scripts bundled with the skill. You cannot run them; use `{}{}` to read one and follow it yourself.\n\n",
             prefix, LOAD_SKILL_RESOURCE_TOOL_NAME
         )
+    } else {
+        "- **scripts/** (Optional): Scripts bundled with the skill.\n\n".to_string()
     };
-    let mut steps = vec![
-        format!(
+    let mut steps = Vec::new();
+    if can_load_skill {
+        steps.push(format!(
             "If a skill seems relevant to the current user query, you MUST use the `{}{}` tool with `skill_name=\"<SKILL_NAME>\"` to read its full instructions before proceeding.",
             prefix, LOAD_SKILL_TOOL_NAME
-        ),
-        "Once you have read the instructions, follow them exactly as documented before replying to the user. For example, if the instruction lists multiple steps, make sure you complete all of them in order.".to_string(),
-        format!(
+        ));
+        steps.push("Once you have read the instructions, follow them exactly as documented before replying to the user. For example, if the instruction lists multiple steps, make sure you complete all of them in order.".to_string());
+    }
+    if can_load_resource {
+        steps.push(format!(
             "The `{}{}` tool is for viewing files within a skill's directory (e.g., `references/*`, `assets/*`, `scripts/*`). It is ONLY for skill-bundled files — do NOT use it to access documents or files provided by the user at runtime. Do NOT use other tools to access skill files.",
             prefix, LOAD_SKILL_RESOURCE_TOOL_NAME
-        ),
-    ];
-    if script_execution_enabled {
-        steps.push(format!(
-            "Use `{}{}` to run scripts from a skill's `scripts/` directory. Use `{}{}` to view script content first if needed.",
-            prefix, RUN_SKILL_SCRIPT_TOOL_NAME, prefix, LOAD_SKILL_RESOURCE_TOOL_NAME
         ));
+        if can_load_skill {
+            steps.push(format!(
+                "If `{}{}` reports that a skill must be loaded first, call `{}{}` for that skill, then retry the resource request once. For any other resource error, do not retry any path; report the error to the user and stop.",
+                prefix, LOAD_SKILL_RESOURCE_TOOL_NAME, prefix, LOAD_SKILL_TOOL_NAME
+            ));
+        } else {
+            steps.push(format!(
+                "If `{}{}` returns an error, do not retry any path. Report the error to the user and stop.",
+                prefix, LOAD_SKILL_RESOURCE_TOOL_NAME
+            ));
+        }
     }
-    steps.push(format!(
-        "If `{}{}` returns any error, do not retry any path. Report the error to the user and stop.",
-        prefix, LOAD_SKILL_RESOURCE_TOOL_NAME
-    ));
-    if script_execution_enabled {
+    if can_run_script {
+        let view_before_running = if can_load_resource {
+            format!(
+                " Use `{}{}` to view script content first if needed.",
+                prefix, LOAD_SKILL_RESOURCE_TOOL_NAME
+            )
+        } else {
+            String::new()
+        };
+        steps.push(format!(
+            "Use `{}{}` to run scripts from a skill's `scripts/` directory.{view_before_running}",
+            prefix, RUN_SKILL_SCRIPT_TOOL_NAME
+        ));
         steps.push(format!(
             "If `{}{}` returns an error (for example `SCRIPT_NOT_FOUND`), do not retry the same script or guess a different script path. Report the error to the user and stop.",
             prefix, RUN_SKILL_SCRIPT_TOOL_NAME
         ));
     }
-    steps.push(format!(
-        "Loading a skill only retrieves its instructions; it does NOT complete your turn. After a `{}{}` call returns, continue in the SAME turn: call whatever tools the skill's steps require (search, data retrieval, render), then write your reply. Never end your turn with an empty response right after loading a skill.",
-        prefix, LOAD_SKILL_TOOL_NAME
-    ));
-    if script_execution_enabled && let Some(folder) = skills_folder {
+    if can_load_skill {
+        steps.push(format!(
+            "Loading a skill only retrieves its instructions; it does NOT complete your turn. After a `{}{}` call returns, continue in the SAME turn: call whatever tools the skill's steps require (search, data retrieval, render), then write your reply. Never end your turn with an empty response right after loading a skill.",
+            prefix, LOAD_SKILL_TOOL_NAME
+        ));
+    }
+    if can_run_script && let Some(folder) = skills_folder {
         let folder = folder.to_string_lossy();
         steps.push(format!(
             "NOTE ON ENVIRONMENT EXECUTION: When using `{}{}` with the `command` parameter, all skill resources (including scripts and assets) are materialized in the execution environment under `{}/<skill_name>/`. Always specify file and script paths relative to or starting with `{}/<skill_name>/` (e.g., `{}/<skill_name>/scripts/<script_name>`).",
@@ -139,17 +180,15 @@ pub static DEFAULT_SKILL_SYSTEM_INSTRUCTION: LazyLock<String> =
 
 /// Rules for reading bundled skill resources.
 ///
-/// [`GoogleCompatible`](Self::GoogleCompatible) is the default and matches
-/// Google ADK Python: a model may read a bundled resource directly when it
-/// knows the skill name. [`ActivatedOnly`](Self::ActivatedOnly) is an opt-in
-/// stricter policy for hosts that require the model to receive a skill's
-/// instructions before inspecting auxiliary files.
+/// [`ActivatedOnly`](Self::ActivatedOnly) is the default: a model must load a
+/// skill before inspecting its auxiliary files. [`GoogleCompatible`](Self::GoogleCompatible)
+/// is an explicit opt-in for hosts that need Google ADK Python interoperability.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ResourceAccessPolicy {
     /// Require an earlier successful `load_skill` call for this agent.
+    #[default]
     ActivatedOnly,
     /// Permit direct reads of a known skill, matching Google ADK Python.
-    #[default]
     GoogleCompatible,
 }
 
@@ -179,10 +218,10 @@ pub struct ActivatedSkill {
 
 /// Configuration for [`SkillToolset`].
 ///
-/// Defaults mirror Google ADK Python resource access while retaining bounded
+/// Defaults require resource activation while retaining bounded
 /// instruction/resource output and strict declared-tool validation. Set
-/// [`ResourceAccessPolicy::ActivatedOnly`] when resource reads must require
-/// activation first.
+/// [`ResourceAccessPolicy::GoogleCompatible`] only when direct reads are
+/// required for interoperability.
 ///
 /// # Example
 ///
@@ -213,7 +252,7 @@ pub struct SkillToolsetConfig {
 impl Default for SkillToolsetConfig {
     fn default() -> Self {
         Self {
-            resource_access: ResourceAccessPolicy::GoogleCompatible,
+            resource_access: ResourceAccessPolicy::ActivatedOnly,
             validation_mode: ValidationMode::Strict,
             max_active_skills: 8,
             max_instruction_chars: 8_000,
@@ -748,11 +787,9 @@ impl Tool for LoadSkillResourceTool {
                 .iter()
                 .any(|item| item.document().id == document.id)
         {
-            return Ok(json!({
-                "error": format!("skill '{name}' must be loaded before reading its resources"),
-                "errorCode": "SKILL_NOT_ACTIVATED",
-                "nextStep": format!("Call load_skill with skill_name '{name}' before calling load_skill_resource."),
-            }));
+            return Err(AdkError::tool(format!(
+                "skill '{name}' must be loaded before reading its resources; call load_skill first"
+            )));
         }
         let content = skill.resource_content(path)?;
         Ok(json!({
@@ -913,6 +950,8 @@ mod tests {
         assert_eq!(&*DEFAULT_SKILL_SYSTEM_INSTRUCTION, &default_instruction);
         assert!(default_instruction.contains("`load_skill`"));
         assert!(default_instruction.contains("You cannot run them"));
+        assert!(default_instruction.contains("must be loaded first"));
+        assert!(default_instruction.contains("then retry the resource request once"));
 
         let filtered = build_skill_system_instruction(
             Some("workspace"),
@@ -921,7 +960,8 @@ mod tests {
             false,
         );
         assert!(filtered.contains("`workspace_load_skill`"));
-        assert!(filtered.contains("`workspace_load_skill_resource`"));
+        assert!(!filtered.contains("The `workspace_load_skill_resource` tool is for viewing"));
+        assert!(!filtered.contains("If `workspace_load_skill_resource` returns any error"));
         assert!(filtered.contains("The following tools are NOT available"));
     }
 
@@ -960,18 +1000,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn google_compatible_default_reads_resources_without_activation() {
+    async fn default_resources_require_activation() {
         let (_temp, toolset) = setup();
         let context = Arc::new(TestContext::new());
         let resource = tool_by_name(
             &toolset.tools(context.clone()).await.expect("tools"),
             "load_skill_resource",
         );
-        let loaded_resource = resource
+        let error = resource
             .execute(context, json!({"skill_name": "weather", "file_path": "references/units.md"}))
             .await
-            .expect("Google-compatible resource read");
-        assert_eq!(loaded_resource["content"], "Use Celsius.");
+            .expect_err("resource access must require activation by default");
+        assert!(error.to_string().contains("must be loaded"));
+    }
+
+    #[tokio::test]
+    async fn google_compatible_policy_allows_direct_resource_reads() {
+        let (_temp, mut toolset) = setup();
+        toolset.config.resource_access = ResourceAccessPolicy::GoogleCompatible;
+        let context = Arc::new(TestContext::new());
+        let resource = tool_by_name(
+            &toolset.tools(context.clone()).await.expect("tools"),
+            "load_skill_resource",
+        );
+        let loaded = resource
+            .execute(context, json!({"skill_name": "weather", "file_path": "references/units.md"}))
+            .await
+            .expect("explicit Google-compatible resource read");
+        assert_eq!(loaded["content"], "Use Celsius.");
     }
 
     #[tokio::test]
@@ -981,15 +1037,14 @@ mod tests {
         let context = Arc::new(TestContext::new());
         let tools = toolset.tools(context.clone()).await.expect("tools");
         let resource = tool_by_name(&tools, "load_skill_resource");
-        let not_activated = resource
+        let error = resource
             .execute(
                 context.clone(),
                 json!({"skill_name": "weather", "file_path": "references/units.md"}),
             )
             .await
-            .expect("activation guidance");
-        assert_eq!(not_activated["errorCode"], "SKILL_NOT_ACTIVATED");
-        assert!(not_activated["nextStep"].as_str().expect("next step").contains("load_skill"));
+            .expect_err("activation denial must remain a tool error");
+        assert!(error.to_string().contains("call load_skill first"));
 
         let load = tool_by_name(&tools, "load_skill");
         load.execute(context.clone(), json!({"skill_name": "weather"})).await.expect("load skill");

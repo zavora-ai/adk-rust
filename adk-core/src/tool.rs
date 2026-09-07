@@ -316,6 +316,19 @@ pub trait Toolset: Send + Sync {
     /// requiring every agent that installs the toolset to repeat that guidance
     /// in its instruction. The default implementation leaves the request
     /// unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// async fn process_llm_request(
+    ///     &self,
+    ///     _ctx: std::sync::Arc<dyn adk_core::ReadonlyContext>,
+    ///     request: &mut adk_core::LlmRequest,
+    /// ) -> adk_core::Result<()> {
+    ///     request.contents.insert(0, adk_core::Content::new("user").with_text("Tool guidance"));
+    ///     Ok(())
+    /// }
+    /// ```
     async fn process_llm_request(
         &self,
         _ctx: Arc<dyn ReadonlyContext>,

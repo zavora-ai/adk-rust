@@ -374,10 +374,10 @@ a variant for a prefixed or filtered toolset, or
 `DEFAULT_SKILL_SYSTEM_INSTRUCTION` for the default exported value.
 
 The activation record contains the skill's content ID and hash, so a changed or
-removed skill cannot silently retain its old permissions. Resources allow direct
-reads by default, matching Google ADK Python, and reject path traversal. Set
-`ResourceAccessPolicy::ActivatedOnly` when resources must require activation
-first.
+removed skill cannot silently retain its old permissions. Resources require
+activation by default and reject path traversal. Set
+`ResourceAccessPolicy::GoogleCompatible` only when direct resource reads are
+required for interoperability.
 
 ```rust,ignore
 use adk_core::ToolRegistry;
