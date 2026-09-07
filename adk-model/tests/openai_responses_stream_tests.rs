@@ -23,6 +23,14 @@ fn completion(output: Value) -> Value {
 }
 
 async fn responses(events: &[Value], open_responses_mode: bool, prefix: &str) -> Vec<LlmResponse> {
+    try_responses(events, open_responses_mode, prefix).await.expect("SSE events must deserialize")
+}
+
+async fn try_responses(
+    events: &[Value],
+    open_responses_mode: bool,
+    prefix: &str,
+) -> Result<Vec<LlmResponse>, adk_core::AdkError> {
     let server = MockServer::start().await;
     let mut body = prefix.to_string();
     for event in events {
@@ -45,11 +53,95 @@ async fn responses(events: &[Value], open_responses_mode: bool, prefix: &str) ->
         client.generate_content(request, true).await.unwrap().try_collect::<Vec<_>>().await
     })
     .await
-    .expect("stream must terminate")
-    .expect("SSE events must deserialize");
+    .expect("stream must terminate");
     let requests = server.received_requests().await.unwrap();
     assert_eq!(serde_json::from_slice::<Value>(&requests[0].body).unwrap()["stream"], true);
     result
+}
+
+#[tokio::test]
+async fn compatible_stream_rejects_conflicting_tool_identities_before_completion() {
+    for conflict in [
+        json!({"type":"response.output_item.added", "sequence_number":3, "output_index":0,
+            "item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"read_file","arguments":"","status":"in_progress"}}),
+        json!({"type":"response.output_item.done", "sequence_number":3, "output_index":0,
+            "item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"read_file","arguments":"","status":"completed"}}),
+        json!({"type":"response.function_call_arguments.delta", "sequence_number":3, "output_index":0,
+            "item_id":"fc_b","delta":" "}),
+        json!({"type":"response.function_call_arguments.done", "sequence_number":3, "output_index":0,
+            "item_id":"fc_b","arguments":""}),
+    ] {
+        let events = [
+            json!({"type":"response.output_item.added", "sequence_number":1, "output_index":0,
+                "item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"read_file","arguments":"","status":"in_progress"}}),
+            json!({"type":"response.function_call_arguments.delta", "sequence_number":2, "output_index":0,
+                "item_id":"fc_a","delta":r#"{"path":"A"}"#}),
+            conflict.clone(),
+            json!({"type":"response.output_item.done", "sequence_number":4, "output_index":0,
+                "item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"read_file","arguments":"","status":"completed"}}),
+            completion(
+                json!([{"type":"function_call","id":"fc_b","call_id":"call_b","name":"read_file"}]),
+            ),
+        ];
+        assert!(
+            try_responses(&events, true, "").await.is_err(),
+            "conflicting event was accepted: {conflict}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn compatible_stream_restores_blank_done_and_completed_arguments() {
+    for blank in ["", " \t\r\n"] {
+        let results = responses(&[
+            json!({"type":"response.function_call_arguments.delta", "sequence_number":1, "output_index":0,
+                "item_id":"fc_a","delta":r#"{"path":"first.txt"}"#}),
+            json!({"type":"response.function_call_arguments.done", "sequence_number":2, "output_index":0,
+                "item_id":"fc_a","arguments":blank}),
+            json!({"type":"response.output_item.done", "sequence_number":3, "output_index":0,
+                "item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"read_file","arguments":blank,"status":"completed"}}),
+            completion(json!([{"type":"function_call","id":"fc_a","call_id":"call_a","name":"read_file","arguments":blank}])),
+        ], true, "").await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].error_code, None);
+        assert_eq!(
+            results[0].content.as_ref().unwrap().parts,
+            vec![Part::FunctionCall {
+                id: Some("call_a".into()),
+                name: "read_file".into(),
+                args: json!({"path":"first.txt"}),
+                thought_signature: None,
+            }]
+        );
+        assert_eq!(
+            results[0].usage_metadata.as_ref().unwrap().cache_read_input_token_count,
+            Some(42)
+        );
+    }
+}
+
+#[tokio::test]
+async fn standard_mode_does_not_apply_compatibility_identity_rules() {
+    let results = responses(&[
+        json!({"type":"response.output_item.added", "sequence_number":1, "output_index":0,
+            "item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"read_file","arguments":"","status":"in_progress"}}),
+        json!({"type":"response.function_call_arguments.delta", "sequence_number":2, "output_index":0,
+            "item_id":"fc_a","delta":r#"{"path":"first.txt"}"#}),
+        json!({"type":"response.output_item.done", "sequence_number":3, "output_index":0,
+            "item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"read_file","arguments":r#"{"path":"second.txt"}"#,"status":"completed"}}),
+        completion(json!([{"type":"function_call","id":"fc_b","call_id":"call_b","name":"read_file",
+            "arguments":r#"{"path":"second.txt"}"#,"status":"completed"}])),
+    ], false, "").await;
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].content.as_ref().unwrap().parts,
+        vec![Part::FunctionCall {
+            id: Some("call_b".into()),
+            name: "read_file".into(),
+            args: json!({"path":"second.txt"}),
+            thought_signature: None,
+        }]
+    );
 }
 
 #[tokio::test]

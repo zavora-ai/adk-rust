@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Open Responses argument identity** (`adk-model`): conflicting item or call
+  identities terminate compatible streams before cached arguments can cross
+  tool calls. Blank completed snapshots restore matching streamed arguments
+  without replacing explicit nonblank values.
+
 - **Overlapping and interrupted tool history** (`adk-runner`): model requests
   retain actual tool results from overlapping turns and omit unresolved calls
   from earlier turns without fabricating interruption results. Persisted events

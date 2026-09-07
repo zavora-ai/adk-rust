@@ -279,24 +279,30 @@ async fn normalize_responses_response(
                         pending.extend_from_slice(&chunk);
                         while let Some(line_end) = pending.iter().position(|byte| *byte == b'\n') {
                             let line: Vec<u8> = pending.drain(..=line_end).collect();
-                            yield Ok::<Vec<u8>, reqwest_openai::Error>(normalize_responses_bytes(
+                            let normalized = stream_state.normalize_line(
                                 &line,
                                 uses_max_reasoning,
                                 open_responses_mode,
-                                Some(&mut stream_state),
-                            ));
+                            );
+                            let failed = normalized.is_err();
+                            yield normalized;
+                            if failed {
+                                return;
+                            }
                         }
                     }
-                    Err(error) => yield Err(error),
+                    Err(error) => {
+                        yield Err(std::io::Error::other(error));
+                        return;
+                    }
                 }
             }
             if !pending.is_empty() {
-                yield Ok::<Vec<u8>, reqwest_openai::Error>(normalize_responses_bytes(
+                yield stream_state.normalize_line(
                     &pending,
                     uses_max_reasoning,
                     open_responses_mode,
-                    Some(&mut stream_state),
-                ));
+                );
             }
         };
         reqwest_openai::Body::wrap_stream(normalized)
@@ -379,6 +385,7 @@ fn normalize_responses_bytes(
 #[derive(Default)]
 struct OpenResponsesStreamState {
     function_calls: std::collections::BTreeMap<u64, StreamedFunctionCall>,
+    identity_conflict: bool,
 }
 
 #[derive(Default)]
@@ -389,7 +396,50 @@ struct StreamedFunctionCall {
 }
 
 impl OpenResponsesStreamState {
+    fn normalize_line(
+        &mut self,
+        bytes: &[u8],
+        uses_max_reasoning: bool,
+        open_responses_mode: bool,
+    ) -> std::io::Result<Vec<u8>> {
+        let normalized =
+            normalize_responses_bytes(bytes, uses_max_reasoning, open_responses_mode, Some(self));
+        if self.identity_conflict {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "conflicting tool-call identities in Open Responses stream",
+            ));
+        }
+        Ok(normalized)
+    }
+
+    fn bind_call(
+        &mut self,
+        output_index: u64,
+        item_id: Option<&str>,
+        call_id: Option<&str>,
+    ) -> Option<&mut StreamedFunctionCall> {
+        let call = self.function_calls.entry(output_index).or_default();
+        if item_id.zip(call.item_id.as_deref()).is_some_and(|(next, previous)| next != previous)
+            || call_id.zip(call.call_id.as_deref()).is_some_and(|(next, previous)| next != previous)
+        {
+            // A reused index cannot transfer accumulated arguments to another call.
+            self.identity_conflict = true;
+            return None;
+        }
+        if call.item_id.is_none() {
+            call.item_id = item_id.map(str::to_owned);
+        }
+        if call.call_id.is_none() {
+            call.call_id = call_id.map(str::to_owned);
+        }
+        Some(call)
+    }
+
     fn normalize_event(&mut self, event: &mut serde_json::Value) {
+        if self.identity_conflict {
+            return;
+        }
         let event_type = event.get("type").and_then(serde_json::Value::as_str);
         match event_type {
             Some("response.output_item.added" | "response.output_item.done") => {
@@ -399,13 +449,13 @@ impl OpenResponsesStreamState {
                     && let Some(item) = event.get_mut("item")
                     && item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
                 {
-                    let call = self.function_calls.entry(output_index).or_default();
-                    if let Some(id) = item.get("id").and_then(serde_json::Value::as_str) {
-                        call.item_id = Some(id.to_string());
-                    }
-                    if let Some(id) = item.get("call_id").and_then(serde_json::Value::as_str) {
-                        call.call_id = Some(id.to_string());
-                    }
+                    let Some(call) = self.bind_call(
+                        output_index,
+                        item.get("id").and_then(serde_json::Value::as_str),
+                        item.get("call_id").and_then(serde_json::Value::as_str),
+                    ) else {
+                        return;
+                    };
                     if is_done
                         && let Some(arguments) =
                             item.get("arguments").and_then(serde_json::Value::as_str)
@@ -414,9 +464,7 @@ impl OpenResponsesStreamState {
                         call.arguments = Some(arguments.to_string());
                     } else if is_done
                         && let Some(arguments) = &call.arguments
-                        && item.get("arguments").is_none_or(|value| {
-                            value.as_str().is_some_and(|arguments| arguments.trim().is_empty())
-                        })
+                        && missing_or_blank_arguments(item.get("arguments"))
                     {
                         item["arguments"] = arguments.clone().into();
                     }
@@ -427,10 +475,13 @@ impl OpenResponsesStreamState {
                     event.get("output_index").and_then(serde_json::Value::as_u64),
                     event.get("delta").and_then(serde_json::Value::as_str),
                 ) {
-                    let call = self.function_calls.entry(output_index).or_default();
-                    if let Some(id) = event.get("item_id").and_then(serde_json::Value::as_str) {
-                        call.item_id = Some(id.to_string());
-                    }
+                    let Some(call) = self.bind_call(
+                        output_index,
+                        event.get("item_id").and_then(serde_json::Value::as_str),
+                        event.get("call_id").and_then(serde_json::Value::as_str),
+                    ) else {
+                        return;
+                    };
                     call.arguments.get_or_insert_default().push_str(delta);
                 }
             }
@@ -438,19 +489,20 @@ impl OpenResponsesStreamState {
                 if let Some(output_index) =
                     event.get("output_index").and_then(serde_json::Value::as_u64)
                 {
-                    let call = self.function_calls.entry(output_index).or_default();
-                    if let Some(id) = event.get("item_id").and_then(serde_json::Value::as_str) {
-                        call.item_id = Some(id.to_string());
-                    }
+                    let Some(call) = self.bind_call(
+                        output_index,
+                        event.get("item_id").and_then(serde_json::Value::as_str),
+                        event.get("call_id").and_then(serde_json::Value::as_str),
+                    ) else {
+                        return;
+                    };
                     if let Some(arguments) =
                         event.get("arguments").and_then(serde_json::Value::as_str)
                         && (!arguments.trim().is_empty() || call.arguments.is_none())
                     {
                         call.arguments = Some(arguments.to_string());
                     } else if let Some(arguments) = &call.arguments
-                        && event.get("arguments").is_none_or(|value| {
-                            value.as_str().is_some_and(|arguments| arguments.trim().is_empty())
-                        })
+                        && missing_or_blank_arguments(event.get("arguments"))
                     {
                         event["arguments"] = serde_json::Value::String(arguments.clone());
                     }
@@ -463,7 +515,7 @@ impl OpenResponsesStreamState {
                     for (output_index, item) in output.iter_mut().enumerate() {
                         let is_function_call = item.get("type").and_then(serde_json::Value::as_str)
                             == Some("function_call");
-                        if !is_function_call || item.get("arguments").is_some() {
+                        if !is_function_call || !missing_or_blank_arguments(item.get("arguments")) {
                             continue;
                         }
                         let item_id = item.get("id").and_then(serde_json::Value::as_str);
@@ -501,6 +553,10 @@ impl OpenResponsesStreamState {
             _ => {}
         }
     }
+}
+
+fn missing_or_blank_arguments(value: Option<&serde_json::Value>) -> bool {
+    value.is_none_or(|value| value.as_str().is_some_and(|arguments| arguments.trim().is_empty()))
 }
 
 fn add_open_responses_defaults(value: &mut serde_json::Value, message_status: &str) {
@@ -786,6 +842,140 @@ mod tests {
     use super::*;
     use crate::openai::config::OpenAIResponsesConfig;
     use async_openai::error::{ApiError, ApiErrorResponse, OpenAIError};
+    use serde_json::json;
+
+    const FIRST_ARGUMENTS: &str = r#"{"path":"first.txt"}"#;
+    fn stream_with_first_call() -> OpenResponsesStreamState {
+        let mut state = OpenResponsesStreamState::default();
+        state.normalize_event(&mut json!({"type":"response.output_item.added", "output_index":0,
+            "item":{"type":"function_call", "id":"item_A", "call_id":"call_A", "name":"read_file"}}));
+        state.normalize_event(
+            &mut json!({"type":"response.function_call_arguments.delta", "output_index":0,
+            "item_id":"item_A", "delta":FIRST_ARGUMENTS}),
+        );
+        state
+    }
+    #[test]
+    fn output_done_does_not_reuse_another_calls_arguments() {
+        let mut state = stream_with_first_call();
+        let mut done = json!({"type":"response.output_item.done", "output_index":0,
+            "item":{"type":"function_call", "id":"item_B", "call_id":"call_B", "name":"read_file"}});
+        state.normalize_event(&mut done);
+        assert_ne!(
+            done["item"]["arguments"], FIRST_ARGUMENTS,
+            "arguments from the first call were injected into the second: {done}"
+        );
+    }
+    #[test]
+    fn output_added_does_not_overwrite_accumulated_call_identity() {
+        let mut state = stream_with_first_call();
+        state.normalize_event(&mut json!({"type":"response.output_item.added", "output_index":0,
+            "item":{"type":"function_call", "id":"item_B", "call_id":"call_B", "name":"read_file"}}));
+        let mut completed = json!({"type":"response.completed", "response":{"output":[
+            {"type":"function_call","id":"item_B","call_id":"call_B","name":"read_file"}]}});
+        state.normalize_event(&mut completed);
+        assert_ne!(completed["response"]["output"][0]["arguments"], FIRST_ARGUMENTS, "{completed}");
+    }
+    #[test]
+    fn argument_done_does_not_reuse_another_items_arguments() {
+        let mut state = stream_with_first_call();
+        let mut done = json!({"type":"response.function_call_arguments.done", "output_index":0,
+            "item_id":"item_B"});
+        state.normalize_event(&mut done);
+        assert_ne!(done["arguments"], FIRST_ARGUMENTS, "{done}");
+    }
+    #[test]
+    fn argument_delta_does_not_concatenate_different_items() {
+        let mut state = stream_with_first_call();
+        state.normalize_event(
+            &mut json!({"type":"response.function_call_arguments.delta", "output_index":0,
+            "item_id":"item_B", "delta":r#"{"path":"B"}"#}),
+        );
+        let mut done = json!({"type":"response.function_call_arguments.done","output_index":0,"item_id":"item_B"});
+        state.normalize_event(&mut done);
+        assert!(!done["arguments"].as_str().unwrap_or("").contains(FIRST_ARGUMENTS), "{done}");
+    }
+    #[test]
+    fn blank_completed_arguments_restore_valid_deltas() {
+        let mut state = stream_with_first_call();
+        let mut done = json!({"type":"response.function_call_arguments.done", "output_index":0,
+            "item_id":"item_A", "arguments":""});
+        state.normalize_event(&mut done);
+        assert_eq!(done["arguments"], FIRST_ARGUMENTS);
+        let mut item_done = json!({"type":"response.output_item.done", "output_index":0,
+            "item":{"type":"function_call","id":"item_A","call_id":"call_A","arguments":""}});
+        state.normalize_event(&mut item_done);
+        assert_eq!(item_done["item"]["arguments"], FIRST_ARGUMENTS);
+        let mut completed = json!({"type":"response.completed","response":{"output":[
+            {"type":"function_call","id":"item_A","call_id":"call_A","name":"read_file","arguments":""}]}});
+        state.normalize_event(&mut completed);
+        assert_eq!(completed["response"]["output"][0]["arguments"], FIRST_ARGUMENTS, "{completed}");
+    }
+    #[test]
+    fn whitespace_completed_arguments_restore_valid_deltas() {
+        let mut state = stream_with_first_call();
+        let mut completed = json!({"type":"response.completed","response":{"output":[
+            {"type":"function_call","id":"item_A","call_id":"call_A","name":"read_file","arguments":" \t\r\n"}]}});
+        state.normalize_event(&mut completed);
+        assert_eq!(completed["response"]["output"][0]["arguments"], FIRST_ARGUMENTS, "{completed}");
+    }
+    #[test]
+    fn omitted_completed_arguments_restore_the_matching_call() {
+        let mut state = stream_with_first_call();
+        let mut completed = json!({"type":"response.completed","response":{"output":[
+            {"type":"function_call","id":"item_A","call_id":"call_A","name":"read_file"}]}});
+        state.normalize_event(&mut completed);
+        assert_eq!(completed["response"]["output"][0]["arguments"], FIRST_ARGUMENTS);
+    }
+
+    #[test]
+    fn every_stream_update_rejects_item_and_call_identity_conflicts() {
+        for event_type in [
+            "response.output_item.added",
+            "response.output_item.done",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+        ] {
+            for (item_id, call_id) in
+                [("item_A", "call_B"), ("item_B", "call_A"), ("item_B", "call_B")]
+            {
+                let mut state = stream_with_first_call();
+                let event = json!({
+                    "type": event_type, "output_index": 0,
+                    "item_id": item_id, "call_id": call_id, "delta": " ",
+                    "arguments": r#"{"path":"second.txt"}"#,
+                    "item": {"type":"function_call", "id":item_id, "call_id":call_id,
+                        "name":"read_file", "arguments":r#"{"path":"second.txt"}"#},
+                });
+                let line = format!("data: {event}\n");
+                let error = state.normalize_line(line.as_bytes(), false, true).unwrap_err();
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+                let call = &state.function_calls[&0];
+                assert_eq!(
+                    (call.item_id.as_deref(), call.call_id.as_deref(), call.arguments.as_deref()),
+                    (Some("item_A"), Some("call_A"), Some(FIRST_ARGUMENTS)),
+                );
+                assert!(state.normalize_line(b"data: {}\n", false, true).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn completed_explicit_arguments_are_not_replaced_by_cached_deltas() {
+        for arguments in [
+            json!("{}"),
+            json!(r#"{"path":"explicit.txt"}"#),
+            json!(null),
+            json!({"path":"object"}),
+        ] {
+            let mut state = stream_with_first_call();
+            let mut event = json!({"type":"response.completed", "response":{"output":[
+                {"type":"function_call","id":"item_A","call_id":"call_A","name":"read_file","arguments":arguments}]}});
+            let expected = event.clone();
+            state.normalize_event(&mut event);
+            assert_eq!(event, expected);
+        }
+    }
 
     #[test]
     fn completed_stream_response_preserves_errors() {
