@@ -413,6 +413,10 @@ impl ToolCallBuffer {
             if self.has_complete_tool_call() {
                 return self.try_parse_and_emit();
             }
+            // A prefix-like chunk can become ordinary text once more data arrives.
+            if !self.starts_tool_call_prefix() && !self.has_partial_prefix() {
+                return self.flush_as_emit();
+            }
             // Safety valve: if buffer is too large, flush as text
             if self.buffer.len() > MAX_BUFFER_SIZE {
                 return self.flush_as_emit();
@@ -742,6 +746,46 @@ mod tests {
                 assert!(matches!(&parts[0], Part::FunctionCall { name, .. } if name == "x"));
             }
             BufferAction::Buffering => panic!("should emit"),
+        }
+    }
+
+    #[test]
+    fn test_buffer_markdown_link_is_not_mistaken_for_tool_call() {
+        let mut buf = ToolCallBuffer::new();
+
+        assert!(matches!(buf.push("["), BufferAction::Buffering));
+
+        match buf.push("documentation](https://example.com) trailing text") {
+            BufferAction::Emit(parts) => {
+                assert_eq!(
+                    parts,
+                    vec![Part::Text {
+                        text: "[documentation](https://example.com) trailing text".to_string()
+                    }]
+                );
+            }
+            BufferAction::Buffering => panic!("markdown link must not stay buffered"),
+        }
+
+        assert!(buf.flush().is_empty());
+    }
+
+    #[test]
+    fn test_buffer_mistral_prefix_can_still_span_chunks() {
+        let mut buf = ToolCallBuffer::new();
+
+        assert!(matches!(buf.push("["), BufferAction::Buffering));
+        assert!(matches!(buf.push("TOOL"), BufferAction::Buffering));
+
+        match buf.push(r#"_CALLS][{"name":"search","arguments":{"q":"rust"}}]"#) {
+            BufferAction::Emit(parts) => {
+                assert_eq!(parts.len(), 1);
+                assert!(matches!(
+                    &parts[0],
+                    Part::FunctionCall { name, .. } if name == "search"
+                ));
+            }
+            BufferAction::Buffering => panic!("should emit parsed tool call"),
         }
     }
 
