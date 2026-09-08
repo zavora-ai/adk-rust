@@ -276,6 +276,57 @@ pub fn content_to_message(content: &Content) -> Message {
     }
 }
 
+/// Reasoning that the terminal chunk still owes the consumer.
+///
+/// With thinking enabled, each `reasoning_content` delta is yielded as a
+/// partial `Part::Thinking` while it arrives, so the terminal chunk must not
+/// replay `buffer`. With thinking disabled the deltas are buffered and never
+/// yielded, so the terminal chunk is the only place they can surface.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // thinking enabled: already streamed, nothing left to emit
+/// assert!(pending_reasoning(&mut buffer, true).is_none());
+/// ```
+pub fn pending_reasoning(buffer: &mut String, thinking_enabled: bool) -> Option<String> {
+    if thinking_enabled || buffer.is_empty() {
+        return None;
+    }
+    Some(std::mem::take(buffer))
+}
+
+/// Parts the terminal chunk of a stream contributes, on top of everything its
+/// earlier chunks already yielded.
+///
+/// ADK accumulates the parts of *every* chunk it receives, partial ones
+/// included, so each piece of a response must be emitted exactly once across
+/// the stream. The terminal chunk therefore carries only its own `delta` —
+/// plus any reasoning that was buffered but never streamed.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // The usual DeepSeek finish chunk has an empty delta and contributes nothing.
+/// assert!(final_chunk_parts(None, &mut String::new(), false).is_empty());
+/// ```
+pub fn final_chunk_parts(
+    delta: Option<&DeltaMessage>,
+    reasoning_buffer: &mut String,
+    thinking_enabled: bool,
+) -> Vec<Part> {
+    let mut parts = Vec::new();
+    if let Some(thinking) = pending_reasoning(reasoning_buffer, thinking_enabled) {
+        parts.push(Part::Thinking { thinking, signature: None });
+    }
+    if let Some(text) = delta.and_then(|d| d.content.as_deref())
+        && !text.is_empty()
+    {
+        parts.push(Part::Text { text: text.to_string() });
+    }
+    parts
+}
+
 /// Convert ADK tools to DeepSeek tools.
 ///
 /// When `strict` is `true`, each tool definition includes `"strict": true`
@@ -431,6 +482,44 @@ pub fn create_tool_call_response(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pending_reasoning_is_owed_only_when_it_was_never_streamed() {
+        // Thinking enabled: the deltas were yielded as they arrived.
+        let mut buffer = String::from("because");
+        assert_eq!(pending_reasoning(&mut buffer, true), None);
+        assert_eq!(buffer, "because", "buffer must not be consumed");
+
+        // Thinking disabled: the terminal chunk is the only place it can surface.
+        assert_eq!(pending_reasoning(&mut buffer, false), Some("because".to_string()));
+        assert!(buffer.is_empty(), "buffer is drained once emitted");
+        assert_eq!(pending_reasoning(&mut buffer, false), None);
+    }
+
+    #[test]
+    fn final_chunk_carries_only_its_own_delta() {
+        // Regression: the terminal chunk used to replay the accumulated text
+        // buffer on top of the deltas it had already yielded, so consumers that
+        // accumulate every chunk saw the whole response twice.
+        let delta = DeltaMessage { content: Some("tail".into()), ..Default::default() };
+        let parts = final_chunk_parts(Some(&delta), &mut String::new(), false);
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(&parts[0], Part::Text { text } if text == "tail"));
+
+        // The usual DeepSeek finish chunk has an empty delta.
+        assert!(final_chunk_parts(None, &mut String::new(), false).is_empty());
+        let empty = DeltaMessage { content: Some(String::new()), ..Default::default() };
+        assert!(final_chunk_parts(Some(&empty), &mut String::new(), false).is_empty());
+    }
+
+    #[test]
+    fn final_chunk_orders_unstreamed_reasoning_before_text() {
+        let delta = DeltaMessage { content: Some("answer".into()), ..Default::default() };
+        let mut buffer = String::from("because");
+        let parts = final_chunk_parts(Some(&delta), &mut buffer, false);
+        assert!(matches!(&parts[0], Part::Thinking { thinking, .. } if thinking == "because"));
+        assert!(matches!(&parts[1], Part::Text { text } if text == "answer"));
+    }
+
     use super::*;
 
     #[test]
