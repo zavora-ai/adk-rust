@@ -29,7 +29,9 @@ pub mod schema_adapter;
 #[cfg(feature = "openai-ws")]
 pub mod ws_transport;
 
-pub use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
+pub use crate::openai_compatible::{
+    OpenAICompatible, OpenAICompatibleConfig, ReasoningReplayField,
+};
 pub use client::{AzureOpenAIClient, OpenAIClient};
 pub use config::{
     AzureConfig, OpenAIConfig, OpenAIReasoningEffort, OpenAIResponsesConfig, PromptCacheRetention,

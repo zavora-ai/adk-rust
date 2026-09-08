@@ -289,6 +289,36 @@ let model = OpenAIClient::new(config)?;
 
 > **Note**: Structured output (`output_schema`) requires backend support. Native OpenAI fully supports it; local servers may have limited support.
 
+### OpenAI-Compatible Reasoning History
+
+Reasoning replay is disabled by default. `Part::Thinking` stays separate from
+visible message text regardless of the replay setting.
+
+| Client setting | Assistant history field |
+|---|---|
+| Default or `with_reasoning_replay(false)` | Neither field |
+| `with_reasoning_replay(true)` | `reasoning_content` |
+| `with_reasoning_replay_field(ReasoningReplayField::Reasoning)` | `reasoning` |
+
+```rust
+use adk_model::{OpenAICompatible, OpenAICompatibleConfig, ReasoningReplayField};
+
+fn main() -> Result<(), adk_core::AdkError> {
+    let config = OpenAICompatibleConfig::new("key", "model")
+        .with_base_url("http://localhost:8000/v1");
+    let model = OpenAICompatible::new(config)?.with_reasoning_replay(true);
+    // Select this override for vLLM endpoints that accept `reasoning`.
+    let model = model.with_reasoning_replay_field(ReasoningReplayField::Reasoning);
+    let _ = model;
+    Ok(())
+}
+```
+
+The last reasoning-replay builder call determines the setting. Enable replay
+only for endpoints that accept the chosen field; older vLLM deployments may use
+`reasoning_content`. This setting controls history serialization, not thinking
+generation. Standard OpenAI and Azure Chat Completions omit both fields by default.
+
 ### Gemini via the OpenAI-Compatible Endpoint
 
 Gemini models are reachable through the OpenAI Chat Completions wire format at

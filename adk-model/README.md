@@ -31,6 +31,13 @@ LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, Op
 
 The crate implements the `Llm` trait from `adk-core`, allowing models to be used interchangeably.
 
+OpenAI-compatible reasoning history is opt-in: `with_reasoning_replay(true)`
+replays `Part::Thinking` through `reasoning_content`. Endpoints using `reasoning`
+(such as newer vLLM deployments) select
+`with_reasoning_replay_field(ReasoningReplayField::Reasoning)` instead.
+The default and `with_reasoning_replay(false)` omit both fields. Thinking stays
+separate from visible message text in all cases.
+
 ## Installation
 
 ```toml
