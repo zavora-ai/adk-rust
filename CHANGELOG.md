@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **DeepSeek streaming emitted every response twice** (`adk-model`): the
+  terminal SSE chunk replayed the accumulated text and reasoning buffers on top
+  of the deltas it had already yielded as partial chunks. Consumers accumulate
+  the parts of every chunk — `LlmAgent` does, to build conversation history — so
+  they saw the whole response twice. With `output_schema` set that is
+  `{...}{...}`, which fails JSON parsing ("Response is not valid JSON: trailing
+  characters") and burns every schema-validation retry, so structured output was
+  unusable on DeepSeek. The terminal chunk now contributes only its own `delta`,
+  plus reasoning that was buffered but never streamed (thinking disabled), and a
+  `delta.content` arriving in the same chunk as `finish_reason` is no longer
+  dropped.
+
 ## [2.2.0] - 2026-09-01
 
 ### Added
@@ -79,6 +93,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enable replay with `with_reasoning_replay(true)` using `reasoning_content`,
   or explicitly select `reasoning` for compatible vLLM endpoints;
   standard OpenAI and Azure requests omit both fields by default.
+- **Bounded partial streaming events** (`adk-agent`): incremental LLM events
+  no longer repeat the complete request and response payload on every chunk.
+  Terminal events retain the existing debug payload, while long histories now
+  incur constant payload overhead instead of growing with the chunk count.
+- **Text tool-call buffering** (`adk-model`): ordinary text that begins like a
+  split tool-call prefix is released as soon as later chunks disambiguate it, so
+  Markdown links and similar content do not remain buffered until stream end.
 - **OpenAI-compatible streaming usage** (`adk-model`): usage-only terminal
   chunks with empty `choices` attach token counts to the final response.
 - **Span parenting across suspension points** (`adk-agent`, `adk-runner`): one
