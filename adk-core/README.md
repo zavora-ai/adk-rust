@@ -61,11 +61,14 @@ pub trait Tool: Send + Sync {
     fn is_long_running(&self) -> bool;
     fn is_read_only(&self) -> bool;           // default: false
     fn is_concurrency_safe(&self) -> bool;    // default: false
+    fn is_agent_delegation(&self) -> bool;    // default: false
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
 ```
 
 `ToolExecutionStrategy::Auto` includes a call in its concurrent subset only when the selected tool returns `true` from both `is_read_only()` and `is_concurrency_safe()`. It runs that safe subset first, then executes the remaining calls sequentially. Both methods default to `false`, so existing implementations remain sequential.
+
+Agent implementations may use `is_agent_delegation()` to identify consecutive delegation calls that can overlap without parallelizing ordinary tools.
 
 ### Toolset
 

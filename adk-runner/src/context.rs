@@ -1,6 +1,6 @@
 use adk_core::{
     AdkIdentity, Agent, AppName, Artifacts, CallbackContext, Content, Event, ExecutionIdentity,
-    InvocationContext as InvocationContextTrait, InvocationId, Memory, ReadonlyContext,
+    InvocationContext as InvocationContextTrait, InvocationId, Memory, Part, ReadonlyContext,
     RequestContext, RunConfig, SecretService, SessionId, UserId,
 };
 use adk_session::Session as AdkSession;
@@ -128,7 +128,10 @@ impl MutableSession {
         let mut compaction_boundary = None;
         for event in events.iter().rev() {
             if let Some(ref compaction) = event.actions.compaction {
-                history.push(compaction.compacted_content.clone());
+                history.push(HistoryContent {
+                    content: compaction.compacted_content.clone(),
+                    invocation_id: None,
+                });
                 compaction_boundary = Some(compaction.end_timestamp);
                 break;
             }
@@ -174,12 +177,165 @@ impl MutableSession {
                     _ => "model",
                 }
                 .to_string();
-                history.push(mapped_content);
+                history.push(HistoryContent {
+                    content: mapped_content,
+                    invocation_id: Some(event.invocation_id.clone()),
+                });
             }
         }
 
-        history
+        close_interrupted_tool_calls(history)
     }
+}
+
+struct HistoryContent {
+    content: Content,
+    invocation_id: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct PartLocation {
+    content: usize,
+    part: usize,
+}
+
+struct PendingFunctionCall {
+    location: PartLocation,
+    id: Option<String>,
+    name: String,
+    user_turn: usize,
+    invocation_id: Option<String>,
+}
+
+/// Makes persisted conversation history valid for the next model turn without
+/// rewriting the source events.
+///
+/// A runner interruption can happen after a model function call is persisted
+/// but before its tool response is available. Responses from overlapping runs
+/// may also be persisted after a later user message, so known responses are
+/// paired first. An unmatched call is closed only when a later user turn exists
+/// and has no durable response in the retained history. Such calls are omitted
+/// from the model projection rather than assigned a result that did not occur.
+fn close_interrupted_tool_calls(history: Vec<HistoryContent>) -> Vec<Content> {
+    let mut pending = Vec::<PendingFunctionCall>::new();
+    let mut removed_parts = std::collections::HashSet::<PartLocation>::new();
+    let mut responses_after = HashMap::<usize, Vec<(usize, String, Part)>>::new();
+    let mut user_turn = 0;
+
+    // Reconcile against the complete retained history first. Concurrent runs can
+    // persist a response after another run's user event, and that response still
+    // completes the original call.
+    for (content_index, history_content) in history.iter().enumerate() {
+        let content = &history_content.content;
+        for (part_index, part) in content.parts.iter().enumerate() {
+            match part {
+                Part::FunctionCall { name, id, .. } => {
+                    pending.push(PendingFunctionCall {
+                        location: PartLocation { content: content_index, part: part_index },
+                        id: id.clone(),
+                        name: name.clone(),
+                        user_turn,
+                        invocation_id: history_content.invocation_id.clone(),
+                    });
+                }
+                Part::FunctionResponse { function_response, id, .. } => {
+                    // Idless responses prefer their own invocation. Fall back
+                    // by name only when provenance is missing and unambiguous.
+                    let matching_index = match id.as_deref() {
+                        Some(response_id) => {
+                            pending.iter().position(|call| call.id.as_deref() == Some(response_id))
+                        }
+                        None => pending
+                            .iter()
+                            .position(|call| {
+                                call.name == function_response.name
+                                    && history_content.invocation_id.is_some()
+                                    && call.invocation_id.as_deref()
+                                        == history_content.invocation_id.as_deref()
+                            })
+                            .or_else(|| {
+                                let mut same_name =
+                                    pending.iter().enumerate().filter(|(_, call)| {
+                                        call.name == function_response.name
+                                            && (call.invocation_id.is_none()
+                                                || history_content.invocation_id.is_none())
+                                    });
+                                let first = same_name.next().map(|(index, _)| index);
+                                match (first, same_name.next()) {
+                                    (Some(index), None) => Some(index),
+                                    _ => None,
+                                }
+                            }),
+                    };
+                    if let Some(index) = matching_index {
+                        let call = pending.remove(index);
+                        if call.user_turn < user_turn {
+                            removed_parts
+                                .insert(PartLocation { content: content_index, part: part_index });
+                            let mut insertion_index = call.location.content;
+                            while let Some(next) = history.get(insertion_index + 1) {
+                                if next.content.parts.is_empty()
+                                    || !next
+                                        .content
+                                        .parts
+                                        .iter()
+                                        .all(|part| matches!(part, Part::FunctionResponse { .. }))
+                                {
+                                    break;
+                                }
+                                insertion_index += 1;
+                            }
+                            responses_after.entry(insertion_index).or_default().push((
+                                call.location.part,
+                                content.role.clone(),
+                                part.clone(),
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if content.role == "user"
+            && content.parts.iter().any(|part| !matches!(part, Part::FunctionResponse { .. }))
+        {
+            user_turn += 1;
+        }
+    }
+
+    for call in pending {
+        if call.user_turn == user_turn {
+            continue;
+        }
+        removed_parts.insert(call.location);
+    }
+
+    let mut normalized = Vec::with_capacity(history.len());
+    for (content_index, history_content) in history.into_iter().enumerate() {
+        let mut content = history_content.content;
+        content.parts = content
+            .parts
+            .into_iter()
+            .enumerate()
+            .filter(|(part_index, _)| {
+                !removed_parts.contains(&PartLocation { content: content_index, part: *part_index })
+            })
+            .map(|(_, part)| part)
+            .collect();
+        if !content.parts.is_empty() {
+            normalized.push(content);
+        }
+        if let Some(mut responses) = responses_after.remove(&content_index) {
+            responses.sort_by_key(|(call_part, _, _)| *call_part);
+            normalized.extend(
+                responses
+                    .into_iter()
+                    .map(|(_, role, response)| Content { role, parts: vec![response] }),
+            );
+        }
+    }
+
+    normalized
 }
 
 impl adk_core::Session for MutableSession {

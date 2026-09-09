@@ -363,8 +363,15 @@ matching user message. It provides three always-available tools:
 1. `list_skills` — L1: names and descriptions only.
 2. `load_skill` — L2: loads one skill's instructions and activates its declared
    `allowed-tools` for the next model turn.
-3. `load_skill_resource` — L3: reads a file from an activated skill's
-   `references/`, `assets/`, or `scripts/` directory.
+3. `load_skill_resource` — L3: reads a file from a skill's `references/`,
+   `assets/`, or `scripts/` directory.
+
+`SkillToolset` automatically injects the progressive-disclosure protocol into
+each model request, so individual agents do not need to repeat it in their
+instructions. The protocol is generated at runtime from the tools actually
+available to the toolset. Use `build_skill_system_instruction(...)` to generate
+a variant for a prefixed or filtered toolset, or
+`DEFAULT_SKILL_SYSTEM_INSTRUCTION` for the default exported value.
 
 The activation record contains the skill's content ID and hash, so a changed or
 removed skill cannot silently retain its old permissions. Resources require

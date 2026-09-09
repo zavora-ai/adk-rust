@@ -106,7 +106,9 @@ fn test_native_declarations_are_exposed() {
     assert_eq!(gemini_decl["x-adk-gemini-tool"]["google_search"], json!({}));
 
     let openai_decl = OpenAIWebSearchTool::new().declaration();
-    assert_eq!(openai_decl["x-adk-openai-tool"]["type"], "web_search_2025_08_26");
+    assert_eq!(openai_decl["x-adk-openai-tool"]["type"], "web_search");
+    let openai_preview_decl = OpenAIWebSearchTool::new().preview().declaration();
+    assert_eq!(openai_preview_decl["x-adk-openai-tool"]["type"], "web_search_preview_2025_03_11");
 
     let anthropic_decl = WebSearchTool::new().declaration();
     assert_eq!(anthropic_decl["x-adk-anthropic-tool"]["type"], "web_search_20250305");

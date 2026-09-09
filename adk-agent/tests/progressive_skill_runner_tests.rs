@@ -7,12 +7,15 @@
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
-    Agent, Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, Result,
-    SessionId, Tool, ToolContext, ToolRegistry, UserId,
+    Agent, Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part,
+    ReadonlyContext, Result, RunConfig, RuntimeToolset, SessionId, Tool, ToolContext, ToolRegistry,
+    Toolset, UserId,
 };
 use adk_runner::Runner;
 use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
-use adk_skill::{SkillToolset, SkillToolsetConfig, load_skill_index};
+use adk_skill::{
+    SkillToolset, SkillToolsetConfig, build_skill_system_instruction, load_skill_index,
+};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -111,6 +114,28 @@ impl ToolRegistry for WeatherRegistry {
     }
 }
 
+struct RequestGuidanceToolset;
+
+#[async_trait]
+impl Toolset for RequestGuidanceToolset {
+    fn name(&self) -> &str {
+        "request-guidance"
+    }
+
+    async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
+        Ok(Vec::new())
+    }
+
+    async fn process_llm_request(
+        &self,
+        _ctx: Arc<dyn ReadonlyContext>,
+        request: &mut LlmRequest,
+    ) -> Result<()> {
+        request.contents.insert(0, Content::new("user").with_text("runtime guidance"));
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn runner_persists_skill_activation_before_the_next_model_turn() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -169,6 +194,17 @@ async fn runner_persists_skill_activation_before_the_next_model_turn() {
     {
         let requests = model.requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 3);
+        let expected_skill_instruction = build_skill_system_instruction(
+            None,
+            Some(&["list_skills", "load_skill", "load_skill_resource"]),
+            None,
+            false,
+        );
+        assert!(requests[0].contents.iter().any(|content| {
+            content.parts.iter().any(
+                |part| matches!(part, Part::Text { text } if text == &expected_skill_instruction),
+            )
+        }));
         assert!(!requests[0].tools.contains_key("weather_lookup"));
         assert!(requests[1].tools.contains_key("weather_lookup"));
     }
@@ -186,4 +222,53 @@ async fn runner_persists_skill_activation_before_the_next_model_turn() {
     let key = SkillToolset::activation_state_key("weather-agent");
     let activations = session.state().get(&key).expect("activation state persists");
     assert_eq!(activations[0]["name"], "weather");
+}
+
+#[tokio::test]
+async fn runtime_toolsets_enrich_each_model_request() {
+    let model = Arc::new(ScriptedModel::new(vec![ScriptedModel::text("done")]));
+    let agent = LlmAgentBuilder::new("runtime-toolset-agent")
+        .model(model.clone())
+        .build()
+        .expect("agent builds");
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "runtime-toolset-test".to_string(),
+            user_id: "user-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .expect("session creates");
+    let runner = Runner::builder()
+        .app_name("runtime-toolset-test")
+        .agent(Arc::new(agent) as Arc<dyn Agent>)
+        .session_service(sessions as Arc<dyn SessionService>)
+        .build()
+        .expect("runner builds");
+    let mut config = RunConfig::default();
+    config.runtime_toolsets.push(RuntimeToolset::new(Arc::new(RequestGuidanceToolset)));
+
+    let mut stream = runner
+        .run_with_config(
+            UserId::new("user-1").expect("user ID"),
+            SessionId::new("session-1").expect("session ID"),
+            Content::new("user").with_text("hello"),
+            Some(config),
+        )
+        .await
+        .expect("runner starts");
+    while let Some(event) = stream.next().await {
+        event.expect("runner event");
+    }
+
+    let requests = model.requests.lock().expect("requests lock");
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].contents.iter().any(|content| {
+        content
+            .parts
+            .iter()
+            .any(|part| matches!(part, Part::Text { text } if text == "runtime guidance"))
+    }));
 }

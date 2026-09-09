@@ -57,14 +57,14 @@ impl OpenAIApproximateLocation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OpenAIWebSearchVariant {
     #[default]
-    Stable20250826,
+    Stable,
     Preview20250311,
 }
 
 impl OpenAIWebSearchVariant {
     fn as_wire(self) -> &'static str {
         match self {
-            Self::Stable20250826 => "web_search_2025_08_26",
+            Self::Stable => "web_search",
             Self::Preview20250311 => "web_search_preview_2025_03_11",
         }
     }

@@ -120,6 +120,13 @@ before executing the target. The default allows the transfer, preserving
 existing behavior; portable teams and other composite roots can deny it with an
 auditable reason. Denials surface as `agent.transfer.denied`.
 
+## Model History After Overlapping or Interrupted Turns
+
+- **Actual results:** late tool responses are paired with their calls before a later user turn.
+- **Missing results:** unresolved calls from earlier turns are omitted from model history; no result is fabricated.
+- **Current execution:** unresolved calls at the history tail remain available for tool execution and confirmation.
+- **Persistence:** source session events are unchanged by this projection.
+
 ## State Propagation
 
 Runner applies state changes immediately:

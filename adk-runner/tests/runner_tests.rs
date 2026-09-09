@@ -1,7 +1,9 @@
 use adk_core::{Agent, Content, EventStream, InvocationContext, Part, Result, SessionId, UserId};
 use adk_plugin::{Plugin, PluginConfig, PluginManager};
 use adk_runner::Runner;
-use adk_session::{Event, Events, GetRequest, Session, SessionService, State};
+use adk_session::{
+    Event, Events, GetRequest, InMemorySessionService, Session, SessionService, State,
+};
 use adk_skill::{SelectionPolicy, SkillInjector, SkillInjectorConfig};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -207,6 +209,33 @@ impl Agent for TransferAgent {
         event.actions.transfer_to_agent = self.target.clone();
         Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
     }
+}
+
+#[tokio::test]
+async fn started_run_exposes_the_invocation_identity_before_polling() {
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(Arc::new(TransferAgent { name: "test_agent".to_string(), target: None })
+            as Arc<dyn Agent>)
+        .session_service(Arc::new(MockSessionService) as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+
+    let started = runner
+        .start_with_config(
+            UserId::new("user123").unwrap(),
+            SessionId::new("session456").unwrap(),
+            Content::new("user").with_text("Hello"),
+            None,
+        )
+        .await
+        .unwrap();
+    let invocation_id = started.invocation_id().to_string();
+    let events = started.into_events().collect::<Vec<_>>().await;
+
+    assert!(!invocation_id.is_empty());
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].as_ref().unwrap().invocation_id, invocation_id);
 }
 
 struct StrictTransferRoot {
@@ -957,6 +986,135 @@ fn test_compute_transfer_context_nested() {
     let (parent, peers) = Runner::compute_transfer_context(&root, "mid");
     assert_eq!(parent, Some("root".to_string()));
     assert!(peers.is_empty());
+}
+
+struct InterruptedHistoryAgent {
+    call_persisted: Arc<tokio::sync::Notify>,
+    captured_history: Arc<Mutex<Option<Vec<Content>>>>,
+}
+
+#[async_trait]
+impl Agent for InterruptedHistoryAgent {
+    fn name(&self) -> &str {
+        "interrupted-history"
+    }
+
+    fn description(&self) -> &str {
+        "Captures history after an interrupted tool call"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let is_first =
+            ctx.user_content().parts.iter().filter_map(Part::text).any(|text| text == "first");
+        if !is_first {
+            *self.captured_history.lock().unwrap_or_else(|error| error.into_inner()) =
+                Some(ctx.session().conversation_history());
+            return Ok(Box::pin(futures::stream::empty()));
+        }
+
+        let invocation_id = ctx.invocation_id().to_string();
+        let call_persisted = self.call_persisted.clone();
+        Ok(Box::pin(async_stream::stream! {
+            let mut call = Event::new(&invocation_id);
+            call.author = "interrupted-history".to_string();
+            call.llm_response.content = Some(Content {
+                role: "model".to_string(),
+                parts: vec![Part::FunctionCall {
+                    name: "slow_tool".to_string(),
+                    args: serde_json::json!({}),
+                    id: Some("call-1".to_string()),
+                    thought_signature: None,
+                }],
+            });
+            yield Ok(call);
+
+            call_persisted.notify_one();
+            futures::future::pending::<()>().await;
+        }))
+    }
+}
+
+#[tokio::test]
+async fn interrupted_run_does_not_leave_an_orphaned_call_in_the_next_request() {
+    let session_service = Arc::new(InMemorySessionService::new());
+    session_service
+        .create(adk_session::CreateRequest {
+            app_name: "test_app".to_string(),
+            user_id: "user123".to_string(),
+            session_id: Some("interrupted-history".to_string()),
+            state: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    let call_persisted = Arc::new(tokio::sync::Notify::new());
+    let captured_history = Arc::new(Mutex::new(None));
+    let agent = Arc::new(InterruptedHistoryAgent {
+        call_persisted: call_persisted.clone(),
+        captured_history: captured_history.clone(),
+    });
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(agent as Arc<dyn Agent>)
+        .session_service(session_service as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+
+    let first = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("interrupted-history").unwrap(),
+            Content::new("user").with_text("first"),
+        )
+        .await
+        .unwrap();
+    let first_task = tokio::spawn(async move {
+        let mut first = first;
+        while let Some(result) = first.next().await {
+            result.unwrap();
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), call_persisted.notified())
+        .await
+        .expect("the first invocation must persist its tool call");
+
+    assert!(runner.interrupt("interrupted-history"));
+    tokio::time::timeout(std::time::Duration::from_secs(2), first_task)
+        .await
+        .expect("the interrupted invocation must stop promptly")
+        .unwrap();
+
+    let mut second = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("interrupted-history").unwrap(),
+            Content::new("user").with_text("second"),
+        )
+        .await
+        .unwrap();
+    while let Some(result) = second.next().await {
+        result.unwrap();
+    }
+
+    let history = captured_history
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+        .expect("the second invocation must capture history");
+    assert_eq!(history.len(), 2);
+    assert!(history.iter().all(|content| content.role == "user"));
+    assert!(!history.iter().flat_map(|content| &content.parts).any(|part| {
+        matches!(
+            part,
+            Part::FunctionCall { id: Some(id), .. }
+                | Part::FunctionResponse { id: Some(id), .. }
+                if id == "call-1"
+        )
+    }));
 }
 
 // Agent that emits events in a loop until cancelled or `max_ticks` is reached.

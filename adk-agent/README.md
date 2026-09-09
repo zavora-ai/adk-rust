@@ -96,6 +96,7 @@ let agent = LlmAgentBuilder::new("assistant")
 | `require_tool_confirmation_for_all()` | Require user confirmation for all tools |
 | `tool_confirmation_policy(policy)` | Set custom tool confirmation policy |
 | `tool_execution_strategy(strategy)` | Tool dispatch mode: `Sequential`, `Parallel`, or `Auto` |
+| `parallelize_agent_delegations(bool)` | Overlap consecutive agent-delegation calls without parallelizing ordinary tools |
 | `disallow_transfer_to_parent(bool)` | Prevent agent from transferring back to parent |
 | `disallow_transfer_to_peers(bool)` | Prevent agent from transferring to sibling agents |
 | `include_contents(mode)` | Control content inclusion in sub-agent context |

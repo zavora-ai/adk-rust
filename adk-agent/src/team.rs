@@ -2364,6 +2364,10 @@ impl Tool for BoundedDelegateTool {
         self.inner.is_concurrency_safe()
     }
 
+    fn is_agent_delegation(&self) -> bool {
+        self.inner.is_agent_delegation()
+    }
+
     async fn execute(
         &self,
         ctx: Arc<dyn adk_core::ToolContext>,
