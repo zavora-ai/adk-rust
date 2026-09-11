@@ -77,6 +77,15 @@ Standalone crates demonstrating current ADK-Rust features. Each has its own `Car
 | `examples/runtime_ui_showcase` | Embedded runtime UI gallery for a tool-calling agent, graph workflow, and portable team, with screenshots and walkthroughs | `cargo run --manifest-path examples/runtime_ui_showcase/Cargo.toml --bin runtime-ui-tools` |
 | `examples/team_architectures` | Portable `TeamSpec` examples for handoff, delegation, parallel shared-state swarms, and hybrid workflows | `cargo run --manifest-path examples/team_architectures/Cargo.toml --bin team-supervisor-handoff` |
 
+**Requires `DEEPSEEK_API_KEY`:**
+
+Drives a real desktop through [computer-use-mcp](https://github.com/zavora-ai/computer-use-mcp),
+so it needs an interactive session with Accessibility and Screen Recording permissions.
+
+| Example | Feature | Run |
+|---------|---------|-----|
+| `examples/blender_console` | Multi-turn agent reporting a plan, task progress and live screen captures into a browser console a person can type into. Two MCP servers over two transports (HTTP + stdio) | `cargo run --manifest-path examples/blender_console/Cargo.toml` |
+
 **Requires Google Cloud ADC (`gcloud auth application-default login`):**
 
 | Example | Feature | Run |
