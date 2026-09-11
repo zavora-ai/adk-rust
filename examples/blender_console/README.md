@@ -24,10 +24,22 @@ from the second.
   call.
 - **Session memory across turns.** Every turn runs against the same
   `adk_session` id, so the third request still knows what the first one built.
-- **A narrow tool surface.** The HTTP toolset is filtered to 17 tools — the 4 run
-  tools and 13 desktop ones. No `run_script`, no `filesystem`, no `process_kill`.
+- **A narrow tool surface.** The HTTP toolset is filtered to 20 of the 73 tools the
+  host exposes — 5 run tools and 15 desktop ones, `web_search` and `scrape` among
+  them. No `run_script`, no `filesystem`, no `process_kill`.
 - **Turn isolation.** A model error fails that turn, reports it into the console and
   keeps the agent alive for the next message, instead of killing the process.
+- **Every action reported, thinking included.** The loop watches its own stream and
+  pushes each thought, call and result — with timings — to the console's activity
+  feed. Reported from here rather than asked of the model: this loop already sees
+  every streamed token and every tool call, so the feed is complete and costs no
+  extra model calls, and Blender's own calls show up too.
+- **Working from a picture.** When someone attaches an image, `run_attachment` returns
+  it *and* the path it is saved at, so the agent can look at the reference and hand
+  the same file to Blender to load as a reference image or a texture.
+- **Reading the web locally.** `web_search` then `scrape`, both executed on this
+  machine — DeepSeek cannot use a provider-side search tool, so a local one is the
+  only kind that works here.
 
 ## Run it
 
