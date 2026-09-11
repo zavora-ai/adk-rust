@@ -130,6 +130,8 @@ pub fn default_pricing() -> Vec<ModelPricing> {
         ModelPricing::new("claude-sonnet-4-6", 0.003, 0.015),
         ModelPricing::new("claude-haiku-4-5", 0.001, 0.005),
         // DeepSeek. Peak (cache-miss) rates; off-peak is half.
+        ModelPricing::new("deepseek-flash", 0.00044, 0.00132),
+        // Legacy alias: still accepted by the API and served as deepseek-flash.
         ModelPricing::new("deepseek-v4-flash", 0.00044, 0.00132),
         ModelPricing::new("deepseek-v4-pro", 0.00132, 0.00396),
     ]

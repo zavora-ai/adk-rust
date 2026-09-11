@@ -1,7 +1,7 @@
 //! Configuration types for DeepSeek provider.
 //!
-//! Supports the DeepSeek V4 models (`deepseek-v4-flash`, `deepseek-v4-pro`,
-//! `deepseek-v4-flash-vision-exp`). The `deepseek-chat` and
+//! Supports the current DeepSeek models (`deepseek-flash`, `deepseek-v4-pro`).
+//! `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-chat` and
 //! `deepseek-reasoner` aliases were retired on 2026-07-24.
 
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,7 @@ impl std::fmt::Display for ReasoningEffort {
 pub struct DeepSeekConfig {
     /// DeepSeek API key.
     pub api_key: String,
-    /// Model name (e.g., `"deepseek-v4-flash"`, `"deepseek-v4-pro"`).
+    /// Model name (e.g., `"deepseek-flash"`, `"deepseek-v4-pro"`).
     pub model: String,
     /// Optional custom base URL.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,13 +139,9 @@ impl DeepSeekConfig {
         }
     }
 
-    /// Create a config for `deepseek-v4-flash` (fast, cost-efficient).
+    /// Create a config for `deepseek-flash` (fast, cost-efficient, vision-capable).
     pub fn v4_flash(api_key: impl Into<String>) -> Self {
-        Self {
-            api_key: api_key.into(),
-            model: "deepseek-v4-flash".to_string(),
-            ..Default::default()
-        }
+        Self { api_key: api_key.into(), model: "deepseek-flash".to_string(), ..Default::default() }
     }
 
     // --- Named-role constructors ---
@@ -262,7 +258,7 @@ mod tests {
     #[test]
     fn test_default_model_is_v4_flash() {
         let config = DeepSeekConfig::default();
-        assert_eq!(config.model, "deepseek-v4-flash");
+        assert_eq!(config.model, "deepseek-flash");
     }
 
     #[test]
@@ -277,7 +273,7 @@ mod tests {
     #[test]
     fn test_v4_flash_constructor() {
         let config = DeepSeekConfig::v4_flash("key");
-        assert_eq!(config.model, "deepseek-v4-flash");
+        assert_eq!(config.model, "deepseek-flash");
         assert!(config.thinking.is_none());
     }
 

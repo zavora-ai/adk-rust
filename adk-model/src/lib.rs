@@ -185,7 +185,7 @@
 //! ### DeepSeek
 //! | Model | Description |
 //! |-------|-------------|
-//! | `deepseek-v4-flash` | Fast balanced default |
+//! | `deepseek-flash` | Fast balanced default |
 //! | `deepseek-v4-pro` | Advanced reasoning |
 //!
 //! ### Groq

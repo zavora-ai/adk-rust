@@ -27,7 +27,10 @@ pub const OPENAI_DEFAULT: &str = "gpt-5.6-terra";
 /// Recommended Anthropic model balancing capability, latency, and cost.
 pub const ANTHROPIC_DEFAULT: &str = "claude-sonnet-5";
 /// Recommended DeepSeek model for general agent workloads.
-pub const DEEPSEEK_DEFAULT: &str = "deepseek-v4-flash";
+///
+/// This is the id the API reports back. `deepseek-v4-flash` and `deepseek-chat`
+/// are still accepted and are served by this same model.
+pub const DEEPSEEK_DEFAULT: &str = "deepseek-flash";
 /// Recommended Groq production model.
 pub const GROQ_DEFAULT: &str = "openai/gpt-oss-120b";
 /// Suggested local Ollama model. The model must already be installed locally.

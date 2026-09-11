@@ -1,7 +1,7 @@
 //! DeepSeek client implementation.
 //!
-//! Supports the DeepSeek V4 models (`deepseek-v4-flash`, `deepseek-v4-pro`,
-//! `deepseek-v4-flash-vision-exp`). The `deepseek-chat` and
+//! Supports the current DeepSeek models (`deepseek-flash`, `deepseek-v4-pro`).
+//! `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-chat` and
 //! `deepseek-reasoner` aliases were retired on 2026-07-24.
 
 use super::config::{DeepSeekConfig, ThinkingMode};
@@ -65,7 +65,7 @@ impl DeepSeekClient {
         Self::new(DeepSeekConfig::v4_pro(api_key))
     }
 
-    /// Create a client for `deepseek-v4-flash` (fast, cost-efficient).
+    /// Create a client for `deepseek-flash` (fast, cost-efficient, vision-capable).
     pub fn v4_flash(api_key: impl Into<String>) -> Result<Self, AdkError> {
         Self::new(DeepSeekConfig::v4_flash(api_key))
     }
@@ -487,7 +487,7 @@ mod response_format_tests {
 
     fn request_with(config: Option<GenerateContentConfig>, prompt: &str) -> LlmRequest {
         let mut request =
-            LlmRequest::new("deepseek-v4-flash", vec![Content::new("user").with_text(prompt)]);
+            LlmRequest::new("deepseek-flash", vec![Content::new("user").with_text(prompt)]);
         request.config = config;
         request
     }
