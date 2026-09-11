@@ -78,6 +78,17 @@ const DESKTOP_TOOLS: &[&str] = &[
     "zoom",
     "left_click",
     "key",
+    // Without these it has no way to enter text, and a URL typed through `key`
+    // one character at a time is both doomed and expensive — `key` takes a combo
+    // like `command+l`, never a string.
+    "type",
+    "write_clipboard",
+    // Logging in and operating controls: the accessibility path is more reliable
+    // than clicking coordinates, and Superset's login form exposes both fields.
+    "find_element",
+    "set_value",
+    "press_button",
+    "click_element",
     "scroll",
     "wait",
     "web_search",
@@ -183,6 +194,46 @@ fn pending_ask(run: &Value) -> Option<(String, String)> {
 }
 
 /// How to work a dashboard, and why the numbers come first.
+/// Load the analytics routing policy from `skills/analytics-agent/SKILL.md`.
+///
+/// The file is the source of truth: it is versioned alongside the tools it
+/// describes rather than frozen into a prompt literal here, so a gotcha found by
+/// running the thing is written down once and every agent picks it up.
+fn load_skill() -> Option<String> {
+    // Two skills, because they answer different questions. `computer-use-forms`
+    // teaches the general capture-click-type-verify loop for a UI that exposes no
+    // accessible fields — true of every web page, not only this one. `analytics-agent`
+    // teaches what a BI platform can do and which of its failures are real.
+    let names = ["computer-use-forms", "analytics-agent"];
+    let root = std::env::var("COMPUTER_USE_SKILLS")
+        .unwrap_or_else(|_| "../mcp-servers/computer-use-mcp".to_string());
+    let mut loaded = Vec::new();
+    for name in names {
+        let path = std::path::Path::new(&root).join(format!("skills/{name}/SKILL.md"));
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                println!("  \u{2713} skill {name}");
+                // Strip YAML front matter; the body is the policy.
+                loaded.push(
+                    text.split_once("---\n")
+                        .and_then(|(_, rest)| rest.split_once("---\n"))
+                        .map(|(_, body)| body.trim().to_string())
+                        .unwrap_or(text),
+                );
+            }
+            Err(_) => println!("  \u{b7} skill {name} not found at {}", path.display()),
+        }
+    }
+    if loaded.is_empty() {
+        println!(
+            "  \u{b7} no skills loaded \u{2014} set COMPUTER_USE_SKILLS to a computer-use-mcp \
+             checkout to load them"
+        );
+        return None;
+    }
+    Some(loaded.join("\n\n"))
+}
+
 fn analyst_brief(run_id: &str) -> String {
     format!(
         "You are a business intelligence analyst. You read the dashboards an organisation \
@@ -222,6 +273,26 @@ fn analyst_brief(run_id: &str) -> String {
          finish, `state:\"failed\"` and say plainly what blocked you.\n\n\
          If they type while you work, their message is in the transcript every run_* reply \
          returns. Read it and adapt.\n\n\
+         ── opening a dashboard on screen: do this early, not last ──\n\
+         Put the dashboard on screen as one of your first steps, before the measuring. The \
+         person watching should see what you are talking about from the start rather than two \
+         minutes in. This does not let you read figures off it — the picture is context for \
+         them, and every number you state still comes from a query. Show first, measure \
+         second, cite the measurement. Capture again later if a filter or a drill changes \
+         what is on screen.\n\
+         `bi_dashboard_url` gives you the link. To put it in front of the person: \
+         `open_application` with `com.google.Chrome`, then `key` with `command+n` for a NEW \
+         window, then `key` with `command+l` to focus that window's address bar, then `type` \
+         with the URL and `press_enter:true`, then `wait` about 3 seconds, then `list_windows` \
+         and `run_progress` with `capture:true` and the dashboard window's `window_id`.\n\
+         The `command+n` matters: the console you are reporting into is itself a page in that \
+         browser, so `command+l` on the frontmost window will replace the person's view of \
+         your run with the dashboard. Open a new window and the console survives.\n\
+         When you pick the window id, never pick the console's own window — capturing it puts \
+         a picture of the console inside the console. Match the dashboard's title, and ignore \
+         any window whose title mentions the run console or its port.\n\
+         `key` presses a *key combination* — `command+n`, `command+l`, `return`. It is never \
+         given a URL or a sentence; that is what `type` is for.\n\n\
          ── when a call fails ──\n\
          Report it and stop. `run_progress` with `state:\"failed\"` and the error the tool gave \
          you, verbatim enough that an operator can act on it. Do not try to reconstruct the \
@@ -303,6 +374,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let manager = Arc::new(manager);
 
+    // Loaded now rather than when the agent is built, so a missing skill is
+    // visible alongside the other readiness checks instead of after the wait.
+    let skill = load_skill();
+
+    // The browser session and the BI server's API token are unrelated: the server
+    // can be authenticated while the browser sits on a login page. Handing the
+    // agent the credentials lets it sign in through the UI so the person actually
+    // sees the dashboard — but it puts a password in the model's context, so it is
+    // opt-in and says so out loud.
+    let ui_login = match (
+        std::env::var("BI_UI_LOGIN").is_ok(),
+        std::env::var("SUPERSET_USERNAME"),
+        std::env::var("SUPERSET_PASSWORD"),
+    ) {
+        (true, Ok(username), Ok(password)) => {
+            println!(
+                "  \u{26a0} BI_UI_LOGIN set \u{2014} the browser sign-in for {username:?} will be \
+                 sent to the model so it can log in on screen. Use a throwaway account."
+            );
+            Some((username, password))
+        }
+        (true, _, _) => {
+            println!(
+                "  \u{b7} BI_UI_LOGIN set but SUPERSET_USERNAME/PASSWORD are not \u{2014} the agent \
+                 cannot sign in on screen"
+            );
+            None
+        }
+        _ => {
+            println!(
+                "  \u{b7} BI_UI_LOGIN unset \u{2014} the agent will report a login page rather than \
+                 signing in"
+            );
+            None
+        }
+    };
+
     // ── 3. Wait for the person to say something ──────────────────────────
     let console = Console::new(base.clone());
     println!("\nOpen {base}/ and ask about the dashboards.");
@@ -322,13 +430,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_reasoning_effort(ReasoningEffort::Max),
     )?;
 
+    // The brief says how to work; the skill says what this exact setup does and
+    // which failures are real. Keeping them separate means a lesson learned by
+    // running it is recorded in the skill file, not buried in a prompt literal.
+    let mut brief = analyst_brief(&run_id);
+    if let Some((username, password)) = &ui_login {
+        brief.push_str(&format!(
+            "\n\n\u{2500}\u{2500} signing in on screen \u{2500}\u{2500}\n\
+             The browser has its own session, separate from the data server's token, so the \
+             dashboard URL may land on a login form. If the frame you captured shows one, sign \
+             in **by clicking, not through accessibility** — a browser does not expose page \
+             fields, so `find_element` returns nothing for them. Take a `screenshot` of the \
+             window, read the field positions off it, then `left_click` the username field and \
+             `type` {username:?}, `left_click` the password field, `key` `command+a` to clear \
+             it and `type` {password:?}, then `left_click` the sign-in button. Do not use Tab \
+             to move between the fields; focus order is not what you expect and both strings \
+             end up in the same field.\n\
+             A window capture is scaled and padded, so map image pixels to screen coordinates \
+             through the window's edges as they appear in the image, not the image's own size.\n\
+             Afterwards Chrome offers to save the password, right over the dashboard. That \
+             dialog IS accessible: `click_element` the button labelled `Never`. Then capture \
+             again and confirm you are looking at the dashboard before telling the person you \
+             are showing it to them."
+        ));
+    }
+    if let Some(policy) = &skill {
+        brief.push_str(&format!(
+            "\n\n\u{2500}\u{2500} routing policy \u{2500}\u{2500}\n\
+             The policy below was written from measurements of this exact setup, and the \
+             failure modes it lists are ones that actually happened.\n\n{policy}"
+        ));
+    }
+
     let agent = LlmAgentBuilder::new("bi-analyst")
         .description(
             "Reads an organisation's saved dashboards, drills into what is odd, and explains \
              it with the numbers behind it",
         )
         .model(Arc::new(model))
-        .instruction(analyst_brief(&run_id))
+        .instruction(brief)
         .toolset(Arc::new(console_tools) as Arc<dyn adk_core::Toolset>)
         .toolset(Arc::clone(&manager) as Arc<dyn adk_core::Toolset>)
         .build()?;
