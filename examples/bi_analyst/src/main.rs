@@ -42,7 +42,11 @@
 //! ```
 //!
 //! Point it at a real platform by passing `BI_BACKEND` through to the server:
-//! `BI_BACKEND=superset SUPERSET_URL=... SUPERSET_TOKEN=...`.
+//! `BI_BACKEND=superset SUPERSET_URL=... SUPERSET_USERNAME=... SUPERSET_PASSWORD=...`.
+//!
+//! Prefer the username and password over `SUPERSET_TOKEN`: a Superset access token
+//! is valid for 15 minutes, which is shorter than an analysis session, and with
+//! credentials the server refreshes it rather than failing partway through.
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{Agent, Content, Part};
@@ -218,6 +222,12 @@ fn analyst_brief(run_id: &str) -> String {
          finish, `state:\"failed\"` and say plainly what blocked you.\n\n\
          If they type while you work, their message is in the transcript every run_* reply \
          returns. Read it and adapt.\n\n\
+         ── when a call fails ──\n\
+         Report it and stop. `run_progress` with `state:\"failed\"` and the error the tool gave \
+         you, verbatim enough that an operator can act on it. Do not try to reconstruct the \
+         data another way — do not go looking at the desktop, the terminal or the filesystem to \
+         work out how the environment is wired. You have no dashboard data, so you have nothing \
+         to analyse, and a screenshot of a login page is not a finding.\n\n\
          ── what not to do ──\n\
          Do not describe a dashboard from its picture alone. Do not report a total you did not \
          query. If a number surprises you, drill into it or say it is unexplained — an honest \
