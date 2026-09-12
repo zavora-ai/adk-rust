@@ -306,6 +306,64 @@ fn allowed_mcp_tools(attached: &Attached) -> Vec<&'static [&'static str]> {
     lists
 }
 
+/// Optional bounds on a single turn.
+///
+/// **Unset by default, and deliberately so.** Thinking is uncapped here because a
+/// capped reasoning budget produced worse answers, and a token limit that truncates a
+/// thought spends the tokens without buying the conclusion. What the review asked for
+/// is not a cap but *knowing why something stopped*, so these exist for an operator
+/// who needs a bound, and when one is hit it is reported rather than looking like a
+/// finish.
+#[derive(Debug, Clone, Copy)]
+struct Budget {
+    /// Wall clock for one turn.
+    seconds: Option<u64>,
+    /// Tool calls in one turn, which is the better proxy for cost here: each call
+    /// carries a result back into context.
+    calls: Option<u64>,
+}
+
+impl Budget {
+    fn from_env() -> Self {
+        let read = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .and_then(|raw| raw.parse::<u64>().ok())
+                .filter(|value| *value > 0)
+        };
+        let budget = Self { seconds: read("BI_MAX_SECONDS"), calls: read("BI_MAX_TOOL_CALLS") };
+        match (budget.seconds, budget.calls) {
+            (None, None) => println!("  \u{b7} no turn budget \u{2014} thinking is uncapped"),
+            (seconds, calls) => println!(
+                "  \u{2713} turn budget: {} {}",
+                seconds.map_or("no time limit".to_string(), |s| format!("{s}s")),
+                calls.map_or("no call limit".to_string(), |c| format!("/ {c} calls")),
+            ),
+        }
+        budget
+    }
+
+    /// Why this turn should stop, if it should.
+    fn exceeded(&self, started: Instant, calls: u64) -> Option<String> {
+        if let Some(limit) = self.seconds
+            && started.elapsed().as_secs() >= limit
+        {
+            return Some(format!(
+                "the {limit}s time budget for one turn was reached after {calls} tool calls"
+            ));
+        }
+        if let Some(limit) = self.calls
+            && calls >= limit
+        {
+            return Some(format!(
+                "the {limit}-call budget for one turn was reached after {}s",
+                started.elapsed().as_secs()
+            ));
+        }
+        None
+    }
+}
+
 /// Which optional servers are actually running.
 #[derive(Debug, Default, Clone, Copy)]
 struct Attached {
@@ -558,6 +616,28 @@ impl Console {
                 "runId": run_id,
                 "state": if closing.is_empty() { "failed" } else { "done" },
                 "narration": narration,
+            }))
+            .send()
+            .await;
+    }
+
+    /// Close a turn that ran out of its budget, saying which budget and what was done.
+    async fn report_budget_stop(&self, reason: &str, closing: &str) {
+        let Some(run_id) = self.run_id().await else { return };
+        let narration = if closing.is_empty() {
+            format!("Stopped before finishing: {reason}. Nothing had been concluded yet.")
+        } else {
+            format!(
+                "Stopped before finishing: {reason}. What I had so far: {}",
+                closing.chars().take(500).collect::<String>()
+            )
+        };
+        let _ = self
+            .http
+            .post(format!("{}/driver", self.base))
+            .json(&serde_json::json!({
+                // failed, not done: the request was not answered.
+                "runId": run_id, "state": "failed", "narration": narration,
             }))
             .send()
             .await;
@@ -819,6 +899,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Resolved here rather than when the agent is built, so an operator sees which
     // browser surface is in force alongside the other readiness lines.
     let mcp_tools = allowed_mcp_tools(&attached);
+    let budget = Budget::from_env();
 
     // The browser session and the BI server's API token are unrelated: the server
     // can be authenticated while the browser sits on a login page. Handing the
@@ -981,6 +1062,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut failure: Option<String> = None;
         let mut cancelled = false;
+        let mut stopped_short: Option<String> = None;
+        let mut tool_calls: u64 = 0;
+        let turn_started = Instant::now();
         let mut started_at: HashMap<String, std::collections::VecDeque<Instant>> = HashMap::new();
         while let Some(event) = stream.next().await {
             // Watch for a stop between events, not only when the model happens to call
@@ -991,6 +1075,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !cancelled && console.cancel_requested().await {
                 cancelled = true;
                 println!("\n\u{23f9} the person asked to stop \u{2014} ending this turn");
+                break;
+            }
+            // A bound that stops work silently is worse than no bound, because the
+            // person cannot tell it from a finish. Record the reason and report it.
+            if let Some(reason) = budget.exceeded(turn_started, tool_calls) {
+                println!("\n\u{23f1} stopping: {reason}");
+                stopped_short = Some(reason);
                 break;
             }
             match event {
@@ -1008,6 +1099,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 flush!();
                                 let args = serde_json::to_string(args).unwrap_or_default();
+                                tool_calls += 1;
                                 started_at.entry(name.clone()).or_default().push_back(Instant::now());
                                 // Redact before either path, not after: the console
                                 // feed and the terminal are both places a secret
@@ -1082,7 +1174,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // state, which leaves the console reading "working" forever. The person
             // watching then cannot tell a finished run from a hung one, so the driver
             // closes the turn itself rather than trusting the agent to have done it.
-            if cancelled {
+            if let Some(reason) = stopped_short {
+                console.report_budget_stop(&reason, &closing).await;
+                println!("{}\nturn {turn} stopped short: {reason}", "─".repeat(60));
+            } else if cancelled {
                 // Say what was done before stopping, so a stop is not silent about the
                 // work already paid for.
                 console.report_stopped(&closing).await;
@@ -1261,5 +1356,37 @@ mod lifecycle_tests {
         assert!(!response_failed(&serde_json::json!({ "error": serde_json::Value::Null })));
         assert!(!response_failed(&serde_json::json!({ "error": false })));
         assert!(response_failed(&serde_json::json!({ "error": "boom" })));
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn no_budget_never_stops_a_turn() {
+        // The default, and it must stay the default: a capped reasoning budget produced
+        // worse answers, and truncating a thought spends the tokens without buying the
+        // conclusion.
+        let budget = Budget { seconds: None, calls: None };
+        assert!(budget.exceeded(Instant::now(), 10_000).is_none());
+    }
+
+    #[test]
+    fn a_call_budget_stops_and_says_which_one() {
+        let budget = Budget { seconds: None, calls: Some(5) };
+        assert!(budget.exceeded(Instant::now(), 4).is_none());
+        let reason = budget.exceeded(Instant::now(), 5).expect("should stop at the limit");
+        assert!(reason.contains("5-call"), "the reason must name the budget: {reason}");
+        assert!(reason.contains('s'), "and report elapsed time for context: {reason}");
+    }
+
+    #[test]
+    fn a_time_budget_stops_and_reports_the_calls_made() {
+        let budget = Budget { seconds: Some(1), calls: None };
+        let long_ago = Instant::now() - std::time::Duration::from_secs(2);
+        let reason = budget.exceeded(long_ago, 7).expect("should stop past the limit");
+        assert!(reason.contains("1s time budget"), "{reason}");
+        assert!(reason.contains("7 tool calls"), "what was done matters as much as why: {reason}");
     }
 }
