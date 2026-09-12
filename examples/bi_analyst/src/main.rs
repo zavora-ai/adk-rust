@@ -197,6 +197,10 @@ const PLAYWRIGHT_WITHHELD: &[&str] =
 /// instead of inventing one. `explain_change` attributes a movement to drivers with a
 /// confidence, which is the question people actually ask.
 const ANALYTICS_PRIMARY: &[&str] = &[
+    // First, always: this server ships seeded fixtures whose metrics carry
+    // `certified: true` and an owner's name. Without asking, an agent cannot tell
+    // them from an organisation's real governed definitions — and one did not.
+    "analytics_backend_info",
     "list_metrics",
     "get_metric_definition",
     "query_metric",
@@ -302,6 +306,74 @@ fn preview(text: &str, max_chars: usize) -> String {
     let mut chars = text.chars();
     let head: String = chars.by_ref().take(max_chars).collect();
     if chars.next().is_some() { format!("{head}…") } else { head }
+}
+
+/// Field names whose values must never be printed or fed to the console.
+///
+/// The agent is deliberately given a sign-in so it can reach a dashboard, which puts
+/// the password in the model's context. That is a decided trade. What was *not*
+/// decided is the same string travelling on to the terminal and to the activity feed
+/// the person is watching, which is where it ends up in a log file or a screenshot.
+/// Measured before this existed: a `browser_fill_form` call printed its fields
+/// verbatim, and the password survived only because the email sorted first and the
+/// preview happened to cut at 110 characters. A secret protected by truncation is not
+/// protected.
+const SECRET_FIELD: &[&str] = &[
+    "password", "passwd", "pwd", "secret", "token", "api_key", "apikey", "credential",
+    "authorization", "auth", "session", "cookie", "otp", "passcode", "pin",
+];
+
+/// Replace secret-shaped values anywhere in a JSON string before it is shown.
+///
+/// Deliberately textual rather than typed: this runs over an already-serialized tool
+/// argument, whose shape differs per tool and per server, and a redactor that only
+/// understood one shape would miss the next one. It errs towards redacting.
+fn redact_secrets(json: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+        // Not parseable, so the safe reading is that anything could be in it. Keep it
+        // only if no secret-shaped name appears at all.
+        let lowered = json.to_lowercase();
+        return if SECRET_FIELD.iter().any(|name| lowered.contains(name)) {
+            "[redacted: unparseable arguments naming a credential field]".to_string()
+        } else {
+            json.to_string()
+        };
+    };
+    redact_value(&mut value);
+    serde_json::to_string(&value).unwrap_or_else(|_| "[redacted]".to_string())
+}
+
+fn redact_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Collect first: a Metabase or Playwright form field carries the field's
+            // name in one key and its value in another, so a secret is recognised by
+            // a sibling rather than by its own key.
+            let names: Vec<String> = map.keys().cloned().collect();
+            let field_is_secret = names.iter().any(|key| {
+                map.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|text| is_secret_name(text))
+            });
+            for key in names {
+                let key_is_secret = is_secret_name(&key);
+                if let Some(entry) = map.get_mut(&key) {
+                    if key_is_secret || (field_is_secret && key == "value") {
+                        *entry = serde_json::Value::String("[redacted]".into());
+                    } else {
+                        redact_value(entry);
+                    }
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(redact_value),
+        _ => {}
+    }
+}
+
+fn is_secret_name(name: &str) -> bool {
+    let lowered = name.to_lowercase();
+    SECRET_FIELD.iter().any(|secret| lowered.contains(secret))
 }
 
 /// Condense JSON into something readable in a one-line activity feed.
@@ -449,7 +521,11 @@ fn analyst_brief(run_id: &str) -> String {
          establish, rather than rounding it off. And the person watching saw the dashboard you \
          were talking about while you were talking about it.\n\n\
          ── how to work ──\n\
-         Call `bi_backend_info` first, because platforms differ in what they can do, and \
+         Call `bi_backend_info` and `analytics_backend_info` first. The second matters: \
+         that server may be serving generated demo fixtures whose metrics carry \
+         `certified: true` and an owner's name, and if its provenance is `demo` you must \
+         say so every time you quote a figure from it rather than presenting it as this \
+         organisation's number. Also call \
          `bi_recall` early, because something may already have been worked out here before. \
          Beyond that, choose your own route — the skills below carry what is known about these \
          tools and the failures that are real. Two habits are worth having: prefer a certified \
@@ -481,8 +557,11 @@ fn analyst_brief(run_id: &str) -> String {
          Do not describe a dashboard from its picture alone. Do not report a total you did not \
          query. Do not narrate your own tool calls — the console already shows them. If a call \
          fails you have no data, so report the error plainly and stop rather than reconstructing \
-         the answer another way. Nothing you can call writes to a dashboard: you are reading a \
-         business's real reporting, so be careful about what you claim it means."
+         the answer another way. The data tools cannot write, but the browser can: you are signed into a real \
+         account and a click lands on whatever is under it, including Save, Delete and \
+         Publish. Operate filters and drill-downs freely \u{2014} those change your view. Treat \
+         anything that persists as out of scope unless you were asked for it, and if you \
+         are unsure whether a control persists, do not click it and say why."
     )
 }
 
@@ -774,10 +853,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 flush!();
                                 let args = serde_json::to_string(args).unwrap_or_default();
                                 started_at.insert(name.clone(), Instant::now());
+                                // Redact before either path, not after: the console
+                                // feed and the terminal are both places a secret
+                                // outlives the run.
+                                let safe = redact_secrets(&args);
                                 activity.push(serde_json::json!({
-                                    "kind": "tool", "name": name, "detail": summarise(&args, 120),
+                                    "kind": "tool", "name": name, "detail": summarise(&safe, 120),
                                 }));
-                                println!("→ {name} {}", preview(&args, 110));
+                                println!("→ {name} {}", preview(&safe, 110));
                             }
                             Part::FunctionResponse { function_response, .. } => {
                                 let body = serde_json::to_string(&function_response.response)
@@ -891,5 +974,59 @@ mod tests {
                 "{name} is in two tiers; it should sit in exactly one"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+
+    /// The exact shape that leaked, from a real run.
+    #[test]
+    fn a_form_fill_does_not_print_the_password() {
+        let args = r#"{"fields":[
+            {"name":"Email address","target":"e38","type":"textbox","value":"admin@example.invalid"},
+            {"name":"Password","target":"e42","type":"textbox","value":"Analytics123!"}
+        ]}"#;
+        let safe = redact_secrets(args);
+        assert!(!safe.contains("Analytics123!"), "the password must not survive: {safe}");
+        assert!(safe.contains("[redacted]"));
+        // The rest has to stay, or the feed stops being useful.
+        assert!(safe.contains("admin@example.invalid"), "a username is not a secret");
+        assert!(safe.contains("Email address"));
+    }
+
+    #[test]
+    fn a_secret_named_key_is_redacted_wherever_it_sits() {
+        for args in [
+            r#"{"password":"hunter2"}"#,
+            r#"{"nested":{"api_key":"hunter2"}}"#,
+            r#"{"list":[{"token":"hunter2"}]}"#,
+            r#"{"Authorization":"Bearer hunter2"}"#,
+        ] {
+            let safe = redact_secrets(args);
+            assert!(!safe.contains("hunter2"), "leaked from {args}: {safe}");
+        }
+    }
+
+    #[test]
+    fn ordinary_arguments_are_left_readable() {
+        // Over-redacting would make the activity feed useless, which is its own failure.
+        let args = r#"{"chart_id":"37","filters":[{"column":"product_line","value":"Trains"}]}"#;
+        let safe = redact_secrets(args);
+        assert!(safe.contains("product_line"));
+        assert!(safe.contains("Trains"));
+        assert!(!safe.contains("[redacted]"));
+    }
+
+    #[test]
+    fn unparseable_arguments_naming_a_credential_are_withheld_entirely() {
+        // If it cannot be parsed, its shape is unknown, so the safe reading is that
+        // anything could be in it.
+        let safe = redact_secrets("password=hunter2 not json at all");
+        assert!(!safe.contains("hunter2"));
+        assert!(safe.contains("redacted"));
+        // But unparseable and innocuous stays, so a malformed argument is still visible.
+        assert_eq!(redact_secrets("chart 37 not json"), "chart 37 not json");
     }
 }
