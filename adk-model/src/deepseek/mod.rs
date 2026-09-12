@@ -5,8 +5,8 @@
 //! | Model | Description | Thinking |
 //! |-------|-------------|----------|
 //! | `deepseek-v4-pro` | Strongest reasoning, thinking enabled by default | Yes |
-//! | `deepseek-v4-flash` | Fast, cost-efficient | Optional |
-//! | `deepseek-v4-flash-vision-exp` | Experimental vision | Yes |
+//! | `deepseek-flash` | Fast, cost-efficient, vision-capable | Optional |
+//! | `deepseek-v4-pro` | Strongest reasoning | Yes |
 //!
 //! # Features
 //!
