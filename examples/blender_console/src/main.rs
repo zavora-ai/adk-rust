@@ -126,10 +126,10 @@ fn load_skill() -> Option<String> {
     }
 }
 
-/// Read-only view of the console host, used to know when to wake up.
-///
-/// The agent does all of its *writing* through MCP tools. This is only for
-/// watching, which is why it needs nothing but two plain GET/POSTs.
+// Read-only view of the console host, used to know when to wake up.
+//
+// The agent does all of its *writing* through MCP tools. This is only for
+// watching, which is why it needs nothing but two plain GET/POSTs.
 
 /// The oldest message from the person that has not been answered.
 ///
