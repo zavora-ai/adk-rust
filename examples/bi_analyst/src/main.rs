@@ -53,6 +53,7 @@ use adk_core::{Agent, Content, Part};
 use adk_model::deepseek::{DeepSeekClient, DeepSeekConfig, ReasoningEffort, ThinkingMode};
 use adk_runner::Runner;
 use adk_session::{InMemorySessionService, SessionService};
+use run_console_driver::{Allowed, Budget, Console, Outcome, preview, redact_secrets, response_failed, summarise};
 use adk_tool::mcp::{McpHttpClientBuilder, manager::McpServerManager};
 use futures::StreamExt;
 use serde_json::Value;
@@ -63,50 +64,6 @@ use std::time::{Duration, Instant};
 /// Console tools: the run itself. Without these nobody can see the work.
 const CONSOLE_TOOLS: &[&str] =
     &["run_plan", "run_progress", "run_say", "run_console", "run_attachment"];
-
-/// Desktop tools, for reading a dashboard that has no data API.
-///
-/// Deliberately narrow. No `run_script`, no `filesystem`, no `process_kill`: this
-/// agent reads dashboards, and a wider surface buys nothing.
-/// Expose only an allowed subset of another toolset's tools.
-///
-/// `McpServerManager` surfaces everything its servers offer, and Playwright offers
-/// arbitrary code execution in the page. An example that people copy should not hand
-/// a model more capability than the task needs, so the list is explicit and the rest
-/// never reaches the model.
-struct Allowed {
-    inner: Arc<dyn adk_core::Toolset>,
-    /// Every list whose tools may pass. Kept as separate lists so each server's
-    /// surface is stated once, rather than merged by hand into a copy that drifts.
-    allow: Vec<&'static [&'static str]>,
-    /// Names refused whatever else is allowed. Asserted rather than assumed, because
-    /// a withheld tool appearing would be a capability leak, not a cosmetic slip.
-    withheld: Vec<&'static str>,
-}
-
-#[async_trait::async_trait]
-impl adk_core::Toolset for Allowed {
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    async fn tools(&self, ctx: Arc<dyn adk_core::ReadonlyContext>) -> adk_core::Result<Vec<Arc<dyn adk_core::Tool>>> {
-        let all = self.inner.tools(ctx).await?;
-        Ok(all
-            .into_iter()
-            .filter(|tool| {
-                // Tools are prefixed `server__tool` when names collide across
-                // servers, so match the trailing segment rather than the whole name.
-                let name = tool.name();
-                let leaf = name.rsplit("__").next().unwrap_or(name);
-                if self.withheld.contains(&leaf) {
-                    return false;
-                }
-                self.allow.iter().any(|list| list.contains(&leaf))
-            })
-            .collect())
-    }
-}
 
 /// The BI server's whole surface. All twelve are read-only by construction.
 const BI_TOOLS: &[&str] = &[
@@ -306,64 +263,6 @@ fn allowed_mcp_tools(attached: &Attached) -> Vec<&'static [&'static str]> {
     lists
 }
 
-/// Optional bounds on a single turn.
-///
-/// **Unset by default, and deliberately so.** Thinking is uncapped here because a
-/// capped reasoning budget produced worse answers, and a token limit that truncates a
-/// thought spends the tokens without buying the conclusion. What the review asked for
-/// is not a cap but *knowing why something stopped*, so these exist for an operator
-/// who needs a bound, and when one is hit it is reported rather than looking like a
-/// finish.
-#[derive(Debug, Clone, Copy)]
-struct Budget {
-    /// Wall clock for one turn.
-    seconds: Option<u64>,
-    /// Tool calls in one turn, which is the better proxy for cost here: each call
-    /// carries a result back into context.
-    calls: Option<u64>,
-}
-
-impl Budget {
-    fn from_env() -> Self {
-        let read = |name: &str| {
-            std::env::var(name)
-                .ok()
-                .and_then(|raw| raw.parse::<u64>().ok())
-                .filter(|value| *value > 0)
-        };
-        let budget = Self { seconds: read("BI_MAX_SECONDS"), calls: read("BI_MAX_TOOL_CALLS") };
-        match (budget.seconds, budget.calls) {
-            (None, None) => println!("  \u{b7} no turn budget \u{2014} thinking is uncapped"),
-            (seconds, calls) => println!(
-                "  \u{2713} turn budget: {} {}",
-                seconds.map_or("no time limit".to_string(), |s| format!("{s}s")),
-                calls.map_or("no call limit".to_string(), |c| format!("/ {c} calls")),
-            ),
-        }
-        budget
-    }
-
-    /// Why this turn should stop, if it should.
-    fn exceeded(&self, started: Instant, calls: u64) -> Option<String> {
-        if let Some(limit) = self.seconds
-            && started.elapsed().as_secs() >= limit
-        {
-            return Some(format!(
-                "the {limit}s time budget for one turn was reached after {calls} tool calls"
-            ));
-        }
-        if let Some(limit) = self.calls
-            && calls >= limit
-        {
-            return Some(format!(
-                "the {limit}-call budget for one turn was reached after {}s",
-                started.elapsed().as_secs()
-            ));
-        }
-        None
-    }
-}
-
 /// Which optional servers are actually running.
 #[derive(Debug, Default, Clone, Copy)]
 struct Attached {
@@ -399,12 +298,6 @@ const DESKTOP_TOOLS: &[&str] = &[
     "scrape",
 ];
 
-fn preview(text: &str, max_chars: usize) -> String {
-    let mut chars = text.chars();
-    let head: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() { format!("{head}…") } else { head }
-}
-
 /// Field names whose values must never be printed or fed to the console.
 ///
 /// The agent is deliberately given a sign-in so it can reach a dashboard, which puts
@@ -415,280 +308,6 @@ fn preview(text: &str, max_chars: usize) -> String {
 /// verbatim, and the password survived only because the email sorted first and the
 /// preview happened to cut at 110 characters. A secret protected by truncation is not
 /// protected.
-const SECRET_FIELD: &[&str] = &[
-    "password", "passwd", "pwd", "secret", "token", "api_key", "apikey", "credential",
-    "authorization", "auth", "session", "cookie", "otp", "passcode", "pin",
-];
-
-/// Replace secret-shaped values anywhere in a JSON string before it is shown.
-///
-/// Deliberately textual rather than typed: this runs over an already-serialized tool
-/// argument, whose shape differs per tool and per server, and a redactor that only
-/// understood one shape would miss the next one. It errs towards redacting.
-fn redact_secrets(json: &str) -> String {
-    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
-        // Not parseable, so the safe reading is that anything could be in it. Keep it
-        // only if no secret-shaped name appears at all.
-        let lowered = json.to_lowercase();
-        return if SECRET_FIELD.iter().any(|name| lowered.contains(name)) {
-            "[redacted: unparseable arguments naming a credential field]".to_string()
-        } else {
-            json.to_string()
-        };
-    };
-    redact_value(&mut value);
-    serde_json::to_string(&value).unwrap_or_else(|_| "[redacted]".to_string())
-}
-
-fn redact_value(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            // Collect first: a Metabase or Playwright form field carries the field's
-            // name in one key and its value in another, so a secret is recognised by
-            // a sibling rather than by its own key.
-            let names: Vec<String> = map.keys().cloned().collect();
-            let field_is_secret = names.iter().any(|key| {
-                map.get(key)
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|text| is_secret_name(text))
-            });
-            for key in names {
-                let key_is_secret = is_secret_name(&key);
-                if let Some(entry) = map.get_mut(&key) {
-                    if key_is_secret || (field_is_secret && key == "value") {
-                        *entry = serde_json::Value::String("[redacted]".into());
-                    } else {
-                        redact_value(entry);
-                    }
-                }
-            }
-        }
-        serde_json::Value::Array(items) => items.iter_mut().for_each(redact_value),
-        _ => {}
-    }
-}
-
-fn is_secret_name(name: &str) -> bool {
-    let lowered = name.to_lowercase();
-    SECRET_FIELD.iter().any(|secret| lowered.contains(secret))
-}
-
-/// Did this tool result actually fail?
-///
-/// MCP reports failure in a structured field, and an earlier version searched the
-/// serialized body for the text `isError` instead — which matched `"isError": false`,
-/// so successful calls were flagged as failures in the feed the person watches. A
-/// nested `error` key inside the returned content still counts, because that is how
-/// these servers report a domain failure, but only when it holds something.
-fn response_failed(response: &serde_json::Value) -> bool {
-    if response.get("isError").and_then(serde_json::Value::as_bool) == Some(true) {
-        return true;
-    }
-    // Some servers put a domain error inside the text content rather than setting the
-    // protocol flag, so look one level in — but treat null and false as success.
-    let has_error = |value: &serde_json::Value| {
-        value
-            .get("error")
-            .is_some_and(|error| !error.is_null() && error.as_bool() != Some(false))
-    };
-    if has_error(response) {
-        return true;
-    }
-    response
-        .get("content")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|parts| {
-            parts.iter().any(|part| {
-                part.get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
-                    .is_some_and(|parsed| has_error(&parsed))
-            })
-        })
-}
-
-/// Condense JSON into something readable in a one-line activity feed.
-fn summarise(json: &str, max_chars: usize) -> String {
-    let cleaned: String = json
-        .trim_start_matches('{')
-        .trim_end_matches('}')
-        .replace("\\n", " ")
-        .replace(['"', '{', '}'], "")
-        .replace(':', ": ")
-        .replace(',', ", ");
-    preview(&cleaned.split_whitespace().collect::<Vec<_>>().join(" "), max_chars)
-}
-
-/// Read-only view of the console host, used to know when to wake up.
-struct Console {
-    base: String,
-    http: reqwest::Client,
-}
-
-impl Console {
-    fn new(base: String) -> Self {
-        Self { base, http: reqwest::Client::new() }
-    }
-
-    async fn run_id(&self) -> Option<String> {
-        let text =
-            self.http.get(format!("{}/run-id", self.base)).send().await.ok()?.text().await.ok()?;
-        let trimmed = text.trim().to_string();
-        (!trimmed.is_empty()).then_some(trimmed)
-    }
-
-    async fn read(&self) -> Option<Value> {
-        let response = self
-            .http
-            .post(format!("{}/rpc", self.base))
-            .json(&serde_json::json!({ "name": "run_console", "arguments": {} }))
-            .send()
-            .await
-            .ok()?;
-        let body: Value = response.json().await.ok()?;
-        let text = body
-            .get("content")?
-            .as_array()?
-            .iter()
-            .find(|block| block.get("type").and_then(Value::as_str) == Some("text"))?
-            .get("text")?
-            .as_str()?;
-        serde_json::from_str(text).ok()
-    }
-
-    /// Push observed activity: thinking, calls, results.
-    ///
-    /// Observed here rather than asked of the model, because this loop already sees
-    /// every streamed token and every tool call — so the feed is complete, costs no
-    /// extra model calls, and includes the BI server's calls too.
-    async fn report_activity(&self, events: &[Value]) {
-        if events.is_empty() {
-            return;
-        }
-        let _ = self
-            .http
-            .post(format!("{}/driver/activity", self.base))
-            .json(&serde_json::json!({ "events": events }))
-            .send()
-            .await;
-    }
-
-    /// Report a turn that died before the agent could speak for itself.
-    /// Has the person asked the agent to stop?
-    ///
-    /// Read between stream events rather than only when the model calls a run tool: an
-    /// agent deep in a thought may not call one for some time, and a console reading
-    /// "Stopping…" while tokens are still being spent is exactly what a stop button is
-    /// supposed to prevent.
-    async fn cancel_requested(&self) -> bool {
-        self.read()
-            .await
-            .and_then(|run| run.get("cancelRequested").and_then(Value::as_bool))
-            .unwrap_or(false)
-    }
-
-    /// Close a turn the model left open.
-    ///
-    /// A run whose state is still `working` after the model has stopped is
-    /// indistinguishable, on screen, from one that has hung. The driver knows the turn
-    /// ended, so it says so — using the agent's own closing words when it wrote any,
-    /// and saying plainly that it stopped without a conclusion when it did not.
-    async fn reconcile(&self, closing: &str) {
-        let Some(run_id) = self.run_id().await else { return };
-        let state = self
-            .read()
-            .await
-            .and_then(|run| run.get("state").and_then(|s| s.as_str().map(str::to_string)))
-            .unwrap_or_default();
-        if state == "done" || state == "failed" {
-            return;
-        }
-        let narration = if closing.is_empty() {
-            "The turn ended without a closing summary. Nothing further was reported."
-                .to_string()
-        } else {
-            closing.chars().take(600).collect()
-        };
-        let _ = self
-            .http
-            .post(format!("{}/driver", self.base))
-            .json(&serde_json::json!({
-                "runId": run_id,
-                "state": if closing.is_empty() { "failed" } else { "done" },
-                "narration": narration,
-            }))
-            .send()
-            .await;
-    }
-
-    /// Close a turn that ran out of its budget, saying which budget and what was done.
-    async fn report_budget_stop(&self, reason: &str, closing: &str) {
-        let Some(run_id) = self.run_id().await else { return };
-        let narration = if closing.is_empty() {
-            format!("Stopped before finishing: {reason}. Nothing had been concluded yet.")
-        } else {
-            format!(
-                "Stopped before finishing: {reason}. What I had so far: {}",
-                closing.chars().take(500).collect::<String>()
-            )
-        };
-        let _ = self
-            .http
-            .post(format!("{}/driver", self.base))
-            .json(&serde_json::json!({
-                // failed, not done: the request was not answered.
-                "runId": run_id, "state": "failed", "narration": narration,
-            }))
-            .send()
-            .await;
-    }
-
-    /// Close a turn that was stopped, reporting what had already been done.
-    async fn report_stopped(&self, closing: &str) {
-        let Some(run_id) = self.run_id().await else { return };
-        let narration = if closing.is_empty() {
-            "Stopped at your request. Nothing had been concluded yet.".to_string()
-        } else {
-            format!(
-                "Stopped at your request. What I had so far: {}",
-                closing.chars().take(500).collect::<String>()
-            )
-        };
-        let _ = self
-            .http
-            .post(format!("{}/driver", self.base))
-            .json(&serde_json::json!({
-                "runId": run_id, "state": "done", "narration": narration,
-            }))
-            .send()
-            .await;
-    }
-
-    async fn report_failure(&self, message: &str) {
-        let _ = self
-            .http
-            .post(format!("{}/driver", self.base))
-            .json(&serde_json::json!({
-                "state": "failed",
-                "narration": format!("This turn stopped before I could finish: {message}"),
-            }))
-            .send()
-            .await;
-    }
-}
-
-/// The last transcript turn, when it is an unanswered message from the person.
-fn pending_ask(run: &Value) -> Option<(String, String)> {
-    let last = run.get("messages")?.as_array()?.last()?;
-    if last.get("role").and_then(Value::as_str)? != "user" {
-        return None;
-    }
-    Some((
-        last.get("text").and_then(Value::as_str)?.to_string(),
-        last.get("at").and_then(Value::as_str).unwrap_or_default().to_string(),
-    ))
-}
-
 /// How to work a dashboard, and why the numbers come first.
 /// Load the analytics routing policy from `skills/analytics-agent/SKILL.md`.
 ///
@@ -768,6 +387,10 @@ fn analyst_brief(run_id: &str) -> String {
          When the request is answered, `run_progress` with `state:\"done\"` and a closing \
          narration stating what you found and the numbers behind it. If you could not finish, \
          `state:\"failed\"` and say plainly what blocked you.\n\
+         Every reply carries `pending`: messages the person sent that you have not \
+         answered. When you answer one, pass its `id` as `acknowledge` on `run_say` \
+         \u{2014} that is what clears it. Nothing else does, and in particular a narration \
+         does not.\n\
          If `cancel_requested` is true in a reply, the person has asked you to stop. Stop \
          where you are: report what you already have with `run_progress`, set \
          `state:\"done\"` if it is useful or `state:\"failed\"` if it is not, and do not start \
@@ -899,7 +522,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Resolved here rather than when the agent is built, so an operator sees which
     // browser surface is in force alongside the other readiness lines.
     let mcp_tools = allowed_mcp_tools(&attached);
-    let budget = Budget::from_env();
+    let budget = Budget::from_env("BI");
 
     // The browser session and the BI server's API token are unrelated: the server
     // can be authenticated while the browser sits on a login page. Handing the
@@ -993,6 +616,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             inner: Arc::clone(&manager) as Arc<dyn adk_core::Toolset>,
             allow: mcp_tools.clone(),
             withheld: withheld_tools(),
+            // Every server's whole surface is named explicitly here, so nothing passes
+            // by prefix.
+            passthrough_prefix: None,
         }) as Arc<dyn adk_core::Toolset>)
         .build()?;
 
@@ -1013,22 +639,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     // ── 6. The conversation loop ─────────────────────────────────────────
-    let mut handled: Option<String> = None;
     let mut turn = 0usize;
     loop {
-        let Some(run) = console.read().await else {
+        let Some(_) = console.read().await else {
             tokio::time::sleep(Duration::from_millis(800)).await;
             continue;
         };
-        let Some((ask, at)) = pending_ask(&run) else {
+        // Read from the console's own `pending`, which the host computes from message
+        // ids and an acknowledgement cursor. Inferring it from the transcript is what
+        // let a progress narration hide a question typed mid-run.
+        let pending = console.pending().await;
+        let Some(first) = pending.first() else {
             tokio::time::sleep(Duration::from_millis(800)).await;
             continue;
         };
-        if handled.as_deref() == Some(at.as_str()) {
+        let ask = first.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
+        let ask_id = first.get("id").and_then(Value::as_i64).unwrap_or_default();
+        if ask.is_empty() {
             tokio::time::sleep(Duration::from_millis(800)).await;
             continue;
         }
-        handled = Some(at);
+        // No local dedup by timestamp: the host's `pending` already excludes anything
+        // acknowledged, and acknowledging is what marks a question answered. A timestamp
+        // key could not tell two messages sent in the same second apart, and duplicated
+        // state the host already holds.
         turn += 1;
 
         println!("\n▸ turn {turn}: {}", preview(&ask, 140));
@@ -1048,14 +682,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .run_str(
                 "analyst",
                 &run_id,
-                Content { role: "user".to_string(), parts: vec![Part::Text { text: ask }] },
+                // The id travels with the question, because the agent cannot acknowledge
+                // a message it was never told the id of.
+                Content {
+                    role: "user".to_string(),
+                    parts: vec![Part::Text {
+                        text: format!("[message {ask_id}] {ask}"),
+                    }],
+                },
             )
             .await;
         let mut stream = match started {
             Ok(stream) => stream,
             Err(error) => {
                 eprintln!("turn {turn} could not start: {error}");
-                console.report_failure(&error.to_string()).await;
+                console.finish(&Outcome::Failed(error.to_string()), "").await;
                 continue;
             }
         };
@@ -1167,7 +808,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         flush!();
         if let Some(message) = failure {
-            console.report_failure(&message).await;
+            console.finish(&Outcome::Failed(message.clone()), "").await;
             println!("{}\nturn {turn} failed — still watching", "─".repeat(60));
         } else {
             // A model can stop without ever calling run_progress with a terminal
@@ -1175,15 +816,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // watching then cannot tell a finished run from a hung one, so the driver
             // closes the turn itself rather than trusting the agent to have done it.
             if let Some(reason) = stopped_short {
-                console.report_budget_stop(&reason, &closing).await;
+                console.finish(&Outcome::OutOfBudget(reason.clone()), &closing).await;
                 println!("{}\nturn {turn} stopped short: {reason}", "─".repeat(60));
             } else if cancelled {
                 // Say what was done before stopping, so a stop is not silent about the
                 // work already paid for.
-                console.report_stopped(&closing).await;
+                console.finish(&Outcome::Cancelled, &closing).await;
                 println!("{}\nturn {turn} stopped at the person's request", "─".repeat(60));
             } else {
-                console.reconcile(&closing).await;
+                console
+                    .finish(
+                        if closing.is_empty() { &Outcome::Incomplete } else { &Outcome::Completed },
+                        &closing,
+                    )
+                    .await;
                 println!("{}\nturn {turn} finished — watching for the next message", "─".repeat(60));
             }
         }

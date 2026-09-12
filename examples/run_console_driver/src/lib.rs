@@ -317,6 +317,14 @@ impl Console {
             .unwrap_or_default()
     }
 
+    /// Acknowledging is the **agent's** job, not the driver's, and deliberately so.
+    ///
+    /// The page endpoint pins `role: "user"` and drops the `acknowledge` argument — it
+    /// exists for a person typing, so a driver posting through it would append another
+    /// user message and create a new pending item rather than clearing one. The agent
+    /// already holds `run_say`, which takes `acknowledge`, so it says what it answered
+    /// as part of answering. The brief tells it to.
+
     /// Has the person asked the agent to stop?
     ///
     /// Worth reading between stream events rather than only when the model calls a run
