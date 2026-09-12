@@ -471,6 +471,10 @@ fn analyst_brief(run_id: &str) -> String {
          When the request is answered, `run_progress` with `state:\"done\"` and a closing \
          narration stating what you found and the numbers behind it. If you could not finish, \
          `state:\"failed\"` and say plainly what blocked you.\n\
+         If `cancel_requested` is true in a reply, the person has asked you to stop. Stop \
+         where you are: report what you already have with `run_progress`, set \
+         `state:\"done\"` if it is useful or `state:\"failed\"` if it is not, and do not start \
+         anything further.\n\
          If they type while you work, their message is in the transcript every run_* reply \
          returns. Read it and adapt.\n\n\
          ── what not to do ──\n\
