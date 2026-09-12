@@ -38,6 +38,64 @@ fn is_secret_name(name: &str) -> bool {
     SECRET_FIELD.iter().any(|secret| lowered.contains(secret))
 }
 
+/// Exact secret values to scrub, wherever they appear.
+///
+/// Name-based redaction has a hole it cannot close. When an agent types a password it
+/// does so through a generic text tool, whose argument is `{"text": "…"}` — no key and
+/// no sibling says "password", so nothing marks it. The same is true in reverse for tool
+/// *results*, which may echo back what was typed or return a page containing a token.
+///
+/// A driver that was handed a credential knows the string, so it can scrub that string
+/// from anything on its way out. That is precise: no heuristic, no false positives, and
+/// it covers both holes with one rule.
+static KNOWN_SECRETS: std::sync::LazyLock<std::sync::RwLock<Vec<String>>> =
+    std::sync::LazyLock::new(|| std::sync::RwLock::new(Vec::new()));
+
+/// Register a value that must never appear in a log or the console.
+///
+/// Call this for every credential handed to the agent, at startup. Short values are
+/// ignored: scrubbing a two-character string would redact half of every message, and a
+/// secret that short is not protected by redaction anyway.
+pub fn register_secret(value: &str) {
+    let value = value.trim();
+    if value.len() < 6 {
+        return;
+    }
+    let mut secrets = KNOWN_SECRETS.write().expect("secrets lock");
+    if !secrets.iter().any(|held| held == value) {
+        secrets.push(value.to_string());
+    }
+}
+
+/// Replace every registered secret value with a marker.
+///
+/// Applied to arguments and results alike, and to the whole serialized string rather
+/// than to parsed fields, because a secret can be nested, concatenated or echoed inside
+/// text that is not JSON at all.
+pub fn scrub_known_secrets(text: &str) -> String {
+    let secrets = KNOWN_SECRETS.read().expect("secrets lock");
+    if secrets.is_empty() {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    for secret in secrets.iter() {
+        if out.contains(secret.as_str()) {
+            out = out.replace(secret.as_str(), "[redacted]");
+        }
+    }
+    out
+}
+
+/// Everything that must happen to a tool argument before it is shown.
+///
+/// Both halves are needed. The name rules catch a credential in a field that announces
+/// itself, including one recognised by a sibling key, which is how form fields carry
+/// their name and value separately. The value rules catch the same secret arriving
+/// through a field that announces nothing.
+pub fn redact_for_display(json: &str) -> String {
+    scrub_known_secrets(&redact_secrets(json))
+}
+
 /// Replace secret-shaped values anywhere in a serialized tool argument.
 ///
 /// Textual rather than typed on purpose: this runs over an already-serialized argument
@@ -536,5 +594,50 @@ mod tests {
         const LIST: &[&str] = &["browser_click"];
         let f = filter(vec![LIST], vec![], None);
         assert!(f.permits("browser__browser_click"), "server__tool must match on the tool");
+    }
+}
+
+#[cfg(test)]
+mod value_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn a_secret_typed_through_a_generic_text_field_is_still_scrubbed() {
+        // The hole name-based redaction cannot close: `type` takes `{"text": "…"}`, and
+        // nothing about that field says it holds a password.
+        register_secret("Analytics123!");
+        let args = r#"{"target":"e42","text":"Analytics123!"}"#;
+        assert!(!redact_for_display(args).contains("Analytics123!"));
+        // And the name-based half still works for a field that does announce itself.
+        assert!(!redact_for_display(r#"{"password":"whatever-long-enough"}"#).contains("whatever-long-enough"));
+    }
+
+    #[test]
+    fn a_secret_echoed_back_in_a_result_is_scrubbed_too() {
+        // A result can echo what was typed, or return a page containing a token.
+        register_secret("s3cret-token-value");
+        let body = r#"{"content":[{"text":"Authorization: Bearer s3cret-token-value"}]}"#;
+        assert!(!redact_for_display(body).contains("s3cret-token-value"));
+    }
+
+    #[test]
+    fn a_secret_is_scrubbed_from_text_that_is_not_json_at_all() {
+        register_secret("plaintext-secret-here");
+        assert!(!scrub_known_secrets("typed plaintext-secret-here into the field")
+            .contains("plaintext-secret-here"));
+    }
+
+    #[test]
+    fn a_very_short_value_is_not_registered() {
+        // Scrubbing "ab" would redact half of every message, and a secret that short is
+        // not protected by redaction anyway.
+        register_secret("abc");
+        assert_eq!(scrub_known_secrets("abc def"), "abc def");
+    }
+
+    #[test]
+    fn ordinary_text_is_untouched_when_nothing_matches() {
+        let ordinary = r#"{"chart_id":"37","value":"Trains"}"#;
+        assert!(redact_for_display(ordinary).contains("Trains"));
     }
 }

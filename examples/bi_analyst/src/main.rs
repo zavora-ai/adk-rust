@@ -53,7 +53,7 @@ use adk_core::{Agent, Content, Part};
 use adk_model::deepseek::{DeepSeekClient, DeepSeekConfig, ReasoningEffort, ThinkingMode};
 use adk_runner::Runner;
 use adk_session::{InMemorySessionService, SessionService};
-use run_console_driver::{Allowed, Budget, Console, Outcome, preview, redact_secrets, response_failed, summarise};
+use run_console_driver::{Allowed, Budget, Console, Outcome, preview, redact_for_display, register_secret, response_failed, scrub_known_secrets, summarise};
 use adk_tool::mcp::{McpHttpClientBuilder, manager::McpServerManager};
 use futures::StreamExt;
 use serde_json::Value;
@@ -535,6 +535,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui_pass = std::env::var("BI_UI_PASSWORD").or_else(|_| std::env::var("SUPERSET_PASSWORD"));
     let ui_login = match (std::env::var("BI_UI_LOGIN").is_ok(), ui_user, ui_pass) {
         (true, Ok(username), Ok(password)) => {
+            // Registered so the value is scrubbed wherever it surfaces, including a
+            // generic text field whose name announces nothing and a result that echoes
+            // it back. Name-based rules alone cannot see either.
+            register_secret(&password);
             println!(
                 "  \u{26a0} BI_UI_LOGIN set \u{2014} the browser sign-in for {username:?} will be \
                  sent to the model so it can log in on screen. Use a throwaway account."
@@ -745,7 +749,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // Redact before either path, not after: the console
                                 // feed and the terminal are both places a secret
                                 // outlives the run.
-                                let safe = redact_secrets(&args);
+                                let safe = redact_for_display(&args);
                                 activity.push(serde_json::json!({
                                     "kind": "tool", "name": name, "detail": summarise(&safe, 120),
                                 }));
@@ -758,12 +762,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let shown = if is_run_tool {
                                     format!("{} bytes of run state", body.len())
                                 } else {
-                                    preview(&body, 110)
+                                    preview(&scrub_known_secrets(&body), 110)
                                 };
                                 let mut entry = serde_json::json!({
                                     "kind": "result",
                                     "name": function_response.name,
-                                    "detail": if is_run_tool { String::new() } else { summarise(&body, 120) },
+                                    "detail": if is_run_tool { String::new() } else { summarise(&scrub_known_secrets(&body), 120) },
                                 });
                                 // Oldest first: responses arrive in call order, so a
                                 // second call to the same tool no longer inherits or
@@ -898,60 +902,6 @@ mod tests {
                 "{name} is in two tiers; it should sit in exactly one"
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod redaction_tests {
-    use super::*;
-
-    /// The exact shape that leaked, from a real run.
-    #[test]
-    fn a_form_fill_does_not_print_the_password() {
-        let args = r#"{"fields":[
-            {"name":"Email address","target":"e38","type":"textbox","value":"admin@example.invalid"},
-            {"name":"Password","target":"e42","type":"textbox","value":"Analytics123!"}
-        ]}"#;
-        let safe = redact_secrets(args);
-        assert!(!safe.contains("Analytics123!"), "the password must not survive: {safe}");
-        assert!(safe.contains("[redacted]"));
-        // The rest has to stay, or the feed stops being useful.
-        assert!(safe.contains("admin@example.invalid"), "a username is not a secret");
-        assert!(safe.contains("Email address"));
-    }
-
-    #[test]
-    fn a_secret_named_key_is_redacted_wherever_it_sits() {
-        for args in [
-            r#"{"password":"hunter2"}"#,
-            r#"{"nested":{"api_key":"hunter2"}}"#,
-            r#"{"list":[{"token":"hunter2"}]}"#,
-            r#"{"Authorization":"Bearer hunter2"}"#,
-        ] {
-            let safe = redact_secrets(args);
-            assert!(!safe.contains("hunter2"), "leaked from {args}: {safe}");
-        }
-    }
-
-    #[test]
-    fn ordinary_arguments_are_left_readable() {
-        // Over-redacting would make the activity feed useless, which is its own failure.
-        let args = r#"{"chart_id":"37","filters":[{"column":"product_line","value":"Trains"}]}"#;
-        let safe = redact_secrets(args);
-        assert!(safe.contains("product_line"));
-        assert!(safe.contains("Trains"));
-        assert!(!safe.contains("[redacted]"));
-    }
-
-    #[test]
-    fn unparseable_arguments_naming_a_credential_are_withheld_entirely() {
-        // If it cannot be parsed, its shape is unknown, so the safe reading is that
-        // anything could be in it.
-        let safe = redact_secrets("password=hunter2 not json at all");
-        assert!(!safe.contains("hunter2"));
-        assert!(safe.contains("redacted"));
-        // But unparseable and innocuous stays, so a malformed argument is still visible.
-        assert_eq!(redact_secrets("chart 37 not json"), "chart 37 not json");
     }
 }
 

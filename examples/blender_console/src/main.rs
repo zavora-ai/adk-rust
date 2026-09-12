@@ -63,7 +63,7 @@ use adk_core::{Agent, Content, Part};
 use adk_model::deepseek::{DeepSeekClient, DeepSeekConfig, ReasoningEffort, ThinkingMode};
 use adk_runner::Runner;
 use adk_session::{InMemorySessionService, SessionService};
-use run_console_driver::{Budget, Console, Outcome, preview, redact_secrets, response_failed};
+use run_console_driver::{Budget, Console, Outcome, preview, redact_for_display, response_failed, scrub_known_secrets};
 use adk_tool::mcp::{McpHttpClientBuilder, manager::McpServerManager};
 use futures::StreamExt;
 use serde_json::Value;
@@ -403,7 +403,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // Redact before printing: this driver logs tool
                                 // arguments, and a credential in one outlives the run in
                                 // whatever captures the terminal.
-                                println!("→ {name} {}", preview(&redact_secrets(&args), 110));
+                                println!("→ {name} {}", preview(&redact_for_display(&args), 110));
                             }
                             Part::FunctionResponse { function_response, .. } => {
                                 // Console replies carry the whole run, screenshot included.
@@ -413,7 +413,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let shown = if function_response.name.starts_with("run_") {
                                     format!("{} bytes of run state", body.len())
                                 } else {
-                                    preview(&body, 110)
+                                    preview(&scrub_known_secrets(&body), 110)
                                 };
                                 let failed = response_failed(&function_response.response);
                                 println!(
