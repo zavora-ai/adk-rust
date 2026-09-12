@@ -63,6 +63,7 @@ use adk_core::{Agent, Content, Part};
 use adk_model::deepseek::{DeepSeekClient, DeepSeekConfig, ReasoningEffort, ThinkingMode};
 use adk_runner::Runner;
 use adk_session::{InMemorySessionService, SessionService};
+use run_console_driver::{Budget, Console, Outcome, preview, redact_secrets, response_failed};
 use adk_tool::mcp::{McpHttpClientBuilder, manager::McpServerManager};
 use futures::StreamExt;
 use serde_json::Value;
@@ -97,11 +98,6 @@ const DESKTOP_TOOLS: &[&str] = &[
     "wait",
 ];
 
-fn preview(text: &str, max_chars: usize) -> String {
-    let mut chars = text.chars();
-    let head: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() { format!("{head}…") } else { head }
-}
 
 /// Load the Blender routing policy from the computer-use-mcp checkout.
 ///
@@ -134,60 +130,6 @@ fn load_skill() -> Option<String> {
 ///
 /// The agent does all of its *writing* through MCP tools. This is only for
 /// watching, which is why it needs nothing but two plain GET/POSTs.
-struct Console {
-    base: String,
-    http: reqwest::Client,
-}
-
-impl Console {
-    fn new(base: String) -> Self {
-        Self { base, http: reqwest::Client::new() }
-    }
-
-    /// The current conversation, or `None` until the person says something.
-    async fn run_id(&self) -> Option<String> {
-        let text =
-            self.http.get(format!("{}/run-id", self.base)).send().await.ok()?.text().await.ok()?;
-        let trimmed = text.trim().to_string();
-        (!trimmed.is_empty()).then_some(trimmed)
-    }
-
-    /// The run as the browser sees it: transcript, plan, narration, last frame.
-    async fn read(&self) -> Option<Value> {
-        let response = self
-            .http
-            .post(format!("{}/rpc", self.base))
-            .json(&serde_json::json!({ "name": "run_console", "arguments": {} }))
-            .send()
-            .await
-            .ok()?;
-        let body: Value = response.json().await.ok()?;
-        let text = body
-            .get("content")?
-            .as_array()?
-            .iter()
-            .find(|block| block.get("type").and_then(Value::as_str) == Some("text"))?
-            .get("text")?
-            .as_str()?;
-        serde_json::from_str(text).ok()
-    }
-
-    /// Report a turn that died before the agent could speak for itself.
-    ///
-    /// A model error would otherwise leave the console frozen mid-task with no
-    /// explanation, which is the one failure a watching person cannot diagnose.
-    async fn report_failure(&self, message: &str) {
-        let _ = self
-            .http
-            .post(format!("{}/driver", self.base))
-            .json(&serde_json::json!({
-                "state": "failed",
-                "narration": format!("This turn stopped before I could finish: {message}"),
-            }))
-            .send()
-            .await;
-    }
-}
 
 /// The last transcript turn, when it is an unanswered message from the person.
 ///
@@ -305,6 +247,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The host opens the run from their first message, so its prompt is their own
     // words. Until then there is no conversation to join.
     let console = Console::new(base.clone());
+    // Unset by default: thinking stays uncapped. Present so a bound, if an operator
+    // wants one, reports why it stopped rather than looking like a finish.
+    let budget = Budget::from_env("BLENDER");
     println!("\nOpen {base}/ and type what you want built.");
     println!("Waiting for the first message…");
     let run_id = loop {
@@ -418,13 +363,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(stream) => stream,
             Err(error) => {
                 eprintln!("turn {turn} could not start: {error}");
-                console.report_failure(&error.to_string()).await;
+                console.finish(&Outcome::Failed(error.to_string()), "").await;
                 continue;
             }
         };
 
         let mut failure: Option<String> = None;
+        let mut cancelled = false;
+        let mut stopped_short: Option<String> = None;
+        let mut tool_calls: u64 = 0;
+        let turn_started = std::time::Instant::now();
         while let Some(event) = stream.next().await {
+            // Both checked between events rather than only when the model calls a run
+            // tool: an agent mid-thought may not call one for some time, and a console
+            // reading "Stopping…" while tokens are still being spent defeats the point.
+            if !cancelled && console.cancel_requested().await {
+                cancelled = true;
+                println!("\n⏹ the person asked to stop — ending this turn");
+                break;
+            }
+            if let Some(reason) = budget.exceeded(turn_started, tool_calls) {
+                println!("\n⏱ stopping: {reason}");
+                stopped_short = Some(reason);
+                break;
+            }
             match event {
                 Ok(event) => {
                     let Some(content) = &event.llm_response.content else { continue };
@@ -433,8 +395,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Part::Text { text } => buffered.push_str(text),
                             Part::FunctionCall { name, args, .. } => {
                                 flush!();
+                                tool_calls += 1;
                                 let args = serde_json::to_string(args).unwrap_or_default();
-                                println!("→ {name} {}", preview(&args, 110));
+                                // Redact before printing: this driver logs tool
+                                // arguments, and a credential in one outlives the run in
+                                // whatever captures the terminal.
+                                println!("→ {name} {}", preview(&redact_secrets(&args), 110));
                             }
                             Part::FunctionResponse { function_response, .. } => {
                                 // Console replies carry the whole run, screenshot included.
@@ -446,7 +412,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     preview(&body, 110)
                                 };
-                                println!("← {} {shown}", function_response.name);
+                                let failed = response_failed(&function_response.response);
+                                println!(
+                                    "← {}{} {shown}",
+                                    function_response.name,
+                                    if failed { " (failed)" } else { "" }
+                                );
                             }
                             _ => {}
                         }
@@ -460,13 +431,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         flush!();
-        if let Some(message) = failure {
-            console.report_failure(&message).await;
+        let closing = buffered.trim().to_string();
+        if let Some(reason) = stopped_short {
+            console.finish(&Outcome::OutOfBudget(reason.clone()), &closing).await;
+            println!("{}\nturn {turn} stopped short: {reason}", "─".repeat(60));
+        } else if cancelled {
+            console.finish(&Outcome::Cancelled, &closing).await;
+            println!("{}\nturn {turn} stopped at the person's request", "─".repeat(60));
+        } else if let Some(message) = failure {
+            console.finish(&Outcome::Failed(message.clone()), "").await;
             println!(
                 "{}\nturn {turn} failed — still watching for the next message",
                 "─".repeat(60)
             );
         } else {
+            // A model can stop without ever reporting a terminal state, which leaves the
+            // console reading "working" — indistinguishable, on screen, from a hang.
+            let outcome =
+                if closing.is_empty() { Outcome::Incomplete } else { Outcome::Completed };
+            console.finish(&outcome, &closing).await;
             println!("{}\nturn {turn} finished — watching for the next message", "─".repeat(60));
         }
     }

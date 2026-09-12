@@ -15,6 +15,10 @@ adk-model = { path = "../../adk-model", features = ["deepseek"] }
 adk-tool = { path = "../../adk-tool", features = ["mcp", "http-transport"] }
 adk-runner = { path = "../../adk-runner" }
 adk-session = { path = "../../adk-session" }
+# The console lifecycle every driver has to get right: polling, acknowledgement,
+# cancellation, budgets, redaction and honest completion. Shared because each of those
+# was fixed in the analytics driver and this one kept the original behaviour.
+run-console-driver = { path = "../run_console_driver" }
 tokio = { version = "1.40", features = ["full"] }
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
