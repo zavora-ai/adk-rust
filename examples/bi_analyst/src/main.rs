@@ -516,6 +516,19 @@ impl Console {
     }
 
     /// Report a turn that died before the agent could speak for itself.
+    /// Has the person asked the agent to stop?
+    ///
+    /// Read between stream events rather than only when the model calls a run tool: an
+    /// agent deep in a thought may not call one for some time, and a console reading
+    /// "Stopping…" while tokens are still being spent is exactly what a stop button is
+    /// supposed to prevent.
+    async fn cancel_requested(&self) -> bool {
+        self.read()
+            .await
+            .and_then(|run| run.get("cancelRequested").and_then(Value::as_bool))
+            .unwrap_or(false)
+    }
+
     /// Close a turn the model left open.
     ///
     /// A run whose state is still `working` after the model has stopped is
@@ -545,6 +558,27 @@ impl Console {
                 "runId": run_id,
                 "state": if closing.is_empty() { "failed" } else { "done" },
                 "narration": narration,
+            }))
+            .send()
+            .await;
+    }
+
+    /// Close a turn that was stopped, reporting what had already been done.
+    async fn report_stopped(&self, closing: &str) {
+        let Some(run_id) = self.run_id().await else { return };
+        let narration = if closing.is_empty() {
+            "Stopped at your request. Nothing had been concluded yet.".to_string()
+        } else {
+            format!(
+                "Stopped at your request. What I had so far: {}",
+                closing.chars().take(500).collect::<String>()
+            )
+        };
+        let _ = self
+            .http
+            .post(format!("{}/driver", self.base))
+            .json(&serde_json::json!({
+                "runId": run_id, "state": "done", "narration": narration,
             }))
             .send()
             .await;
@@ -946,8 +980,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let mut failure: Option<String> = None;
+        let mut cancelled = false;
         let mut started_at: HashMap<String, std::collections::VecDeque<Instant>> = HashMap::new();
         while let Some(event) = stream.next().await {
+            // Watch for a stop between events, not only when the model happens to call
+            // a run tool. An agent that is mid-thought may not call one for a while, and
+            // "Stopping…" on screen while tokens keep being spent is the failure this
+            // avoids. Dropping the stream is what actually ends the work; the flag alone
+            // only lets a cooperative agent notice.
+            if !cancelled && console.cancel_requested().await {
+                cancelled = true;
+                println!("\n\u{23f9} the person asked to stop \u{2014} ending this turn");
+                break;
+            }
             match event {
                 Ok(event) => {
                     let Some(content) = &event.llm_response.content else { continue };
@@ -1037,8 +1082,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // state, which leaves the console reading "working" forever. The person
             // watching then cannot tell a finished run from a hung one, so the driver
             // closes the turn itself rather than trusting the agent to have done it.
-            console.reconcile(&closing).await;
-            println!("{}\nturn {turn} finished — watching for the next message", "─".repeat(60));
+            if cancelled {
+                // Say what was done before stopping, so a stop is not silent about the
+                // work already paid for.
+                console.report_stopped(&closing).await;
+                println!("{}\nturn {turn} stopped at the person's request", "─".repeat(60));
+            } else {
+                console.reconcile(&closing).await;
+                println!("{}\nturn {turn} finished — watching for the next message", "─".repeat(60));
+            }
         }
     }
 }
