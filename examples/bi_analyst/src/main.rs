@@ -245,6 +245,24 @@ const ANALYTICS_WITHHELD: &[&str] = &[
     "check_export_risk",
 ];
 
+/// Market data, for cross-checking a dashboard figure against the outside world.
+///
+/// Read-only only. The server's writes — `create_instrument`, `set_quote`, `add_bar`,
+/// `publish_mark` and the `create_*` family — publish marks and define instruments,
+/// which is a different job from analysing a dashboard.
+const MARKET_PRIMARY: &[&str] = &[
+    "backend_info",
+    "get_quote",
+    "history",
+    "analytics",
+    "moving_average",
+    "correlation",
+    "fx_convert",
+    "benchmark_level",
+    "list_instruments",
+    "get_instrument",
+];
+
 /// Which tool lists the stdio servers may expose.
 ///
 /// The specialists are on by default because a dashboard genuinely produces the
@@ -260,19 +278,40 @@ fn withheld_tools() -> Vec<&'static str> {
         .collect()
 }
 
-fn allowed_mcp_tools() -> Vec<&'static [&'static str]> {
-    if std::env::var("BI_BROWSER_MINIMAL").is_ok() {
+fn allowed_mcp_tools(attached: &Attached) -> Vec<&'static [&'static str]> {
+    let minimal = std::env::var("BI_BROWSER_MINIMAL").is_ok();
+    if minimal {
         println!("  \u{b7} BI_BROWSER_MINIMAL set \u{2014} browser specialists withheld");
-        vec![BI_TOOLS, PLAYWRIGHT_PRIMARY, ANALYTICS_PRIMARY]
-    } else {
-        vec![
-            BI_TOOLS,
-            PLAYWRIGHT_PRIMARY,
-            PLAYWRIGHT_SECONDARY,
-            ANALYTICS_PRIMARY,
-            ANALYTICS_SECONDARY,
-        ]
     }
+    // Only list tools for a server that actually started. Offering a name for a
+    // server that is not there wastes a call discovering it, and the reverse — a
+    // server running whose every tool is filtered out — was real: market-data was
+    // being spawned with none of its tools allowed, so it could do nothing at all.
+    let mut lists: Vec<&'static [&'static str]> = vec![BI_TOOLS];
+    if attached.browser {
+        lists.push(PLAYWRIGHT_PRIMARY);
+        if !minimal {
+            lists.push(PLAYWRIGHT_SECONDARY);
+        }
+    }
+    if attached.analytics {
+        lists.push(ANALYTICS_PRIMARY);
+        if !minimal {
+            lists.push(ANALYTICS_SECONDARY);
+        }
+    }
+    if attached.market {
+        lists.push(MARKET_PRIMARY);
+    }
+    lists
+}
+
+/// Which optional servers are actually running.
+#[derive(Debug, Default, Clone, Copy)]
+struct Attached {
+    browser: bool,
+    analytics: bool,
+    market: bool,
 }
 
 const DESKTOP_TOOLS: &[&str] = &[
@@ -376,6 +415,40 @@ fn is_secret_name(name: &str) -> bool {
     SECRET_FIELD.iter().any(|secret| lowered.contains(secret))
 }
 
+/// Did this tool result actually fail?
+///
+/// MCP reports failure in a structured field, and an earlier version searched the
+/// serialized body for the text `isError` instead — which matched `"isError": false`,
+/// so successful calls were flagged as failures in the feed the person watches. A
+/// nested `error` key inside the returned content still counts, because that is how
+/// these servers report a domain failure, but only when it holds something.
+fn response_failed(response: &serde_json::Value) -> bool {
+    if response.get("isError").and_then(serde_json::Value::as_bool) == Some(true) {
+        return true;
+    }
+    // Some servers put a domain error inside the text content rather than setting the
+    // protocol flag, so look one level in — but treat null and false as success.
+    let has_error = |value: &serde_json::Value| {
+        value
+            .get("error")
+            .is_some_and(|error| !error.is_null() && error.as_bool() != Some(false))
+    };
+    if has_error(response) {
+        return true;
+    }
+    response
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|parts| {
+            parts.iter().any(|part| {
+                part.get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                    .is_some_and(|parsed| has_error(&parsed))
+            })
+        })
+}
+
 /// Condense JSON into something readable in a one-line activity feed.
 fn summarise(json: &str, max_chars: usize) -> String {
     let cleaned: String = json
@@ -443,6 +516,40 @@ impl Console {
     }
 
     /// Report a turn that died before the agent could speak for itself.
+    /// Close a turn the model left open.
+    ///
+    /// A run whose state is still `working` after the model has stopped is
+    /// indistinguishable, on screen, from one that has hung. The driver knows the turn
+    /// ended, so it says so — using the agent's own closing words when it wrote any,
+    /// and saying plainly that it stopped without a conclusion when it did not.
+    async fn reconcile(&self, closing: &str) {
+        let Some(run_id) = self.run_id().await else { return };
+        let state = self
+            .read()
+            .await
+            .and_then(|run| run.get("state").and_then(|s| s.as_str().map(str::to_string)))
+            .unwrap_or_default();
+        if state == "done" || state == "failed" {
+            return;
+        }
+        let narration = if closing.is_empty() {
+            "The turn ended without a closing summary. Nothing further was reported."
+                .to_string()
+        } else {
+            closing.chars().take(600).collect()
+        };
+        let _ = self
+            .http
+            .post(format!("{}/driver", self.base))
+            .json(&serde_json::json!({
+                "runId": run_id,
+                "state": if closing.is_empty() { "failed" } else { "done" },
+                "narration": narration,
+            }))
+            .send()
+            .await;
+    }
+
     async fn report_failure(&self, message: &str) {
         let _ = self
             .http
@@ -604,7 +711,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Playwright drives its own browser, which is the right tool for a web app: it
     // acts by selector, waits by itself, and needs no coordinates. Not headless —
     // the window has to be visible for the person watching the console to see it.
+    let mut attached = Attached::default();
     if std::env::var("BI_NO_BROWSER").is_err() {
+        attached.browser = true;
         servers.push_str(
             r#", "browser": { "command": "npx", "args": ["-y", "@playwright/mcp@latest", "--isolated"] }"#,
         );
@@ -616,6 +725,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // "what does this chart show"; with it the agent can also answer "what does this
     // company mean by revenue, and who owns that definition".
     if let Ok(analytics_bin) = std::env::var("MCP_ANALYTICS_BIN") {
+        attached.analytics = true;
         servers.push_str(&format!(
             r#", "analytics": {{ "command": {analytics_bin:?}, "args": [] }}"#
         ));
@@ -627,6 +737,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     if let Ok(market_bin) = std::env::var("MCP_MARKET_DATA_BIN") {
+        attached.market = true;
         servers.push_str(&format!(r#", "market": {{ "command": {market_bin:?}, "args": [] }}"#));
         println!("  ✓ market-data server attached");
     } else {
@@ -673,7 +784,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let skill = load_skill();
     // Resolved here rather than when the agent is built, so an operator sees which
     // browser surface is in force alongside the other readiness lines.
-    let mcp_tools = allowed_mcp_tools();
+    let mcp_tools = allowed_mcp_tools(&attached);
 
     // The browser session and the BI server's API token are unrelated: the server
     // can be authenticated while the browser sits on a login page. Handing the
@@ -835,7 +946,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let mut failure: Option<String> = None;
-        let mut started_at: HashMap<String, Instant> = HashMap::new();
+        let mut started_at: HashMap<String, std::collections::VecDeque<Instant>> = HashMap::new();
         while let Some(event) = stream.next().await {
             match event {
                 Ok(event) => {
@@ -852,7 +963,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 flush!();
                                 let args = serde_json::to_string(args).unwrap_or_default();
-                                started_at.insert(name.clone(), Instant::now());
+                                started_at.entry(name.clone()).or_default().push_back(Instant::now());
                                 // Redact before either path, not after: the console
                                 // feed and the terminal are both places a secret
                                 // outlives the run.
@@ -876,11 +987,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "name": function_response.name,
                                     "detail": if is_run_tool { String::new() } else { summarise(&body, 120) },
                                 });
-                                if let Some(start) = started_at.remove(&function_response.name) {
+                                // Oldest first: responses arrive in call order, so a
+                                // second call to the same tool no longer inherits or
+                                // discards the first one's start time.
+                                if let Some(start) = started_at
+                                    .get_mut(&function_response.name)
+                                    .and_then(std::collections::VecDeque::pop_front)
+                                {
                                     entry["ms"] =
                                         serde_json::json!(start.elapsed().as_millis() as u64);
                                 }
-                                if body.contains("\"error\"") || body.contains("isError") {
+                                // Read the structured result rather than searching its
+                                // serialized text. `body.contains("isError")` matched
+                                // `"isError": false` too, so successful calls were being
+                                // reported as failures in the feed the person watches.
+                                if response_failed(&function_response.response) {
                                     entry["failed"] = serde_json::json!(true);
                                 }
                                 activity.push(entry);
@@ -898,18 +1019,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        flush!();
-        if !buffered.trim().is_empty() {
+        // Report before flushing, not after. flush!() clears the buffer, so the check
+        // that followed it could never be true and the agent's closing summary reached
+        // the terminal but never the console.
+        let closing = buffered.trim().to_string();
+        if !closing.is_empty() {
             console
-                .report_activity(&[
-                    serde_json::json!({ "kind": "thought", "detail": buffered.trim() }),
-                ])
+                .report_activity(&[serde_json::json!({ "kind": "thought", "detail": &closing })])
                 .await;
         }
+        flush!();
         if let Some(message) = failure {
             console.report_failure(&message).await;
             println!("{}\nturn {turn} failed — still watching", "─".repeat(60));
         } else {
+            // A model can stop without ever calling run_progress with a terminal
+            // state, which leaves the console reading "working" forever. The person
+            // watching then cannot tell a finished run from a hung one, so the driver
+            // closes the turn itself rather than trusting the agent to have done it.
+            console.reconcile(&closing).await;
             println!("{}\nturn {turn} finished — watching for the next message", "─".repeat(60));
         }
     }
@@ -931,6 +1059,9 @@ mod tests {
         let available: Vec<&str> = PLAYWRIGHT_PRIMARY
             .iter()
             .chain(PLAYWRIGHT_SECONDARY.iter())
+            .chain(ANALYTICS_PRIMARY.iter())
+            .chain(ANALYTICS_SECONDARY.iter())
+            .chain(MARKET_PRIMARY.iter())
             .chain(BI_TOOLS.iter())
             .chain(CONSOLE_TOOLS.iter())
             .chain(DESKTOP_TOOLS.iter())
@@ -1028,5 +1159,55 @@ mod redaction_tests {
         assert!(safe.contains("redacted"));
         // But unparseable and innocuous stays, so a malformed argument is still visible.
         assert_eq!(redact_secrets("chart 37 not json"), "chart 37 not json");
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    /// The bug: `body.contains("isError")` matched `"isError": false`, so successful
+    /// calls were reported as failures in the feed the person watches.
+    #[test]
+    fn a_successful_result_is_not_reported_as_failed() {
+        let ok = serde_json::json!({
+            "isError": false,
+            "content": [{ "type": "text", "text": "{\"rows\": 28}" }]
+        });
+        assert!(!response_failed(&ok), "isError false is success");
+
+        let plain = serde_json::json!({ "content": [{ "type": "text", "text": "28 rows" }] });
+        assert!(!response_failed(&plain));
+
+        // A body that merely mentions the word must not trip it either.
+        let mentions = serde_json::json!({
+            "content": [{ "type": "text", "text": "{\"note\": \"no error occurred\"}" }]
+        });
+        assert!(!response_failed(&mentions));
+    }
+
+    #[test]
+    fn a_real_failure_is_still_caught_both_ways() {
+        // The protocol flag.
+        let flagged = serde_json::json!({ "isError": true, "content": [] });
+        assert!(response_failed(&flagged));
+
+        // And a domain error inside the content, which is how these servers report one.
+        let domain = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "{\"error\": \"bi_error\", \"message\": \"HTTP 500\"}"
+            }]
+        });
+        assert!(response_failed(&domain), "a domain error in the text still counts");
+    }
+
+    #[test]
+    fn a_null_or_false_error_field_is_success() {
+        // Servers commonly return `error: null` on success; treating that as a failure
+        // would mark almost everything red.
+        assert!(!response_failed(&serde_json::json!({ "error": serde_json::Value::Null })));
+        assert!(!response_failed(&serde_json::json!({ "error": false })));
+        assert!(response_failed(&serde_json::json!({ "error": "boom" })));
     }
 }
