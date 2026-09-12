@@ -328,6 +328,7 @@ dependencies = [
  "adk-runner",
  "adk-session",
  "adk-tool",
+ "async-trait",
  "dotenvy",
  "futures",
  "reqwest 0.12.28",

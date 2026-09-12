@@ -68,6 +68,137 @@ const CONSOLE_TOOLS: &[&str] =
 ///
 /// Deliberately narrow. No `run_script`, no `filesystem`, no `process_kill`: this
 /// agent reads dashboards, and a wider surface buys nothing.
+/// Expose only an allowed subset of another toolset's tools.
+///
+/// `McpServerManager` surfaces everything its servers offer, and Playwright offers
+/// arbitrary code execution in the page. An example that people copy should not hand
+/// a model more capability than the task needs, so the list is explicit and the rest
+/// never reaches the model.
+struct Allowed {
+    inner: Arc<dyn adk_core::Toolset>,
+    /// Every list whose tools may pass. Kept as separate lists so each server's
+    /// surface is stated once, rather than merged by hand into a copy that drifts.
+    allow: Vec<&'static [&'static str]>,
+    /// Names refused whatever else is allowed. Asserted rather than assumed, because
+    /// a withheld tool appearing would be a capability leak, not a cosmetic slip.
+    withheld: &'static [&'static str],
+}
+
+#[async_trait::async_trait]
+impl adk_core::Toolset for Allowed {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    async fn tools(&self, ctx: Arc<dyn adk_core::ReadonlyContext>) -> adk_core::Result<Vec<Arc<dyn adk_core::Tool>>> {
+        let all = self.inner.tools(ctx).await?;
+        Ok(all
+            .into_iter()
+            .filter(|tool| {
+                // Tools are prefixed `server__tool` when names collide across
+                // servers, so match the trailing segment rather than the whole name.
+                let name = tool.name();
+                let leaf = name.rsplit("__").next().unwrap_or(name);
+                if self.withheld.contains(&leaf) {
+                    return false;
+                }
+                self.allow.iter().any(|list| list.contains(&leaf))
+            })
+            .collect())
+    }
+}
+
+/// The BI server's whole surface. All twelve are read-only by construction.
+const BI_TOOLS: &[&str] = &[
+    "bi_backend_info",
+    "bi_list_dashboards",
+    "bi_get_dashboard",
+    "bi_list_datasets",
+    "bi_describe_dataset",
+    "bi_chart_data",
+    "bi_drill_down",
+    "bi_query",
+    "bi_insights",
+    "bi_render_chart",
+    "bi_export_dashboard_image",
+    "bi_dashboard_url",
+];
+
+/// Playwright's everyday tools: what operating a dashboard normally needs.
+///
+/// These are the first choice for anything inside a web page. They act by selector
+/// and wait by themselves, so they need no coordinates and no screenshots.
+const PLAYWRIGHT_PRIMARY: &[&str] = &[
+    "browser_navigate",
+    "browser_navigate_back",
+    "browser_snapshot",
+    "browser_fill_form",
+    "browser_click",
+    "browser_type",
+    "browser_select_option",
+    "browser_press_key",
+    "browser_hover",
+    "browser_wait_for",
+    "browser_handle_dialog",
+    "browser_tabs",
+];
+
+/// Playwright's specialist tools: available, but each answers one specific question.
+///
+/// Kept rather than dropped because a dashboard does produce these situations. The
+/// risk of a wide tool surface is that a model picks an exotic tool for an everyday
+/// job, so the brief names the case each one is for instead of listing them flatly:
+///
+/// - `browser_network_requests` / `browser_network_request` — which query produced a
+///   number on screen. This is provenance, and nothing else here can answer it.
+/// - `browser_console_messages` — why a chart rendered blank or a filter did nothing.
+/// - `browser_drag` / `browser_drop` — a range slider, a reorder, a resize handle:
+///   controls that only respond to a gesture.
+/// - `browser_find` — locate one element when a full snapshot would be huge.
+/// - `browser_take_screenshot` — an image of one element, when the console's own
+///   window capture is the wrong frame.
+/// - `browser_resize` — force a viewport size so a responsive dashboard lays out
+///   predictably before capture.
+/// - `browser_close` — tidy up a tab that is finished with.
+const PLAYWRIGHT_SECONDARY: &[&str] = &[
+    "browser_network_requests",
+    "browser_network_request",
+    "browser_console_messages",
+    "browser_drag",
+    "browser_drop",
+    "browser_find",
+    "browser_take_screenshot",
+    "browser_resize",
+    "browser_close",
+];
+
+/// Deliberately never exposed, and worth saying why rather than leaving a silent gap.
+///
+/// - `browser_run_code_unsafe` executes arbitrary JavaScript **in the Playwright
+///   server process**, not in the page. It is remote-code-execution equivalent, and
+///   no analysis needs it.
+/// - `browser_evaluate` runs arbitrary code in the page. A read-only analyst has no
+///   call for it, and `browser_snapshot` plus the specialist tools above cover the
+///   legitimate cases without handing over script execution.
+/// - `browser_file_upload` writes into the platform. Everything else here reads.
+const PLAYWRIGHT_WITHHELD: &[&str] =
+    &["browser_run_code_unsafe", "browser_evaluate", "browser_file_upload"];
+
+/// Which tool lists the stdio servers may expose.
+///
+/// The specialists are on by default because a dashboard genuinely produces the
+/// situations they answer. Set `BI_BROWSER_MINIMAL` to drop them when a model does
+/// better with a smaller surface — a wide tool set invites picking an exotic tool for
+/// an everyday job, which is the failure a narrower list prevents.
+fn allowed_mcp_tools() -> Vec<&'static [&'static str]> {
+    if std::env::var("BI_BROWSER_MINIMAL").is_ok() {
+        println!("  \u{b7} BI_BROWSER_MINIMAL set \u{2014} browser specialists withheld");
+        vec![BI_TOOLS, PLAYWRIGHT_PRIMARY]
+    } else {
+        vec![BI_TOOLS, PLAYWRIGHT_PRIMARY, PLAYWRIGHT_SECONDARY]
+    }
+}
+
 const DESKTOP_TOOLS: &[&str] = &[
     "open_application",
     "activate_app",
@@ -273,6 +404,46 @@ fn analyst_brief(run_id: &str) -> String {
          finish, `state:\"failed\"` and say plainly what blocked you.\n\n\
          If they type while you work, their message is in the transcript every run_* reply \
          returns. Read it and adapt.\n\n\
+         ── working the screen ──\n\
+         When you are driving the screen, every capture comes back to you. Look at it and \
+         **say what you see** in your narration before you decide anything: which page this \
+         is, what controls are on it, whether something is already filled, whether a dialog \
+         is in the way, whether it is still loading. Then choose the one next action that \
+         description implies, take it, capture again, and compare against what you expected. \
+         Do not chain two blind actions — with no capture between them you cannot tell which \
+         one failed. If a capture looks identical after you acted, the action did not land; \
+         work out why rather than repeating it.\n\
+         The person is watching this. \"The dashboard is asking me to sign in, so I am filling \
+         the username field\" is worth reading. \"Working on it\" is not.\n\n\
+         ── anything inside a web page: the browser tools come first ──\n\
+         A dashboard is a web page and you are driving a real browser. **The `browser_*` tools \
+         are always the first choice for it.** They act by selector and wait by themselves, so \
+         they need no coordinates and no screenshots.\n\
+         Everyday work: `browser_navigate` opens a URL. `browser_snapshot` is how you *look* at \
+         a page — structured elements, not pixels. `browser_fill_form` fills several fields in \
+         one call. `browser_click` presses a control or drills into a chart. `browser_type`, \
+         `browser_select_option`, `browser_press_key` and `browser_hover` cover the rest. \
+         `browser_wait_for` waits for something to appear. `browser_tabs` says what is open, and \
+         whether your navigation worked, without a capture.\n\
+         There are also specialists. Do not reach for them by default — each answers one \
+         question, and using one for an everyday job wastes a call:\n\
+         `browser_network_requests` and `browser_network_request` show which query produced a \
+         number on screen. That is provenance, and nothing else can tell you — reach for it when \
+         a figure on the dashboard disagrees with one you measured.\n\
+         `browser_console_messages` explains a chart that rendered blank or a filter that did \
+         nothing. `browser_drag` and `browser_drop` work controls that only respond to a gesture: \
+         a range slider, a reorder, a resize handle. `browser_find` locates one element when a \
+         whole snapshot would be huge. `browser_take_screenshot` captures a single element when \
+         the console's window capture is the wrong frame. `browser_resize` forces a viewport size \
+         so a responsive dashboard lays out predictably before you capture it. `browser_close` \
+         tidies a tab you are done with.\n\
+         The desktop tools are the fallback, not the default. Use them for three things: to \
+         capture a window so the person watching sees it, to deal with a dialog the operating \
+         system owns rather than the page, and to reach something with no element behind it, such \
+         as a chart drawn on a canvas. Estimating a click position from a screenshot is the \
+         slowest thing you can do — a capture is 2.5 times smaller than the screen and a field is \
+         about 35 pixels tall, so the estimate misses and you pay for another look. If you find \
+         yourself measuring pixels, stop and ask whether a `browser_*` tool would do it.\n\n\
          ── opening a dashboard on screen: do this early, not last ──\n\
          Put the dashboard on screen as one of your first steps, before the measuring. The \
          person watching should see what you are talking about from the start rather than two \
@@ -344,6 +515,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bi_bin = std::env::var("MCP_BI_BIN")
         .unwrap_or_else(|_| "../mcp-servers/mcp-bi/target/release/mcp-bi".to_string());
     let mut servers = format!(r#""bi": {{ "command": {bi_bin:?}, "args": [] }}"#);
+    // Playwright drives its own browser, which is the right tool for a web app: it
+    // acts by selector, waits by itself, and needs no coordinates. Not headless —
+    // the window has to be visible for the person watching the console to see it.
+    if std::env::var("BI_NO_BROWSER").is_err() {
+        servers.push_str(
+            r#", "browser": { "command": "npx", "args": ["-y", "@playwright/mcp@latest", "--isolated"] }"#,
+        );
+        println!("  \u{2713} playwright browser attached");
+    } else {
+        println!("  \u{b7} BI_NO_BROWSER set \u{2014} no browser automation, desktop tools only");
+    }
     if let Ok(market_bin) = std::env::var("MCP_MARKET_DATA_BIN") {
         servers.push_str(&format!(r#", "market": {{ "command": {market_bin:?}, "args": [] }}"#));
         println!("  ✓ market-data server attached");
@@ -359,6 +541,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Only the BI server is essential — it is what this agent reads. Market
             // data is a cross-check, so its absence degrades the analysis rather than
             // preventing it, and saying so beats failing to start.
+            Err(error) if name == "browser" => {
+                println!(
+                    "  \u{b7} playwright did not start ({error}) \u{2014} falling back to the \
+                     desktop tools, which is slower"
+                );
+            }
             Err(error) if name == "bi" => {
                 return Err(format!(
                     "the BI server failed to start: {error}\n\
@@ -383,11 +571,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // agent the credentials lets it sign in through the UI so the person actually
     // sees the dashboard — but it puts a password in the model's context, so it is
     // opt-in and says so out loud.
-    let ui_login = match (
-        std::env::var("BI_UI_LOGIN").is_ok(),
-        std::env::var("SUPERSET_USERNAME"),
-        std::env::var("SUPERSET_PASSWORD"),
-    ) {
+    // Backend-agnostic: BI_UI_USERNAME/PASSWORD when set, else the Superset ones,
+    // because the sign-in the browser needs is not always the API's credentials.
+    let ui_user = std::env::var("BI_UI_USERNAME").or_else(|_| std::env::var("SUPERSET_USERNAME"));
+    let ui_pass = std::env::var("BI_UI_PASSWORD").or_else(|_| std::env::var("SUPERSET_PASSWORD"));
+    let ui_login = match (std::env::var("BI_UI_LOGIN").is_ok(), ui_user, ui_pass) {
         (true, Ok(username), Ok(password)) => {
             println!(
                 "  \u{26a0} BI_UI_LOGIN set \u{2014} the browser sign-in for {username:?} will be \
@@ -397,7 +585,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         (true, _, _) => {
             println!(
-                "  \u{b7} BI_UI_LOGIN set but SUPERSET_USERNAME/PASSWORD are not \u{2014} the agent \
+                "  \u{b7} BI_UI_LOGIN set but no UI credentials given \u{2014} the agent \
                  cannot sign in on screen"
             );
             None
@@ -439,15 +627,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "\n\n\u{2500}\u{2500} signing in on screen \u{2500}\u{2500}\n\
              The browser has its own session, separate from the data server's token, so the \
              dashboard URL may land on a login form. If the frame you captured shows one, sign \
-             in **by clicking, not through accessibility** — a browser does not expose page \
-             fields, so `find_element` returns nothing for them. Take a `screenshot` of the \
-             window, read the field positions off it, then `left_click` the username field and \
-             `type` {username:?}, `left_click` the password field, `key` `command+a` to clear \
-             it and `type` {password:?}, then `left_click` the sign-in button. Do not use Tab \
-             to move between the fields; focus order is not what you expect and both strings \
-             end up in the same field.\n\
-             A window capture is scaled and padded, so map image pixels to screen coordinates \
-             through the window's edges as they appear in the image, not the image's own size.\n\
+             in with the browser tools: `browser_snapshot` to see the form, then \
+             `browser_fill_form` with the email field set to {username:?} and the password \
+             field to {password:?}, then `browser_click` the sign-in button. Three calls, no \
+             coordinates. Do not estimate field positions from a screenshot.\n\
              Afterwards Chrome offers to save the password, right over the dashboard. That \
              dialog IS accessible: `click_element` the button labelled `Never`. Then capture \
              again and confirm you are looking at the dashboard before telling the person you \
@@ -470,7 +653,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .model(Arc::new(model))
         .instruction(brief)
         .toolset(Arc::new(console_tools) as Arc<dyn adk_core::Toolset>)
-        .toolset(Arc::clone(&manager) as Arc<dyn adk_core::Toolset>)
+        // The manager carries both servers, so the filter names the BI tools too.
+        .toolset(Arc::new(Allowed {
+            inner: Arc::clone(&manager) as Arc<dyn adk_core::Toolset>,
+            allow: allowed_mcp_tools(),
+            withheld: PLAYWRIGHT_WITHHELD,
+        }) as Arc<dyn adk_core::Toolset>)
         .build()?;
 
     // ── 5. Runner, one session for the whole conversation ────────────────
@@ -610,6 +798,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}\nturn {turn} failed — still watching", "─".repeat(60));
         } else {
             println!("{}\nturn {turn} finished — watching for the next message", "─".repeat(60));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every tool the brief names must actually be available.
+    ///
+    /// This drifted once already: the brief told the agent to use `browser_find` and
+    /// `browser_page_text` from the desktop server after those had been dropped from
+    /// this example's filter in favour of Playwright's own tools. Nothing failed
+    /// loudly — the agent simply spent calls on tools it did not have.
+    #[test]
+    fn the_brief_only_names_tools_the_agent_has() {
+        let brief = analyst_brief("run_test");
+        let available: Vec<&str> = PLAYWRIGHT_PRIMARY
+            .iter()
+            .chain(PLAYWRIGHT_SECONDARY.iter())
+            .chain(BI_TOOLS.iter())
+            .chain(CONSOLE_TOOLS.iter())
+            .chain(DESKTOP_TOOLS.iter())
+            .copied()
+            .collect();
+
+        for word in brief.split(|c: char| !c.is_alphanumeric() && c != '_') {
+            // `browser_*` in prose splits to a bare prefix; that is not a tool name.
+            let is_tool = (word.starts_with("browser_") && word.len() > "browser_".len())
+                || (word.starts_with("bi_") && word.len() > "bi_".len());
+            if !is_tool {
+                continue;
+            }
+            assert!(
+                available.contains(&word),
+                "the brief names {word}, which is not in any allowed list"
+            );
+            assert!(
+                !PLAYWRIGHT_WITHHELD.contains(&word),
+                "the brief names {word}, which is deliberately withheld"
+            );
+        }
+    }
+
+    /// A withheld tool must never also be allowed, whatever the tiers say.
+    #[test]
+    fn withheld_tools_are_not_reachable_through_any_tier() {
+        for name in PLAYWRIGHT_WITHHELD {
+            assert!(!PLAYWRIGHT_PRIMARY.contains(name), "{name} is both withheld and primary");
+            assert!(!PLAYWRIGHT_SECONDARY.contains(name), "{name} is both withheld and secondary");
+        }
+    }
+
+    /// The tiers must partition Playwright's surface, so adding a tool to its server
+    /// without deciding which tier it belongs to shows up here.
+    #[test]
+    fn the_tiers_do_not_overlap() {
+        for name in PLAYWRIGHT_PRIMARY {
+            assert!(
+                !PLAYWRIGHT_SECONDARY.contains(name),
+                "{name} is in two tiers; it should sit in exactly one"
+            );
         }
     }
 }
