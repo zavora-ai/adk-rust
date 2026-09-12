@@ -533,6 +533,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // because the sign-in the browser needs is not always the API's credentials.
     let ui_user = std::env::var("BI_UI_USERNAME").or_else(|_| std::env::var("SUPERSET_USERNAME"));
     let ui_pass = std::env::var("BI_UI_PASSWORD").or_else(|_| std::env::var("SUPERSET_PASSWORD"));
+    // Which variable supplied the account, for the warning below. Naming the source is
+    // more useful than naming the account — it says whether the fallback was taken — and
+    // it keeps an identity out of stdout, which in CI or a container is a retained log.
+    let ui_source = if std::env::var("BI_UI_USERNAME").is_ok() {
+        "BI_UI_USERNAME"
+    } else {
+        "SUPERSET_USERNAME"
+    };
     let ui_login = match (std::env::var("BI_UI_LOGIN").is_ok(), ui_user, ui_pass) {
         (true, Ok(username), Ok(password)) => {
             // Registered so the value is scrubbed wherever it surfaces, including a
@@ -540,7 +548,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // it back. Name-based rules alone cannot see either.
             register_secret(&password);
             println!(
-                "  \u{26a0} BI_UI_LOGIN set \u{2014} the browser sign-in for {username:?} will be \
+                "  \u{26a0} BI_UI_LOGIN set \u{2014} the browser sign-in from {ui_source} will be \
                  sent to the model so it can log in on screen. Use a throwaway account."
             );
             Some((username, password))
