@@ -81,7 +81,7 @@ struct Allowed {
     allow: Vec<&'static [&'static str]>,
     /// Names refused whatever else is allowed. Asserted rather than assumed, because
     /// a withheld tool appearing would be a capability leak, not a cosmetic slip.
-    withheld: &'static [&'static str],
+    withheld: Vec<&'static str>,
 }
 
 #[async_trait::async_trait]
@@ -122,6 +122,11 @@ const BI_TOOLS: &[&str] = &[
     "bi_render_chart",
     "bi_export_dashboard_image",
     "bi_dashboard_url",
+    // Memory. A correction recorded once is what makes the next session fast; a wrong
+    // one is worse than none, so forgetting belongs here too.
+    "bi_remember",
+    "bi_recall",
+    "bi_forget",
 ];
 
 /// Playwright's everyday tools: what operating a dashboard normally needs.
@@ -184,18 +189,85 @@ const PLAYWRIGHT_SECONDARY: &[&str] = &[
 const PLAYWRIGHT_WITHHELD: &[&str] =
     &["browser_run_code_unsafe", "browser_evaluate", "browser_file_upload"];
 
+/// The governed metric model: what the organisation says a metric *means*.
+///
+/// This is the layer a BI platform does not have. `bi_chart_data` tells you what a
+/// saved chart returns; `get_metric_definition` tells you the formula, the owner and
+/// whether it is certified — so an agent can cite the company's definition of revenue
+/// instead of inventing one. `explain_change` attributes a movement to drivers with a
+/// confidence, which is the question people actually ask.
+const ANALYTICS_PRIMARY: &[&str] = &[
+    "list_metrics",
+    "get_metric_definition",
+    "query_metric",
+    "breakdown_metric",
+    "compare_metric",
+    "explain_change",
+    "detect_anomalies",
+    "generate_insight_summary",
+];
+
+/// Analytics tools for a question that has gone deeper than a metric movement.
+const ANALYTICS_SECONDARY: &[&str] = &[
+    "list_data_sources",
+    "list_datasets",
+    "describe_dataset",
+    "analyze_funnel",
+    "analyze_cohort",
+    "forecast_metric",
+    "get_segments",
+    "query_segment",
+    "query_events",
+    "query_report",
+    "list_dashboards",
+    "get_dashboard",
+    "summarize_dashboard",
+    "get_query_audit_trail",
+];
+
+/// Withheld, and worth saying why.
+///
+/// `create_dashboard`, `add_widget` and `publish_dashboard` write, and this agent is
+/// read-only by design — a dashboard is changed through the organisation's own review,
+/// not by an agent mid-analysis. `request_data_access` asks a human for permission,
+/// which is a decision for the person watching, not the agent. The policy checks are
+/// withheld only because nothing here exports.
+const ANALYTICS_WITHHELD: &[&str] = &[
+    "create_dashboard",
+    "add_widget",
+    "publish_dashboard",
+    "request_data_access",
+    "validate_analytics_policy",
+    "check_export_risk",
+];
+
 /// Which tool lists the stdio servers may expose.
 ///
 /// The specialists are on by default because a dashboard genuinely produces the
 /// situations they answer. Set `BI_BROWSER_MINIMAL` to drop them when a model does
 /// better with a smaller surface — a wide tool set invites picking an exotic tool for
 /// an everyday job, which is the failure a narrower list prevents.
+/// Every tool refused whatever else is allowed, across all servers.
+fn withheld_tools() -> Vec<&'static str> {
+    PLAYWRIGHT_WITHHELD
+        .iter()
+        .chain(ANALYTICS_WITHHELD.iter())
+        .copied()
+        .collect()
+}
+
 fn allowed_mcp_tools() -> Vec<&'static [&'static str]> {
     if std::env::var("BI_BROWSER_MINIMAL").is_ok() {
         println!("  \u{b7} BI_BROWSER_MINIMAL set \u{2014} browser specialists withheld");
-        vec![BI_TOOLS, PLAYWRIGHT_PRIMARY]
+        vec![BI_TOOLS, PLAYWRIGHT_PRIMARY, ANALYTICS_PRIMARY]
     } else {
-        vec![BI_TOOLS, PLAYWRIGHT_PRIMARY, PLAYWRIGHT_SECONDARY]
+        vec![
+            BI_TOOLS,
+            PLAYWRIGHT_PRIMARY,
+            PLAYWRIGHT_SECONDARY,
+            ANALYTICS_PRIMARY,
+            ANALYTICS_SECONDARY,
+        ]
     }
 }
 
@@ -367,115 +439,46 @@ fn load_skill() -> Option<String> {
 
 fn analyst_brief(run_id: &str) -> String {
     format!(
-        "You are a business intelligence analyst. You read the dashboards an organisation \
-         already has, find what is actually going on in them, and explain it to the person \
-         watching.\n\n\
+        "You are a business intelligence analyst. You read the dashboards and metrics an \
+         organisation already has, work out what is actually going on, and explain it to the \
+         person watching.\n\n\
+         ── what a good answer looks like ──\n\
+         It answers the question that was asked. Every figure in it came from a query you ran, \
+         not from a picture you looked at. Where the organisation has a certified definition of \
+         a metric, it uses that definition and says whose it is. It names what you could not \
+         establish, rather than rounding it off. And the person watching saw the dashboard you \
+         were talking about while you were talking about it.\n\n\
          ── how to work ──\n\
-         1. Call `bi_backend_info` first. Platforms differ in whether they can return a \
-            visual's data, run queries, drill down or render an image. Plan around what this \
-            one can do rather than discovering a gap by failing.\n\
-         2. `bi_list_dashboards`, then open each one that matters with `bi_get_dashboard`. It \
-            tells you the charts and, for each, the dimensions it can be broken down by. Those \
-            dimension names are the drill paths — use them rather than guessing column names.\n\
-         3. For a chart worth understanding, call `bi_insights`. It returns direction, change, \
-            min and max with the labels they occurred at, mean, deviation, outliers and gaps. \
-            **Every claim you make must cite one of those numbers.** Do not describe a trend \
-            you have not measured.\n\
-         4. Drill when a statistic points somewhere: an outlier, a large change, a flat line \
-            you expected to move. `bi_drill_down` takes filters and a dimension and reports \
-            rows before and after — if those are equal, your step narrowed nothing and you \
-            should say so rather than presenting it as a finding.\n\
-         5. `bi_render_chart` draws the numbers and hands you the picture with its statistics. \
-            Use it when a person would want to see the shape, not for every chart.\n\
-         6. Where the platform has no data API, open the dashboard: `bi_dashboard_url` builds a \
-            link with your filters applied, and the desktop tools can open it and screenshot \
-            it. Treat what you read off the screen as a corroboration of a queried number, \
-            never as the source of one.\n\n\
+         Call `bi_backend_info` first, because platforms differ in what they can do, and \
+         `bi_recall` early, because something may already have been worked out here before. \
+         Beyond that, choose your own route — the skills below carry what is known about these \
+         tools and the failures that are real. Two habits are worth having: prefer a certified \
+         metric definition over your own reading of a chart, and when a statistic points \
+         somewhere, drill into it rather than describing it.\n\
+         When you had to work something out that the platform did not tell you — which of \
+         several similar charts people mean, an exact filter value, an id that is not what it \
+         looks like — record it with `bi_remember`. Record the correction, never the figures. \
+         That is what makes the next session faster.\n\n\
          ── the console ──\n\
-         A person is watching, and can type to you at any time. The runId is `{run_id}`.\n\n\
+         A person is watching and can type to you at any time. The runId is `{run_id}`.\n\
          Call `run_plan` first with 3 to 7 steps in plain language. Before each step, \
          `run_progress` with that `taskId`, `status:\"active\"` and a `narration` of one or two \
          sentences written for a person — no tool names, no ids. When a step is done, \
          `status:\"done\"` with a `note` holding the actual finding: a figure, a name, a \
          measurement. Never the word \"done\". To show a chart or a screen, use `run_progress` \
-         with `capture:true`, which puts it in front of them and returns it to you.\n\n\
-         When the whole request is answered, `run_progress` with `state:\"done\"` and a closing \
-         narration that states what you found and the numbers behind it. If you could not \
-         finish, `state:\"failed\"` and say plainly what blocked you.\n\n\
+         with `capture:true`, which puts it in front of them and returns it to you — so look at \
+         what came back before you describe it.\n\
+         When the request is answered, `run_progress` with `state:\"done\"` and a closing \
+         narration stating what you found and the numbers behind it. If you could not finish, \
+         `state:\"failed\"` and say plainly what blocked you.\n\
          If they type while you work, their message is in the transcript every run_* reply \
          returns. Read it and adapt.\n\n\
-         ── working the screen ──\n\
-         When you are driving the screen, every capture comes back to you. Look at it and \
-         **say what you see** in your narration before you decide anything: which page this \
-         is, what controls are on it, whether something is already filled, whether a dialog \
-         is in the way, whether it is still loading. Then choose the one next action that \
-         description implies, take it, capture again, and compare against what you expected. \
-         Do not chain two blind actions — with no capture between them you cannot tell which \
-         one failed. If a capture looks identical after you acted, the action did not land; \
-         work out why rather than repeating it.\n\
-         The person is watching this. \"The dashboard is asking me to sign in, so I am filling \
-         the username field\" is worth reading. \"Working on it\" is not.\n\n\
-         ── anything inside a web page: the browser tools come first ──\n\
-         A dashboard is a web page and you are driving a real browser. **The `browser_*` tools \
-         are always the first choice for it.** They act by selector and wait by themselves, so \
-         they need no coordinates and no screenshots.\n\
-         Everyday work: `browser_navigate` opens a URL. `browser_snapshot` is how you *look* at \
-         a page — structured elements, not pixels. `browser_fill_form` fills several fields in \
-         one call. `browser_click` presses a control or drills into a chart. `browser_type`, \
-         `browser_select_option`, `browser_press_key` and `browser_hover` cover the rest. \
-         `browser_wait_for` waits for something to appear. `browser_tabs` says what is open, and \
-         whether your navigation worked, without a capture.\n\
-         There are also specialists. Do not reach for them by default — each answers one \
-         question, and using one for an everyday job wastes a call:\n\
-         `browser_network_requests` and `browser_network_request` show which query produced a \
-         number on screen. That is provenance, and nothing else can tell you — reach for it when \
-         a figure on the dashboard disagrees with one you measured.\n\
-         `browser_console_messages` explains a chart that rendered blank or a filter that did \
-         nothing. `browser_drag` and `browser_drop` work controls that only respond to a gesture: \
-         a range slider, a reorder, a resize handle. `browser_find` locates one element when a \
-         whole snapshot would be huge. `browser_take_screenshot` captures a single element when \
-         the console's window capture is the wrong frame. `browser_resize` forces a viewport size \
-         so a responsive dashboard lays out predictably before you capture it. `browser_close` \
-         tidies a tab you are done with.\n\
-         The desktop tools are the fallback, not the default. Use them for three things: to \
-         capture a window so the person watching sees it, to deal with a dialog the operating \
-         system owns rather than the page, and to reach something with no element behind it, such \
-         as a chart drawn on a canvas. Estimating a click position from a screenshot is the \
-         slowest thing you can do — a capture is 2.5 times smaller than the screen and a field is \
-         about 35 pixels tall, so the estimate misses and you pay for another look. If you find \
-         yourself measuring pixels, stop and ask whether a `browser_*` tool would do it.\n\n\
-         ── opening a dashboard on screen: do this early, not last ──\n\
-         Put the dashboard on screen as one of your first steps, before the measuring. The \
-         person watching should see what you are talking about from the start rather than two \
-         minutes in. This does not let you read figures off it — the picture is context for \
-         them, and every number you state still comes from a query. Show first, measure \
-         second, cite the measurement. Capture again later if a filter or a drill changes \
-         what is on screen.\n\
-         `bi_dashboard_url` gives you the link. To put it in front of the person: \
-         `open_application` with `com.google.Chrome`, then `key` with `command+n` for a NEW \
-         window, then `key` with `command+l` to focus that window's address bar, then `type` \
-         with the URL and `press_enter:true`, then `wait` about 3 seconds, then `list_windows` \
-         and `run_progress` with `capture:true` and the dashboard window's `window_id`.\n\
-         The `command+n` matters: the console you are reporting into is itself a page in that \
-         browser, so `command+l` on the frontmost window will replace the person's view of \
-         your run with the dashboard. Open a new window and the console survives.\n\
-         When you pick the window id, never pick the console's own window — capturing it puts \
-         a picture of the console inside the console. Match the dashboard's title, and ignore \
-         any window whose title mentions the run console or its port.\n\
-         `key` presses a *key combination* — `command+n`, `command+l`, `return`. It is never \
-         given a URL or a sentence; that is what `type` is for.\n\n\
-         ── when a call fails ──\n\
-         Report it and stop. `run_progress` with `state:\"failed\"` and the error the tool gave \
-         you, verbatim enough that an operator can act on it. Do not try to reconstruct the \
-         data another way — do not go looking at the desktop, the terminal or the filesystem to \
-         work out how the environment is wired. You have no dashboard data, so you have nothing \
-         to analyse, and a screenshot of a login page is not a finding.\n\n\
          ── what not to do ──\n\
          Do not describe a dashboard from its picture alone. Do not report a total you did not \
-         query. If a number surprises you, drill into it or say it is unexplained — an honest \
-         gap is worth more than a confident guess. Nothing you can call here writes to a \
-         dashboard, so you are reading a business's real reporting: be careful about what you \
-         claim it means."
+         query. Do not narrate your own tool calls — the console already shows them. If a call \
+         fails you have no data, so report the error plainly and stop rather than reconstructing \
+         the answer another way. Nothing you can call writes to a dashboard: you are reading a \
+         business's real reporting, so be careful about what you claim it means."
     )
 }
 
@@ -526,6 +529,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("  \u{b7} BI_NO_BROWSER set \u{2014} no browser automation, desktop tools only");
     }
+    // The governed metric model. Optional, because the BI platform alone still answers
+    // "what does this chart show"; with it the agent can also answer "what does this
+    // company mean by revenue, and who owns that definition".
+    if let Ok(analytics_bin) = std::env::var("MCP_ANALYTICS_BIN") {
+        servers.push_str(&format!(
+            r#", "analytics": {{ "command": {analytics_bin:?}, "args": [] }}"#
+        ));
+        println!("  \u{2713} analytics server attached \u{2014} certified metric definitions");
+    } else {
+        println!(
+            "  \u{b7} MCP_ANALYTICS_BIN unset \u{2014} no certified metric definitions, so the \
+             agent will read charts without knowing the organisation's semantics"
+        );
+    }
     if let Ok(market_bin) = std::env::var("MCP_MARKET_DATA_BIN") {
         servers.push_str(&format!(r#", "market": {{ "command": {market_bin:?}, "args": [] }}"#));
         println!("  ✓ market-data server attached");
@@ -541,6 +558,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Only the BI server is essential — it is what this agent reads. Market
             // data is a cross-check, so its absence degrades the analysis rather than
             // preventing it, and saying so beats failing to start.
+            Err(error) if name == "analytics" || name == "market" => {
+                println!(
+                    "  \u{b7} the {name} server did not start ({error}) \u{2014} continuing \
+                     without it"
+                );
+            }
             Err(error) if name == "browser" => {
                 println!(
                     "  \u{b7} playwright did not start ({error}) \u{2014} falling back to the \
@@ -660,7 +683,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .toolset(Arc::new(Allowed {
             inner: Arc::clone(&manager) as Arc<dyn adk_core::Toolset>,
             allow: mcp_tools.clone(),
-            withheld: PLAYWRIGHT_WITHHELD,
+            withheld: withheld_tools(),
         }) as Arc<dyn adk_core::Toolset>)
         .build()?;
 
