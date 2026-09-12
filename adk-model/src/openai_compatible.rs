@@ -16,6 +16,28 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Assistant-message field accepted by an OpenAI-compatible provider for reasoning replay.
+///
+/// Reasoning replay is disabled by default. Enabling it selects `reasoning_content`;
+/// an explicit field overrides that choice for endpoints such as newer vLLM servers.
+///
+/// # Example
+///
+/// ```
+/// use adk_model::ReasoningReplayField;
+///
+/// let field = ReasoningReplayField::ReasoningContent;
+/// assert_eq!(field, ReasoningReplayField::ReasoningContent);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReasoningReplayField {
+    /// Use the `reasoning_content` assistant-message field.
+    ReasoningContent,
+    /// Use the `reasoning` assistant-message field, as used by newer vLLM servers.
+    Reasoning,
+}
+
 /// Configuration for OpenAI-compatible providers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAICompatibleConfig {
@@ -236,6 +258,7 @@ pub struct OpenAICompatible {
     reasoning_effort: Option<OpenAIReasoningEffort>,
     organization_id: Option<String>,
     parallel_tool_calls: bool,
+    reasoning_replay_field: Option<ReasoningReplayField>,
 }
 
 impl OpenAICompatible {
@@ -273,6 +296,7 @@ impl OpenAICompatible {
             reasoning_effort,
             organization_id: config.organization_id,
             parallel_tool_calls: config.parallel_tool_calls,
+            reasoning_replay_field: None,
         })
     }
 
@@ -292,6 +316,83 @@ impl OpenAICompatible {
     pub fn retry_config(&self) -> &RetryConfig {
         &self.retry_config
     }
+
+    /// Enables or disables assistant reasoning replay through `reasoning_content`.
+    ///
+    /// Disabled by default. Passing `true` selects `reasoning_content`, replacing
+    /// any previous field selection; passing `false` clears the selection.
+    /// This controls history serialization, not whether the model thinks.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
+    ///
+    /// let client = OpenAICompatible::new(OpenAICompatibleConfig::new("key", "model"))?
+    ///     .with_reasoning_replay(true);
+    /// # let _ = client;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    #[must_use]
+    pub fn with_reasoning_replay(mut self, enabled: bool) -> Self {
+        self.reasoning_replay_field = enabled.then_some(ReasoningReplayField::ReasoningContent);
+        self
+    }
+
+    /// Enables assistant reasoning replay with an explicit provider field.
+    ///
+    /// Newer vLLM servers use `ReasoningReplayField::Reasoning`. Older deployments
+    /// may still require `reasoning_content`; select the field the endpoint accepts.
+    /// The last call to either reasoning-replay builder determines the selection.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::{
+    ///     OpenAICompatible, OpenAICompatibleConfig, ReasoningReplayField,
+    /// };
+    ///
+    /// let client = OpenAICompatible::new(OpenAICompatibleConfig::new("key", "model"))?
+    ///     .with_reasoning_replay_field(ReasoningReplayField::Reasoning);
+    /// # let _ = client;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    #[must_use]
+    pub fn with_reasoning_replay_field(mut self, field: ReasoningReplayField) -> Self {
+        self.reasoning_replay_field = Some(field);
+        self
+    }
+}
+
+fn inject_assistant_reasoning(
+    body: &mut serde_json::Value,
+    contents: &[Content],
+    field: Option<ReasoningReplayField>,
+) {
+    let Some(field) = field else {
+        return;
+    };
+    let Some(messages) = body.get_mut("messages").and_then(serde_json::Value::as_array_mut) else {
+        return;
+    };
+    let field_name = match field {
+        ReasoningReplayField::ReasoningContent => "reasoning_content",
+        ReasoningReplayField::Reasoning => "reasoning",
+    };
+
+    for (message, content) in messages.iter_mut().zip(contents) {
+        if !matches!(content.role.as_str(), "model" | "assistant") {
+            continue;
+        }
+        let Some(reasoning) = convert::extract_reasoning_content(&content.parts) else {
+            continue;
+        };
+        let Some(message) = message.as_object_mut() else {
+            continue;
+        };
+
+        message.insert(field_name.to_string(), serde_json::Value::String(reasoning));
+    }
 }
 
 /// Build the serialized JSON request body from an `LlmRequest`.
@@ -304,6 +405,7 @@ pub(crate) fn build_request_json(
     request: &LlmRequest,
     reasoning_effort: &Option<OpenAIReasoningEffort>,
     parallel_tool_calls: bool,
+    reasoning_replay_field: Option<ReasoningReplayField>,
     adapter: &dyn SchemaAdapter,
     cache: &SchemaCache,
 ) -> Result<serde_json::Value, AdkError> {
@@ -375,6 +477,8 @@ pub(crate) fn build_request_json(
     if matches!(reasoning_effort, Some(OpenAIReasoningEffort::Max)) {
         body["reasoning_effort"] = serde_json::Value::String("max".to_string());
     }
+
+    inject_assistant_reasoning(&mut body, &request.contents, reasoning_replay_field);
 
     // Merge provider-specific extensions from config.extensions["openai"] into
     // the request body.  This allows users to pass provider-specific fields
@@ -540,6 +644,7 @@ impl Llm for OpenAICompatible {
         let base_url = self.base_url.clone();
         let retry_config = self.retry_config.clone();
         let reasoning_effort = self.reasoning_effort;
+        let reasoning_replay_field = self.reasoning_replay_field;
         let organization_id = self.organization_id.clone();
 
         // Normalize tool schemas at request time using the schema adapter.
@@ -552,6 +657,7 @@ impl Llm for OpenAICompatible {
             &request,
             &reasoning_effort,
             self.parallel_tool_calls,
+            reasoning_replay_field,
             adapter,
             &SCHEMA_CACHE,
         )?;
@@ -1043,6 +1149,7 @@ mod tests {
                 &request,
                 &configured_effort,
                 true,
+                None,
                 &adapter,
                 &cache,
             )
@@ -1069,6 +1176,7 @@ mod tests {
             &request,
             &None,
             true,
+            None,
             &adapter,
             &cache,
         )
@@ -1094,6 +1202,7 @@ mod tests {
             &request,
             &Some(OpenAIReasoningEffort::Max),
             true,
+            None,
             &adapter,
             &cache,
         )
@@ -1114,6 +1223,7 @@ mod tests {
             &request,
             &None,
             true,
+            None,
             &GenericSchemaAdapter,
             &cache,
         )

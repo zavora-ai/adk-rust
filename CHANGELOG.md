@@ -124,6 +124,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **OpenAI message conversion** (`adk-model`): `Part::Thinking` is excluded
+  from visible user, assistant, and system message content instead of being
+  serialized as ordinary text in subsequent requests. OpenAI-compatible clients
+  enable replay with `with_reasoning_replay(true)` using `reasoning_content`,
+  or explicitly select `reasoning` for compatible vLLM endpoints;
+  standard OpenAI and Azure requests omit both fields by default.
 - **Bounded partial streaming events** (`adk-agent`): incremental LLM events
   no longer repeat the complete request and response payload on every chunk.
   Terminal events retain the existing debug payload, while long histories now

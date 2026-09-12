@@ -309,7 +309,7 @@ pub use ollama::{OllamaConfig, OllamaModel};
 #[cfg(feature = "openai")]
 pub use openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig, ReasoningEffort};
 #[cfg(feature = "openai")]
-pub use openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
+pub use openai_compatible::{OpenAICompatible, OpenAICompatibleConfig, ReasoningReplayField};
 #[cfg(feature = "openrouter")]
 pub use openrouter::{OpenRouterApiMode, OpenRouterClient, OpenRouterConfig};
 pub use provider::ModelProvider;
