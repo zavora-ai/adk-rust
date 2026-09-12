@@ -565,6 +565,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Loaded now rather than when the agent is built, so a missing skill is
     // visible alongside the other readiness checks instead of after the wait.
     let skill = load_skill();
+    // Resolved here rather than when the agent is built, so an operator sees which
+    // browser surface is in force alongside the other readiness lines.
+    let mcp_tools = allowed_mcp_tools();
 
     // The browser session and the BI server's API token are unrelated: the server
     // can be authenticated while the browser sits on a login page. Handing the
@@ -656,7 +659,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // The manager carries both servers, so the filter names the BI tools too.
         .toolset(Arc::new(Allowed {
             inner: Arc::clone(&manager) as Arc<dyn adk_core::Toolset>,
-            allow: allowed_mcp_tools(),
+            allow: mcp_tools.clone(),
             withheld: PLAYWRIGHT_WITHHELD,
         }) as Arc<dyn adk_core::Toolset>)
         .build()?;
