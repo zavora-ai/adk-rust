@@ -131,18 +131,21 @@ fn load_skill() -> Option<String> {
 /// The agent does all of its *writing* through MCP tools. This is only for
 /// watching, which is why it needs nothing but two plain GET/POSTs.
 
-/// The last transcript turn, when it is an unanswered message from the person.
+/// The oldest message from the person that has not been answered.
 ///
-/// Returns its timestamp as well, because that is what makes an ask identifiable:
-/// the caller records it so the same message is never worked twice.
+/// Returns its id as well, which is what makes an ask identifiable: the caller records
+/// it so the same message is never worked twice, and it is what `acknowledge` takes.
 fn pending_ask(run: &Value) -> Option<(String, String)> {
-    let last = run.get("messages")?.as_array()?.last()?;
-    if last.get("role").and_then(Value::as_str)? != "user" {
-        return None;
-    }
+    // Read the host's own `pending`, which it computes from stable message ids and an
+    // acknowledgement cursor. Checking whether the *last* message was the person's is
+    // what a progress narration falsified: the narration appends an agent message, so a
+    // question typed mid-run stopped being last and became invisible.
+    let first = run.get("pending")?.as_array()?.first()?;
     Some((
-        last.get("text").and_then(Value::as_str)?.to_string(),
-        last.get("at").and_then(Value::as_str).unwrap_or_default().to_string(),
+        first.get("text").and_then(Value::as_str)?.to_string(),
+        // The id, not a timestamp: two messages can share a second, and the id is what
+        // `acknowledge` takes.
+        first.get("id").and_then(Value::as_i64)?.to_string(),
     ))
 }
 
@@ -430,8 +433,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        flush!();
+        // Read the summary before flushing: flush!() clears the buffer, so taking it
+        // afterwards left `closing` always empty and every turn reporting Incomplete
+        // with the agent's conclusion lost.
         let closing = buffered.trim().to_string();
+        flush!();
         if let Some(reason) = stopped_short {
             console.finish(&Outcome::OutOfBudget(reason.clone()), &closing).await;
             println!("{}\nturn {turn} stopped short: {reason}", "─".repeat(60));
