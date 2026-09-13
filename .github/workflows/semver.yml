@@ -35,7 +35,7 @@ jobs:
         cache-save: 'false'
 
     - name: Install cargo-semver-checks
-      uses: taiki-e/install-action@v2.87.4
+      uses: taiki-e/install-action@v2.87.10
       with:
         tool: cargo-semver-checks
 
