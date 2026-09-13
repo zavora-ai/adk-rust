@@ -84,7 +84,9 @@ so it needs an interactive session with Accessibility and Screen Recording permi
 
 | Example | Feature | Run |
 |---------|---------|-----|
+| `examples/bi_analyst` | Reads an organisation's saved dashboards, drills into what is odd, and explains it with the numbers behind it. Open-source BI (Apache Superset) with five commercial backends; runs on a seeded fixture with no credentials | `cargo run --manifest-path examples/bi_analyst/Cargo.toml` |
 | `examples/blender_console` | Multi-turn agent reporting a plan, task progress and live screen captures into a browser console a person can type into. Two MCP servers over two transports (HTTP + stdio) | `cargo run --manifest-path examples/blender_console/Cargo.toml` |
+| `examples/blender_studio` | Models in Blender through its own MCP for anything with an API, and desktop pixels only where Blender exposes no controls. The desktop surface is narrowed by a real toolset filter, not by approval configuration | `cargo run --manifest-path examples/blender_studio/Cargo.toml -- "<task>"` |
 
 **Requires Google Cloud ADC (`gcloud auth application-default login`):**
 

@@ -1,5 +1,5 @@
 [package]
-name = "blender-console-example"
+name = "bi-analyst-example"
 version = "0.0.1"
 edition = "2024"
 publish = false
@@ -10,15 +10,15 @@ publish = false
 adk-core = { path = "../../adk-core" }
 adk-agent = { path = "../../adk-agent" }
 adk-model = { path = "../../adk-model", features = ["deepseek"] }
-# http-transport is what lets this agent reach the console host's /mcp endpoint,
-# so the run it reports into is the same one the browser is reading.
+# http-transport reaches the run console host; mcp starts the BI and market-data
+# servers as child processes.
 adk-tool = { path = "../../adk-tool", features = ["mcp", "http-transport"] }
 adk-runner = { path = "../../adk-runner" }
 adk-session = { path = "../../adk-session" }
-# The console lifecycle every driver has to get right: polling, acknowledgement,
-# cancellation, budgets, redaction and honest completion. Shared because each of those
-# was fixed in the analytics driver and this one kept the original behaviour.
+# The console lifecycle every driver has to get right. Shared so a fix lands in both.
 run-console-driver = { path = "../run_console_driver" }
+# Needed to implement adk_core::Toolset, which is an #[async_trait].
+async-trait = "0.1"
 tokio = { version = "1.40", features = ["full"] }
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

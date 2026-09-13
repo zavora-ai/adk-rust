@@ -187,6 +187,31 @@ impl adk_core::Agent for StreamingTestAgent {
     }
 }
 
+struct ErrorStreamingTestAgent;
+
+#[async_trait]
+impl adk_core::Agent for ErrorStreamingTestAgent {
+    fn name(&self) -> &str {
+        "error-stream-test-agent"
+    }
+
+    fn description(&self) -> &str {
+        "Streaming error test agent"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
+        &[]
+    }
+
+    async fn run(
+        &self,
+        _ctx: Arc<dyn adk_core::InvocationContext>,
+    ) -> adk_core::Result<Pin<Box<dyn futures::Stream<Item = adk_core::Result<Event>> + Send>>>
+    {
+        Ok(Box::pin(stream::once(async { Err(adk_core::AdkError::model("provider unavailable")) })))
+    }
+}
+
 struct PartialReasoningStreamingTestAgent;
 
 #[async_trait]
@@ -1334,6 +1359,84 @@ async fn test_run_sse_compat_emits_profile_wrapped_event() {
     let body_str = String::from_utf8(body.to_vec()).unwrap();
     assert!(body_str.contains("\"ui_protocol\":\"ag_ui\""));
     assert!(body_str.contains("\"event\""));
+}
+
+#[tokio::test]
+async fn test_run_sse_adk_ui_emits_runtime_error_event() {
+    let agent = Arc::new(ErrorStreamingTestAgent);
+    let config = adk_server::ServerConfig::new(
+        Arc::new(adk_core::SingleAgentLoader::new(agent)),
+        Arc::new(adk_session::InMemorySessionService::new()),
+    );
+    let app = create_app(config);
+
+    let body = serde_json::json!({
+        "appName": "error-stream-test-agent",
+        "userId": "user1",
+        "sessionId": "session1",
+        "newMessage": {
+            "role": "user",
+            "parts": [{ "text": "hello" }]
+        }
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/run_sse")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body_str.contains("provider unavailable"));
+    assert!(body_str.contains("error_code"));
+}
+
+#[tokio::test]
+async fn test_run_sse_wrapped_profile_emits_runtime_error_event() {
+    let agent = Arc::new(ErrorStreamingTestAgent);
+    let config = adk_server::ServerConfig::new(
+        Arc::new(adk_core::SingleAgentLoader::new(agent)),
+        Arc::new(adk_session::InMemorySessionService::new()),
+    );
+    let app = create_app(config);
+
+    let body = serde_json::json!({
+        "appName": "error-stream-test-agent",
+        "userId": "user1",
+        "sessionId": "session1",
+        "newMessage": {
+            "role": "user",
+            "parts": [{ "text": "hello" }]
+        },
+        "uiProtocol": "a2ui"
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/run_sse")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body_str.contains("\"ui_protocol\":\"a2ui\""));
+    assert!(body_str.contains("provider unavailable"));
+    assert!(body_str.contains("error_code"));
 }
 
 #[tokio::test]

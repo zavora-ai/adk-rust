@@ -311,6 +311,13 @@ fn serialize_runtime_event(event: &adk_core::Event, profile: UiProfile) -> Optio
     .ok()
 }
 
+fn serialize_runtime_error(error: &adk_core::AdkError, profile: UiProfile) -> Option<String> {
+    let mut event = adk_core::Event::new(String::new());
+    event.llm_response.error_code = Some(error.code.to_string());
+    event.llm_response.error_message = Some(error.to_string());
+    serialize_runtime_event(&event, profile)
+}
+
 fn infer_sse_request_protocol(req: &RunSseRequest) -> Option<&str> {
     req.ui_protocol
         .as_deref()
@@ -1106,6 +1113,8 @@ where
                             "runId": run_id,
                             "message": error.to_string(),
                         }).to_string()));
+                    } else if let Some(payload) = serialize_runtime_error(&error, profile) {
+                        yield Ok(Event::default().data(payload));
                     }
                     return;
                 }

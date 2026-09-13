@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is also applied to invocation-scoped toolsets.
 ### Fixed
 
+- **OpenAI reasoning history** (`adk-model`): `Part::Thinking` is excluded
+  from visible user, assistant, and system message content. By default,
+  subsequent model requests omit Thinking entirely instead of replaying it
+  as visible content; stored history is unchanged. Compatible backends can
+  opt in with `with_reasoning_replay(true)` to send `reasoning_content`, or
+  use `with_reasoning_replay_field(ReasoningReplayField::Reasoning)` to send
+  `reasoning`. Replay emits only the selected field; standard OpenAI and
+  Azure requests omit both fields by default.
 - **Open Responses argument identity** (`adk-model`): conflicting item or call
   identities terminate compatible streams before cached arguments can cross
   tool calls. Blank completed snapshots restore matching streamed arguments
@@ -124,12 +132,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **OpenAI message conversion** (`adk-model`): `Part::Thinking` is excluded
-  from visible user, assistant, and system message content instead of being
-  serialized as ordinary text in subsequent requests. OpenAI-compatible clients
-  enable replay with `with_reasoning_replay(true)` using `reasoning_content`,
-  or explicitly select `reasoning` for compatible vLLM endpoints;
-  standard OpenAI and Azure requests omit both fields by default.
+- **Runtime SSE errors** (`adk-server`): ADK UI and legacy wrapped transports
+  emit structured runtime error events instead of ending the stream silently;
+  protocol-native AG-UI continues to emit `RUN_ERROR`.
 - **Bounded partial streaming events** (`adk-agent`): incremental LLM events
   no longer repeat the complete request and response payload on every chunk.
   Terminal events retain the existing debug payload, while long histories now
