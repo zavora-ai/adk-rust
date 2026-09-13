@@ -10,7 +10,7 @@ use std::sync::Arc;
 use adk_core::Content;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, EnvVariable, InitializeRequest, InitializeResponse, McpServer,
+    ContentBlock, ContentChunk, InitializeRequest, InitializeResponse, McpServer,
     NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SessionNotification, SessionUpdate,
 };
@@ -453,24 +453,28 @@ pub(crate) fn validate_initialization(
 }
 
 /// Build an SDK process component while preserving environment values exactly.
+///
+/// Migrated for agent-client-protocol 2.x, where `AcpAgent` is configured by an
+/// `AcpAgentConfig` rather than by the `McpServer` it used to wrap. That removes a
+/// round-trip this function used to make — unwrap to `McpServer::Stdio`, push
+/// `EnvVariable` entries onto it, wrap it again — because the environment is now a plain
+/// map on the configuration itself.
+///
+/// Note the name collision: `AcpAgentConfig` in this signature is *ours*, declared at the
+/// top of this module, while 2.x introduced an SDK type with the same name. The SDK's is
+/// referred to by its full path throughout so the two can never be confused at a glance.
 pub(crate) fn build_agent(config: &AcpAgentConfig) -> Result<AcpAgent> {
+    // `FromStr` still parses a command line, and still accepts a JSON object, so a
+    // configured command keeps working unchanged.
     let parsed = AcpAgent::from_str(&config.command).map_err(|error| {
         AcpError::InvalidConfig(format!("invalid command '{}': {error}", config.command))
     })?;
-    match parsed.into_server() {
-        McpServer::Stdio(mut stdio) => {
-            stdio.env.extend(
-                config
-                    .env
-                    .iter()
-                    .map(|(name, value)| EnvVariable::new(name.clone(), value.clone())),
-            );
-            Ok(AcpAgent::new(McpServer::Stdio(stdio)))
-        }
-        _ => Err(AcpError::InvalidConfig(
-            "AcpAgentConfig currently supports local stdio agents".into(),
-        )),
-    }
+    // Environment values are applied after parsing so a configured variable wins over one
+    // the command string carried, which is the precedence the field documents.
+    let spawn = parsed
+        .into_config()
+        .envs(config.env.iter().map(|(name, value)| (name.clone(), value.clone())));
+    Ok(AcpAgent::new(spawn))
 }
 
 #[cfg(test)]

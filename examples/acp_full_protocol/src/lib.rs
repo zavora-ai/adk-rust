@@ -128,7 +128,19 @@ impl Agent for ScriptedAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> AdkResult<EventStream> {
-        let decision = ctx.run_config().tool_confirmation_decisions.get(CONFIRM_TOOL).copied();
+        // Keyed by function-call id, not tool name. `RunConfig::tool_confirmation_decisions`
+        // is deliberately keyed by call so a decision authorizes only the call it was
+        // granted for — approving one `delete_file` must not silently approve the next.
+        // The ACP server handler documents and populates it that way, and adk-acp's own
+        // stdio test reads it that way; this example was looking up CONFIRM_TOOL, found
+        // nothing, and so never took either resume branch. Both permission tests failed
+        // as a result: the tool never ran on approval, and no skip message was streamed
+        // on denial.
+        let decision = ctx
+            .run_config()
+            .tool_confirmation_decisions
+            .get(CONFIRM_CALL_ID)
+            .copied();
         let user_content = ctx.user_content().clone();
         let invocation = ctx.invocation_id().to_string();
         let delete_tool = self.delete_tool.clone();

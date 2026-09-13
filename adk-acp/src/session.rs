@@ -203,7 +203,16 @@ impl AcpSession {
                                             continue;
                                         }
 
-                                        let connection = session.connection();
+                                        // Cloned, not borrowed. In 2.x `connection()`
+                                        // returns `&ConnectionTo<Link>` where 1.x returned
+                                        // it by value — part of the change making session
+                                        // accessors borrow their connection state. Holding
+                                        // that borrow across the loop below would conflict
+                                        // with `read_update`, which needs the session
+                                        // mutably. `ConnectionTo` is a cheap cloneable
+                                        // handle, so cloning restores the previous
+                                        // ownership without copying the connection.
+                                        let connection = session.connection().clone();
                                         let session_id = session.session_id().clone();
                                         let mut response = String::new();
                                         let mut cancellation_requested = false;
