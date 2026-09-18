@@ -14,9 +14,9 @@ dependencies = [
 
 [[package]]
 name = "a2a-protocol-types"
-version = "0.5.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47e4fe91cf2436cef079cf2f00bb208344d63a5a8030fc77c96812b304404e8b"
+checksum = "2f57bddf2515adc4c3f9b0229bdbbce379d08a9c41a208dca2e630b9d9f8ce1d"
 dependencies = [
  "serde",
  "serde_json",
