@@ -108,7 +108,7 @@ mod tests {
         // Parse both the actual and expected JSON to Values for comparison
         let actual: Value = serde_json::from_str(&json).unwrap();
         let expected: Value = serde_json::from_str(
-            r#"{"type":"web_search_tool_result","content":{"error_code":"invalid_tool_input"},"tool_use_id":"tool-123"}"#
+            r#"{"type":"web_search_tool_result","content":{"type":"web_search_tool_result_error","error_code":"invalid_tool_input"},"tool_use_id":"tool-123"}"#
         ).unwrap();
 
         assert_eq!(actual, expected);

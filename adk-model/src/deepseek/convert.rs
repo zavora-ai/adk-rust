@@ -6,10 +6,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// DeepSeek chat message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Message {
     pub role: String,
     pub content: Option<String>,
+    #[serde(skip)]
+    pub content_parts: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,6 +21,32 @@ pub struct Message {
     /// Reasoning content from thinking mode (only in responses).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+}
+
+impl Serialize for Message {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("role", &self.role)?;
+        if let Some(parts) = &self.content_parts {
+            map.serialize_entry("content", parts)?;
+        } else {
+            map.serialize_entry("content", &self.content)?;
+        }
+        if let Some(name) = &self.name {
+            map.serialize_entry("name", name)?;
+        }
+        if let Some(calls) = &self.tool_calls {
+            map.serialize_entry("tool_calls", calls)?;
+        }
+        if let Some(id) = &self.tool_call_id {
+            map.serialize_entry("tool_call_id", id)?;
+        }
+        if let Some(reasoning) = &self.reasoning_content {
+            map.serialize_entry("reasoning_content", reasoning)?;
+        }
+        map.end()
+    }
 }
 
 /// Tool call in a message.
@@ -178,7 +206,7 @@ pub struct DeltaFunction {
 }
 
 /// Token usage information.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
@@ -186,6 +214,8 @@ pub struct Usage {
     /// Tokens used for reasoning (thinking mode).
     #[serde(default)]
     pub reasoning_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens_details: Option<Value>,
     /// Cache hit tokens for prefix caching.
     #[serde(default)]
     pub prompt_cache_hit_tokens: Option<u32>,
@@ -194,12 +224,36 @@ pub struct Usage {
     pub prompt_cache_miss_tokens: Option<u32>,
 }
 
+pub fn usage(u: &Usage) -> UsageMetadata {
+    UsageMetadata {
+        prompt_token_count: u.prompt_tokens as i32,
+        candidates_token_count: u.completion_tokens as i32,
+        total_token_count: u.total_tokens as i32,
+        thinking_token_count: u
+            .reasoning_tokens
+            .or_else(|| {
+                u.completion_tokens_details
+                    .as_ref()?
+                    .get("reasoning_tokens")?
+                    .as_u64()?
+                    .try_into()
+                    .ok()
+            })
+            .map(|tokens| tokens as i32),
+        cache_read_input_token_count: u.prompt_cache_hit_tokens.map(|tokens| tokens as i32),
+        // Cache misses are ordinary input, not separately billed cache writes.
+        provider_usage: serde_json::to_value(u).ok(),
+        ..Default::default()
+    }
+}
+
 /// Convert ADK Content to DeepSeek Message.
 /// Builds a system message carrying `text`.
 pub fn system_message(text: impl Into<String>) -> Message {
     Message {
         role: "system".to_string(),
         content: Some(text.into()),
+        content_parts: None,
         name: None,
         tool_calls: None,
         tool_call_id: None,
@@ -220,8 +274,11 @@ pub fn content_to_message(content: &Content) -> Message {
     let mut reasoning_parts = Vec::new();
     let mut tool_calls = Vec::new();
     let mut tool_call_id = None;
+    let mut content_parts = Vec::new();
+    let mut has_image = false;
 
     for part in &content.parts {
+        let previous = text_parts.len();
         match part {
             Part::Text { text } => text_parts.push(text.clone()),
             Part::FunctionCall { name, args, id, .. } => {
@@ -239,6 +296,19 @@ pub fn content_to_message(content: &Content) -> Message {
                 tool_call_id = id.clone();
                 text_parts
                     .push(crate::tool_result::serialize_tool_result(&function_response.response));
+            }
+            Part::InlineData { mime_type, data, .. }
+                if role == "user"
+                    && matches!(
+                        mime_type.as_str(),
+                        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+                    ) =>
+            {
+                has_image = true;
+                content_parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": {"url": format!("data:{mime_type};base64,{}", attachment::encode_base64(data))}
+                }));
             }
             Part::InlineData { mime_type, data, .. } => {
                 text_parts.push(attachment::inline_attachment_to_text(mime_type, data));
@@ -260,15 +330,28 @@ pub fn content_to_message(content: &Content) -> Message {
                 }
             },
         }
+        content_parts.extend(
+            text_parts[previous..]
+                .iter()
+                .map(|text| serde_json::json!({"type":"text", "text":text})),
+        );
     }
 
-    let content_str = if text_parts.is_empty() { None } else { Some(text_parts.join("\n")) };
+    // Interrupted calls and cross-provider histories may retain only thinking.
+    // DeepSeek rejects an assistant with neither content nor tool_calls; an
+    // explicit empty string preserves the reasoning without inventing an answer.
+    let content_str = if text_parts.is_empty() {
+        (role == "assistant" && tool_calls.is_empty()).then(String::new)
+    } else {
+        Some(text_parts.join("\n"))
+    };
     let reasoning_content =
         if reasoning_parts.is_empty() { None } else { Some(reasoning_parts.join("\n")) };
 
     Message {
         role: role.to_string(),
         content: content_str,
+        content_parts: has_image.then_some(content_parts),
         name: None,
         tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
         tool_call_id,
@@ -414,15 +497,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         (None, None)
     };
 
-    let usage = response.usage.as_ref().map(|u| UsageMetadata {
-        prompt_token_count: u.prompt_tokens as i32,
-        candidates_token_count: u.completion_tokens as i32,
-        total_token_count: u.total_tokens as i32,
-        thinking_token_count: u.reasoning_tokens.map(|t| t as i32),
-        cache_read_input_token_count: u.prompt_cache_hit_tokens.map(|t| t as i32),
-        cache_creation_input_token_count: u.prompt_cache_miss_tokens.map(|t| t as i32),
-        ..Default::default()
-    });
+    let usage = response.usage.as_ref().map(usage);
 
     // A turn that emits tool calls is not complete — tool results must still be
     // processed and sent back to the model (issue #401).
@@ -556,6 +631,22 @@ mod tests {
         let payload = message.content.unwrap_or_default();
         assert!(payload.contains("text/csv"));
         assert!(payload.contains("https://example.com/data.csv"));
+    }
+
+    #[test]
+    fn thinking_only_history_has_explicit_content() {
+        let content = Content {
+            role: "model".into(),
+            parts: vec![Part::Thinking {
+                thinking: "Retained reasoning from an interrupted turn".into(),
+                signature: None,
+            }],
+        };
+        let message = content_to_message(&content);
+        let json = serde_json::to_value(&message).unwrap();
+        assert_eq!(json["content"], "");
+        assert_eq!(json["reasoning_content"], "Retained reasoning from an interrupted turn");
+        assert!(json.get("tool_calls").is_none());
     }
 
     #[test]

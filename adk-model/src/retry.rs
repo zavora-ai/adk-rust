@@ -168,6 +168,32 @@ where
     Fut: Future<Output = Result<T>>,
     Classify: Fn(&AdkError) -> bool,
 {
+    execute_with_retry_observer(
+        retry_config,
+        classify_error,
+        server_hint,
+        operation,
+        |_, _, _| async { Ok(()) },
+    )
+    .await
+}
+
+/// Observe each scheduled retry before its backoff delay. Observer failures stop retries.
+/// The callback receives the one-based attempt, retry limit and effective delay.
+pub async fn execute_with_retry_observer<T, Op, Fut, Classify, Observe, Observed>(
+    retry_config: &RetryConfig,
+    classify_error: Classify,
+    server_hint: Option<&ServerRetryHint>,
+    operation: &mut Op,
+    mut observe: Observe,
+) -> Result<T>
+where
+    Op: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+    Classify: Fn(&AdkError) -> bool,
+    Observe: FnMut(u32, u32, Duration) -> Observed,
+    Observed: Future<Output = Result<()>>,
+{
     if !retry_config.enabled {
         return operation().await;
     }
@@ -198,9 +224,10 @@ where
                     attempt = attempt,
                     max_retries = retry_config.max_retries,
                     delay_ms = effective_delay.as_millis(),
-                    error = %error,
+                    error_code = %error.code,
                     "Provider request failed with retryable error; retrying"
                 );
+                observe(attempt, retry_config.max_retries, effective_delay).await?;
                 tokio::time::sleep(effective_delay).await;
                 delay = next_retry_delay(delay, retry_config);
             }

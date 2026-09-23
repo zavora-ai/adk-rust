@@ -38,6 +38,7 @@ impl fmt::Display for WebSearchErrorCode {
 /// This struct represents various failure conditions that can occur during
 /// web search operations, from input validation errors to service availability issues.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename = "web_search_tool_result_error")]
 pub struct WebSearchToolResultError {
     /// The specific error code indicating the type of failure.
     ///
@@ -87,14 +88,15 @@ mod tests {
         let error = WebSearchToolResultError { error_code: WebSearchErrorCode::InvalidToolInput };
 
         let json = serde_json::to_string(&error).unwrap();
-        let expected = r#"{"error_code":"invalid_tool_input"}"#;
+        let expected =
+            r#"{"type":"web_search_tool_result_error","error_code":"invalid_tool_input"}"#;
 
         assert_eq!(json, expected);
     }
 
     #[test]
     fn deserialization() {
-        let json = r#"{"error_code":"max_uses_exceeded"}"#;
+        let json = r#"{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}"#;
         let error: WebSearchToolResultError = serde_json::from_str(json).unwrap();
 
         assert_eq!(error.error_code, WebSearchErrorCode::MaxUsesExceeded);

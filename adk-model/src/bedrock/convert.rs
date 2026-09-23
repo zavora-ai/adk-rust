@@ -480,6 +480,10 @@ pub(crate) fn bedrock_response_to_adk(
     let finish_reason = Some(bedrock_stop_reason_to_adk(stop_reason));
 
     let usage_metadata = usage.map(|u| UsageMetadata {
+        provider_usage: Some(serde_json::json!({
+            "inputTokens":u.input_tokens, "outputTokens":u.output_tokens, "totalTokens":u.total_tokens,
+            "cacheReadInputTokens":u.cache_read_input_tokens, "cacheWriteInputTokens":u.cache_write_input_tokens,
+        })),
         prompt_token_count: u.input_tokens,
         candidates_token_count: u.output_tokens,
         total_token_count: u.total_tokens,
@@ -488,13 +492,14 @@ pub(crate) fn bedrock_response_to_adk(
         ..Default::default()
     });
 
+    let turn_complete = content.as_ref().is_none_or(|content| !content.has_function_calls());
     LlmResponse {
         content,
         usage_metadata,
         finish_reason,
         citation_metadata: None,
         partial: false,
-        turn_complete: true,
+        turn_complete,
         interrupted: false,
         error_code: None,
         error_message: None,

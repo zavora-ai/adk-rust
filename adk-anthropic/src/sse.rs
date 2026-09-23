@@ -25,9 +25,15 @@ const MAX_EVENT_SIZE: usize = 64 * 1024;
 /// Timeout for receiving data between chunks (30 seconds)
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[cfg(test)]
+#[path = "sse/unicode.rs"]
+mod unicode;
+
 /// State for SSE processing with production hardening
 struct SseState {
     buffer: String,
+    pending: Vec<u8>,
+    ended: bool,
     last_activity: Instant,
     total_bytes_processed: usize,
     start: Instant,
@@ -76,6 +82,8 @@ where
     // Initialize state with production hardening
     let state = SseState {
         buffer: String::new(),
+        pending: Vec::new(),
+        ended: false,
         last_activity: Instant::now(),
         total_bytes_processed: 0,
         start: Instant::now(),
@@ -83,6 +91,9 @@ where
     };
 
     stream::unfold((stream, state), move |(mut stream, mut state)| async move {
+        if state.ended {
+            return None;
+        }
         loop {
             // Check for timeout
             if state.last_activity.elapsed() > CHUNK_TIMEOUT {
@@ -137,21 +148,22 @@ where
                         STREAM_TTFB.add(now.duration_since(state.start).as_secs_f64());
                     }
 
-                    match String::from_utf8(bytes.to_vec()) {
+                    state.pending.extend_from_slice(&bytes);
+                    match std::str::from_utf8(&state.pending) {
                         Ok(text) => {
-                            state.buffer.push_str(&text);
+                            state.buffer.push_str(text);
+                            state.pending.clear();
+                        }
+                        Err(e) if e.error_len().is_none() => {
+                            let valid = e.valid_up_to();
+                            let prefix = std::str::from_utf8(&state.pending[..valid])
+                                .expect("validated UTF-8 prefix");
+                            state.buffer.push_str(prefix);
+                            // Retain the incomplete character for the next network chunk.
+                            state.pending.drain(..valid);
                         }
                         Err(e) => {
-                            // Try to recover partial UTF-8 sequences
-                            let valid_up_to = e.utf8_error().valid_up_to();
-                            if valid_up_to > 0
-                                && let Ok(partial) =
-                                    String::from_utf8(bytes[..valid_up_to].to_vec())
-                            {
-                                state.buffer.push_str(&partial);
-                                // Log invalid bytes but continue processing
-                                continue;
-                            }
+                            state.ended = true;
                             return Some((
                                 Err(Error::encoding(
                                     format!("Invalid UTF-8 in stream: {e}"),
@@ -167,6 +179,16 @@ where
                     return Some((Err(e), (stream, state)));
                 }
                 None => {
+                    if !state.pending.is_empty() {
+                        state.ended = true;
+                        return Some((
+                            Err(Error::encoding(
+                                "SSE stream ended inside a UTF-8 character".to_string(),
+                                None,
+                            )),
+                            (stream, state),
+                        ));
+                    }
                     // End of stream - try to process any remaining buffered events
                     if !state.buffer.is_empty()
                         && let Ok(Some((event, _))) = extract_event(&state.buffer, parser)

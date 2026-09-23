@@ -3,8 +3,8 @@
 //! This backend communicates with `{region}-aiplatform.googleapis.com` for
 //! regional endpoints, or `aiplatform.googleapis.com` when the location is
 //! `global`. It uses Google Cloud credentials (ADC, service account, WIF, or
-//! API key), the gRPC SDK for non-streaming requests (with REST fallback on
-//! transport errors), and REST SSE for streaming.
+//! API key), the gRPC SDK for non-streaming requests and REST SSE for streaming.
+//! Model requests are never replayed through another transport after a failure.
 //!
 //! Cached-content operations (create, get, update, list, delete) go through the
 //! Vertex REST endpoint
@@ -155,9 +155,7 @@ impl VertexBackend {
             Self::inject_vertex_rag_store(&mut request_value, store)?;
         }
 
-        // The REST fallback sends the same body; its model rides in the URL
-        // path, so clone before the gRPC-only `model` field is inserted.
-        let rest_value = request_value.clone();
+        // Non-streaming gRPC requests carry the model resource in the body.
 
         let model = self.model.to_string();
         let request_object =
@@ -173,17 +171,8 @@ impl VertexBackend {
                     serde_json::to_value(&response).context(GoogleCloudResponseSerializeSnafu)?;
                 serde_json::from_value(value).context(GoogleCloudResponseDeserializeSnafu)
             }
-            Err(source) => {
-                if Self::is_transport_error(&source.to_string()) {
-                    tracing::warn!(
-                        error = %source,
-                        "Vertex SDK transport error on generateContent; falling back to REST"
-                    );
-                    self.generate_content_rest(&rest_value).await
-                } else {
-                    Err(Error::GoogleCloudRequest { source })
-                }
-            }
+            // A transport failure can occur after model admission; never replay it.
+            Err(source) => Err(Error::GoogleCloudRequest { source }),
         }
     }
 
@@ -214,7 +203,10 @@ impl VertexBackend {
 
         let auth_headers = self.auth_headers().await?;
 
-        let response = Client::new()
+        let response = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|source| Error::PerformRequestNew { source })?
             .post(url.clone())
             .headers(auth_headers)
             .json(&request_value)
@@ -232,40 +224,6 @@ impl VertexBackend {
             });
 
         Ok(Box::pin(stream))
-    }
-
-    /// Non-streaming generate via REST (fallback when gRPC has transport issues).
-    ///
-    /// Takes the already-serialized request body so JSON-layer additions
-    /// (e.g. an injected `retrieval` tool) survive the fallback.
-    async fn generate_content_rest(
-        &self,
-        request: &serde_json::Value,
-    ) -> Result<GenerationResponse, Error> {
-        let url = Url::parse(&format!(
-            "{}/v1/{}:generateContent",
-            self.endpoint.trim_end_matches('/'),
-            self.model
-        ))
-        .context(UrlParseSnafu)?;
-
-        let auth_headers = self.auth_headers().await?;
-
-        let response = Client::new()
-            .post(url.clone())
-            .headers(auth_headers)
-            .query(&[("$alt", "json;enum-encoding=int")])
-            .json(request)
-            .send()
-            .await
-            .map_err(|source| Error::PerformRequest { source, url })?;
-        let response = Self::check_response(response).await?;
-
-        let vertex_resp: google_cloud_aiplatform_v1::model::GenerateContentResponse =
-            response.json().await.context(DecodeResponseSnafu)?;
-        let value =
-            serde_json::to_value(&vertex_resp).context(GoogleCloudResponseSerializeSnafu)?;
-        serde_json::from_value(value).context(GoogleCloudResponseDeserializeSnafu)
     }
 
     // ── Cached-content plumbing ──────────────────────────────────
@@ -321,7 +279,10 @@ impl VertexBackend {
     /// GET a JSON resource with auth headers.
     async fn get_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T, Error> {
         let auth_headers = self.auth_headers().await?;
-        let response = Client::new()
+        let response = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|source| Error::PerformRequestNew { source })?
             .get(url.clone())
             .headers(auth_headers)
             .send()
@@ -338,7 +299,10 @@ impl VertexBackend {
         body: &Req,
     ) -> Result<Res, Error> {
         let auth_headers = self.auth_headers().await?;
-        let response = Client::new()
+        let response = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|source| Error::PerformRequestNew { source })?
             .post(url.clone())
             .headers(auth_headers)
             .json(body)
@@ -422,7 +386,10 @@ impl GeminiBackend for VertexBackend {
 
         let auth_headers = self.auth_headers().await?;
 
-        let response = Client::new()
+        let response = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|source| Error::PerformRequestNew { source })?
             .post(url.clone())
             .headers(auth_headers)
             .query(&[("$alt", "json;enum-encoding=int")])
@@ -510,7 +477,10 @@ impl GeminiBackend for VertexBackend {
         debug!(cache.update_mask = update_mask, "updating cached content expiration");
 
         let auth_headers = self.auth_headers().await?;
-        let response = Client::new()
+        let response = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|source| Error::PerformRequestNew { source })?
             .patch(url.clone())
             .headers(auth_headers)
             .json(&update_payload)
@@ -525,7 +495,10 @@ impl GeminiBackend for VertexBackend {
     async fn delete_cached_content(&self, name: &str) -> Result<(), Error> {
         let url = self.cache_url(Some(name))?;
         let auth_headers = self.auth_headers().await?;
-        let response = Client::new()
+        let response = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|source| Error::PerformRequestNew { source })?
             .delete(url.clone())
             .headers(auth_headers)
             .send()

@@ -37,6 +37,8 @@ pub enum ThinkingMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
+    /// Reduced reasoning depth when supported by the selected model.
+    Low,
     /// Standard reasoning depth (default for regular requests).
     High,
     /// Maximum reasoning depth (default for complex agent requests).
@@ -46,6 +48,7 @@ pub enum ReasoningEffort {
 impl std::fmt::Display for ReasoningEffort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Low => write!(f, "low"),
             Self::High => write!(f, "high"),
             Self::Max => write!(f, "max"),
         }

@@ -7,13 +7,13 @@ use adk_core::{
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
-    ChatCompletionRequestMessageContentPartAudio, ChatCompletionRequestMessageContentPartImage,
-    ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessageArgs,
-    ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
-    ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-    ChatCompletionTool, ChatCompletionTools, CreateChatCompletionResponse,
-    FinishReason as OaiFinishReason, FunctionCall, FunctionObject, ImageDetail, ImageUrl,
-    InputAudio, InputAudioFormat,
+    ChatCompletionRequestMessageContentPartAudio, ChatCompletionRequestMessageContentPartFile,
+    ChatCompletionRequestMessageContentPartImage, ChatCompletionRequestMessageContentPartText,
+    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
+    ChatCompletionRequestUserMessageArgs, ChatCompletionRequestUserMessageContent,
+    ChatCompletionRequestUserMessageContentPart, ChatCompletionTool, ChatCompletionTools,
+    CreateChatCompletionResponse, FinishReason as OaiFinishReason, FunctionCall, FunctionObject,
+    ImageDetail, ImageUrl, InputAudio, InputAudioFormat,
 };
 use std::collections::HashMap;
 
@@ -159,6 +159,22 @@ fn inline_data_part_to_openai(
                 // Explicit "auto" (API default) instead of `None`; see issue #395 — a
                 // serialized `"detail": null` is rejected by strict gateways.
                 image_url: ImageUrl { url: data_uri, detail: Some(ImageDetail::Auto) },
+            },
+        );
+    }
+
+    if mime_type == "application/pdf" {
+        return ChatCompletionRequestUserMessageContentPart::File(
+            ChatCompletionRequestMessageContentPartFile {
+                // async-openai 0.41.1 exposes this wire type through Deserialize only.
+                file: serde_json::from_value(serde_json::json!({
+                    "file_data": format!(
+                        "data:{mime_type};base64,{}",
+                        attachment::encode_base64(data)
+                    ),
+                    "filename": "document.pdf",
+                }))
+                .expect("inline PDF uses the FileObject wire schema"),
             },
         );
     }
@@ -706,28 +722,22 @@ mod tests {
     }
 
     #[test]
-    fn test_user_message_with_pdf_inline_data_falls_back_to_text_part() {
+    fn pdf_inline_data_uses_file_part() {
         let content = Content {
             role: "user".to_string(),
             parts: vec![Part::inline_data("application/pdf", b"%PDF".to_vec())],
         };
-        let msg = content_to_message(&content);
-
-        if let ChatCompletionRequestMessage::User(user_msg) = &msg {
-            if let ChatCompletionRequestUserMessageContent::Array(parts) = &user_msg.content {
-                assert_eq!(parts.len(), 1);
-                if let ChatCompletionRequestUserMessageContentPart::Text(text_part) = &parts[0] {
-                    assert!(text_part.text.contains("application/pdf"));
-                    assert!(text_part.text.contains("encoding=\"base64\""));
-                } else {
-                    panic!("Expected fallback text part for pdf inline data");
+        let message = serde_json::to_value(content_to_message(&content)).unwrap();
+        assert_eq!(
+            message["content"],
+            serde_json::json!([{
+                "type": "file",
+                "file": {
+                    "filename": "document.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERg=="
                 }
-            } else {
-                panic!("Expected Array content");
-            }
-        } else {
-            panic!("Expected User message");
-        }
+            }])
+        );
     }
 
     #[test]

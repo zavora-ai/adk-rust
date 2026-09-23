@@ -12,8 +12,8 @@ use async_openai::types::responses::{
     Annotation, ApplyPatchToolCallItemParam, ApplyPatchToolCallOutputItemParam, ConversationParam,
     CreateResponse, CreateResponseArgs, EasyInputContent, EasyInputMessage, FunctionCallOutput,
     FunctionCallOutputItemParam, FunctionShellCallItemParam, FunctionShellCallOutputItemParam,
-    FunctionTool, FunctionToolCall, IncludeEnum, InputContent, InputImageContent, InputItem,
-    InputParam, Item, OutputItem, OutputMessageContent, Prompt,
+    FunctionTool, FunctionToolCall, IncludeEnum, InputContent, InputFileContent, InputImageContent,
+    InputItem, InputParam, Item, MessagePhase, OutputItem, OutputMessageContent, Prompt,
     PromptCacheRetention as OaiPromptCacheRetention, Reasoning,
     ReasoningEffort as OaiReasoningEffort, ReasoningSummary as OaiReasoningSummary, Response,
     ResponseUsage, Role, ServiceTier as OaiServiceTier, Status, SummaryPart, Tool, Truncation,
@@ -25,7 +25,7 @@ use super::config::{OpenAIReasoningEffort, ReasoningSummary};
 
 /// Convert a list of ADK `Content` items to Responses API `InputItem` list.
 pub fn contents_to_input_items(contents: &[Content]) -> Vec<InputItem> {
-    contents.iter().flat_map(content_to_input_items).collect()
+    crate::tool_result::with_images(contents).iter().flat_map(content_to_input_items).collect()
 }
 
 /// Returns true when the request includes any OpenAI-native tool declarations.
@@ -119,27 +119,36 @@ fn content_to_input_items(content: &Content) -> Vec<InputItem> {
             }
 
             Part::InlineData { mime_type, data, .. } => {
-                if mime_type.starts_with("image/") {
-                    let data_uri =
-                        format!("data:{mime_type};base64,{}", attachment::encode_base64(data));
-                    let image_content = InputContent::InputImage(InputImageContent {
-                        image_url: Some(data_uri),
+                let data = if mime_type.starts_with("image/") {
+                    InputContent::InputImage(InputImageContent {
+                        image_url: Some(format!(
+                            "data:{mime_type};base64,{}",
+                            attachment::encode_base64(data)
+                        )),
                         detail: Default::default(),
                         file_id: None,
-                    });
-                    // Wrap in an EasyMessage with content list
-                    let msg_role = match role {
-                        "model" | "assistant" => Role::Assistant,
-                        _ => Role::User,
-                    };
-                    items.push(InputItem::EasyMessage(EasyInputMessage {
-                        role: msg_role,
-                        content: EasyInputContent::ContentList(vec![image_content]),
+                    })
+                } else if mime_type == "application/pdf" {
+                    InputContent::InputFile(InputFileContent {
+                        file_data: Some(format!(
+                            "data:{mime_type};base64,{}",
+                            attachment::encode_base64(data)
+                        )),
+                        filename: Some("document.pdf".into()),
                         ..Default::default()
-                    }));
-                }
-                // Non-image inline data is not directly supported by Responses API;
-                // skip silently.
+                    })
+                } else {
+                    continue;
+                };
+                let msg_role = match role {
+                    "model" | "assistant" => Role::Assistant,
+                    _ => Role::User,
+                };
+                items.push(InputItem::EasyMessage(EasyInputMessage {
+                    role: msg_role,
+                    content: EasyInputContent::ContentList(vec![data]),
+                    ..Default::default()
+                }));
             }
 
             Part::Thinking { thinking, .. } => {
@@ -594,45 +603,43 @@ pub fn from_response(response: &Response) -> LlmResponse {
     let usage_metadata = response.usage.as_ref().map(convert_usage);
     let finish_reason = map_finish_reason(response);
     let provider_metadata = build_provider_metadata(response);
-    let citation_sources = response
-        .output
-        .iter()
-        .filter_map(|item| match item {
-            OutputItem::Message(message) => Some(&message.content),
-            _ => None,
-        })
-        .flatten()
-        .filter_map(|content| match content {
-            OutputMessageContent::OutputText(text) => Some(&text.annotations),
-            OutputMessageContent::Refusal(_) => None,
-        })
-        .flatten()
-        .filter_map(|annotation| match annotation {
-            Annotation::UrlCitation(citation) => {
-                let value = serde_json::to_value(citation).ok()?;
-                Some(CitationSource {
+    let mut citation_sources = Vec::new();
+    let mut offset = 0usize;
+    for item in &response.output {
+        let OutputItem::Message(message) = item else { continue };
+        if message.phase == Some(MessagePhase::Commentary) {
+            continue;
+        }
+        for content in &message.content {
+            let OutputMessageContent::OutputText(text) = content else { continue };
+            let length = text.text.chars().count();
+            for annotation in &text.annotations {
+                let Annotation::UrlCitation(citation) = annotation else { continue };
+                let Ok(value) = serde_json::to_value(citation) else { continue };
+                let index = |name: &str| {
+                    value
+                        .get(name)
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|value| usize::try_from(value).ok())
+                        .filter(|value| *value <= length)
+                        .and_then(|value| offset.checked_add(value))
+                        .and_then(|value| i32::try_from(value).ok())
+                };
+                citation_sources.push(CitationSource {
                     uri: value.get("url").and_then(serde_json::Value::as_str).map(str::to_owned),
                     title: value
                         .get("title")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_owned),
-                    start_index: value
-                        .get("start_index")
-                        .and_then(serde_json::Value::as_u64)
-                        .and_then(|index| i32::try_from(index).ok()),
-                    end_index: value
-                        .get("end_index")
-                        .and_then(serde_json::Value::as_u64)
-                        .and_then(|index| i32::try_from(index).ok()),
+                    start_index: index("start_index"),
+                    end_index: index("end_index"),
                     license: None,
                     publication_date: None,
-                })
+                });
             }
-            Annotation::FileCitation(_)
-            | Annotation::ContainerFileCitation(_)
-            | Annotation::FilePath(_) => None,
-        })
-        .collect::<Vec<_>>();
+            offset += length;
+        }
+    }
     let citation_metadata =
         (!citation_sources.is_empty()).then_some(CitationMetadata { citation_sources });
 
@@ -661,6 +668,17 @@ pub fn from_response(response: &Response) -> LlmResponse {
 /// - Other variants (WebSearchCall, FileSearchCall, etc.) → empty vec (handled in provider_metadata)
 fn output_item_to_parts(item: &OutputItem) -> Result<Vec<Part>, String> {
     let parts = match item {
+        // Preserve commentary as a native message in canonical history. It is not
+        // answer text and must retain its phase when sent back to the provider.
+        OutputItem::Message(msg) if msg.phase == Some(MessagePhase::Commentary) => {
+            response_item_part(
+                Item::Message(
+                    bridge_response_item(msg)
+                        .expect("output messages have an input representation"),
+                ),
+                false,
+            )
+        }
         OutputItem::Message(msg) => msg
             .content
             .iter()
@@ -999,6 +1017,24 @@ mod tests {
         ServiceTier as OaiServiceTier, WebSearchActionSearch, WebSearchToolCall,
         WebSearchToolCallAction, WebSearchToolCallStatus,
     };
+
+    #[test]
+    fn pdf_inline_data_uses_input_file() {
+        let content = Content {
+            role: "user".into(),
+            parts: vec![Part::inline_data("application/pdf", b"%PDF".to_vec())],
+        };
+        let items = serde_json::to_value(contents_to_input_items(&[content])).unwrap();
+        assert_eq!(items[0]["role"], "user");
+        assert_eq!(
+            items[0]["content"],
+            serde_json::json!([{
+                "type": "input_file",
+                "filename": "document.pdf",
+                "file_data": "data:application/pdf;base64,JVBERg=="
+            }])
+        );
+    }
 
     #[test]
     fn test_convert_tools_supports_native_openai_tool_declarations() {

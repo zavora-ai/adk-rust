@@ -279,6 +279,8 @@ pub mod part_conversion;
 pub mod provider;
 /// Retry logic with exponential backoff for transient provider errors.
 pub mod retry;
+#[cfg(any(feature = "openai", feature = "deepseek", feature = "azure-ai"))]
+mod sse;
 pub mod tool_call_parser;
 #[cfg(any(
     feature = "openai",

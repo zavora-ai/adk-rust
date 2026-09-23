@@ -87,9 +87,11 @@ mod client;
 mod config;
 mod convert;
 mod error;
+mod history;
 mod models;
 mod rate_limit;
 pub mod schema_adapter;
+mod streaming;
 mod token_count;
 
 pub use client::AnthropicClient;

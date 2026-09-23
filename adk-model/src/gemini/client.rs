@@ -368,6 +368,23 @@ impl GeminiModel {
         Ok(Self::from_client(client, model_name))
     }
 
+    /// Create an API-key model using an explicit REST base URL.
+    /// The base URL includes the API version and ends with a slash.
+    pub fn new_with_base_url(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        base_url: impl AsRef<str>,
+    ) -> Result<Self> {
+        let model_name = model.into();
+        let base_url = base_url
+            .as_ref()
+            .parse()
+            .map_err(|_| adk_core::AdkError::model("Invalid Gemini base URL"))?;
+        let client = Gemini::with_model_and_base_url(api_key.into(), model_name.clone(), base_url)
+            .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
+        Ok(Self::from_client(client, model_name))
+    }
+
     /// Create a Gemini model via Vertex AI with API key auth.
     ///
     /// Requires `gemini-vertex` feature.
@@ -388,6 +405,28 @@ impl GeminiModel {
         .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
         let mut model = Self::from_client(client, model_name);
+        model.vertex_backend = true;
+        Ok(model)
+    }
+
+    /// Use an explicit Vertex endpoint and either a supplied key or execution-host ADC.
+    #[cfg(feature = "gemini-vertex")]
+    pub fn new_google_cloud_endpoint(
+        api_key: Option<&str>,
+        project: &str,
+        location: &str,
+        model_name: &str,
+        endpoint: &str,
+    ) -> Result<Self> {
+        let mut builder = adk_gemini::GeminiBuilder::new(api_key.unwrap_or_default())
+            .with_model(model_name.to_owned())
+            .with_google_cloud(project, location)
+            .with_google_cloud_endpoint(endpoint);
+        if api_key.is_none() {
+            builder = builder.with_google_cloud_adc().map_err(|e| gemini_error_to_adk(&e))?;
+        }
+        let client = builder.build().map_err(|e| gemini_error_to_adk(&e))?;
+        let mut model = Self::from_client(client, model_name.to_owned());
         model.vertex_backend = true;
         Ok(model)
     }
@@ -783,34 +822,6 @@ impl GeminiModel {
             }
         }
 
-        // Add grounding metadata as text if present (required for Google Search grounding compliance)
-        if let Some(grounding) = resp.candidates.first().and_then(|c| c.grounding_metadata.as_ref())
-        {
-            if let Some(queries) = &grounding.web_search_queries
-                && !queries.is_empty()
-            {
-                let search_info = format!("\n\n🔍 **Searched:** {}", queries.join(", "));
-                converted_parts.push(Part::Text { text: search_info });
-            }
-            if let Some(chunks) = &grounding.grounding_chunks {
-                let sources: Vec<String> = chunks
-                    .iter()
-                    .filter_map(|c| {
-                        c.web.as_ref().and_then(|w| match (&w.title, &w.uri) {
-                            (Some(title), Some(uri)) => Some(format!("[{}]({})", title, uri)),
-                            (Some(title), None) => Some(title.clone()),
-                            (None, Some(uri)) => Some(uri.to_string()),
-                            (None, None) => None,
-                        })
-                    })
-                    .collect();
-                if !sources.is_empty() {
-                    let sources_info = format!("\n📚 **Sources:** {}", sources.join(" | "));
-                    converted_parts.push(Part::Text { text: sources_info });
-                }
-            }
-        }
-
         let content = if converted_parts.is_empty() {
             None
         } else {
@@ -820,10 +831,15 @@ impl GeminiModel {
 
         let usage_metadata = resp.usage_metadata.as_ref().map(|u| UsageMetadata {
             prompt_token_count: u.prompt_token_count.unwrap_or(0),
-            candidates_token_count: u.candidates_token_count.unwrap_or(0),
+            // Gemini's candidate count excludes the separately reported thoughts.
+            candidates_token_count: u
+                .candidates_token_count
+                .unwrap_or(0)
+                .saturating_add(u.thoughts_token_count.unwrap_or(0)),
             total_token_count: u.total_token_count.unwrap_or(0),
             thinking_token_count: u.thoughts_token_count,
             cache_read_input_token_count: u.cached_content_token_count,
+            provider_usage: serde_json::to_value(u).ok(),
             ..Default::default()
         });
 
@@ -855,7 +871,7 @@ impl GeminiModel {
             });
 
         // Serialize grounding metadata into provider_metadata so consumers
-        // can access structured grounding data (search queries, sources, supports).
+        // can display search queries and sources without changing the answer.
         let provider_metadata = resp
             .candidates
             .first()

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is also applied to invocation-scoped toolsets.
 ### Fixed
 
+- **Native provider fidelity** (`adk-model`, `adk-anthropic`, `adk-gemini`): retain streamed Unicode, tool images, PDF inputs, native search/reasoning blocks and usage; preserve commentary for application rendering and honor explicit request/retry configuration.
+
 - **OpenAI reasoning history** (`adk-model`): `Part::Thinking` is excluded
   from visible user, assistant, and system message content. By default,
   subsequent model requests omit Thinking entirely instead of replaying it

@@ -57,6 +57,7 @@ impl BedrockClient {
         let prompt_caching = config.prompt_caching.clone();
 
         let mut sdk_config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .retry_config(aws_smithy_types::retry::RetryConfig::standard().with_max_attempts(1))
             .region(aws_config::Region::new(config.region.clone()));
 
         if let Some(endpoint_url) = &config.endpoint_url {
@@ -69,6 +70,30 @@ impl BedrockClient {
         info!("bedrock client created for region={region}, model={model_id}");
 
         Ok(Self { client, model_id, region, retry_config: RetryConfig::default(), prompt_caching })
+    }
+
+    /// Use an explicit Bedrock bearer key without reading the process credential chain.
+    pub fn new_with_api_key(config: BedrockConfig, api_key: &str) -> Result<Self, AdkError> {
+        let mut sdk = aws_sdk_bedrockruntime::Config::builder()
+            .behavior_version_latest()
+            .region(aws_sdk_bedrockruntime::config::Region::new(config.region.clone()))
+            .retry_config(aws_smithy_types::retry::RetryConfig::standard().with_max_attempts(1))
+            .bearer_token(aws_sdk_bedrockruntime::config::Token::new(api_key, None));
+        if let Some(endpoint) = &config.endpoint_url {
+            sdk = sdk.endpoint_url(endpoint);
+        }
+        Ok(Self::from_client(config, aws_sdk_bedrockruntime::Client::from_conf(sdk.build())))
+    }
+
+    /// Supply a configured SDK client, preserving its identity and transport ownership.
+    pub fn from_client(config: BedrockConfig, client: aws_sdk_bedrockruntime::Client) -> Self {
+        Self {
+            client,
+            model_id: config.model_id,
+            region: config.region,
+            retry_config: RetryConfig::disabled(),
+            prompt_caching: config.prompt_caching,
+        }
     }
 
     /// Set the retry configuration, consuming and returning `self`.
@@ -315,6 +340,11 @@ impl BedrockClient {
                     ConverseStreamOutput::Metadata(metadata_event) => {
                         if let Some(usage) = &metadata_event.usage {
                             pending_usage = Some(adk_core::UsageMetadata {
+                                provider_usage: Some(serde_json::json!({
+                                    "inputTokens":usage.input_tokens, "outputTokens":usage.output_tokens,
+                                    "totalTokens":usage.total_tokens, "cacheReadInputTokens":usage.cache_read_input_tokens,
+                                    "cacheWriteInputTokens":usage.cache_write_input_tokens,
+                                })),
                                 prompt_token_count: usage.input_tokens,
                                 candidates_token_count: usage.output_tokens,
                                 total_token_count: usage.total_tokens,
@@ -334,6 +364,8 @@ impl BedrockClient {
             if let Some(mut stop) = pending_stop {
                 stop.usage_metadata = pending_usage.take();
                 yield stop;
+            } else {
+                Err(AdkError::model("incomplete Bedrock event stream"))?;
             }
         };
 

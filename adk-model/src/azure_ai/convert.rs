@@ -23,7 +23,19 @@ pub(crate) fn build_request_body(
     config: Option<&GenerateContentConfig>,
     stream: bool,
 ) -> Value {
-    let messages: Vec<Value> = contents.iter().map(content_to_message).collect();
+    let mut messages = Vec::new();
+    for content in contents {
+        if matches!(content.role.as_str(), "function" | "tool") {
+            for part in &content.parts {
+                messages.push(content_to_message(&Content {
+                    role: content.role.clone(),
+                    parts: vec![part.clone()],
+                }));
+            }
+        } else {
+            messages.push(content_to_message(content));
+        }
+    }
 
     let mut body = serde_json::json!({
         "model": model,
@@ -73,6 +85,16 @@ pub(crate) fn build_request_body(
 fn content_to_message(content: &Content) -> Value {
     match content.role.as_str() {
         "user" => {
+            if content.parts.iter().any(|part| matches!(part, Part::InlineData { .. })) {
+                let parts = content.parts.iter().filter_map(|part| match part {
+                    Part::Text { text } => Some(serde_json::json!({"type":"text", "text":text})),
+                    Part::InlineData { mime_type, data, .. } => Some(serde_json::json!({
+                        "type":"image_url", "image_url":{"url":format!("data:{mime_type};base64,{}", crate::attachment::encode_base64(data))}
+                    })),
+                    _ => None,
+                }).collect::<Vec<_>>();
+                return serde_json::json!({"role":"user", "content":parts});
+            }
             let text = extract_text(&content.parts);
             serde_json::json!({
                 "role": "user",
@@ -230,8 +252,9 @@ pub(crate) fn parse_response(body: &Value) -> LlmResponse {
         .and_then(|fr| fr.as_str())
         .map(map_finish_reason);
 
-    let usage_metadata = body.get("usage").map(|u| {
+    let usage_metadata = body.get("usage").filter(|usage| usage.is_object()).map(|u| {
         let mut meta = UsageMetadata {
+            provider_usage: Some(u.clone()),
             prompt_token_count: u.get("prompt_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
             candidates_token_count: u.get("completion_tokens").and_then(|v| v.as_i64()).unwrap_or(0)
                 as i32,
@@ -249,13 +272,14 @@ pub(crate) fn parse_response(body: &Value) -> LlmResponse {
         meta
     });
 
+    let turn_complete = content.as_ref().is_none_or(|content| !content.has_function_calls());
     LlmResponse {
         content,
         usage_metadata,
         finish_reason,
         citation_metadata: None,
         partial: false,
-        turn_complete: true,
+        turn_complete,
         interrupted: false,
         error_code: None,
         error_message: None,
@@ -330,7 +354,7 @@ pub(crate) fn parse_sse_chunk(chunk: &Value) -> LlmResponse {
 
     LlmResponse {
         content,
-        usage_metadata: None,
+        usage_metadata: parse_response(chunk).usage_metadata,
         finish_reason,
         citation_metadata: None,
         partial: !is_final,

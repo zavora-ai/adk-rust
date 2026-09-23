@@ -6,22 +6,19 @@ use super::error::AnthropicApiError;
 use super::rate_limit::RateLimitInfo;
 use super::schema_adapter::AnthropicSchemaAdapter;
 use crate::retry::{RetryConfig, ServerRetryHint, execute_with_retry, is_retryable_model_error};
-use adk_anthropic::{
-    Anthropic, ContentBlock, ContentBlockDelta, ContentBlockDeltaEvent, MessageStreamEvent,
-    StopReason, TextDelta,
-};
+use adk_anthropic::{Anthropic, ContentBlock};
+#[cfg(test)]
+use adk_anthropic::{ContentBlockDelta, ContentBlockDeltaEvent, MessageStreamEvent, TextDelta};
 use adk_core::{
-    AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, Part, SchemaAdapter,
-    SchemaCache,
+    AdkError, ErrorCategory, ErrorComponent, Llm, LlmRequest, Part, SchemaAdapter, SchemaCache,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::StreamExt;
-use std::pin::pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::Span;
 use tracing::field;
-use tracing::{Span, debug};
 
 /// Anthropic client for Claude models.
 pub struct AnthropicClient {
@@ -56,13 +53,15 @@ impl AnthropicClient {
     /// Create a new Anthropic client.
     pub fn new(config: AnthropicConfig) -> Result<Self, AdkError> {
         crate::catalog::warn_if_obsolete("anthropic", &config.model);
-        let mut client = Anthropic::new(Some(config.api_key.clone()))
-            .map_err(|e| AdkError::model(format!("Failed to create Anthropic client: {e}")))?;
-        if let Some(base_url) = &config.base_url {
-            client = client.with_base_url(base_url.clone()).map_err(|e| {
-                AdkError::model(format!("Invalid Anthropic base URL '{base_url}': {e}"))
-            })?;
+        let mut client = match &config.base_url {
+            Some(base_url) => {
+                Anthropic::new_with_base_url(config.api_key.clone(), base_url.clone())
+            }
+            None => Anthropic::new(Some(config.api_key.clone())),
         }
+        .map_err(|e| AdkError::model(format!("Failed to create Anthropic client: {e}")))?;
+        // This adapter owns retries; do not nest the SDK's independent retry loop.
+        client = client.with_max_retries(0);
 
         Ok(Self {
             client,
@@ -451,7 +450,7 @@ pub(super) fn convert_anthropic_error(e: adk_anthropic::Error) -> AdkError {
 ///
 /// Requirements 4.1, 4.2, 4.4: Parse structured error body fields and
 /// capture the request-id header value.
-fn to_anthropic_api_error(e: &adk_anthropic::Error) -> AnthropicApiError {
+pub(super) fn to_anthropic_api_error(e: &adk_anthropic::Error) -> AnthropicApiError {
     match e {
         adk_anthropic::Error::Api { status_code, error_type, message, request_id } => {
             AnthropicApiError {
@@ -591,227 +590,9 @@ impl Llm for AnthropicClient {
                 })
                 .await?;
 
-                // Pin the stream for iteration
-                let mut pinned_stream = pin!(event_stream);
-
-                // Track tool calls being built
-                let mut current_tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args_json)
-                let mut current_tool_index: Option<usize> = None;
-                let mut pending_server_parts: Vec<Part> = Vec::new();
-
-                // Track usage from MessageStart for propagation to final MessageDelta
-                let mut stream_input_tokens: i32 = 0;
-                let mut stream_cache_read_tokens: Option<i32> = None;
-                let mut stream_cache_creation_tokens: Option<i32> = None;
-
-                while let Some(event_result) = pinned_stream.next().await {
-                    // Requirement 3.4: Handle error events from the stream.
-                    // The adk-anthropic SSE parser converts `event: error` into stream Err values
-                    // with structured error info. We emit these as LlmResponse with error fields
-                    // rather than propagating as AdkError.
-                    let event = match event_result {
-                        Ok(ev) => ev,
-                        Err(ref e) => {
-                            // Requirement 4.2: extract request-id from stream errors
-                            let api_err = to_anthropic_api_error(e);
-                            if let Some(ref rid) = api_err.request_id {
-                                Span::current().record("anthropic.request_id", rid.as_str());
-                            }
-                            // Requirement 11.4: Record error details as a span event
-                            tracing::error!(
-                                error.type_ = %api_err.error_type,
-                                error.message = %api_err.message,
-                                error.status_code = api_err.status_code,
-                                "anthropic stream error"
-                            );
-                            yield convert::from_stream_error(&api_err.error_type, &api_err.message);
-                            continue;
-                        }
-                    };
-
-                    match event {
-                        MessageStreamEvent::ContentBlockStart(start_event) => {
-                            // Check if this is a tool_use block
-                            let index = start_event.index;
-                            match start_event.content_block {
-                                ContentBlock::ToolUse(tool_use) => {
-                                    current_tool_index = Some(index);
-                                    while current_tool_calls.len() <= index {
-                                        current_tool_calls
-                                            .push((String::new(), String::new(), String::new()));
-                                    }
-                                    current_tool_calls[index] = (
-                                        tool_use.id.clone(),
-                                        tool_use.name.clone(),
-                                        String::new(),
-                                    );
-                                }
-                                ContentBlock::ServerToolUse(server_tool_use) => {
-                                    if let Ok(val) = serde_json::to_value(server_tool_use) {
-                                        pending_server_parts
-                                            .push(Part::ServerToolCall { server_tool_call: val });
-                                    }
-                                }
-                                ContentBlock::WebSearchToolResult(web_search_result) => {
-                                    if let Ok(val) = serde_json::to_value(web_search_result) {
-                                        pending_server_parts.push(Part::ServerToolResponse {
-                                            server_tool_response: val,
-                                        });
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        MessageStreamEvent::ContentBlockDelta(ContentBlockDeltaEvent { index, delta }) => {
-                            match delta {
-                                ContentBlockDelta::TextDelta(TextDelta { text }) => {
-                                    if !text.is_empty() {
-                                        yield convert::from_text_delta(&text);
-                                    }
-                                }
-                                ContentBlockDelta::InputJsonDelta(json_delta) => {
-                                    // Accumulate tool call arguments
-                                    if let Some(idx) = current_tool_index {
-                                        if idx < current_tool_calls.len() {
-                                            current_tool_calls[idx].2.push_str(&json_delta.partial_json);
-                                        }
-                                    } else if index < current_tool_calls.len() {
-                                        current_tool_calls[index].2.push_str(&json_delta.partial_json);
-                                    }
-                                }
-                                // Requirement 3.1: Emit thinking deltas wrapped in <thinking> tags
-                                ContentBlockDelta::ThinkingDelta(td) => {
-                                    if !td.thinking.is_empty() {
-                                        yield convert::from_thinking_delta(&td.thinking);
-                                    }
-                                }
-                                // Requirement 3.2: Accumulate signature deltas silently
-                                ContentBlockDelta::SignatureDelta(_) => {}
-                                // Requirement 3.5: Log unrecognized deltas at debug level
-                                ContentBlockDelta::CitationsDelta(cd) => {
-                                    debug!(?cd, "citations delta received (not yet mapped)");
-                                }
-                            }
-                        }
-                        MessageStreamEvent::ContentBlockStop { .. } => {
-                            current_tool_index = None;
-                        }
-                        MessageStreamEvent::MessageDelta(delta_event) => {
-                            // Check for stop reason
-                            if let Some(stop_reason) = &delta_event.delta.stop_reason {
-                                let turn_complete = !matches!(stop_reason, StopReason::ToolUse);
-                                let finish_reason = match stop_reason {
-                                    StopReason::EndTurn => Some(FinishReason::Stop),
-                                    StopReason::MaxTokens => Some(FinishReason::MaxTokens),
-                                    StopReason::StopSequence => Some(FinishReason::Stop),
-                                    StopReason::ToolUse => Some(FinishReason::Stop),
-                                    StopReason::PauseTurn => Some(FinishReason::Stop),
-                                    StopReason::Refusal => Some(FinishReason::Safety),
-                                    StopReason::PauseRun => Some(FinishReason::Stop),
-                                    StopReason::ModelContextWindowExceeded => Some(FinishReason::MaxTokens),
-                                };
-
-                                // If we have accumulated tool calls, emit them
-                                let mut parts = std::mem::take(&mut pending_server_parts);
-                                if !current_tool_calls.is_empty() {
-                                    let tool_calls = current_tool_calls
-                                        .drain(..)
-                                        .filter(|(id, name, _)| !id.is_empty() && !name.is_empty())
-                                        .map(|(id, name, args_str)| {
-                                            let args: serde_json::Value = serde_json::from_str(&args_str)
-                                                .unwrap_or(serde_json::json!({}));
-                                            Part::FunctionCall {
-                                                name,
-                                                args,
-                                                id: Some(id),
-                                                thought_signature: None,
-                                            }
-                                        })
-                                        .collect::<Vec<_>>();
-                                    parts.extend(tool_calls);
-                                }
-
-                                if !parts.is_empty() {
-                                    yield adk_core::LlmResponse {
-                                        content: Some(adk_core::Content {
-                                            role: "model".to_string(),
-                                            parts,
-                                        }),
-                                        usage_metadata: Some(adk_core::UsageMetadata {
-                                            prompt_token_count: stream_input_tokens,
-                                            candidates_token_count: delta_event.usage.output_tokens,
-                                            total_token_count: stream_input_tokens + delta_event.usage.output_tokens,
-                                            cache_read_input_token_count: stream_cache_read_tokens,
-                                            cache_creation_input_token_count: stream_cache_creation_tokens,
-                                            ..Default::default()
-                                        }),
-                                        finish_reason,
-                                        citation_metadata: None,
-                                        partial: false,
-                                        turn_complete,
-                                        interrupted: false,
-                                        error_code: None,
-                                        error_message: None,
-                                        provider_metadata: None,
-                                        interaction_id: None,
-                                    };
-                                    continue;
-                                }
-
-                                // Emit final message
-                                yield adk_core::LlmResponse {
-                                    content: None,
-                                    usage_metadata: Some(adk_core::UsageMetadata {
-                                        prompt_token_count: stream_input_tokens,
-                                        candidates_token_count: delta_event.usage.output_tokens,
-                                        total_token_count: stream_input_tokens + delta_event.usage.output_tokens,
-                                        cache_read_input_token_count: stream_cache_read_tokens,
-                                        cache_creation_input_token_count: stream_cache_creation_tokens,
-                                        ..Default::default()
-                                    }),
-                                    finish_reason,
-                                    citation_metadata: None,
-                                    partial: false,
-                                    turn_complete,
-                                    interrupted: false,
-                                    error_code: None,
-                                    error_message: None,
-                                    provider_metadata: None,
-                                    interaction_id: None,
-                                };
-                            }
-                        }
-                        MessageStreamEvent::MessageStop(_) => {
-                            // Stream complete
-                        }
-                        // Requirement 3.3: Treat ping as keep-alive no-op
-                        MessageStreamEvent::Ping => {}
-                        // Requirement 3.5: Log unrecognized events at debug level
-                        MessageStreamEvent::MessageStart(start_event) => {
-                            debug!("message_start event received");
-                            // Store input tokens for the final UsageMetadata
-                            stream_input_tokens = start_event.message.usage.input_tokens;
-                            // Store cache token counts for propagation to the final MessageDelta
-                            stream_cache_read_tokens = start_event.message.usage.cache_read_input_tokens;
-                            stream_cache_creation_tokens = start_event.message.usage.cache_creation_input_tokens;
-                            // Requirement 6.3: Extract cache usage from the initial message usage
-                            let cache_meta = convert::extract_cache_usage(&start_event.message.usage);
-                            if !cache_meta.is_empty() {
-                                debug!(
-                                    cache_creation = ?start_event.message.usage.cache_creation_input_tokens,
-                                    cache_read = ?start_event.message.usage.cache_read_input_tokens,
-                                    "cache usage tokens received in stream"
-                                );
-                            }
-                        }
-                        // New adk-anthropic event variants — log at debug level for now
-                        MessageStreamEvent::ToolInputStart { .. }
-                        | MessageStreamEvent::ToolInputDelta { .. }
-                        | MessageStreamEvent::CompactionEvent(_)
-                        | MessageStreamEvent::StreamError { .. } => {
-                            debug!("unhandled stream event variant received");
-                        }
-                    }
+                let mut responses = super::streaming::responses(event_stream);
+                while let Some(response) = responses.next().await {
+                    yield response?;
                 }
             } else {
                 // Non-streaming mode

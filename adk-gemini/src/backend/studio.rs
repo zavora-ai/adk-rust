@@ -79,6 +79,7 @@ impl StudioBackend {
 
         let http_client = Client::builder()
             .default_headers(headers)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("all parameters must be valid");
 

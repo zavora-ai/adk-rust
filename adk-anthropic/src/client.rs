@@ -178,9 +178,26 @@ impl Anthropic {
             }
         };
 
+        let base_url = Self::resolve_base_url(env::var("ANTHROPIC_BASE_URL").ok())?;
+        Self::from_values(api_key, base_url)
+    }
+
+    /// Create a client with a literal API key and an explicit base URL.
+    /// This constructor does not read environment variables or credential files.
+    pub fn new_with_base_url(
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self> {
+        let base_url = base_url.into();
+        validate_base_url(&base_url)?;
+        Self::from_values(api_key.into(), base_url)
+    }
+
+    fn from_values(api_key: String, base_url: String) -> Result<Self> {
         let timeout = DEFAULT_TIMEOUT;
         let client = ReqwestClient::builder()
             .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
             .pool_max_idle_per_host(10) // Connection pooling optimization
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Duration::from_secs(60))
@@ -191,11 +208,6 @@ impl Anthropic {
 
         // Pre-build headers for performance
         let cached_headers = Arc::new(Self::build_default_headers(&api_key)?);
-
-        // Resolve base URL from environment variable, defaulting to the API URL.
-        // An env-provided value is validated here so the cleartext path closed on
-        // `with_base_url` cannot be reopened through the environment.
-        let base_url = Self::resolve_base_url(env::var("ANTHROPIC_BASE_URL").ok())?;
 
         Ok(Self {
             api_key,
@@ -1646,6 +1658,26 @@ mod tests {
         // Test that rate_limit error (which 529 now maps to) is also retryable
         let rate_limit_error = Error::rate_limit("Overloaded", Some(5));
         assert!(rate_limit_error.is_retryable());
+    }
+
+    #[test]
+    fn explicit_configuration() {
+        if std::env::var_os("ADK_EXPLICIT_CONFIG_CHILD").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "client::tests::explicit_configuration"])
+                .env("ADK_EXPLICIT_CONFIG_CHILD", "1")
+                .env("ANTHROPIC_BASE_URL", "invalid-environment-url")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let key = "file:///adk-explicit-key-does-not-exist";
+        let client = Anthropic::new_with_base_url(key, "http://127.0.0.1:12345").unwrap();
+        assert_eq!(client.api_key, key);
+        assert_eq!(client.cached_headers["x-api-key"], key);
+        assert_eq!(client.base_url, "http://127.0.0.1:12345");
+        assert!(Anthropic::new_with_base_url(key, "invalid-explicit-url").is_err());
     }
 
     #[test]

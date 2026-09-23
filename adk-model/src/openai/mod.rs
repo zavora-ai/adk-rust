@@ -14,6 +14,7 @@
 //! })?;
 //! ```
 
+mod azure;
 mod background;
 mod client;
 mod compaction;
@@ -23,6 +24,7 @@ pub mod conversations;
 pub(crate) mod convert;
 pub mod file_input;
 pub mod pricing;
+mod request;
 mod responses_client;
 mod responses_convert;
 pub mod schema_adapter;
@@ -32,13 +34,15 @@ pub mod ws_transport;
 pub use crate::openai_compatible::{
     OpenAICompatible, OpenAICompatibleConfig, ReasoningReplayField,
 };
-pub use client::{AzureOpenAIClient, OpenAIClient};
+pub use azure::AzureOpenAIClient;
+pub use client::OpenAIClient;
 pub use config::{
     AzureConfig, OpenAIConfig, OpenAIReasoningEffort, OpenAIResponsesConfig, PromptCacheRetention,
     ReasoningEffort, ReasoningSummary, ResponsesTransport, ServiceTier,
 };
 #[cfg(feature = "openai-conversations")]
 pub use conversations::ConversationsClient;
+pub use request::RequestAdapter;
 pub use responses_client::OpenAIResponsesClient;
 pub use schema_adapter::{OpenAiSchemaAdapter, OpenAiStrictSchemaAdapter};
 #[cfg(feature = "openai-ws")]

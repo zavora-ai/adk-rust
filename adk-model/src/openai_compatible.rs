@@ -249,7 +249,9 @@ impl OpenAICompatibleConfig {
 
 /// Shared OpenAI-compatible client implementation.
 pub struct OpenAICompatible {
+    completion_url: Option<String>,
     http: reqwest::Client,
+    request_adapter: Option<crate::openai::RequestAdapter>,
     api_key: String,
     base_url: String,
     model: String,
@@ -287,7 +289,12 @@ impl OpenAICompatible {
         let base_url = config.base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
         Ok(Self {
-            http: reqwest::Client::new(),
+            completion_url: None,
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| AdkError::model("failed to initialize compatible HTTP transport"))?,
+            request_adapter: None,
             api_key: config.api_key,
             base_url,
             model: config.model,
@@ -304,6 +311,24 @@ impl OpenAICompatible {
     #[must_use]
     pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
+        self
+    }
+
+    /// Customize generation request fields and headers before each HTTP attempt.
+    #[must_use]
+    pub fn with_request_adapter(mut self, adapter: crate::openai::RequestAdapter) -> Self {
+        self.request_adapter = Some(adapter);
+        self
+    }
+
+    /// Use a native service's fully qualified Chat Completions route.
+    pub(crate) fn with_completion_url(mut self, url: String) -> Self {
+        self.completion_url = Some(url);
+        self
+    }
+
+    pub(crate) fn with_reasoning_effort(mut self, effort: Option<OpenAIReasoningEffort>) -> Self {
+        self.reasoning_effort = effort;
         self
     }
 
@@ -425,7 +450,8 @@ pub(crate) fn build_request_json(
         )
         .with_provider("gemini"));
     }
-    let messages: Vec<_> = request.contents.iter().map(convert::content_to_message).collect();
+    let contents = crate::tool_result::with_images(&request.contents);
+    let messages: Vec<_> = contents.iter().map(convert::content_to_message).collect();
 
     let mut request_builder = CreateChatCompletionRequestArgs::default();
     request_builder.model(model).messages(messages);
@@ -478,7 +504,7 @@ pub(crate) fn build_request_json(
         body["reasoning_effort"] = serde_json::Value::String("max".to_string());
     }
 
-    inject_assistant_reasoning(&mut body, &request.contents, reasoning_replay_field);
+    inject_assistant_reasoning(&mut body, &contents, reasoning_replay_field);
 
     // Merge provider-specific extensions from config.extensions["openai"] into
     // the request body.  This allows users to pass provider-specific fields
@@ -520,8 +546,20 @@ async fn send_request(
     organization_id: &Option<String>,
     body: &serde_json::Value,
     provider_name: &str,
+    adapter: Option<&crate::openai::RequestAdapter>,
 ) -> Result<reqwest::Response, AdkError> {
-    let mut http_req = http.post(url).bearer_auth(api_key).json(body);
+    let mut http_req = http.post(url);
+    if !api_key.is_empty() {
+        http_req = http_req.bearer_auth(api_key);
+    }
+    if let Some(adapter) = adapter {
+        let mut body = body.clone();
+        let mut headers = reqwest::header::HeaderMap::new();
+        adapter(&mut body, &mut headers)?;
+        http_req = http_req.headers(headers).json(&body);
+    } else {
+        http_req = http_req.json(body);
+    }
 
     if let Some(org_id) = organization_id {
         http_req = http_req.header("OpenAI-Organization", org_id);
@@ -642,10 +680,13 @@ impl Llm for OpenAICompatible {
         let http = self.http.clone();
         let api_key = self.api_key.clone();
         let base_url = self.base_url.clone();
+        let completion_url =
+            self.completion_url.clone().unwrap_or_else(|| format!("{base_url}/chat/completions"));
         let retry_config = self.retry_config.clone();
         let reasoning_effort = self.reasoning_effort;
         let reasoning_replay_field = self.reasoning_replay_field;
         let organization_id = self.organization_id.clone();
+        let request_adapter = self.request_adapter.clone();
 
         // Normalize tool schemas at request time using the schema adapter.
         let adapter = self.schema_adapter();
@@ -677,7 +718,7 @@ impl Llm for OpenAICompatible {
                     );
                 }
 
-                let url = format!("{base_url}/chat/completions");
+                let url = completion_url.clone();
 
                 // Retry covers only the initial HTTP request, not stream consumption.
                 let response = execute_with_retry(&retry_config, is_retryable_model_error, || {
@@ -687,15 +728,16 @@ impl Llm for OpenAICompatible {
                     let organization_id = organization_id.clone();
                     let body = body.clone();
                     let provider_name = provider_name.clone();
+                    let request_adapter = request_adapter.clone();
                     async move {
-                        send_request(&http, &url, &api_key, &organization_id, &body, &provider_name).await
+                        send_request(&http, &url, &api_key, &organization_id, &body, &provider_name, request_adapter.as_ref()).await
                     }
                 })
                 .await?;
 
                 // Process SSE byte stream (following DeepSeekClient pattern).
                 let mut byte_stream = response.bytes_stream();
-                let mut buffer = String::new();
+                let mut buffer = Vec::new();
                 let mut tool_call_accumulators: HashMap<u32, (String, String, String)> =
                     HashMap::new();
                 let mut text_tool_buffer = crate::tool_call_parser::ToolCallBuffer::new();
@@ -706,12 +748,10 @@ impl Llm for OpenAICompatible {
                         AdkError::model(format!("stream read error: {e}"))
                     })?;
 
-                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    buffer.extend_from_slice(&chunk);
 
                     // Process complete SSE lines.
-                    while let Some(line_end) = buffer.find('\n') {
-                        let line = buffer[..line_end].trim().to_string();
-                        buffer = buffer[line_end + 1..].to_string();
+                    while let Some(line) = take_line(&mut buffer)? {
 
                         if line.is_empty() {
                             continue;
@@ -974,13 +1014,14 @@ impl Llm for OpenAICompatible {
                     let provider_name = provider_name.clone();
                     let http = http.clone();
                     let api_key = api_key.clone();
-                    let base_url = base_url.clone();
+                    let completion_url = completion_url.clone();
                     let body = request_body.clone();
                     let organization_id = organization_id.clone();
+                    let request_adapter = request_adapter.clone();
                     async move {
-                        let url = format!("{base_url}/chat/completions");
+                        let url = completion_url.clone();
                         let http_resp =
-                            send_request(&http, &url, &api_key, &organization_id, &body, &provider_name)
+                            send_request(&http, &url, &api_key, &organization_id, &body, &provider_name, request_adapter.as_ref())
                                 .await?;
 
                         let raw_json: serde_json::Value = http_resp.json().await.map_err(|e| {
@@ -1024,11 +1065,59 @@ impl Llm for OpenAICompatible {
     }
 }
 
+use crate::sse::take_line;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use adk_core::{GenericSchemaAdapter, LlmRequest, SchemaCache};
     use std::sync::Arc;
+
+    mod sse_lines {
+        use super::take_line;
+
+        #[test]
+        fn preserves_every_split() {
+            let expected = r#"data: {"text":"é中文🙂�","arguments":"{\"path\":\"资料.txt\",\"text\":\"改动🙂\"}"}"#;
+            let framed = format!("{expected}\r\n");
+            for split in 0..framed.len() {
+                let mut buffer = framed.as_bytes()[..split].to_vec();
+                assert_eq!(take_line(&mut buffer).unwrap(), None);
+                buffer.extend_from_slice(&framed.as_bytes()[split..]);
+                assert_eq!(take_line(&mut buffer).unwrap().as_deref(), Some(expected));
+                assert!(buffer.is_empty());
+            }
+        }
+
+        #[test]
+        fn accepts_bytewise_delivery() {
+            let expected = "data: 中文🙂é";
+            let mut buffer = Vec::new();
+            for byte in expected.as_bytes() {
+                buffer.push(*byte);
+                assert_eq!(take_line(&mut buffer).unwrap(), None);
+            }
+            buffer.push(b'\n');
+            assert_eq!(take_line(&mut buffer).unwrap().as_deref(), Some(expected));
+            assert!(buffer.is_empty());
+        }
+
+        #[test]
+        fn leaves_following_lines() {
+            let mut buffer = "data: 第一行\r\n\r\ndata: 第二行🙂\n".as_bytes().to_vec();
+            assert_eq!(take_line(&mut buffer).unwrap().as_deref(), Some("data: 第一行"));
+            assert_eq!(take_line(&mut buffer).unwrap().as_deref(), Some(""));
+            assert_eq!(take_line(&mut buffer).unwrap().as_deref(), Some("data: 第二行🙂"));
+            assert_eq!(take_line(&mut buffer).unwrap(), None);
+        }
+
+        #[test]
+        fn rejects_invalid_utf8() {
+            for invalid in [b"data: \xc3(\n".as_slice(), b"data: \xf0\x9f\n".as_slice()] {
+                assert!(take_line(&mut invalid.to_vec()).is_err());
+            }
+        }
+    }
 
     #[test]
     fn test_parallel_tool_calls_config() {

@@ -42,6 +42,10 @@ pub fn content_to_message(
         _ => MessageRole::User,
     };
 
+    if let Some(blocks) = super::history::restore(content)? {
+        return Ok(MessageParam::new_with_blocks(blocks, role));
+    }
+
     // Note: cache_control is applied at the system prompt and top-level request
     // level only (max 4 blocks). Individual message blocks do not get cache_control
     // to avoid exceeding Anthropic's 4-block limit.
@@ -282,25 +286,37 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
         }
     }
 
+    if let Some(native) = super::history::preserve(message) {
+        parts.push(native);
+    }
     let content =
         if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) };
 
+    // Anthropic reports uncached input separately from cache reads and writes.
+    let prompt_token_count = message
+        .usage
+        .input_tokens
+        .saturating_add(message.usage.cache_read_input_tokens.unwrap_or(0))
+        .saturating_add(message.usage.cache_creation_input_tokens.unwrap_or(0));
     let usage_metadata = Some(UsageMetadata {
-        prompt_token_count: message.usage.input_tokens,
+        prompt_token_count,
         candidates_token_count: message.usage.output_tokens,
-        total_token_count: (message.usage.input_tokens + message.usage.output_tokens),
+        total_token_count: prompt_token_count.saturating_add(message.usage.output_tokens),
         cache_read_input_token_count: message.usage.cache_read_input_tokens,
         cache_creation_input_token_count: message.usage.cache_creation_input_tokens,
+        provider_usage: serde_json::to_value(message.usage).ok(),
         ..Default::default()
     });
 
     let finish_reason = message.stop_reason.as_ref().map(|sr| match sr {
         StopReason::EndTurn => FinishReason::Stop,
-        StopReason::MaxTokens => FinishReason::MaxTokens,
+        StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => FinishReason::MaxTokens,
+        StopReason::Refusal => FinishReason::Safety,
         StopReason::StopSequence => FinishReason::Stop,
         StopReason::ToolUse => FinishReason::Stop,
         _ => FinishReason::Stop,
     });
+    let paused = matches!(message.stop_reason, Some(StopReason::PauseTurn));
     let tool_call_turn = matches!(message.stop_reason, Some(StopReason::ToolUse))
         || content.as_ref().is_some_and(Content::has_function_calls);
 
@@ -311,13 +327,13 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
             content,
             usage_metadata,
             finish_reason,
-            citation_metadata: None,
+            citation_metadata: super::history::citations(message),
             partial: false,
-            turn_complete: !tool_call_turn,
+            turn_complete: !tool_call_turn && !paused,
             interrupted: false,
             error_code: None,
             error_message: None,
-            provider_metadata: None,
+            provider_metadata: paused.then(|| serde_json::json!({"continue_turn": true})),
             interaction_id: None,
         },
         cache_meta,

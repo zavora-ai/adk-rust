@@ -54,6 +54,7 @@ impl DeepSeekClient {
     pub fn new(config: DeepSeekConfig) -> Result<Self, AdkError> {
         crate::catalog::warn_if_obsolete("deepseek", &config.model);
         let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| AdkError::model(format!("failed to create HTTP client: {e}")))?;
 
@@ -271,7 +272,8 @@ impl Llm for DeepSeekClient {
 
             if stream {
                 let mut byte_stream = response.bytes_stream();
-                let mut buffer = String::new();
+                let mut buffer = Vec::new();
+                let mut finished = false;
                 let mut tool_call_accumulators: std::collections::HashMap<u32, (String, String, String)> =
                     std::collections::HashMap::new();
                 let mut reasoning_buffer = String::new();
@@ -280,11 +282,9 @@ impl Llm for DeepSeekClient {
                     let chunk = chunk_result
                         .map_err(|e| AdkError::model(format!("stream read error: {e}")))?;
 
-                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    buffer.extend_from_slice(&chunk);
 
-                    while let Some(line_end) = buffer.find('\n') {
-                        let line = buffer[..line_end].trim().to_string();
-                        buffer = buffer[line_end + 1..].to_string();
+                    while let Some(line) = crate::sse::take_line(&mut buffer)? {
 
                         if line.is_empty() || line == "data: [DONE]" {
                             continue;
@@ -344,6 +344,7 @@ impl Llm for DeepSeekClient {
 
                                         // Check for finish
                                         if choice.finish_reason.is_some() {
+                                            finished = true;
                                             let finish_reason = choice.finish_reason.as_ref().map(|fr| {
                                                 match fr.as_str() {
                                                     "stop" => FinishReason::Stop,
@@ -361,21 +362,22 @@ impl Llm for DeepSeekClient {
                                                 let tool_calls: Vec<_> = sorted_calls
                                                     .into_iter()
                                                     .map(|(_, (id, name, args_str))| {
-                                                        let args: Value =
-                                                            serde_json::from_str(&args_str)
-                                                                .unwrap_or(serde_json::json!({}));
-                                                        (id, name, args)
+                                                        let args: Value = serde_json::from_str(&args_str)
+                                                            .map_err(|_| AdkError::model("invalid DeepSeek tool arguments"))?;
+                                                        Ok((id, name, args))
                                                     })
-                                                    .collect();
+                                                    .collect::<Result<_, AdkError>>()?;
                                                 let tool_reasoning = convert::pending_reasoning(
                                                     &mut reasoning_buffer,
                                                     thinking_enabled,
                                                 );
-                                                yield convert::create_tool_call_response(
+                                                let mut response = convert::create_tool_call_response(
                                                     tool_calls,
                                                     finish_reason,
                                                     tool_reasoning,
                                                 );
+                                                response.usage_metadata = chunk_response.usage.as_ref().map(convert::usage);
+                                                yield response;
                                                 continue;
                                             }
 
@@ -400,17 +402,7 @@ impl Llm for DeepSeekClient {
 
                                             yield LlmResponse {
                                                 content,
-                                                usage_metadata: chunk_response.usage.map(|u| {
-                                                    adk_core::UsageMetadata {
-                                                        prompt_token_count: u.prompt_tokens as i32,
-                                                        candidates_token_count: u.completion_tokens as i32,
-                                                        total_token_count: u.total_tokens as i32,
-                                                        thinking_token_count: u.reasoning_tokens.map(|t| t as i32),
-                                                        cache_read_input_token_count: u.prompt_cache_hit_tokens.map(|t| t as i32),
-                                                        cache_creation_input_token_count: u.prompt_cache_miss_tokens.map(|t| t as i32),
-                                                        ..Default::default()
-                                                    }
-                                                }),
+                                                usage_metadata: chunk_response.usage.as_ref().map(convert::usage),
                                                 finish_reason,
                                                 partial: false,
                                                 turn_complete,
@@ -436,12 +428,15 @@ impl Llm for DeepSeekClient {
                                         }
                                     }
                                 }
-                                Err(e) => {
-                                    tracing::warn!("failed to parse DeepSeek chunk: {e} - {data}");
+                                Err(_) => {
+                                    Err(AdkError::model("invalid DeepSeek event data"))?;
                                 }
                             }
                         }
                     }
+                }
+                if !finished || buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                    Err(AdkError::model("incomplete DeepSeek event stream"))?;
                 }
             } else {
                 // Non-streaming mode
