@@ -45,13 +45,16 @@ impl BrowserSession {
         Self::new(BrowserConfig::default())
     }
 
-    /// Start the browser session by connecting to WebDriver.
+    /// Start the browser session, replacing an unavailable WebDriver connection.
     pub async fn start(&self) -> Result<()> {
         let mut driver_guard = self.driver.write().await;
 
-        if driver_guard.is_some() {
-            return Ok(()); // Already started
+        if let Some(driver) = driver_guard.as_ref()
+            && driver.title().await.is_ok()
+        {
+            return Ok(());
         }
+        *driver_guard = None;
 
         let caps = self.build_capabilities()?;
         let driver = WebDriver::new(&self.config.webdriver_url, caps)
@@ -122,6 +125,11 @@ impl BrowserSession {
                     return Ok(());
                 }
             }
+        }
+        if self.config.require_explicit_start {
+            return Err(AdkError::tool(
+                "Browser session is unavailable; explicitly restart it before continuing",
+            ));
         }
         // Session is dead or missing — (re)create it
         // First clear the stale driver if any
@@ -804,8 +812,6 @@ impl BrowserSession {
                         AdkError::tool(format!("Failed to add headless arg: {}", e))
                     })?;
                 }
-                caps.add_arg("--no-sandbox")
-                    .map_err(|e| AdkError::tool(format!("Failed to add no-sandbox: {}", e)))?;
                 caps.add_arg("--disable-dev-shm-usage")
                     .map_err(|e| AdkError::tool(format!("Failed to add disable-dev-shm: {}", e)))?;
 
@@ -820,6 +826,11 @@ impl BrowserSession {
                     })?;
                 }
 
+                for (name, value) in &self.config.chrome_options {
+                    caps.add_experimental_option(name, value.clone()).map_err(|error| {
+                        AdkError::tool(format!("Invalid Chrome option: {error}"))
+                    })?;
+                }
                 caps.into()
             }
             BrowserType::Firefox => {
@@ -926,5 +937,28 @@ mod tests {
         let session = BrowserSession::new(config);
         let caps = session.build_capabilities();
         assert!(caps.is_ok());
+    }
+    #[tokio::test]
+    async fn explicit_start_does_not_connect_implicitly() {
+        let config = BrowserConfig { require_explicit_start: true, ..Default::default() };
+        let session = BrowserSession::new(config);
+        let error = session.ensure_started().await.unwrap_err();
+        assert!(error.to_string().contains("explicitly restart"));
+        assert!(!session.is_active().await);
+    }
+
+    #[test]
+    fn chrome_options_preserve_binary_and_download_preferences() {
+        let mut config = BrowserConfig::default();
+        config.chrome_options.insert("binary".into(), serde_json::json!("/opt/chromium"));
+        config.chrome_options.insert(
+            "prefs".into(),
+            serde_json::json!({"download.default_directory":"/tmp/downloads"}),
+        );
+        let caps = BrowserSession::new(config).build_capabilities().unwrap();
+        let options = &caps["goog:chromeOptions"];
+        assert_eq!(options["binary"], "/opt/chromium");
+        assert_eq!(options["prefs"]["download.default_directory"], "/tmp/downloads");
+        assert!(!options["args"].as_array().unwrap().iter().any(|arg| arg == "--no-sandbox"));
     }
 }

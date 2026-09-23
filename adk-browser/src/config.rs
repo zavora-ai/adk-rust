@@ -34,6 +34,14 @@ pub struct BrowserConfig {
 
     /// Additional browser arguments
     pub browser_args: Vec<String>,
+
+    /// Require the host to explicitly start or restart a lost session.
+    #[serde(default)]
+    pub require_explicit_start: bool,
+
+    /// Chrome options supplied by the execution host, including binary and download preferences.
+    #[serde(default)]
+    pub chrome_options: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// Supported browser types.
@@ -59,6 +67,8 @@ impl Default for BrowserConfig {
             implicit_wait_secs: 10,
             user_agent: None,
             browser_args: Vec::new(),
+            chrome_options: Default::default(),
+            require_explicit_start: false,
         }
     }
 }

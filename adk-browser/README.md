@@ -433,3 +433,11 @@ Apache-2.0
 ## Part of ADK-Rust
 
 This crate is part of the [ADK-Rust](https://github.com/zavora-ai/adk-rust) framework for building AI agents in Rust.
+
+### Host-managed browser sessions
+
+Set `BrowserConfig::require_explicit_start` to require `BrowserSession::start`
+before tools connect or recreate a lost session. The default remains automatic
+startup. `chrome_options` supplies Chrome options such as `binary` and `prefs`.
+Chrome's sandbox is enabled by default; environments that require disabling it
+must explicitly add `--no-sandbox` to `browser_args`.

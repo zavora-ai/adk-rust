@@ -64,6 +64,8 @@ proptest! {
         let result: Result<(), TestCaseError> = rt.block_on(async {
             let backend = ProcessBackend::default();
             let timeout = Duration::from_millis(timeout_ms);
+            // The sandbox clears the environment; sleep still needs an explicit PATH.
+            let path = std::env::var("PATH").expect("the test environment must provide PATH");
 
             let request = ExecRequest {
                 language: Language::Command,
@@ -71,7 +73,7 @@ proptest! {
                 stdin: None,
                 timeout,
                 memory_limit_mb: None,
-                env: HashMap::new(),
+                env: HashMap::from([("PATH".to_string(), path)]),
             };
 
             let start = std::time::Instant::now();

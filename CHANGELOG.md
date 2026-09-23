@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Browser session options** (`adk-browser`): optional explicit session startup and Chrome binary/preferences overrides. Chrome keeps its sandbox unless callers explicitly supply `--no-sandbox`.
+
 - **Automatic progressive-skill guidance** (`adk-skill`, `adk-agent`):
   `SkillToolset` now adds guidance for its currently available tools to each
   model request through the new `Toolset::process_llm_request` hook. Guidance
