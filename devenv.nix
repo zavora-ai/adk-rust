@@ -24,6 +24,8 @@
 
   # Load .env file automatically
   dotenv.enable = builtins.pathExists ./.env;
+  # The locked module leaves this undefined when dotenv is disabled.
+  dotenv.resolved = lib.mkDefault { };
 
   # --------------------------------------------------------------------------
   # Core Languages

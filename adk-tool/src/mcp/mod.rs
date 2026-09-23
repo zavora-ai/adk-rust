@@ -1,6 +1,7 @@
 mod auth;
 mod elicitation;
 mod http;
+mod input;
 pub mod manager;
 mod reconnect;
 mod resource_notifications;

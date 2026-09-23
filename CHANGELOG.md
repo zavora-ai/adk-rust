@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Preserve MCP task execution for direct tool calls and retain pending tasks until cancellation is confirmed.
+
 ### Added
 
 - **Automatic progressive-skill guidance** (`adk-skill`, `adk-agent`):

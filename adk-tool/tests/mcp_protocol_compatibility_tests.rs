@@ -625,6 +625,7 @@ async fn a_server_pinned_to_the_oldest_revision_still_works() {
 #[derive(Clone, Default)]
 struct TaskServer {
     tasks: Arc<rmcp::task_manager::TaskManager>,
+    hold: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl rmcp::ServerHandler for TaskServer {
@@ -654,10 +655,14 @@ impl rmcp::ServerHandler for TaskServer {
             return Ok(CallToolResult::success(vec![ContentBlock::text("inline")]).into());
         }
 
-        let task = self.tasks.spawn(rmcp::task_manager::TaskOptions::default(), |_ctx| {
-            Box::pin(
-                async move { Ok(CallToolResult::success(vec![ContentBlock::text("from a task")])) },
-            )
+        let hold = self.hold.clone();
+        let task = self.tasks.spawn(rmcp::task_manager::TaskOptions::default(), move |_ctx| {
+            Box::pin(async move {
+                if let Some(hold) = hold {
+                    hold.notified().await;
+                }
+                Ok(CallToolResult::success(vec![ContentBlock::text("from a task")]))
+            })
         });
         Ok(rmcp::model::CallToolResponse::Task(rmcp::model::CreateTaskResult::new(task)))
     }
@@ -668,6 +673,15 @@ impl rmcp::ServerHandler for TaskServer {
         _context: rmcp::service::RequestContext<RoleServer>,
     ) -> Result<rmcp::model::GetTaskResult, rmcp::ErrorData> {
         Ok(rmcp::model::GetTaskResult::new(self.tasks.get_task(&params.task_id)?))
+    }
+
+    async fn cancel_task(
+        &self,
+        params: rmcp::model::CancelTaskParams,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<(), rmcp::ErrorData> {
+        self.tasks.cancel_task(&params.task_id)?;
+        Ok(())
     }
 }
 
@@ -731,4 +745,41 @@ async fn a_declared_client_polls_a_server_materialized_task() {
         .await
         .expect("the task must be polled to completion");
     assert!(output.to_string().contains("from a task"), "got {output}");
+}
+
+#[tokio::test]
+async fn direct_calls_support_tasks_and_cleanup_after_cancellation() {
+    let server =
+        TaskServer { hold: Some(Arc::new(tokio::sync::Notify::new())), ..Default::default() };
+    let hold = server.hold.clone().unwrap();
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    tokio::spawn(async move {
+        let running = server.serve(server_io).await.unwrap();
+        let _ = running.waiting().await;
+    });
+    let handler = adk_tool::mcp::AdkClientHandler::new(Arc::new(
+        adk_tool::mcp::AutoDeclineElicitationHandler,
+    ))
+    .with_tasks();
+    let client = handler.serve(client_io).await.unwrap();
+    let toolset =
+        McpToolset::new(client).with_task_support(adk_tool::mcp::McpTaskConfig::enabled());
+    let call = toolset.call_tool_value("slow_tool", Default::default());
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(100), call).await.is_err());
+    let error = toolset.cancel_pending_tasks().await.unwrap_err();
+    assert!(error.to_string().contains("has not confirmed termination"));
+    // The server acknowledges cancellation before its operation exits.
+    hold.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if toolset.cancel_pending_tasks().await.is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed task must be removed");
+    // Acknowledged terminal tasks are removed; repeated cleanup is a no-op.
+    toolset.cancel_pending_tasks().await.unwrap();
 }
