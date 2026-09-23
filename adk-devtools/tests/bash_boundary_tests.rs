@@ -77,11 +77,12 @@ async fn a_command_cannot_read_an_inherited_secret() {
 #[tokio::test]
 async fn allowlisted_variables_still_reach_the_command() {
     // Clearing everything would break the tools an agent is meant to run.
+    let path = std::env::var("PATH").expect("the test environment must provide PATH");
     let (_dir, workspace) = temp_workspace();
-    let result = run_bash(workspace, "echo \"path=$PATH\"", None).await.expect("must run");
-    let stdout = result["stdout"].as_str().unwrap_or_default();
+    let result = run_bash(workspace, "printf '%s\\n' \"$PATH\"", None).await.expect("must run");
 
-    assert!(stdout.contains("path=/"), "PATH must be available or nothing can run: {stdout}");
+    assert_eq!(result["exit_code"], json!(0));
+    assert_eq!(result["stdout"], json!(format!("{path}\n")));
 }
 
 #[tokio::test]

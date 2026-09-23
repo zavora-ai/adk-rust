@@ -361,6 +361,8 @@ impl Event {
 
     /// Returns whether the event is the final response of an agent.
     ///
+    /// Tool-start notifications and provider-native continuation pauses are not final.
+    ///
     /// An event is considered final if:
     /// - It has skip_summarization set, OR
     /// - It has long_running_tool_ids (indicating async operations), OR
@@ -370,6 +372,18 @@ impl Event {
     /// Note: When multiple agents participate in one invocation, there could be
     /// multiple events with is_final_response() as true, for each participating agent.
     pub fn is_final_response(&self) -> bool {
+        if self.provider_metadata.contains_key("adk_tool_started")
+            || self
+                .llm_response
+                .provider_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("continue_turn"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        {
+            return false;
+        }
+
         // If skip_summarization is set or we have long-running tools, it's final
         if self.actions.skip_summarization || !self.long_running_tool_ids.is_empty() {
             return true;
@@ -556,6 +570,30 @@ mod tests {
         let event = Event::new("inv-123");
         // No content, no function calls -> final
         assert!(event.is_final_response());
+    }
+
+    #[test]
+    fn tool_start_is_not_final() {
+        let mut event = Event::new("inv-123");
+        event.provider_metadata.insert(
+            "adk_tool_started".into(),
+            serde_json::json!({"id": "call-1", "name": "search"}).to_string(),
+        );
+        assert!(!event.llm_response.partial);
+        assert!(!event.is_final_response());
+    }
+
+    #[test]
+    fn provider_continuation_is_not_final() {
+        for content in [None, Some(Content::new("model").with_text("Searching"))] {
+            let mut event = Event::new("inv-123");
+            event.llm_response.content = content;
+            event.llm_response.provider_metadata = Some(serde_json::json!({"continue_turn": true}));
+            assert!(!event.is_final_response());
+            event.llm_response.provider_metadata =
+                Some(serde_json::json!({"continue_turn": false}));
+            assert!(event.is_final_response());
+        }
     }
 
     #[test]

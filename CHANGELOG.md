@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is also applied to invocation-scoped toolsets.
 ### Fixed
 
+- **Agent event fidelity** (`adk-agent`): preserve citations and complete terminal content, continue provider-native paused turns, and emit individual tool results while sibling approvals are pending. Propagate approval failures and keep tool-start events from ending responses. Built-in streaming consumers avoid appending complete snapshots twice; `adk-core::EventTextDeltas` exposes the same text/thinking adapter to applications.
+
 - **OpenAI reasoning history** (`adk-model`): `Part::Thinking` is excluded
   from visible user, assistant, and system message content. By default,
   subsequent model requests omit Thinking entirely instead of replaying it

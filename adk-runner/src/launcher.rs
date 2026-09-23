@@ -139,17 +139,19 @@ impl Launcher {
                 .run(UserId::new("user")?, SessionId::new(&session_id)?, user_content)
                 .await?;
 
+            let mut text_deltas = adk_core::EventTextDeltas::default();
             while let Some(event) = stream.next().await {
                 match event {
                     Ok(evt) => {
+                        let evt = text_deltas.push(&evt);
                         if let Some(content) = evt.content() {
                             for part in &content.parts {
                                 match part {
-                                    Part::Text { text } => {
+                                    Part::Text { text } if !text.is_empty() => {
                                         print!("{text}");
                                         io::stdout().flush().ok();
                                     }
-                                    Part::Thinking { thinking, .. } => {
+                                    Part::Thinking { thinking, .. } if !thinking.is_empty() => {
                                         print!("\n[thinking] {thinking}");
                                         io::stdout().flush().ok();
                                     }

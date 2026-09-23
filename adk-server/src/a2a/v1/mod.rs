@@ -9,6 +9,7 @@ pub mod rest_handler;
 pub mod state_machine;
 pub mod stream;
 pub mod task_store;
+mod text;
 pub mod version;
 
 pub use executor::V1Executor;

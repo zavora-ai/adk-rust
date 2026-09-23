@@ -611,6 +611,7 @@ impl AcpSessionHandler {
 
             // Confirmations surfaced during this run, awaiting a client decision.
             let mut pending: Vec<ToolConfirmationRequest> = Vec::new();
+            let mut text_deltas = adk_core::EventTextDeltas::default();
 
             loop {
                 let result = tokio::select! {
@@ -630,6 +631,7 @@ impl AcpSessionHandler {
                             pending.push(confirmation.clone());
                             continue;
                         }
+                        let event = text_deltas.push(&event);
                         for update in ResponseStreamer::map_event(&event) {
                             connection
                                 .send_notification(SessionNotification::new(

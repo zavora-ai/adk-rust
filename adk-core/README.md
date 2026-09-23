@@ -171,6 +171,26 @@ event.actions    // State changes, transfers, escalation
 event.provider_metadata  // HashMap<String, String>
 ```
 
+#### Complete response snapshots
+
+Terminal events marked with `llm_response.provider_metadata.content_complete`
+contain the complete response for their event ID, including earlier streamed
+text. Preserve the original event for persistence and replacement-aware UIs.
+Append-only output can use one `EventTextDeltas` adapter per live stream:
+
+```rust
+let mut deltas = adk_core::EventTextDeltas::default();
+while let Some(event) = stream.next().await {
+    let event = event?;
+    let output = deltas.push(&event);
+    // Render output.content(); persist the original event.
+}
+```
+
+The adapter preserves tool parts, thinking signatures, actions and usage. A
+non-prefix correction is returned in full because append-only output cannot
+retract text already rendered.
+
 #### First-class tool events
 
 Events expose typed, render-ready views of tool activity, so UIs consume tool

@@ -511,6 +511,20 @@ render — not just `bash`-style tools.
 below) back to its originating call. Providers that omit call ids (e.g. Gemini)
 leave it `None`; fall back to `name` in that case.
 
+### Complete response snapshots
+
+Partial model events carry live deltas. A terminal event marked with
+`llm_response.provider_metadata.content_complete = true` contains the complete
+response for the same event ID, including text already streamed. Persist the
+original terminal event, or replace the matching partial projection with it.
+
+Append-only consumers can keep one `adk_core::EventTextDeltas` per stream and
+call `push(&event)` before rendering. The adapter removes previously emitted
+text and thinking prefixes while preserving tool parts, signatures, actions,
+and usage. It leaves unmarked deltas unchanged. A corrected snapshot that no
+longer starts with the emitted prefix is returned in full; append-only output
+cannot retract earlier content.
+
 ### Streaming Tool Progress
 
 Long-running tools (a shell command, a build, a download) can push intermediate

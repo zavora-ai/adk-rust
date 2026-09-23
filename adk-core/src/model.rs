@@ -130,6 +130,11 @@ pub struct LlmResponse {
     /// Error message from the provider, if any.
     pub error_message: Option<String>,
     /// Provider-specific metadata (e.g., response IDs, routing info).
+    ///
+    /// `LlmAgent` recognizes two optional boolean fields: `content_complete`
+    /// on a non-partial response replaces accumulated deltas with authoritative
+    /// content; `continue_turn` requests another bounded model iteration for
+    /// a provider-native tool pause without a client function call.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub provider_metadata: Option<serde_json::Value>,
     /// Interactions API: the server-assigned interaction id for this turn, used

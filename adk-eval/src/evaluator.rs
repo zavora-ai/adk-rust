@@ -434,8 +434,27 @@ impl Evaluator {
     fn extract_from_events(&self, events: &[Event]) -> (Option<String>, Vec<ToolUse>) {
         let mut response_text = String::new();
         let mut tool_calls = Vec::new();
+        let complete_ids: std::collections::HashSet<_> = events
+            .iter()
+            .filter(|event| {
+                !event.llm_response.partial
+                    && event
+                        .llm_response
+                        .provider_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("content_complete"))
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+            })
+            .map(|event| (&event.invocation_id, &event.id))
+            .collect();
 
         for event in events {
+            if event.llm_response.partial
+                && complete_ids.contains(&(&event.invocation_id, &event.id))
+            {
+                continue;
+            }
             // Extract text content
             if let Some(content) = event.content() {
                 for part in &content.parts {
@@ -958,6 +977,22 @@ impl adk_core::State for EvalState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_snapshots_replace_partial_text_and_calls() {
+        let evaluator = Evaluator::new(EvaluationConfig::default());
+        let mut partial = Event::with_id("response", "invocation");
+        partial.llm_response.partial = true;
+        partial.llm_response.content = Some(Content::new("model").with_text("Draft"));
+        let mut final_event = partial.clone();
+        final_event.llm_response.partial = false;
+        final_event.llm_response.provider_metadata =
+            Some(serde_json::json!({"content_complete":true}));
+        final_event.llm_response.content = Some(Content::new("model").with_text("Corrected"));
+        let (text, calls) = evaluator.extract_from_events(&[partial, final_event]);
+        assert_eq!(text.as_deref(), Some("Corrected"));
+        assert!(calls.is_empty());
+    }
 
     #[test]
     fn test_evaluator_creation() {

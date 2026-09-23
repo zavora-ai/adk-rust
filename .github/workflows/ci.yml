@@ -88,6 +88,7 @@ jobs:
 
 
     - name: Run clippy
+      shell: bash
       run: CI=true devenv shell ws-clippy --message-format=json | tee clippy.json
 
     - name: Annotate clippy warnings
@@ -120,7 +121,8 @@ jobs:
     - run: nix profile install nixpkgs#devenv
 
     - name: Run tests
-      run: CI=true devenv shell ws-test-ci | tee test.log
+      shell: bash
+      run: CI=true devenv shell ws-test-ci 2>&1 | tee test.log
 
     - name: Generate computer-use v8 ADK evaluation receipt
       run: CI=true devenv shell node scripts/generate-computer-use-v8-evidence.mjs --subject-version "${COMPUTER_USE_MCP_V8_VERSION}" --output adk-computer-use-v8-evidence.json --compact

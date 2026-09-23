@@ -13,6 +13,7 @@ pub struct EventProcessor {
     response_id: Option<String>,
     terminal_state: Option<TaskState>,
     has_artifacts: bool,
+    text_deltas: adk_core::EventTextDeltas,
 }
 
 impl EventProcessor {
@@ -25,13 +26,15 @@ impl EventProcessor {
             response_id: None,
             terminal_state: None,
             has_artifacts: false,
+            text_deltas: adk_core::EventTextDeltas::default(),
         }
     }
 
     pub fn process(&mut self, event: &Event) -> Result<Option<TaskArtifactUpdateEvent>> {
         self.update_terminal_actions(event);
+        let event = self.text_deltas.push(event);
 
-        let event_meta = to_event_meta(&self.meta, event);
+        let event_meta = to_event_meta(&self.meta, &event);
         let event_meta_map: serde_json::Map<String, serde_json::Value> =
             event_meta.into_iter().collect();
 

@@ -86,6 +86,7 @@ pub mod context;
 pub mod error;
 /// Event types representing agent interactions in a conversation.
 pub mod event;
+mod event_stream;
 /// Typed identity primitives for app, user, session, and invocation.
 pub mod identity;
 /// Template-based instruction injection with session state interpolation.
@@ -138,6 +139,7 @@ pub use event::{
     TOOL_PROGRESS_CALL_ID_KEY, TOOL_PROGRESS_STREAM_KEY, ToolCallView, ToolResultView,
     event_belongs_to_branch,
 };
+pub use event_stream::EventTextDeltas;
 pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,
 };

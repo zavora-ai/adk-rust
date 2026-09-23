@@ -27,6 +27,7 @@ use super::executor::V1Executor;
 use super::push::PushNotificationSender;
 use super::stream::wrap_artifact_event;
 use super::task_store::{ListTasksParams, TaskStore};
+use super::text::ResponseText;
 
 /// Validates an ID string (messageId or taskId).
 fn validate_id(id: &str, field_name: &str) -> Result<(), A2aError> {
@@ -347,17 +348,11 @@ impl RequestHandler {
     ) -> Result<(), A2aError> {
         let mut event_stream = Self::start_agent(runner_config, context_id, msg).await?;
 
-        let mut response_text = String::new();
+        let mut response_text = ResponseText::default();
         while let Some(result) = event_stream.next().await {
             match result {
                 Ok(event) => {
-                    if let Some(content) = &event.llm_response.content {
-                        for part in &content.parts {
-                            if let Some(text) = part.text() {
-                                response_text.push_str(text);
-                            }
-                        }
-                    }
+                    response_text.push(&event);
                 }
                 Err(e) => {
                     return Err(A2aError::Internal { message: format!("agent error: {e}") });
@@ -365,6 +360,7 @@ impl RequestHandler {
             }
         }
 
+        let response_text = response_text.text();
         if !response_text.is_empty() {
             let artifact = Artifact::new(
                 ArtifactId::new(uuid::Uuid::new_v4().to_string()),
@@ -487,18 +483,12 @@ impl RequestHandler {
                 // One artifact ID for the whole response so a client can join the chunks.
                 let artifact_id = uuid::Uuid::new_v4().to_string();
                 let mut chunks_sent = false;
-                let mut full_text = String::new();
+                let mut full_text = ResponseText::default();
 
                 while let Some(result) = event_stream.next().await {
                     match result {
                         Ok(event) => {
-                            let Some(content) = &event.llm_response.content else { continue };
-                            let text: String =
-                                content.parts.iter().filter_map(|p| p.text()).collect();
-                            if text.is_empty() {
-                                continue;
-                            }
-                            full_text.push_str(&text);
+                            let Some((text, append)) = full_text.push(&event) else { continue };
 
                             let partial = event.llm_response.partial;
                             let artifact = Artifact::new(
@@ -509,7 +499,7 @@ impl RequestHandler {
                                 task_id: a2a_protocol_types::TaskId::new(tid.clone()),
                                 context_id: a2a_protocol_types::ContextId::new(cid.clone()),
                                 artifact,
-                                append: Some(chunks_sent),
+                                append: Some(chunks_sent && append),
                                 last_chunk: Some(!partial),
                                 metadata: None,
                             }));
@@ -532,6 +522,7 @@ impl RequestHandler {
 
                 // Persist the joined text so `tasks/get` returns the same artifact a
                 // non-streaming caller would have received.
+                let full_text = full_text.text();
                 if !full_text.is_empty() {
                     let artifact = Artifact::new(
                         ArtifactId::new(artifact_id),
@@ -811,6 +802,43 @@ mod tests {
         chunks: Vec<String>,
     }
 
+    struct SnapshotAgent {
+        prefix: String,
+        snapshot: String,
+    }
+
+    #[async_trait::async_trait]
+    impl adk_core::Agent for SnapshotAgent {
+        fn name(&self) -> &str {
+            "snapshot_agent"
+        }
+
+        fn description(&self) -> &str {
+            "emits an authoritative response after text deltas"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
+            &[]
+        }
+
+        async fn run(
+            &self,
+            _ctx: Arc<dyn adk_core::InvocationContext>,
+        ) -> adk_core::Result<adk_core::EventStream> {
+            let mut first = adk_core::Event::new("invocation");
+            first.set_content(adk_core::Content::new("model").with_text(&self.prefix));
+            let mut delta = adk_core::Event::new("invocation");
+            delta.llm_response.partial = true;
+            delta.set_content(adk_core::Content::new("model").with_text("Hello"));
+            let mut terminal = delta.clone();
+            terminal.llm_response.partial = false;
+            terminal.llm_response.provider_metadata =
+                Some(serde_json::json!({"content_complete": true}));
+            terminal.set_content(adk_core::Content::new("model").with_text(&self.snapshot));
+            Ok(Box::pin(futures::stream::iter(vec![Ok(first), Ok(delta), Ok(terminal)])))
+        }
+    }
+
     #[async_trait::async_trait]
     impl adk_core::Agent for ChunkingAgent {
         fn name(&self) -> &str {
@@ -940,6 +968,65 @@ mod tests {
         assert_eq!(artifacts[1].append, Some(true), "later chunks append");
         assert_eq!(artifacts[0].last_chunk, Some(false));
         assert_eq!(artifacts[1].last_chunk, Some(true), "the final chunk must be marked");
+    }
+
+    #[tokio::test]
+    async fn snapshots_replace_streamed_deltas_and_persist_the_same_text() {
+        for prefix in ["", "Earlier. "] {
+            for snapshot in ["Hello world", "Corrected", ""] {
+                let (handler, store) = handler_with_agent(Arc::new(SnapshotAgent {
+                    prefix: prefix.into(),
+                    snapshot: snapshot.into(),
+                }));
+                let mut stream = handler.message_stream(make_test_message()).await.unwrap();
+                let mut task_id = None;
+                let mut received = String::new();
+                let mut last_update = None;
+                while let Some(item) = stream.next().await {
+                    match item.unwrap() {
+                        StreamResponse::Task(task) => task_id = Some(task.id.0),
+                        StreamResponse::ArtifactUpdate(update) => {
+                            if update.append != Some(true) {
+                                received.clear();
+                            }
+                            received.extend(update.artifact.parts.iter().filter_map(part_text));
+                            last_update = Some(update);
+                        }
+                        _ => {}
+                    }
+                }
+                let expected = format!("{prefix}{snapshot}");
+                assert_eq!(received, expected);
+                let update = last_update.unwrap();
+                assert_eq!(
+                    (update.append, update.last_chunk),
+                    (Some(snapshot.starts_with("Hello")), Some(true))
+                );
+                let task = store.get_task(&task_id.unwrap()).await.unwrap();
+                let stored: String = task
+                    .artifacts
+                    .iter()
+                    .flat_map(|artifact| artifact.parts.iter().filter_map(part_text))
+                    .collect();
+                assert_eq!(stored, expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn buffered_send_replaces_deltas_with_the_snapshot() {
+        let (handler, _) = handler_with_agent(Arc::new(SnapshotAgent {
+            prefix: "Earlier. ".into(),
+            snapshot: "Hello world".into(),
+        }));
+        let task = handler.message_send(make_test_message()).await.unwrap();
+        let text: String = task
+            .artifacts
+            .unwrap()
+            .iter()
+            .flat_map(|artifact| artifact.parts.iter().filter_map(part_text))
+            .collect();
+        assert_eq!(text, "Earlier. Hello world");
     }
 
     #[tokio::test]

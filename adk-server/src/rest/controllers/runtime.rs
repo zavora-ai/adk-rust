@@ -726,7 +726,12 @@ fn serialize_ag_ui_tool_call_delta(args: &Value, allow_raw_string_delta: bool) -
     serde_json::to_string(args).unwrap_or_else(|_| args.to_string())
 }
 
-fn translate_ag_ui_event(event: &adk_core::Event, thread_id: &str, run_id: &str) -> Vec<Value> {
+fn translate_ag_ui_event(
+    event: &adk_core::Event,
+    thread_id: &str,
+    run_id: &str,
+    open: &AgUiMessages,
+) -> Vec<Value> {
     let mut translated = Vec::new();
     let timestamp = timestamp_millis(event);
     let is_partial = event.llm_response.partial;
@@ -754,10 +759,25 @@ fn translate_ag_ui_event(event: &adk_core::Event, thread_id: &str, run_id: &str)
         return translated;
     };
 
+    let mut text_seen = false;
+    let mut thinking_seen = false;
     for (index, part) in content.parts.iter().enumerate() {
         match part {
-            adk_core::Part::Text { text } if !text.trim().is_empty() => {
-                let message_id = format!("{}-text-{}", event.id, index);
+            adk_core::Part::Text { .. } if !text_seen => {
+                text_seen = true;
+                let text: String = content
+                    .parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        adk_core::Part::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                if text.is_empty() && (is_partial || open.text.is_none()) {
+                    continue;
+                }
+                let message_id =
+                    open.text.clone().unwrap_or_else(|| format!("{}-text-{}", event.id, index));
                 if is_partial {
                     translated.push(json!({
                         "type": "TEXT_MESSAGE_CHUNK",
@@ -767,27 +787,46 @@ fn translate_ag_ui_event(event: &adk_core::Event, thread_id: &str, run_id: &str)
                         "timestamp": timestamp,
                     }));
                 } else {
-                    translated.push(json!({
+                    if open.text.is_none() {
+                        translated.push(json!({
                         "type": "TEXT_MESSAGE_START",
                         "messageId": message_id,
                         "role": "assistant",
                         "timestamp": timestamp,
-                    }));
-                    translated.push(json!({
+                        }));
+                    }
+                    if !text.is_empty() {
+                        translated.push(json!({
                         "type": "TEXT_MESSAGE_CONTENT",
-                        "messageId": format!("{}-text-{}", event.id, index),
+                        "messageId": message_id,
                         "delta": text,
                         "timestamp": timestamp,
-                    }));
+                        }));
+                    }
                     translated.push(json!({
                         "type": "TEXT_MESSAGE_END",
-                        "messageId": format!("{}-text-{}", event.id, index),
+                        "messageId": message_id,
                         "timestamp": timestamp,
                     }));
                 }
             }
-            adk_core::Part::Thinking { thinking, .. } if !thinking.trim().is_empty() => {
-                let message_id = format!("{}-reasoning-{}", event.id, index);
+            adk_core::Part::Thinking { .. } if !thinking_seen => {
+                thinking_seen = true;
+                let thinking: String = content
+                    .parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        adk_core::Part::Thinking { thinking, .. } => Some(thinking.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                if thinking.is_empty() && (is_partial || open.reasoning.is_none()) {
+                    continue;
+                }
+                let message_id = open
+                    .reasoning
+                    .clone()
+                    .unwrap_or_else(|| format!("{}-reasoning-{}", event.id, index));
                 if is_partial {
                     translated.push(json!({
                         "type": "REASONING_MESSAGE_CHUNK",
@@ -797,26 +836,30 @@ fn translate_ag_ui_event(event: &adk_core::Event, thread_id: &str, run_id: &str)
                     }));
                 } else {
                     let reasoning_id = format!("{}-reasoning-phase-{}", event.id, index);
-                    translated.push(json!({
-                        "type": "REASONING_START",
-                        "messageId": reasoning_id,
-                        "timestamp": timestamp,
-                    }));
-                    translated.push(json!({
+                    if open.reasoning.is_none() {
+                        translated.push(json!({
+                            "type": "REASONING_START",
+                            "messageId": reasoning_id,
+                            "timestamp": timestamp,
+                        }));
+                        translated.push(json!({
                         "type": "REASONING_MESSAGE_START",
                         "messageId": message_id,
                         "role": "assistant",
                         "timestamp": timestamp,
-                    }));
-                    translated.push(json!({
+                        }));
+                    }
+                    if !thinking.is_empty() {
+                        translated.push(json!({
                         "type": "REASONING_MESSAGE_CONTENT",
-                        "messageId": format!("{}-reasoning-{}", event.id, index),
+                        "messageId": message_id,
                         "delta": thinking,
                         "timestamp": timestamp,
-                    }));
+                        }));
+                    }
                     translated.push(json!({
                         "type": "REASONING_MESSAGE_END",
-                        "messageId": format!("{}-reasoning-{}", event.id, index),
+                        "messageId": message_id,
                         "timestamp": timestamp,
                     }));
                     translated.push(json!({
@@ -1013,11 +1056,62 @@ fn apply_mcp_apps_runtime_envelope(
     }
 }
 
-fn direct_ag_ui_events(event: &adk_core::Event, thread_id: &str, run_id: &str) -> Vec<String> {
-    translate_ag_ui_event(event, thread_id, run_id)
-        .into_iter()
-        .filter_map(|item| serde_json::to_string(&item).ok())
-        .collect()
+#[derive(Default)]
+struct AgUiMessages {
+    text: Option<String>,
+    reasoning: Option<String>,
+}
+
+#[derive(Default)]
+struct AgUiStream {
+    deltas: adk_core::EventTextDeltas,
+    messages: HashMap<(String, String), AgUiMessages>,
+}
+
+impl AgUiStream {
+    fn translate(&mut self, event: &adk_core::Event, thread_id: &str, run_id: &str) -> Vec<Value> {
+        let key = (event.invocation_id.clone(), event.id.clone());
+        let mut open = self.messages.remove(&key).unwrap_or_default();
+        let mut delta = self.deltas.push(event);
+        if !event.llm_response.partial {
+            let parts = delta.content().map(|content| content.parts.as_slice()).unwrap_or(&[]);
+            let mut endings = Vec::new();
+            if open.text.is_some()
+                && !parts.iter().any(|part| matches!(part, adk_core::Part::Text { .. }))
+            {
+                endings.push(adk_core::Part::Text { text: String::new() });
+            }
+            if open.reasoning.is_some()
+                && !parts.iter().any(|part| matches!(part, adk_core::Part::Thinking { .. }))
+            {
+                endings.push(adk_core::Part::Thinking { thinking: String::new(), signature: None });
+            }
+            if !endings.is_empty() {
+                delta
+                    .to_mut()
+                    .llm_response
+                    .content
+                    .get_or_insert_with(|| adk_core::Content::new("model"))
+                    .parts
+                    .extend(endings);
+            }
+        }
+        let translated = translate_ag_ui_event(&delta, thread_id, run_id, &open);
+        if event.llm_response.partial {
+            for item in &translated {
+                let id = item.get("messageId").and_then(Value::as_str).map(str::to_owned);
+                match item.get("type").and_then(Value::as_str) {
+                    Some("TEXT_MESSAGE_CHUNK") => open.text = id,
+                    Some("REASONING_MESSAGE_CHUNK") => open.reasoning = id,
+                    _ => {}
+                }
+            }
+            if open.text.is_some() || open.reasoning.is_some() {
+                self.messages.insert(key, open);
+            }
+        }
+        translated
+    }
 }
 
 fn build_runtime_sse_stream<S>(
@@ -1043,6 +1137,7 @@ where
     Box::pin(async_stream::stream! {
         let native_ag_ui = profile == UiProfile::AgUi && transport == UiTransportMode::ProtocolNative;
         let mut started = false;
+        let mut ag_ui_stream = AgUiStream::default();
         let mut active_run_id = ag_ui_input.as_ref().and_then(|input| input.run_id.clone());
 
         while let Some(item) = event_stream.next().await {
@@ -1089,8 +1184,8 @@ where
                             started = true;
                         }
 
-                        for payload in direct_ag_ui_events(&event, &selected_thread_id, &run_id) {
-                            yield Ok(Event::default().data(payload));
+                        for payload in ag_ui_stream.translate(&event, &selected_thread_id, &run_id) {
+                            yield Ok(Event::default().data(payload.to_string()));
                         }
                     } else if let Some(payload) = serialize_runtime_event(&event, profile) {
                         yield Ok(Event::default().data(payload));
@@ -1564,3 +1659,7 @@ pub async fn run_collect(
 
     Ok(Json(events))
 }
+
+#[cfg(test)]
+#[path = "runtime_stream_tests.rs"]
+mod stream_tests;
