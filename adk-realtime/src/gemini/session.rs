@@ -719,6 +719,18 @@ impl GeminiRealtimeSession {
             });
         }
 
+        // Spoken language (`RealtimeConfig::with_language`). Without it the model detects the
+        // language per turn, and short or accented utterances are transcribed in the wrong one.
+        if let Some(code) = config
+            .extra
+            .as_ref()
+            .and_then(|ext| ext.get("language_code"))
+            .and_then(|val| val.as_str())
+            .filter(|code| !code.is_empty())
+        {
+            generation_config["speechConfig"]["languageCode"] = json!(code);
+        }
+
         if let Some(temp) = config.temperature {
             generation_config["temperature"] = json!(temp);
         }
@@ -1570,6 +1582,43 @@ mod tests {
             setup_json.get("model").expect("model missing from setup payload").as_str().unwrap(),
             "models/gemini-2.5-flash-native-audio-latest"
         );
+    }
+
+    #[test]
+    fn test_language_code_lands_in_speech_config_next_to_the_voice() {
+        let js = setup_json(RealtimeConfig::default().with_voice("Aoede").with_language("en-US"));
+        let speech = &js["setup"]["generationConfig"]["speechConfig"];
+        assert_eq!(speech["languageCode"], json!("en-US"));
+        assert_eq!(speech["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"], json!("Aoede"));
+    }
+
+    #[test]
+    fn test_language_code_without_a_voice_still_builds_speech_config() {
+        let js = setup_json(RealtimeConfig::default().with_language("en-GB"));
+        assert_eq!(js["setup"]["generationConfig"]["speechConfig"]["languageCode"], json!("en-GB"));
+        assert!(
+            setup_json(RealtimeConfig::default())["setup"]["generationConfig"]
+                .get("speechConfig")
+                .is_none()
+        );
+        assert!(
+            setup_json(RealtimeConfig::default().with_language(""))["setup"]["generationConfig"]
+                .get("speechConfig")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_language_code_keeps_other_extras_and_replaces_a_non_object_extra() {
+        let config =
+            RealtimeConfig { extra: Some(json!({"thinking_level": "low"})), ..Default::default() };
+        let extra = config.with_language("en-US").extra.unwrap();
+        assert_eq!(extra, json!({"thinking_level": "low", "language_code": "en-US"}));
+
+        let config =
+            RealtimeConfig { extra: Some(json!(["not", "an", "object"])), ..Default::default() };
+        let extra = config.with_language("fr-FR").extra.unwrap();
+        assert_eq!(extra, json!({"language_code": "fr-FR"}));
     }
 
     #[test]

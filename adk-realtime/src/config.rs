@@ -390,6 +390,34 @@ impl RealtimeConfig {
         self
     }
 
+    /// Pins the spoken language (BCP-47, e.g. `"en-US"`).
+    ///
+    /// Gemini Live sends it as `speechConfig.languageCode`, which steers both the voice and
+    /// the input/output transcription; without it the model detects the language per turn
+    /// and short or accented utterances can be transcribed in the wrong one. Gemini
+    /// native-audio output models choose the language automatically and do not honor it.
+    ///
+    /// Stored under `extra.language_code`. An `extra` value that is not a JSON object is
+    /// replaced. OpenAI Realtime and other providers ignore the key.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_realtime::RealtimeConfig;
+    ///
+    /// let config = RealtimeConfig::default().with_voice("Kore").with_language("en-US");
+    /// assert_eq!(config.extra.unwrap()["language_code"], "en-US");
+    /// ```
+    pub fn with_language(mut self, code: impl Into<String>) -> Self {
+        let mut extra = match self.extra.take() {
+            Some(Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        extra.insert("language_code".to_string(), Value::String(code.into()));
+        self.extra = Some(Value::Object(extra));
+        self
+    }
+
     /// Set cached content resource.
     pub fn with_cached_content(mut self, content: impl Into<String>) -> Self {
         self.cached_content = Some(content.into());

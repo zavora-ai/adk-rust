@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Gemini Live spoken language** (`adk-realtime`): `RealtimeConfig::with_language`
+  sends a BCP-47 tag as `generationConfig.speechConfig.languageCode` for AI Studio
+  and Vertex AI Live, so transcription does not switch languages on short or
+  accented turns. Native-audio output models ignore it.
+
 - **Live ACP end-to-end example** (`examples/acp_openai_e2e`): an OpenAI-backed
   coordinator delegates over ACP stdio to an OpenAI-backed ADK agent served by
   `AcpServer`, and asserts environment passing, one-shot and persistent sessions,
