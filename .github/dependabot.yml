@@ -31,24 +31,13 @@ updates:
       - dependency-name: "syn"
         versions:
           - ">= 3, < 4"
-
-  - package-ecosystem: "npm"
-    directory: "/packages/adk-ui-react"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "javascript"
-
-  - package-ecosystem: "npm"
-    directory: "/adk-studio/ui"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "javascript"
+    # adk-sandbox passes wasmtime types into wasmtime-wasi, which requires the
+    # same wasmtime major, so bumping either alone fails to compile.
+    groups:
+      wasmtime:
+        patterns:
+          - "wasmtime"
+          - "wasmtime-wasi"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -57,4 +46,3 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
-      - "ci"
