@@ -162,6 +162,9 @@ jobs:
   #   - { package: <crate>, features: <feature> }
   # Append `, protoc: true` when its build scripts run protoc.
   feature-coverage:
+    # Explicit so per-entry flags such as `protoc` do not change the rendered check
+    # names that the ruleset requires.
+    name: feature-coverage (${{ matrix.package }}, ${{ matrix.features }})
     needs: fmt
     runs-on: ubuntu-latest
     strategy:
