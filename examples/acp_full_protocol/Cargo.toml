@@ -35,6 +35,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # The validating test drives the ADK server through the official SDK's
 # in-process duplex channel, so it needs the SDK Client/Channel types directly.
 # Pin to the same version adk-acp uses.
-agent-client-protocol = "1.2.0"
+agent-client-protocol = "2.2.0"
 tokio-util = { version = "0.7", features = ["rt"] }
 base64 = "0.22"

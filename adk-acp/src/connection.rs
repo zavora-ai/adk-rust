@@ -10,7 +10,7 @@ use std::sync::Arc;
 use adk_core::Content;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, EnvVariable, InitializeRequest, InitializeResponse, McpServer,
+    ContentBlock, ContentChunk, InitializeRequest, InitializeResponse, McpServer,
     NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SessionNotification, SessionUpdate,
 };
@@ -453,24 +453,17 @@ pub(crate) fn validate_initialization(
 }
 
 /// Build an SDK process component while preserving environment values exactly.
+///
+/// `AcpAgentConfig` here is this crate's type; the SDK has an unrelated type of the same name.
 pub(crate) fn build_agent(config: &AcpAgentConfig) -> Result<AcpAgent> {
     let parsed = AcpAgent::from_str(&config.command).map_err(|error| {
         AcpError::InvalidConfig(format!("invalid command '{}': {error}", config.command))
     })?;
-    match parsed.into_server() {
-        McpServer::Stdio(mut stdio) => {
-            stdio.env.extend(
-                config
-                    .env
-                    .iter()
-                    .map(|(name, value)| EnvVariable::new(name.clone(), value.clone())),
-            );
-            Ok(AcpAgent::new(McpServer::Stdio(stdio)))
-        }
-        _ => Err(AcpError::InvalidConfig(
-            "AcpAgentConfig currently supports local stdio agents".into(),
-        )),
-    }
+    // Applied after parsing so a configured variable overrides one from the command string.
+    let spawn = parsed
+        .into_config()
+        .envs(config.env.iter().map(|(name, value)| (name.clone(), value.clone())));
+    Ok(AcpAgent::new(spawn))
 }
 
 #[cfg(test)]

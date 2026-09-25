@@ -22,6 +22,7 @@ playground versions are being finalized:
 - `examples/acp_client_host` — vendor-neutral ACP client with streamed updates, async permissions, and a workspace-bounded filesystem
 - `examples/acp_kiro` — external coding-agent delegation, persistent sessions, and concurrent cancellation
 - `examples/acp_server` — expose a tool-using ADK-Rust agent to an editor through stable ACP v1
+- `examples/acp_openai_e2e` — live OpenAI end-to-end check: a coordinator agent delegates over ACP stdio to an ADK agent served by `AcpServer`, asserting environment passing, one-shot and persistent sessions, and the permission bridge
 - `examples/acp_full_protocol` — no-API-key, Runner-backed ACP v1 server-direction reference with an end-to-end validating test (embedded-resource + multimodal prompts, permission bridge, `session/load` replay, usage/tool-call updates)
 
 ## Validated Feature Examples
@@ -43,6 +44,7 @@ Standalone crates demonstrating current ADK-Rust features. Each has its own `Car
 | `examples/acp_client_host` | External ACP agent with streamed UI events and client-controlled read-only files | Set `ACP_AGENT_COMMAND`, then `cargo run --manifest-path examples/acp_client_host/Cargo.toml` |
 | `examples/acp_kiro` | Direct, delegated, persistent, and cancellable coding-agent sessions | `cargo run --manifest-path examples/acp_kiro/Cargo.toml --bin acp-kiro-session` |
 | `examples/acp_server` | Gemini-backed ADK-Rust coding agent exposed to editors | Set `GOOGLE_API_KEY`, then `cargo run --manifest-path examples/acp_server/Cargo.toml` |
+| `examples/acp_openai_e2e` | Live OpenAI client-to-server ACP check with self-verifying assertions | Set `OPENAI_API_KEY`, then `cargo run --manifest-path examples/acp_openai_e2e/Cargo.toml` |
 | `examples/acp_full_protocol` | No-key, Runner-backed ACP v1 server-direction reference + validating test | `cargo test --manifest-path examples/acp_full_protocol/Cargo.toml` |
 
 **Dry-run mode (no external credentials):**

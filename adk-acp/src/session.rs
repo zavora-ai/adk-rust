@@ -203,7 +203,9 @@ impl AcpSession {
                                             continue;
                                         }
 
-                                        let connection = session.connection();
+                                        // Cloned because a borrow would conflict with the
+                                        // mutable `read_update` calls below; the handle is cheap.
+                                        let connection = session.connection().clone();
                                         let session_id = session.session_id().clone();
                                         let mut response = String::new();
                                         let mut cancellation_requested = false;
