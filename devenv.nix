@@ -24,6 +24,9 @@
 
   # Load .env file automatically
   dotenv.enable = builtins.pathExists ./.env;
+  # Newer devenv CLIs read `dotenv.resolved` even when dotenv is disabled, while the
+  # pinned modules define it only when enabled; the module's own value wins when set.
+  dotenv.resolved = lib.mkDefault { };
 
   # --------------------------------------------------------------------------
   # Core Languages
