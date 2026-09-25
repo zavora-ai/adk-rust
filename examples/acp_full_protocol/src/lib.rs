@@ -191,10 +191,8 @@ impl Agent for ScriptedAgent {
             let mut echoes: Vec<String> = Vec::new();
             for part in &user_content.parts {
                 match part {
-                    Part::Text { text } => {
-                        if text.to_ascii_lowercase().contains("delete") {
-                            wants_delete = true;
-                        }
+                    Part::Text { text } if text.to_ascii_lowercase().contains("delete") => {
+                        wants_delete = true;
                     }
                     Part::EmbeddedResource { resource } => {
                         echoes.push(describe_embedded(resource));
