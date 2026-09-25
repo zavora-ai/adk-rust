@@ -80,6 +80,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `delta.content` arriving in the same chunk as `finish_reason` is no longer
   dropped.
 
+### Security
+
+- **rustls 0.23.45** (workspace and every standalone example lockfile): resolves
+  RUSTSEC-2026-0285, TLS 1.3 handshake messages accepted across encryption-level
+  boundaries. In example lockfiles the update also moves `rustls-webpki` to
+  0.103.15 and `aws-lc-rs` to 1.18.1.
+
 ## [2.2.0] - 2026-09-01
 
 ### Added
