@@ -1,0 +1,30 @@
+[package]
+name = "acp-openai-e2e-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "acp-openai-e2e"
+path = "src/main.rs"
+
+[dependencies]
+adk-acp = { path = "../../adk-acp", features = ["server"] }
+adk-agent = { path = "../../adk-agent" }
+adk-core = { path = "../../adk-core" }
+adk-model = { path = "../../adk-model", default-features = false, features = ["openai"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+anyhow = "1.0"
+async-trait = "0.1"
+dotenvy = "0.15"
+futures = "0.3"
+serde_json = "1.0"
+shell-words = "1"
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }

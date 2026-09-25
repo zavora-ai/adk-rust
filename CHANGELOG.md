@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`adk-acp` moves to `agent-client-protocol` 2.2.** `adk_acp::agent_client_protocol`
+  re-exports the SDK, so code that uses it directly compiles against the 2.x API.
+  The wire protocol stays stable ACP v1, and the `adk-acp` API is unchanged.
+
 ### Added
+
+- **Live ACP end-to-end example** (`examples/acp_openai_e2e`): an OpenAI-backed
+  coordinator delegates over ACP stdio to an OpenAI-backed ADK agent served by
+  `AcpServer`, and asserts environment passing, one-shot and persistent sessions,
+  and the permission bridge.
 
 - **Automatic progressive-skill guidance** (`adk-skill`, `adk-agent`):
   `SkillToolset` now adds guidance for its currently available tools to each
@@ -15,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is also applied to invocation-scoped toolsets.
 ### Fixed
 
+- **`acp_full_protocol` permission tests** (`examples/acp_full_protocol`): the
+  example reads `tool_confirmation_decisions` by function-call ID, matching the
+  key the ACP server populates, so approval and denial resume correctly.
 - **OpenAI reasoning history** (`adk-model`): `Part::Thinking` is excluded
   from visible user, assistant, and system message content. By default,
   subsequent model requests omit Thinking entirely instead of replaying it
