@@ -80,6 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `delta.content` arriving in the same chunk as `finish_reason` is no longer
   dropped.
 
+### Changed
+
+- **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
+  move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
+  are not part of its public API.
+
 ## [2.2.0] - 2026-09-01
 
 ### Added
