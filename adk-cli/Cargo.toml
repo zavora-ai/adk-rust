@@ -44,7 +44,7 @@ tracing.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
-dirs = "6"
+dirs = "7"
 toml.workspace = true
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
