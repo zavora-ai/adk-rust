@@ -178,6 +178,7 @@ jobs:
           # the adk-guardrail integration and `tool_guardrail_tests` ran in no required check.
           - { package: adk-agent, features: guardrails }
           - { package: adk-model, features: openrouter }
+          - { package: adk-model, features: opencode }
           - { package: adk-sandbox, features: wasm }
           # The background run store and its persistence are behind `background`, so a
           # default --workspace build skips their tests entirely. Nothing compiled them

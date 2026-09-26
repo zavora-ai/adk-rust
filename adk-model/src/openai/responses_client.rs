@@ -148,6 +148,26 @@ impl OpenAIResponsesClient {
         })
     }
 
+    /// Sets additional HTTP defaults for Responses and auxiliary requests.
+    ///
+    /// Explicit authentication headers and compatibility middleware remain active.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either HTTP client cannot be initialized.
+    pub fn with_default_headers(mut self, headers: http::HeaderMap) -> Result<Self, AdkError> {
+        let http = reqwest_openai::Client::builder()
+            .default_headers(headers.clone())
+            .build()
+            .map_err(|_| AdkError::model("failed to initialize Responses HTTP client"))?;
+        self.client = self.client.with_http_client(http);
+        self.http = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .map_err(|_| AdkError::model("failed to initialize Responses HTTP client"))?;
+        Ok(self)
+    }
+
     /// Set the retry configuration, consuming self.
     #[must_use]
     pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {

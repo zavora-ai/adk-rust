@@ -93,6 +93,15 @@ impl AnthropicClient {
         &self.client
     }
 
+    /// Adds default HTTP headers while preserving authentication and automatic beta headers.
+    ///
+    /// Headers with the same name replace the existing default value.
+    #[must_use]
+    pub fn with_default_headers(mut self, headers: http::HeaderMap) -> Self {
+        self.client = self.client.with_default_headers(headers);
+        self
+    }
+
     /// Access the current Anthropic configuration.
     pub fn anthropic_config(&self) -> &AnthropicConfig {
         &self.config

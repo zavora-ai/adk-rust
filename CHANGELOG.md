@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OpenCode Go and Zen** (`adk-model`): optional model adapter routes documented models through Chat Completions, Responses, Messages, or Gemini GenerateContent, preserving application and conversation headers. The existing clients expose additional default HTTP headers, and Gemini honors its configured HTTP client builder.
+
 - **Gemini Live spoken language** (`adk-realtime`): `RealtimeConfig::with_language`
   sends a BCP-47 tag as `generationConfig.speechConfig.languageCode` for AI Studio
   and Vertex AI Live, so transcription does not switch languages on short or

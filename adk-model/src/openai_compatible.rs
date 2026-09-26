@@ -300,6 +300,19 @@ impl OpenAICompatible {
         })
     }
 
+    /// Sets additional HTTP defaults for all requests, preserving explicit authentication headers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be initialized.
+    pub fn with_default_headers(mut self, headers: http::HeaderMap) -> Result<Self, AdkError> {
+        self.http = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .map_err(|_| AdkError::model("failed to initialize OpenAI-compatible HTTP client"))?;
+        Ok(self)
+    }
+
     /// Set the retry configuration (builder pattern).
     #[must_use]
     pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {

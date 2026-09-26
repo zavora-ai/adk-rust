@@ -1,0 +1,13 @@
+[package]
+name = "opencode-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-model = { path = "../../adk-model", default-features = false, features = ["opencode"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+futures = "0.3"

@@ -53,7 +53,8 @@ openai-conversations = ["openai"]
 # adk-server directly for webhook verification/handling.
 openai-responses-full = ["openai-ws", "openai-conversations"]
 xai = ["openai"]
-anthropic = ["dep:adk-anthropic"]
+anthropic = ["dep:adk-anthropic", "dep:http"]
+opencode = ["openai", "anthropic", "gemini"]
 deepseek = ["dep:reqwest"]
 ollama = ["dep:ollama-rs", "dep:schemars"]
 groq = ["dep:reqwest"]
@@ -66,7 +67,7 @@ cerebras = ["openai"]
 sambanova = ["openai"]
 bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-config", "dep:aws-smithy-types"]
 azure-ai = ["dep:reqwest"]
-all-providers = ["gemini", "openai", "anthropic", "deepseek", "ollama", "groq", "openrouter", "bedrock", "azure-ai"]
+all-providers = ["gemini", "openai", "anthropic", "deepseek", "ollama", "groq", "openrouter", "opencode", "bedrock", "azure-ai"]
 
 [dev-dependencies]
 proptest = "1.5"

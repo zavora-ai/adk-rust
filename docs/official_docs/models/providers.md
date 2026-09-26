@@ -61,6 +61,8 @@ export DEEPSEEK_API_KEY="your-key"    # DeepSeek
 export GROQ_API_KEY="your-key"        # Groq
 ```
 
+For OpenCode Go and Zen, enable `opencode` and follow the [OpenCode configuration guide](opencode.md).
+
 ## Schema Normalization
 
 Each provider automatically normalizes MCP tool schemas at request time. You don't need to do anything — it works transparently. But here's what happens under the hood:

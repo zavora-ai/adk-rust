@@ -339,7 +339,7 @@ impl GeminiModel {
     ///
     /// Centralizing struct construction here keeps the cfg-gated Interactions
     /// fields out of every public constructor's `Self { .. }` literal.
-    fn from_client(client: Gemini, model_name: String) -> Self {
+    pub(crate) fn from_client(client: Gemini, model_name: String) -> Self {
         Self {
             client,
             model_name,

@@ -398,6 +398,27 @@ impl Anthropic {
         (*self.cached_headers).clone()
     }
 
+    /// Adds default HTTP headers, replacing defaults with the same name.
+    ///
+    /// Per-request replacement headers still take precedence. Automatically
+    /// selected beta headers continue to be derived from message parameters.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use adk_anthropic::Anthropic;
+    /// use reqwest::header::{HeaderMap, HeaderValue};
+    /// let mut headers = HeaderMap::new();
+    /// headers.insert("x-session-id", HeaderValue::from_static("conversation-1"));
+    /// let client = Anthropic::new(Some("api-key".into()))?.with_default_headers(headers);
+    /// # Ok::<(), adk_anthropic::Error>(())
+    /// ```
+    #[must_use]
+    pub fn with_default_headers(mut self, headers: HeaderMap) -> Self {
+        Arc::make_mut(&mut self.cached_headers).extend(headers);
+        self
+    }
+
     /// Return a copy of the headers this client normally sends.
     ///
     /// Callers can modify this map and pass it to
