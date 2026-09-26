@@ -149,9 +149,9 @@ jobs:
   # plain runner via the shared setup-rust action (components + wild-linker
   # strip + cache come from there — no per-job setup drift).
   #
-  # System build deps needed by any matrix entry (currently just protoc, for
-  # `adk-rag --features lancedb`) are installed unconditionally below, so the
-  # "add ONE line" invariant holds without touching the steps.
+  # System build deps are opted into per entry with a matrix flag on the same
+  # line (currently `protoc: true`, needed only by `adk-rag --features lancedb`),
+  # so the "add ONE line" invariant holds without touching the steps.
   #
   # `adk-rag --features lancedb` is the slowest entry — it pulls the whole
   # lance/datafusion tree. It lives in the PR tier on purpose: an arrow version
@@ -160,7 +160,11 @@ jobs:
   #
   # To cover another feature-gated module, add ONE line to the matrix below:
   #   - { package: <crate>, features: <feature> }
+  # Append `, protoc: true` when its build scripts run protoc.
   feature-coverage:
+    # Explicit so per-entry flags such as `protoc` do not change the rendered check
+    # names that the ruleset requires.
+    name: feature-coverage (${{ matrix.package }}, ${{ matrix.features }})
     needs: fmt
     runs-on: ubuntu-latest
     strategy:
@@ -226,7 +230,7 @@ jobs:
           - { package: adk-managed, features: memory }
           - { package: adk-managed, features: full }
           - { package: adk-audio, features: fx }
-          - { package: adk-rag, features: lancedb }
+          - { package: adk-rag, features: lancedb, protoc: true }
           # adk-rag's SurrealDB backend: gated behind `surrealdb`, so `--workspace` builds
           # never compiled it. A surrealdb 3.2 parser change broke create_collection while
           # every required check stayed green. Tests run on the embedded kv-mem engine.
@@ -303,12 +307,11 @@ jobs:
         cache-key: feature-coverage-${{ matrix.package }}-${{ matrix.features }}
         cache-save: 'false'
 
-    # protoc is required by lancedb's build script (adk-rag --features lancedb).
-    # Unconditional rather than gated on the matrix entry: the job header
-    # promises that covering a new feature costs ONE matrix line, and an `if:`
-    # keyed to a package name would break that for the next entry that needs a
-    # system dep. Cost is a prebuilt-binary download on the other entries.
+    # Gated on the entry's `protoc` flag: the action queries the GitHub releases
+    # API on every run, and ~50 concurrent calls per workflow run fail often
+    # enough to dequeue PRs. Only lancedb's build script needs protoc.
     - name: Install protoc
+      if: matrix.protoc
       uses: arduino/setup-protoc@v3
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -316,7 +319,7 @@ jobs:
     # libdbus-1 is linked at build time by adk-cli's keyring dependency
     # (sync-secret-service on Linux). The workspace `test` job gets dbus from
     # the devenv/nix shell; this plain runner must install it. Unconditional
-    # for the same reason as protoc above.
+    # because it comes from the runner's apt mirror, not a rate-limited API.
     - name: Install libdbus
       run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
 
