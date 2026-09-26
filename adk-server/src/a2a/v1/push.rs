@@ -104,7 +104,11 @@ impl HttpPushNotificationSender {
 
             // Add Bearer auth if configured
             if let Some(ref auth) = config.authentication {
-                request = request.header("Authorization", format!("Bearer {}", auth.credentials));
+                // `credentials` became Option<String> in a2a-protocol-types 0.12:
+                // omit the header entirely rather than sending "Bearer None".
+                if let Some(ref credentials) = auth.credentials {
+                    request = request.header("Authorization", format!("Bearer {credentials}"));
+                }
             }
 
             // Add notification token if configured
@@ -359,7 +363,7 @@ mod tests {
         let mut config = TaskPushNotificationConfig::new("task-1", "https://example.com/hook");
         config.authentication = Some(AuthenticationInfo {
             scheme: "bearer".to_string(),
-            credentials: "my-token".to_string(),
+            credentials: Some("my-token".to_string()),
         });
         let event = make_status_event();
         assert!(
@@ -384,7 +388,7 @@ mod tests {
         let mut config = TaskPushNotificationConfig::new("task-1", "https://example.com/hook");
         config.authentication = Some(AuthenticationInfo {
             scheme: "bearer".to_string(),
-            credentials: "my-token".to_string(),
+            credentials: Some("my-token".to_string()),
         });
         config.token = Some("notification-secret".to_string());
         let event = make_status_event();

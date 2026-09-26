@@ -681,7 +681,7 @@ impl RequestHandler {
         if config.id.is_none() {
             config.id = Some(uuid::Uuid::new_v4().to_string());
         }
-        config.task_id = task_id.to_string();
+        config.task_id = Some(task_id.to_string());
 
         // Add to the task's push configs
         entry.push_configs.push(config.clone());

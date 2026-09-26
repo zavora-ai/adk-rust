@@ -17,7 +17,7 @@ adk-model = { path = "../../adk-model", features = ["gemini", "openai"] }
 adk-runner = { path = "../../adk-runner" }
 adk-session = { path = "../../adk-session" }
 adk-core = { path = "../../adk-core" }
-a2a-protocol-types = "0.5"
+a2a-protocol-types = "0.12.1"
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }

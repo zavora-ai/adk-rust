@@ -16,7 +16,8 @@ use futures::StreamExt;
 
 use a2a_protocol_types::TaskPushNotificationConfig;
 use a2a_protocol_types::jsonrpc::{
-    JsonRpcError, JsonRpcErrorResponse, JsonRpcRequest, JsonRpcSuccessResponse, JsonRpcVersion,
+    JsonRpcError, JsonRpcErrorResponse, JsonRpcRequest, JsonRpcRequestId, JsonRpcSuccessResponse,
+    JsonRpcVersion,
 };
 use a2a_protocol_types::params::{
     CancelTaskParams, DeletePushConfigParams, GetExtendedAgentCardParams, GetPushConfigParams,
@@ -69,17 +70,17 @@ fn parse_params<T: serde::de::DeserializeOwned>(
 
 /// Builds a JSON-RPC success response.
 fn make_success_response<T: serde::Serialize>(
-    id: Option<serde_json::Value>,
+    id: JsonRpcRequestId,
     result: &T,
 ) -> serde_json::Value {
-    let resp = JsonRpcSuccessResponse { jsonrpc: JsonRpcVersion, id, result };
+    let resp = JsonRpcSuccessResponse { jsonrpc: JsonRpcVersion, id: id.to_response_id(), result };
     serde_json::to_value(&resp).expect("success response serialization should not fail")
 }
 
 /// Builds a JSON-RPC error response from an [`A2aError`].
-fn make_error_response(id: Option<serde_json::Value>, err: &A2aError) -> serde_json::Value {
+fn make_error_response(id: JsonRpcRequestId, err: &A2aError) -> serde_json::Value {
     let resp = JsonRpcErrorResponse::new(
-        id,
+        id.to_response_id(),
         JsonRpcError::with_data(err.json_rpc_code(), err.to_string(), err.to_error_info()),
     );
     serde_json::to_value(&resp).expect("error response serialization should not fail")
@@ -127,7 +128,7 @@ async fn handle_send_streaming_message(
             Ok(stream_resp) => {
                 let resp = JsonRpcSuccessResponse {
                     jsonrpc: JsonRpcVersion,
-                    id: request_id.clone(),
+                    id: request_id.to_response_id(),
                     result: &stream_resp,
                 };
                 let json = serde_json::to_string(&resp)
@@ -136,7 +137,7 @@ async fn handle_send_streaming_message(
             }
             Err(e) => {
                 let resp = JsonRpcErrorResponse::new(
-                    request_id.clone(),
+                    request_id.to_response_id(),
                     JsonRpcError::with_data(e.json_rpc_code(), e.to_string(), e.to_error_info()),
                 );
                 let json = serde_json::to_string(&resp)
@@ -220,7 +221,7 @@ async fn handle_subscribe_to_task(
             Ok(stream_resp) => {
                 let resp = JsonRpcSuccessResponse {
                     jsonrpc: JsonRpcVersion,
-                    id: request_id.clone(),
+                    id: request_id.to_response_id(),
                     result: &stream_resp,
                 };
                 let json = serde_json::to_string(&resp)
@@ -229,7 +230,7 @@ async fn handle_subscribe_to_task(
             }
             Err(e) => {
                 let resp = JsonRpcErrorResponse::new(
-                    request_id.clone(),
+                    request_id.to_response_id(),
                     JsonRpcError::with_data(e.json_rpc_code(), e.to_string(), e.to_error_info()),
                 );
                 let json = serde_json::to_string(&resp)
@@ -252,7 +253,15 @@ async fn handle_push_config_create(
         Err(e) => return a2a_json_response(make_error_response(id, &e)),
     };
 
-    let task_id = config.task_id.clone();
+    // `TaskPushNotificationConfig::task_id` became Option<String> in
+    // a2a-protocol-types 0.12. An absent id is a malformed request here, not a
+    // default: rejecting it is what the previous non-optional field enforced.
+    let Some(task_id) = config.task_id.clone() else {
+        return a2a_json_response(make_error_response(
+            id,
+            &A2aError::InvalidParams { message: "task_id is required".to_string() },
+        ));
+    };
     match handler.push_config_create(&task_id, config).await {
         Ok(created) => a2a_json_response(make_success_response(id, &created)),
         Err(e) => a2a_json_response(make_error_response(id, &e)),

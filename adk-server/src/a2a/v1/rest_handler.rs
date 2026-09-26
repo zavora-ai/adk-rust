@@ -213,7 +213,7 @@ async fn handle_push_config_create(
     Path(task_id): Path<String>,
     Json(mut config): Json<TaskPushNotificationConfig>,
 ) -> Response {
-    config.task_id = task_id.clone();
+    config.task_id = Some(task_id.clone());
     match handler.push_config_create(&task_id, config).await {
         Ok(created) => a2a_json_response(&created),
         Err(e) => error_response(&e),
