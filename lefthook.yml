@@ -70,6 +70,15 @@ pre-commit:
       glob: "*.sh"
       run: shellcheck --severity=warning {staged_files}
       fail_text: "shellcheck found issues. Run `shellcheck --severity=warning <file>` to see them."
+    # A new adk-rust feature must change what links, or carry a recorded
+    # decision. Cheap (metadata parse only), so it runs on manifest edits.
+    feature-surface:
+      tags: lint
+      glob:
+        - "adk-*/Cargo.toml"
+        - "Cargo.toml"
+      run: bash scripts/check-feature-growth.sh
+      fail_text: "Feature surface gate failed. Run `scripts/check-feature-growth.sh --report` to see the axis table."
     # PowerShell counterpart to the shellcheck gate, for scripts/*.ps1 (Windows
     # has no POSIX shell, so setup-dev.ps1 is the only Windows setup path). The
     # logic lives in scripts/lint-powershell.ps1 because lefthook pipes commands

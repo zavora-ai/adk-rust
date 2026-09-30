@@ -189,9 +189,11 @@ every `ci.yml` dependency and matrix entry succeeds. See CONTRIBUTING.md
 ### Local git hooks (lefthook)
 
 - **pre-commit** — `cargo fmt --all -- --check`, `cargo clippy --workspace
-  --all-targets -- -D warnings`, `shellcheck` on staged shell scripts, and
-  PSScriptAnalyzer on staged `*.ps1` via `scripts/lint-powershell.ps1` (skips
-  itself when the module is not installed).
+  --all-targets -- -D warnings`, `scripts/check-feature-growth.sh` (a new
+  `adk-rust` feature must change what links or carry a recorded decision — see
+  [docs/feature-surface.md](docs/feature-surface.md)), `shellcheck` on staged
+  shell scripts, and PSScriptAnalyzer on staged `*.ps1` via
+  `scripts/lint-powershell.ps1` (skips itself when the module is not installed).
 - **pre-push** — `cargo check --workspace` (a fast compilation check, not the full
   test suite), plus `scripts/check-examples-compile.sh` over all four shards when
   an example or a workspace crate it depends on has changed. The standalone

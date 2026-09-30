@@ -122,3 +122,7 @@ docs/podcast/pipeline/
 .agents/
 skills-lock.json
 site-home-current.png
+
+# Python bytecode from scripts/
+__pycache__/
+*.pyc

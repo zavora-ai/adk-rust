@@ -463,6 +463,12 @@ jobs:
         # Publish-order guard: publish.sh tiers must satisfy the workspace
         # dependency graph, including versioned dev-deps (what broke v1.0.0).
         bash scripts/check-publish-order.sh
+        # Feature-surface guard: a new adk-rust feature must either change what
+        # links or carry a recorded decision. The surface is 143 features grown
+        # one capability at a time, and the axes it grew along were unenforced,
+        # so a 144th alias for a runtime choice could land unremarked.
+        bash scripts/check-feature-growth.sh
+        python3 -m unittest discover -s scripts/tests
         # Scaffold every advertised template — including addon combos and
         # default-provider resolution — and cargo-check the generated projects.
         bash scripts/check-cargo-adk-templates.sh
