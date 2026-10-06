@@ -31,8 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SkillToolset` now adds guidance for its currently available tools to each
   model request through the new `Toolset::process_llm_request` hook. Guidance
   is also applied to invocation-scoped toolsets.
+
+- **`ProcessBackend::toolchain_env` is public** (`adk-sandbox`): callers that
+  invoke `rustc` themselves apply the same minimal toolchain allowlist after
+  `env_clear()`.
+- **`DockerConfig::validate_sandbox_policy`** (`adk-code`): checks whether a
+  container created from a `DockerConfig` satisfies a `SandboxPolicy`.
+
 ### Fixed
 
+- **Rust sandbox and container stdin delivery** (`adk-code`):
+  `RustSandboxExecutor` and `ContainerCommandExecutor` write stdin concurrently
+  with draining stdout and stderr, inside the execution timeout. A program that
+  stopped reading stdin, or filled an output pipe first, previously blocked the
+  caller indefinitely. Captured output is capped while it is read.
 - **`acp_full_protocol` permission tests** (`examples/acp_full_protocol`): the
   example reads `tool_confirmation_decisions` by function-call ID, matching the
   key the ACP server populates, so approval and denial resume correctly.
@@ -92,6 +104,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
+
+### Security
+
+- **adk-code: Rust executors no longer expose the host environment.**
+  `RustExecutor` and `RustSandboxExecutor` ran `rustc` with the inherited
+  environment, so `env!("OPENAI_API_KEY")` or `option_env!` in model-written
+  code embedded host credentials in the binary, and `RustSandboxExecutor` ran the
+  binary with the full host environment. `rustc` now starts from a cleared
+  environment plus the `ProcessBackend::toolchain_env` allowlist, with
+  `kill_on_drop` and the request timeout. `RustSandboxExecutor` runs the binary
+  with only the variables named by the request's `EnvironmentPolicy` and now
+  reports `enforce_environment_policy: true`. `RustExecutor` compiles inside
+  the `SandboxBackend` when the backend confines filesystem reads, so
+  `include_str!` is confined like the binary; otherwise it compiles on the host.
+- **adk-code: `validate_policy` rejects environment policies the backend cannot
+  enforce.** `EnvironmentPolicy::None` passed validation on backends reporting
+  `enforce_environment_policy: false`, although those backends pass the host
+  environment through. Such backends now reject every request with
+  `ExecutionError::UnsupportedPolicy`.
+- **adk-code: `EmbeddedJsExecutor` enforces its timeout.** The timeout was
+  checked only after evaluation returned, so `while (true) {}` never returned
+  and pinned a blocking-pool thread. Evaluation runs on a dedicated thread,
+  `execute` returns `ExecutionStatus::Timeout` at the deadline, and Boa runtime
+  limits (10,000,000 loop iterations per call frame, call depth 512, VM stack
+  10,240 values) stop the interpreter with an uncatchable error.
+- **adk-code: `DockerExecutor` honours the request's sandbox policy.** Network,
+  bind mounts, and environment came from `DockerConfig` alone while the backend
+  reported network, filesystem, and environment enforcement. Each request is now
+  checked with `DockerConfig::validate_sandbox_policy`, and a request stricter
+  than the container — for example `SandboxPolicy::strict_rust()` against a
+  `with_network()` container — fails with `ExecutionError::UnsupportedPolicy`.
+  Variables named by `EnvironmentPolicy::AllowList` are passed from the host to
+  the exec.
 
 ## [2.2.0] - 2026-09-01
 

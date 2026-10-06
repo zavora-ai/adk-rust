@@ -112,6 +112,22 @@ fn validate_policy_rejects_environment_when_unenforced() {
     assert!(err.to_string().contains("environment"));
 }
 
+/// `EnvironmentPolicy::None` promises that no variables are exposed; a backend
+/// that cannot enforce environment policies passes the host environment through.
+#[test]
+fn validate_policy_rejects_no_environment_when_unenforced() {
+    let mut caps = full_caps();
+    caps.enforce_environment_policy = false;
+    let policy = SandboxPolicy {
+        network: NetworkPolicy::Enabled,
+        environment: EnvironmentPolicy::None,
+        ..SandboxPolicy::strict_rust()
+    };
+    let err = validate_policy(&caps, &policy).unwrap_err();
+    assert!(matches!(err, ExecutionError::UnsupportedPolicy(_)));
+    assert!(err.to_string().contains("environment"), "{err}");
+}
+
 #[test]
 fn validate_policy_rejects_when_timeout_unenforced() {
     let mut caps = full_caps();

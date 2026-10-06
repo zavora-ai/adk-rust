@@ -80,9 +80,9 @@ User code must provide `fn run(input: serde_json::Value) -> serde_json::Value`. 
 
 | Backend | Isolation | Timeout | Network | Filesystem | Environment | Persistent |
 |---------|-----------|---------|---------|------------|-------------|------------|
-| `RustSandboxExecutor` | HostLocal | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `RustSandboxExecutor` | HostLocal | ✅ | ❌ | ❌ | ✅ | ❌ |
 | `RustExecutor` | Delegated | ✅ | Delegated | Delegated | Delegated | ❌ |
-| `EmbeddedJsExecutor` | InProcess | ✅ | ✅* | ✅* | ✅* | ❌ |
+| `EmbeddedJsExecutor` | InProcess | ✅† | ✅* | ✅* | ✅* | ❌ |
 | `MontyOneShotExecutor` | InProcess | ✅ | ✅* | ✅ | ✅ | ❌ |
 | `MontyReplExecutor` | InProcess | ✅ | ✅* | ✅ | ✅ | ✅ |
 | `WasmGuestExecutor` | InProcess | ✅ | ✅* | ✅* | ✅* | ❌ |
@@ -91,9 +91,20 @@ User code must provide `fn run(input: serde_json::Value) -> serde_json::Value`. 
 
 *Enforcement by omission — the engine has no APIs for these operations.
 
+†The deadline is enforced on the result; runtime limits stop the interpreter. See [EmbeddedJsExecutor](#embeddedjsexecutor-embedded-js-feature).
+
+`validate_policy()` rejects every request on a backend that reports `enforce_environment_policy: false`: both `EnvironmentPolicy::None` and `EnvironmentPolicy::AllowList` restrict what the code sees, and such a backend passes the host environment through.
+
 ### RustSandboxExecutor (legacy)
 
-Host-local Rust compilation and execution. Compiles with `rustc`, runs the binary as a child process. Honest about capabilities: can enforce timeouts and output truncation, but not network/filesystem/environment restrictions.
+Host-local Rust compilation and execution. Compiles with `rustc`, runs the binary as a child process. Enforces timeouts (including stdin delivery), output truncation, and environment restrictions, but not network or filesystem restrictions.
+
+| Process | Environment |
+|---------|-------------|
+| `rustc` | Cleared, plus the toolchain allowlist from `ProcessBackend::toolchain_env()` (`PATH`, `HOME`, `RUSTUP_HOME`, `CARGO_HOME`, `RUSTUP_TOOLCHAIN`, `TMPDIR`, and on Windows `LIB`, `SystemRoot`, and similar) |
+| Compiled binary | Cleared, plus the variables named by `EnvironmentPolicy::AllowList` (and `SystemRoot` on Windows) |
+
+`env!` and `option_env!` in user code therefore cannot embed host credentials into the binary, and `std::env::var` sees only allowlisted variables.
 
 ```rust
 use adk_code::{RustSandboxExecutor, RustSandboxConfig, CodeExecutor};
@@ -121,6 +132,13 @@ let executor = RustExecutor::new(backend, RustExecutorConfig {
     rustc_flags: vec![],
 });
 ```
+
+| Step | Where it runs | Environment |
+|------|---------------|-------------|
+| Check, build | Inside the backend when it reports `filesystem_read_isolation` and supports `Language::Command` (Unix only); otherwise on the host | Cleared, plus the toolchain allowlist |
+| Execute | Inside the backend | Whatever the backend exposes; `ProcessBackend` clears it |
+
+Compile-time file access such as `include_str!` follows wherever `rustc` runs. `rustc` runs on the host only when the backend does not confine reads, so it reaches no file the binary could not also read at run time. On Windows, `rustc` always runs on the host.
 
 `RustExecutor::execute()` returns a `CodeResult` with:
 - `exec_result` — sandbox execution result (stdout, stderr, exit_code, duration)
@@ -151,6 +169,16 @@ let request = ExecutionRequest {
 ```
 
 User code is wrapped in an IIFE so `return` works. Input is injected as a global `input` variable. Return value is converted to JSON.
+
+Each evaluation runs on its own thread, and `execute()` returns `ExecutionStatus::Timeout` once the policy timeout passes. Boa cannot be preempted, so an abandoned evaluation runs until it finishes or reaches a runtime limit:
+
+| Limit | Value |
+|-------|-------|
+| Loop iterations per call frame | 10,000,000 |
+| Call depth | 512 |
+| VM stack values | 10,240 |
+
+Runtime-limit errors cannot be caught by `try`/`catch`; a limit reached before the deadline yields `ExecutionStatus::Failed`. Loop limits count per call frame, work inside a single native builtin (such as a pathological regular expression) is not counted, and there is no heap limit.
 
 ### Monty executors (`embedded-python` feature)
 
@@ -237,6 +265,20 @@ Presets: `DockerConfig::python()`, `DockerConfig::node()`, `DockerConfig::custom
 Builder methods: `setup_command()`, `pip_install()`, `npm_install()`, `with_network()`, `bind_mount()`, `env()`.
 
 Lifecycle: `start()` → `execute()` (reusable) → `stop()` / `cleanup()`. Set `auto_start: true` (default) to start on first execute.
+
+The container's network mode, bind mounts, and environment are fixed at creation, so `execute()` checks each request's `SandboxPolicy` against the `DockerConfig` with `DockerConfig::validate_sandbox_policy()` and rejects a stricter request with `ExecutionError::UnsupportedPolicy`:
+
+| Policy | Satisfied when |
+|--------|----------------|
+| `NetworkPolicy::Disabled` | The config does not call `with_network()` |
+| `FilesystemPolicy::None` | There are no bind mounts |
+| `FilesystemPolicy::WorkspaceReadOnly { root }` | Every bind mount is `:ro` and its host path lies under `root` |
+| `FilesystemPolicy::WorkspaceReadWrite { root }` | Every bind mount's host path lies under `root` |
+| `FilesystemPolicy::Paths { read_only, read_write }` | Every bind mount lies under a `read_write` path, or is `:ro` and lies under a `read_only` path |
+| `EnvironmentPolicy::None` | The config sets no `env()` variables |
+| `EnvironmentPolicy::AllowList(names)` | Every `env()` variable is in `names`; the named host variables are also passed to the exec |
+
+The networked container in the example above therefore needs requests built with `NetworkPolicy::Enabled`; `SandboxPolicy::strict_rust()` disables the network and is rejected.
 
 ### Vertex AI Agent Engine sandboxes (`vertex-sandbox` feature)
 

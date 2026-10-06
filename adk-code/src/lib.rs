@@ -73,6 +73,7 @@ pub mod embedded_python;
 mod error;
 mod executor;
 pub mod harness;
+mod host_process;
 mod rust_executor;
 mod rust_sandbox;
 mod types;

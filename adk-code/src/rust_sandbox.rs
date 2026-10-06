@@ -58,11 +58,18 @@
 //! Phase 1 uses host-local process execution via `rustc`. The backend is honest
 //! about its capabilities:
 //!
-//! - **Timeout enforcement**: Yes (via `tokio::time::timeout`)
-//! - **Output truncation**: Yes (configurable limits)
+//! - **Timeout enforcement**: Yes (via `tokio::time::timeout`), covering stdin
+//!   delivery as well as the run
+//! - **Output truncation**: Yes (configurable limits, applied while reading)
 //! - **Network restriction**: No (host-local cannot enforce this)
 //! - **Filesystem restriction**: No (host-local cannot enforce this)
-//! - **Environment restriction**: No (host-local cannot enforce this)
+//! - **Environment restriction**: Yes. `rustc` starts from a cleared environment
+//!   plus the toolchain allowlist from
+//!   [`ProcessBackend::toolchain_env`](adk_sandbox::ProcessBackend::toolchain_env)
+//!   (`PATH`, `HOME`, `RUSTUP_HOME`, and similar), so `env!` and `option_env!`
+//!   cannot embed host credentials. The binary starts from a cleared environment
+//!   plus the variables named by [`EnvironmentPolicy::AllowList`](crate::EnvironmentPolicy)
+//!   (and `SystemRoot` on Windows).
 //!
 //! ## Example
 //!
@@ -99,15 +106,16 @@
 //! ```
 
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, instrument, warn};
 
 use crate::harness::{
     HARNESS_TEMPLATE, extract_structured_output, truncate_output, validate_rust_source,
 };
+use crate::host_process;
 use crate::{
     BackendCapabilities, CodeExecutor, ExecutionError, ExecutionIsolation, ExecutionLanguage,
     ExecutionPayload, ExecutionRequest, ExecutionResult, ExecutionStatus, validate_request,
@@ -157,8 +165,8 @@ impl Default for RustSandboxConfig {
 /// | Isolation class | `HostLocal` | Runs as a local process, not in a container |
 /// | Network policy | No | Host-local processes inherit host network access |
 /// | Filesystem policy | No | Host-local processes inherit host filesystem access |
-/// | Environment policy | No | Host-local processes inherit host environment |
-/// | Timeout | Yes | Enforced via `tokio::time::timeout` |
+/// | Environment policy | Yes | `rustc` sees only the toolchain allowlist; the binary sees only the policy's allowlist |
+/// | Timeout | Yes | Enforced via `tokio::time::timeout`, including stdin delivery |
 /// | Structured output | Yes | Harness extracts JSON from last stdout line |
 /// | Process execution | No | User code cannot spawn child processes through the harness |
 /// | Persistent workspace | No | Each execution uses a fresh temp directory |
@@ -178,6 +186,7 @@ impl Default for RustSandboxConfig {
 /// assert_eq!(executor.name(), "rust-sandbox");
 /// assert_eq!(executor.capabilities().isolation, ExecutionIsolation::HostLocal);
 /// assert!(executor.capabilities().enforce_timeout);
+/// assert!(executor.capabilities().enforce_environment_policy);
 /// assert!(!executor.capabilities().enforce_network_policy);
 /// ```
 #[derive(Debug, Clone)]
@@ -209,7 +218,7 @@ impl CodeExecutor for RustSandboxExecutor {
             isolation: ExecutionIsolation::HostLocal,
             enforce_network_policy: false,
             enforce_filesystem_policy: false,
-            enforce_environment_policy: false,
+            enforce_environment_policy: true,
             enforce_timeout: true,
             supports_structured_output: true,
             supports_process_execution: false,
@@ -288,7 +297,7 @@ impl RustSandboxExecutor {
     ) -> Result<Option<ExecutionResult>, ExecutionError> {
         let serde_json_dep = self.find_serde_json_dep().await?;
 
-        let mut cmd = tokio::process::Command::new(&self.config.rustc_path);
+        let mut cmd = host_process::rustc_command(&self.config.rustc_path);
         cmd.arg(source_path).arg("-o").arg(binary_path).arg("--edition").arg("2021");
 
         // Link against serde_json.
@@ -356,83 +365,71 @@ impl RustSandboxExecutor {
     }
 
     /// Run the compiled binary with timeout enforcement and output capture.
+    ///
+    /// The binary starts from a cleared environment plus the variables the
+    /// request's [`EnvironmentPolicy`](crate::EnvironmentPolicy) allows.
     async fn run_binary(
         &self,
         binary_path: &std::path::Path,
         request: &ExecutionRequest,
         start: Instant,
     ) -> Result<ExecutionResult, ExecutionError> {
+        // Structured input takes precedence over raw stdin.
+        let stdin = match (&request.input, &request.stdin) {
+            (Some(input), _) => Some(serde_json::to_vec(input).unwrap_or_default()),
+            (None, Some(raw)) => Some(raw.clone()),
+            (None, None) => None,
+        };
+
         let mut cmd = tokio::process::Command::new(binary_path);
+        cmd.args(&request.argv)
+            .env_clear()
+            .envs(host_process::binary_env(&request.sandbox.environment))
+            .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
-        // Pass argv to the binary.
-        for arg in &request.argv {
-            cmd.arg(arg);
-        }
-
-        cmd.stdin(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-        // Kill the child when the handle is dropped (important for timeout).
-        cmd.kill_on_drop(true);
-
-        let mut child = cmd
+        let child = cmd
             .spawn()
             .map_err(|e| ExecutionError::ExecutionFailed(format!("failed to spawn binary: {e}")))?;
 
-        // Write structured input as JSON to stdin, then close it.
-        if let Some(ref input) = request.input {
-            if let Some(mut stdin) = child.stdin.take() {
-                let json_bytes = serde_json::to_vec(input).unwrap_or_default();
-                let _ = stdin.write_all(&json_bytes).await;
-                drop(stdin);
-            }
-        } else if let Some(ref raw_stdin) = request.stdin {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(raw_stdin).await;
-                drop(stdin);
-            }
-        } else {
-            // Close stdin immediately so the child doesn't block reading.
-            drop(child.stdin.take());
-        }
+        let completed = host_process::run_to_completion(
+            child,
+            stdin,
+            request.sandbox.timeout,
+            request.sandbox.max_stdout_bytes,
+            request.sandbox.max_stderr_bytes,
+        )
+        .await
+        .map_err(|e| ExecutionError::ExecutionFailed(format!("failed to run binary: {e}")))?;
 
-        // Wait with timeout. `wait_with_output` consumes `child`, so on
-        // timeout we rely on `kill_on_drop` to clean up the process.
-        let output =
-            match tokio::time::timeout(request.sandbox.timeout, child.wait_with_output()).await {
-                Ok(Ok(output)) => output,
-                Ok(Err(e)) => {
-                    return Err(ExecutionError::ExecutionFailed(format!(
-                        "failed to wait for binary: {e}"
-                    )));
-                }
-                Err(_) => {
-                    // Timeout — `kill_on_drop` will clean up the child process.
-                    warn!("execution timed out");
-                    let duration_ms = start.elapsed().as_millis() as u64;
-                    return Ok(ExecutionResult {
-                        status: ExecutionStatus::Timeout,
-                        stdout: String::new(),
-                        stderr: String::new(),
-                        output: None,
-                        exit_code: None,
-                        stdout_truncated: false,
-                        stderr_truncated: false,
-                        duration_ms,
-                        metadata: None,
-                    });
-                }
-            };
+        let Some(output) = completed else {
+            warn!("execution timed out");
+            return Ok(ExecutionResult {
+                status: ExecutionStatus::Timeout,
+                stdout: String::new(),
+                stderr: String::new(),
+                output: None,
+                exit_code: None,
+                stdout_truncated: false,
+                stderr_truncated: false,
+                duration_ms: start.elapsed().as_millis() as u64,
+                metadata: None,
+            });
+        };
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        let raw_stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let raw_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let raw_stdout = String::from_utf8_lossy(&output.stdout.bytes).into_owned();
+        let raw_stderr = String::from_utf8_lossy(&output.stderr.bytes).into_owned();
 
         let (stdout, stdout_truncated) =
             truncate_output(raw_stdout, request.sandbox.max_stdout_bytes);
         let (stderr, stderr_truncated) =
             truncate_output(raw_stderr, request.sandbox.max_stderr_bytes);
+        let stdout_truncated = stdout_truncated || output.stdout.truncated;
+        let stderr_truncated = stderr_truncated || output.stderr.truncated;
 
         // Try to parse the last line of stdout as structured JSON output.
         // The harness prints the JSON output as the last line.
@@ -548,7 +545,7 @@ mod tests {
         assert!(caps.supports_structured_output);
         assert!(!caps.enforce_network_policy);
         assert!(!caps.enforce_filesystem_policy);
-        assert!(!caps.enforce_environment_policy);
+        assert!(caps.enforce_environment_policy);
     }
 
     #[test]

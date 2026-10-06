@@ -514,7 +514,19 @@ impl ProcessBackend {
     ///
     /// This widens what the compile phase can see compared with the run phase. An OS
     /// enforcer is what constrains it; see [`ProcessBackend::isolation`].
-    fn toolchain_env() -> Vec<(String, OsString)> {
+    ///
+    /// Callers that invoke `rustc` themselves apply this after `env_clear()`, so
+    /// compile-time macros such as `env!` and `option_env!` see only these variables.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_sandbox::ProcessBackend;
+    ///
+    /// let environment = ProcessBackend::toolchain_env();
+    /// assert!(environment.iter().all(|(key, _)| key != "OPENAI_API_KEY"));
+    /// ```
+    pub fn toolchain_env() -> Vec<(String, OsString)> {
         // RUSTUP_TOOLCHAIN matters as much as RUSTUP_HOME: `rustc` on PATH is usually a rustup
         // shim, and without it the shim ignores the caller's selection and resolves
         // `rust-toolchain.toml` instead. That either compiles with a different toolchain than the
