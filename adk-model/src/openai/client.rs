@@ -205,6 +205,9 @@ impl Llm for AzureOpenAIClient {
         let api_base = self.api_base.clone();
         let api_version = self.api_version.clone();
         let retry_config = self.retry_config.clone();
+        // Text-encoded tool calls are honoured only for tools this request declared.
+        let declared_tools: std::collections::HashSet<String> =
+            request.tools.keys().cloned().collect();
 
         // Normalize tool schemas at request time using the schema adapter.
         let adapter = self.schema_adapter();
@@ -252,24 +255,31 @@ impl Llm for AzureOpenAIClient {
 
                     if !http_resp.status().is_success() {
                         let status_code = http_resp.status().as_u16();
+                        let retry_after = http_resp
+                            .headers()
+                            .get(reqwest::header::RETRY_AFTER)
+                            .and_then(|value| value.to_str().ok())
+                            .and_then(crate::retry::parse_retry_after);
                         let body_text = http_resp.text().await.unwrap_or_default();
                         let msg = format!("Azure OpenAI API error (HTTP {status_code}): {body_text}");
-                        let (category, code, status) = match status_code {
-                            429 => (ErrorCategory::RateLimited, "model.azure_openai.rate_limited", Some(429u16)),
-                            503 => (ErrorCategory::Unavailable, "model.azure_openai.unavailable", Some(503u16)),
-                            529 => (ErrorCategory::Unavailable, "model.azure_openai.overloaded", Some(529u16)),
-                            408 => (ErrorCategory::Timeout, "model.azure_openai.timeout", Some(408u16)),
-                            401 => (ErrorCategory::Unauthorized, "model.azure_openai.unauthorized", Some(401u16)),
-                            404 => (ErrorCategory::NotFound, "model.azure_openai.not_found", Some(404u16)),
-                            _ if status_code >= 500 => (ErrorCategory::Internal, "model.azure_openai.api_error", Some(status_code)),
-                            _ => (ErrorCategory::Internal, "model.azure_openai.api_error", Some(status_code)),
+                        let code = match status_code {
+                            429 => "model.azure_openai.rate_limited",
+                            500 | 502 | 503 | 504 => "model.azure_openai.unavailable",
+                            529 => "model.azure_openai.overloaded",
+                            408 => "model.azure_openai.timeout",
+                            401 => "model.azure_openai.unauthorized",
+                            404 => "model.azure_openai.not_found",
+                            _ => "model.azure_openai.api_error",
                         };
-                        let mut err = AdkError::new(ErrorComponent::Model, category, code, msg)
-                            .with_provider("azure-openai");
-                        if let Some(sc) = status {
-                            err = err.with_upstream_status(sc);
-                        }
-                        return Err(err);
+                        let err = AdkError::new(
+                            ErrorComponent::Model,
+                            crate::retry::category_for_status_code(status_code),
+                            code,
+                            msg,
+                        )
+                        .with_provider("azure-openai")
+                        .with_upstream_status(status_code);
+                        return Err(crate::retry::with_retry_after(err, retry_after));
                     }
 
                     let raw_json: serde_json::Value = http_resp.json().await.map_err(|e| {
@@ -296,7 +306,7 @@ impl Llm for AzureOpenAIClient {
             })
             .await?;
 
-            let adk_response = convert::from_raw_openai_response(&response).map_err(|error| {
+            let adk_response = convert::from_raw_openai_response(&response, &declared_tools).map_err(|error| {
                 AdkError::new(
                     ErrorComponent::Model,
                     ErrorCategory::Internal,

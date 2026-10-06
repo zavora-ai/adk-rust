@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounds the whole duration of a streaming request. Streams have no total bound
   by default.
 
+- **Shared HTTP error helpers** (`adk-model`): `retry::category_for_status_code`,
+  `retry::parse_retry_after`, and `retry::with_retry_after` give every provider
+  client the same status mapping and `Retry-After` handling.
+
 ### Fixed
 
 - **Long Anthropic streams** (`adk-anthropic`): streaming requests run on an HTTP
@@ -63,6 +67,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Anthropic server tool input** (`adk-anthropic`): `AccumulatingStream` applies
   `input_json_delta` fragments to `server_tool_use` blocks, which previously kept
   the empty `{}` input from `content_block_start`.
+- **Text tool-call false positives** (`adk-model`): text-encoded tool calls are
+  parsed only when the request declares the named tool, so a ` ```json ` example
+  with a `"name"` key stays text. The DeepSeek fence format requires an
+  `arguments` or `parameters` object instead of defaulting to `{}`, and text after
+  the closing fence is kept. `parse_declared_tool_calls` and
+  `ToolCallBuffer::for_declared_tools` expose the filtered parse.
+- **Transient upstream errors are retried** (`adk-model`): HTTP 500, 502, 503, and
+  504 from OpenAI-compatible, Azure OpenAI, Azure AI, Anthropic, DeepSeek, and
+  Groq map to `ErrorCategory::Unavailable` with the upstream status, so
+  `execute_with_retry` retries them. A `Retry-After` header becomes the error's
+  retry hint for every one of these providers.
+- **`Retry-After` capped at `max_delay`** (`adk-model`): a server-provided retry
+  delay no longer exceeds `RetryConfig::max_delay`, so `Retry-After: 3600` cannot
+  stall an agent run for an hour.
+- **Stable tool order for cached providers** (`adk-model`): Anthropic and Bedrock
+  send tool definitions sorted by name, so the prompt-cache prefix matches across
+  requests.
+- **Malformed streamed tool arguments** (`adk-model`): Anthropic, Bedrock,
+  DeepSeek, Groq, and Azure AI fail with `model.<provider>.invalid_tool_arguments`
+  instead of calling the tool with `{}` or `null`. A zero-argument Bedrock call
+  receives `{}`.
+- **Mid-stream Anthropic errors in `AnthropicClient`** (`adk-model`): an SSE
+  `error` event fails the stream with the category of the equivalent HTTP error
+  (`overloaded_error` → `Unavailable`, `rate_limit_error` → `RateLimited`)
+  instead of being logged at `debug`.
 - **`acp_full_protocol` permission tests** (`examples/acp_full_protocol`): the
   example reads `tool_confirmation_decisions` by function-call ID, matching the
   key the ACP server populates, so approval and denial resume correctly.
@@ -129,6 +158,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ManagedAgentsClient`, and `FilesClient` redact the API key in `Debug`
   output, and the `x-api-key` and bearer `Authorization` header values are
   marked sensitive.
+- **Provider API keys in `Debug` and `Serialize` output** (`adk-model`):
+  `OpenAIConfig`, `AzureConfig`, `OpenAIResponsesConfig`, `OpenAICompatibleConfig`,
+  `AnthropicConfig`, `GroqConfig`, `DeepSeekConfig`, `OpenRouterConfig`, and
+  `AzureAIConfig` redact `api_key` in `Debug` output and omit it when serialized.
+  A config deserialized without `api_key` gets an empty key.
 
 ## [2.2.0] - 2026-09-01
 

@@ -17,6 +17,14 @@
 //! - **DeepSeek**: `` ```json\n{"name":"...","arguments":{...}}\n``` `` with `<｜tool▁call▁end｜>`
 //! - **Gemma 4**: `<|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>`
 //! - **Action tags**: `<|action_start|>JSON<|action_end|>`
+//!
+//! Provider clients call [`parse_declared_tool_calls`] and
+//! [`ToolCallBuffer::for_declared_tools`], which accept a parse only when every
+//! call names a tool the request declared. A markdown ` ```json ` fence is
+//! ordinary model output, so the DeepSeek format also requires an `arguments`
+//! or `parameters` object.
+
+use std::collections::HashSet;
 
 use adk_core::Part;
 
@@ -76,6 +84,45 @@ pub fn parse_text_tool_calls(text: &str) -> Option<Vec<Part>> {
     }
 
     None
+}
+
+/// Parse text-based tool calls, accepting them only when they call declared tools.
+///
+/// Returns `None` — the caller keeps the text as text — when `declared_tools`
+/// is empty, when no tool call is detected, or when any parsed call names a
+/// tool outside `declared_tools`. This keeps ordinary output such as a JSON
+/// example with a `"name"` key from being turned into a tool call.
+///
+/// # Example
+///
+/// ```rust
+/// use std::collections::HashSet;
+///
+/// use adk_core::Part;
+/// use adk_model::tool_call_parser::parse_declared_tool_calls;
+///
+/// let declared = HashSet::from(["lookup".to_string()]);
+/// let example = "```json\n{\"name\": \"Alice\", \"age\": 30}\n```";
+/// assert!(parse_declared_tool_calls(example, &declared).is_none());
+///
+/// let call = "<tool_call>{\"name\": \"lookup\", \"arguments\": {\"id\": 7}}</tool_call>";
+/// let parts = parse_declared_tool_calls(call, &declared).unwrap();
+/// assert!(matches!(&parts[0], Part::FunctionCall { name, .. } if name == "lookup"));
+/// ```
+pub fn parse_declared_tool_calls(
+    text: &str,
+    declared_tools: &HashSet<String>,
+) -> Option<Vec<Part>> {
+    if declared_tools.is_empty() {
+        return None;
+    }
+    let parts = parse_text_tool_calls(text)?;
+    let all_declared = parts.iter().all(|part| match part {
+        Part::FunctionCall { name, .. } => declared_tools.contains(name),
+        _ => true,
+    });
+    let has_call = parts.iter().any(|part| matches!(part, Part::FunctionCall { .. }));
+    (all_declared && has_call).then_some(parts)
 }
 
 /// Parse Qwen/Hermes format tool calls.
@@ -215,10 +262,18 @@ fn parse_mistral_nemo_format(text: &str, _parts: &mut Vec<Part>) -> Option<Vec<P
     if result.is_empty() { None } else { Some(result) }
 }
 
+/// DeepSeek end-of-call markers that may follow the closing fence.
+const DEEPSEEK_END_MARKERS: &[&str] = &[
+    "<\u{ff5c}tool\u{2581}call\u{2581}end\u{ff5c}>",
+    "<\u{ff5c}tool\u{2581}calls\u{2581}end\u{ff5c}>",
+];
+
 /// Parse DeepSeek format: ` ```json\n{"name":"...","arguments":{...}}\n``` `
 ///
 /// DeepSeek models wrap tool calls in markdown JSON fences, optionally
-/// followed by `<｜tool▁call▁end｜>` (full-width Unicode delimiters).
+/// followed by `<｜tool▁call▁end｜>` (full-width Unicode delimiters). A fence
+/// is also ordinary markdown, so every object must carry a name and an
+/// `arguments` or `parameters` object; text after the fence is kept.
 fn parse_deepseek_format(text: &str) -> Option<Vec<Part>> {
     let fence_start = text.find("```json")?;
     let json_start = fence_start + "```json".len();
@@ -226,36 +281,49 @@ fn parse_deepseek_format(text: &str) -> Option<Vec<Part>> {
     let fence_end = after_fence.find("```")?;
     let json_str = after_fence[..fence_end].trim();
 
+    let value: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    let calls = match &value {
+        serde_json::Value::Array(items) => {
+            items.iter().map(parse_fenced_tool_call).collect::<Option<Vec<_>>>()?
+        }
+        object => vec![parse_fenced_tool_call(object)?],
+    };
+    if calls.is_empty() {
+        return None;
+    }
+
     let mut result = Vec::new();
     let before = &text[..fence_start];
     if !before.is_empty() {
         result.push(Part::Text { text: before.to_string() });
     }
+    result.extend(calls);
 
-    // Could be a single object or an array
-    if let Some(part) = parse_json_tool_call(json_str) {
-        result.push(part);
-    } else if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(json_str) {
-        for item in &arr {
-            if let Some(obj) = item.as_object() {
-                let name = obj
-                    .get("name")
-                    .or_else(|| obj.get("function"))
-                    .and_then(|v| v.as_str())?
-                    .to_string();
-                let args = obj
-                    .get("arguments")
-                    .or_else(|| obj.get("parameters"))
-                    .cloned()
-                    .unwrap_or(serde_json::json!({}));
-                result.push(Part::FunctionCall { name, args, id: None, thought_signature: None });
-            }
-        }
-    } else {
-        return None;
+    let mut trailing = &after_fence[fence_end + "```".len()..];
+    while let Some(rest) =
+        DEEPSEEK_END_MARKERS.iter().find_map(|m| trailing.trim_start().strip_prefix(m))
+    {
+        trailing = rest;
+    }
+    if !trailing.is_empty() {
+        result.push(Part::Text { text: trailing.to_string() });
     }
 
-    if result.is_empty() { None } else { Some(result) }
+    Some(result)
+}
+
+/// Parse one fenced tool-call object; `arguments`/`parameters` must be present
+/// and be an object, never defaulted.
+fn parse_fenced_tool_call(value: &serde_json::Value) -> Option<Part> {
+    let obj = value.as_object()?;
+    let name = obj.get("name").or_else(|| obj.get("function")).and_then(|v| v.as_str())?;
+    let args = obj.get("arguments").or_else(|| obj.get("parameters")).filter(|v| v.is_object())?;
+    Some(Part::FunctionCall {
+        name: name.to_string(),
+        args: args.clone(),
+        id: None,
+        thought_signature: None,
+    })
 }
 
 /// Parse Gemma 4 format: `<|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>`
@@ -385,6 +453,8 @@ const MAX_BUFFER_SIZE: usize = 4096;
 pub struct ToolCallBuffer {
     buffer: String,
     buffering: bool,
+    /// Tools the request declared; `None` accepts any parsed call.
+    declared_tools: Option<HashSet<String>>,
 }
 
 /// Action returned by `ToolCallBuffer::push()`.
@@ -396,9 +466,33 @@ pub enum BufferAction {
 }
 
 impl ToolCallBuffer {
-    /// Create a new empty buffer.
+    /// Create a new empty buffer that accepts a parsed call to any tool name.
     pub fn new() -> Self {
-        Self { buffer: String::new(), buffering: false }
+        Self { buffer: String::new(), buffering: false, declared_tools: None }
+    }
+
+    /// Create a buffer that emits a parsed call only when every call names one of
+    /// `declared_tools`, as [`parse_declared_tool_calls`] does.
+    ///
+    /// With no declared tools the buffer never holds text back: every chunk is
+    /// emitted as text immediately.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::collections::HashSet;
+    ///
+    /// use adk_core::Part;
+    /// use adk_model::tool_call_parser::{BufferAction, ToolCallBuffer};
+    ///
+    /// let mut buffer = ToolCallBuffer::for_declared_tools(HashSet::new());
+    /// let BufferAction::Emit(parts) = buffer.push("<tool_call>{\"name\":\"x\"}</tool_call>") else {
+    ///     panic!("nothing is buffered without declared tools");
+    /// };
+    /// assert!(matches!(&parts[0], Part::Text { .. }));
+    /// ```
+    pub fn for_declared_tools(declared_tools: HashSet<String>) -> Self {
+        Self { buffer: String::new(), buffering: false, declared_tools: Some(declared_tools) }
     }
 
     /// Push a text chunk into the buffer.
@@ -407,6 +501,10 @@ impl ToolCallBuffer {
     /// `BufferAction::Buffering` if we're accumulating a potential tool call.
     pub fn push(&mut self, text: &str) -> BufferAction {
         self.buffer.push_str(text);
+
+        if self.declared_tools.as_ref().is_some_and(HashSet::is_empty) {
+            return self.flush_as_emit();
+        }
 
         if self.buffering {
             // Check if we have a complete tool call
@@ -450,7 +548,7 @@ impl ToolCallBuffer {
         }
 
         // Try to parse as tool calls one last time
-        if let Some(parts) = parse_text_tool_calls(&self.buffer) {
+        if let Some(parts) = self.parse_buffer() {
             self.buffer.clear();
             self.buffering = false;
             return parts;
@@ -460,6 +558,13 @@ impl ToolCallBuffer {
         let text = std::mem::take(&mut self.buffer);
         self.buffering = false;
         if text.is_empty() { Vec::new() } else { vec![Part::Text { text }] }
+    }
+
+    fn parse_buffer(&self) -> Option<Vec<Part>> {
+        match &self.declared_tools {
+            Some(declared_tools) => parse_declared_tool_calls(&self.buffer, declared_tools),
+            None => parse_text_tool_calls(&self.buffer),
+        }
     }
 
     fn starts_tool_call_prefix(&self) -> bool {
@@ -496,7 +601,7 @@ impl ToolCallBuffer {
     }
 
     fn try_parse_and_emit(&mut self) -> BufferAction {
-        if let Some(parts) = parse_text_tool_calls(&self.buffer) {
+        if let Some(parts) = self.parse_buffer() {
             self.buffer.clear();
             self.buffering = false;
             BufferAction::Emit(parts)
@@ -813,6 +918,78 @@ mod tests {
         let has_fn_call =
             parts.iter().any(|p| matches!(p, Part::FunctionCall { name, .. } if name == "search"));
         assert!(has_fn_call);
+    }
+
+    fn declared(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn json_example_without_declared_tools_stays_text() {
+        let text = "Here is the record:\n```json\n{\"name\":\"Alice\",\"age\":30}\n```\nDone.";
+
+        assert_eq!(parse_declared_tool_calls(text, &declared(&[])), None);
+    }
+
+    #[test]
+    fn json_example_with_other_declared_tool_stays_text() {
+        let text = "Here is the record:\n```json\n{\"name\":\"Alice\",\"age\":30}\n```\nDone.";
+
+        assert_eq!(parse_declared_tool_calls(text, &declared(&["lookup"])), None);
+        // The fence carries no arguments, so it is not a call even without the filter.
+        assert_eq!(parse_text_tool_calls(text), None);
+    }
+
+    #[test]
+    fn fenced_call_to_undeclared_tool_stays_text() {
+        let text = "```json\n{\"name\":\"delete_all\",\"arguments\":{}}\n```";
+
+        assert_eq!(parse_declared_tool_calls(text, &declared(&["lookup"])), None);
+    }
+
+    #[test]
+    fn fenced_call_to_declared_tool_parses_and_keeps_trailing_text() {
+        let text = "Checking.\n```json\n{\"name\":\"lookup\",\"arguments\":{\"id\":7}}\n```\nI will report back.";
+
+        assert_eq!(
+            parse_declared_tool_calls(text, &declared(&["lookup"])),
+            Some(vec![
+                Part::Text { text: "Checking.\n".to_string() },
+                Part::FunctionCall {
+                    name: "lookup".to_string(),
+                    args: serde_json::json!({"id": 7}),
+                    id: None,
+                    thought_signature: None,
+                },
+                Part::Text { text: "\nI will report back.".to_string() },
+            ])
+        );
+    }
+
+    #[test]
+    fn deepseek_end_marker_is_not_kept_as_text() {
+        let text = "```json\n{\"name\":\"lookup\",\"arguments\":{}}\n```\n<｜tool▁call▁end｜>";
+
+        assert_eq!(
+            parse_text_tool_calls(text),
+            Some(vec![Part::FunctionCall {
+                name: "lookup".to_string(),
+                args: serde_json::json!({}),
+                id: None,
+                thought_signature: None,
+            }])
+        );
+    }
+
+    #[test]
+    fn declared_buffer_keeps_undeclared_calls_as_text() {
+        let text = "<tool_call>{\"name\":\"rm\",\"arguments\":{}}</tool_call>";
+        let mut buffer = ToolCallBuffer::for_declared_tools(declared(&["lookup"]));
+
+        let BufferAction::Emit(parts) = buffer.push(text) else {
+            panic!("a complete tag is resolved immediately");
+        };
+        assert_eq!(parts, vec![Part::Text { text: text.to_string() }]);
     }
 
     // ===== Gemma 4 format tests =====

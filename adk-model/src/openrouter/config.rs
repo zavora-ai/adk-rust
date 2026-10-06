@@ -23,9 +23,13 @@ pub enum OpenRouterApiMode {
 }
 
 /// OpenRouter configuration shared by native APIs and the `Llm` adapter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The API key is redacted from `Debug` output and omitted when serializing.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OpenRouterConfig {
-    /// OpenRouter API key.
+    /// OpenRouter API key. Never serialized; deserializing a config without it
+    /// yields an empty key.
+    #[serde(skip_serializing, default)]
     pub api_key: String,
     /// Default model name.
     pub model: String,
@@ -40,6 +44,19 @@ pub struct OpenRouterConfig {
     /// Default API mode used when the generic `Llm` adapter is invoked.
     #[serde(default)]
     pub default_api_mode: OpenRouterApiMode,
+}
+
+impl std::fmt::Debug for OpenRouterConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenRouterConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("http_referer", &self.http_referer)
+            .field("title", &self.title)
+            .field("default_api_mode", &self.default_api_mode)
+            .finish()
+    }
 }
 
 impl OpenRouterConfig {

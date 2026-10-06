@@ -6,9 +6,12 @@ use serde::{Deserialize, Serialize};
 pub const GROQ_API_BASE: &str = "https://api.groq.com/openai/v1";
 
 /// Configuration for Groq API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The API key is redacted from `Debug` output and omitted when serializing.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GroqConfig {
-    /// Groq API key.
+    /// Groq API key. Never serialized; deserializing a config without it yields an empty key.
+    #[serde(skip_serializing, default)]
     pub api_key: String,
     /// Model name.
     pub model: String,
@@ -21,6 +24,18 @@ pub struct GroqConfig {
     /// Maximum tokens for output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+}
+
+impl std::fmt::Debug for GroqConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroqConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("reasoning_enabled", &self.reasoning_enabled)
+            .field("max_tokens", &self.max_tokens)
+            .finish()
+    }
 }
 
 impl Default for GroqConfig {

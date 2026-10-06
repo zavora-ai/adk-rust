@@ -39,11 +39,14 @@ pub enum ReasoningReplayField {
 }
 
 /// Configuration for OpenAI-compatible providers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The API key is redacted from `Debug` output and omitted when serializing.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OpenAICompatibleConfig {
     /// Provider display name used in error messages.
     pub provider_name: String,
-    /// API key.
+    /// API key. Never serialized; deserializing a config without it yields an empty key.
+    #[serde(skip_serializing, default)]
     pub api_key: String,
     /// Model name.
     pub model: String,
@@ -61,6 +64,21 @@ pub struct OpenAICompatibleConfig {
     pub reasoning_effort: Option<OaiReasoningEffort>,
     /// Whether to allow the model to call multiple tools in a single turn.
     pub parallel_tool_calls: bool,
+}
+
+impl std::fmt::Debug for OpenAICompatibleConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAICompatibleConfig")
+            .field("provider_name", &self.provider_name)
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("organization_id", &self.organization_id)
+            .field("project_id", &self.project_id)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("parallel_tool_calls", &self.parallel_tool_calls)
+            .finish()
+    }
 }
 
 impl OpenAICompatibleConfig {
@@ -540,25 +558,21 @@ async fn send_request(
     if !http_resp.status().is_success() {
         let status = http_resp.status();
         let status_code = status.as_u16();
+        let retry_after = http_resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(crate::retry::parse_retry_after);
         let body = http_resp.text().await.unwrap_or_default();
-        let category = match status_code {
-            401 => ErrorCategory::Unauthorized,
-            403 => ErrorCategory::Forbidden,
-            404 => ErrorCategory::NotFound,
-            408 => ErrorCategory::Timeout,
-            429 => ErrorCategory::RateLimited,
-            503 | 529 => ErrorCategory::Unavailable,
-            _ if status_code >= 500 => ErrorCategory::Internal,
-            _ => ErrorCategory::InvalidInput,
-        };
-        return Err(AdkError::new(
+        let error = AdkError::new(
             ErrorComponent::Model,
-            category,
+            crate::retry::category_for_status_code(status_code),
             "model.openai_compat.api_error",
             format!("{provider_name} API error (HTTP {status}): {body}"),
         )
         .with_upstream_status(status_code)
-        .with_provider(provider_name));
+        .with_provider(provider_name);
+        return Err(crate::retry::with_retry_after(error, retry_after));
     }
 
     Ok(http_resp)
@@ -597,18 +611,12 @@ fn parse_tool_call_arguments(
     tool_name: &str,
     arguments: &str,
 ) -> Result<serde_json::Value, AdkError> {
-    let encoded = serde_json::Value::String(arguments.to_owned());
-    convert::decode_tool_call_arguments(Some(&encoded)).map_err(|error| {
-        AdkError::new(
-            ErrorComponent::Model,
-            ErrorCategory::Internal,
-            "model.openai_compat.invalid_tool_arguments",
-            format!(
-                "{provider_name} returned invalid JSON arguments for tool '{tool_name}': {error}"
-            ),
-        )
-        .with_provider(provider_name)
-    })
+    crate::tool_args::parse_streamed_tool_arguments(
+        provider_name,
+        "model.openai_compat.invalid_tool_arguments",
+        tool_name,
+        arguments,
+    )
 }
 
 /// Parse usage metadata from a raw SSE chunk JSON value.
@@ -646,6 +654,9 @@ impl Llm for OpenAICompatible {
         let reasoning_effort = self.reasoning_effort;
         let reasoning_replay_field = self.reasoning_replay_field;
         let organization_id = self.organization_id.clone();
+        // Text-encoded tool calls are honoured only for tools this request declared.
+        let declared_tools: std::collections::HashSet<String> =
+            request.tools.keys().cloned().collect();
 
         // Normalize tool schemas at request time using the schema adapter.
         let adapter = self.schema_adapter();
@@ -698,7 +709,8 @@ impl Llm for OpenAICompatible {
                 let mut buffer = String::new();
                 let mut tool_call_accumulators: HashMap<u32, (String, String, String)> =
                     HashMap::new();
-                let mut text_tool_buffer = crate::tool_call_parser::ToolCallBuffer::new();
+                let mut text_tool_buffer =
+                    crate::tool_call_parser::ToolCallBuffer::for_declared_tools(declared_tools);
                 let mut pending_final_response: Option<LlmResponse> = None;
 
                 while let Some(chunk_result) = byte_stream.next().await {
@@ -1007,7 +1019,7 @@ impl Llm for OpenAICompatible {
                 })
                 .await?;
 
-                let adk_response = convert::from_raw_openai_response(&response).map_err(|error| {
+                let adk_response = convert::from_raw_openai_response(&response, &declared_tools).map_err(|error| {
                     AdkError::new(
                         ErrorComponent::Model,
                         ErrorCategory::Internal,

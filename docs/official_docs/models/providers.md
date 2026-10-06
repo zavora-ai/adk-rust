@@ -577,6 +577,37 @@ async fn main() -> anyhow::Result<()> {
 
 ---
 
+## Retries, Tool Calls, and Credentials
+
+These rules apply to every HTTP provider client in `adk-model` (OpenAI and
+OpenAI-compatible, Azure OpenAI, Azure AI Inference, Anthropic, DeepSeek, Groq).
+
+| Behaviour | Rule |
+|-----------|------|
+| Transient upstream errors | HTTP 500, 502, 503, 504, and 529 map to `ErrorCategory::Unavailable` with the upstream status recorded, so `RetryConfig` retries them |
+| `Retry-After` | A delay in seconds is attached to the error and used for the next retry, capped at `RetryConfig::max_delay` (default 5 seconds) |
+| Mid-stream Anthropic `error` event | Fails the stream with the category of the equivalent HTTP error, so `overloaded_error` and `rate_limit_error` are retryable |
+| Malformed streamed tool arguments | Fail with `model.<provider>.invalid_tool_arguments`; an empty payload is a zero-argument call with `{}` |
+| Text-encoded tool calls | Recognised only when the request declares the named tool; a ` ```json ` fence also needs an `arguments` or `parameters` object |
+| Tool order | Anthropic and Bedrock send tool definitions sorted by name, so the prompt-cache prefix is stable |
+| API keys | Provider configs redact the key in `Debug` output and omit it when serialized |
+
+```rust
+use std::time::Duration;
+
+use adk_model::catalog::GROQ_DEFAULT;
+use adk_model::groq::{GroqClient, GroqConfig};
+use adk_model::RetryConfig;
+
+fn build() -> Result<GroqClient, adk_core::AdkError> {
+    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
+    let retry = RetryConfig::default().with_max_delay(Duration::from_secs(30));
+    Ok(GroqClient::new(GroqConfig::new(api_key, GROQ_DEFAULT))?.with_retry_config(retry))
+}
+```
+
+---
+
 ## Switching Providers
 
 All providers implement the same `Llm` trait, so switching is easy:

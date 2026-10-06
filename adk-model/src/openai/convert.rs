@@ -15,7 +15,7 @@ use async_openai::types::chat::{
     FinishReason as OaiFinishReason, FunctionCall, FunctionObject, ImageDetail, ImageUrl,
     InputAudio, InputAudioFormat,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Convert ADK Content to OpenAI ChatCompletionRequestMessage.
 pub fn content_to_message(content: &Content) -> ChatCompletionRequestMessage {
@@ -411,7 +411,12 @@ fn json_i32(value: Option<&serde_json::Value>) -> Option<i32> {
 /// Unlike [`from_openai_response`], this parses the raw JSON directly so it can
 /// extract fields that `async-openai` does not model, such as `reasoning_content`
 /// returned by reasoning models (o3, gpt-5-mini, etc.).
-pub(crate) fn from_raw_openai_response(json: &serde_json::Value) -> Result<LlmResponse, String> {
+///
+/// Text-encoded tool calls are recognised only for tools in `declared_tools`.
+pub(crate) fn from_raw_openai_response(
+    json: &serde_json::Value,
+    declared_tools: &HashSet<String>,
+) -> Result<LlmResponse, String> {
     let choice = json.get("choices").and_then(|c| c.get(0));
 
     let content = choice
@@ -436,8 +441,10 @@ pub(crate) fn from_raw_openai_response(json: &serde_json::Value) -> Result<LlmRe
                 && !text.is_empty()
             {
                 // Check for text-based tool calls (Qwen, Llama, Mistral Nemo format)
-                // before adding as plain text
-                if let Some(parsed_parts) = crate::tool_call_parser::parse_text_tool_calls(text) {
+                // to declared tools before adding as plain text
+                if let Some(parsed_parts) =
+                    crate::tool_call_parser::parse_declared_tool_calls(text, declared_tools)
+                {
                     parts.extend(parsed_parts);
                 } else {
                     parts.push(Part::Text { text: text.to_string() });
@@ -502,51 +509,7 @@ pub(crate) fn from_raw_openai_response(json: &serde_json::Value) -> Result<LlmRe
     })
 }
 
-/// Normalizes tool arguments returned by OpenAI-compatible wire protocols.
-///
-/// Compatible providers sometimes encode a no-argument call as a missing value,
-/// `null`, an empty string, or an empty array. These representations are all
-/// equivalent to an empty JSON object. Non-empty arguments must still resolve
-/// to an object so malformed payloads cannot silently invoke a tool.
-pub(crate) fn decode_tool_call_arguments(
-    arguments: Option<&serde_json::Value>,
-) -> Result<serde_json::Value, String> {
-    let decoded = match arguments {
-        None | Some(serde_json::Value::Null) => serde_json::json!({}),
-        Some(serde_json::Value::String(encoded)) if encoded.trim().is_empty() => {
-            serde_json::json!({})
-        }
-        Some(serde_json::Value::String(encoded)) => {
-            let decoded: serde_json::Value = serde_json::from_str(encoded)
-                .map_err(|error| format!("arguments are not valid JSON: {error}"))?;
-            match decoded {
-                serde_json::Value::Null => serde_json::json!({}),
-                serde_json::Value::Array(items) if items.is_empty() => serde_json::json!({}),
-                decoded => decoded,
-            }
-        }
-        Some(serde_json::Value::Object(fields)) => serde_json::Value::Object(fields.clone()),
-        Some(serde_json::Value::Array(items)) if items.is_empty() => serde_json::json!({}),
-        Some(other) => {
-            return Err(format!(
-                "arguments must be a JSON object or an encoded JSON object, got {}",
-                match other {
-                    serde_json::Value::Array(_) => "array",
-                    serde_json::Value::Bool(_) => "boolean",
-                    serde_json::Value::Number(_) => "number",
-                    serde_json::Value::String(_) => "string",
-                    serde_json::Value::Null => "null",
-                    serde_json::Value::Object(_) => "object",
-                }
-            ));
-        }
-    };
-    if decoded.is_object() {
-        Ok(decoded)
-    } else {
-        Err("arguments must decode to a JSON object".to_owned())
-    }
-}
+pub(crate) use crate::tool_args::decode_tool_call_arguments;
 
 #[cfg(test)]
 mod tests {
@@ -891,7 +854,7 @@ mod tests {
             }
         });
 
-        let resp = from_raw_openai_response(&json).expect("response should parse");
+        let resp = from_raw_openai_response(&json, &HashSet::new()).expect("response should parse");
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 2);
         assert!(
@@ -899,6 +862,56 @@ mod tests {
         );
         assert!(matches!(&content.parts[1], Part::Text { text } if text == "Hello!"));
         assert_eq!(resp.usage_metadata.unwrap().thinking_token_count, Some(40));
+    }
+
+    fn raw_text_response(text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop"
+            }]
+        })
+    }
+
+    #[test]
+    fn json_fence_without_declared_tools_stays_text() {
+        let text = "```json\n{\"name\":\"Alice\",\"age\":30}\n```";
+
+        let resp = from_raw_openai_response(&raw_text_response(text), &HashSet::new()).unwrap();
+
+        assert_eq!(resp.content.unwrap().parts, vec![Part::Text { text: text.to_string() }]);
+    }
+
+    #[test]
+    fn json_fence_naming_no_declared_tool_stays_text() {
+        let text = "```json\n{\"name\":\"Alice\",\"age\":30}\n```";
+        let declared = HashSet::from(["lookup".to_string()]);
+
+        let resp = from_raw_openai_response(&raw_text_response(text), &declared).unwrap();
+
+        assert_eq!(resp.content.unwrap().parts, vec![Part::Text { text: text.to_string() }]);
+    }
+
+    #[test]
+    fn json_fence_calling_declared_tool_parses_and_keeps_trailing_text() {
+        let text =
+            "```json\n{\"name\":\"lookup\",\"arguments\":{\"id\":7}}\n```\nThen I will summarize.";
+        let declared = HashSet::from(["lookup".to_string()]);
+
+        let resp = from_raw_openai_response(&raw_text_response(text), &declared).unwrap();
+
+        assert_eq!(
+            resp.content.unwrap().parts,
+            vec![
+                Part::FunctionCall {
+                    name: "lookup".to_string(),
+                    args: serde_json::json!({"id": 7}),
+                    id: None,
+                    thought_signature: None,
+                },
+                Part::Text { text: "\nThen I will summarize.".to_string() },
+            ]
+        );
     }
 
     #[test]
@@ -919,7 +932,7 @@ mod tests {
             }
         });
 
-        let resp = from_raw_openai_response(&json).expect("response should parse");
+        let resp = from_raw_openai_response(&json, &HashSet::new()).expect("response should parse");
         let content = resp.content.unwrap();
         assert!(content.parts.is_empty(), "empty text should be filtered out");
         assert_eq!(resp.finish_reason, Some(FinishReason::MaxTokens));
@@ -946,7 +959,7 @@ mod tests {
             "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 }
         });
 
-        let resp = from_raw_openai_response(&json).expect("response should parse");
+        let resp = from_raw_openai_response(&json, &HashSet::new()).expect("response should parse");
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 1);
         if let Part::FunctionCall { name, args, id, .. } = &content.parts[0] {
@@ -997,7 +1010,8 @@ mod tests {
             }]
         });
 
-        let response = from_raw_openai_response(&json).expect("compatible arguments should parse");
+        let response = from_raw_openai_response(&json, &HashSet::new())
+            .expect("compatible arguments should parse");
         let parts = response.content.expect("tool content").parts;
         assert!(matches!(
             &parts[0],
@@ -1036,7 +1050,7 @@ mod tests {
             }]
         });
 
-        let error = from_raw_openai_response(&json)
+        let error = from_raw_openai_response(&json, &HashSet::new())
             .expect_err("truncated tool arguments must remain invalid");
         assert!(error.contains("bash"));
     }
@@ -1061,7 +1075,7 @@ mod tests {
             }]
         });
 
-        let error = from_raw_openai_response(&json)
+        let error = from_raw_openai_response(&json, &HashSet::new())
             .expect_err("non-empty array arguments must remain invalid");
         assert!(error.contains("bash"));
         assert!(error.contains("array"));
@@ -1077,7 +1091,7 @@ mod tests {
             "usage": { "prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8 }
         });
 
-        let resp = from_raw_openai_response(&json).expect("response should parse");
+        let resp = from_raw_openai_response(&json, &HashSet::new()).expect("response should parse");
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 1);
         assert!(matches!(&content.parts[0], Part::Text { text } if text == "Hello there!"));
@@ -1112,7 +1126,8 @@ mod tests {
             "usage": provider_usage.clone()
         });
 
-        let response = from_raw_openai_response(&json).expect("response should parse");
+        let response =
+            from_raw_openai_response(&json, &HashSet::new()).expect("response should parse");
         let usage = response.usage_metadata.expect("usage should be parsed");
 
         assert_eq!(usage.prompt_token_count, 120);

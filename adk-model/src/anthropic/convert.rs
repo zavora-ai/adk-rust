@@ -205,13 +205,18 @@ pub fn content_to_message(
 }
 
 /// Convert ADK tools to adk-anthropic ToolUnionParam format.
+///
+/// Tools are emitted sorted by name: the declarations come from a `HashMap`, and
+/// a stable order keeps the prompt-cache prefix identical across requests.
 pub fn convert_tools(
     tools: &HashMap<String, Value>,
     adapter: &dyn SchemaAdapter,
     cache: &SchemaCache,
 ) -> Result<Vec<ToolUnionParam>, ConversionError> {
+    let mut tools = tools.iter().collect::<Vec<_>>();
+    tools.sort_unstable_by_key(|(name, _)| *name);
     tools
-        .iter()
+        .into_iter()
         .map(|(name, decl)| {
             if let Some(provider_tool) = decl.get("x-adk-anthropic-tool") {
                 return serde_json::from_value::<ToolUnionParam>(provider_tool.clone()).map_err(
@@ -679,6 +684,34 @@ mod tests {
         let claude_tools =
             convert_tools(&tools, &adapter, &cache).expect("tool conversion should succeed");
         assert_eq!(claude_tools.len(), 1);
+    }
+
+    #[test]
+    fn convert_tools_order_is_stable_across_maps() {
+        use super::super::schema_adapter::AnthropicSchemaAdapter;
+        let names: Vec<String> = (0..12).map(|i| format!("tool_{i:02}")).collect();
+        let declaration = |name: &str| {
+            serde_json::json!({
+                "description": format!("{name} description"),
+                "parameters": {"type": "object", "properties": {}}
+            })
+        };
+        let forward: HashMap<String, Value> =
+            names.iter().map(|name| (name.clone(), declaration(name))).collect();
+        let reverse: HashMap<String, Value> =
+            names.iter().rev().map(|name| (name.clone(), declaration(name))).collect();
+
+        let adapter = AnthropicSchemaAdapter;
+        let cache = SchemaCache::for_adapter(std::sync::Arc::new(AnthropicSchemaAdapter));
+        let from_forward = convert_tools(&forward, &adapter, &cache).unwrap();
+        let from_reverse = convert_tools(&reverse, &adapter, &cache).unwrap();
+
+        assert_eq!(from_forward, from_reverse);
+        let converted_names: Vec<String> = from_forward
+            .iter()
+            .map(|tool| serde_json::to_value(tool).unwrap()["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(converted_names, names);
     }
 
     #[test]

@@ -58,18 +58,10 @@ impl std::error::Error for AnthropicApiError {}
 
 impl From<AnthropicApiError> for AdkError {
     fn from(err: AnthropicApiError) -> Self {
-        use adk_core::{ErrorCategory, ErrorComponent};
+        use adk_core::ErrorComponent;
         let msg = err.to_string();
-        let category = match err.status_code {
-            401 => ErrorCategory::Unauthorized,
-            403 => ErrorCategory::Forbidden,
-            404 => ErrorCategory::NotFound,
-            408 => ErrorCategory::Timeout,
-            429 => ErrorCategory::RateLimited,
-            503 | 529 => ErrorCategory::Unavailable,
-            s if s >= 500 => ErrorCategory::Internal,
-            _ => ErrorCategory::InvalidInput,
-        };
+        // Anthropic documents `api_error` (500) and `overloaded_error` (529) as transient.
+        let category = crate::retry::category_for_status_code(err.status_code);
         let mut adk_err =
             AdkError::new(ErrorComponent::Model, category, "model.anthropic.api_error", msg)
                 .with_upstream_status(err.status_code)
@@ -169,6 +161,36 @@ mod tests {
         assert_eq!(adk_err.details.upstream_status_code, Some(529));
         assert_eq!(adk_err.details.provider.as_deref(), Some("anthropic"));
         assert!(adk_err.is_retryable(), "529 should be retryable (Unavailable category)");
+    }
+
+    #[test]
+    fn transient_server_errors_are_retryable() {
+        for (error_type, status_code) in [
+            ("api_error", 500),
+            ("api_error", 502),
+            ("timeout_error", 504),
+            ("overloaded_error", 529),
+        ] {
+            let adk_err: AdkError = AnthropicApiError {
+                error_type: error_type.to_string(),
+                message: "transient".to_string(),
+                status_code,
+                request_id: None,
+            }
+            .into();
+            assert_eq!(adk_err.category, adk_core::ErrorCategory::Unavailable, "{status_code}");
+            assert!(adk_err.is_retryable(), "{status_code} should be retryable");
+            assert_eq!(adk_err.details.upstream_status_code, Some(status_code));
+        }
+
+        let client_error: AdkError = AnthropicApiError {
+            error_type: "client_error".to_string(),
+            message: "bad".to_string(),
+            status_code: 0,
+            request_id: None,
+        }
+        .into();
+        assert!(!client_error.is_retryable());
     }
 
     #[test]

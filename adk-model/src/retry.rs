@@ -1,4 +1,4 @@
-use adk_core::{AdkError, Result};
+use adk_core::{AdkError, ErrorCategory, Result};
 use std::{future::Future, time::Duration};
 
 /// Configuration for automatic retry with exponential backoff.
@@ -10,7 +10,9 @@ pub struct RetryConfig {
     pub max_retries: u32,
     /// Initial delay before the first retry.
     pub initial_delay: Duration,
-    /// Maximum delay between retries (caps exponential growth).
+    /// Maximum delay between retries. Caps both exponential growth and a
+    /// server-provided `Retry-After` delay, so a large `Retry-After` never
+    /// stalls an agent run for longer than this.
     pub max_delay: Duration,
     /// Multiplier applied to the delay after each retry.
     pub backoff_multiplier: f32,
@@ -68,6 +70,83 @@ impl RetryConfig {
 #[must_use]
 pub fn is_retryable_status_code(status_code: u16) -> bool {
     matches!(status_code, 408 | 429 | 500 | 502 | 503 | 504 | 529)
+}
+
+/// Maps an upstream HTTP error status to the [`ErrorCategory`] provider clients report.
+///
+/// The transient server statuses (500, 502, 503, 504, and Anthropic's 529) map
+/// to [`ErrorCategory::Unavailable`], which [`execute_with_retry`] retries; every
+/// supported provider documents them as safe to retry after a short wait.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::ErrorCategory;
+/// use adk_model::retry::category_for_status_code;
+///
+/// assert_eq!(category_for_status_code(502), ErrorCategory::Unavailable);
+/// assert_eq!(category_for_status_code(429), ErrorCategory::RateLimited);
+/// assert_eq!(category_for_status_code(400), ErrorCategory::InvalidInput);
+/// ```
+#[must_use]
+pub fn category_for_status_code(status_code: u16) -> ErrorCategory {
+    match status_code {
+        401 => ErrorCategory::Unauthorized,
+        403 => ErrorCategory::Forbidden,
+        404 => ErrorCategory::NotFound,
+        408 => ErrorCategory::Timeout,
+        429 => ErrorCategory::RateLimited,
+        500 | 502 | 503 | 504 | 529 => ErrorCategory::Unavailable,
+        500..=599 => ErrorCategory::Internal,
+        _ => ErrorCategory::InvalidInput,
+    }
+}
+
+/// Parses a `Retry-After` header value given in seconds.
+///
+/// Returns `None` for an HTTP-date or any other value that is not a
+/// non-negative number of seconds.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_model::retry::parse_retry_after;
+/// use std::time::Duration;
+///
+/// assert_eq!(parse_retry_after("7"), Some(Duration::from_secs(7)));
+/// assert_eq!(parse_retry_after("1.5"), Some(Duration::from_millis(1500)));
+/// assert_eq!(parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT"), None);
+/// ```
+#[must_use]
+pub fn parse_retry_after(value: &str) -> Option<Duration> {
+    let seconds = value.trim().parse::<f64>().ok()?;
+    Duration::try_from_secs_f64(seconds).ok()
+}
+
+/// Attaches a server-provided `Retry-After` delay to a retryable error.
+///
+/// Errors in a non-retryable category are returned unchanged.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{AdkError, ErrorCategory, ErrorComponent};
+/// use adk_model::retry::with_retry_after;
+/// use std::time::Duration;
+///
+/// let error = AdkError::new(ErrorComponent::Model, ErrorCategory::Unavailable, "m.e", "down");
+/// let error = with_retry_after(error, Some(Duration::from_secs(2)));
+/// assert_eq!(error.retry.retry_after(), Some(Duration::from_secs(2)));
+/// ```
+#[must_use]
+pub fn with_retry_after(error: AdkError, retry_after: Option<Duration>) -> AdkError {
+    match retry_after {
+        Some(delay) if error.retry.should_retry => {
+            let retry = error.retry.clone().with_retry_after(delay);
+            error.with_retry(retry)
+        }
+        _ => error,
+    }
 }
 
 /// Returns `true` if the error message contains patterns indicating a transient failure.
@@ -157,6 +236,9 @@ where
 /// When `server_hint` contains a `retry_after` duration, that duration is used
 /// instead of the exponential backoff calculation. This respects server-provided
 /// timing from `retry-after` headers (Requirement 5.1).
+///
+/// A server-provided delay, from the error or from `server_hint`, is capped at
+/// [`RetryConfig::max_delay`].
 pub async fn execute_with_retry_hint<T, Op, Fut, Classify>(
     retry_config: &RetryConfig,
     classify_error: Classify,
@@ -184,12 +266,13 @@ where
             Err(error) if attempt < retry_config.max_retries && classify_error(&error) => {
                 attempt += 1;
 
-                // Priority: 1) structured retry_after from AdkError, 2) server hint, 3) backoff
+                // Priority: 1) structured retry_after from AdkError, 2) server hint, 3) backoff.
+                // A server delay is capped so `Retry-After: 3600` cannot stall the run.
                 let error_retry_after = error.retry.retry_after();
                 let effective_delay = if let Some(d) = error_retry_after {
-                    d
+                    d.min(retry_config.max_delay)
                 } else if attempt == 1 {
-                    server_delay.unwrap_or(delay)
+                    server_delay.map_or(delay, |d| d.min(retry_config.max_delay))
                 } else {
                     delay
                 };
@@ -290,6 +373,102 @@ mod tests {
         assert!(is_retryable_status_code(529));
         assert!(!is_retryable_status_code(400));
         assert!(!is_retryable_status_code(401));
+    }
+
+    #[tokio::test]
+    async fn server_retry_after_is_capped_at_max_delay() {
+        let retry_config = RetryConfig::default()
+            .with_max_retries(1)
+            .with_initial_delay(Duration::ZERO)
+            .with_max_delay(Duration::from_millis(20));
+        let attempts = Arc::new(AtomicU32::new(0));
+        let started = std::time::Instant::now();
+
+        let result = execute_with_retry(&retry_config, is_retryable_model_error, || {
+            let attempts = Arc::clone(&attempts);
+            async move {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let error = AdkError::new(
+                        adk_core::ErrorComponent::Model,
+                        ErrorCategory::Unavailable,
+                        "model.test.unavailable",
+                        "overloaded",
+                    );
+                    return Err(with_retry_after(error, Some(Duration::from_secs(3600))));
+                }
+                Ok("ok")
+            }
+        })
+        .await;
+
+        assert_eq!(result.unwrap(), "ok");
+        assert!(started.elapsed() < Duration::from_secs(5), "delay was not capped");
+    }
+
+    #[tokio::test]
+    async fn server_hint_is_capped_at_max_delay() {
+        let retry_config = RetryConfig::default()
+            .with_max_retries(1)
+            .with_initial_delay(Duration::ZERO)
+            .with_max_delay(Duration::from_millis(20));
+        let hint = ServerRetryHint { retry_after: Some(Duration::from_secs(3600)) };
+        let attempts = Arc::new(AtomicU32::new(0));
+        let started = std::time::Instant::now();
+
+        let result = execute_with_retry_hint(
+            &retry_config,
+            is_retryable_model_error,
+            Some(&hint),
+            &mut || {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        return Err(AdkError::model("HTTP 503 unavailable"));
+                    }
+                    Ok("ok")
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(result.unwrap(), "ok");
+        assert!(started.elapsed() < Duration::from_secs(5), "delay was not capped");
+    }
+
+    #[test]
+    fn transient_server_statuses_map_to_retryable_unavailable() {
+        for status in [500, 502, 503, 504, 529] {
+            assert_eq!(category_for_status_code(status), ErrorCategory::Unavailable, "{status}");
+        }
+        assert_eq!(category_for_status_code(501), ErrorCategory::Internal);
+        assert_eq!(category_for_status_code(429), ErrorCategory::RateLimited);
+        assert_eq!(category_for_status_code(408), ErrorCategory::Timeout);
+        assert_eq!(category_for_status_code(422), ErrorCategory::InvalidInput);
+    }
+
+    #[test]
+    fn retry_after_is_attached_only_to_retryable_errors() {
+        let delay = Some(Duration::from_secs(4));
+        let unavailable = AdkError::new(
+            adk_core::ErrorComponent::Model,
+            ErrorCategory::Unavailable,
+            "model.test",
+            "down",
+        );
+        let invalid = AdkError::new(
+            adk_core::ErrorComponent::Model,
+            ErrorCategory::InvalidInput,
+            "model.test",
+            "bad",
+        );
+
+        assert_eq!(
+            with_retry_after(unavailable, delay).retry.retry_after(),
+            Some(Duration::from_secs(4))
+        );
+        assert_eq!(with_retry_after(invalid, delay).retry.retry_after(), None);
+        assert_eq!(parse_retry_after("-1"), None);
+        assert_eq!(parse_retry_after(" 30 "), Some(Duration::from_secs(30)));
     }
 
     #[test]

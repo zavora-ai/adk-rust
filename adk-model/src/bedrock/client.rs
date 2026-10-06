@@ -253,8 +253,13 @@ impl BedrockClient {
                     ConverseStreamOutput::ContentBlockStop(_) => {
                         // If we were accumulating tool arguments, emit the complete FunctionCall.
                         if let (Some(name), Some(id)) = (tool_name.take(), tool_id.take()) {
-                            let args: serde_json::Value =
-                                serde_json::from_str(&tool_args_buf).unwrap_or_default();
+                            // A zero-argument tool streams no input, which decodes to `{}`.
+                            let args = crate::tool_args::parse_streamed_tool_arguments(
+                                "bedrock",
+                                "model.bedrock.invalid_tool_arguments",
+                                &name,
+                                &tool_args_buf,
+                            )?;
                             tool_args_buf.clear();
 
                             yield LlmResponse {
