@@ -31,8 +31,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SkillToolset` now adds guidance for its currently available tools to each
   model request through the new `Toolset::process_llm_request` hook. Guidance
   is also applied to invocation-scoped toolsets.
+
+### Security
+
+- **Redis memory `delete_user` erased other users' memories** (`adk-memory`): the
+  index-key `SCAN` pattern was `mem_idx:{app}:{user}*`, with no delimiter after the
+  user id and no glob escaping, so deleting `alice` also deleted the index sets of
+  `alice2` and `alice-admin`, and a `user_id` of `*` matched every user. Both
+  `delete_user` patterns now end the user segment with `:` and escape `*`, `?`,
+  `[`, `]` and `\`.
+- **Redis key delimiter collisions** (`adk-memory`): identifiers were
+  joined with `:`, which identity validation allows, so app `a:b` with user `c`
+  shared keys with app `a` and user `b:c`. Key segments are now percent-encoded;
+  the key-format change is listed under Changed.
+
 ### Fixed
 
+- **Neo4j memory entry ids** (`adk-memory`): `MemoryEntry.id` carries a global
+  uniqueness constraint but was `{session_id}_{i}` or `entry_{millis}`, so a second
+  `add_session` for a session id failed, as did the same session id under another
+  tenant, and two `add_entry_to_project` calls in one millisecond collided. Ids are
+  now scoped by app, user, project and session, direct entries use a UUID, and
+  `add_session` merges on the id, so re-ingesting a session updates it.
+- **Neo4j vector search returned nothing for most tenants** (`adk-memory`): search
+  took the global top `limit` from the vector index, then filtered by app, user
+  and project. It now requests `limit × 10` candidates, capped at
+  `DEFAULT_VECTOR_CANDIDATE_CAP` (1000) and configurable with
+  `Neo4jMemoryService::with_vector_candidate_cap`, filters them, then applies
+  `limit`. A tenant whose entries all rank below the cap still gets no vector
+  results.
+- **SQLite memory search failed on ordinary text** (`adk-memory`): `search`,
+  `delete_entries` and `delete_entries_in_project` bound the raw query to FTS5
+  `MATCH`, so `what's my name?` raised an FTS5 syntax error. Each word is now a
+  quoted phrase, bare `AND`/`OR`/`NOT`/`NEAR` are dropped, and an entry matches
+  when it contains every word, as with `plainto_tsquery` in the Postgres backend.
 - **`acp_full_protocol` permission tests** (`examples/acp_full_protocol`): the
   example reads `tool_confirmation_decisions` by function-call ID, matching the
   key the ACP server populates, so approval and denial resume correctly.
@@ -92,6 +124,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
+- **Redis key segments are percent-encoded** (`adk-memory`): `%`
+  becomes `%25` and `:` becomes `%3A` in every app, user, session and project
+  segment. Identifiers containing neither character keep their existing keys.
+  Data stored under an identifier containing `:` or `%` must be renamed to the
+  encoded key, for example memory entries of app `a:b`, user `c`, session `s` move
+  from `mem:a:b:c:s` to `mem:a%3Ab:c:s`.
+- **Neo4j memory entry ids** (`adk-memory`): new entries use the scoped id format
+  `s:{app}:{user}:{scope}:{session}:{index}` or `d:{app}:{user}:{scope}:{uuid}`.
+  Entries written earlier keep their ids, so re-ingesting a session stored before
+  this release adds a second copy; call `delete_session` first to avoid it.
 
 ## [2.2.0] - 2026-09-01
 

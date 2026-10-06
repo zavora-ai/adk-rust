@@ -62,10 +62,32 @@ fn extract_content_text(value: &serde_json::Value) -> String {
     }
 }
 
+/// Converts free text into an FTS5 query matching entries that contain every word.
+///
+/// Each whitespace-separated token becomes a quoted phrase, so FTS5 syntax
+/// characters (`"`, `'`, `*`, `^`, `:`, `?`, parentheses) are matched as text
+/// instead of parsed, and the bare operators `AND`, `OR`, `NOT` and `NEAR` are
+/// dropped. Tokens without a letter or digit produce no FTS5 term and are
+/// skipped. As with `plainto_tsquery` in the Postgres backend, the remaining
+/// terms are ANDed. Returns `None` when nothing searchable remains.
+fn fts5_match_query(query: &str) -> Option<String> {
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .filter(|token| !matches!(*token, "AND" | "OR" | "NOT" | "NEAR"))
+        .filter(|token| token.chars().any(char::is_alphanumeric))
+        .map(|token| format!("\"{}\"", token.replace('"', "\"\"")))
+        .collect();
+    (!terms.is_empty()).then(|| terms.join(" "))
+}
+
 /// SQLite-backed memory service with FTS5 full-text search.
 ///
 /// Stores memory entries in a SQLite database with an FTS5 virtual table
 /// for efficient keyword search. No embedding provider is needed.
+///
+/// Search and query-based deletion treat the query as plain text: an entry
+/// matches when it contains every word of the query, and FTS5 operators in the
+/// query are matched literally rather than interpreted.
 ///
 /// # Example
 ///
@@ -282,6 +304,9 @@ impl MemoryService for SqliteMemoryService {
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
         let pool = self.pool.clone();
         let limit = req.limit.unwrap_or(10) as i64;
+        let Some(match_query) = fts5_match_query(&req.query) else {
+            return Ok(SearchResponse { memories: Vec::new() });
+        };
 
         let rows = if let Some(ref project_id) = req.project_id {
             sqlx::query(
@@ -296,7 +321,7 @@ impl MemoryService for SqliteMemoryService {
                 LIMIT ?
                 "#,
             )
-            .bind(&req.query)
+            .bind(&match_query)
             .bind(&req.app_name)
             .bind(&req.user_id)
             .bind(project_id)
@@ -317,7 +342,7 @@ impl MemoryService for SqliteMemoryService {
                 LIMIT ?
                 "#,
             )
-            .bind(&req.query)
+            .bind(&match_query)
             .bind(&req.app_name)
             .bind(&req.user_id)
             .bind(limit)
@@ -404,6 +429,9 @@ impl MemoryService for SqliteMemoryService {
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_entries(&self, app_name: &str, user_id: &str, query: &str) -> Result<u64> {
         let pool = self.pool.clone();
+        let Some(match_query) = fts5_match_query(query) else {
+            return Ok(0);
+        };
         let result = sqlx::query(
             "DELETE FROM memory_entries WHERE id IN (\
                 SELECT m.id FROM memory_entries_fts f \
@@ -413,7 +441,7 @@ impl MemoryService for SqliteMemoryService {
                 AND m.project_id IS NULL\
             )",
         )
-        .bind(query)
+        .bind(&match_query)
         .bind(app_name)
         .bind(user_id)
         .execute(&pool)
@@ -523,6 +551,9 @@ impl MemoryService for SqliteMemoryService {
         query: &str,
     ) -> Result<u64> {
         let pool = self.pool.clone();
+        let Some(match_query) = fts5_match_query(query) else {
+            return Ok(0);
+        };
         let result = sqlx::query(
             "DELETE FROM memory_entries WHERE id IN (\
                 SELECT m.id FROM memory_entries_fts f \
@@ -532,7 +563,7 @@ impl MemoryService for SqliteMemoryService {
                 AND m.project_id = ?\
             )",
         )
-        .bind(query)
+        .bind(&match_query)
         .bind(app_name)
         .bind(user_id)
         .bind(project_id)
@@ -557,5 +588,158 @@ impl MemoryService for SqliteMemoryService {
         .map_err(|e| adk_core::AdkError::memory(format!("delete_project failed: {e}")))?;
 
         Ok(result.rows_affected())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adk_core::Content;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    const APP: &str = "app";
+    const USER: &str = "user";
+
+    async fn service_with(texts: &[&str]) -> SqliteMemoryService {
+        // One connection: every connection to `sqlite::memory:` is its own database.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory sqlite");
+        let service = SqliteMemoryService::from_pool(pool);
+        service.migrate().await.expect("migrate");
+        let entries = texts
+            .iter()
+            .map(|text| MemoryEntry {
+                content: Content::new("user").with_text(*text),
+                author: "user".to_string(),
+                timestamp: Utc::now(),
+            })
+            .collect();
+        service.add_session(APP, USER, "s1", entries).await.expect("add_session");
+        service
+    }
+
+    async fn search_texts(service: &SqliteMemoryService, query: &str) -> Vec<String> {
+        let response = service
+            .search(SearchRequest {
+                query: query.to_string(),
+                user_id: USER.to_string(),
+                app_name: APP.to_string(),
+                limit: None,
+                min_score: None,
+                project_id: None,
+            })
+            .await
+            .unwrap_or_else(|e| panic!("search for {query:?} failed: {e}"));
+        let mut texts: Vec<String> =
+            response.memories.iter().map(|m| crate::text::extract_text(&m.content)).collect();
+        texts.sort();
+        texts
+    }
+
+    #[test]
+    fn test_fts5_match_query_quotes_terms_and_drops_operators() {
+        assert_eq!(
+            [
+                fts5_match_query("what's my name?"),
+                fts5_match_query("rust AND programming OR NOT NEAR"),
+                fts5_match_query(r#"say "hi"#),
+                fts5_match_query("rust* ^start col:value (x)"),
+                fts5_match_query("编程"),
+            ],
+            [
+                Some(r#""what's" "my" "name?""#.to_string()),
+                Some(r#""rust" "programming""#.to_string()),
+                Some(r#""say" """hi""#.to_string()),
+                Some(r#""rust*" "^start" "col:value" "(x)""#.to_string()),
+                Some(r#""编程""#.to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_fts5_match_query_without_searchable_terms() {
+        for query in ["", "   ", "?", "*", "AND", "OR NOT", "\"", "🦀 !"] {
+            assert_eq!(fts5_match_query(query), None, "{query:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_accepts_ordinary_text() {
+        let service = service_with(&[
+            "what's my name? It is Alice",
+            "Alice's favourite colour is blue",
+            "rust programming is fun",
+            "I like python",
+            "我喜欢 编程",
+        ])
+        .await;
+
+        assert_eq!(
+            search_texts(&service, "what's my name?").await,
+            ["what's my name? It is Alice"]
+        );
+        assert_eq!(
+            search_texts(&service, "Alice's colour?").await,
+            ["Alice's favourite colour is blue"]
+        );
+        assert_eq!(
+            search_texts(&service, "rust AND programming").await,
+            ["rust programming is fun"]
+        );
+        assert_eq!(search_texts(&service, "rust*").await, ["rust programming is fun"]);
+        assert_eq!(search_texts(&service, "编程").await, ["我喜欢 编程"]);
+        assert_eq!(search_texts(&service, "编程？").await, ["我喜欢 编程"]);
+    }
+
+    #[tokio::test]
+    async fn test_search_with_fts5_syntax_does_not_error() {
+        let service = service_with(&["rust programming is fun"]).await;
+
+        for query in [
+            "*",
+            "?",
+            "AND",
+            "OR",
+            "NOT rust",
+            "rust OR python",
+            "\"unbalanced",
+            "NEAR(rust fun)",
+            "content_text:rust",
+            "(rust",
+            "-rust +fun",
+            "^rust",
+        ] {
+            // Each query must parse; the result set itself is query-specific.
+            search_texts(&service, query).await;
+        }
+        assert_eq!(search_texts(&service, "*").await, Vec::<String>::new());
+        assert_eq!(search_texts(&service, "NOT rust").await, ["rust programming is fun"]);
+    }
+
+    #[tokio::test]
+    async fn test_delete_entries_accepts_ordinary_text() {
+        let service = service_with(&["what's my name? It is Alice", "unrelated"]).await;
+
+        assert_eq!(service.delete_entries(APP, USER, "what's my name?").await.unwrap(), 1);
+        assert_eq!(service.delete_entries(APP, USER, "*").await.unwrap(), 0);
+        assert_eq!(search_texts(&service, "unrelated").await, ["unrelated"]);
+    }
+
+    #[tokio::test]
+    async fn test_delete_entries_in_project_accepts_ordinary_text() {
+        let service = service_with(&[]).await;
+        let entry = MemoryEntry {
+            content: Content::new("user").with_text("what's the project's deadline?"),
+            author: "user".to_string(),
+            timestamp: Utc::now(),
+        };
+        service.add_entry_to_project(APP, USER, "proj", entry).await.unwrap();
+
+        let deleted =
+            service.delete_entries_in_project(APP, USER, "proj", "project's deadline?").await;
+        assert_eq!(deleted.unwrap(), 1);
     }
 }
