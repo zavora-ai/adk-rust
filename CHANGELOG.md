@@ -86,12 +86,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus reasoning that was buffered but never streamed (thinking disabled), and a
   `delta.content` arriving in the same chunk as `finish_reason` is no longer
   dropped.
+- **`LoopAgent` with zero iterations** (`adk-agent`): `with_max_iterations(0)`
+  runs no iterations and completes after its callbacks, instead of panicking on
+  `u32` underflow in debug builds and looping `u32::MAX` times in release builds.
+- **`output_key` written before schema validation** (`adk-agent`): with
+  `output_schema` set, `state[output_key]` receives only a response that passes
+  validation. Rejected attempts, including every attempt of a run that exhausts
+  `output_max_retries`, are no longer persisted.
+- **After-tool callbacks without shared state** (`adk-agent`):
+  `CallbackContext::shared_state()` in after-tool callbacks returns the
+  `ParallelAgent` shared state, matching before-tool callbacks.
 
 ### Changed
 
 - **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
+
+### Security
+
+- **Team relationship approval honours `Deny`** (`adk-agent`): a tool whose
+  confirmation the invocation context requires — a team `Delegate` relationship
+  with `RelationshipApprovalPolicy::Required` — no longer executes when the static
+  or handler decision for the call is `Deny`. The tool executor applies the union
+  of the agent's `ToolConfirmationPolicy` and
+  `InvocationContext::requires_tool_confirmation`, so a denied delegate call
+  returns the same denied function response as the agent-policy path.
 
 ## [2.2.0] - 2026-09-01
 
