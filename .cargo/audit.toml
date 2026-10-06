@@ -6,6 +6,11 @@
 #
 # Run `cargo audit` locally or in CI — these IDs will be skipped while
 # new, unreviewed advisories still surface as failures.
+#
+# This list is wider than deny.toml's: cargo-audit scans the lockfile, so it
+# also reports crates that no resolved feature graph reaches (rkyv 0.7) and
+# transitive unmaintained crates that cargo-deny's `unmaintained = "workspace"`
+# policy deliberately leaves to upstream.
 
 [advisories]
 ignore = [
@@ -25,16 +30,6 @@ ignore = [
 
     # rsa: Marvin timing side-channel (no upstream fix, accepted risk)
     "RUSTSEC-2023-0071",
-
-    # rustls-webpki: CRL validation bypass (upgrade deferred, breaks workspace)
-    "RUSTSEC-2026-0104",
-    # rustls-webpki: Name constraint bypass
-    "RUSTSEC-2026-0098",
-    # rustls-webpki: Related name constraint issue
-    "RUSTSEC-2026-0099",
-
-    # lru: Unsoundness in 0.12.5 (transitive via tantivy/lancedb, replacement planned)
-    # Note: lru advisory ID may vary — add the specific RUSTSEC ID when assigned
 
     # --- Unmaintained crates (no security impact) ---
 

@@ -3,9 +3,13 @@
 # Enforced by the nightly `supply-chain` job (`.github/workflows/ci-nightly.yml`)
 # alongside `cargo audit`. Run locally with `cargo deny check`.
 #
-# The accepted-advisory list mirrors `.cargo/audit.toml` so both tools agree.
-# Every entry is justified in `docs/security/DEPENDENCY-ADVISORIES.md`; add the
-# rationale there before adding an ID here.
+# The accepted-advisory list is the subset of `.cargo/audit.toml` that cargo-deny
+# actually reaches: it resolves the feature graph (so lockfile-only crates such as
+# rkyv 0.7 never appear) and `unmaintained = "workspace"` leaves transitive
+# unmaintained crates to upstream. Every entry is justified in
+# `docs/security/DEPENDENCY-ADVISORIES.md`; add the rationale there before adding
+# an ID here, and remove an ID as soon as `cargo deny check advisories` reports it
+# as `advisory-not-detected`.
 
 [graph]
 # Optional backends (surrealdb, lancedb, the ONNX audio models, mistral.rs,
@@ -36,38 +40,16 @@ ignore = [
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
 
-    # rkyv 0.7 — lockfile-only through rust_decimal's disabled optional feature.
-    # No workspace feature activates it; live archive consumers use rkyv 0.8.
-    "RUSTSEC-2026-0235",
-
     # rsa — Marvin timing side-channel. No upstream fix exists.
     "RUSTSEC-2023-0071",
 
-    # rustls-webpki < 0.103.12 — CRL and name-constraint handling. The old line
-    # is pinned inside the AWS SDK's own HTTP client stack.
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    "RUSTSEC-2026-0104",
-
     # --- Unsoundness and notices: reviewed, no ADK-reachable path ---
-    "RUSTSEC-2026-0190", # anyhow: Error::downcast_mut
-    "RUSTSEC-2026-0202", # cxx
-    "RUSTSEC-2026-0186", # memmap2
-    "RUSTSEC-2026-0097", # rand
-    "RUSTSEC-2026-0174", # http-types: ASCII invariant in Authorization value
+    # http-types: ASCII invariant in Authorization value. Reached only through
+    # the Azure SDK's HTTP stack; ADK never constructs http-types headers.
+    "RUSTSEC-2026-0174",
 
-    # --- Unmaintained crates carried by upstream dependencies ---
-    "RUSTSEC-2023-0089", # atomic-polyfill
-    "RUSTSEC-2024-0384", # instant
-    "RUSTSEC-2024-0436", # paste
-    "RUSTSEC-2025-0012", # backoff
-    "RUSTSEC-2025-0052", # async-std
-    "RUSTSEC-2025-0057", # fxhash
-    "RUSTSEC-2025-0119", # number_prefix
-    "RUSTSEC-2025-0134", # rustls-pemfile
-    "RUSTSEC-2025-0141", # bincode
-    "RUSTSEC-2026-0150", # audiopus_sys
-    "RUSTSEC-2026-0173", # proc-macro-error2
+    # http-types is informational for cargo-audit and is therefore not listed in
+    # `.cargo/audit.toml`.
 ]
 
 [licenses]
