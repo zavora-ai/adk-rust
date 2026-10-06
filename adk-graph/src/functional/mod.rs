@@ -79,6 +79,7 @@ pub mod execution_log;
 pub mod messages;
 pub mod reducers;
 pub mod schema;
+mod task_id;
 pub mod typed_reducer;
 
 pub use context::TaskContext;
@@ -87,4 +88,7 @@ pub use execution_log::{ExecutionLog, TaskRecord, TaskStatus};
 pub use messages::{ChatMessage, MessageRole, MessagesValue};
 pub use reducers::{ReducedValue, UntrackedValue};
 pub use schema::{ExpectedType, StateSchemaValidator};
+#[doc(hidden)]
+pub use task_id::__private;
+pub use task_id::task_call_id;
 pub use typed_reducer::{AppendReducer, MergeReducer, ReplaceReducer, TypedReducer};

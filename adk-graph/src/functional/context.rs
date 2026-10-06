@@ -76,6 +76,9 @@ pub struct TaskContext {
     resume_values: HashMap<String, Value>,
     /// Counts interrupt calls so each site gets a stable key across a replay.
     interrupt_ordinal: Arc<RwLock<usize>>,
+    /// Calls made so far of each `#[task]`, keyed by task name, so each call
+    /// gets its own execution-log key; see [`super::task_call_id`].
+    task_call_counters: std::sync::Mutex<HashMap<String, usize>>,
 }
 
 impl TaskContext {
@@ -104,6 +107,7 @@ impl TaskContext {
             pending_route: None,
             resume_values: HashMap::new(),
             interrupt_ordinal: Arc::new(RwLock::new(0)),
+            task_call_counters: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -442,6 +446,24 @@ impl TaskContext {
     // ─── Internal Methods (pub(crate)) ───────────────────────────────────
     // These methods are used by the macro-generated task wrappers
     // (`#[entrypoint]` and `#[task]`), not directly by user code.
+
+    /// Returns the execution-log key for the next call of `task_name`.
+    ///
+    /// Advances the task's call ordinal, so two calls in one run never share a
+    /// key. `args` holds each argument as JSON, or `None` for one that does not
+    /// implement `Serialize`. The key format is documented on
+    /// [`super::task_call_id`].
+    #[doc(hidden)]
+    pub fn next_task_call_id(&self, task_name: &str, args: &[Option<Value>]) -> String {
+        let ordinal = {
+            let mut counters = self.task_call_counters.lock().unwrap_or_else(|e| e.into_inner());
+            let counter = counters.entry(task_name.to_string()).or_insert(0);
+            let ordinal = *counter;
+            *counter += 1;
+            ordinal
+        };
+        super::task_call_id(task_name, ordinal, args)
+    }
 
     /// Check if a task was already completed in a prior run (for resume-skip).
     ///

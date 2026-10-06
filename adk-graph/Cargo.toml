@@ -78,3 +78,5 @@ adk-action = { path = "../adk-action" }
 adk-tool = { path = "../adk-tool" }
 # For composing SequentialAgent/ParallelAgent/LoopAgent as graph nodes.
 adk-agent = { path = "../adk-agent" }
+# For exercising the `#[entrypoint]`/`#[task]` expansion against this crate.
+adk-rust-macros = { path = "../adk-rust-macros" }
