@@ -86,6 +86,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus reasoning that was buffered but never streamed (thinking disabled), and a
   `delta.content` arriving in the same chunk as `finish_reason` is no longer
   dropped.
+- **Firestore app-state path** (`adk-session`, feature `firestore`): app state
+  moves to `{root}/{app_name}/app_state/current`. The previous
+  `{root}/{app_name}/app_state` path is a collection path, so every `create` and
+  `append_event` failed. `app_state_path` and `user_state_path` now return the
+  document paths the backend writes.
+- **Undecodable stored events are logged** (`adk-session`): the SQLite,
+  PostgreSQL, Redis, and Firestore backends emit a `warn!` with the session and
+  event ID for each stored event that fails to deserialize, and still return the
+  remaining events.
+
+### Security
+
+- **Firestore tenant isolation** (`adk-session`, feature `firestore`): `delete`
+  and every append re-read the session document inside their transaction and
+  apply only when its app, user, and session ID match the request. Deleting
+  another user's session is a no-op, and appending to it fails with
+  `session.not_found`. `create` no longer upserts: an ID already taken in the app
+  fails with `session.already_exists`, so a session and its events cannot be
+  taken over, and a new session never inherits events left under its path.
+  App names, user IDs, and session IDs containing `/` are rejected.
+- **`EncryptedSession` encrypts events and binds ciphertext to the session**
+  (`adk-session`, feature `encrypted-session`):
+  - Event content, LLM response metadata, actions, and long-running tool IDs are
+    sealed into one envelope per event; `llm_request` and event
+    `provider_metadata` are not persisted.
+  - State values from `create` and from event `state_delta` are encrypted per
+    value, so `app:` and `user:` values stay in their shared tiers and later
+    writes are encrypted even when the initial state is empty.
+  - Associated data binds each ciphertext to its app, user, session, and state
+    key or event ID; data moved to another session fails with
+    `session.encryption.decrypt_failed`.
+  - `list` returns decrypted state and events instead of ciphertext.
+  - Key rotation re-encrypts state through a state-only event appended with
+    `append_event_for_identity` and returns failures, instead of calling
+    `create` over the existing session and discarding the result.
+  - `append_event(session_id, ..)` returns
+    `session.encryption.identity_required`; use `append_event_for_identity`.
+  - Data in the previous format is rejected with
+    `session.encryption.unencrypted_data`;
+    `EncryptedSession::with_legacy_migration(true)` reads and re-encrypts it.
+    `inner()` and `into_inner()` expose the wrapped service.
+- **`RedisSessionConfig` redacts credentials in `Debug`** (`adk-session`,
+  feature `redis`): the URL password and `*password*` query parameters print as
+  `[REDACTED]`.
 
 ### Changed
 

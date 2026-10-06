@@ -237,9 +237,28 @@ operation has cached exactly one app/user scope for that ID. The cache is
 bounded; long-running processes may need to get or list an older session again
 after its scope is evicted.
 
+## Firestore Sessions
+
+`FirestoreSessionService` stores a session at `{root}/{app_name}/sessions/{session_id}`
+with the owning `user_id` as a document field. Every write re-reads the session
+document inside its transaction and applies only when the app, user, and session ID
+match the request:
+
+| Operation | Session missing, or owned by another user |
+|-----------|-------------------------------------------|
+| `create` | Fails with `session.already_exists` when the ID is taken in the app |
+| `get`, `append_event_for_identity` | Fails with `session.not_found` |
+| `delete` | No-op, identical to deleting a missing session |
+| `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed |
+
+App state lives at `{root}/{app_name}/app_state/current` and user state at
+`{root}/{app_name}/users/{user_id}/state/current`. App names, user IDs, and session
+IDs are Firestore document IDs, so they must not contain `/`.
+
 ## Encrypted Sessions
 
-Wrap any `SessionService` with `EncryptedSession` to encrypt session state at rest using AES-256-GCM:
+Wrap any `SessionService` with `EncryptedSession` to encrypt session state and event
+payloads at rest using AES-256-GCM:
 
 ```rust
 use adk_session::{EncryptedSession, EncryptionKey, InMemorySessionService};
@@ -251,6 +270,20 @@ let service = EncryptedSession::new(inner, key, vec![]);
 // Use like any SessionService — encryption is transparent
 ```
 
+| Data | Stored in the inner service as |
+|------|--------------------------------|
+| State values (create state and event `state_delta`) | Encrypted per value; key names stay in plaintext |
+| Event content, LLM response metadata, actions, long-running tool IDs | One encrypted envelope in the event content |
+| Event ID, timestamp, invocation ID, branch, author | Plaintext |
+| `llm_request`, event `provider_metadata` | Not persisted |
+
+- **Identity binding**: each ciphertext is bound to its app, user, session, and state
+  key or event ID, so data copied to another session fails to decrypt.
+- **Shared tiers**: `app:` and `user:` values are stored encrypted in the shared app
+  and user tiers and stay visible to every session of that app or user.
+- **Addressing**: `append_event(session_id, ..)` returns
+  `session.encryption.identity_required`; use `append_event_for_identity()`.
+
 Key rotation is supported by passing previous keys:
 
 ```rust
@@ -258,6 +291,15 @@ let new_key = EncryptionKey::generate();
 let old_key = EncryptionKey::from_env("OLD_KEY")?;
 let service = EncryptedSession::new(inner, new_key, vec![old_key]);
 ```
+
+`get` re-encrypts state values still under a previous key and returns any failure.
+Stored events cannot be rewritten, so keep a previous key until the sessions whose
+events it encrypted are deleted or expire.
+
+Data written by releases before the per-value format (a single `__encrypted_state`
+blob plus plaintext event deltas) is rejected with
+`session.encryption.unencrypted_data`. Enable `.with_legacy_migration(true)` while
+migrating; `get` then re-encrypts that state into the current format.
 
 ## Schema Migrations
 
