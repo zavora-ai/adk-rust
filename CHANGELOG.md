@@ -100,6 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each run derives a child of `RunnerConfig::cancellation_token` instead of
   spawning two watcher tasks that never completed. Cancelling the global token
   still stops every in-flight run, and `Runner::interrupt` cancels only its target.
+- **Lost wakeup in `SharedState::wait_for_key`** (`adk-core`): a waiter registers
+  for notification before it reads the key, so a `set_shared` that lands between
+  the read and the wait wakes it instead of leaving it to time out.
 
 ### Changed
 
