@@ -1,6 +1,6 @@
 # Browser Tools
 
-The `adk-browser` crate provides 46 comprehensive browser automation tools that enable AI agents to interact with web pages. Built on the WebDriver protocol (Selenium), it works with any WebDriver-compatible browser.
+The `adk-browser` crate provides 46 comprehensive browser automation tools (45 enabled by default) that enable AI agents to interact with web pages. Built on the WebDriver protocol (Selenium), it works with any WebDriver-compatible browser.
 
 ## Overview
 
@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let browser = Arc::new(BrowserSession::new(config));
     browser.start().await?;
 
-    // Create toolset with all 46 tools
+    // Create toolset with the 45 default tools (browser_evaluate_js is opt-in)
     let toolset = BrowserToolset::new(browser.clone());
     let tools = toolset.all_tools();
 
@@ -92,7 +92,7 @@ let toolset = BrowserToolset::new(browser)
     .with_interaction(true)  // click, double_click, type, clear, select
     .with_wait(true)         // wait_for_element, wait, wait_for_page_load, wait_for_text
     .with_screenshot(true)   // screenshot
-    .with_js(true)           // evaluate_js, scroll, hover, handle_alert
+    .with_js(true)           // scroll, hover, handle_alert, and evaluate_js
     .with_cookies(false)     // Disable cookie tools
     .with_frames(false)      // Disable frame tools
     .with_windows(false)     // Disable window tools
@@ -100,6 +100,27 @@ let toolset = BrowserToolset::new(browser)
 
 let tools = toolset.all_tools();
 ```
+
+## Security Defaults
+
+Two defaults limit what a model can reach through the browser:
+
+| Default | Why | Opt out |
+|---------|-----|---------|
+| `browser_evaluate_js` is excluded from every toolset and profile | It runs model-written JavaScript in the page, with the page's cookies and session | `.with_evaluate_js(true)` or `.with_js(true)` |
+| `browser_navigate`, `browser_new_tab`, and `browser_new_window` accept only `http` and `https` | `file:` reads the host filesystem, `javascript:` and `data:` run script, and `chrome:` reaches browser settings | `.with_allowed_schemes([...])` |
+
+```rust
+use adk_browser::{BrowserConfig, BrowserSession, BrowserToolset};
+use std::sync::Arc;
+
+let browser = Arc::new(BrowserSession::new(BrowserConfig::new()));
+let toolset = BrowserToolset::new(browser)
+    .with_evaluate_js(true)           // opt in to arbitrary JavaScript
+    .with_allowed_schemes(["https"]); // HTTPS only
+```
+
+A refused URL fails with `URL scheme '<scheme>' is not allowed` before the browser is touched.
 
 ## Multi-Tenant Usage with Pool-Backed Toolsets
 
@@ -127,13 +148,13 @@ let agent = LlmAgentBuilder::new("web_agent")
 
 Browser sessions auto-start and auto-recover from stale WebDriver connections. You no longer need to call `browser.start()` before using tools — the session starts transparently on first use.
 
-## Available Tools (46 Total)
+## Available Tools (46 Total, 45 by Default)
 
 ### Navigation (4 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_navigate` | Navigate to a URL |
+| `browser_navigate` | Navigate to a URL (`http`/`https` by default) |
 | `browser_back` | Go back in history |
 | `browser_forward` | Go forward in history |
 | `browser_refresh` | Refresh current page |
@@ -177,7 +198,7 @@ Browser sessions auto-start and auto-recover from stale WebDriver connections. Y
 
 | Tool | Description |
 |------|-------------|
-| `browser_evaluate_js` | Execute JavaScript code |
+| `browser_evaluate_js` | Execute JavaScript code (opt-in) |
 | `browser_scroll` | Scroll the page |
 | `browser_hover` | Hover over an element |
 | `browser_handle_alert` | Handle JavaScript alerts |

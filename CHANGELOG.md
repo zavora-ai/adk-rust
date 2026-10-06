@@ -96,6 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bigquery_execute_sql` refuses DML, DDL, and scripts. Restore the previous
   behavior with `BigQueryToolset::with_project("my-project").with_read_only(false)`;
   the tool then reports itself as mutating.
+- **`browser_evaluate_js` is opt-in, and navigation is limited to `http`/`https`**
+  (`adk-browser`): `BrowserToolset::new`, `with_pool`, and every `BrowserProfile`
+  leave out `browser_evaluate_js` (`Full` now has 45 tools, `Scraping` 13); the
+  scroll, hover, and alert helpers stay. Opt in with
+  `BrowserToolset::new(browser).with_evaluate_js(true)`; `.with_js(true)` also
+  enables it. Allow other URL schemes with `.with_allowed_schemes(["https", "file"])`.
 
 ### Security
 
@@ -128,6 +134,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default permissions and removed only on normal completion, so a cancelled call left
   the key on disk. They are now parsed in memory and never written. A malformed key
   secret is no longer quoted back in the tool error.
+- **adk-browser: navigation accepts only web URLs, and arbitrary JavaScript is
+  opt-in.** `browser_navigate` only checked that the URL parsed, so a model could open
+  `file:///etc/passwd`, `javascript:` and `data:` URLs, or `chrome://` pages;
+  `browser_new_tab` and `browser_new_window` did not check at all. All three now
+  accept only `http` and `https` (`DEFAULT_ALLOWED_SCHEMES`) unless
+  `BrowserToolset::with_allowed_schemes` widens the list, and refuse other schemes
+  before the browser is touched. `browser_evaluate_js` was part of the default
+  toolset and the `Full` and `Scraping` profiles; it is now excluded from all of them.
 
 ## [2.2.0] - 2026-09-01
 
