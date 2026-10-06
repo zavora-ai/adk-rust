@@ -48,7 +48,7 @@ Branch naming conventions:
 CI enforces three gates: format, lint, and test. The easiest way to catch failures before they reach CI is to let [lefthook](https://github.com/evilmartians/lefthook) run them automatically as git hooks (see [Git Hooks with Lefthook](#git-hooks-with-lefthook)):
 
 - **pre-commit** runs `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`, plus `shellcheck --severity=warning` on any staged shell scripts
-- **pre-push** runs `cargo check --workspace` (a fast compilation check — CI runs the full test suite)
+- **pre-push** runs `cargo check --workspace` (a fast compilation check — CI runs the full test suite), plus `scripts/check-examples-compile.sh` when an example or a workspace crate it depends on changed
 
 Once installed, these run on every `git commit` and `git push` — no extra steps required.
 
@@ -172,7 +172,7 @@ cp .env.example .env
 The repo ships a `lefthook.yml` that wires the [Quality Gates](#quality-gates) into git hooks, so they run automatically:
 
 - **pre-commit** — format check (`cargo fmt --all -- --check`), lint (`cargo clippy --workspace --all-targets -- -D warnings`), and shell-script lint (`shellcheck --severity=warning` on staged `*.sh`, mirroring the shellcheck hook in `devenv.nix`)
-- **pre-push** — a fast compilation check (`cargo check --workspace`), not the full test suite. CI is the full-suite safety net, so the local push gate stays quick (see [Quality Gates](#quality-gates) for the CI tier design)
+- **pre-push** — a fast compilation check (`cargo check --workspace`), not the full test suite, plus `scripts/check-examples-compile.sh` over the four example shards when an example or a crate it depends on changed. CI is the full-suite safety net, so the local push gate stays quick (see [Quality Gates](#quality-gates) for the CI tier design)
 
 The shellcheck gate only runs when shell scripts are staged, and runs at `--severity=warning` so informational notes (e.g. SC1091 about sourced files that can't be followed) don't block commits. `publish.sh` is skipped because it's a zsh script, which shellcheck doesn't support. Install shellcheck with `brew install shellcheck` (macOS) or `apt install shellcheck` (Debian/Ubuntu); `scripts/setup-dev.sh` installs it for you.
 

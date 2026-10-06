@@ -74,11 +74,7 @@ exclude = [
     "examples/enterprise_hello",
     "examples/eval_showcase",
 
-    # Reference implementations (not part of workspace)
-    "reference/adk-go",
-    "reference/mcp-rust-sdk",
-    "reference/gemini-rust",
-    # Learning materials (gitignored, not part of CI)
+    # Local-only directories (gitignored, not part of CI)
     "learning",
 ]
 

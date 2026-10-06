@@ -408,7 +408,7 @@ per-platform tool matrix and the CI cost tiers.
 - [Official docs](docs/official_docs/) — guides for every capability above
 - [Wiki](https://github.com/zavora-ai/adk-rust/wiki) — tutorials and quickstarts
 - [docs.rs](https://docs.rs/adk-rust) — API reference
-- [Examples](examples/) — 110 standalone crates, plus 120+ in the
+- [Examples](examples/) — 117 standalone crates, plus 120+ in the
   [playground](https://github.com/zavora-ai/adk-playground)
 
 ## Companion projects

@@ -362,7 +362,7 @@ adk-ui/          Dynamic UI generation (forms, cards, tables, charts) — extrac
 ### Examples and docs
 
 ```
-examples/              97 standalone example crates (each with own Cargo.toml) covering all major
+examples/              117 standalone example crates (each with own Cargo.toml) covering all major
                        features. Additional 120+ examples in the adk-playground repo.
 docs/official_docs/    Comprehensive documentation site content
 ```
@@ -822,21 +822,21 @@ Always verify builds during publish — never use `--no-verify`. Verification en
 Crates must be published in dependency order. `cargo xtask publish` (via
 `./publish.sh`) computes the order from the workspace graph, so this list is
 documentation rather than configuration — `scripts/check-publish-order.sh` is the
-gate that keeps it satisfiable. The current 8 tiers over 43 publishable crates:
+gate that keeps it satisfiable. The current 9 tiers over 43 publishable crates:
 
 ```
-Tier 1: adk-core, adk-anthropic, adk-deploy, adk-enterprise, adk-rust-macros,
-        adk-telemetry, awp-types
-Tier 2: adk-action, adk-artifact, adk-awp, adk-browser, adk-devtools, adk-gcp,
-        adk-gemini, adk-guardrail, adk-memory, adk-mistralrs, adk-plugin,
-        adk-sandbox, adk-session
-Tier 3: adk-code, adk-graph, adk-model, adk-rag, adk-realtime, adk-retry-reflect,
-        adk-skill
-Tier 4: adk-agent, adk-audio, adk-runner, adk-tool
-Tier 5: adk-acp, adk-codeact-monty, adk-eval, adk-managed, adk-server
-Tier 6: adk-auth, adk-bench, adk-cli
-Tier 7: adk-computer-use, adk-payments, cargo-adk
-Tier 8: adk-rust (umbrella — always last)
+Tier 1: adk-anthropic, adk-core, adk-enterprise, adk-rust-macros, adk-telemetry,
+        awp-types
+Tier 2: adk-action, adk-awp, adk-browser, adk-devtools, adk-gcp, adk-gemini,
+        adk-guardrail, adk-mistralrs, adk-plugin, adk-sandbox
+Tier 3: adk-artifact, adk-code, adk-deploy, adk-graph, adk-memory, adk-model,
+        adk-rag, adk-retry-reflect, adk-session, adk-skill
+Tier 4: adk-realtime, adk-runner, adk-tool
+Tier 5: adk-acp, adk-agent, adk-audio, adk-eval
+Tier 6: adk-bench, adk-codeact-monty, adk-managed, adk-server
+Tier 7: adk-auth, adk-cli, cargo-adk
+Tier 8: adk-computer-use, adk-payments
+Tier 9: adk-rust (umbrella — always last)
 ```
 
 > **Note:** internal **dev**-dependencies are declared path-only (no version) so
