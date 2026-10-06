@@ -3,8 +3,8 @@
 //! Executes graphs using the Pregel model with super-steps.
 
 #[cfg(feature = "node-cache")]
-use crate::cache::{NodeCache, compute_cache_key};
-use crate::deferred::FanInTracker;
+use crate::cache::compute_cache_key;
+use crate::deferred::{FAN_IN_METADATA_KEY, FanInSnapshot, FanInTracker};
 use crate::error::{GraphError, InterruptedExecution, Result};
 use crate::graph::CompiledGraph;
 use crate::interrupt::{GraphToolConfirmationPause, Interrupt};
@@ -68,9 +68,11 @@ pub struct PregelExecutor<'a> {
     /// Restored from the checkpoint on resume and cleared once that node has
     /// executed, so the gate re-arms for a later arrival through a cycle.
     cleared_interrupt: Option<String>,
-    /// Per-node caches initialized from `CompiledGraph::cache_policies`.
-    #[cfg(feature = "node-cache")]
-    node_caches: HashMap<String, NodeCache>,
+    /// Whether a thread whose last run finished starts again from its entry
+    /// nodes instead of returning the finished state.
+    restart_completed: bool,
+    /// The step this run started at; the recursion limit counts from here.
+    run_start_step: usize,
 }
 
 impl<'a> PregelExecutor<'a> {
@@ -84,13 +86,6 @@ impl<'a> PregelExecutor<'a> {
         config: ExecutionConfig,
         run_config: Option<adk_core::RunConfig>,
     ) -> Self {
-        #[cfg(feature = "node-cache")]
-        let node_caches = graph
-            .cache_policies
-            .iter()
-            .map(|(name, policy)| (name.clone(), NodeCache::from_policy(policy)))
-            .collect();
-
         Self {
             graph,
             config,
@@ -104,9 +99,19 @@ impl<'a> PregelExecutor<'a> {
             attempts: HashMap::new(),
             child_ledger: Arc::new(std::sync::Mutex::new(HashMap::new())),
             cleared_interrupt: None,
-            #[cfg(feature = "node-cache")]
-            node_caches,
+            restart_completed: false,
+            run_start_step: 0,
         }
+    }
+
+    /// Starts a thread whose last run finished again from its entry nodes.
+    ///
+    /// Used by [`GraphAgent`](crate::agent::GraphAgent), where every call is a
+    /// new turn on the session's thread. The finished state carries over and the
+    /// new input is merged on top; a paused thread still resumes where it paused.
+    pub(crate) fn restarting_completed_threads(mut self) -> Self {
+        self.restart_completed = true;
+        self
     }
 
     /// Attempt to resume from an existing checkpoint.
@@ -133,13 +138,28 @@ impl<'a> PregelExecutor<'a> {
         };
 
         if let Some(checkpoint) = checkpoint {
-            // Restore state from checkpoint
+            let finished = checkpoint.pending_nodes.is_empty();
             self.state = checkpoint.state;
-            self.pending_nodes = checkpoint.pending_nodes;
             self.step = checkpoint.step;
-            self.cleared_interrupt = checkpoint.cleared_interrupt;
-            self.attempts = checkpoint.attempts;
-            *self.child_ledger.lock().expect("child ledger") = checkpoint.child_ledger;
+
+            if finished && self.restart_completed && self.config.resume_from.is_none() {
+                // A new turn on a finished thread. The retry budget, child ledger,
+                // gate marker, and fan-in arrivals belonged to the finished run,
+                // so none of them carry over; only the state does.
+                self.pending_nodes = self.graph.get_entry_nodes();
+                self.run_start_step = checkpoint.step;
+            } else {
+                self.pending_nodes = checkpoint.pending_nodes;
+                self.cleared_interrupt = checkpoint.cleared_interrupt;
+                self.attempts = checkpoint.attempts;
+                *self.child_ledger.lock().expect("child ledger") = checkpoint.child_ledger;
+                if let Some(snapshot) = FanInSnapshot::from_metadata(&checkpoint.metadata)? {
+                    let (trackers, started) =
+                        snapshot.restore(|node| self.graph.get_upstream_nodes(node));
+                    self.pending_deferred = trackers;
+                    self.deferred_start_times = started;
+                }
+            }
 
             // Merge input on top of restored state
             for (key, value) in input {
@@ -166,8 +186,9 @@ impl<'a> PregelExecutor<'a> {
         // Main execution loop
         while !self.pending_nodes.is_empty() {
             // Check recursion limit
-            if self.step >= self.config.recursion_limit {
-                return Err(GraphError::RecursionLimitExceeded(self.step));
+            let steps_taken = self.step.saturating_sub(self.run_start_step);
+            if steps_taken >= self.config.recursion_limit {
+                return Err(GraphError::RecursionLimitExceeded(steps_taken));
             }
 
             // Execute super-step
@@ -182,8 +203,14 @@ impl<'a> PregelExecutor<'a> {
                         .pending_nodes
                         .iter()
                         .any(|node| self.graph.retry_policy_for(node).is_some());
-                    if any_retryable {
-                        let _ = self.save_checkpoint().await;
+                    if any_retryable && let Err(save_error) = self.save_checkpoint().await {
+                        tracing::warn!(
+                            thread_id = %self.config.thread_id,
+                            step = self.step,
+                            error = %save_error,
+                            "failed to checkpoint a failing super-step; a resumed run restarts \
+                             its retry budget"
+                        );
                     }
                     return Err(error);
                 }
@@ -191,29 +218,7 @@ impl<'a> PregelExecutor<'a> {
 
             // Handle interrupts
             if let Some(interrupt) = result.interrupt {
-                // Record the gate being answered so the resumed run executes
-                // this node rather than stopping at it again.
-                if let Interrupt::Before(node) = &interrupt {
-                    self.cleared_interrupt = Some(node.clone());
-                }
-                // `After` has the opposite timing: the node ran and its updates
-                // are applied, so the resume point is its successors. Saving the
-                // executing frontier would re-run it and re-raise the gate.
-                if matches!(interrupt, Interrupt::After(_)) {
-                    let next = self.next_frontier(&result.executed_nodes, &result.goto)?;
-                    self.pending_nodes =
-                        self.filter_deferred_nodes(next, &result.executed_nodes)?;
-                } else if !matches!(interrupt, Interrupt::Before(_)) {
-                    // A dynamic or tool-confirmation pause occurs inside a
-                    // frontier. Nodes that had already completed must not run
-                    // again after the caller answers the pause, especially when
-                    // they have side effects. The interrupted node itself stays
-                    // pending because it produced no updates.
-                    self.pending_nodes.retain(|node| !result.executed_nodes.contains(node));
-                }
-                // For `Before`, the frontier saved is deliberately the one that
-                // was executing: the node produced no updates, so resuming must
-                // run it, which the marker above now permits.
+                self.pause_frontier(&interrupt, &result.executed_nodes, &result.goto)?;
                 let checkpoint_id = self.save_checkpoint().await?;
                 return Err(GraphError::Interrupted(Box::new(InterruptedExecution::new(
                     self.config.thread_id.clone(),
@@ -291,8 +296,9 @@ impl<'a> PregelExecutor<'a> {
             // Main execution loop
             while !self.pending_nodes.is_empty() {
                 // Check recursion limit
-                if self.step >= self.config.recursion_limit {
-                    yield Err(GraphError::RecursionLimitExceeded(self.step));
+                let steps_taken = self.step.saturating_sub(self.run_start_step);
+                if steps_taken >= self.config.recursion_limit {
+                    yield Err(GraphError::RecursionLimitExceeded(steps_taken));
                     return;
                 }
 
@@ -497,24 +503,11 @@ impl<'a> PregelExecutor<'a> {
                     // This branch returns rather than falling through to the shared
                     // handling below, so the pause is reported here.
                     if let Some(interrupt) = result.interrupt {
-                        if let Interrupt::Before(node) = &interrupt {
-                            self.cleared_interrupt = Some(node.clone());
-                        }
-                        // `After` resumes at the successors, because that node has
-                        // already applied its updates; see `run`.
-                        if matches!(interrupt, Interrupt::After(_)) {
-                            let next =
-                                self.next_frontier(&result.executed_nodes, &result.goto)?;
-                            match self.filter_deferred_nodes(next, &result.executed_nodes) {
-                                Ok(frontier) => self.pending_nodes = frontier,
-                                Err(error) => {
-                                    yield Err(error);
-                                    return;
-                                }
-                            }
-                        } else if !matches!(interrupt, Interrupt::Before(_)) {
-                            self.pending_nodes
-                                .retain(|node| !result.executed_nodes.contains(node));
+                        if let Err(error) =
+                            self.pause_frontier(&interrupt, &result.executed_nodes, &result.goto)
+                        {
+                            yield Err(error);
+                            return;
                         }
                         // Persist before reporting: without this the pause cannot be
                         // resumed and the work already done is lost.
@@ -612,29 +605,15 @@ impl<'a> PregelExecutor<'a> {
 
                 // Handle interrupts
                 if let Some(interrupt) = result.interrupt {
-                    // Record the gate being answered; see `run`.
-                    if let Interrupt::Before(node) = &interrupt {
-                        self.cleared_interrupt = Some(node.clone());
-                    }
-                    // `After` resumes at the successors; see `run`.
-                    if matches!(interrupt, Interrupt::After(_)) {
-                        let next =
-                            self.next_frontier(&result.executed_nodes, &result.goto)?;
-                        match self.filter_deferred_nodes(next, &result.executed_nodes) {
-                            Ok(frontier) => self.pending_nodes = frontier,
-                            Err(error) => {
-                                yield Err(error);
-                                return;
-                            }
-                        }
-                    } else if !matches!(interrupt, Interrupt::Before(_)) {
-                        self.pending_nodes
-                            .retain(|node| !result.executed_nodes.contains(node));
+                    if let Err(error) =
+                        self.pause_frontier(&interrupt, &result.executed_nodes, &result.goto)
+                    {
+                        yield Err(error);
+                        return;
                     }
                     // Persist before reporting: without this the interrupt is
                     // unresumable, because resuming loads the checkpoint for the
-                    // thread. The frontier saved is the one that was executing,
-                    // since an interrupted node still owes its updates.
+                    // thread.
                     let checkpoint_id = match self.save_checkpoint().await {
                         Ok(checkpoint_id) => checkpoint_id,
                         Err(error) => {
@@ -854,54 +833,42 @@ impl<'a> PregelExecutor<'a> {
             return Ok(SuperStepResult { interrupt: Some(interrupt), ..Default::default() });
         }
 
-        // --- Node cache: check for cache hits before executing ---
+        // Collect all updates and check for errors/interrupts
+        let mut all_updates = Vec::new();
+
+        // Node cache lookups. Every key is computed from the pre-step state, the
+        // state each node in this step reads, and a hit's updates join the same
+        // batch as computed ones, so a hit changes nothing a sibling sees and the
+        // key stored on a miss is the key the next identical lookup computes.
         #[cfg(feature = "node-cache")]
-        let mut cached_results: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut miss_keys: HashMap<String, String> = HashMap::new();
         #[cfg(feature = "node-cache")]
         let mut nodes_to_execute: Vec<String> = Vec::new();
-
         #[cfg(feature = "node-cache")]
-        {
-            for node_name in &self.pending_nodes {
-                if let Some(cache) = self.node_caches.get(node_name) {
-                    let cache_key = compute_cache_key(node_name, &self.state);
-                    let cached_value = cache.get(&cache_key).await;
-                    tracing::debug!(
-                        node = %node_name,
-                        cache_hit = cached_value.is_some(),
-                        cache_key = %cache_key,
-                        "node cache lookup"
-                    );
-                    if let Some(value) = cached_value {
-                        // Cache hit — store the cached result for later application
-                        cached_results.insert(node_name.clone(), value);
-                    } else {
-                        // Cache miss — node needs execution
-                        nodes_to_execute.push(node_name.clone());
-                    }
-                } else {
-                    // No cache configured — node needs execution
-                    nodes_to_execute.push(node_name.clone());
+        for node_name in &self.pending_nodes {
+            let Some(cache) = self.graph.node_caches.get(node_name) else {
+                nodes_to_execute.push(node_name.clone());
+                continue;
+            };
+            let cache_key = compute_cache_key(node_name, &self.state);
+            let cached_value = cache.get(&cache_key).await;
+            tracing::debug!(
+                node = %node_name,
+                cache_hit = cached_value.is_some(),
+                cache_key = %cache_key,
+                "node cache lookup"
+            );
+            match cached_value {
+                Some(serde_json::Value::Object(updates)) => {
+                    result.executed_nodes.push(node_name.clone());
+                    result.events.push(StreamEvent::node_end(node_name, self.step, 0));
+                    all_updates.push((node_name.clone(), updates.into_iter().collect()));
                 }
-            }
-        }
-
-        // Apply cached results immediately
-        #[cfg(feature = "node-cache")]
-        {
-            for (node_name, cached_value) in &cached_results {
-                result.executed_nodes.push(node_name.clone());
-                result.events.push(StreamEvent::node_end(node_name, self.step, 0));
-
-                // Reconstruct updates from the cached JSON value (a map of key -> value)
-                if let Some(updates_map) = cached_value.as_object() {
-                    self.ensure_channels_declared(
-                        node_name,
-                        updates_map.keys().map(String::as_str),
-                    )?;
-                    for (key, value) in updates_map {
-                        self.graph.schema.apply_update(&mut self.state, key, value.clone());
-                    }
+                // A cached value is always the map of a node's updates; anything
+                // else is unusable, so the node runs.
+                Some(_) | None => {
+                    miss_keys.insert(node_name.clone(), cache_key);
+                    nodes_to_execute.push(node_name.clone());
                 }
             }
         }
@@ -1020,8 +987,6 @@ impl<'a> PregelExecutor<'a> {
         // be. Keep node event order stable and make the first node name win.
         outputs.sort_by(|left, right| left.0.cmp(&right.0));
 
-        // Collect all updates and check for errors/interrupts
-        let mut all_updates = Vec::new();
         let mut interrupt = None;
 
         for (node_name, output_result, duration_ms, step, attempts) in outputs {
@@ -1049,16 +1014,15 @@ impl<'a> PregelExecutor<'a> {
                     // Collect custom events
                     result.events.extend(output.events);
 
-                    // Store result in cache on miss
+                    // Store result in cache on miss, under the key the lookup used.
                     #[cfg(feature = "node-cache")]
+                    if let Some(cache_key) = miss_keys.get(&node_name)
+                        && let Some(cache) = self.graph.node_caches.get(&node_name)
                     {
-                        if let Some(cache) = self.node_caches.get(&node_name) {
-                            let cache_key = compute_cache_key(&node_name, &self.state);
-                            let updates_value = serde_json::to_value(&output.updates)
-                                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                            let ttl = self.graph.cache_policies.get(&node_name).and_then(|p| p.ttl);
-                            cache.set(&cache_key, updates_value, ttl).await;
-                        }
+                        let updates_value = serde_json::to_value(&output.updates)
+                            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                        let ttl = self.graph.cache_policies.get(&node_name).and_then(|p| p.ttl);
+                        cache.set(cache_key, updates_value, ttl).await;
                     }
 
                     // A node that named its successors overrides its declared edges.
@@ -1159,6 +1123,66 @@ impl<'a> PregelExecutor<'a> {
             .map(|node| Interrupt::After(node.clone()))
     }
 
+    /// Sets the frontier a paused super-step resumes from.
+    ///
+    /// | Interrupt | Saved frontier |
+    /// |-----------|----------------|
+    /// | `Before` | The frontier that was executing; the gated node produced no updates. |
+    /// | `After` | The successors of the nodes that ran; the gated node already applied its updates. |
+    /// | `Dynamic` (including tool confirmation) | The successors of every node that completed, plus each node that paused. |
+    ///
+    /// A completed node never re-runs on resume, and its successors and `goto`
+    /// targets are not lost: they are computed now, while the step's results are
+    /// still at hand, and arrivals at a fan-in node are recorded for the checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns the routing error from [`Self::next_frontier`] or the fan-in error
+    /// from [`Self::filter_deferred_nodes`].
+    fn pause_frontier(
+        &mut self,
+        interrupt: &Interrupt,
+        executed: &[String],
+        goto: &HashMap<String, Vec<String>>,
+    ) -> Result<()> {
+        match interrupt {
+            Interrupt::Before(node) => {
+                // Record the gate being answered so the resumed run executes this
+                // node rather than stopping at it again.
+                self.cleared_interrupt = Some(node.clone());
+                return Ok(());
+            }
+            Interrupt::After(_) => {
+                let next = self.next_frontier(executed, goto)?;
+                self.pending_nodes = self.filter_deferred_nodes(next, executed)?;
+            }
+            Interrupt::Dynamic { .. } => {
+                let paused: Vec<String> = self
+                    .pending_nodes
+                    .iter()
+                    .filter(|node| !executed.contains(node))
+                    .cloned()
+                    .collect();
+                let next = self.next_frontier(executed, goto)?;
+                let mut frontier = self.filter_deferred_nodes(next, executed)?;
+                for node in paused {
+                    if !frontier.contains(&node) {
+                        frontier.push(node);
+                    }
+                }
+                self.pending_nodes = frontier;
+            }
+        }
+        // A gate answered earlier re-arms once its node has run, as after an
+        // uninterrupted step.
+        if let Some(cleared) = &self.cleared_interrupt
+            && executed.iter().any(|node| node == cleared)
+        {
+            self.cleared_interrupt = None;
+        }
+        Ok(())
+    }
+
     /// Computes the next frontier, letting a node's `goto` stand in for its edges.
     ///
     /// A node that named successors has its declared edges skipped, so a `goto`
@@ -1233,6 +1257,13 @@ impl<'a> PregelExecutor<'a> {
             checkpoint.cleared_interrupt = self.cleared_interrupt.clone();
             checkpoint.attempts = self.attempts.clone();
             checkpoint.child_ledger = self.child_ledger.lock().expect("child ledger").clone();
+            // Carried in metadata rather than a field, so every backend persists
+            // it without a schema change and older checkpoints load as before.
+            if let Some(snapshot) =
+                FanInSnapshot::capture(&self.pending_deferred, &self.deferred_start_times)
+            {
+                checkpoint.metadata.insert(FAN_IN_METADATA_KEY.to_string(), snapshot.to_value());
+            }
             let id = cp.save(&checkpoint).await?;
 
             // Trimmed as the run proceeds, so the cost stays proportional to the run
@@ -1352,8 +1383,17 @@ impl CompiledGraph {
             for (key, value) in updates {
                 self.schema.apply_update(&mut state, &key, value);
             }
-            let new_checkpoint =
+            let mut new_checkpoint =
                 Checkpoint::new(thread_id, state, checkpoint.step, checkpoint.pending_nodes);
+            // Everything a resume restores carries over, so editing state between
+            // a pause and its resume keeps the answered gate, the retry budget,
+            // finished children, and the arrivals a waiting join has recorded.
+            new_checkpoint.cleared_interrupt = checkpoint.cleared_interrupt;
+            new_checkpoint.attempts = checkpoint.attempts;
+            new_checkpoint.child_ledger = checkpoint.child_ledger;
+            if let Some(fan_in) = checkpoint.metadata.get(FAN_IN_METADATA_KEY) {
+                new_checkpoint.metadata.insert(FAN_IN_METADATA_KEY.to_string(), fan_in.clone());
+            }
             cp.save(&new_checkpoint).await?;
         }
         Ok(())
