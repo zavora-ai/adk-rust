@@ -11,9 +11,9 @@ permissions:
 jobs:
   advisory-check:
     runs-on: ubuntu-latest
-    continue-on-error: true
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Check documented provider defaults
         run: bash scripts/check-model-catalog-freshness.sh
       - name: Check encoded per-token rates

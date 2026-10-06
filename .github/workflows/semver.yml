@@ -22,8 +22,9 @@ concurrency:
 jobs:
   semver:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         fetch-depth: 0
 
@@ -35,7 +36,7 @@ jobs:
         cache-save: 'false'
 
     - name: Install cargo-semver-checks
-      uses: taiki-e/install-action@v2.87.4
+      uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
       with:
         tool: cargo-semver-checks
 

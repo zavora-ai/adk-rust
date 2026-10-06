@@ -29,8 +29,9 @@ jobs:
   # ── Fast gate: formatting (< 30s) ──────────────────────────────
   fmt:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     # ws-fmt is exactly `cargo fmt --all`; use the shared pinned toolchain
     # directly instead of spending ~3 minutes bootstrapping Nix + devenv.
@@ -47,11 +48,12 @@ jobs:
   webui:
     needs: fmt
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup Node.js
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
       with:
         node-version: '22'
         cache: npm
@@ -70,18 +72,19 @@ jobs:
   clippy:
     needs: fmt
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Free disk space
       run: |
         sudo rm -rf /usr/local/lib/android
         sudo rm -rf /usr/share/dotnet
 
-    - uses: cachix/install-nix-action@v30
+    - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
       with:
         nix_path: nixpkgs=channel:nixos-unstable
-    - uses: cachix/cachix-action@v17
+    - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
       with:
         name: devenv
     - run: nix profile install nixpkgs#devenv
@@ -104,18 +107,19 @@ jobs:
   test:
     needs: fmt
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Free disk space
       run: |
         sudo rm -rf /usr/local/lib/android
         sudo rm -rf /usr/share/dotnet
 
-    - uses: cachix/install-nix-action@v30
+    - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
       with:
         nix_path: nixpkgs=channel:nixos-unstable
-    - uses: cachix/cachix-action@v17
+    - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
       with:
         name: devenv
     - run: nix profile install nixpkgs#devenv
@@ -130,7 +134,7 @@ jobs:
         COMPUTER_USE_MCP_V8_VERSION: "7.0.0"
 
     - name: Upload computer-use v8 ADK evaluation receipt
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: adk-computer-use-v8-evidence
         path: adk-computer-use-v8-evidence.json
@@ -169,6 +173,7 @@ jobs:
     name: feature-coverage (${{ matrix.package }}, ${{ matrix.features }})
     needs: fmt
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -298,7 +303,7 @@ jobs:
           # (realtime stack) is nightly-only to keep PR-tier feedback fast.
           - { package: adk-rust, features: gemini-agent-platform }
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     # Toolchain (with clippy) + wild-linker strip + build cache from the shared
     # action. neutralize-wild defaults to true, correct for this plain runner.
@@ -314,7 +319,7 @@ jobs:
     # enough to dequeue PRs. Only lancedb's build script needs protoc.
     - name: Install protoc
       if: matrix.protoc
-      uses: arduino/setup-protoc@v3
+      uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -326,7 +331,7 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@v2.87.4
+      uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
       with:
         tool: cargo-nextest
 
@@ -340,10 +345,11 @@ jobs:
   docs:
     needs: fmt
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       CI: true
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     # Documentation needs the pinned Rust toolchain, not the full devenv
     # shell. Running directly avoids Nix bootstrap latency and transient
@@ -401,12 +407,13 @@ jobs:
     name: examples-compile (${{ matrix.shard }}/4)
     needs: fmt
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3]
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -431,8 +438,9 @@ jobs:
   templates:
     needs: fmt
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -474,8 +482,9 @@ jobs:
   macos:
     needs: fmt
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -502,8 +511,9 @@ jobs:
   windows:
     needs: fmt
     runs-on: windows-latest
+    timeout-minutes: 120
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -514,10 +524,10 @@ jobs:
         cache-save: 'false'
 
     - name: Install cmake
-      uses: lukka/get-cmake@latest
+      uses: lukka/get-cmake@fffaaafeea488556c2c12dad60690008bc1caacb # v4.4.2
 
     - name: Install protoc
-      uses: arduino/setup-protoc@v3
+      uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
 
