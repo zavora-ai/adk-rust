@@ -120,6 +120,35 @@ println!("fallback ran: {}", response.served_by_fallback());
 # }
 ```
 
+### Timeouts, stream errors, and request limits
+
+| Behaviour | Rule |
+|-----------|------|
+| Non-streaming request | `with_timeout` bounds the whole request (default 60 seconds) |
+| Streaming request | `with_timeout` bounds the wait for response headers; the body has no total bound |
+| Stalled stream | The stream yields `Error::Timeout` and ends after 30 seconds without data |
+| Total stream bound | Opt in with `with_stream_timeout(Some(duration))` |
+| Mid-stream `error` event | `AccumulatingStream` yields it as `Err` (`overloaded_error` → `Error::ServiceUnavailable`, `rate_limit_error` → `Error::RateLimit`) and sends the error, not the partial message, through its channel |
+| Unknown SSE event type | Logged at `debug` and surfaced as `MessageStreamEvent::Ping` |
+| Request validation | Text is capped at 1 MB per message and 100 KB for the system prompt; base64 images at 5 MB and PDFs at 32 MB each; base64 media plus text at 32 MB per request |
+
+```rust
+use std::time::Duration;
+
+use adk_anthropic::Anthropic;
+
+# fn example() -> Result<(), adk_anthropic::Error> {
+let client = Anthropic::new(None)?
+    .with_timeout(Duration::from_secs(30))?
+    .with_stream_timeout(Some(Duration::from_secs(900)));
+# let _ = client;
+# Ok(())
+# }
+```
+
+`Debug` output of `Anthropic`, `ManagedAgentsClient`, and `FilesClient` redacts
+the API key, and the `x-api-key` header is marked sensitive.
+
 Run any example with `cargo run -p adk-anthropic --example <name>`:
 
 | Example | Description |

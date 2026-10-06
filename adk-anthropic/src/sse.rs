@@ -7,6 +7,7 @@ use bytes::Bytes;
 use futures::stream::{self, Stream, StreamExt};
 use serde::de::DeserializeOwned;
 use std::time::{Duration, Instant};
+use tracing::debug;
 
 use crate::observability::{
     STREAM_BYTES, STREAM_DURATION, STREAM_ERRORS, STREAM_EVENTS, STREAM_TTFB,
@@ -22,16 +23,18 @@ const MAX_BUFFER_SIZE: usize = 1024 * 1024;
 /// Maximum event size (64KB)
 const MAX_EVENT_SIZE: usize = 64 * 1024;
 
-/// Timeout for receiving data between chunks (30 seconds)
+/// Longest wait for the next chunk from the server before the stream fails (30 seconds).
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// State for SSE processing with production hardening
 struct SseState {
     buffer: String,
-    last_activity: Instant,
     total_bytes_processed: usize,
     start: Instant,
     first_byte: Option<Instant>,
+    /// Set once a terminal error (inactivity timeout, transport failure, buffer
+    /// overflow) has been reported; the stream then ends.
+    finished: bool,
 }
 
 /// Process a stream of bytes into a stream of server-sent events with production hardening.
@@ -43,14 +46,20 @@ struct SseState {
 /// Production features:
 /// - Buffer size limits to prevent memory exhaustion
 /// - Event size validation
-/// - Timeout handling for stalled connections
-/// - Graceful error recovery
+/// - Inactivity timeout: when the server sends nothing for 30 seconds the
+///   stream yields an `Error::Timeout` and then ends. Time the consumer spends
+///   between polls does not count towards it.
+/// - Terminal errors: after a transport error, an inactivity timeout, or a
+///   buffer overflow the stream yields that error once and then ends.
+/// - Graceful error recovery: an event type this client does not know is logged
+///   at `debug` level and surfaced as [`MessageStreamEvent::Ping`], so a new
+///   server-side event type never fails the stream
 /// - UTF-8 validation with partial byte handling
 pub fn process_sse<S>(byte_stream: S) -> impl Stream<Item = Result<MessageStreamEvent>>
 where
     S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin + 'static,
 {
-    process_sse_with(byte_stream, parse_standard_event)
+    process_sse_with(byte_stream, parse_standard_event, CHUNK_TIMEOUT)
 }
 
 pub(crate) fn process_json_sse<S, T>(byte_stream: S) -> impl Stream<Item = Result<T>>
@@ -58,10 +67,14 @@ where
     S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin + 'static,
     T: DeserializeOwned + 'static,
 {
-    process_sse_with(byte_stream, parse_json_event::<T>)
+    process_sse_with(byte_stream, parse_json_event::<T>, CHUNK_TIMEOUT)
 }
 
-fn process_sse_with<S, T, P>(byte_stream: S, parser: P) -> impl Stream<Item = Result<T>>
+fn process_sse_with<S, T, P>(
+    byte_stream: S,
+    parser: P,
+    chunk_timeout: Duration,
+) -> impl Stream<Item = Result<T>>
 where
     S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin + 'static,
     T: 'static,
@@ -76,25 +89,17 @@ where
     // Initialize state with production hardening
     let state = SseState {
         buffer: String::new(),
-        last_activity: Instant::now(),
         total_bytes_processed: 0,
         start: Instant::now(),
         first_byte: None,
+        finished: false,
     };
 
     stream::unfold((stream, state), move |(mut stream, mut state)| async move {
+        if state.finished {
+            return None;
+        }
         loop {
-            // Check for timeout
-            if state.last_activity.elapsed() > CHUNK_TIMEOUT {
-                return Some((
-                    Err(Error::timeout(
-                        "SSE stream timeout: no data received within timeout period".to_string(),
-                        Some(CHUNK_TIMEOUT.as_secs_f64()),
-                    )),
-                    (stream, state),
-                ));
-            }
-
             // Check if we have a complete event in the buffer
             match extract_event(&state.buffer, parser) {
                 Ok(Some((event, remaining))) => {
@@ -116,6 +121,7 @@ where
 
             // Check buffer size limit
             if state.buffer.len() > MAX_BUFFER_SIZE {
+                state.finished = true;
                 return Some((
                     Err(Error::streaming(
                         format!("SSE buffer size exceeded maximum limit: {MAX_BUFFER_SIZE} bytes"),
@@ -125,10 +131,24 @@ where
                 ));
             }
 
-            // Read more data
-            match stream.next().await {
+            // Only the wait on the server is timed, so a consumer that pauses
+            // between polls never trips the inactivity timeout.
+            let Ok(next) = tokio::time::timeout(chunk_timeout, stream.next()).await else {
+                STREAM_ERRORS.click();
+                state.finished = true;
+                return Some((
+                    Err(Error::timeout(
+                        format!(
+                            "SSE stream timeout: no data received for {} seconds",
+                            chunk_timeout.as_secs_f64()
+                        ),
+                        Some(chunk_timeout.as_secs_f64()),
+                    )),
+                    (stream, state),
+                ));
+            };
+            match next {
                 Some(Ok(bytes)) => {
-                    state.last_activity = Instant::now();
                     state.total_bytes_processed += bytes.len();
                     STREAM_BYTES.count(bytes.len() as u64);
                     if state.first_byte.is_none() {
@@ -163,7 +183,10 @@ where
                     }
                 }
                 Some(Err(e)) => {
+                    // A failed body (for example a request timeout) keeps returning
+                    // the same error; polling it again would spin.
                     STREAM_ERRORS.click();
+                    state.finished = true;
                     return Some((Err(e), (stream, state)));
                 }
                 None => {
@@ -396,15 +419,11 @@ fn parse_event_type(
         }
 
         _ => {
-            // Handle unknown event types gracefully - log but don't fail the stream
+            // New server-side event types must not fail the stream: log them and
+            // surface the keep-alive no-op that every consumer already ignores.
             if event_type.starts_with("event:") {
-                Some((
-                    Err(Error::serialization(
-                        format!("Unknown SSE event type: {}", event_type.trim()),
-                        None,
-                    )),
-                    rest,
-                ))
+                debug!(sse.event_type = %event_type.trim(), "ignoring unknown sse event type");
+                Some((Ok(MessageStreamEvent::Ping), rest))
             } else {
                 // Malformed event type format
                 Some((
@@ -478,17 +497,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_unknown_event_type() {
-        let data = b"event: unknown_event\ndata: {}\n\n";
+    async fn unknown_event_type_is_ignored_and_stream_continues() {
+        let data = b"event: brand_new_event\ndata: {\"type\":\"brand_new_event\"}\n\n\
+event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
         let stream = Box::pin(stream::once(async { Ok(Bytes::from(&data[..])) }));
 
-        let mut sse_stream = Box::pin(process_sse(stream));
-        let event = sse_stream.next().await.unwrap();
+        let events: Vec<_> = Box::pin(process_sse(stream)).collect().await;
 
-        assert!(event.is_err());
-        if let Err(e) = event {
-            assert!(e.to_string().contains("Unknown SSE event type"));
-        }
+        assert_eq!(
+            events.into_iter().collect::<Result<Vec<_>>>().unwrap(),
+            vec![
+                MessageStreamEvent::Ping,
+                MessageStreamEvent::MessageStop(MessageStopEvent::new()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn stalled_server_times_out_and_ends_the_stream() {
+        let stream = Box::pin(stream::pending::<std::result::Result<Bytes, reqwest::Error>>());
+
+        let mut sse_stream =
+            Box::pin(process_sse_with(stream, parse_standard_event, Duration::from_millis(50)));
+
+        let error = sse_stream.next().await.unwrap().unwrap_err();
+        assert!(error.is_timeout(), "expected a timeout error, got {error:?}");
+        assert!(sse_stream.next().await.is_none(), "the stream ends after a timeout");
+    }
+
+    #[tokio::test]
+    async fn consumer_pause_longer_than_timeout_does_not_fail_the_stream() {
+        let stream = Box::pin(stream::iter(vec![
+            Ok(Bytes::from_static(b"event: ping\ndata: {}\n\n")),
+            Ok(Bytes::from_static(b"event: ping\ndata: {}\n\n")),
+        ]));
+
+        let mut sse_stream =
+            Box::pin(process_sse_with(stream, parse_standard_event, Duration::from_millis(50)));
+
+        assert!(matches!(sse_stream.next().await, Some(Ok(MessageStreamEvent::Ping))));
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(matches!(sse_stream.next().await, Some(Ok(MessageStreamEvent::Ping))));
+        assert!(sse_stream.next().await.is_none());
     }
 
     #[tokio::test]

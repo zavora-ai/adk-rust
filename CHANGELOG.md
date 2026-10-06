@@ -31,8 +31,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SkillToolset` now adds guidance for its currently available tools to each
   model request through the new `Toolset::process_llm_request` hook. Guidance
   is also applied to invocation-scoped toolsets.
+
+- **Opt-in total stream bound** (`adk-anthropic`): `Anthropic::with_stream_timeout`
+  bounds the whole duration of a streaming request. Streams have no total bound
+  by default.
+
 ### Fixed
 
+- **Long Anthropic streams** (`adk-anthropic`): streaming requests run on an HTTP
+  client without a total request timeout, so a generation longer than 60 seconds
+  is no longer cut off mid-body. `with_timeout` still bounds non-streaming
+  requests and the wait for streaming response headers.
+- **Anthropic stream inactivity timeout** (`adk-anthropic`): the 30-second timeout
+  now measures only the wait on the server, so a stalled server fails the stream
+  and a consumer that pauses between polls does not. A timeout, a transport
+  error, or a buffer overflow ends the stream after one `Err` instead of
+  repeating the error.
+- **Mid-stream Anthropic `error` events** (`adk-anthropic`): `AccumulatingStream`
+  yields an SSE `error` event (for example `overloaded_error`) as `Err` and sends
+  the error, not the partial message, through its channel.
+  `From<ApiError> for Error` maps `overloaded_error` and `rate_limit_error` to
+  the retryable `ServiceUnavailable` and `RateLimit` variants.
+- **Unknown Anthropic SSE event types** (`adk-anthropic`): an unrecognized event
+  type is logged at `debug` and surfaced as `MessageStreamEvent::Ping` instead
+  of failing the stream.
+- **Anthropic request size validation** (`adk-anthropic`):
+  `MessageCreateParams::validate` measures text bytes in place instead of
+  `Debug`-formatting the payload. Base64 images are held to the API's 5 MB
+  limit and PDFs to 32 MB, with 32 MB of text plus base64 media per request, so
+  an 800 KB JPEG or a typical PDF is no longer rejected by the 1 MB text cap.
+- **Anthropic server tool input** (`adk-anthropic`): `AccumulatingStream` applies
+  `input_json_delta` fragments to `server_tool_use` blocks, which previously kept
+  the empty `{}` input from `content_block_start`.
 - **`acp_full_protocol` permission tests** (`examples/acp_full_protocol`): the
   example reads `tool_confirmation_decisions` by function-call ID, matching the
   key the ACP server populates, so approval and denial resume correctly.
@@ -92,6 +122,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
+
+### Security
+
+- **Anthropic API keys in `Debug` output** (`adk-anthropic`): `Anthropic`,
+  `ManagedAgentsClient`, and `FilesClient` redact the API key in `Debug`
+  output, and the `x-api-key` and bearer `Authorization` header values are
+  marked sensitive.
 
 ## [2.2.0] - 2026-09-01
 
