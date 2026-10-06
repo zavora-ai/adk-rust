@@ -96,6 +96,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **After-tool callbacks without shared state** (`adk-agent`):
   `CallbackContext::shared_state()` in after-tool callbacks returns the
   `ParallelAgent` shared state, matching before-tool callbacks.
+- **Two tasks leaked per run with a global cancellation token** (`adk-runner`):
+  each run derives a child of `RunnerConfig::cancellation_token` instead of
+  spawning two watcher tasks that never completed. Cancelling the global token
+  still stops every in-flight run, and `Runner::interrupt` cancels only its target.
 
 ### Changed
 

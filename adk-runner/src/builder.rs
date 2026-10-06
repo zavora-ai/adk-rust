@@ -248,6 +248,9 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
     }
 
     /// Set a cooperative cancellation token (optional).
+    ///
+    /// Each run derives a child of this token, so cancelling it stops every in-flight
+    /// run, while [`Runner::interrupt`] cancels only the targeted run.
     pub fn cancellation_token(mut self, token: CancellationToken) -> Self {
         self.cancellation_token = Some(token);
         self

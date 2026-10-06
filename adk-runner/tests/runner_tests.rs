@@ -1232,3 +1232,120 @@ async fn test_runner_runs_to_completion_without_interrupt() {
     }
     assert_eq!(count, 3, "agent should emit exactly max_ticks events when not interrupted");
 }
+
+// ── Global cancellation token ──────────────────────────────────────────
+
+fn runner_with_global_token(
+    agent: Arc<dyn Agent>,
+    global: tokio_util::sync::CancellationToken,
+) -> Runner {
+    Runner::builder()
+        .app_name("test_app")
+        .agent(agent)
+        .session_service(Arc::new(MockSessionService) as Arc<dyn SessionService>)
+        .cancellation_token(global)
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn global_cancellation_token_leaves_no_task_behind_per_run() {
+    let global = tokio_util::sync::CancellationToken::new();
+    let runner = runner_with_global_token(
+        Arc::new(MockAgent { name: "test_agent".to_string() }),
+        global.clone(),
+    );
+    let metrics = tokio::runtime::Handle::current().metrics();
+    let baseline = metrics.num_alive_tasks();
+
+    for run in 0..5 {
+        let mut stream = runner
+            .run(
+                UserId::new("user123").unwrap(),
+                SessionId::new(format!("session-{run}")).unwrap(),
+                Content::new("user").with_text("go"),
+            )
+            .await
+            .unwrap();
+        while let Some(result) = stream.next().await {
+            result.unwrap();
+        }
+    }
+    tokio::task::yield_now().await;
+
+    assert_eq!(metrics.num_alive_tasks(), baseline, "a completed run must not leave tasks behind");
+    assert_eq!(runner.active_runs(), Vec::new());
+    assert!(!global.is_cancelled());
+}
+
+#[tokio::test]
+async fn global_cancellation_token_stops_an_in_flight_run() {
+    let global = tokio_util::sync::CancellationToken::new();
+    let runner = runner_with_global_token(
+        Arc::new(CancellableLoopAgent { max_ticks: 1000 }),
+        global.clone(),
+    );
+    let mut stream = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("global-cancel").unwrap(),
+            Content::new("user").with_text("go"),
+        )
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("first event should arrive within timeout");
+    assert!(first.is_some(), "expected at least one event before cancellation");
+
+    global.cancel();
+
+    let remaining = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut count = 0usize;
+        while stream.next().await.is_some() {
+            count += 1;
+        }
+        count
+    })
+    .await
+    .expect("stream should terminate after the global token is cancelled");
+    assert!(remaining < 50, "stream kept producing events after cancellation");
+}
+
+#[tokio::test]
+async fn interrupt_with_a_global_token_cancels_only_the_target_run() {
+    let global = tokio_util::sync::CancellationToken::new();
+    let runner =
+        runner_with_global_token(Arc::new(CancellableLoopAgent { max_ticks: 3 }), global.clone());
+    let mut interrupted = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("interrupted").unwrap(),
+            Content::new("user").with_text("go"),
+        )
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), interrupted.next())
+        .await
+        .expect("first event should arrive within timeout");
+    assert!(first.is_some(), "expected at least one event before interrupt");
+
+    assert!(runner.interrupt("interrupted"));
+    while interrupted.next().await.is_some() {}
+    assert!(!global.is_cancelled(), "interrupting one run must not cancel the global token");
+
+    let mut next = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("next").unwrap(),
+            Content::new("user").with_text("go"),
+        )
+        .await
+        .unwrap();
+    let mut count = 0usize;
+    while let Some(result) = next.next().await {
+        result.unwrap();
+        count += 1;
+    }
+    assert_eq!(count, 3, "a later run must not inherit the interrupted run's cancellation");
+}

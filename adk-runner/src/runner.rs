@@ -132,6 +132,9 @@ pub struct RunnerConfig {
     /// `user_scopes()` and `user_id()` reflect the authenticated identity.
     pub request_context: Option<adk_core::RequestContext>,
     /// Optional cooperative cancellation token for externally managed runs.
+    ///
+    /// Each run derives a child of this token, so cancelling it stops every in-flight
+    /// run, while [`Runner::interrupt`] cancels only the targeted run's child.
     pub cancellation_token: Option<CancellationToken>,
     /// Optional intra-invocation compaction configuration.
     /// When set, the runner estimates token count before each agent run
@@ -400,7 +403,6 @@ impl Runner {
         let cache_capable = self.cache_capable.clone();
         let cache_manager_ref = self.cache_manager.clone();
         let request_context = self.request_context.clone();
-        let cancellation_token = self.cancellation_token.clone();
         let intra_compactor = self.intra_compactor.clone();
         #[cfg(feature = "context-compaction")]
         let context_compaction = self.context_compaction.clone();
@@ -414,7 +416,14 @@ impl Runner {
         // unique run ID rather than the raw session ID: two identities can share a
         // session ID, and one identity can have two runs in flight, and both cases
         // previously overwrote each other's token.
-        let session_token = CancellationToken::new();
+        //
+        // A child of the global token fires when either the global token or this run's
+        // interrupt does, with no watcher task to outlive the run; dropping the run's
+        // last handle detaches the child from the global token.
+        let session_token = match self.cancellation_token.as_ref() {
+            Some(global) => global.child_token(),
+            None => CancellationToken::new(),
+        };
         let run_id = self.next_run_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         {
             let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
@@ -424,27 +433,7 @@ impl Runner {
             );
         }
         let active_runs = self.active_runs.clone();
-        // Effective token: cancelled if either the global token or the session token fires
-        let effective_token = if let Some(ref global) = cancellation_token {
-            let combined = CancellationToken::new();
-            let combined_clone = combined.clone();
-            let global_clone = global.clone();
-            let session_clone = session_token.clone();
-            // Watch both tokens — cancel the combined token when either fires
-            let combined_for_global = combined_clone.clone();
-            tokio::spawn(async move {
-                global_clone.cancelled().await;
-                combined_for_global.cancel();
-            });
-            let combined_for_session = combined_clone;
-            tokio::spawn(async move {
-                session_clone.cancelled().await;
-                combined_for_session.cancel();
-            });
-            Some(combined)
-        } else {
-            Some(session_token.clone())
-        };
+        let effective_token = Some(session_token);
 
         // Built here rather than inside the generator: registration happens as soon
         // as `run` is called, so deregistration must also survive a stream that is
