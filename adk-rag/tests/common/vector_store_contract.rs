@@ -38,9 +38,8 @@ const DIM: usize = 4;
 pub struct ContractOptions {
     /// Whether `upsert` with an existing chunk ID replaces the stored row.
     ///
-    /// InMemory and SurrealDB replace by ID. LanceDB appends a new row instead
-    /// (`upsert` maps to `table.add`), so a repeated ID yields duplicate rows.
-    /// Its suite sets this to `false` to scope the replacement assertion out.
+    /// InMemory, SurrealDB, and LanceDB (through a merge-insert keyed on the
+    /// id) all replace by ID, so every current suite leaves this `true`.
     pub upsert_replaces_by_id: bool,
 }
 

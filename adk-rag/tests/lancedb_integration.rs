@@ -215,3 +215,98 @@ async fn test_lancedb_empty_input_noops() {
     let after = ids(&store.search("docs", &[0.0, 0.0, 0.0, 0.0], 10).await.unwrap());
     assert_eq!(after, before, "empty-input calls must not change stored rows");
 }
+
+fn sorted_ids(results: &[adk_rag::document::SearchResult]) -> Vec<String> {
+    let mut v = ids(results);
+    v.sort();
+    v
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_lancedb_delete_treats_quotes_in_ids_as_data() {
+    let (_dir, store) = store().await;
+    store.create_collection("docs", DIM).await.unwrap();
+
+    let injection = "x') OR ('1'='1";
+    let chunks = vec![
+        plain("keep", "keep", vec![1.0, 0.0, 0.0, 0.0]),
+        plain("o'brien", "quoted", vec![0.0, 1.0, 0.0, 0.0]),
+        plain(injection, "injection", vec![0.0, 0.0, 1.0, 0.0]),
+        plain(r"back\slash'", "backslash", vec![0.0, 0.0, 0.0, 1.0]),
+    ];
+    store.upsert("docs", &chunks).await.unwrap();
+
+    // Before the fix this predicate became `id IN ('x') OR ('1'='1')` and emptied the table.
+    store.delete("docs", &[injection]).await.unwrap();
+    let remaining = sorted_ids(&store.search("docs", &[0.0, 0.0, 0.0, 0.0], 10).await.unwrap());
+    assert_eq!(
+        remaining,
+        vec![r"back\slash'".to_string(), "keep".to_string(), "o'brien".to_string()]
+    );
+
+    store.delete("docs", &["o'brien", r"back\slash'"]).await.unwrap();
+    let remaining = sorted_ids(&store.search("docs", &[0.0, 0.0, 0.0, 0.0], 10).await.unwrap());
+    assert_eq!(remaining, vec!["keep".to_string()]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_lancedb_reupsert_replaces_rows_by_id() {
+    let (_dir, store) = store().await;
+    store.create_collection("docs", DIM).await.unwrap();
+
+    let first = vec![
+        plain("doc_0", "first version", vec![1.0, 0.0, 0.0, 0.0]),
+        plain("doc_1", "second chunk", vec![0.0, 1.0, 0.0, 0.0]),
+    ];
+    store.upsert("docs", &first).await.unwrap();
+    store.upsert("docs", &first).await.unwrap();
+
+    let updated = plain("doc_0", "updated version", vec![1.0, 0.0, 0.0, 0.0]);
+    store.upsert("docs", std::slice::from_ref(&updated)).await.unwrap();
+
+    let results = store.search("docs", &[1.0, 0.0, 0.0, 0.0], 10).await.unwrap();
+    assert_eq!(sorted_ids(&results), vec!["doc_0".to_string(), "doc_1".to_string()]);
+    assert_eq!(results[0].chunk, as_returned(&updated));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_lancedb_upsert_keeps_the_last_duplicate_in_a_batch() {
+    let (_dir, store) = store().await;
+    store.create_collection("docs", DIM).await.unwrap();
+
+    let last = plain("dup", "last", vec![1.0, 0.0, 0.0, 0.0]);
+    store
+        .upsert("docs", &[plain("dup", "first", vec![1.0, 0.0, 0.0, 0.0]), last.clone()])
+        .await
+        .unwrap();
+
+    let results = store.search("docs", &[1.0, 0.0, 0.0, 0.0], 10).await.unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].chunk, as_returned(&last));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_lancedb_upsert_rejects_mismatched_dimensions() {
+    let (_dir, store) = store().await;
+    store.create_collection("docs", DIM).await.unwrap();
+
+    let mixed = vec![
+        plain("ok", "four dims", vec![1.0, 0.0, 0.0, 0.0]),
+        plain("short", "three dims", vec![1.0, 0.0, 0.0]),
+    ];
+    let err = store.upsert("docs", &mixed).await.unwrap_err();
+    assert!(
+        matches!(&err, adk_rag::error::RagError::VectorStoreError { message, .. }
+            if message.contains("chunk 'short' has a 3-dimensional embedding")),
+        "unexpected error: {err:?}"
+    );
+
+    let wrong = vec![plain("wide", "five dims", vec![1.0, 0.0, 0.0, 0.0, 0.0])];
+    assert!(store.upsert("docs", &wrong).await.is_err(), "table dimension mismatch must fail");
+
+    let missing = vec![plain("none", "no embedding", Vec::new())];
+    assert!(store.upsert("docs", &missing).await.is_err(), "missing embedding must fail");
+
+    // Nothing from the rejected batches was written.
+    assert!(store.search("docs", &[1.0, 0.0, 0.0, 0.0], 10).await.unwrap().is_empty());
+}

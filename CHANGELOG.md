@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared keys with app `a` and user `b:c`, and a session id ending in `:events`
   aliased another session's event set. Key segments are now percent-encoded; the
   key-format change is listed under Changed.
+- **LanceDB delete predicate injection** (`adk-rag`): `LanceDBVectorStore::delete`
+  spliced ids into `id IN ('…')` without escaping, so an id containing `'` failed
+  the delete and the id `x') OR ('1'='1` deleted every row. Ids are now typed
+  string literals in a DataFusion expression.
 
 ### Fixed
 
@@ -66,6 +70,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MATCH`, so `what's my name?` raised an FTS5 syntax error. Each word is now a
   quoted phrase, bare `AND`/`OR`/`NOT`/`NEAR` are dropped, and an entry matches
   when it contains every word, as with `plainto_tsquery` in the Postgres backend.
+- **Chunkers looped forever on multibyte text** (`adk-rag`): when
+  `chunk_size - chunk_overlap` was narrower than a character, `FixedSizeChunker`,
+  `RecursiveChunker` and `MarkdownChunker` stopped advancing and grew memory until
+  the process ran out. Every chunk now advances at least one character. The new
+  `try_new` constructors reject `chunk_size == 0` and `chunk_overlap >= chunk_size`
+  with `RagError::ConfigError`; `new` normalises such pairs with a warning instead
+  of stopping after the first chunk. Docs now state that sizes are bytes of UTF-8.
+- **LanceDB `upsert` appended duplicates** (`adk-rag`): `upsert` called
+  `table.add`, so re-ingesting a document duplicated its chunks. It now
+  merge-inserts on `id`, keeping the last duplicate in a batch, and an embedding
+  whose length differs from the collection's dimensions returns
+  `RagError::VectorStoreError` instead of panicking.
+- **RAG ingest dropped chunks without embeddings** (`adk-rag`):
+  `RagPipeline::ingest` zipped chunks with embeddings, so a provider returning
+  fewer vectors than chunks silently stored fewer chunks. A count mismatch now
+  fails with `RagError::PipelineError`.
 - **`acp_full_protocol` permission tests** (`examples/acp_full_protocol`): the
   example reads `tool_confirmation_decisions` by function-call ID, matching the
   key the ACP server populates, so approval and denial resume correctly.

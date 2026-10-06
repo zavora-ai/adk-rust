@@ -30,6 +30,7 @@ use lancedb::arrow::arrow_array::{
     StringArray,
 };
 use lancedb::arrow::arrow_schema::{DataType, Field, Schema};
+use lancedb::expr::{DfExpr, col, is_in, lit};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use tracing::debug;
 
@@ -41,6 +42,10 @@ use crate::vectorstore::VectorStore;
 ///
 /// Wraps a [`lancedb::Connection`] and maps collections to LanceDB tables.
 /// Runs in embedded mode by default using a local directory for storage.
+///
+/// `upsert` replaces rows by chunk id through a merge-insert, so ingesting the
+/// same chunks again updates them instead of adding duplicates. Every embedding
+/// in an `upsert` must match the collection's dimensions.
 pub struct LanceDBVectorStore {
     connection: Connection,
 }
@@ -59,6 +64,18 @@ impl LanceDBVectorStore {
 
     fn map_err(e: lancedb::Error) -> RagError {
         RagError::VectorStoreError { backend: "lancedb".to_string(), message: e.to_string() }
+    }
+
+    fn store_error(message: String) -> RagError {
+        RagError::VectorStoreError { backend: "lancedb".to_string(), message }
+    }
+
+    /// Builds the `id IN (...)` predicate that selects rows by chunk id.
+    ///
+    /// Ids become typed string literals in a DataFusion expression rather than
+    /// text spliced into SQL, so a quote in an id cannot alter the predicate.
+    fn id_predicate(ids: &[&str]) -> DfExpr {
+        is_in(col("id"), ids.iter().map(|id| lit(*id)).collect())
     }
 
     fn build_schema(dimensions: usize) -> Arc<Schema> {
@@ -106,7 +123,39 @@ impl VectorStore for LanceDBVectorStore {
             return Ok(());
         }
 
-        let dimensions = chunks[0].embedding.len();
+        // Merge-insert rejects a source batch with two rows for one id; the last
+        // occurrence wins, matching the other backends.
+        let mut last_index: HashMap<&str, usize> = HashMap::with_capacity(chunks.len());
+        for (i, chunk) in chunks.iter().enumerate() {
+            last_index.insert(chunk.id.as_str(), i);
+        }
+        let chunks: Vec<&Chunk> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(i, chunk)| last_index[chunk.id.as_str()] == *i)
+            .map(|(_, chunk)| chunk)
+            .collect();
+
+        let table =
+            self.connection.open_table(collection).execute().await.map_err(Self::map_err)?;
+        let table_schema = table.schema().await.map_err(Self::map_err)?;
+        let dimensions = match table_schema.field_with_name("vector").map(Field::data_type) {
+            Ok(DataType::FixedSizeList(_, size)) => *size as usize,
+            _ => {
+                return Err(Self::store_error(format!(
+                    "collection '{collection}' has no fixed-size `vector` column; \
+                     create it with `create_collection`"
+                )));
+            }
+        };
+        if let Some(chunk) = chunks.iter().find(|c| c.embedding.len() != dimensions) {
+            return Err(Self::store_error(format!(
+                "chunk '{}' has a {}-dimensional embedding but collection '{collection}' \
+                 stores {dimensions} dimensions",
+                chunk.id,
+                chunk.embedding.len()
+            )));
+        }
         let schema = Self::build_schema(dimensions);
 
         let ids: Vec<&str> = chunks.iter().map(|c| c.id.as_str()).collect();
@@ -118,11 +167,13 @@ impl VectorStore for LanceDBVectorStore {
             .collect();
         let metadata_refs: Vec<&str> = metadata_jsons.iter().map(|s| s.as_str()).collect();
 
-        let all_values: Vec<f32> = chunks.iter().flat_map(|c| c.embedding.clone()).collect();
+        let all_values: Vec<f32> =
+            chunks.iter().flat_map(|c| c.embedding.iter().copied()).collect();
         let values_array = Arc::new(Float32Array::from(all_values));
         let list_field = Arc::new(Field::new("item", DataType::Float32, true));
         let vector_array =
-            FixedSizeListArray::new(list_field, dimensions as i32, values_array, None);
+            FixedSizeListArray::try_new(list_field, dimensions as i32, values_array, None)
+                .map_err(|e| Self::store_error(format!("failed to build vector column: {e}")))?;
 
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -134,16 +185,13 @@ impl VectorStore for LanceDBVectorStore {
                 Arc::new(StringArray::from(metadata_refs)),
             ],
         )
-        .map_err(|e| RagError::VectorStoreError {
-            backend: "lancedb".to_string(),
-            message: format!("failed to build record batch: {e}"),
-        })?;
+        .map_err(|e| Self::store_error(format!("failed to build record batch: {e}")))?;
 
-        let table =
-            self.connection.open_table(collection).execute().await.map_err(Self::map_err)?;
         let batches: Box<dyn RecordBatchReader + Send> =
             Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
-        table.add(batches).execute().await.map_err(Self::map_err)?;
+        let mut merge = table.merge_insert(&["id"]);
+        merge.when_matched_update_all(None).when_not_matched_insert_all();
+        merge.execute(batches).await.map_err(Self::map_err)?;
 
         debug!(collection, count = chunks.len(), "upserted chunks to lancedb");
         Ok(())
@@ -156,9 +204,7 @@ impl VectorStore for LanceDBVectorStore {
 
         let table =
             self.connection.open_table(collection).execute().await.map_err(Self::map_err)?;
-        let id_list: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
-        let predicate = format!("id IN ({})", id_list.join(", "));
-        table.delete(&predicate).await.map_err(Self::map_err)?;
+        table.delete(&Self::id_predicate(ids)).await.map_err(Self::map_err)?;
 
         debug!(collection, count = ids.len(), "deleted chunks from lancedb");
         Ok(())
@@ -234,5 +280,24 @@ impl VectorStore for LanceDBVectorStore {
         }
 
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lancedb::expr::expr_to_sql_string;
+
+    #[test]
+    fn id_predicate_keeps_quotes_inside_the_literal() {
+        let injection = "x') OR ('1'='1";
+        assert_eq!(
+            LanceDBVectorStore::id_predicate(&["a", injection]),
+            col("id").in_list(vec![lit("a"), lit(injection)], false)
+        );
+
+        let sql = expr_to_sql_string(&LanceDBVectorStore::id_predicate(&[injection]))
+            .expect("render predicate");
+        assert!(sql.contains("'x'') OR (''1''=''1'"), "quote not escaped: {sql}");
     }
 }

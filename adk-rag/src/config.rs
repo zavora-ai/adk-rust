@@ -7,9 +7,9 @@ use crate::error::{RagError, Result};
 /// Configuration parameters for the RAG pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RagConfig {
-    /// Maximum chunk size in characters.
+    /// Maximum chunk size in bytes of UTF-8.
     pub chunk_size: usize,
-    /// Number of overlapping characters between consecutive chunks.
+    /// Number of bytes shared by consecutive chunks.
     pub chunk_overlap: usize,
     /// Number of top results to return from vector search.
     pub top_k: usize,
@@ -37,13 +37,13 @@ pub struct RagConfigBuilder {
 }
 
 impl RagConfigBuilder {
-    /// Set the maximum chunk size in characters.
+    /// Set the maximum chunk size in bytes of UTF-8.
     pub fn chunk_size(mut self, size: usize) -> Self {
         self.config.chunk_size = size;
         self
     }
 
-    /// Set the overlap between consecutive chunks in characters.
+    /// Set the overlap between consecutive chunks in bytes.
     pub fn chunk_overlap(mut self, overlap: usize) -> Self {
         self.config.chunk_overlap = overlap;
         self

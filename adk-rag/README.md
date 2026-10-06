@@ -238,6 +238,10 @@ adk-rag = { version = "2.3.0", features = ["lancedb"] }
 let store = LanceDBVectorStore::new("/tmp/my-vectors").await?;
 ```
 
+`upsert` replaces rows by chunk id, so re-ingesting a document updates its
+chunks instead of duplicating them. An embedding whose length differs from the
+collection's dimensions returns `RagError::VectorStoreError`.
+
 ### pgvector (PostgreSQL)
 
 Use your existing PostgreSQL database for vector search.
@@ -300,12 +304,12 @@ and the [`examples/vertex_rag`](https://github.com/zavora-ai/adk-rust/tree/main/
 
 | Chunker | Best for | How it splits |
 |---------|----------|--------------|
-| `FixedSizeChunker` | General text, logs | Every N characters with overlap |
+| `FixedSizeChunker` | General text, logs | Every N bytes with overlap, on character boundaries |
 | `RecursiveChunker` | Articles, docs, code | Paragraphs → sentences → words (natural boundaries) |
 | `MarkdownChunker` | Markdown files, READMEs | By headers, preserving section hierarchy in metadata |
 
 ```rust
-// Fixed: 512 chars per chunk, 100 char overlap
+// Fixed: 512 bytes per chunk, 100 byte overlap
 let chunker = FixedSizeChunker::new(512, 100);
 
 // Recursive: tries paragraph breaks first, then sentences
@@ -315,12 +319,24 @@ let chunker = RecursiveChunker::new(512, 100);
 let chunker = MarkdownChunker::new(512, 100);
 ```
 
+Sizes are bytes of UTF-8, not characters, and chunks never split a character.
+`new` normalises an invalid size pair (a zero `chunk_size` becomes 1 and a
+`chunk_overlap` that is not smaller than `chunk_size` is ignored, with a
+warning); `try_new` rejects it with `RagError::ConfigError`:
+
+```rust
+use adk_rag::FixedSizeChunker;
+
+let chunker = FixedSizeChunker::try_new(512, 100)?;
+assert!(FixedSizeChunker::try_new(100, 100).is_err());
+```
+
 ## Configuration
 
 ```rust
 let config = RagConfig::builder()
-    .chunk_size(256)            // max characters per chunk (default: 512)
-    .chunk_overlap(50)          // overlap between chunks (default: 100)
+    .chunk_size(256)            // max bytes per chunk (default: 512)
+    .chunk_overlap(50)          // bytes shared by adjacent chunks (default: 100)
     .top_k(5)                   // number of results to return (default: 10)
     .similarity_threshold(0.5)  // minimum score to include (default: 0.0)
     .build()?;

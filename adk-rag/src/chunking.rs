@@ -2,11 +2,18 @@
 //!
 //! This module provides the [`Chunker`] trait and three implementations:
 //!
-//! - [`FixedSizeChunker`] — splits by character count with configurable overlap
+//! - [`FixedSizeChunker`] — splits by byte length with configurable overlap
 //! - [`RecursiveChunker`] — splits hierarchically by paragraphs, sentences, then words
 //! - [`MarkdownChunker`] — splits by markdown headers, preserving header context
+//!
+//! Sizes are measured in bytes of UTF-8, not characters. Chunks never split a
+//! character, so a chunk is at most `chunk_size` bytes unless a single character
+//! is wider than `chunk_size`, in which case that character forms a chunk alone.
+
+use tracing::warn;
 
 use crate::document::{Chunk, Document};
+use crate::error::{RagError, Result};
 
 /// MSRV-compatible replacement for `str::floor_char_boundary` (stable since 1.91.0).
 /// Returns the largest byte index `<= index` that is a valid char boundary.
@@ -21,6 +28,47 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
     i
 }
 
+/// Returns the byte index just past the character that starts at `index`.
+fn next_char_boundary(s: &str, index: usize) -> usize {
+    s[index..].chars().next().map_or(s.len(), |c| index + c.len_utf8())
+}
+
+/// Checks that `chunk_size` is positive and `chunk_overlap` is smaller than it.
+fn validate_sizes(chunk_size: usize, chunk_overlap: usize) -> Result<()> {
+    if chunk_size == 0 {
+        return Err(RagError::ConfigError("chunk_size must be greater than zero".to_string()));
+    }
+    if chunk_overlap >= chunk_size {
+        return Err(RagError::ConfigError(format!(
+            "chunk_overlap ({chunk_overlap}) must be less than chunk_size ({chunk_size})"
+        )));
+    }
+    Ok(())
+}
+
+/// Replaces an invalid size pair with the nearest configuration that still advances.
+///
+/// A zero `chunk_size` becomes one byte and an overlap that is not smaller than
+/// `chunk_size` is dropped, so chunking covers the whole document instead of
+/// stopping after the first chunk.
+fn normalize_sizes(chunker: &str, chunk_size: usize, chunk_overlap: usize) -> (usize, usize) {
+    match validate_sizes(chunk_size, chunk_overlap) {
+        Ok(()) => (chunk_size, chunk_overlap),
+        Err(error) => {
+            let size = chunk_size.max(1);
+            let overlap = if chunk_overlap < size { chunk_overlap } else { 0 };
+            warn!(
+                chunker,
+                error = %error,
+                chunk_size = size,
+                chunk_overlap = overlap,
+                "invalid chunker sizes; use try_new to reject them"
+            );
+            (size, overlap)
+        }
+    }
+}
+
 /// A strategy for splitting documents into chunks.
 ///
 /// Implementations produce [`Chunk`]s with text and metadata but no embeddings.
@@ -33,7 +81,11 @@ pub trait Chunker: Send + Sync {
     fn chunk(&self, document: &Document) -> Vec<Chunk>;
 }
 
-/// Splits text into fixed-size chunks by character count with configurable overlap.
+/// Splits text into fixed-size chunks by byte length with configurable overlap.
+///
+/// Each chunk holds at most `chunk_size` bytes of UTF-8 and starts
+/// `chunk_size - chunk_overlap` bytes after the previous one, rounded down to a
+/// character boundary and always at least one character further on.
 ///
 /// Chunk IDs are generated as `{document_id}_{chunk_index}`. Each chunk inherits
 /// the parent document's metadata plus a `chunk_index` field.
@@ -43,7 +95,7 @@ pub trait Chunker: Send + Sync {
 /// ```rust,ignore
 /// use adk_rag::FixedSizeChunker;
 ///
-/// let chunker = FixedSizeChunker::new(256, 50);
+/// let chunker = FixedSizeChunker::try_new(256, 50)?;
 /// let chunks = chunker.chunk(&document);
 /// ```
 #[derive(Debug, Clone)]
@@ -57,57 +109,70 @@ impl FixedSizeChunker {
     ///
     /// # Arguments
     ///
-    /// * `chunk_size` — maximum number of characters per chunk
-    /// * `chunk_overlap` — number of overlapping characters between consecutive chunks
+    /// * `chunk_size` — maximum number of bytes per chunk
+    /// * `chunk_overlap` — number of bytes shared by consecutive chunks
+    ///
+    /// An invalid pair is normalised rather than rejected: a zero `chunk_size`
+    /// becomes 1 and a `chunk_overlap` that is not smaller than `chunk_size` is
+    /// ignored, with a warning logged. Use [`try_new`](Self::try_new) to reject it.
     pub fn new(chunk_size: usize, chunk_overlap: usize) -> Self {
+        let (chunk_size, chunk_overlap) =
+            normalize_sizes("FixedSizeChunker", chunk_size, chunk_overlap);
         Self { chunk_size, chunk_overlap }
+    }
+
+    /// Create a new `FixedSizeChunker`, rejecting an invalid size pair.
+    ///
+    /// # Arguments
+    ///
+    /// * `chunk_size` — maximum number of bytes per chunk
+    /// * `chunk_overlap` — number of bytes shared by consecutive chunks
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RagError::ConfigError`] when `chunk_size` is zero or
+    /// `chunk_overlap` is not smaller than `chunk_size`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_rag::FixedSizeChunker;
+    ///
+    /// assert!(FixedSizeChunker::try_new(512, 100).is_ok());
+    /// assert!(FixedSizeChunker::try_new(100, 100).is_err());
+    /// ```
+    pub fn try_new(chunk_size: usize, chunk_overlap: usize) -> Result<Self> {
+        validate_sizes(chunk_size, chunk_overlap)?;
+        Ok(Self { chunk_size, chunk_overlap })
     }
 }
 
 impl Chunker for FixedSizeChunker {
     fn chunk(&self, document: &Document) -> Vec<Chunk> {
-        if document.text.is_empty() {
-            return Vec::new();
-        }
-
-        let text = &document.text;
-        let mut chunks = Vec::new();
-        let mut start = 0;
-        let mut chunk_index = 0;
-
-        while start < text.len() {
-            let end = floor_char_boundary(text, (start + self.chunk_size).min(text.len()));
-            let chunk_text = &text[start..end];
-
-            let mut metadata = document.metadata.clone();
-            metadata.insert("chunk_index".to_string(), chunk_index.to_string());
-
-            chunks.push(Chunk {
-                id: format!("{}_{chunk_index}", document.id),
-                text: chunk_text.to_string(),
-                embedding: Vec::new(),
-                metadata,
-                document_id: document.id.clone(),
-            });
-
-            chunk_index += 1;
-            let step = self.chunk_size.saturating_sub(self.chunk_overlap);
-            if step == 0 {
-                break;
-            }
-            start = floor_char_boundary(text, start + step);
-        }
-
-        chunks
+        split_by_size(&document.text, self.chunk_size, self.chunk_overlap)
+            .into_iter()
+            .enumerate()
+            .map(|(chunk_index, text)| {
+                let mut metadata = document.metadata.clone();
+                metadata.insert("chunk_index".to_string(), chunk_index.to_string());
+                Chunk {
+                    id: format!("{}_{chunk_index}", document.id),
+                    text,
+                    embedding: Vec::new(),
+                    metadata,
+                    document_id: document.id.clone(),
+                }
+            })
+            .collect()
     }
 }
 
 /// Splits text hierarchically: paragraphs → sentences → words.
 ///
 /// First splits by paragraph separators (`\n\n`). If a paragraph exceeds
-/// `chunk_size`, splits by sentence boundaries (`. `, `! `, `? `). If a
-/// sentence still exceeds `chunk_size`, splits by word boundaries. Overlap
-/// is applied between chunks at each level.
+/// `chunk_size` bytes, splits by sentence boundaries (`. `, `! `, `? `). If a
+/// sentence still exceeds `chunk_size`, splits by word boundaries, and a single
+/// word longer than `chunk_size` is split by byte length with overlap.
 ///
 /// # Example
 ///
@@ -128,10 +193,41 @@ impl RecursiveChunker {
     ///
     /// # Arguments
     ///
-    /// * `chunk_size` — maximum number of characters per chunk
-    /// * `chunk_overlap` — number of overlapping characters between consecutive chunks
+    /// * `chunk_size` — maximum number of bytes per chunk
+    /// * `chunk_overlap` — number of bytes shared by consecutive chunks
+    ///
+    /// An invalid pair is normalised rather than rejected: a zero `chunk_size`
+    /// becomes 1 and a `chunk_overlap` that is not smaller than `chunk_size` is
+    /// ignored, with a warning logged. Use [`try_new`](Self::try_new) to reject it.
     pub fn new(chunk_size: usize, chunk_overlap: usize) -> Self {
+        let (chunk_size, chunk_overlap) =
+            normalize_sizes("RecursiveChunker", chunk_size, chunk_overlap);
         Self { chunk_size, chunk_overlap }
+    }
+
+    /// Create a new `RecursiveChunker`, rejecting an invalid size pair.
+    ///
+    /// # Arguments
+    ///
+    /// * `chunk_size` — maximum number of bytes per chunk
+    /// * `chunk_overlap` — number of bytes shared by consecutive chunks
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RagError::ConfigError`] when `chunk_size` is zero or
+    /// `chunk_overlap` is not smaller than `chunk_size`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_rag::RecursiveChunker;
+    ///
+    /// assert!(RecursiveChunker::try_new(512, 100).is_ok());
+    /// assert!(RecursiveChunker::try_new(100, 100).is_err());
+    /// ```
+    pub fn try_new(chunk_size: usize, chunk_overlap: usize) -> Result<Self> {
+        validate_sizes(chunk_size, chunk_overlap)?;
+        Ok(Self { chunk_size, chunk_overlap })
     }
 }
 
@@ -216,23 +312,26 @@ fn split_keeping_separator<'a>(text: &'a str, separator: &str) -> Vec<&'a str> {
     result
 }
 
-/// Simple character-based splitting with overlap.
+/// Byte-length splitting with overlap that never splits a character.
+///
+/// Both the chunk end and the next start are rounded down to a character
+/// boundary, then pushed one character forward if rounding left them at
+/// `start`. Without that, a step narrower than a multibyte character would
+/// leave `start` in place forever.
 fn split_by_size(text: &str, chunk_size: usize, chunk_overlap: usize) -> Vec<String> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-
+    let step = chunk_size.saturating_sub(chunk_overlap);
     let mut chunks = Vec::new();
     let mut start = 0;
 
     while start < text.len() {
-        let end = floor_char_boundary(text, (start + chunk_size).min(text.len()));
-        chunks.push(text[start..end].to_string());
-        let step = chunk_size.saturating_sub(chunk_overlap);
-        if step == 0 {
-            break;
+        let mut end = floor_char_boundary(text, start.saturating_add(chunk_size));
+        if end <= start {
+            end = next_char_boundary(text, start);
         }
-        start = floor_char_boundary(text, start + step);
+        chunks.push(text[start..end].to_string());
+
+        let next = floor_char_boundary(text, start.saturating_add(step));
+        start = if next > start { next } else { next_char_boundary(text, start) };
     }
 
     chunks
@@ -269,7 +368,7 @@ impl Chunker for RecursiveChunker {
 /// Splits text by markdown headers, keeping each section as a chunk.
 ///
 /// Each section is prefixed with its header hierarchy. Sections exceeding
-/// `chunk_size` are further split using [`RecursiveChunker`] logic.
+/// `chunk_size` bytes are further split using [`RecursiveChunker`] logic.
 /// The `header_path` metadata field records the header hierarchy for each chunk.
 ///
 /// # Example
@@ -291,10 +390,41 @@ impl MarkdownChunker {
     ///
     /// # Arguments
     ///
-    /// * `chunk_size` — maximum number of characters per chunk
-    /// * `chunk_overlap` — number of overlapping characters between consecutive chunks
+    /// * `chunk_size` — maximum number of bytes per chunk
+    /// * `chunk_overlap` — number of bytes shared by consecutive chunks
+    ///
+    /// An invalid pair is normalised rather than rejected: a zero `chunk_size`
+    /// becomes 1 and a `chunk_overlap` that is not smaller than `chunk_size` is
+    /// ignored, with a warning logged. Use [`try_new`](Self::try_new) to reject it.
     pub fn new(chunk_size: usize, chunk_overlap: usize) -> Self {
+        let (chunk_size, chunk_overlap) =
+            normalize_sizes("MarkdownChunker", chunk_size, chunk_overlap);
         Self { chunk_size, chunk_overlap }
+    }
+
+    /// Create a new `MarkdownChunker`, rejecting an invalid size pair.
+    ///
+    /// # Arguments
+    ///
+    /// * `chunk_size` — maximum number of bytes per chunk
+    /// * `chunk_overlap` — number of bytes shared by consecutive chunks
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RagError::ConfigError`] when `chunk_size` is zero or
+    /// `chunk_overlap` is not smaller than `chunk_size`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_rag::MarkdownChunker;
+    ///
+    /// assert!(MarkdownChunker::try_new(512, 100).is_ok());
+    /// assert!(MarkdownChunker::try_new(100, 100).is_err());
+    /// ```
+    pub fn try_new(chunk_size: usize, chunk_overlap: usize) -> Result<Self> {
+        validate_sizes(chunk_size, chunk_overlap)?;
+        Ok(Self { chunk_size, chunk_overlap })
     }
 }
 
@@ -406,6 +536,7 @@ impl Chunker for MarkdownChunker {
 mod tests {
     use super::*;
     use crate::Document;
+    use proptest::prelude::*;
     use std::collections::HashMap;
 
     fn doc(text: &str) -> Document {
@@ -476,5 +607,126 @@ mod tests {
             let _ = chunk.text.chars().count();
         }
         assert!(!chunks.is_empty());
+    }
+
+    fn texts(chunks: &[Chunk]) -> Vec<&str> {
+        chunks.iter().map(|c| c.text.as_str()).collect()
+    }
+
+    #[test]
+    fn fixed_chunker_advances_when_step_is_narrower_than_a_character() {
+        // Step 2 bytes, characters 3 bytes: rounding down used to leave `start` in place.
+        let chunks = FixedSizeChunker::new(5, 3).chunk(&doc("你好世界"));
+        assert_eq!(texts(&chunks), ["你", "好", "世", "界"]);
+
+        // Step 1 byte, characters 4 bytes.
+        let chunks = FixedSizeChunker::new(6, 5).chunk(&doc("🦀🚀"));
+        assert_eq!(texts(&chunks), ["🦀", "🚀"]);
+    }
+
+    #[test]
+    fn fixed_chunker_emits_characters_wider_than_chunk_size_whole() {
+        let chunks = FixedSizeChunker::new(2, 0).chunk(&doc("a你b"));
+        assert_eq!(texts(&chunks), ["a", "你", "b"]);
+    }
+
+    #[test]
+    fn split_by_size_advances_when_step_is_narrower_than_a_character() {
+        assert_eq!(split_by_size("日本語", 4, 3), ["日", "本", "語"]);
+    }
+
+    #[test]
+    fn recursive_and_markdown_chunkers_terminate_on_narrow_steps() {
+        let text = "# 标题\n\n第一段落很长很长很长。第二句也很长很长。\n\n🦀🦀🦀🦀🦀🦀";
+        let recursive = RecursiveChunker::new(5, 4).chunk(&doc(text));
+        let markdown = MarkdownChunker::new(5, 4).chunk(&doc(text));
+        assert!(!recursive.is_empty());
+        assert!(!markdown.is_empty());
+    }
+
+    #[test]
+    fn try_new_rejects_invalid_sizes() {
+        for (size, overlap) in [(0, 0), (10, 10), (10, 11)] {
+            assert!(
+                matches!(FixedSizeChunker::try_new(size, overlap), Err(RagError::ConfigError(_))),
+                "FixedSizeChunker accepted ({size}, {overlap})"
+            );
+            assert!(
+                matches!(RecursiveChunker::try_new(size, overlap), Err(RagError::ConfigError(_))),
+                "RecursiveChunker accepted ({size}, {overlap})"
+            );
+            assert!(
+                matches!(MarkdownChunker::try_new(size, overlap), Err(RagError::ConfigError(_))),
+                "MarkdownChunker accepted ({size}, {overlap})"
+            );
+        }
+        assert!(FixedSizeChunker::try_new(10, 9).is_ok());
+    }
+
+    #[test]
+    fn new_normalizes_invalid_sizes_instead_of_truncating() {
+        // An overlap equal to chunk_size used to stop after the first chunk.
+        let chunks = FixedSizeChunker::new(4, 4).chunk(&doc("abcdefghij"));
+        assert_eq!(texts(&chunks), ["abcd", "efgh", "ij"]);
+
+        let chunks = FixedSizeChunker::new(0, 0).chunk(&doc("abc"));
+        assert_eq!(texts(&chunks), ["a", "b", "c"]);
+    }
+
+    fn arb_text() -> impl Strategy<Value = String> {
+        prop_oneof![
+            "\\PC{0,120}",
+            "[a 你好世界🦀é\\n.!?#]{0,120}",
+            proptest::collection::vec(any::<char>(), 0..60)
+                .prop_map(|chars| chars.into_iter().collect::<String>()),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// Chunking terminates for any UTF-8 text and any size pair, and every
+        /// chunk is a non-empty slice that advances through the text.
+        #[test]
+        fn prop_chunkers_terminate_for_any_text_and_sizes(
+            text in arb_text(),
+            chunk_size in 0usize..24,
+            chunk_overlap in 0usize..32,
+        ) {
+            let document = doc(&text);
+
+            let fixed = FixedSizeChunker::new(chunk_size, chunk_overlap).chunk(&document);
+            prop_assert!(fixed.len() <= text.len());
+            prop_assert!(fixed.iter().all(|c| !c.text.is_empty()));
+            if let (Some(first), Some(last)) = (fixed.first(), fixed.last()) {
+                prop_assert!(text.starts_with(&first.text));
+                prop_assert!(text.ends_with(&last.text));
+            }
+
+            let recursive = RecursiveChunker::new(chunk_size, chunk_overlap).chunk(&document);
+            prop_assert!(recursive.iter().all(|c| !c.text.is_empty()));
+
+            let markdown = MarkdownChunker::new(chunk_size, chunk_overlap).chunk(&document);
+            prop_assert!(markdown.iter().all(|c| !c.text.is_empty()));
+        }
+
+        /// With no overlap the chunks partition the text, and none exceeds
+        /// `chunk_size` unless it is a single wider character.
+        #[test]
+        fn prop_fixed_chunks_without_overlap_partition_the_text(
+            text in arb_text(),
+            chunk_size in 1usize..24,
+        ) {
+            let chunks = FixedSizeChunker::try_new(chunk_size, 0)
+                .expect("valid sizes")
+                .chunk(&doc(&text));
+            prop_assert_eq!(texts(&chunks).concat(), text.clone());
+            for chunk in &chunks {
+                prop_assert!(
+                    chunk.text.len() <= chunk_size || chunk.text.chars().count() == 1,
+                    "chunk {:?} exceeds {} bytes", chunk.text, chunk_size
+                );
+            }
+        }
     }
 }
