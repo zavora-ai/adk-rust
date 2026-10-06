@@ -6,9 +6,57 @@ use adk_core::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use sqlx::{Row, sqlite::SqlitePool};
+use sqlx::{
+    Row,
+    sqlite::{SqlitePool, SqliteRow},
+};
 use std::collections::HashMap;
 use uuid::Uuid;
+
+/// Decodes a stored event row, logging and skipping a row that no longer deserializes
+/// so one corrupt event does not hide the rest of the session history.
+fn decode_event_row(row: &SqliteRow, session_id: &str) -> Option<Event> {
+    fn decode(row: &SqliteRow) -> std::result::Result<Event, String> {
+        let llm_response =
+            serde_json::from_str(row.try_get("llm_response").map_err(|e| e.to_string())?)
+                .map_err(|e| format!("llm_response: {e}"))?;
+        let actions = serde_json::from_str(row.try_get("actions").map_err(|e| e.to_string())?)
+            .map_err(|e| format!("actions: {e}"))?;
+        let long_running_tool_ids =
+            serde_json::from_str(row.try_get("long_running_tool_ids").map_err(|e| e.to_string())?)
+                .map_err(|e| format!("long_running_tool_ids: {e}"))?;
+        let timestamp: String = row.try_get("timestamp").map_err(|e| e.to_string())?;
+        let timestamp = DateTime::parse_from_rfc3339(&timestamp)
+            .map_err(|e| format!("timestamp: {e}"))?
+            .with_timezone(&Utc);
+        Ok(Event {
+            id: row.try_get("id").map_err(|e| e.to_string())?,
+            timestamp,
+            invocation_id: row.try_get("invocation_id").map_err(|e| e.to_string())?,
+            branch: row.try_get("branch").map_err(|e| e.to_string())?,
+            author: row.try_get("author").map_err(|e| e.to_string())?,
+            llm_request: None,
+            llm_response,
+            actions,
+            long_running_tool_ids,
+            provider_metadata: HashMap::new(),
+        })
+    }
+
+    match decode(row) {
+        Ok(event) => Some(event),
+        Err(error) => {
+            let event_id: String = row.try_get("id").unwrap_or_else(|_| "<unknown>".to_string());
+            tracing::warn!(
+                session.id = %session_id,
+                event.id = %event_id,
+                error = %error,
+                "skipping stored event that failed to deserialize"
+            );
+            None
+        }
+    }
+}
 
 /// SQLite-backed session service using `sqlx`.
 pub struct SqliteSessionService {
@@ -256,26 +304,8 @@ impl SessionService for SqliteSessionService {
             .fetch_all(&self.pool)
             .await
             .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?
-            .into_iter()
-            .filter_map(|row| {
-                let llm_response = serde_json::from_str(row.get("llm_response")).ok()?;
-                let actions = serde_json::from_str(row.get("actions")).ok()?;
-                let long_running_tool_ids = serde_json::from_str(row.get("long_running_tool_ids")).ok()?;
-                let timestamp: String = row.get("timestamp");
-                let timestamp = DateTime::parse_from_rfc3339(&timestamp).ok()?.with_timezone(&Utc);
-                Some(Event {
-                    id: row.get("id"),
-                    timestamp,
-                    invocation_id: row.get("invocation_id"),
-                    branch: row.get("branch"),
-                    author: row.get("author"),
-                    llm_request: None,
-                    llm_response,
-                    actions,
-                    long_running_tool_ids,
-                    provider_metadata: std::collections::HashMap::new(),
-                })
-            })
+            .iter()
+            .filter_map(|row| decode_event_row(row, &req.session_id))
             .collect();
 
         let mut events = events;
@@ -877,26 +907,8 @@ impl SessionService for SqliteSessionService {
         .fetch_all(&mut *tx)
         .await
         .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-        .into_iter()
-        .filter_map(|row| {
-            let llm_response = serde_json::from_str(row.get("llm_response")).ok()?;
-            let actions = serde_json::from_str(row.get("actions")).ok()?;
-            let long_running_tool_ids = serde_json::from_str(row.get("long_running_tool_ids")).ok()?;
-            let timestamp: String = row.get("timestamp");
-            let timestamp = DateTime::parse_from_rfc3339(&timestamp).ok()?.with_timezone(&Utc);
-            Some(Event {
-                id: row.get("id"),
-                timestamp,
-                invocation_id: row.get("invocation_id"),
-                branch: row.get("branch"),
-                author: row.get("author"),
-                llm_request: None,
-                llm_response,
-                actions,
-                long_running_tool_ids,
-                provider_metadata: std::collections::HashMap::new(),
-            })
-        })
+        .iter()
+        .filter_map(|row| decode_event_row(row, session_id))
         .collect();
 
         // Rebuild session state from remaining events' state deltas

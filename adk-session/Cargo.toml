@@ -40,6 +40,7 @@ axum = "0.8"
 futures.workspace = true
 http = "1"
 proptest = "1.5"
+tracing-subscriber = { workspace = true, features = ["fmt"] }
 
 [features]
 default = []
