@@ -270,3 +270,69 @@ async fn test_get_session_traces_unchanged() {
     assert!(span.get("trace_id").is_some(), "span should have a trace_id field");
     assert!(span.get("attributes").is_some(), "span should have an attributes field");
 }
+
+/// Authenticates the user named in the `x-user` header.
+struct HeaderExtractor;
+
+#[async_trait]
+impl adk_server::RequestContextExtractor for HeaderExtractor {
+    async fn extract(
+        &self,
+        parts: &axum::http::request::Parts,
+    ) -> Result<adk_core::RequestContext, adk_server::RequestContextError> {
+        let user_id = parts
+            .headers
+            .get("x-user")
+            .and_then(|value| value.to_str().ok())
+            .ok_or(adk_server::RequestContextError::MissingAuth)?;
+        Ok(adk_core::RequestContext {
+            user_id: user_id.to_string(),
+            scopes: vec![],
+            metadata: Default::default(),
+        })
+    }
+}
+
+/// `get_event` authorized the path user but then looked the trace up by session ID
+/// alone, so a caller could read another user's trace by naming its session ID under
+/// their own user ID.
+#[tokio::test]
+async fn test_get_event_rejects_a_session_owned_by_another_user() {
+    use adk_telemetry::SpanSink;
+
+    let exporter = Arc::new(adk_telemetry::AdkSpanExporter::new());
+    exporter.export_span(
+        "agent.execute",
+        [
+            ("span_id", "span-bob"),
+            ("gcp.vertex.agent.event_id", "evt-bob"),
+            ("gcp.vertex.agent.session_id", "shared"),
+            ("gcp.vertex.agent.invocation_id", "inv-bob"),
+            ("gcp.vertex.agent.llm_request", "bob's prompt"),
+            ("adk.user_id", "bob"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect(),
+    );
+    let config =
+        base_config().with_span_exporter(exporter).with_request_context(Arc::new(HeaderExtractor));
+    let app = create_app(config);
+
+    let request = |user: &str| {
+        Request::builder()
+            .uri(format!("/api/apps/myapp/users/{user}/sessions/shared/events/evt-bob"))
+            .header("x-user", user)
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let as_alice = app.clone().oneshot(request("alice")).await.unwrap();
+    assert_eq!(as_alice.status(), StatusCode::FORBIDDEN);
+
+    let as_bob = app.oneshot(request("bob")).await.unwrap();
+    assert_eq!(as_bob.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(as_bob.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["gcp.vertex.agent.llm_request"], "bob's prompt");
+}

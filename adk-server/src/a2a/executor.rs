@@ -33,8 +33,47 @@ impl Executor {
         Self { config }
     }
 
+    /// Runs `message` in the session named by `context_id` for an unauthenticated caller.
+    ///
+    /// The session belongs to the synthetic user `A2A_USER_{context_id}`. Use
+    /// [`execute_for_user`](Self::execute_for_user) when the request carries an
+    /// authenticated principal, so a caller who knows another caller's `contextId`
+    /// cannot reach that caller's session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session cannot be prepared, the message cannot be
+    /// converted, or the runner fails to start.
     pub async fn execute(
         &self,
+        context_id: &str,
+        task_id: &str,
+        message: &Message,
+    ) -> Result<Vec<UpdateEvent>> {
+        self.execute_for_user(None, context_id, task_id, message).await
+    }
+
+    /// Runs `message` in the session named by `context_id`, owned by `user_id`.
+    ///
+    /// `user_id` is the authenticated principal. When it is `None` the session
+    /// belongs to the synthetic user `A2A_USER_{context_id}`, which is only safe
+    /// when no authentication is configured.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let events = executor
+    ///     .execute_for_user(Some("alice"), "ctx-1", "task-1", &message)
+    ///     .await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session cannot be prepared, the message cannot be
+    /// converted, or the runner fails to start.
+    pub async fn execute_for_user(
+        &self,
+        user_id: Option<&str>,
         context_id: &str,
         task_id: &str,
         message: &Message,
@@ -100,7 +139,7 @@ impl Executor {
             }
         };
 
-        let meta = to_invocation_meta(&self.config.app_name, context_id, None);
+        let meta = to_invocation_meta(&self.config.app_name, context_id, user_id);
         let cancellation_token = self.config.cancellation_token.clone();
 
         // Prepare session

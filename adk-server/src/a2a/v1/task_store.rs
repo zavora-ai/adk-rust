@@ -12,6 +12,13 @@ use tokio::sync::RwLock;
 
 use super::error::A2aError;
 
+/// [`TaskStoreEntry::metadata`] key holding the authenticated user that created a task.
+///
+/// The request handler writes it when a caller is authenticated and only serves
+/// the task to that caller. It is never sent on the wire: task and status-event
+/// conversions drop it. A custom [`TaskStore`] persists it like any other metadata.
+pub const OWNER_METADATA_KEY: &str = "adk.owner";
+
 /// An entry in the task store representing a persisted A2A task.
 #[derive(Debug, Clone)]
 pub struct TaskStoreEntry {
@@ -33,6 +40,14 @@ pub struct TaskStoreEntry {
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// Timestamp when the task was last updated.
     pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TaskStoreEntry {
+    /// The authenticated user that created the task, or `None` for a task created
+    /// without authentication. Read from [`OWNER_METADATA_KEY`].
+    pub fn owner(&self) -> Option<&str> {
+        self.metadata.get(OWNER_METADATA_KEY).and_then(serde_json::Value::as_str)
+    }
 }
 
 /// Parameters for listing tasks with optional filtering and pagination.

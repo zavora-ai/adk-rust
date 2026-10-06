@@ -235,7 +235,7 @@ let config = ServerConfig::new(agent_loader, session_service)
     .with_request_context(Arc::new(MyExtractor));
 ```
 
-When configured, the extracted `RequestContext` flows into `InvocationContext`, making scopes available to tools via `ToolContext::user_scopes()`. Session and artifact endpoints enforce user_id authorization against the authenticated identity.
+When configured, the extracted `RequestContext` flows into `InvocationContext`, making scopes available to tools via `ToolContext::user_scopes()`. Session and artifact endpoints enforce user_id authorization against the authenticated identity. A2A routes use the authenticated identity as the session user and the owner of every task they create, so `tasks/get` and `tasks/cancel` cannot reach another caller's task.
 
 ### Background Runs and Cron (feature: `background`)
 
@@ -265,7 +265,14 @@ for run_id in store.restore().await? {
 | `/cron` | POST / GET / PATCH / DELETE | Manage scheduled jobs |
 
 Cron jobs take a concurrency policy — `skip`, `allow` or `queue` — for what happens
-when the previous run is still going.
+when the previous run is still going. A `queue` job holds at most 100 waiting runs
+by default (`CronState::with_max_queue_depth`), and resuming a paused job skips the
+occurrences that fell inside the pause.
+
+> **Important:** the routers carry no authentication. Mount them with
+> `ServerBuilder::with_background_runs` and `ServerBuilder::with_cron_jobs`, which
+> serve `/api/runs` and `/api/cron` behind the server's auth middleware, or put a
+> standalone mount behind your own authentication layer.
 
 **What survives a restart.** With a `RunPersistence` attached, run records do. A run
 that was still going cannot still be going, so `restore` returns it as `Failed` with

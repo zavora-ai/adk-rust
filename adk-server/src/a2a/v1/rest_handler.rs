@@ -24,6 +24,7 @@ use a2a_protocol_types::TaskPushNotificationConfig;
 use super::error::A2aError;
 use super::request_handler::RequestHandler;
 use super::task_store::ListTasksParams;
+use crate::auth_bridge::AuthenticatedCaller;
 
 /// Creates the Axum router for A2A v1.0.0 REST endpoints.
 ///
@@ -85,6 +86,7 @@ struct TaskListQuery {
 /// `POST /message:send` — sends a message and returns a Task.
 async fn handle_message_send(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Json(params): Json<serde_json::Value>,
 ) -> Response {
     let msg = match extract_message(params) {
@@ -92,7 +94,7 @@ async fn handle_message_send(
         Err(e) => return error_response(&e),
     };
 
-    match handler.message_send(msg).await {
+    match handler.for_caller(caller.0).message_send(msg).await {
         Ok(task) => a2a_json_response(&task),
         Err(e) => error_response(&e),
     }
@@ -101,6 +103,7 @@ async fn handle_message_send(
 /// `POST /message:stream` — sends a message and returns an SSE stream.
 async fn handle_message_stream(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Json(params): Json<serde_json::Value>,
 ) -> Response {
     let msg = match extract_message(params) {
@@ -108,7 +111,7 @@ async fn handle_message_stream(
         Err(e) => return error_response(&e),
     };
 
-    let event_stream = match handler.message_stream(msg).await {
+    let event_stream = match handler.for_caller(caller.0).message_stream(msg).await {
         Ok(s) => s,
         Err(e) => return error_response(&e),
     };
@@ -135,10 +138,11 @@ async fn handle_message_stream(
 /// `GET /tasks/{taskId}` — retrieves a task by ID.
 async fn handle_tasks_get(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Path(task_id): Path<String>,
     Query(query): Query<TaskGetQuery>,
 ) -> Response {
-    match handler.tasks_get(&task_id, query.history_length).await {
+    match handler.for_caller(caller.0).tasks_get(&task_id, query.history_length).await {
         Ok(task) => a2a_json_response(&task),
         Err(e) => error_response(&e),
     }
@@ -147,9 +151,10 @@ async fn handle_tasks_get(
 /// `POST /tasks/{taskId}/cancel` — cancels a task.
 async fn handle_tasks_cancel(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Path(task_id): Path<String>,
 ) -> Response {
-    match handler.tasks_cancel(&task_id).await {
+    match handler.for_caller(caller.0).tasks_cancel(&task_id).await {
         Ok(task) => a2a_json_response(&task),
         Err(e) => error_response(&e),
     }
@@ -158,6 +163,7 @@ async fn handle_tasks_cancel(
 /// `GET /tasks` — lists tasks with optional filtering and pagination.
 async fn handle_tasks_list(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Query(query): Query<TaskListQuery>,
 ) -> Response {
     let state = query.status.and_then(|s| parse_task_state(&s));
@@ -172,7 +178,7 @@ async fn handle_tasks_list(
         include_artifacts: query.include_artifacts,
     };
 
-    match handler.tasks_list(params).await {
+    match handler.for_caller(caller.0).tasks_list(params).await {
         Ok(tasks) => a2a_json_response(&tasks),
         Err(e) => error_response(&e),
     }
@@ -181,9 +187,10 @@ async fn handle_tasks_list(
 /// `POST /tasks/{taskId}/subscribe` — subscribes to task updates via SSE.
 async fn handle_tasks_subscribe(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Path(task_id): Path<String>,
 ) -> Response {
-    let event_stream = match handler.tasks_subscribe(&task_id).await {
+    let event_stream = match handler.for_caller(caller.0).tasks_subscribe(&task_id).await {
         Ok(s) => s,
         Err(e) => return error_response(&e),
     };
@@ -210,11 +217,12 @@ async fn handle_tasks_subscribe(
 /// `POST /tasks/{taskId}/pushNotificationConfigs` — creates a push config.
 async fn handle_push_config_create(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Path(task_id): Path<String>,
     Json(mut config): Json<TaskPushNotificationConfig>,
 ) -> Response {
     config.task_id = task_id.clone();
-    match handler.push_config_create(&task_id, config).await {
+    match handler.for_caller(caller.0).push_config_create(&task_id, config).await {
         Ok(created) => a2a_json_response(&created),
         Err(e) => error_response(&e),
     }
@@ -223,9 +231,10 @@ async fn handle_push_config_create(
 /// `GET /tasks/{taskId}/pushNotificationConfigs/{configId}` — gets a push config.
 async fn handle_push_config_get(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Path((task_id, config_id)): Path<(String, String)>,
 ) -> Response {
-    match handler.push_config_get(&task_id, &config_id).await {
+    match handler.for_caller(caller.0).push_config_get(&task_id, &config_id).await {
         Ok(config) => a2a_json_response(&config),
         Err(e) => error_response(&e),
     }
@@ -234,9 +243,10 @@ async fn handle_push_config_get(
 /// `GET /tasks/{taskId}/pushNotificationConfigs` — lists push configs for a task.
 async fn handle_push_config_list(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Path(task_id): Path<String>,
 ) -> Response {
-    match handler.push_config_list(&task_id).await {
+    match handler.for_caller(caller.0).push_config_list(&task_id).await {
         Ok(configs) => a2a_json_response(&configs),
         Err(e) => error_response(&e),
     }
@@ -245,9 +255,10 @@ async fn handle_push_config_list(
 /// `DELETE /tasks/{taskId}/pushNotificationConfigs/{configId}` — deletes a push config.
 async fn handle_push_config_delete(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Path((task_id, config_id)): Path<(String, String)>,
 ) -> Response {
-    match handler.push_config_delete(&task_id, &config_id).await {
+    match handler.for_caller(caller.0).push_config_delete(&task_id, &config_id).await {
         Ok(()) => (axum::http::StatusCode::NO_CONTENT, "").into_response(),
         Err(e) => error_response(&e),
     }

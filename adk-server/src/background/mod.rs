@@ -21,6 +21,13 @@
 //!
 //! ## Usage
 //!
+//! > **Important:** these routers carry no authentication of their own. Prefer
+//! > [`ServerBuilder::with_background_runs`](crate::ServerBuilder::with_background_runs)
+//! > and [`ServerBuilder::with_cron_jobs`](crate::ServerBuilder::with_cron_jobs), which
+//! > mount them under `/api` behind the server's auth middleware. A standalone mount
+//! > must sit behind an authentication layer, or anyone who reaches it can submit,
+//! > schedule, and cancel work.
+//!
 //! The routers can be used standalone or merged into an existing Axum application:
 //!
 //! ```rust,ignore
@@ -984,6 +991,11 @@ async fn cancel_run(
 /// - `POST /runs` — Submit a new background run
 /// - `GET /runs/{run_id}` — Get run status
 /// - `DELETE /runs/{run_id}` — Cancel a run
+///
+/// > **Important:** the router carries no authentication. Anyone who reaches it can
+/// > submit and cancel runs. Mount it through
+/// > [`ServerBuilder::with_background_runs`](crate::ServerBuilder::with_background_runs),
+/// > which applies the server's auth middleware, or behind your own authentication layer.
 pub fn background_runs_router() -> Router {
     let state = BackgroundState::new();
     background_runs_router_with_state(state)
@@ -992,6 +1004,9 @@ pub fn background_runs_router() -> Router {
 /// Create the background runs router with a pre-configured state.
 ///
 /// This is useful for testing or sharing state with other components.
+///
+/// > **Important:** the router carries no authentication; see
+/// > [`background_runs_router`].
 pub fn background_runs_router_with_state(state: BackgroundState) -> Router {
     Router::new()
         .route("/runs", post(submit_run))

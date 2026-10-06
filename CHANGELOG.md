@@ -15,7 +15,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-exports the SDK, so code that uses it directly compiles against the 2.x API.
   The wire protocol stays stable ACP v1, and the `adk-acp` API is unchanged.
 
+### Security
+
+- **A2A sessions and tasks bind to the authenticated caller** (`adk-server`): the
+  `/a2a` and `/a2a/stream` routes, and the v1 `jsonrpc_handler` and `rest_router`,
+  use the authenticated principal as the session user and record it as the owner
+  of every task they create. `tasks/get`, `tasks/cancel`, and the v1 task, list,
+  subscribe, and push-config operations answer "not found" for another caller's
+  task; a v1 `messageId` deduplicates per caller; and a v1 `INPUT_REQUIRED` task
+  resumes only for its owner. The session user was derived from the
+  client-supplied `contextId`, so an authenticated caller who knew another
+  caller's `contextId` or task ID could read that caller's history, poll its
+  task, or cancel it. Deployments without authentication keep the
+  `contextId`-derived session user.
+- **Debug event lookup checks trace ownership** (`adk-server`):
+  `GET /api/apps/{app}/users/{user}/sessions/{session}/events/{event}` answers 403
+  when spans recorded for the session belong to a different user, as
+  `GET /api/debug/trace/session/{session_id}` does, instead of reading the trace
+  by session ID alone.
+- **Background and cron routes mount behind authentication** (`adk-server`,
+  feature `background`): `ServerBuilder::with_background_runs` and
+  `ServerBuilder::with_cron_jobs` serve `/api/runs` and `/api/cron` behind the
+  server's auth middleware. The standalone routers carry no authentication; their
+  rustdoc and the functional API guide state that a standalone mount must sit
+  behind an authentication layer.
+- **Push webhook validation covers metadata and internal ranges** (`adk-server`,
+  feature `a2a-v1`): `validate_webhook_url` also rejects `0.0.0.0/8`,
+  `169.254.0.0/16`, `100.64.0.0/10`, `fc00::/7`, `fe80::/10`, multicast,
+  broadcast, `*.localhost`, and IPv4-mapped, IPv4-compatible, and NAT64 forms of
+  blocked IPv4 addresses. `HttpPushNotificationSender::new()` does not follow
+  redirects and bounds each delivery attempt at 10 seconds.
+
 ### Added
+
+- **`AuthenticatedCaller` extractor** (`adk-server`): reads the request's
+  `RequestContext` from the extensions the auth layer sets, and yields `None`
+  when no authentication ran.
+- **`A2aTaskRetention`** (`adk-server`): bounds finished A2A task records — the
+  newest 1,000 for at most one hour by default — configured with
+  `ServerBuilder::with_a2a_task_retention` or `A2aController::with_task_retention`.
+- **`RequestHandler::for_caller`** (`adk-server`, feature `a2a-v1`): returns a
+  `CallerScope` that runs every v1 operation for one caller.
 
 - **Gemini Live spoken language** (`adk-realtime`): `RealtimeConfig::with_language`
   sends a BCP-47 tag as `generationConfig.speechConfig.languageCode` for AI Studio
@@ -33,6 +73,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is also applied to invocation-scoped toolsets.
 ### Fixed
 
+- **A2A task store hygiene** (`adk-server`): finished task records are evicted by
+  count and age instead of accumulating for the life of the process. A
+  `message/send` that reuses the `taskId` of a running task, or of another
+  caller's task, is rejected with JSON-RPC error `-32602` instead of replacing the
+  running task's registration and its abort handle. A task is registered before
+  it is spawned, so a fast failure cannot leave a permanent `working` entry. A
+  failed task's stored status message carries the same sanitized text as the
+  streaming error.
+- **Cron pause, queue depth, and execution count** (`adk-server`, feature
+  `background`): resuming a paused job skips the occurrences missed while paused
+  instead of claiming them one per scheduler tick. The `Queue` policy holds at
+  most `DEFAULT_MAX_QUEUE_DEPTH` (100) runs per job, configurable with
+  `CronState::with_max_queue_depth`, and skips an occurrence with a warning when
+  full. `executionCount` reports the runs the scheduler started.
+- **`A2aServerBuilder::bind_addr` rustdoc** (`adk-server`): states the actual
+  default, `127.0.0.1:8080`.
 - **`acp_full_protocol` permission tests** (`examples/acp_full_protocol`): the
   example reads `tool_confirmation_decisions` by function-call ID, matching the
   key the ACP server populates, so approval and denial resume correctly.
@@ -92,6 +148,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
+- **Caller-aware A2A handlers** (`adk-server`): the built-in routers mount
+  `handle_jsonrpc_for_caller` and `handle_jsonrpc_stream_for_caller`.
+  `handle_jsonrpc` and `handle_jsonrpc_stream` are deprecated because they ignore
+  the authenticated caller. `tasks/cancel` for an unknown task answers
+  `Task not found` (`-32603`), as `tasks/get` does, instead of a canceled status.
+- **v1 `jsonrpc_handler` takes an `AuthenticatedCaller`** (`adk-server`, feature
+  `a2a-v1`): a direct call passes the extractor as the second argument;
+  `post(jsonrpc_handler)` mounts are unchanged.
+- **`CronJobStore::enqueue_run` returns `bool`** (`adk-server`, feature
+  `background`): `false` when the job's queue is full or the job does not exist.
 
 ## [2.2.0] - 2026-09-01
 

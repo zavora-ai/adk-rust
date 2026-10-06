@@ -3,7 +3,7 @@ mod routes;
 
 pub use controllers::{
     A2aController, AppsController, ArtifactsController, DebugController, RuntimeController,
-    SessionController,
+    SessionController, a2a::A2aTaskRetention,
 };
 
 use crate::{
@@ -456,8 +456,8 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
             .route("/.well-known/agent.json", get(controllers::a2a::get_agent_card))
             .with_state(a2a_controller.clone());
         let a2a_rpc = Router::new()
-            .route("/a2a", post(controllers::a2a::handle_jsonrpc))
-            .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream))
+            .route("/a2a", post(controllers::a2a::handle_jsonrpc_for_caller))
+            .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream_for_caller))
             .with_state(a2a_controller)
             .layer(auth_layer.clone());
         app = app.merge(a2a_discovery).merge(a2a_rpc);
@@ -542,8 +542,13 @@ pub struct ServerBuilder {
     root_routes: Vec<Router>,
     shutdown_endpoint: bool,
     skill_index: Option<Arc<adk_skill::SkillIndex>>,
+    a2a_task_retention: Option<A2aTaskRetention>,
     #[cfg(feature = "agent-engine")]
     agent_engine: bool,
+    #[cfg(feature = "background")]
+    background_state: Option<crate::background::BackgroundState>,
+    #[cfg(feature = "background")]
+    cron_state: Option<crate::background::CronState>,
 }
 
 impl ServerBuilder {
@@ -556,8 +561,13 @@ impl ServerBuilder {
             root_routes: Vec::new(),
             shutdown_endpoint: false,
             skill_index: None,
+            a2a_task_retention: None,
             #[cfg(feature = "agent-engine")]
             agent_engine: false,
+            #[cfg(feature = "background")]
+            background_state: None,
+            #[cfg(feature = "background")]
+            cron_state: None,
         }
     }
 
@@ -621,6 +631,72 @@ impl ServerBuilder {
     /// ```
     pub fn with_skill_index(mut self, skill_index: Arc<adk_skill::SkillIndex>) -> Self {
         self.skill_index = Some(skill_index);
+        self
+    }
+
+    /// Bound how many finished A2A task records the server keeps, and for how long.
+    ///
+    /// Defaults to [`A2aTaskRetention::default`]: the newest 1,000 records, each for
+    /// at most one hour. Has no effect without [`with_a2a`](Self::with_a2a).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_server::{A2aTaskRetention, ServerBuilder};
+    /// use std::time::Duration;
+    ///
+    /// let app = ServerBuilder::new(config)
+    ///     .with_a2a("http://localhost:8080")
+    ///     .with_a2a_task_retention(A2aTaskRetention::default().with_ttl(Duration::from_secs(300)))
+    ///     .build();
+    /// ```
+    pub fn with_a2a_task_retention(mut self, retention: A2aTaskRetention) -> Self {
+        self.a2a_task_retention = Some(retention);
+        self
+    }
+
+    /// Mount the background run endpoints under `/api`, behind the auth middleware.
+    ///
+    /// Serves `POST /api/runs`, `GET /api/runs/{run_id}`, and
+    /// `DELETE /api/runs/{run_id}` from `state`. When a `RequestContextExtractor`
+    /// is configured, every request must authenticate. Mounting
+    /// [`background_runs_router_with_state`](crate::background::background_runs_router_with_state)
+    /// yourself skips that layer.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_server::background::BackgroundState;
+    ///
+    /// let app = ServerBuilder::new(config)
+    ///     .with_background_runs(BackgroundState::new().with_executor(executor))
+    ///     .build();
+    /// ```
+    #[cfg(feature = "background")]
+    pub fn with_background_runs(mut self, state: crate::background::BackgroundState) -> Self {
+        self.background_state = Some(state);
+        self
+    }
+
+    /// Mount the cron job endpoints under `/api`, behind the auth middleware.
+    ///
+    /// Serves `POST /api/cron`, `GET /api/cron`, and `GET`/`PATCH`/`DELETE
+    /// /api/cron/{job_id}` from `state`. The scheduler is not started here — call
+    /// [`start_cron_scheduler`](crate::background::start_cron_scheduler) with a
+    /// clone of the same state.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_server::background::{BackgroundState, CronState, start_cron_scheduler};
+    ///
+    /// let cron_state = CronState::new(BackgroundState::new());
+    /// start_cron_scheduler(cron_state.clone());
+    /// let app = ServerBuilder::new(config).with_cron_jobs(cron_state).build();
+    /// ```
+    #[cfg(feature = "background")]
+    pub fn with_cron_jobs(mut self, state: crate::background::CronState) -> Self {
+        self.cron_state = Some(state);
         self
     }
 
@@ -821,6 +897,22 @@ impl ServerBuilder {
             api_router = api_router.merge(custom_routes.layer(auth_layer.clone()));
         }
 
+        // Background runs and cron jobs submit and schedule work, so they carry the
+        // same authentication as every other mutation surface.
+        #[cfg(feature = "background")]
+        if let Some(state) = self.background_state {
+            api_router = api_router.merge(
+                crate::background::background_runs_router_with_state(state)
+                    .layer(auth_layer.clone()),
+            );
+        }
+        #[cfg(feature = "background")]
+        if let Some(state) = self.cron_state {
+            api_router = api_router.merge(
+                crate::background::cron_jobs_router_with_state(state).layer(auth_layer.clone()),
+            );
+        }
+
         // Add shutdown endpoint if enabled
         let shutdown_handle = if self.shutdown_endpoint {
             let handle = ShutdownHandle::new();
@@ -879,13 +971,17 @@ impl ServerBuilder {
                 }
                 None => A2aController::new(config.clone(), base_url),
             };
+            let a2a_controller = match self.a2a_task_retention {
+                Some(retention) => a2a_controller.with_task_retention(retention),
+                None => a2a_controller,
+            };
             // Same split as `create_app_with_a2a`: discovery is public, RPC is authenticated.
             let a2a_discovery = Router::new()
                 .route("/.well-known/agent.json", get(controllers::a2a::get_agent_card))
                 .with_state(a2a_controller.clone());
             let a2a_rpc = Router::new()
-                .route("/a2a", post(controllers::a2a::handle_jsonrpc))
-                .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream))
+                .route("/a2a", post(controllers::a2a::handle_jsonrpc_for_caller))
+                .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream_for_caller))
                 .with_state(a2a_controller)
                 .layer(auth_layer.clone());
             app = app.merge(a2a_discovery).merge(a2a_rpc);

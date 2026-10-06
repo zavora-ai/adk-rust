@@ -8,6 +8,12 @@
 //! When a [`RunnerConfig`] is provided, `message_send` and `message_stream`
 //! invoke the agent through the ADK Runner for real LLM generation. Without
 //! a runner config, they fall back to stub behavior (state transitions only).
+//!
+//! Operations run on behalf of a caller ([`RequestHandler::for_caller`]). An
+//! authenticated caller owns the session and every task it creates; tasks owned
+//! by anyone else are reported as not found.
+//!
+//! [`RunnerConfig`]: adk_runner::RunnerConfig
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,7 +32,8 @@ use super::error::A2aError;
 use super::executor::V1Executor;
 use super::push::PushNotificationSender;
 use super::stream::wrap_artifact_event;
-use super::task_store::{ListTasksParams, TaskStore};
+use super::task_store::{ListTasksParams, TaskStore, TaskStoreEntry};
+use crate::auth_bridge::RequestContext;
 
 /// Validates an ID string (messageId or taskId).
 fn validate_id(id: &str, field_name: &str) -> Result<(), A2aError> {
@@ -63,6 +70,10 @@ fn validate_message(msg: &Message) -> Result<(), A2aError> {
     Ok(())
 }
 
+/// Idempotency key: the owner scopes a `messageId`, so one caller's ID cannot
+/// return another caller's task.
+type IdempotencyKey = (Option<String>, String);
+
 /// Shared dispatch layer for A2A v1.0.0 operations.
 ///
 /// Maps operation names to executor/store calls. Used by both the JSON-RPC
@@ -72,6 +83,10 @@ fn validate_message(msg: &Message) -> Result<(), A2aError> {
 /// `message_send` and `message_stream` invoke the agent through the ADK Runner
 /// for real LLM generation. Without a runner config, they perform state
 /// transitions only (useful for protocol-level testing).
+///
+/// The operation methods on `RequestHandler` act for an unauthenticated caller.
+/// Use [`for_caller`](Self::for_caller) to act for an authenticated one; the
+/// bundled transports do this with the principal from the request extensions.
 pub struct RequestHandler {
     executor: Arc<V1Executor>,
     task_store: Arc<dyn TaskStore>,
@@ -79,8 +94,8 @@ pub struct RequestHandler {
     push_sender: Arc<dyn PushNotificationSender>,
     agent_card: Arc<RwLock<CachedAgentCard>>,
     runner_config: Option<Arc<adk_runner::RunnerConfig>>,
-    /// messageId → taskId mapping for idempotent request handling.
-    idempotency_map: RwLock<HashMap<String, String>>,
+    /// (owner, messageId) → taskId mapping for idempotent request handling.
+    idempotency_map: RwLock<HashMap<IdempotencyKey, String>>,
 }
 
 impl RequestHandler {
@@ -119,127 +134,146 @@ impl RequestHandler {
         }
     }
 
-    /// Sends a message, creating a task and processing it through the executor.
+    /// Returns a view of this handler that acts on behalf of `caller`.
     ///
-    /// When a runner config is present, invokes the agent through the ADK
-    /// Runner for real LLM generation. The LLM response is recorded as an
-    /// artifact on the task. Without a runner, performs state transitions only.
+    /// With `Some(caller)`, the agent session belongs to `caller.user_id`, every
+    /// created task is owned by that user, and operations on tasks owned by anyone
+    /// else fail with [`A2aError::TaskNotFound`]. With `None` — no authentication
+    /// configured — the session user is `a2a-{contextId}` and only ownerless tasks
+    /// are visible.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let task = handler.for_caller(Some(request_context)).message_send(msg).await?;
+    /// ```
+    pub fn for_caller(&self, caller: Option<RequestContext>) -> CallerScope<'_> {
+        CallerScope { handler: self, caller }
+    }
+
+    /// Sends a message as an unauthenticated caller; see [`CallerScope::message_send`].
     ///
     /// # Errors
     ///
-    /// Returns an error if task creation, state transitions, or store
-    /// operations fail.
+    /// See [`CallerScope::message_send`].
     pub async fn message_send(&self, msg: Message) -> Result<Task, A2aError> {
-        validate_message(&msg)?;
-
-        // Idempotency check
-        let message_id = msg.id.0.clone();
-        {
-            let map = self.idempotency_map.read().await;
-            if let Some(existing_task_id) = map.get(&message_id) {
-                // Try to return the existing task
-                match self.tasks_get(existing_task_id, None).await {
-                    Ok(task) => return Ok(task),
-                    Err(A2aError::TaskNotFound { .. }) => {
-                        // Stale entry — will be removed below and processed as new
-                    }
-                    Err(e) => return Err(e),
-                }
-                // If we get here, the entry was stale — remove it
-                drop(map);
-                self.idempotency_map.write().await.remove(&message_id);
-            }
-        }
-
-        // Multi-turn resume: check if contextId matches an existing INPUT_REQUIRED task
-        if let Some(ref ctx_id) = msg.context_id
-            && let Some(existing) = self.task_store.find_task_by_context(&ctx_id.0).await?
-            && existing.status.state == TaskState::InputRequired
-        {
-            // Resume the existing task
-            let task_id = existing.id.clone();
-            let context_id = existing.context_id.clone();
-
-            // Transition from INPUT_REQUIRED to Working
-            self.executor.transition_state(&task_id, &context_id, TaskState::Working, None).await?;
-
-            // Append the new message to history
-            self.task_store.add_history_message(&task_id, msg.clone()).await?;
-
-            // Run the agent if a runner config is available
-            if let Some(runner_config) = &self.runner_config {
-                match self.run_agent(runner_config, &task_id, &context_id, &msg).await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        let _ =
-                            self.executor.fail_task(&task_id, &context_id, &e.to_string()).await;
-                        let entry = self.task_store.get_task(&task_id).await?;
-                        return internal_task_to_wire(&entry);
-                    }
-                }
-            }
-
-            // Transition to COMPLETED
-            self.executor
-                .transition_state(&task_id, &context_id, TaskState::Completed, None)
-                .await?;
-
-            // Record idempotency mapping
-            self.idempotency_map.write().await.insert(message_id, task_id.clone());
-
-            let entry = self.task_store.get_task(&task_id).await?;
-            return internal_task_to_wire(&entry);
-        }
-        // If task is in a terminal state or other non-INPUT_REQUIRED state,
-        // fall through to create a new task (existing behavior)
-
-        let task_id = uuid::Uuid::new_v4().to_string();
-        let context_id = msg
-            .context_id
-            .as_ref()
-            .map(|c| c.0.clone())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-        // Create task in SUBMITTED state
-        self.executor.create_task(&task_id, &context_id).await?;
-
-        // Add the incoming message to history
-        self.task_store.add_history_message(&task_id, msg.clone()).await?;
-
-        // Transition to WORKING
-        self.executor.transition_state(&task_id, &context_id, TaskState::Working, None).await?;
-
-        // Run the agent if a runner config is available
-        if let Some(runner_config) = &self.runner_config {
-            match self.run_agent(runner_config, &task_id, &context_id, &msg).await {
-                Ok(()) => {}
-                Err(e) => {
-                    // Transition to FAILED on error
-                    let _ = self.executor.fail_task(&task_id, &context_id, &e.to_string()).await;
-                    let entry = self.task_store.get_task(&task_id).await?;
-                    return internal_task_to_wire(&entry);
-                }
-            }
-        }
-
-        // Transition to COMPLETED
-        self.executor.transition_state(&task_id, &context_id, TaskState::Completed, None).await?;
-
-        // Record idempotency mapping
-        self.idempotency_map.write().await.insert(message_id, task_id.clone());
-
-        // Retrieve and return the final task
-        let entry = self.task_store.get_task(&task_id).await?;
-        internal_task_to_wire(&entry)
+        self.for_caller(None).message_send(msg).await
     }
 
-    /// Runs the agent through the ADK Runner and records the response as an artifact.
+    /// Sends a streaming message as an unauthenticated caller; see
+    /// [`CallerScope::message_stream`].
+    ///
+    /// # Errors
+    ///
+    /// See [`CallerScope::message_stream`].
+    pub async fn message_stream(
+        &self,
+        msg: Message,
+    ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
+        self.for_caller(None).message_stream(msg).await
+    }
+
+    /// Retrieves an ownerless task; see [`CallerScope::tasks_get`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist or has an owner.
+    pub async fn tasks_get(
+        &self,
+        task_id: &str,
+        history_len: Option<u32>,
+    ) -> Result<Task, A2aError> {
+        self.for_caller(None).tasks_get(task_id, history_len).await
+    }
+
+    /// Cancels an ownerless task; see [`CallerScope::tasks_cancel`].
+    ///
+    /// # Errors
+    ///
+    /// See [`CallerScope::tasks_cancel`].
+    pub async fn tasks_cancel(&self, task_id: &str) -> Result<Task, A2aError> {
+        self.for_caller(None).tasks_cancel(task_id).await
+    }
+
+    /// Lists ownerless tasks; see [`CallerScope::tasks_list`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task store fails.
+    pub async fn tasks_list(&self, params: ListTasksParams) -> Result<Vec<Task>, A2aError> {
+        self.for_caller(None).tasks_list(params).await
+    }
+
+    /// Snapshots an ownerless task; see [`CallerScope::tasks_subscribe`].
+    ///
+    /// # Errors
+    ///
+    /// See [`CallerScope::tasks_subscribe`].
+    pub async fn tasks_subscribe(
+        &self,
+        task_id: &str,
+    ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
+        self.for_caller(None).tasks_subscribe(task_id).await
+    }
+
+    /// Creates a push notification configuration on an ownerless task; see
+    /// [`CallerScope::push_config_create`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist or has an owner.
+    pub async fn push_config_create(
+        &self,
+        task_id: &str,
+        config: TaskPushNotificationConfig,
+    ) -> Result<TaskPushNotificationConfig, A2aError> {
+        self.for_caller(None).push_config_create(task_id, config).await
+    }
+
+    /// Retrieves a push notification configuration from an ownerless task; see
+    /// [`CallerScope::push_config_get`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::TaskNotFound`] if the task or config does not exist.
+    pub async fn push_config_get(
+        &self,
+        task_id: &str,
+        config_id: &str,
+    ) -> Result<TaskPushNotificationConfig, A2aError> {
+        self.for_caller(None).push_config_get(task_id, config_id).await
+    }
+
+    /// Lists the push notification configurations of an ownerless task; see
+    /// [`CallerScope::push_config_list`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist or has an owner.
+    pub async fn push_config_list(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2aError> {
+        self.for_caller(None).push_config_list(task_id).await
+    }
+
+    /// Deletes a push notification configuration from an ownerless task; see
+    /// [`CallerScope::push_config_delete`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::TaskNotFound`] if the task or config does not exist.
+    pub async fn push_config_delete(&self, task_id: &str, config_id: &str) -> Result<(), A2aError> {
+        self.for_caller(None).push_config_delete(task_id, config_id).await
+    }
+
     /// Builds the session, converts the inbound message, and starts the agent.
     ///
     /// Both the buffered (`message/send`) and streaming (`message/stream`) paths use this, so
     /// they cannot drift: streaming yields from the same stream the buffered path drains.
     async fn start_agent(
         runner_config: &Arc<adk_runner::RunnerConfig>,
+        caller: Option<&RequestContext>,
         context_id: &str,
         msg: &Message,
     ) -> Result<adk_core::EventStream, A2aError> {
@@ -247,7 +281,10 @@ impl RequestHandler {
         use adk_session::{CreateRequest, GetRequest};
 
         let app_name = &runner_config.app_name;
-        let user_id = format!("a2a-{context_id}");
+        // The context ID is chosen by the client, so it only names the session user when
+        // no authentication is configured.
+        let user_id =
+            caller.map_or_else(|| format!("a2a-{context_id}"), |context| context.user_id.clone());
         let session_id = context_id.to_string();
 
         // Ensure session exists
@@ -316,8 +353,11 @@ impl RequestHandler {
             runner_builder =
                 runner_builder.intra_compaction_summarizer(intra_compaction_summarizer.clone());
         }
-        if let Some(ref request_context) = runner_config.request_context {
-            runner_builder = runner_builder.request_context(request_context.clone());
+        // The caller's own context wins over a context baked into the shared config.
+        if let Some(request_context) =
+            caller.cloned().or_else(|| runner_config.request_context.clone())
+        {
+            runner_builder = runner_builder.request_context(request_context);
         }
         if let Some(ref cancellation_token) = runner_config.cancellation_token {
             runner_builder = runner_builder.cancellation_token(cancellation_token.clone());
@@ -337,6 +377,185 @@ impl RequestHandler {
             .map_err(|e| A2aError::Internal { message: format!("runner run: {e}") })
     }
 
+    /// Returns the extended agent card.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::ExtendedAgentCardNotConfigured`] if no card is set.
+    pub async fn agent_card_extended(&self) -> Result<AgentCard, A2aError> {
+        let cached = self.agent_card.read().await;
+        Ok(cached.card.clone())
+    }
+
+    /// Returns a reference to the underlying executor.
+    pub fn executor(&self) -> &Arc<V1Executor> {
+        &self.executor
+    }
+
+    /// Returns a reference to the underlying task store.
+    pub fn task_store(&self) -> &Arc<dyn TaskStore> {
+        &self.task_store
+    }
+}
+
+/// A [`RequestHandler`] acting on behalf of one caller.
+///
+/// Created by [`RequestHandler::for_caller`]. Every operation is scoped to the
+/// caller: tasks it creates are owned by the caller's `user_id`, and a task owned
+/// by anyone else is reported as [`A2aError::TaskNotFound`] — the same answer as
+/// for a task that does not exist, so task IDs cannot be probed.
+pub struct CallerScope<'a> {
+    handler: &'a RequestHandler,
+    caller: Option<RequestContext>,
+}
+
+impl CallerScope<'_> {
+    /// The authenticated user this scope acts for, or `None` without authentication.
+    pub fn owner(&self) -> Option<&str> {
+        self.caller.as_ref().map(|context| context.user_id.as_str())
+    }
+
+    /// Loads a task, treating one owned by another caller as missing.
+    async fn owned_task(&self, task_id: &str) -> Result<TaskStoreEntry, A2aError> {
+        let entry = self.handler.task_store.get_task(task_id).await?;
+        if entry.owner() == self.owner() {
+            Ok(entry)
+        } else {
+            Err(A2aError::TaskNotFound { task_id: task_id.to_string() })
+        }
+    }
+
+    fn idempotency_key(&self, message_id: &str) -> IdempotencyKey {
+        (self.owner().map(str::to_string), message_id.to_string())
+    }
+
+    /// Sends a message, creating a task and processing it through the executor.
+    ///
+    /// When a runner config is present, invokes the agent through the ADK
+    /// Runner for real LLM generation. The LLM response is recorded as an
+    /// artifact on the task. Without a runner, performs state transitions only.
+    ///
+    /// A message whose `contextId` matches one of this caller's `INPUT_REQUIRED`
+    /// tasks resumes that task; another caller's task with the same `contextId` is
+    /// never resumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if task creation, state transitions, or store
+    /// operations fail.
+    pub async fn message_send(&self, msg: Message) -> Result<Task, A2aError> {
+        validate_message(&msg)?;
+        let handler = self.handler;
+
+        // Idempotency check
+        let idempotency_key = self.idempotency_key(&msg.id.0);
+        {
+            let map = handler.idempotency_map.read().await;
+            if let Some(existing_task_id) = map.get(&idempotency_key) {
+                // Try to return the existing task
+                match self.tasks_get(existing_task_id, None).await {
+                    Ok(task) => return Ok(task),
+                    Err(A2aError::TaskNotFound { .. }) => {
+                        // Stale entry — will be removed below and processed as new
+                    }
+                    Err(e) => return Err(e),
+                }
+                // If we get here, the entry was stale — remove it
+                drop(map);
+                handler.idempotency_map.write().await.remove(&idempotency_key);
+            }
+        }
+
+        // Multi-turn resume: check if contextId matches one of this caller's INPUT_REQUIRED tasks
+        if let Some(ref ctx_id) = msg.context_id
+            && let Some(existing) = handler.task_store.find_task_by_context(&ctx_id.0).await?
+            && existing.status.state == TaskState::InputRequired
+            && existing.owner() == self.owner()
+        {
+            // Resume the existing task
+            let task_id = existing.id.clone();
+            let context_id = existing.context_id.clone();
+
+            // Transition from INPUT_REQUIRED to Working
+            handler
+                .executor
+                .transition_state(&task_id, &context_id, TaskState::Working, None)
+                .await?;
+
+            // Append the new message to history
+            handler.task_store.add_history_message(&task_id, msg.clone()).await?;
+
+            // Run the agent if a runner config is available
+            if let Some(runner_config) = &handler.runner_config {
+                match self.run_agent(runner_config, &task_id, &context_id, &msg).await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        let _ =
+                            handler.executor.fail_task(&task_id, &context_id, &e.to_string()).await;
+                        let entry = handler.task_store.get_task(&task_id).await?;
+                        return internal_task_to_wire(&entry);
+                    }
+                }
+            }
+
+            // Transition to COMPLETED
+            handler
+                .executor
+                .transition_state(&task_id, &context_id, TaskState::Completed, None)
+                .await?;
+
+            // Record idempotency mapping
+            handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
+
+            let entry = handler.task_store.get_task(&task_id).await?;
+            return internal_task_to_wire(&entry);
+        }
+        // If task is in a terminal state or other non-INPUT_REQUIRED state,
+        // fall through to create a new task (existing behavior)
+
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let context_id = msg
+            .context_id
+            .as_ref()
+            .map(|c| c.0.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        // Create task in SUBMITTED state
+        handler.executor.create_task_for(&task_id, &context_id, self.owner()).await?;
+
+        // Add the incoming message to history
+        handler.task_store.add_history_message(&task_id, msg.clone()).await?;
+
+        // Transition to WORKING
+        handler.executor.transition_state(&task_id, &context_id, TaskState::Working, None).await?;
+
+        // Run the agent if a runner config is available
+        if let Some(runner_config) = &handler.runner_config {
+            match self.run_agent(runner_config, &task_id, &context_id, &msg).await {
+                Ok(()) => {}
+                Err(e) => {
+                    // Transition to FAILED on error
+                    let _ = handler.executor.fail_task(&task_id, &context_id, &e.to_string()).await;
+                    let entry = handler.task_store.get_task(&task_id).await?;
+                    return internal_task_to_wire(&entry);
+                }
+            }
+        }
+
+        // Transition to COMPLETED
+        handler
+            .executor
+            .transition_state(&task_id, &context_id, TaskState::Completed, None)
+            .await?;
+
+        // Record idempotency mapping
+        handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
+
+        // Retrieve and return the final task
+        let entry = handler.task_store.get_task(&task_id).await?;
+        internal_task_to_wire(&entry)
+    }
+
     /// Runs the agent to completion and records its output as a single artifact.
     async fn run_agent(
         &self,
@@ -345,7 +564,9 @@ impl RequestHandler {
         context_id: &str,
         msg: &Message,
     ) -> Result<(), A2aError> {
-        let mut event_stream = Self::start_agent(runner_config, context_id, msg).await?;
+        let mut event_stream =
+            RequestHandler::start_agent(runner_config, self.caller.as_ref(), context_id, msg)
+                .await?;
 
         let mut response_text = String::new();
         while let Some(result) = event_stream.next().await {
@@ -370,7 +591,7 @@ impl RequestHandler {
                 ArtifactId::new(uuid::Uuid::new_v4().to_string()),
                 vec![a2a_protocol_types::Part::text(&response_text)],
             );
-            self.executor.record_artifact(task_id, context_id, artifact).await?;
+            self.handler.executor.record_artifact(task_id, context_id, artifact).await?;
         }
 
         Ok(())
@@ -403,13 +624,14 @@ impl RequestHandler {
         msg: Message,
     ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
         validate_message(&msg)?;
+        let handler = self.handler;
 
         // Idempotency check — return existing task as single-element stream
-        let message_id = msg.id.0.clone();
+        let idempotency_key = self.idempotency_key(&msg.id.0);
         {
-            let map = self.idempotency_map.read().await;
-            if let Some(existing_task_id) = map.get(&message_id) {
-                match self.task_store.get_task(existing_task_id).await {
+            let map = handler.idempotency_map.read().await;
+            if let Some(existing_task_id) = map.get(&idempotency_key) {
+                match self.owned_task(existing_task_id).await {
                     Ok(entry) => {
                         let task = internal_task_to_wire(&entry)?;
                         let stream =
@@ -419,7 +641,7 @@ impl RequestHandler {
                     Err(A2aError::TaskNotFound { .. }) => {
                         // Stale entry — remove and process as new
                         drop(map);
-                        self.idempotency_map.write().await.remove(&message_id);
+                        handler.idempotency_map.write().await.remove(&idempotency_key);
                     }
                     Err(e) => return Err(e),
                 }
@@ -434,25 +656,26 @@ impl RequestHandler {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         // Create task
-        self.executor.create_task(&task_id, &context_id).await?;
+        handler.executor.create_task_for(&task_id, &context_id, self.owner()).await?;
 
         // Keep a copy for the agent: `add_history_message` takes ownership.
         let msg_for_agent = msg.clone();
 
         // Add the incoming message to history
-        self.task_store.add_history_message(&task_id, msg).await?;
+        handler.task_store.add_history_message(&task_id, msg).await?;
 
         // Record idempotency mapping
-        self.idempotency_map.write().await.insert(message_id, task_id.clone());
+        handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
 
         // Get the task entry for the first SSE event
-        let task_entry = self.task_store.get_task(&task_id).await?;
+        let task_entry = handler.task_store.get_task(&task_id).await?;
         let first_task = internal_task_to_wire(&task_entry)?;
 
-        let executor = self.executor.clone();
+        let executor = handler.executor.clone();
         let tid = task_id.clone();
         let cid = context_id.clone();
-        let runner_config = self.runner_config.clone();
+        let runner_config = handler.runner_config.clone();
+        let caller = self.caller.clone();
         let stream_msg = msg_for_agent;
 
         let stream = async_stream::stream! {
@@ -467,7 +690,8 @@ impl RequestHandler {
             }
 
             if let Some(config) = runner_config {
-                let started = Self::start_agent(&config, &cid, &stream_msg).await;
+                let started =
+                    RequestHandler::start_agent(&config, caller.as_ref(), &cid, &stream_msg).await;
                 let mut event_stream = match started {
                     Ok(stream) => stream,
                     Err(e) => {
@@ -553,20 +777,21 @@ impl RequestHandler {
         Ok(stream.boxed())
     }
 
-    /// Retrieves a task by ID from the task store.
+    /// Retrieves one of this caller's tasks by ID.
     ///
     /// Optionally limits the number of history messages returned.
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::TaskNotFound`] if the task does not exist.
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist or belongs to
+    /// another caller.
     pub async fn tasks_get(
         &self,
         task_id: &str,
         history_len: Option<u32>,
     ) -> Result<Task, A2aError> {
         validate_id(task_id, "taskId")?;
-        let mut entry = self.task_store.get_task(task_id).await?;
+        let mut entry = self.owned_task(task_id).await?;
 
         // Truncate history if requested
         if let Some(len) = history_len {
@@ -580,18 +805,19 @@ impl RequestHandler {
         internal_task_to_wire(&entry)
     }
 
-    /// Cancels a task by transitioning it to CANCELED state.
+    /// Cancels one of this caller's tasks by transitioning it to CANCELED state.
     ///
     /// Validates that the task is not already in a terminal state before
     /// canceling.
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::TaskNotFound`] if the task does not exist, or
-    /// [`A2aError::TaskNotCancelable`] if the task is in a terminal state.
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist or belongs to
+    /// another caller, or [`A2aError::TaskNotCancelable`] if the task is in a
+    /// terminal state.
     pub async fn tasks_cancel(&self, task_id: &str) -> Result<Task, A2aError> {
         validate_id(task_id, "taskId")?;
-        let entry = self.task_store.get_task(task_id).await?;
+        let entry = self.owned_task(task_id).await?;
 
         // Check if task is in a terminal state
         if is_terminal_state(entry.status.state) {
@@ -602,24 +828,43 @@ impl RequestHandler {
         }
 
         // Transition to CANCELED via the executor (validates state machine)
-        self.executor
+        self.handler
+            .executor
             .transition_state(task_id, &entry.context_id, TaskState::Canceled, None)
             .await?;
 
         // Return the updated task
-        let updated = self.task_store.get_task(task_id).await?;
+        let updated = self.handler.task_store.get_task(task_id).await?;
         internal_task_to_wire(&updated)
     }
 
-    /// Lists tasks matching the given parameters.
+    /// Lists this caller's tasks matching the given parameters.
     ///
     /// Supports filtering by context_id, state, and pagination via page_size.
+    /// `page_size` applies after the owner filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task store fails.
     pub async fn tasks_list(&self, params: ListTasksParams) -> Result<Vec<Task>, A2aError> {
-        let entries = self.task_store.list_tasks(params).await?;
+        let page_size = params.page_size;
+        let unpaged = ListTasksParams { page_size: None, ..params };
+        let mut entries: Vec<TaskStoreEntry> = self
+            .handler
+            .task_store
+            .list_tasks(unpaged)
+            .await?
+            .into_iter()
+            .filter(|entry| entry.owner() == self.owner())
+            .collect();
+        if let Some(page_size) = page_size {
+            entries.truncate(page_size as usize);
+        }
         entries.iter().map(internal_task_to_wire).collect()
     }
 
-    /// Returns the current state of a task as a short stream, then closes.
+    /// Returns the current state of one of this caller's tasks as a short stream,
+    /// then closes.
     ///
     /// > **Important:** this is a point-in-time snapshot, not a live subscription. It emits the
     /// > task and its current status and then ends; it does not deliver subsequent updates. A
@@ -631,13 +876,14 @@ impl RequestHandler {
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::TaskNotFound`] if the task does not exist, or
-    /// [`A2aError::TaskNotCancelable`] if the task already reached a terminal state.
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist or belongs to
+    /// another caller, or [`A2aError::TaskNotCancelable`] if the task already
+    /// reached a terminal state.
     pub async fn tasks_subscribe(
         &self,
         task_id: &str,
     ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
-        let entry = self.task_store.get_task(task_id).await?;
+        let entry = self.owned_task(task_id).await?;
 
         // For terminal tasks, return an error — can't subscribe to completed tasks
         if is_terminal_state(entry.status.state) {
@@ -662,20 +908,21 @@ impl RequestHandler {
         Ok(stream.boxed())
     }
 
-    /// Creates a push notification configuration for a task.
+    /// Creates a push notification configuration for one of this caller's tasks.
     ///
     /// Assigns a server-generated config ID and stores the config on the task.
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::TaskNotFound`] if the task does not exist.
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist or belongs to
+    /// another caller.
     pub async fn push_config_create(
         &self,
         task_id: &str,
         mut config: TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2aError> {
         // Verify task exists
-        let mut entry = self.task_store.get_task(task_id).await?;
+        let mut entry = self.owned_task(task_id).await?;
 
         // Assign a server-generated config ID if not present
         if config.id.is_none() {
@@ -689,8 +936,8 @@ impl RequestHandler {
 
         // Re-persist the task with updated push configs
         // (We delete and re-create since TaskStore doesn't have an update_push_configs method)
-        self.task_store.delete_task(task_id).await?;
-        self.task_store.create_task(entry).await?;
+        self.handler.task_store.delete_task(task_id).await?;
+        self.handler.task_store.create_task(entry).await?;
 
         Ok(config)
     }
@@ -699,13 +946,14 @@ impl RequestHandler {
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::TaskNotFound`] if the task or config does not exist.
+    /// Returns [`A2aError::TaskNotFound`] if the task or config does not exist, or
+    /// the task belongs to another caller.
     pub async fn push_config_get(
         &self,
         task_id: &str,
         config_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2aError> {
-        let entry = self.task_store.get_task(task_id).await?;
+        let entry = self.owned_task(task_id).await?;
 
         entry.push_configs.iter().find(|c| c.id.as_deref() == Some(config_id)).cloned().ok_or_else(
             || A2aError::TaskNotFound {
@@ -714,16 +962,17 @@ impl RequestHandler {
         )
     }
 
-    /// Lists all push notification configurations for a task.
+    /// Lists all push notification configurations for one of this caller's tasks.
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::TaskNotFound`] if the task does not exist.
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist or belongs to
+    /// another caller.
     pub async fn push_config_list(
         &self,
         task_id: &str,
     ) -> Result<Vec<TaskPushNotificationConfig>, A2aError> {
-        let entry = self.task_store.get_task(task_id).await?;
+        let entry = self.owned_task(task_id).await?;
         Ok(entry.push_configs)
     }
 
@@ -731,9 +980,10 @@ impl RequestHandler {
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::TaskNotFound`] if the task or config does not exist.
+    /// Returns [`A2aError::TaskNotFound`] if the task or config does not exist, or
+    /// the task belongs to another caller.
     pub async fn push_config_delete(&self, task_id: &str, config_id: &str) -> Result<(), A2aError> {
-        let mut entry = self.task_store.get_task(task_id).await?;
+        let mut entry = self.owned_task(task_id).await?;
 
         let original_len = entry.push_configs.len();
         entry.push_configs.retain(|c| c.id.as_deref() != Some(config_id));
@@ -747,30 +997,10 @@ impl RequestHandler {
         entry.updated_at = chrono::Utc::now();
 
         // Re-persist
-        self.task_store.delete_task(task_id).await?;
-        self.task_store.create_task(entry).await?;
+        self.handler.task_store.delete_task(task_id).await?;
+        self.handler.task_store.create_task(entry).await?;
 
         Ok(())
-    }
-
-    /// Returns the extended agent card.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`A2aError::ExtendedAgentCardNotConfigured`] if no card is set.
-    pub async fn agent_card_extended(&self) -> Result<AgentCard, A2aError> {
-        let cached = self.agent_card.read().await;
-        Ok(cached.card.clone())
-    }
-
-    /// Returns a reference to the underlying executor.
-    pub fn executor(&self) -> &Arc<V1Executor> {
-        &self.executor
-    }
-
-    /// Returns a reference to the underlying task store.
-    pub fn task_store(&self) -> &Arc<dyn TaskStore> {
-        &self.task_store
     }
 }
 
@@ -1504,5 +1734,163 @@ mod tests {
 
         let task = handler.message_send(msg).await.unwrap();
         assert_eq!(task.status.state, TaskState::Completed);
+    }
+
+    // ── Caller scoping ─────────────────────────────────────────────────────
+    //
+    // The session user was `a2a-{contextId}` and every operation looked tasks up by ID
+    // alone, so an authenticated caller could reach another caller's session through its
+    // contextId and read, cancel, or reconfigure its tasks through their IDs.
+
+    fn caller(user_id: &str) -> Option<RequestContext> {
+        Some(RequestContext {
+            user_id: user_id.to_string(),
+            scopes: vec![],
+            metadata: Default::default(),
+        })
+    }
+
+    fn message_in(message_id: &str, context_id: &str) -> Message {
+        let mut msg = make_test_message();
+        msg.id = MessageId::new(message_id);
+        msg.context_id = Some(a2a_protocol_types::ContextId::new(context_id));
+        msg
+    }
+
+    fn is_not_found<T>(result: Result<T, A2aError>) -> bool {
+        matches!(result, Err(A2aError::TaskNotFound { .. }))
+    }
+
+    #[tokio::test]
+    async fn another_callers_task_is_reported_as_missing() {
+        let handler = make_handler();
+        handler.executor.create_task_for("bob-task", "bob-ctx", Some("bob")).await.unwrap();
+        handler
+            .executor
+            .transition_state("bob-task", "bob-ctx", TaskState::Working, None)
+            .await
+            .unwrap();
+        let hook = TaskPushNotificationConfig::new("bob-task", "https://example.com/hook");
+
+        for scope in [handler.for_caller(caller("alice")), handler.for_caller(None)] {
+            assert!(is_not_found(scope.tasks_get("bob-task", None).await));
+            assert!(is_not_found(scope.tasks_cancel("bob-task").await));
+            assert!(is_not_found(scope.tasks_subscribe("bob-task").await));
+            assert!(is_not_found(scope.push_config_create("bob-task", hook.clone()).await));
+            assert!(is_not_found(scope.push_config_list("bob-task").await));
+            assert!(scope.tasks_list(ListTasksParams::default()).await.unwrap().is_empty());
+        }
+
+        let bob = handler.for_caller(caller("bob"));
+        assert_eq!(bob.tasks_get("bob-task", None).await.unwrap().status.state, TaskState::Working);
+        assert_eq!(bob.tasks_list(ListTasksParams::default()).await.unwrap().len(), 1);
+        assert_eq!(bob.tasks_cancel("bob-task").await.unwrap().status.state, TaskState::Canceled);
+    }
+
+    #[tokio::test]
+    async fn a_reused_message_id_does_not_return_another_callers_task() {
+        let handler = make_handler();
+        let bobs = handler
+            .for_caller(caller("bob"))
+            .message_send(message_in("shared-msg", "bob-ctx"))
+            .await
+            .unwrap();
+
+        let alices = handler
+            .for_caller(caller("alice"))
+            .message_send(message_in("shared-msg", "alice-ctx"))
+            .await
+            .unwrap();
+        assert_ne!(alices.id, bobs.id);
+        assert_eq!(alices.context_id.0, "alice-ctx");
+
+        let bob_retry = handler
+            .for_caller(caller("bob"))
+            .message_send(message_in("shared-msg", "bob-ctx"))
+            .await
+            .unwrap();
+        assert_eq!(bob_retry.id, bobs.id, "bob's own retry still deduplicates");
+    }
+
+    #[tokio::test]
+    async fn another_callers_input_required_task_is_not_resumed() {
+        let handler = make_handler();
+        handler.executor.create_task_for("bob-task", "shared-ctx", Some("bob")).await.unwrap();
+        for state in [TaskState::Working, TaskState::InputRequired] {
+            handler.executor.transition_state("bob-task", "shared-ctx", state, None).await.unwrap();
+        }
+
+        let alices = handler
+            .for_caller(caller("alice"))
+            .message_send(message_in("alice-msg", "shared-ctx"))
+            .await
+            .unwrap();
+        assert_ne!(alices.id.0, "bob-task");
+
+        let bobs = handler.for_caller(caller("bob")).tasks_get("bob-task", None).await.unwrap();
+        assert_eq!(bobs.status.state, TaskState::InputRequired);
+        assert_eq!(bobs.history, None, "alice's message must not join bob's task");
+    }
+
+    #[tokio::test]
+    async fn the_session_belongs_to_the_authenticated_caller() {
+        let sessions = Arc::new(adk_session::InMemorySessionService::new());
+        let store: Arc<dyn TaskStore> = Arc::new(InMemoryTaskStore::new());
+        let runner_config = Arc::new(
+            adk_runner::Runner::builder()
+                .app_name("a2a-identity")
+                .agent(Arc::new(ChunkingAgent { chunks: vec!["ok".into()] }))
+                .session_service(sessions.clone())
+                .build_config(),
+        );
+        let handler = RequestHandler::with_runner(
+            Arc::new(V1Executor::new(store.clone())),
+            store,
+            Arc::new(NoOpPushNotificationSender),
+            Arc::new(RwLock::new(CachedAgentCard::new(make_test_agent_card()))),
+            runner_config,
+        );
+
+        handler.for_caller(caller("alice")).message_send(message_in("m1", "ctx-1")).await.unwrap();
+
+        use adk_session::SessionService;
+        let session_for = |user_id: &str| {
+            sessions.get(adk_session::GetRequest {
+                app_name: "a2a-identity".to_string(),
+                user_id: user_id.to_string(),
+                session_id: "ctx-1".to_string(),
+                num_recent_events: None,
+                after: None,
+            })
+        };
+        assert!(session_for("alice").await.is_ok());
+        assert!(
+            session_for("a2a-ctx-1").await.is_err(),
+            "the client-chosen context ID must not name the session user"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_owner_is_not_sent_on_the_wire() {
+        let handler = make_handler();
+        let alice = handler.for_caller(caller("alice"));
+
+        let task = alice.message_send(message_in("m-send", "ctx")).await.unwrap();
+        assert_eq!(task.metadata, None);
+        let entry = handler.task_store.get_task(&task.id.0).await.unwrap();
+        assert_eq!(entry.owner(), Some("alice"));
+
+        let events: Vec<_> =
+            alice.message_stream(message_in("m-stream", "ctx")).await.unwrap().collect().await;
+        for event in events {
+            match event.unwrap() {
+                StreamResponse::Task(task) => assert_eq!(task.metadata, None),
+                StreamResponse::StatusUpdate(update) => assert_eq!(update.metadata, None),
+                StreamResponse::ArtifactUpdate(update) => assert_eq!(update.metadata, None),
+                StreamResponse::Message(message) => assert_eq!(message.metadata, None),
+                // `StreamResponse` is `#[non_exhaustive]`; nothing else carries task metadata.
+                _ => {}
+            }
+        }
     }
 }
