@@ -3,11 +3,10 @@
 //! Two claims did not match behaviour:
 //!
 //! 1. `ProcessBackend::capabilities` reported one `filesystem_isolation` flag, set true
-//!    whenever any enforcer was configured. The macOS Seatbelt profile contains both
-//!    `(deny default)` and `(allow default)`, then denies network, fork, and *writes*
-//!    before re-allowing writes to configured paths. It never denies reads, so sandboxed
-//!    code could read host files outside the allowed paths while the capability said the
-//!    filesystem was isolated.
+//!    whenever any enforcer was configured, while the macOS Seatbelt profile followed
+//!    `(deny default)` with `(allow default)` and never denied reads. The flag was split
+//!    into write and read isolation, and the profile is now genuinely deny-by-default, so
+//!    macOS reports both.
 //! 2. The Windows `probe` checked that `CreateAppContainerProfile` links, which proves the
 //!    platform API exists — while `configure_command` still returns `EnforcerFailed`
 //!    because nothing is implemented. A caller selecting an enforcer by probing would pick
@@ -31,7 +30,7 @@ fn a_backend_without_an_enforcer_claims_no_filesystem_isolation() {
 
 #[cfg(all(feature = "sandbox-macos", target_os = "macos"))]
 #[test]
-fn the_macos_profile_denies_writes_but_not_reads() {
+fn the_macos_profile_is_deny_default_and_reports_read_isolation() {
     use adk_sandbox::sandbox::macos::MacOsEnforcer;
     use adk_sandbox::{SandboxEnforcer, SandboxPolicyBuilder};
 
@@ -43,29 +42,22 @@ fn the_macos_profile_denies_writes_but_not_reads() {
 
     let dir = tempfile::tempdir().unwrap();
     let policy = SandboxPolicyBuilder::new().allow_read_write(dir.path()).build();
-    let profile = enforcer
+    let wrapped = enforcer
         .wrap_command(std::ffi::OsStr::new("/bin/echo"), &[], &policy)
         .expect("wrapping must succeed on macOS");
+    let profile = wrapped.args[1].to_string_lossy();
 
-    // The generated profile is passed to sandbox-exec; find it in the arguments.
-    let rendered = profile
-        .args
-        .iter()
-        .map(|arg| arg.to_string_lossy().to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
+    assert!(profile.contains("(deny default)"), "{profile}");
+    assert!(
+        !profile.contains("(allow default)"),
+        "an allow-default rule would reopen every read the capability claims is confined"
+    );
 
-    assert!(
-        rendered.contains("file-write") || rendered.contains("deny default"),
-        "the profile must restrict writes: {rendered}"
-    );
-    // This documents the gap rather than asserting isolation the profile does not give:
-    // there is no blanket read denial, which is why `filesystem_read_isolation` is false
-    // on macOS.
-    assert!(
-        !rendered.contains("(deny file-read*)"),
-        "if a blanket read denial is added, update the reported read-isolation capability"
-    );
+    let caps =
+        ProcessBackend::with_sandbox(Default::default(), Box::new(enforcer), policy).capabilities();
+    assert!(caps.enforced_limits.filesystem_write_isolation);
+    assert!(caps.enforced_limits.filesystem_read_isolation);
+    assert!(caps.enforced_limits.network_isolation);
 }
 
 // The Windows enforcer type only exists when compiling for Windows with

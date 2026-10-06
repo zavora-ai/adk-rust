@@ -16,12 +16,32 @@
 //! - `--unshare-net` — isolate network namespace (no network access)
 //! - `--ro-bind <src> <dest>` — read-only filesystem bind mount
 //! - `--bind <src> <dest>` — read-write filesystem bind mount
-//! - `--new-session` — new session for process isolation
+//! - `--new-session` — new session, so the child cannot inject input into the caller's terminal
+//! - `--seccomp <fd>` — seccomp program that denies process creation
+//!
+//! ## Process Spawning
+//!
+//! When `allow_process_spawn` is `false`, the wrapped program runs under a seccomp filter
+//! that fails `fork`, `vfork`, and non-thread `clone` with `EPERM` and `clone3` with
+//! `ENOSYS`. Threads and `execve` keep working. The filter is generated for x86-64 and
+//! AArch64; on any other architecture [`SandboxEnforcer::configure_command`] returns
+//! `EnforcerFailed` rather than running without it.
+//!
+//! The filter reaches bubblewrap as file descriptor [`SECCOMP_FD`], which
+//! [`SandboxEnforcer::configure_command`] installs on the command. Running the output of
+//! [`LinuxEnforcer::generate_args`] without that call makes bubblewrap exit with an error.
 
 use std::ffi::{OsStr, OsString};
 
+use super::seccomp;
 use super::{AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy, WrappedCommand};
 use crate::error::SandboxError;
+
+/// File descriptor bubblewrap reads the process-creation seccomp program from.
+///
+/// High enough to stay clear of stdio and the descriptors the standard library uses while
+/// spawning, and below every default `RLIMIT_NOFILE`.
+pub const SECCOMP_FD: i32 = 64;
 
 /// Linux bubblewrap sandbox enforcer.
 ///
@@ -50,9 +70,11 @@ use crate::error::SandboxError;
 /// )?;
 /// // wrapped.program == "bwrap"
 /// // wrapped.args == ["--die-with-parent", "--unshare-pid", "--unshare-net",
-/// //                   "--new-session", "--ro-bind", "/usr/lib", "/usr/lib",
+/// //                   "--new-session", "--seccomp", "64",
+/// //                   "--ro-bind", "/usr/lib", "/usr/lib",
 /// //                   "--bind", "/tmp/work", "/tmp/work",
 /// //                   "--", "python3", "-c", "print('hello')"]
+/// // `configure_command` must then be applied to the command built from `wrapped`.
 /// ```
 pub struct LinuxEnforcer;
 
@@ -110,9 +132,11 @@ impl LinuxEnforcer {
             args.push("--unshare-net".to_string());
         }
 
-        // Process spawn restriction
+        // Process spawn restriction: the seccomp program is what denies fork and clone.
         if !allow_process_spawn {
             args.push("--new-session".to_string());
+            args.push("--seccomp".to_string());
+            args.push(SECCOMP_FD.to_string());
         }
 
         // Filesystem bind mounts
@@ -229,6 +253,63 @@ impl SandboxEnforcer for LinuxEnforcer {
 
         Ok(WrappedCommand { program: OsString::from("bwrap"), args: wrapped_args })
     }
+
+    /// Installs the process-creation seccomp program as file descriptor [`SECCOMP_FD`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `EnforcerFailed` when the policy denies process spawning on an architecture
+    /// without a generated filter, or when the descriptor cannot be prepared.
+    fn configure_command(
+        &self,
+        cmd: &mut tokio::process::Command,
+        policy: &SandboxPolicy,
+    ) -> Result<(), SandboxError> {
+        use std::io::Write;
+        use std::os::fd::{AsRawFd, OwnedFd};
+
+        if policy.allow_process_spawn {
+            return Ok(());
+        }
+
+        let abi = seccomp::Abi::native().ok_or_else(|| SandboxError::EnforcerFailed {
+            enforcer: "bubblewrap".to_string(),
+            message: format!(
+                "no process-creation seccomp filter exists for {}; allow process spawning in \
+                 the policy or run on x86_64 or aarch64",
+                std::env::consts::ARCH
+            ),
+        })?;
+        let program = seccomp::encode(&seccomp::deny_process_creation(abi));
+
+        let failed = |error: std::io::Error| SandboxError::EnforcerFailed {
+            enforcer: "bubblewrap".to_string(),
+            message: format!("failed to prepare the seccomp program descriptor: {error}"),
+        };
+        // The program is a few hundred bytes, well inside a pipe buffer, so the write cannot
+        // block, and closing the writer gives bubblewrap its end-of-file.
+        let (reader, mut writer) = std::io::pipe().map_err(failed)?;
+        writer.write_all(&program).map_err(failed)?;
+        drop(writer);
+        let program_fd = OwnedFd::from(reader);
+
+        // SAFETY: the closure runs in the forked child before exec and calls only dup2(2) and
+        // fcntl(2), which are async-signal-safe. `program_fd` is owned by the closure, so the
+        // descriptor stays open until the command is dropped.
+        unsafe {
+            cmd.pre_exec(move || {
+                let source = program_fd.as_raw_fd();
+                let result = if source == SECCOMP_FD {
+                    // dup2 onto itself leaves FD_CLOEXEC set, so clear the flag directly.
+                    libc::fcntl(source, libc::F_SETFD, 0)
+                } else {
+                    libc::dup2(source, SECCOMP_FD)
+                };
+                if result == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Canonicalizes all paths in the policy, logging warnings for changed paths.
@@ -275,6 +356,9 @@ mod tests {
         assert_eq!(args[1], "--unshare-pid");
         assert!(args.contains(&"--unshare-net".to_string()));
         assert!(args.contains(&"--new-session".to_string()));
+        assert!(
+            args.windows(2).any(|pair| pair[0] == "--seccomp" && pair[1] == SECCOMP_FD.to_string())
+        );
         // No bind mounts
         assert!(!args.contains(&"--ro-bind".to_string()));
         assert!(!args.contains(&"--bind".to_string()));
@@ -324,6 +408,7 @@ mod tests {
         let args = LinuxEnforcer::generate_args(&policy);
 
         assert!(!args.contains(&"--new-session".to_string()));
+        assert!(!args.contains(&"--seccomp".to_string()));
     }
 
     #[test]
@@ -332,6 +417,29 @@ mod tests {
         let args = LinuxEnforcer::generate_args(&policy);
 
         assert!(args.contains(&"--new-session".to_string()));
+        let seccomp = args.iter().position(|arg| arg == "--seccomp").expect("--seccomp present");
+        assert_eq!(args[seccomp + 1], SECCOMP_FD.to_string());
+    }
+
+    #[test]
+    fn configure_command_is_a_no_op_when_spawning_is_allowed() {
+        let policy = SandboxPolicyBuilder::new().allow_process_spawn().build();
+        let mut cmd = tokio::process::Command::new("true");
+
+        LinuxEnforcer::new().configure_command(&mut cmd, &policy).expect("nothing to configure");
+    }
+
+    #[test]
+    fn configure_command_installs_the_filter_on_supported_architectures() {
+        let policy = SandboxPolicyBuilder::new().build();
+        let mut cmd = tokio::process::Command::new("true");
+
+        let result = LinuxEnforcer::new().configure_command(&mut cmd, &policy);
+        if seccomp::Abi::native().is_some() {
+            result.expect("the filter is prepared on a supported architecture");
+        } else {
+            assert!(matches!(result, Err(SandboxError::EnforcerFailed { .. })), "{result:?}");
+        }
     }
 
     #[test]

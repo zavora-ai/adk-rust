@@ -56,6 +56,12 @@ impl SandboxTool {
 /// Default timeout in seconds when `timeout_secs` is not provided.
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
+/// Smallest `timeout_secs` the tool accepts; the schema's `minimum`.
+const MIN_TIMEOUT_SECS: u64 = 1;
+
+/// Largest `timeout_secs` the tool accepts; the schema's `maximum`.
+const MAX_TIMEOUT_SECS: u64 = 300;
+
 /// Scopes required to execute this tool.
 const REQUIRED_SCOPES: &[&str] = &["code:execute"];
 
@@ -184,8 +190,8 @@ impl adk_core::Tool for SandboxTool {
                     "type": "integer",
                     "description": "Maximum execution time in seconds.",
                     "default": DEFAULT_TIMEOUT_SECS,
-                    "minimum": 1,
-                    "maximum": 300
+                    "minimum": MIN_TIMEOUT_SECS,
+                    "maximum": MAX_TIMEOUT_SECS
                 }
             },
             "required": ["language", "code"]
@@ -221,9 +227,13 @@ impl adk_core::Tool for SandboxTool {
         // Parse stdin (optional)
         let stdin = args.get("stdin").and_then(|v| v.as_str()).map(String::from);
 
-        // Parse timeout_secs (optional, default 30)
+        // Parse timeout_secs (optional, default 30). The schema bounds are advisory to the
+        // model, so they are enforced here: an out-of-range value is clamped rather than
+        // trusted, and a non-numeric one falls back to the default.
         let timeout_secs =
-            args.get("timeout_secs").and_then(|v| v.as_u64()).unwrap_or(DEFAULT_TIMEOUT_SECS);
+            args.get("timeout_secs").and_then(Value::as_f64).map_or(DEFAULT_TIMEOUT_SECS, |secs| {
+                secs.clamp(MIN_TIMEOUT_SECS as f64, MAX_TIMEOUT_SECS as f64) as u64
+            });
 
         let request = ExecRequest {
             language,
@@ -264,6 +274,8 @@ mod tests {
         error: Option<SandboxError>,
         /// When `error` is `None`, `execute()` returns this result.
         result: ExecResult,
+        /// The timeout of the most recent request.
+        last_timeout: Mutex<Option<Duration>>,
     }
 
     impl MockBackend {
@@ -276,6 +288,7 @@ mod tests {
                     exit_code,
                     duration: Duration::from_millis(42),
                 },
+                last_timeout: Mutex::new(None),
             }
         }
 
@@ -288,6 +301,7 @@ mod tests {
                     exit_code: 0,
                     duration: Duration::ZERO,
                 },
+                last_timeout: Mutex::new(None),
             }
         }
     }
@@ -313,7 +327,8 @@ mod tests {
             }
         }
 
-        async fn execute(&self, _request: ExecRequest) -> Result<ExecResult, SandboxError> {
+        async fn execute(&self, request: ExecRequest) -> Result<ExecResult, SandboxError> {
+            *self.last_timeout.lock().unwrap() = Some(request.timeout);
             if let Some(ref err) = self.error { Err(err.clone()) } else { Ok(self.result.clone()) }
         }
     }
@@ -512,17 +527,42 @@ mod tests {
         assert!(result["stderr"].as_str().unwrap().contains("cobol"));
     }
 
-    #[tokio::test]
-    async fn test_custom_timeout() {
-        // Verify that a custom timeout_secs is parsed (we can't easily verify
-        // the Duration passed to the backend without more instrumentation, but
-        // we can at least confirm the call succeeds).
+    /// Runs the tool with `timeout_secs` and returns the timeout the backend received.
+    async fn timeout_passed_for(timeout_secs: Value) -> Duration {
         let backend = Arc::new(MockBackend::success("ok", 0));
-        let tool = SandboxTool::new(backend);
-        let args = json!({ "language": "python", "code": "print('ok')", "timeout_secs": 60 });
+        let tool = SandboxTool::new(backend.clone());
+        let mut args = json!({ "language": "python", "code": "print('ok')" });
+        if !timeout_secs.is_null() {
+            args["timeout_secs"] = timeout_secs;
+        }
 
         let result = tool.execute(ctx(), args).await.unwrap();
         assert_eq!(result["status"], "success");
+        backend.last_timeout.lock().unwrap().expect("the backend was called")
+    }
+
+    #[tokio::test]
+    async fn test_custom_timeout() {
+        assert_eq!(timeout_passed_for(json!(60)).await, Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn test_timeout_defaults_when_absent_or_not_a_number() {
+        let default = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
+        assert_eq!(timeout_passed_for(Value::Null).await, default);
+        assert_eq!(timeout_passed_for(json!("600")).await, default);
+    }
+
+    /// The schema advertises `minimum: 1` and `maximum: 300`; a model that ignores them must
+    /// not get an unbounded or zero timeout.
+    #[tokio::test]
+    async fn test_timeout_is_clamped_to_the_schema_bounds() {
+        assert_eq!(timeout_passed_for(json!(86_400)).await, Duration::from_secs(300));
+        assert_eq!(timeout_passed_for(json!(u64::MAX)).await, Duration::from_secs(300));
+        assert_eq!(timeout_passed_for(json!(0)).await, Duration::from_secs(1));
+        assert_eq!(timeout_passed_for(json!(-5)).await, Duration::from_secs(1));
+        assert_eq!(timeout_passed_for(json!(0.25)).await, Duration::from_secs(1));
+        assert_eq!(timeout_passed_for(json!(300)).await, Duration::from_secs(300));
     }
 
     #[tokio::test]

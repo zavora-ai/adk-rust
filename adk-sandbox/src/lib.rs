@@ -46,6 +46,9 @@ pub mod tool;
 pub mod types;
 
 // Feature-gated modules
+#[cfg(any(feature = "process", feature = "workspace"))]
+mod child_io;
+
 #[cfg(feature = "process")]
 pub mod process;
 

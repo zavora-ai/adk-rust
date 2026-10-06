@@ -14,6 +14,9 @@ pub mod linux;
 #[cfg(all(feature = "sandbox-windows", target_os = "windows"))]
 pub mod windows;
 
+#[cfg(any(test, all(feature = "sandbox-linux", target_os = "linux")))]
+mod seccomp;
+
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -66,9 +69,12 @@ pub struct AllowedPath {
 
 /// A network access rule specifying an allowed domain and ports.
 ///
-/// Used for per-domain network filtering. Only enforced on platforms that
-/// support domain-level network control (macOS Seatbelt). On Linux and
-/// Windows, network access is binary (all or nothing via `allow_network`).
+/// Declares intent for per-domain network filtering. **No enforcer can apply
+/// it:** Seatbelt network filters accept only `*` or `localhost` as the host,
+/// and bubblewrap and AppContainer have no domain-level control. Network access
+/// is binary everywhere (all or nothing via `allow_network`), and rules present
+/// with `allow_network = false` block all network access and log a
+/// `tracing::warn`.
 ///
 /// # Example
 ///
@@ -101,19 +107,18 @@ pub struct NetworkRule {
 /// 1. **Binary** (`allow_network`): When `true`, all network access is allowed.
 ///    When `false`, all network is blocked. Works on all platforms.
 ///
-/// 2. **Domain allowlist** (`network_rules`): When `allow_network` is `false`
-///    but `network_rules` is non-empty, only the specified domains/ports are
-///    allowed. **Only enforced on macOS** (Seatbelt supports domain-level
-///    filtering). On Linux and Windows, non-empty `network_rules` with
-///    `allow_network = false` results in all network being blocked — the
-///    rules are ignored with a `tracing::warn`.
+/// 2. **Domain allowlist** (`network_rules`): recorded for callers and
+///    future enforcers, but **not enforced on any platform**. Non-empty
+///    `network_rules` with `allow_network = false` block all network access —
+///    the rules are ignored with a `tracing::warn`. This fails closed.
 ///
 /// # Example
 ///
 /// ```rust
 /// use adk_sandbox::sandbox::SandboxPolicyBuilder;
 ///
-/// // Allow only OpenAI API access
+/// // Records the intended domains; all network stays blocked because no
+/// // enforcer can filter by domain.
 /// let policy = SandboxPolicyBuilder::new()
 ///     .allow_read("/usr/lib")
 ///     .allow_domain("api.openai.com", &[443])
@@ -131,12 +136,24 @@ pub struct SandboxPolicy {
     pub allowed_paths: Vec<AllowedPath>,
     /// Whether the process may access the network (all domains/ports).
     pub allow_network: bool,
-    /// Per-domain network allowlist. Only used when `allow_network` is `false`.
-    /// Only enforced on macOS (Seatbelt). Linux/Windows ignore these rules
-    /// and fall back to binary network control.
+    /// Per-domain network allowlist. Not enforced on any platform: with
+    /// `allow_network = false` these rules are ignored and all network access
+    /// is blocked.
     #[serde(default)]
     pub network_rules: Vec<NetworkRule>,
-    /// Whether the process may spawn child processes.
+    /// Whether the process may create child processes.
+    ///
+    /// When `false`, replacing the process image with `execve` remains allowed
+    /// but creating a new process is refused:
+    ///
+    /// | Enforcer | Mechanism |
+    /// |----------|-----------|
+    /// | Seatbelt (macOS) | `process-fork` is not granted |
+    /// | bubblewrap (Linux) | seccomp filter failing `fork`, `vfork`, and non-thread `clone` (x86-64 and AArch64) |
+    /// | AppContainer (Windows) | Not implemented |
+    ///
+    /// A shell running more than one external command forks, so `sh -c` scripts
+    /// usually need this enabled.
     pub allow_process_spawn: bool,
     /// Environment variables passed to the sandboxed process.
     pub env: HashMap<String, String>,
@@ -219,15 +236,14 @@ impl SandboxPolicyBuilder {
         self
     }
 
-    /// Allows network access to a specific domain and ports.
+    /// Records a domain and ports the process is intended to reach.
     ///
-    /// When `allow_network` is `false` (the default), only domains added via
-    /// this method are accessible. Pass an empty slice for `ports` to allow
-    /// all ports on the domain.
+    /// Pass an empty slice for `ports` to mean all ports on the domain.
     ///
-    /// **Platform support:** Only enforced on macOS (Seatbelt). On Linux and
-    /// Windows, domain-level filtering is not available — if any rules are
-    /// present but `allow_network` is false, all network is blocked.
+    /// **Platform support:** not enforced on any platform. Seatbelt network
+    /// filters accept only `*` or `localhost` as the host, and bubblewrap and
+    /// AppContainer have no domain-level control. If any rules are present but
+    /// `allow_network` is false, all network access is blocked.
     ///
     /// # Example
     ///
@@ -315,12 +331,13 @@ pub trait SandboxEnforcer: Send + Sync {
         policy: &SandboxPolicy,
     ) -> Result<WrappedCommand, SandboxError>;
 
-    /// Optional: configure the Command with platform-specific process attributes.
+    /// Configures the Command with platform-specific process attributes.
     ///
-    /// Called after the Command is constructed from `wrap_command()` output.
-    /// Default implementation is a no-op. Windows uses this to set
-    /// AppContainer process attributes via `creation_flags()` and
-    /// `raw_attribute()`.
+    /// Must be called on the Command constructed from `wrap_command()` output,
+    /// after its program and arguments are final. The default implementation is
+    /// a no-op. Linux uses it to install the process-creation seccomp program
+    /// that the wrapped arguments reference; Windows sets AppContainer process
+    /// attributes via `creation_flags()` and `raw_attribute()`.
     fn configure_command(
         &self,
         _cmd: &mut tokio::process::Command,

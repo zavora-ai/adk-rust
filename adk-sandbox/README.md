@@ -14,20 +14,23 @@ Isolated code execution runtime for [ADK-Rust](https://github.com/zavora-ai/adk-
 | `sandbox-linux` | Linux bubblewrap enforcement        | ❌      | None (external `bwrap` binary) |
 | `sandbox-windows` | Windows AppContainer enforcement  | ❌      | `windows-sys`      |
 | `sandbox-native` | Auto-detect platform enforcer      | ❌      | All of the above   |
+| `workspace` | Workspace lifecycle + `LocalUnixClient` | ❌   | `tar`, `uuid`      |
+| `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ | `bollard`, `futures` |
 
 ## Backend Comparison
 
 | Capability              | `ProcessBackend`         | `WasmBackend`            |
 |-------------------------|--------------------------|--------------------------|
-| Timeout enforcement     | ✅ `tokio::time::timeout` | ✅ Epoch-based interruption |
-| Memory limit            | ❌ Not enforced           | ✅ `StoreLimitsBuilder`   |
-| Network isolation       | ❌ Not enforced           | ✅ No WASI network        |
-| Filesystem isolation    | ❌ Not enforced           | ✅ No WASI preopens       |
+| Timeout enforcement     | ✅ `tokio::time::timeout`, stdin write included | ✅ Epoch-based interruption |
+| Memory limit            | ❌ Not enforced           | ✅ `StoreLimitsBuilder`: one linear memory, `memory_limit_mb` or 256 MiB by default |
+| Network isolation       | Only with an OS enforcer | ✅ No WASI network        |
+| Filesystem isolation    | Only with an OS enforcer | ✅ No WASI preopens       |
 | Environment isolation   | ✅ `env_clear()` + explicit env | ✅ Full (no host access) |
-| Output truncation       | ✅ 1 MB limit, UTF-8 safe | ✅ 1 MB capture pipes     |
+| Output truncation       | ✅ 1 MB limit applied while reading, UTF-8 safe | ✅ 1 MB capture pipes |
+| Process cleanup         | ✅ Process group killed on timeout and on exit | — (in-process) |
 | Supported languages     | Rust, Python, JS, TS, Command | Wasm only            |
 
-`ProcessBackend` is honest about what it does *not* enforce. Use `WasmBackend` when you need full sandboxing with memory limits and no host access.
+`ProcessBackend` is honest about what it does *not* enforce. Use `WasmBackend` when you need full sandboxing with memory limits and no host access, or attach an OS enforcer (below) to confine a `ProcessBackend`.
 
 ## Quick Start
 
@@ -78,7 +81,7 @@ let agent = LlmAgentBuilder::new("sandbox_agent")
     .build()?;
 ```
 
-The tool accepts `language`, `code`, optional `stdin`, and optional `timeout_secs` parameters. It requires the `code:execute` scope.
+The tool accepts `language`, `code`, optional `stdin`, and optional `timeout_secs` parameters. It requires the `code:execute` scope. `timeout_secs` is clamped to the schema's 1–300 second range; a missing or non-numeric value uses 30 seconds.
 
 ## Error Handling
 
@@ -99,7 +102,9 @@ Non-zero exit codes are **not** errors — they are returned in `ExecResult.exit
 
 ## OS Sandbox Profiles
 
-OS-level sandbox enforcement restricts child processes at the kernel level — blocking network access, limiting filesystem writes, and controlling process spawning. This goes beyond `ProcessBackend`'s default environment isolation.
+OS-level sandbox enforcement restricts child processes at the kernel level — blocking network access, confining filesystem reads and writes to the policy's paths, and controlling process spawning. This goes beyond `ProcessBackend`'s default environment isolation.
+
+Under an enforcer, `ProcessBackend` runs each execution in a fresh scratch directory that holds its source file and compiler output. The directory is the process's working directory and is granted read-write in addition to the policy's paths; nothing else from the host is added.
 
 ### Feature Flags
 
@@ -118,7 +123,8 @@ use adk_sandbox::{
     SandboxPolicyBuilder, get_enforcer,
 };
 
-// 1. Build a policy
+// 1. Build a policy. Seatbelt grants the macOS system runtime itself; bubblewrap
+//    mounts only the listed paths, so Linux policies list the system directories too.
 let policy = SandboxPolicyBuilder::new()
     .allow_read("/usr")
     .allow_read("/tmp")
@@ -147,9 +153,32 @@ let result = backend.execute(request).await?;
 
 | Aspect | macOS Seatbelt | Linux bubblewrap | Windows AppContainer |
 |--------|---------------|-----------------|---------------------|
-| Strategy | "Allow default, deny dangerous" | Whitelist (mount only what's needed) | Whitelist (grant ACLs) |
-| Network | `(deny network*)` rule | `--unshare-net` namespace | Omit `INTERNET_CLIENT` |
-| Writes | `(deny file-write*)` + selective allows | Only `--bind` paths writable | Only ACL-granted paths |
+| Strategy | Deny-default profile plus the system runtime | Whitelist (mount only what's needed) | Not implemented — the enforcer reports itself unavailable |
+| Reads | System runtime and policy paths; home directories, `/tmp`, and `$TMPDIR` are unreadable unless allowed | Only bound paths exist | — |
+| Writes | Only policy read-write paths (and `/dev/null`) | Only `--bind` paths writable | — |
+| Network | Denied unless `allow_network` | `--unshare-net` namespace | — |
+| Process spawning | `process-fork` granted only with `allow_process_spawn` | seccomp filter fails `fork`, `vfork`, and non-thread `clone` (x86-64, AArch64) | — |
+| Domain rules (`allow_domain`) | Not enforceable; all network blocked | Not enforceable; all network blocked | — |
+
+The Seatbelt system runtime covers `/bin`, `/sbin`, `/usr`, `/System`, `/Library/Apple`, `/Library/Frameworks`, `/opt/homebrew`, `/private/etc` (minus `master.passwd` and `sudoers`), the dyld cache, and time zone data. File metadata (existence, size, timestamps) is readable everywhere because path resolution needs it; file contents are not. Programs installed elsewhere — a rustup toolchain, a pyenv interpreter, Xcode — need their directories passed to `allow_read`.
+
+Every path is written into the Seatbelt profile as an escaped string literal, so a directory name containing `"`, `\`, or control characters cannot add directives to the profile.
+
+## Workspace Clients
+
+The `workspace` feature provides the `provision → session → exec → snapshot → resume` lifecycle.
+
+| Control | `LocalUnixClient` | `DockerClient` |
+|---------|-------------------|----------------|
+| Filesystem | Host filesystem; the workspace is only the working directory | Container filesystem |
+| Network | Host network | `none` by default; `with_network_mode("bridge")` to enable |
+| Capabilities | Host user | `cap_drop: ALL`, `no-new-privileges` |
+| Process count | Unlimited | 512 by default (`with_pids_limit`) |
+| Environment | Cleared except `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, `TERM` | Image environment |
+| Output | 1 MiB per stream, read while the command runs | Unbounded |
+| Timeout | Kills the command's process group | Kills the command's process tree inside the container |
+
+`LocalUnixClient` is not an isolation boundary. Use `DockerClient` when workspace commands are untrusted. `DockerClient` passes paths, URLs, and branch names as command arguments rather than shell text, reads files as raw bytes, and needs a network mode other than `none` for `GitRepo` manifest entries.
 
 ### Example
 

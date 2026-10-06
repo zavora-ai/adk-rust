@@ -3,7 +3,8 @@
 //! **Feature: os-sandbox-profiles, Property 1: Seatbelt Profile Generation Correctness**
 //!
 //! *For any* valid `SandboxPolicy`, the Seatbelt profile string returned by
-//! `MacOsEnforcer::generate_profile` SHALL satisfy structural invariants.
+//! `MacOsEnforcer::generate_profile` SHALL satisfy structural invariants, and no allowed path
+//! SHALL be able to alter the profile's structure.
 //!
 //! **Validates: Requirements 3.2, 3.4, 3.5, 3.6, 3.7, 9.2, 9.3, 9.4, 14.1, 14.2, 14.3, 14.4, 14.5**
 
@@ -45,6 +46,59 @@ fn arb_sandbox_policy() -> impl Strategy<Value = SandboxPolicy> {
         })
 }
 
+/// Paths built from the characters that matter to SBPL: quotes, backslashes, parentheses,
+/// whitespace, and control characters.
+fn arb_hostile_path() -> impl Strategy<Value = String> {
+    proptest::collection::vec(
+        prop_oneof![
+            Just('"'),
+            Just('\\'),
+            Just('('),
+            Just(')'),
+            Just(' '),
+            Just('\n'),
+            Just('\t'),
+            Just('\u{1}'),
+            Just('*'),
+            Just(';'),
+            Just('/'),
+            proptest::char::range('a', 'z'),
+        ],
+        1..40,
+    )
+    .prop_map(|chars| format!("/{}", chars.into_iter().collect::<String>()))
+}
+
+/// Removes every SBPL string literal, leaving the profile's structure.
+fn strip_string_literals(profile: &str) -> String {
+    let mut structure = String::with_capacity(profile.len());
+    let mut chars = profile.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '"' {
+            structure.push(ch);
+            continue;
+        }
+        structure.push_str("\"\"");
+        while let Some(inner) = chars.next() {
+            match inner {
+                '\\' => {
+                    chars.next();
+                }
+                '"' => break,
+                _ => {}
+            }
+        }
+    }
+    structure
+}
+
+/// Lines granting exactly one policy path, as opposed to the multi-path system grants.
+fn single_path_directives<'a>(profile: &'a str, prefix: &'a str) -> impl Iterator<Item = &'a str> {
+    profile
+        .lines()
+        .filter(move |line| line.starts_with(prefix) && line.matches("(subpath").count() == 1)
+}
+
 // ---------------------------------------------------------------------------
 // Property tests
 // ---------------------------------------------------------------------------
@@ -55,12 +109,12 @@ proptest! {
     /// **Feature: os-sandbox-profiles, Property 1: Seatbelt Profile Generation Correctness**
     ///
     /// *For any* valid `SandboxPolicy`, the generated Seatbelt profile SHALL:
-    /// - Contain `(version 1)` and `(deny default)` and `(allow default)`
-    /// - Contain `(deny network*)` iff `allow_network` is false
-    /// - Contain `(deny process-fork)` iff `allow_process_spawn` is false
-    /// - Contain `(deny file-write*)`
+    /// - Contain `(version 1)` and `(deny default)`, and never `(allow default)`
+    /// - Contain `(allow network*)` iff `allow_network` is true
+    /// - Contain `(allow process-fork)` iff `allow_process_spawn` is true
     /// - Have one `(allow file-read* (subpath "..."))` per read-only path
     /// - Have one `(allow file-read* file-write* (subpath "..."))` per read-write path
+    /// - Grant writes only through those read-write directives
     /// - Have balanced parentheses
     ///
     /// **Validates: Requirements 3.2, 3.4, 3.5, 3.6, 3.7, 9.2, 9.3, 9.4, 14.1, 14.2, 14.3, 14.4, 14.5**
@@ -68,110 +122,77 @@ proptest! {
     fn prop_seatbelt_profile_generation(policy in arb_sandbox_policy()) {
         let profile = MacOsEnforcer::generate_profile(&policy);
 
-        // Must contain base directives
+        prop_assert!(profile.contains("(version 1)"), "profile missing (version 1):\n{profile}");
+        prop_assert!(profile.contains("(deny default)"), "profile missing (deny default):\n{profile}");
         prop_assert!(
-            profile.contains("(version 1)"),
-            "profile missing (version 1):\n{profile}"
-        );
-        prop_assert!(
-            profile.contains("(deny default)"),
-            "profile missing (deny default):\n{profile}"
-        );
-        prop_assert!(
-            profile.contains("(allow default)"),
-            "profile missing (allow default):\n{profile}"
+            !profile.contains("(allow default)"),
+            "(allow default) overrides the deny-default base:\n{profile}"
         );
 
-        // Network: deny iff allow_network is false
-        if policy.allow_network {
-            prop_assert!(
-                !profile.contains("(deny network*)"),
-                "profile should NOT contain (deny network*) when network is allowed:\n{profile}"
-            );
-        } else {
-            prop_assert!(
-                profile.contains("(deny network*)"),
-                "profile should contain (deny network*) when network is denied:\n{profile}"
-            );
-        }
+        prop_assert_eq!(profile.contains("(allow network*)"), policy.allow_network);
+        prop_assert_eq!(profile.contains("(allow process-fork)"), policy.allow_process_spawn);
 
-        // Process spawn: deny iff allow_process_spawn is false
-        if policy.allow_process_spawn {
-            prop_assert!(
-                !profile.contains("(deny process-fork)"),
-                "profile should NOT contain (deny process-fork) when spawn is allowed:\n{profile}"
-            );
-        } else {
-            prop_assert!(
-                profile.contains("(deny process-fork)"),
-                "profile should contain (deny process-fork) when spawn is denied:\n{profile}"
-            );
-        }
-
-        // File writes are always denied by default
-        prop_assert!(
-            profile.contains("(deny file-write*)"),
-            "profile missing (deny file-write*):\n{profile}"
-        );
-
-        // Count read-only path directives
         let read_only_count = policy
             .allowed_paths
             .iter()
             .filter(|p| p.mode == AccessMode::ReadOnly)
             .count();
-        let read_only_directive_count = profile
-            .lines()
-            .filter(|line| {
-                line.contains("(allow file-read* (subpath")
-                    && !line.contains("file-write*")
-            })
-            .count();
         prop_assert_eq!(
-            read_only_directive_count,
-            read_only_count,
+            single_path_directives(&profile, "(allow file-read* (subpath ").count(),
+            read_only_count
         );
 
-        // Count read-write path directives
         let read_write_count = policy
             .allowed_paths
             .iter()
             .filter(|p| p.mode == AccessMode::ReadWrite)
             .count();
-        let read_write_directive_count = profile
-            .lines()
-            .filter(|line| line.contains("(allow file-read* file-write* (subpath"))
-            .count();
         prop_assert_eq!(
-            read_write_directive_count,
-            read_write_count,
+            single_path_directives(&profile, "(allow file-read* file-write* (subpath ").count(),
+            read_write_count
         );
+        prop_assert_eq!(profile.matches("file-write*").count(), read_write_count);
 
-        // Verify each path appears in the profile
         for entry in &policy.allowed_paths {
             let path_str = entry.path.to_string_lossy();
-            match entry.mode {
-                AccessMode::ReadOnly => {
-                    let directive = format!("(allow file-read* (subpath \"{path_str}\"))");
-                    prop_assert!(
-                        profile.contains(&directive),
-                        "missing read-only directive for {path_str}:\n{profile}"
-                    );
-                }
+            let directive = match entry.mode {
+                AccessMode::ReadOnly => format!("(allow file-read* (subpath \"{path_str}\"))"),
                 AccessMode::ReadWrite => {
-                    let directive =
-                        format!("(allow file-read* file-write* (subpath \"{path_str}\"))");
-                    prop_assert!(
-                        profile.contains(&directive),
-                        "missing read-write directive for {path_str}:\n{profile}"
-                    );
+                    format!("(allow file-read* file-write* (subpath \"{path_str}\"))")
                 }
-            }
+            };
+            prop_assert!(profile.contains(&directive), "missing {directive}:\n{profile}");
         }
 
-        // Balanced parentheses
         let open = profile.chars().filter(|c| *c == '(').count();
         let close = profile.chars().filter(|c| *c == ')').count();
         prop_assert_eq!(open, close);
+    }
+
+    /// No path, whatever it contains, changes the profile's structure: every character stays
+    /// inside its string literal, so no directive can be injected.
+    #[test]
+    fn prop_hostile_paths_cannot_inject_directives(
+        hostile in arb_hostile_path(),
+        read_write in any::<bool>(),
+    ) {
+        let builder = adk_sandbox::SandboxPolicyBuilder::new();
+        let builder = if read_write {
+            builder.allow_read_write(hostile.as_str())
+        } else {
+            builder.allow_read(hostile.as_str())
+        };
+        let hostile_profile = MacOsEnforcer::generate_profile(&builder.build());
+
+        let benign = adk_sandbox::SandboxPolicyBuilder::new();
+        let benign = if read_write { benign.allow_read_write("/x") } else { benign.allow_read("/x") };
+        let benign_profile = MacOsEnforcer::generate_profile(&benign.build());
+
+        prop_assert_eq!(
+            strip_string_literals(&hostile_profile),
+            strip_string_literals(&benign_profile),
+            "the path {:?} changed the profile structure",
+            hostile
+        );
     }
 }
