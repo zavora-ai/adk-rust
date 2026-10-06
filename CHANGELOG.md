@@ -87,8 +87,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `delta.content` arriving in the same chunk as `finish_reason` is no longer
   dropped.
 
+- **UI sign-in warning** (`adk-cli`): the account name no longer reaches
+  stdout when the launcher warns about UI sign-in.
+
 ### Changed
 
+- **Supported versions** (`SECURITY.md`): security fixes target the 2.2.x line
+  and 2.1.x; 2.0.x and 1.x no longer receive updates.
+- **`Model::Gemini3ProPreview` is deprecated** (`adk-gemini`): the
+  `gemini-3-pro-preview` model is retired. Use `Model::Gemini31ProPreview`.
 - **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
