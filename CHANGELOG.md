@@ -92,6 +92,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
+- **`BigQueryToolset` is read-only by default** (`adk-tool`, feature `bigquery`):
+  `bigquery_execute_sql` refuses DML, DDL, and scripts. Restore the previous
+  behavior with `BigQueryToolset::with_project("my-project").with_read_only(false)`;
+  the tool then reports itself as mutating.
 
 ### Security
 
@@ -112,6 +116,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while reading, drains and discards the excess so the command still completes, and
   cuts on a character boundary. Dropping the tool call left the command and its
   descendants running; the process group is now killed on drop, as on timeout.
+- **adk-tool: `bigquery_execute_sql` no longer runs writes while reporting itself
+  read-only.** The tool returned `is_read_only() == true` but executed any SQL, so
+  parallel dispatch could run a `DROP TABLE` alongside other calls. In read-only mode,
+  now the default, it accepts a single `SELECT` or `WITH` statement (comments and
+  string contents are ignored, multiple statements are refused), and a BigQuery dry
+  run must classify the query as `SELECT` before it runs. `is_read_only()` follows
+  the configuration.
+- **adk-tool: BigQuery and Spanner service-account keys stay in memory.** Keys
+  resolved through `from_secret` were written to the shared temp directory with
+  default permissions and removed only on normal completion, so a cancelled call left
+  the key on disk. They are now parsed in memory and never written. A malformed key
+  secret is no longer quoted back in the tool error.
 
 ## [2.2.0] - 2026-09-01
 

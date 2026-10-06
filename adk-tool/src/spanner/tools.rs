@@ -30,7 +30,8 @@ fn database_path(project_id: &str, instance_id: &str, database_id: &str) -> Stri
 /// For [`CredentialSource::ApplicationDefault`], uses the
 /// `GOOGLE_APPLICATION_CREDENTIALS` environment variable or ADC.
 /// For [`CredentialSource::SecretRef`], resolves the service account key
-/// JSON from the secret provider and writes it to a temporary file.
+/// JSON from the secret provider and parses it in memory; the key is never
+/// written to disk.
 async fn create_client(
     project_id: &str,
     instance_id: &str,
@@ -72,37 +73,27 @@ async fn create_client(
                 )
             })?;
 
-            // Write the secret to a temporary file for the client
-            let tmp_dir = std::env::temp_dir();
-            let tmp_path = tmp_dir.join(format!("adk-spanner-{}.json", uuid::Uuid::new_v4()));
-            tokio::fs::write(&tmp_path, &secret_json).await.map_err(|e| {
-                AdkError::new(
-                    ErrorComponent::Tool,
-                    ErrorCategory::Internal,
-                    "tool.spanner.temp_file_error",
-                    format!("Failed to write temporary credentials file: {e}"),
-                )
-            })?;
-
-            // Parse the credentials file and create config
+            // The key stays in memory. The parser's message can quote the offending JSON
+            // value, which may be key material, so it is not passed on.
             let cred_file =
-                google_cloud_spanner::client::google_cloud_auth::credentials::CredentialsFile::new_from_file(
-                    tmp_path.to_str().unwrap_or("").to_string(),
+                google_cloud_spanner::client::google_cloud_auth::credentials::CredentialsFile::new_from_str(
+                    &secret_json,
                 )
                 .await
-                .map_err(|e| {
-                    let _ = std::fs::remove_file(&tmp_path);
+                .map_err(|_| {
                     AdkError::new(
                         ErrorComponent::Tool,
                         ErrorCategory::Unauthorized,
                         "tool.spanner.auth_error",
-                        format!("Failed to parse Spanner credentials from secret: {e}"),
+                        format!(
+                            "Spanner credentials secret '{secret_name}' is not a valid service \
+                             account key JSON. Store the full key file contents in the secret."
+                        ),
                     )
                 })?;
 
             let config =
                 ClientConfig::default().with_credentials(cred_file).await.map_err(|e| {
-                    let _ = std::fs::remove_file(&tmp_path);
                     AdkError::new(
                         ErrorComponent::Tool,
                         ErrorCategory::Unauthorized,
@@ -110,9 +101,6 @@ async fn create_client(
                         format!("Failed to initialize Spanner credentials from secret: {e}"),
                     )
                 })?;
-
-            // Clean up the temporary file
-            let _ = tokio::fs::remove_file(&tmp_path).await;
 
             Client::new(&db_path, config)
                 .await
