@@ -14,6 +14,13 @@
 //! | `user_state:{app}:{user}` | Hash | User-level state |
 //! | `sessions_idx:{app}:{user}` | Set | Session IDs for list lookups |
 //! | `session_lookup:{session}` | String | Reverse lookup to `{app}:{user}` |
+//!
+//! Each `{segment}` is percent-encoded (`%` → `%25`, `:` → `%3A`) so an identifier
+//! containing `:` cannot spill into the next segment, and an app name equal to one
+//! of the key-family prefixes (`app_state`, `user_state`, `sessions_idx`,
+//! `session_lookup`) has its first byte encoded too (`user_state` → `%75ser_state`)
+//! in the keys that start with the app name. Identifiers without these characters
+//! or names produce the same keys as before the encoding was introduced.
 
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
@@ -25,6 +32,7 @@ use chrono::{DateTime, Utc};
 use fred::clients::Transaction;
 use fred::prelude::*;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::instrument;
@@ -43,34 +51,114 @@ pub struct RedisSessionConfig {
 
 // --- Key generation functions ---
 
+/// Prefixes of the key families that do not start with the app name.
+///
+/// A session key for an app with one of these names would otherwise share the
+/// keyspace of that family, e.g. `session_key("user_state", a, u)` and
+/// `user_state_key(a, u)`.
+const RESERVED_PREFIXES: [&str; 4] = ["app_state", "user_state", "sessions_idx", "session_lookup"];
+
+/// Percent-encodes `%` and `:` so an encoded segment never contains the `:` delimiter.
+fn encode_segment(segment: &str) -> Cow<'_, str> {
+    if !segment.contains([':', '%']) {
+        return Cow::Borrowed(segment);
+    }
+    let mut encoded = String::with_capacity(segment.len() + 8);
+    for c in segment.chars() {
+        match c {
+            '%' => encoded.push_str("%25"),
+            ':' => encoded.push_str("%3A"),
+            other => encoded.push(other),
+        }
+    }
+    Cow::Owned(encoded)
+}
+
+/// Reverses [`encode_segment`].
+///
+/// Only `%25` and `%3A` are decoded; any other `%` is kept as written, so
+/// lookup values stored before the encoding existed still parse.
+fn decode_segment(segment: &str) -> Cow<'_, str> {
+    if !segment.contains('%') {
+        return Cow::Borrowed(segment);
+    }
+    let mut decoded = String::with_capacity(segment.len());
+    let mut rest = segment;
+    while let Some(pos) = rest.find('%') {
+        decoded.push_str(&rest[..pos]);
+        match rest.get(pos..pos + 3) {
+            Some("%25") => decoded.push('%'),
+            Some("%3A" | "%3a") => decoded.push(':'),
+            _ => {
+                decoded.push('%');
+                rest = &rest[pos + 1..];
+                continue;
+            }
+        }
+        rest = &rest[pos + 3..];
+    }
+    decoded.push_str(rest);
+    Cow::Owned(decoded)
+}
+
+/// Encodes the app segment of keys that start with the app name.
+///
+/// Applies [`encode_segment`], then encodes the first byte of an app name that
+/// equals a [`RESERVED_PREFIXES`] entry.
+fn leading_app_segment(app: &str) -> Cow<'_, str> {
+    let encoded = encode_segment(app);
+    if RESERVED_PREFIXES.contains(&encoded.as_ref()) {
+        // Reserved prefixes are ASCII, so the first byte is a whole character.
+        let (first, rest) = encoded.split_at(1);
+        return Cow::Owned(format!("%{:02X}{rest}", first.as_bytes()[0]));
+    }
+    encoded
+}
+
 /// Session metadata hash key: `{app}:{user}:{session}`.
 pub fn session_key(app: &str, user: &str, session: &str) -> String {
-    format!("{app}:{user}:{session}")
+    format!("{}:{}:{}", leading_app_segment(app), encode_segment(user), encode_segment(session))
 }
 
 /// Events sorted set key: `{app}:{user}:{session}:events`.
 pub fn events_key(app: &str, user: &str, session: &str) -> String {
-    format!("{app}:{user}:{session}:events")
+    format!(
+        "{}:{}:{}:events",
+        leading_app_segment(app),
+        encode_segment(user),
+        encode_segment(session)
+    )
 }
 
 /// App-level state hash key: `app_state:{app}`.
 pub fn app_state_key(app: &str) -> String {
-    format!("app_state:{app}")
+    format!("app_state:{}", encode_segment(app))
 }
 
 /// User-level state hash key: `user_state:{app}:{user}`.
 pub fn user_state_key(app: &str, user: &str) -> String {
-    format!("user_state:{app}:{user}")
+    format!("user_state:{}:{}", encode_segment(app), encode_segment(user))
 }
 
 /// Session index set key: `sessions_idx:{app}:{user}`.
 pub fn index_key(app: &str, user: &str) -> String {
-    format!("sessions_idx:{app}:{user}")
+    format!("sessions_idx:{}:{}", encode_segment(app), encode_segment(user))
 }
 
 /// Reverse lookup key: `session_lookup:{session}` → `{app}:{user}`.
 fn lookup_key(session: &str) -> String {
-    format!("session_lookup:{session}")
+    format!("session_lookup:{}", encode_segment(session))
+}
+
+/// Reverse lookup value naming the owner of a session: `{app}:{user}`.
+fn lookup_value(app: &str, user: &str) -> String {
+    format!("{}:{}", encode_segment(app), encode_segment(user))
+}
+
+/// Parses a [`lookup_value`] back into `(app, user)`.
+fn parse_lookup_value(value: &str) -> Option<(String, String)> {
+    let (app, user) = value.split_once(':')?;
+    Some((decode_segment(app).into_owned(), decode_segment(user).into_owned()))
 }
 
 /// Redis-backed session service.
@@ -243,7 +331,7 @@ impl SessionService for RedisSessionService {
 
         // Reverse lookup: session_id → app_name:user_id
         let lk = lookup_key(&session_id);
-        let lookup_val = format!("{}:{}", req.app_name, req.user_id);
+        let lookup_val = lookup_value(&req.app_name, &req.user_id);
         let _: () = trx
             .set(&lk, lookup_val, None, None, false)
             .await
@@ -408,10 +496,9 @@ impl SessionService for RedisSessionService {
         let lookup_val =
             lookup_val.ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
-        // Parse "app_name:user_id" — split on first ':'
-        let (app_name, user_id) = lookup_val
-            .split_once(':')
+        let (app_name, user_id) = parse_lookup_value(&lookup_val)
             .ok_or_else(|| adk_core::AdkError::session("corrupt session lookup entry"))?;
+        let (app_name, user_id) = (app_name.as_str(), user_id.as_str());
 
         let session_k = session_key(app_name, user_id, session_id);
 
@@ -704,5 +791,44 @@ impl Events for RedisSession {
 
     fn at(&self, index: usize) -> Option<&Event> {
         self.events.get(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lookup_value_round_trips_identifiers_with_delimiters() {
+        for (app, user) in
+            [("app", "user"), ("a:b", "c"), ("a", "b:c"), ("100%", "%3A"), ("::", "%")]
+        {
+            assert_eq!(
+                parse_lookup_value(&lookup_value(app, user)),
+                Some((app.to_string(), user.to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn test_lookup_value_parses_values_written_before_encoding() {
+        assert_eq!(
+            [
+                parse_lookup_value("app:user"),
+                parse_lookup_value("app:50%off"),
+                parse_lookup_value("x")
+            ],
+            [
+                Some(("app".to_string(), "user".to_string())),
+                Some(("app".to_string(), "50%off".to_string())),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_lookup_key_is_encoded() {
+        assert_eq!(lookup_key("s:1"), "session_lookup:s%3A1");
+        assert_ne!(lookup_key("u:s"), session_key("session_lookup", "u", "s"));
     }
 }

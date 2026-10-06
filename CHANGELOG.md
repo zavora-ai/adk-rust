@@ -40,10 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `alice2` and `alice-admin`, and a `user_id` of `*` matched every user. Both
   `delete_user` patterns now end the user segment with `:` and escape `*`, `?`,
   `[`, `]` and `\`.
-- **Redis key delimiter collisions** (`adk-memory`): identifiers were
+- **Redis key delimiter collisions** (`adk-memory`, `adk-session`): identifiers were
   joined with `:`, which identity validation allows, so app `a:b` with user `c`
-  shared keys with app `a` and user `b:c`. Key segments are now percent-encoded;
-  the key-format change is listed under Changed.
+  shared keys with app `a` and user `b:c`, and a session id ending in `:events`
+  aliased another session's event set. Key segments are now percent-encoded; the
+  key-format change is listed under Changed.
 
 ### Fixed
 
@@ -124,12 +125,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
-- **Redis key segments are percent-encoded** (`adk-memory`): `%`
+- **Redis key segments are percent-encoded** (`adk-memory`, `adk-session`): `%`
   becomes `%25` and `:` becomes `%3A` in every app, user, session and project
   segment. Identifiers containing neither character keep their existing keys.
   Data stored under an identifier containing `:` or `%` must be renamed to the
   encoded key, for example memory entries of app `a:b`, user `c`, session `s` move
-  from `mem:a:b:c:s` to `mem:a%3Ab:c:s`.
+  from `mem:a:b:c:s` to `mem:a%3Ab:c:s`. In `adk-session`, an app named
+  `app_state`, `user_state`, `sessions_idx` or `session_lookup` also has its first
+  byte encoded in session and event keys (`user_state:app:alice` →
+  `%75ser_state:app:alice`).
 - **Neo4j memory entry ids** (`adk-memory`): new entries use the scoped id format
   `s:{app}:{user}:{scope}:{session}:{index}` or `d:{app}:{user}:{scope}:{uuid}`.
   Entries written earlier keep their ids, so re-ingesting a session stored before
