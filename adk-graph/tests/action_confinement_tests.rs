@@ -2,15 +2,17 @@
 //!
 //! A file node used the interpolated path as given, so `../` or an absolute
 //! path reached any file the process could. An HTTP node requested any URL the
-//! state produced. Both are now confined.
+//! state produced. Both are now confined, and a node whose backend does not
+//! exist says it is not implemented rather than pointing at a feature flag.
 
 #![cfg(feature = "action")]
 
 use std::path::PathBuf;
 
 use adk_action::{
-    ActionNodeConfig, Callbacks, ErrorHandling, ErrorMode, ExecutionControl, FileNodeConfig,
-    FileOperation, FileWriteConfig, InputOutputMapping, LocalFileConfig, LogLevel,
+    ActionNodeConfig, Callbacks, CodeLanguage, CodeNodeConfig, DatabaseConnection,
+    DatabaseNodeConfig, DatabaseType, ErrorHandling, ErrorMode, ExecutionControl, FileNodeConfig,
+    FileOperation, FileWriteConfig, InputOutputMapping, LocalFileConfig, LogLevel, SqlConfig,
     StandardProperties, Tracing,
 };
 use adk_graph::action::ActionNodeExecutor;
@@ -128,4 +130,36 @@ async fn a_file_url_is_rejected_by_an_http_node() {
     let message = failure(&executor, state).await;
 
     assert!(message.contains("scheme 'file' is not permitted"), "{message}");
+}
+
+#[tokio::test]
+async fn unimplemented_nodes_say_so_when_executed() {
+    let database = ActionNodeExecutor::new(ActionNodeConfig::Database(DatabaseNodeConfig {
+        standard: standard("db"),
+        connection: DatabaseConnection {
+            database_type: DatabaseType::Postgresql,
+            connection_string: Some("postgres://localhost/db".to_string()),
+            credential_ref: None,
+        },
+        sql: Some(SqlConfig {
+            query: "select 1".to_string(),
+            params: Vec::new(),
+            operation: "query".to_string(),
+        }),
+        mongo: None,
+        redis: None,
+    }));
+    let javascript = ActionNodeExecutor::new(ActionNodeConfig::Code(CodeNodeConfig {
+        standard: standard("js"),
+        language: CodeLanguage::Javascript,
+        code: "return 1;".to_string(),
+        sandbox: None,
+    }));
+
+    for message in
+        [failure(&database, State::new()).await, failure(&javascript, State::new()).await]
+    {
+        assert!(message.contains("not implemented"), "{message}");
+        assert!(!message.contains("feature is reserved"), "{message}");
+    }
 }

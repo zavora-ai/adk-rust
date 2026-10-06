@@ -126,13 +126,13 @@ impl ActionNodeExecutor {
     pub fn unavailable_reason(&self) -> Option<String> {
         match &self.config {
             ActionNodeConfig::Database(config) => Some(format!(
-                "database node '{}' cannot execute: the driver is a validated placeholder \
-                 with no backend integrated",
+                "database node '{}' cannot execute: database action nodes are not \
+                 implemented in any feature configuration",
                 config.standard.id
             )),
             ActionNodeConfig::Email(config) => Some(format!(
-                "email node '{}' cannot execute: IMAP monitoring and SMTP sending are \
-                 not implemented",
+                "email node '{}' cannot execute: email action nodes are not implemented \
+                 in any feature configuration",
                 config.standard.id
             )),
             ActionNodeConfig::Code(config)
@@ -142,8 +142,8 @@ impl ActionNodeExecutor {
                 ) =>
             {
                 Some(format!(
-                    "code node '{}' cannot execute: JavaScript and TypeScript have no \
-                     sandboxed runtime yet; use language 'rust'",
+                    "code node '{}' cannot execute: JavaScript and TypeScript code nodes are \
+                     not implemented in any feature configuration; use language 'rust'",
                     config.standard.id
                 ))
             }
@@ -199,10 +199,14 @@ impl ActionNodeExecutor {
 
             #[cfg(feature = "action-db")]
             ActionNodeConfig::Database(c) => database::execute_database(c, ctx).await,
+            // Not "enable the feature": the feature compiles a placeholder that
+            // fails the same way, so naming it would send the caller nowhere.
             #[cfg(not(feature = "action-db"))]
             ActionNodeConfig::Database(_) => Err(GraphError::NodeExecutionFailed {
                 node: self.config.standard().id.clone(),
-                message: "Database node requires the 'action-db' feature".into(),
+                message: "database action nodes are not implemented; no database driver is \
+                          integrated"
+                    .into(),
             }),
 
             #[cfg(feature = "action-email")]
@@ -210,7 +214,9 @@ impl ActionNodeExecutor {
             #[cfg(not(feature = "action-email"))]
             ActionNodeConfig::Email(_) => Err(GraphError::NodeExecutionFailed {
                 node: self.config.standard().id.clone(),
-                message: "Email node requires the 'action-email' feature".into(),
+                message: "email action nodes are not implemented; neither IMAP monitoring nor \
+                          SMTP sending is integrated"
+                    .into(),
             }),
 
             #[cfg(feature = "action-http")]

@@ -1,10 +1,9 @@
-//! Database action node executor (requires `action-db` feature).
+//! Database action node executor (compiled with the `action-db` feature).
 //!
-//! Validates the database configuration and returns an informative error
-//! about the required database driver. The actual database drivers (`sqlx`,
-//! `mongodb`, `redis`) are not yet wired as dependencies — this module
-//! serves as a validated placeholder that will be replaced once the heavy
-//! dependencies are added.
+//! **Not implemented.** No database driver is integrated under any feature,
+//! so this module validates the configuration and then returns an error saying
+//! so. [`ActionNodeExecutor`](super::ActionNodeExecutor) rejects a database
+//! node when the graph is built, before any node runs.
 
 use adk_action::{DatabaseNodeConfig, DatabaseType};
 
@@ -106,11 +105,8 @@ fn execute_sql_placeholder(config: &DatabaseNodeConfig, node_id: &str) -> Result
     Err(GraphError::NodeExecutionFailed {
         node: node_id.to_string(),
         message: format!(
-            "SQL database execution for {:?} is not yet available. \
-             The 'action-db' feature is reserved for sqlx integration. \
-             To enable SQL support, add sqlx as a dependency and implement \
-             the connection pool and query execution in this module.",
-            db_type
+            "database action nodes are not implemented: no {db_type:?} driver is integrated, \
+             in any feature configuration; run the query from a function node instead"
         ),
     })
 }
@@ -132,10 +128,8 @@ fn execute_mongo_placeholder(config: &DatabaseNodeConfig, node_id: &str) -> Resu
 
     Err(GraphError::NodeExecutionFailed {
         node: node_id.to_string(),
-        message: "MongoDB execution is not yet available. \
-                  The 'action-db-mongo' feature is reserved for the mongodb driver. \
-                  To enable MongoDB support, add the mongodb crate as a dependency \
-                  and implement the driver integration in this module."
+        message: "database action nodes are not implemented: no MongoDB driver is integrated, \
+                  in any feature configuration; run the operation from a function node instead"
             .to_string(),
     })
 }
@@ -157,10 +151,8 @@ fn execute_redis_placeholder(config: &DatabaseNodeConfig, node_id: &str) -> Resu
 
     Err(GraphError::NodeExecutionFailed {
         node: node_id.to_string(),
-        message: "Redis execution is not yet available. \
-                  The 'action-db-redis' feature is reserved for a Redis client. \
-                  To enable Redis support, add a Redis crate as a dependency \
-                  and implement the command execution in this module."
+        message: "database action nodes are not implemented: no Redis client is integrated, \
+                  in any feature configuration; run the command from a function node instead"
             .to_string(),
     })
 }

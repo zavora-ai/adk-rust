@@ -1,9 +1,9 @@
-//! Email action node executor (requires `action-email` feature).
+//! Email action node executor (compiled with the `action-email` feature).
 //!
-//! Validates the email configuration and returns an informative error
-//! about the required email drivers. The actual drivers (`lettre` for SMTP,
-//! `imap`/`native-tls`/`mailparse` for IMAP) are not yet wired as
-//! dependencies — this module serves as a validated placeholder.
+//! **Not implemented.** Neither SMTP sending nor IMAP monitoring is integrated
+//! under any feature, so this module validates the configuration and then
+//! returns an error saying so. [`ActionNodeExecutor`](super::ActionNodeExecutor)
+//! rejects an email node when the graph is built, before any node runs.
 
 use adk_action::{EmailMode, EmailNodeConfig};
 
@@ -33,10 +33,8 @@ pub async fn execute_email(config: &EmailNodeConfig, _ctx: &NodeContext) -> Resu
 
             Err(GraphError::NodeExecutionFailed {
                 node: node_id.to_string(),
-                message: "Email monitoring (IMAP) is not yet available. \
-                          The 'action-email' feature is reserved for imap/native-tls/mailparse \
-                          integration. To enable IMAP support, add these crates as dependencies \
-                          and implement the IMAP connection and search logic in this module."
+                message: "email action nodes are not implemented: IMAP monitoring is not \
+                          integrated, in any feature configuration"
                     .to_string(),
             })
         }
@@ -56,10 +54,8 @@ pub async fn execute_email(config: &EmailNodeConfig, _ctx: &NodeContext) -> Resu
 
             Err(GraphError::NodeExecutionFailed {
                 node: node_id.to_string(),
-                message: "Email sending (SMTP) is not yet available. \
-                          The 'action-email' feature is reserved for lettre integration. \
-                          To enable SMTP support, add the lettre crate as a dependency \
-                          and implement the message builder and transport in this module."
+                message: "email action nodes are not implemented: SMTP sending is not \
+                          integrated, in any feature configuration"
                     .to_string(),
             })
         }
