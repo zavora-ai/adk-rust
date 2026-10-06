@@ -93,6 +93,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
 
+### Security
+
+- **adk-devtools: file tools refuse dangling symlinks, and `glob` stays inside the
+  workspace.** `Workspace::resolve` stepped past a path component that failed to
+  canonicalize, so a dangling symlink passed the containment check and `write_file`
+  followed it, creating its target outside the root — a repository containing
+  `link -> ~/.zshenv` let `write_file("link", ..)` create `~/.zshenv`. Dangling and
+  looping symlinks are now refused wherever they point, and `write_file`/`edit_file`
+  re-check the canonical parent before the open and open with `O_NOFOLLOW` on Unix.
+  `glob` joined the pattern onto the root unchecked, so `../*` and symlinked
+  directories listed host paths; it now refuses `..` and absolute patterns, escapes
+  the root path, and drops every match that resolves outside the root.
+- **adk-devtools: `bash` output is capped as it is read, and a cancelled call kills
+  the command.** Output was collected in full and cut afterwards with
+  `String::truncate`, which bounded only the report and panicked when the cap fell
+  inside a multi-byte character. Each stream now keeps at most `max_output_bytes`
+  while reading, drains and discards the excess so the command still completes, and
+  cuts on a character boundary. Dropping the tool call left the command and its
+  descendants running; the process group is now killed on drop, as on timeout.
+
 ## [2.2.0] - 2026-09-01
 
 ### Added
