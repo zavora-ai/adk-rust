@@ -462,7 +462,7 @@ Specialist opt-in features:
 - `codeact` — CodeAct agents: the model acts by writing code (forwarded to adk-agent)
 - `codeact-monty` — Python `CodeRuntime` for the CodeActAgent via the Monty interpreter (adk-codeact-monty; implies `codeact`)
 - `slack`, `bigquery`, `spanner` — Native toolsets
-- `action`, `action-http`, `action-trigger`, `action-db`, `action-code`, `action-email`, `action-rss`, `action-full` — Action node executors
+- `action`, `action-http`, `action-trigger`, `action-db`, `action-code`, `action-email`, `action-rss`, `action-full` — Action node executors. Implemented: trigger, set, transform, switch, loop, merge, wait, file (confined to allowed roots), Rust code, HTTP and notification (`action-http`, host/scheme policy), RSS (`action-rss`). `action-db`, `action-email`, and `action-code` compile placeholders only: database, email, and JavaScript/TypeScript code nodes are not implemented and are rejected when the graph compiles
 - `video-avatar` — HeyGen/D-ID avatar providers
 - `acp` — Agent Client Protocol integration
 - `openrouter` — OpenRouter native APIs
