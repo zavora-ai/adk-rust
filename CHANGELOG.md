@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`adk-acp` moves to `agent-client-protocol` 2.2.** `adk_acp::agent_client_protocol`
   re-exports the SDK, so code that uses it directly compiles against the 2.x API.
   The wire protocol stays stable ACP v1, and the `adk-acp` API is unchanged.
+- **AP2 amount conversion is fallible** (`adk-payments`, `ap2`):
+  `PaymentCurrencyAmount::to_money` and `Ap2McpReceiptStatus::from_receipt`
+  return `Result<_, Ap2Error>`. Malformed, over-precise, or overflowing amounts
+  return `Ap2Error::InvalidAmount` instead of a zero or wrapped value.
 
 ### Added
 
@@ -33,6 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is also applied to invocation-scoped toolsets.
 ### Fixed
 
+- **AP2 amount parsing** (`adk-payments`, `ap2`): the sign comes from the decimal
+  string, so `-0.50` is `-50` minor units rather than `+50`, and exponent
+  notation parses exactly. Every amount in a cart shares one scale, so
+  mixed-precision items no longer produce a spurious `ap2_unallocated_delta`.
+  Cart sums use checked arithmetic; overflow, more than 18 fraction digits, and
+  mixed currencies return `Ap2Error::InvalidAmount` instead of panicking or
+  wrapping.
+- **Scale-aware amount guardrail** (`adk-payments`): `AmountThresholdGuardrail`
+  compares totals with thresholds by value across scales and denies when the two
+  cannot be aligned.
 - **`acp_full_protocol` permission tests** (`examples/acp_full_protocol`): the
   example reads `tool_confirmation_decisions` by function-call ID, matching the
   key the ACP server populates, so approval and denial resume correctly.
@@ -92,6 +106,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
+- **AP2 adapter requires verifiers** (`adk-payments`, `ap2`): `Ap2Adapter::new`
+  configures no authorization verifier, so merchant, intent, and payment
+  authorizations fail with `Ap2Error::AuthorizationVerifierNotConfigured` until
+  `with_merchant_authorization_verifier` and `with_user_authorization_verifier`
+  are set. `allow_unverified_authorizations()` restores the presence-only checks
+  for local development and logs a warning.
+- **`AcpVerificationConfig::strict()` enforces signatures and timestamps**
+  (`adk-payments`, `acp`): the strict profile requires a verified `Signature`, a
+  `Timestamp` within five minutes, and an `Idempotency-Key` on POST, and router
+  `build()` fails until `with_signature_verifier` is set. The previous
+  idempotency-only profile is
+  `permissive().with_idempotency_mode(IdempotencyMode::RequireForPost)`.
+- **Amounts follow the currency minor unit** (`adk-payments`): AP2 amounts and ACP
+  delegated-payment allowances use the ISO 4217 minor-unit scale (`JPY` 0, `KWD`
+  3) instead of a fixed scale of 2. `AmountThresholdGuardrail::new` thresholds are
+  minor units at that scale; `with_currency` binds them to one currency and
+  denies the others.
+- **AP2 human-not-present authority** (`adk-payments`, `ap2`): an intent needs
+  merchant or SKU constraints; `requires_refundability` alone no longer
+  authorizes autonomous payment.
+
+### Security
+
+- **AP2 authorizations are verified, not just present** (`adk-payments`, `ap2`):
+  the default verifiers accepted any non-empty `merchant_authorization` or
+  `user_authorization`, so a forged value reached `execute_payment`. The adapter
+  now rejects every authorization until cryptographic verifiers are configured.
+  A merchant verifier that sets `VERIFIED_MERCHANT_NAME_CLAIM` makes the adapter
+  reject carts whose `merchant_name` differs from the verified signer.
+- **AP2 payment mandates are single-use** (`adk-payments`, `ap2`): the adapter
+  consumes each mandate in a `PaymentMandateLedger` before execution and records
+  it on the transaction. A resubmitted mandate returns
+  `Ap2Error::PaymentMandateReplayed`, a second mandate for a paid transaction
+  returns `Ap2Error::TransactionAlreadyPaid`, and `ap2_payment_mandate_id` is
+  never rebound by later receipts. `with_payment_mandate_ledger` plugs in shared
+  storage for multi-instance deployments.
+- **ACP signature enforcement without a verifier** (`adk-payments`, `acp`):
+  `require_signature(true)` without `with_signature_verifier` only checked that
+  the header existed. Router `build()` now fails for that profile, and the
+  request verifier rejects every request if reached.
+- **Card data in delegated-payment selections** (`adk-payments`, `acp`):
+  `PaymentMethodSelection.extensions` carried the full card, including PAN, CVC,
+  and cryptogram. It now keeps only type, funding type, brand, last four digits,
+  wallet type, and the virtual flag.
 
 ## [2.2.0] - 2026-09-01
 

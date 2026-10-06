@@ -6,6 +6,7 @@
 
 mod adapter;
 mod error;
+mod ledger;
 mod mapper;
 mod types;
 mod verification;
@@ -20,6 +21,7 @@ pub mod mcp;
 
 pub use adapter::Ap2Adapter;
 pub use error::Ap2Error;
+pub use ledger::{InMemoryPaymentMandateLedger, PaymentMandateLedger};
 pub use types::{
     AP2_A2A_EXTENSION_URI, AP2_CART_MANDATE_DATA_KEY, AP2_CONTACT_ADDRESS_DATA_KEY,
     AP2_INTENT_MANDATE_DATA_KEY, AP2_PAYMENT_MANDATE_DATA_KEY, AP2_PAYMENT_METHOD_DATA_KEY,
@@ -30,8 +32,9 @@ pub use types::{
     PaymentShippingOption, PaymentStatusEnvelope, PaymentSuccessStatus,
 };
 pub use verification::{
-    MerchantAuthorizationVerifier, RequireMerchantAuthorization, RequireUserAuthorization,
-    UserAuthorizationVerifier, VerifiedAuthorization,
+    CRYPTOGRAPHICALLY_VERIFIED_CLAIM, MerchantAuthorizationVerifier, RequireMerchantAuthorization,
+    RequireUserAuthorization, UserAuthorizationVerifier, VERIFIED_MERCHANT_NAME_CLAIM,
+    VerifiedAuthorization,
 };
 
 #[cfg(feature = "ap2-a2a")]

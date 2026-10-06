@@ -2,16 +2,27 @@
 
 mod support;
 
+use std::sync::Arc;
+
+use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 use adk_payments::AP2_ALPHA_BASELINE;
 use adk_payments::domain::{
-    CommerceMode, InterventionKind, InterventionStatus, OrderState, ProtocolDescriptor,
-    ReceiptState, TransactionState, TransactionStateTag,
+    Cart, CartLine, CommerceMode, InterventionKind, InterventionStatus, MAX_MONEY_SCALE, Money,
+    MoneyError, OrderState, ProtocolDescriptor, ProtocolExtensions, ReceiptState, TransactionState,
+    TransactionStateTag,
 };
+use adk_payments::kernel::CommerceContext;
 use adk_payments::protocol::ap2::{
-    Ap2Adapter, AuthorizationArtifact, CartMandate, IntentMandate, PaymentMandate, PaymentReceipt,
+    Ap2Adapter, Ap2Error, AuthorizationArtifact, CRYPTOGRAPHICALLY_VERIFIED_CLAIM, CartMandate,
+    IntentMandate, MerchantAuthorizationVerifier, PaymentMandate, PaymentReceipt,
+    UserAuthorizationVerifier, VERIFIED_MERCHANT_NAME_CLAIM, VerifiedAuthorization,
 };
+use async_trait::async_trait;
 use chrono::{Duration, Utc};
-use serde_json::json;
+use hmac::{Hmac, Mac};
+use serde::Serialize;
+use serde_json::{Map, Value, json};
+use sha2::Sha256;
 use support::commerce_harness::{
     HarnessActorKind, MultiActorHarness, MultiActorHarnessActors, MultiActorHarnessConfig,
 };
@@ -97,12 +108,14 @@ fn touch_acp_harness_api() {
 async fn test_ap2_human_present_shopper_merchant_payment_processor_journey() {
     touch_acp_harness_api();
     let harness = MultiActorHarness::new(MultiActorHarnessConfig::ap2_defaults()).await;
+    // Flow coverage only; signature verification is covered by the HMAC verifier tests below.
     let adapter = Ap2Adapter::new(
         harness.backend.clone(),
         harness.backend.clone(),
         harness.backend.clone(),
         harness.backend.clone(),
-    );
+    )
+    .allow_unverified_authorizations();
 
     let tx_id = "hp-tx-001";
     let details_id = "hp-details-001";
@@ -256,6 +269,7 @@ async fn test_ap2_human_not_present_intent_autonomous_and_forced_return() {
         harness.backend.clone(),
         harness.backend.clone(),
     )
+    .allow_unverified_authorizations()
     .with_intervention_service(harness.backend.clone());
 
     let tx_id_auto = "hnp-auto-001";
@@ -423,4 +437,478 @@ async fn test_ap2_human_not_present_intent_autonomous_and_forced_return() {
     assert!(actions.iter().any(|action| {
         action.actor == HarnessActorKind::Shopper && action.action == "begin_intervention"
     }));
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+const MERCHANT_KEY: &[u8] = b"merchant-signing-key";
+const USER_KEY: &[u8] = b"user-signing-key";
+
+fn forged_authorization() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Auth,
+        ErrorCategory::Unauthorized,
+        "payments.ap2.test.forged_authorization",
+        "authorization signature does not match the mandate",
+    )
+}
+
+fn hmac_hex(key: &[u8], payload: &impl Serialize) -> String {
+    let mut mac = HmacSha256::new_from_slice(key).unwrap();
+    mac.update(&serde_json::to_vec(payload).unwrap());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+fn verify_hmac(key: &[u8], payload: &impl Serialize, signature: &str) -> adk_core::Result<()> {
+    let signature = hex::decode(signature).map_err(|_| forged_authorization())?;
+    let mut mac = HmacSha256::new_from_slice(key).unwrap();
+    mac.update(&serde_json::to_vec(payload).unwrap());
+    // `verify_slice` compares in constant time.
+    mac.verify_slice(&signature).map_err(|_| forged_authorization())
+}
+
+/// Accepts carts whose authorization is an HMAC of `contents` under the merchant key.
+struct HmacMerchantVerifier {
+    merchant_name: String,
+}
+
+#[async_trait]
+impl MerchantAuthorizationVerifier for HmacMerchantVerifier {
+    async fn verify_cart_authorization(
+        &self,
+        mandate: &CartMandate,
+        artifact: &AuthorizationArtifact,
+    ) -> adk_core::Result<VerifiedAuthorization> {
+        verify_hmac(MERCHANT_KEY, &mandate.contents, &artifact.value)?;
+        let mut claims = Map::new();
+        claims.insert(VERIFIED_MERCHANT_NAME_CLAIM.to_string(), json!(self.merchant_name));
+        Ok(VerifiedAuthorization::new("merchant_authorization", claims))
+    }
+}
+
+/// Accepts intents and payment mandates signed with the user key.
+struct HmacUserVerifier;
+
+#[async_trait]
+impl UserAuthorizationVerifier for HmacUserVerifier {
+    async fn verify_intent_authorization(
+        &self,
+        mandate: &IntentMandate,
+        artifact: &AuthorizationArtifact,
+    ) -> adk_core::Result<VerifiedAuthorization> {
+        verify_hmac(USER_KEY, mandate, &artifact.value)?;
+        Ok(VerifiedAuthorization::new("intent_authorization", Map::new()))
+    }
+
+    async fn verify_payment_authorization(
+        &self,
+        mandate: &PaymentMandate,
+        artifact: &AuthorizationArtifact,
+    ) -> adk_core::Result<VerifiedAuthorization> {
+        verify_hmac(USER_KEY, &mandate.payment_mandate_contents, &artifact.value)?;
+        Ok(VerifiedAuthorization::new("user_authorization", Map::new()))
+    }
+}
+
+fn signed_cart_mandate(details_id: &str) -> CartMandate {
+    let mut cart = make_cart_mandate(details_id);
+    cart.merchant_authorization = Some(hmac_hex(MERCHANT_KEY, &cart.contents));
+    cart
+}
+
+fn signed_payment_mandate(details_id: &str) -> PaymentMandate {
+    let mut payment = make_payment_mandate(details_id, None);
+    payment.user_authorization = Some(hmac_hex(USER_KEY, &payment.payment_mandate_contents));
+    payment
+}
+
+fn cart_with_amounts(cart_id: &str, currency: &str, items: &[Value], total: Value) -> CartMandate {
+    let display_items: Vec<Value> = items
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            json!({"label": format!("item-{index}"), "amount": {"currency": currency, "value": value}})
+        })
+        .collect();
+    serde_json::from_value(json!({
+        "contents": {
+            "id": cart_id,
+            "user_cart_confirmation_required": false,
+            "payment_request": {
+                "method_data": [{"supported_methods": "CARD"}],
+                "details": {
+                    "id": cart_id,
+                    "display_items": display_items,
+                    "total": {"label": "Total", "amount": {"currency": currency, "value": total}}
+                }
+            },
+            "cart_expiry": future_expiry(),
+            "merchant_name": "AP2 Merchant"
+        },
+        "merchant_authorization": "unverified-merchant-signature"
+    }))
+    .expect("cart mandate JSON should be valid")
+}
+
+fn assert_ap2_error(error: AdkError, expected: Ap2Error) {
+    let expected = AdkError::from(expected);
+    assert_eq!((error.code, error.message), (expected.code, expected.message));
+}
+
+async fn execute_count(harness: &MultiActorHarness, transaction_id: &str) -> usize {
+    harness
+        .recorded_actions()
+        .await
+        .iter()
+        .filter(|action| {
+            action.transaction_id == transaction_id && action.action == "execute_payment"
+        })
+        .count()
+}
+
+fn ap2_contexts(
+    harness: &MultiActorHarness,
+    transaction_id: &str,
+    mode: CommerceMode,
+) -> (CommerceContext, CommerceContext) {
+    let protocol = ProtocolDescriptor::ap2(AP2_ALPHA_BASELINE);
+    (
+        harness.merchant_context(transaction_id, mode, protocol.clone()),
+        harness.shopper_context(transaction_id, mode, protocol),
+    )
+}
+
+#[tokio::test]
+async fn ap2_adapter_without_verifiers_rejects_every_authorization() {
+    touch_acp_harness_api();
+    let harness = MultiActorHarness::new(MultiActorHarnessConfig::ap2_defaults()).await;
+    let backend = harness.backend.clone();
+    let unconfigured =
+        Ap2Adapter::new(backend.clone(), backend.clone(), backend.clone(), backend.clone());
+    let (merchant, shopper) = ap2_contexts(&harness, "no-verifier-001", CommerceMode::HumanPresent);
+
+    let error = unconfigured
+        .submit_cart_mandate(merchant.clone(), make_cart_mandate("no-verifier-cart"))
+        .await
+        .unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::AuthorizationVerifierNotConfigured {
+            artifact_kind: "merchant_authorization".to_string(),
+        },
+    );
+
+    let (_, hnp_shopper) =
+        ap2_contexts(&harness, "no-verifier-intent", CommerceMode::HumanNotPresent);
+    let error = unconfigured
+        .submit_intent_mandate(
+            hnp_shopper,
+            IntentMandate {
+                user_cart_confirmation_required: false,
+                natural_language_description: "Buy shoes".to_string(),
+                merchants: Some(vec!["AP2 Merchant".to_string()]),
+                skus: None,
+                requires_refundability: false,
+                intent_expiry: future_expiry(),
+            },
+            Some(AuthorizationArtifact::new("user_intent_authorization", "x", "text/plain")),
+        )
+        .await
+        .unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::AuthorizationVerifierNotConfigured {
+            artifact_kind: "intent_authorization".to_string(),
+        },
+    );
+
+    // A configured merchant verifier does not stand in for the missing user verifier.
+    let merchant_only = Ap2Adapter::new(backend.clone(), backend.clone(), backend.clone(), backend)
+        .with_merchant_authorization_verifier(Arc::new(HmacMerchantVerifier {
+            merchant_name: "AP2 Merchant".to_string(),
+        }));
+    merchant_only
+        .submit_cart_mandate(merchant, signed_cart_mandate("no-verifier-cart"))
+        .await
+        .expect("signed cart should pass the merchant verifier");
+    let error = merchant_only
+        .submit_payment_mandate(
+            shopper,
+            make_payment_mandate("no-verifier-cart", Some("x".to_string())),
+        )
+        .await
+        .unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::AuthorizationVerifierNotConfigured {
+            artifact_kind: "user_authorization".to_string(),
+        },
+    );
+    assert_eq!(execute_count(&harness, "no-verifier-001").await, 0);
+}
+
+#[tokio::test]
+async fn ap2_verifiers_reject_forged_authorizations_and_accept_signed_ones() {
+    touch_acp_harness_api();
+    let harness = MultiActorHarness::new(MultiActorHarnessConfig::ap2_defaults()).await;
+    let backend = harness.backend.clone();
+    let adapter = Ap2Adapter::new(backend.clone(), backend.clone(), backend.clone(), backend)
+        .with_merchant_authorization_verifier(Arc::new(HmacMerchantVerifier {
+            merchant_name: "AP2 Merchant".to_string(),
+        }))
+        .with_user_authorization_verifier(Arc::new(HmacUserVerifier));
+    let tx_id = "verified-001";
+    let (merchant, shopper) = ap2_contexts(&harness, tx_id, CommerceMode::HumanPresent);
+
+    let mut forged_cart = make_cart_mandate("verified-cart");
+    forged_cart.merchant_authorization = Some("x".to_string());
+    let error = adapter.submit_cart_mandate(merchant.clone(), forged_cart).await.unwrap_err();
+    assert_eq!(error.code, "payments.ap2.test.forged_authorization");
+
+    let mut impostor = make_cart_mandate("verified-cart");
+    impostor.contents.merchant_name = "Impostor Shop".to_string();
+    impostor.merchant_authorization = Some(hmac_hex(MERCHANT_KEY, &impostor.contents));
+    let error = adapter.submit_cart_mandate(merchant.clone(), impostor).await.unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::MerchantIdentityMismatch {
+            claimed: "Impostor Shop".to_string(),
+            verified: "AP2 Merchant".to_string(),
+        },
+    );
+
+    adapter
+        .submit_cart_mandate(merchant, signed_cart_mandate("verified-cart"))
+        .await
+        .expect("signed cart should be accepted");
+
+    let error = adapter
+        .submit_payment_mandate(
+            shopper.clone(),
+            make_payment_mandate("verified-cart", Some("x".to_string())),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "payments.ap2.test.forged_authorization");
+    assert_eq!(execute_count(&harness, tx_id).await, 0);
+
+    let result = adapter
+        .submit_payment_mandate(shopper, signed_payment_mandate("verified-cart"))
+        .await
+        .expect("signed payment mandate should execute");
+    assert_eq!(result.outcome, adk_payments::kernel::PaymentExecutionOutcome::Completed);
+    assert_eq!(execute_count(&harness, tx_id).await, 1);
+}
+
+#[tokio::test]
+async fn ap2_unverified_opt_in_accepts_any_non_empty_authorization() {
+    touch_acp_harness_api();
+    let harness = MultiActorHarness::new(MultiActorHarnessConfig::ap2_defaults()).await;
+    let backend = harness.backend.clone();
+    let adapter = Ap2Adapter::new(backend.clone(), backend.clone(), backend.clone(), backend)
+        .allow_unverified_authorizations();
+    let tx_id = "unverified-001";
+    let (merchant, shopper) = ap2_contexts(&harness, tx_id, CommerceMode::HumanPresent);
+
+    adapter.submit_cart_mandate(merchant, make_cart_mandate("unverified-cart")).await.unwrap();
+    let result = adapter
+        .submit_payment_mandate(
+            shopper,
+            make_payment_mandate("unverified-cart", Some("x".to_string())),
+        )
+        .await
+        .expect("the development opt-in accepts any non-empty authorization");
+
+    let verification = result
+        .transaction
+        .extensions
+        .as_slice()
+        .iter()
+        .find_map(|envelope| envelope.fields.get("user_authorization_verification"))
+        .expect("payment envelope should record the verification");
+    assert_eq!(verification["claims"][CRYPTOGRAPHICALLY_VERIFIED_CLAIM], json!(false));
+}
+
+#[tokio::test]
+async fn ap2_payment_mandates_are_single_use() {
+    touch_acp_harness_api();
+    let harness = MultiActorHarness::new(MultiActorHarnessConfig::ap2_defaults()).await;
+    let backend = harness.backend.clone();
+    let adapter = Ap2Adapter::new(backend.clone(), backend.clone(), backend.clone(), backend)
+        .allow_unverified_authorizations();
+    let tx_id = "replay-001";
+    let details_id = "replay-cart";
+    let (merchant, shopper) = ap2_contexts(&harness, tx_id, CommerceMode::HumanPresent);
+    let payment = make_payment_mandate(details_id, Some("user-signed".to_string()));
+
+    adapter.submit_cart_mandate(merchant, make_cart_mandate(details_id)).await.unwrap();
+    adapter.submit_payment_mandate(shopper.clone(), payment.clone()).await.unwrap();
+
+    let error = adapter.submit_payment_mandate(shopper.clone(), payment.clone()).await.unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::PaymentMandateReplayed {
+            payment_mandate_id: format!("pm-{details_id}"),
+            transaction_id: tx_id.to_string(),
+        },
+    );
+
+    let mut second = payment.clone();
+    second.payment_mandate_contents.payment_mandate_id = "pm-second".to_string();
+    let error = adapter.submit_payment_mandate(shopper, second).await.unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::TransactionAlreadyPaid {
+            transaction_id: tx_id.to_string(),
+            executed_payment_mandate_id: format!("pm-{details_id}"),
+        },
+    );
+    assert_eq!(execute_count(&harness, tx_id).await, 1);
+
+    let processor = harness.payment_processor_context(
+        tx_id,
+        CommerceMode::HumanPresent,
+        ProtocolDescriptor::ap2(AP2_ALPHA_BASELINE),
+    );
+    let error = adapter
+        .apply_payment_receipt(processor, make_success_receipt("pm-other"))
+        .await
+        .unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::PaymentMandateMismatch {
+            payment_mandate_id: "pm-other".to_string(),
+            field: "payment_receipt.payment_mandate_id".to_string(),
+        },
+    );
+    let record = harness.transaction(tx_id).await;
+    assert_eq!(record.protocol_refs.ap2_payment_mandate_id, Some(format!("pm-{details_id}")));
+
+    // The same signed cart and mandate replayed into a fresh transaction.
+    let other_tx = "replay-002";
+    let (other_merchant, other_shopper) =
+        ap2_contexts(&harness, other_tx, CommerceMode::HumanPresent);
+    adapter.submit_cart_mandate(other_merchant, make_cart_mandate(details_id)).await.unwrap();
+    let error = adapter.submit_payment_mandate(other_shopper, payment).await.unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::PaymentMandateReplayed {
+            payment_mandate_id: format!("pm-{details_id}"),
+            transaction_id: tx_id.to_string(),
+        },
+    );
+    assert_eq!(execute_count(&harness, other_tx).await, 0);
+}
+
+#[tokio::test]
+async fn ap2_refundability_alone_is_not_an_authority_constraint() {
+    touch_acp_harness_api();
+    let harness = MultiActorHarness::new(MultiActorHarnessConfig::ap2_defaults()).await;
+    let backend = harness.backend.clone();
+    let adapter = Ap2Adapter::new(backend.clone(), backend.clone(), backend.clone(), backend)
+        .allow_unverified_authorizations();
+    let (_, shopper) = ap2_contexts(&harness, "refund-only-001", CommerceMode::HumanNotPresent);
+
+    let error = adapter
+        .submit_intent_mandate(
+            shopper,
+            IntentMandate {
+                user_cart_confirmation_required: false,
+                natural_language_description: "Buy anything refundable".to_string(),
+                merchants: None,
+                skus: None,
+                requires_refundability: true,
+                intent_expiry: future_expiry(),
+            },
+            Some(AuthorizationArtifact::new("user_intent_authorization", "signed", "text/plain")),
+        )
+        .await
+        .unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::MissingAuthorityConstraints { transaction_id: "refund-only-001".to_string() },
+    );
+}
+
+#[tokio::test]
+async fn ap2_cart_amounts_are_normalised_to_one_scale() {
+    touch_acp_harness_api();
+    let harness = MultiActorHarness::new(MultiActorHarnessConfig::ap2_defaults()).await;
+    let backend = harness.backend.clone();
+    let adapter = Ap2Adapter::new(backend.clone(), backend.clone(), backend.clone(), backend)
+        .allow_unverified_authorizations();
+    let (merchant, _) = ap2_contexts(&harness, "scale-001", CommerceMode::HumanPresent);
+
+    let cart = cart_with_amounts(
+        "scale-cart",
+        "USD",
+        &[json!(1.125), json!(2.5), json!(-0.5)],
+        json!(3.125),
+    );
+    let record = adapter.submit_cart_mandate(merchant, cart).await.unwrap();
+    let line = |index: usize, amount_minor: i64| CartLine {
+        line_id: format!("scale-cart:{index}"),
+        merchant_sku: None,
+        title: format!("item-{index}"),
+        quantity: 1,
+        unit_price: Money::new("USD", amount_minor, 3),
+        total_price: Money::new("USD", amount_minor, 3),
+        product_class: None,
+        extensions: ProtocolExtensions::default(),
+    };
+    assert_eq!(
+        record.cart,
+        Cart {
+            cart_id: Some("scale-cart".to_string()),
+            lines: vec![line(0, 1_125), line(1, 2_500), line(2, -500)],
+            subtotal: Some(Money::new("USD", 3_125, 3)),
+            adjustments: Vec::new(),
+            total: Money::new("USD", 3_125, 3),
+            affiliate_attribution: None,
+            extensions: ProtocolExtensions::default(),
+        }
+    );
+
+    let (yen_merchant, _) = ap2_contexts(&harness, "scale-002", CommerceMode::HumanPresent);
+    let record = adapter
+        .submit_cart_mandate(
+            yen_merchant,
+            cart_with_amounts("yen-cart", "JPY", &[json!(1200)], json!(1200)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record.cart.total, Money::new("JPY", 1_200, 0));
+    assert!(record.cart.adjustments.is_empty());
+
+    let (bad_merchant, _) = ap2_contexts(&harness, "scale-003", CommerceMode::HumanPresent);
+    let error = adapter
+        .submit_cart_mandate(
+            bad_merchant.clone(),
+            cart_with_amounts("tiny-cart", "USD", &[json!(1e-19)], json!(1)),
+        )
+        .await
+        .unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::InvalidAmount(MoneyError::PrecisionTooHigh {
+            value: "1e-19".to_string(),
+            scale: 19,
+            max_scale: MAX_MONEY_SCALE,
+        }),
+    );
+
+    let mut mixed = cart_with_amounts("mixed-cart", "USD", &[json!(1)], json!(1));
+    mixed.contents.payment_request.details.display_items[0].amount.currency = "EUR".to_string();
+    let error = adapter.submit_cart_mandate(bad_merchant, mixed).await.unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::InvalidAmount(MoneyError::CurrencyMismatch {
+            expected: "USD".to_string(),
+            found: "EUR".to_string(),
+        }),
+    );
+    assert!(
+        !harness.recorded_actions().await.iter().any(|action| action.transaction_id == "scale-003"),
+        "rejected carts must not reach the checkout backend"
+    );
 }

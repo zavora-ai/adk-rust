@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 
 use crate::domain::Money;
+use crate::protocol::ap2::error::Ap2Error;
 
 /// AP2 alpha A2A extension URI.
 pub const AP2_A2A_EXTENSION_URI: &str = "https://github.com/google-agentic-commerce/ap2/tree/v0.1";
@@ -47,12 +48,6 @@ fn is_default_refund_period(value: &u32) -> bool {
 
 fn utc_now_rfc3339() -> String {
     Utc::now().to_rfc3339()
-}
-
-fn decimal_scale(rendered: &str) -> u32 {
-    rendered
-        .split_once('.')
-        .map_or(2, |(_, fraction)| u32::try_from(fraction.len()).unwrap_or(2).max(2))
 }
 
 /// AP2 roles advertised through mandate and A2A metadata.
@@ -147,30 +142,40 @@ impl PaymentCurrencyAmount {
         }
     }
 
-    /// Converts the AP2 amount into canonical money.
-    #[must_use]
-    pub fn to_money(&self) -> Money {
-        let rendered = self.value.to_string();
-        let scale = decimal_scale(&rendered);
-        let normalized = if let Some((whole, fraction)) = rendered.split_once('.') {
-            let padded =
-                format!("{fraction:0<width$}", width = usize::try_from(scale).unwrap_or(2));
-            let signed_whole = whole.parse::<i64>().unwrap_or_default();
-            let multiplier = 10_i64.pow(scale);
-            let whole_minor = signed_whole.saturating_mul(multiplier);
-            let fraction_minor =
-                padded[..usize::try_from(scale).unwrap_or(2)].parse::<i64>().unwrap_or_default();
-            if signed_whole.is_negative() {
-                whole_minor.saturating_sub(fraction_minor)
-            } else {
-                whole_minor.saturating_add(fraction_minor)
-            }
-        } else {
-            let whole = rendered.parse::<i64>().unwrap_or_default();
-            whole.saturating_mul(10_i64.pow(scale))
-        };
+    /// Converts the AP2 amount into canonical money without rounding.
+    ///
+    /// The sign comes from the decimal string itself, so `-0.50 USD` becomes
+    /// `-50` minor units. The scale is the currency's ISO 4217 minor-unit scale,
+    /// raised to the number of significant fraction digits when the value is
+    /// more precise than the currency's minor unit.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_payments::domain::Money;
+    /// use adk_payments::protocol::ap2::PaymentCurrencyAmount;
+    ///
+    /// let amount = PaymentCurrencyAmount::new("USD", 12.34);
+    /// assert_eq!(amount.to_money().unwrap(), Money::new("USD", 1_234, 2));
+    ///
+    /// let yen = PaymentCurrencyAmount::new("JPY", 1_200.0);
+    /// assert_eq!(yen.to_money().unwrap(), Money::new("JPY", 1_200, 0));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Ap2Error::InvalidAmount`] when the value is malformed, carries
+    /// more than [`MAX_MONEY_SCALE`](crate::domain::MAX_MONEY_SCALE) significant
+    /// fraction digits, or does not fit in `i64` minor units.
+    pub fn to_money(&self) -> Result<Money, Ap2Error> {
+        let exact = self.to_exact_money()?;
+        let scale = Money::iso_minor_unit_scale(&self.currency).unwrap_or(0).max(exact.scale);
+        Ok(exact.rescaled(scale)?)
+    }
 
-        Money::new(self.currency.clone(), normalized, scale)
+    /// Parses the value at its own significant scale, without any currency floor.
+    pub(crate) fn to_exact_money(&self) -> Result<Money, Ap2Error> {
+        Ok(Money::parse_decimal(self.currency.clone(), &self.value.to_string())?)
     }
 }
 
@@ -420,10 +425,55 @@ mod tests {
 
     use super::*;
 
+    fn amount(currency: &str, value: Value) -> PaymentCurrencyAmount {
+        serde_json::from_value(json!({"currency": currency, "value": value})).unwrap()
+    }
+
     #[test]
     fn amount_projection_preserves_minor_units() {
         let amount = PaymentCurrencyAmount::new("USD", 12.34);
-        assert_eq!(amount.to_money(), Money::new("USD", 1_234, 2));
+        assert_eq!(amount.to_money().unwrap(), Money::new("USD", 1_234, 2));
+    }
+
+    #[test]
+    fn negative_amount_below_one_major_unit_stays_negative() {
+        assert_eq!(amount("USD", json!(-0.5)).to_money().unwrap(), Money::new("USD", -50, 2));
+        assert_eq!(amount("USD", json!(-0.05)).to_money().unwrap(), Money::new("USD", -5, 2));
+    }
+
+    #[test]
+    fn amount_scale_follows_currency_minor_unit() {
+        assert_eq!(amount("JPY", json!(1200)).to_money().unwrap(), Money::new("JPY", 1_200, 0));
+        assert_eq!(amount("KWD", json!(1.5)).to_money().unwrap(), Money::new("KWD", 1_500, 3));
+        assert_eq!(amount("USD", json!(1.125)).to_money().unwrap(), Money::new("USD", 1_125, 3));
+        assert_eq!(amount("XXX", json!(7)).to_money().unwrap(), Money::new("XXX", 7, 0));
+    }
+
+    #[test]
+    fn amount_with_more_than_eighteen_fraction_digits_is_rejected() {
+        let error = amount("USD", json!(1e-19)).to_money().unwrap_err();
+        assert_eq!(
+            error,
+            Ap2Error::InvalidAmount(crate::domain::MoneyError::PrecisionTooHigh {
+                value: "1e-19".to_string(),
+                scale: 19,
+                max_scale: crate::domain::MAX_MONEY_SCALE,
+            })
+        );
+    }
+
+    #[test]
+    fn amount_overflow_is_an_error_not_a_panic() {
+        let error = amount("USD", json!(1e300)).to_money().unwrap_err();
+        assert!(matches!(
+            error,
+            Ap2Error::InvalidAmount(crate::domain::MoneyError::Overflow { .. })
+        ));
+        let error = amount("USD", json!(92_233_720_368_547_759_i64)).to_money().unwrap_err();
+        assert!(matches!(
+            error,
+            Ap2Error::InvalidAmount(crate::domain::MoneyError::Overflow { .. })
+        ));
     }
 
     #[test]

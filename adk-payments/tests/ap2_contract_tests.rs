@@ -134,7 +134,7 @@ fn mcp_receipt_view_omits_sensitive_payment_details() {
     let receipt: PaymentReceipt =
         serde_json::from_value(load_json("v0.1-alpha/payment_receipt.json")).unwrap();
 
-    let view = Ap2McpReceiptStatus::from_receipt(&record, &receipt);
+    let view = Ap2McpReceiptStatus::from_receipt(&record, &receipt).unwrap();
     let encoded = serde_json::to_string(&view).unwrap();
 
     assert_eq!(view.status, Ap2ReceiptStatusKind::Success);

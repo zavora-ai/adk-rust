@@ -142,9 +142,11 @@ impl AcpExperimentalRouterBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error when no experimental routes are configured or when a
-    /// configured route is missing a required backend service.
+    /// Returns an error when no experimental routes are configured, when a
+    /// configured route is missing a required backend service, or when the
+    /// verification profile requires signatures without a signature verifier.
     pub fn build(self) -> Result<Router> {
+        self.verification.validate()?;
         let webhook_context_template = self
             .webhook_context_template
             .unwrap_or_else(|| default_webhook_context(&self.context_template));

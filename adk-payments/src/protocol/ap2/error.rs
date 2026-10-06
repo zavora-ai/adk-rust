@@ -1,6 +1,8 @@
 use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 use thiserror::Error;
 
+use crate::domain::MoneyError;
+
 /// AP2 adapter errors that map into the ADK structured error envelope.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum Ap2Error {
@@ -30,9 +32,19 @@ pub enum Ap2Error {
     ExpiredArtifact { field: String, expires_at: String },
 
     #[error(
-        "human-not-present transaction `{transaction_id}` lacks explicit authority constraints. Add merchant, SKU, or refundability constraints before autonomous execution."
+        "no AP2 verifier is configured for `{artifact_kind}`, so the artifact cannot be verified and is rejected. Configure a cryptographic verifier on `Ap2Adapter`, or call `allow_unverified_authorizations()` for local development only."
+    )]
+    AuthorizationVerifierNotConfigured { artifact_kind: String },
+
+    #[error(
+        "human-not-present transaction `{transaction_id}` lacks explicit authority constraints. Add merchant or SKU constraints before autonomous execution; a refundability requirement alone does not bound the agent's authority."
     )]
     MissingAuthorityConstraints { transaction_id: String },
+
+    #[error(
+        "cart mandate names merchant `{claimed}`, but its authorization was verified for merchant `{verified}`. Reject the cart or have the verified merchant sign it."
+    )]
+    MerchantIdentityMismatch { claimed: String, verified: String },
 
     #[error(
         "merchant `{merchant_name}` is outside the intent mandate authority constraints. Narrow the checkout or obtain fresh user approval."
@@ -58,6 +70,33 @@ pub enum Ap2Error {
         "payment mandate `{payment_mandate_id}` does not match the current cart for field `{field}`. Rebuild the payment mandate from the latest cart state before retrying."
     )]
     PaymentMandateMismatch { payment_mandate_id: String, field: String },
+
+    #[error(
+        "payment mandate `{payment_mandate_id}` was already executed for transaction `{transaction_id}`. Payment mandates are single-use; create a new mandate for another payment."
+    )]
+    PaymentMandateReplayed { payment_mandate_id: String, transaction_id: String },
+
+    #[error(
+        "transaction `{transaction_id}` already executed payment mandate `{executed_payment_mandate_id}`. Start a new transaction for another payment."
+    )]
+    TransactionAlreadyPaid { transaction_id: String, executed_payment_mandate_id: String },
+
+    #[error(
+        "transaction `{transaction_id}` is `{state}` and no longer accepts payment mandates. Start a new transaction for another payment."
+    )]
+    TransactionNotPayable { transaction_id: String, state: String },
+
+    #[error(
+        "transaction `{transaction_id}` is bound to payment mandate `{bound_payment_mandate_id}`, not `{payment_mandate_id}`. Resubmit the bound mandate or start a new transaction."
+    )]
+    PaymentMandateRebind {
+        transaction_id: String,
+        bound_payment_mandate_id: String,
+        payment_mandate_id: String,
+    },
+
+    #[error("invalid AP2 amount: {0}")]
+    InvalidAmount(#[from] MoneyError),
 
     #[error(
         "canonical transaction `{transaction_id}` was not found. Create or resume the AP2 transaction before continuing."
@@ -101,6 +140,33 @@ impl From<Ap2Error> for AdkError {
                 ErrorComponent::Server,
                 ErrorCategory::InvalidInput,
                 "payments.ap2.invalid_input",
+                message,
+            ),
+            Ap2Error::MerchantIdentityMismatch { .. } => AdkError::new(
+                ErrorComponent::Server,
+                ErrorCategory::Forbidden,
+                "payments.ap2.merchant_identity_mismatch",
+                message,
+            ),
+            Ap2Error::AuthorizationVerifierNotConfigured { .. } => AdkError::new(
+                ErrorComponent::Server,
+                ErrorCategory::Unauthorized,
+                "payments.ap2.verifier_not_configured",
+                message,
+            ),
+            Ap2Error::PaymentMandateReplayed { .. }
+            | Ap2Error::TransactionAlreadyPaid { .. }
+            | Ap2Error::TransactionNotPayable { .. }
+            | Ap2Error::PaymentMandateRebind { .. } => AdkError::new(
+                ErrorComponent::Server,
+                ErrorCategory::Forbidden,
+                "payments.ap2.payment_mandate_refused",
+                message,
+            ),
+            Ap2Error::InvalidAmount(_) => AdkError::new(
+                ErrorComponent::Server,
+                ErrorCategory::InvalidInput,
+                "payments.ap2.invalid_amount",
                 message,
             ),
             Ap2Error::TransactionNotFound { .. } => AdkError::new(

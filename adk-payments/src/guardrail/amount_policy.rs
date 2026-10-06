@@ -1,20 +1,52 @@
+use std::cmp::Ordering;
+
 use adk_guardrail::Severity;
 
-use crate::domain::{ProtocolDescriptor, TransactionRecord};
+use crate::domain::{Money, ProtocolDescriptor, TransactionRecord};
 
 use super::{PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail};
 
 /// Enforces soft-review and hard-stop thresholds for transaction totals.
+///
+/// Totals and thresholds are compared by value, so a total expressed at a
+/// finer scale (for example `40.000 USD` at scale 3) is compared correctly with
+/// a threshold expressed in cents.
+///
+/// # Example
+///
+/// ```
+/// use adk_payments::guardrail::AmountThresholdGuardrail;
+///
+/// // Review above 50.00 USD and deny above 100.00 USD; other currencies are denied.
+/// let guardrail = AmountThresholdGuardrail::new(Some(5_000), Some(10_000)).with_currency("USD", 2);
+/// # let _ = guardrail;
+/// ```
 pub struct AmountThresholdGuardrail {
     review_threshold_minor: Option<i64>,
     hard_limit_minor: Option<i64>,
+    currency: Option<(String, u32)>,
 }
 
 impl AmountThresholdGuardrail {
     /// Creates a new amount-threshold guardrail.
+    ///
+    /// Without [`with_currency`](Self::with_currency), thresholds are minor
+    /// units of whichever currency the transaction uses, at that currency's
+    /// ISO 4217 minor-unit scale (`5_000` is 50.00 USD but 5,000 JPY). Bind the
+    /// thresholds to one currency when transactions can use several.
     #[must_use]
     pub fn new(review_threshold_minor: Option<i64>, hard_limit_minor: Option<i64>) -> Self {
-        Self { review_threshold_minor, hard_limit_minor }
+        Self { review_threshold_minor, hard_limit_minor, currency: None }
+    }
+
+    /// Expresses the thresholds in `currency` minor units at `scale`.
+    ///
+    /// Transactions in any other currency are denied, because comparing
+    /// amounts across currencies is meaningless without an exchange rate.
+    #[must_use]
+    pub fn with_currency(mut self, currency: impl Into<String>, scale: u32) -> Self {
+        self.currency = Some((currency.into(), scale));
+        self
     }
 }
 
@@ -28,31 +60,74 @@ impl PaymentPolicyGuardrail for AmountThresholdGuardrail {
         record: &TransactionRecord,
         _protocol: &ProtocolDescriptor,
     ) -> PaymentPolicyDecision {
-        let amount = record.cart.total.amount_minor;
-        let currency = record.cart.total.currency.as_str();
+        let total = &record.cart.total;
+        let total_text = format!("{} {}", total.to_decimal_string(), total.currency);
+        let (currency, scale) = match &self.currency {
+            Some((currency, scale)) if currency.eq_ignore_ascii_case(&total.currency) => {
+                (currency.clone(), *scale)
+            }
+            Some((currency, _)) => {
+                return PaymentPolicyDecision::deny(vec![PaymentPolicyFinding::new(
+                    self.name(),
+                    format!(
+                        "transaction total {total_text} is not in the guardrail currency {currency}"
+                    ),
+                    Severity::High,
+                )]);
+            }
+            None => (
+                total.currency.clone(),
+                Money::iso_minor_unit_scale(&total.currency).unwrap_or(total.scale),
+            ),
+        };
 
-        if let Some(limit) = self.hard_limit_minor
-            && amount > limit
-        {
-            return PaymentPolicyDecision::deny(vec![PaymentPolicyFinding::new(
-                self.name(),
-                format!(
-                    "transaction total {amount} {currency} exceeds the hard limit of {limit} {currency}"
-                ),
-                Severity::High,
-            )]);
+        // `Ok(Some(reason))` when the total exceeds the limit; `Err` when the
+        // two amounts cannot be aligned, which fails closed.
+        let exceeds = |limit_minor: i64, label: &str| -> Result<Option<String>, String> {
+            let limit = Money::new(currency.clone(), limit_minor, scale);
+            let limit_text = format!("{} {currency}", limit.to_decimal_string());
+            match total.compare_amount(&limit) {
+                Some(Ordering::Greater) => Ok(Some(format!(
+                    "transaction total {total_text} exceeds the {label} of {limit_text}"
+                ))),
+                Some(Ordering::Less | Ordering::Equal) => Ok(None),
+                None => Err(format!(
+                    "transaction total {total_text} cannot be compared with the {label} of {limit_text}"
+                )),
+            }
+        };
+
+        if let Some(limit) = self.hard_limit_minor {
+            match exceeds(limit, "hard limit") {
+                Ok(Some(reason)) | Err(reason) => {
+                    return PaymentPolicyDecision::deny(vec![PaymentPolicyFinding::new(
+                        self.name(),
+                        reason,
+                        Severity::High,
+                    )]);
+                }
+                Ok(None) => {}
+            }
         }
 
-        if let Some(threshold) = self.review_threshold_minor
-            && amount > threshold
-        {
-            return PaymentPolicyDecision::escalate(vec![PaymentPolicyFinding::new(
-                self.name(),
-                format!(
-                    "transaction total {amount} {currency} exceeds the review threshold of {threshold} {currency}"
-                ),
-                Severity::Medium,
-            )]);
+        if let Some(threshold) = self.review_threshold_minor {
+            match exceeds(threshold, "review threshold") {
+                Ok(Some(reason)) => {
+                    return PaymentPolicyDecision::escalate(vec![PaymentPolicyFinding::new(
+                        self.name(),
+                        reason,
+                        Severity::Medium,
+                    )]);
+                }
+                Err(reason) => {
+                    return PaymentPolicyDecision::deny(vec![PaymentPolicyFinding::new(
+                        self.name(),
+                        reason,
+                        Severity::High,
+                    )]);
+                }
+                Ok(None) => {}
+            }
         }
 
         PaymentPolicyDecision::allow()
@@ -65,11 +140,11 @@ mod tests {
 
     use super::*;
     use crate::domain::{
-        Cart, CartLine, CommerceActor, CommerceActorRole, CommerceMode, MerchantRef, Money,
+        Cart, CartLine, CommerceActor, CommerceActorRole, CommerceMode, MerchantRef,
         ProtocolExtensions, TransactionId,
     };
 
-    fn sample_record(amount_minor: i64) -> TransactionRecord {
+    fn sample_record(total: Money) -> TransactionRecord {
         TransactionRecord::new(
             TransactionId::from("tx-amount"),
             CommerceActor {
@@ -96,14 +171,14 @@ mod tests {
                     merchant_sku: Some("sku-1".to_string()),
                     title: "Widget".to_string(),
                     quantity: 1,
-                    unit_price: Money::new("USD", amount_minor, 2),
-                    total_price: Money::new("USD", amount_minor, 2),
+                    unit_price: total.clone(),
+                    total_price: total.clone(),
                     product_class: Some("widgets".to_string()),
                     extensions: ProtocolExtensions::default(),
                 }],
-                subtotal: Some(Money::new("USD", amount_minor, 2)),
+                subtotal: Some(total.clone()),
                 adjustments: Vec::new(),
-                total: Money::new("USD", amount_minor, 2),
+                total,
                 affiliate_attribution: None,
                 extensions: ProtocolExtensions::default(),
             },
@@ -111,13 +186,83 @@ mod tests {
         )
     }
 
+    fn evaluate(guardrail: &AmountThresholdGuardrail, total: Money) -> PaymentPolicyDecision {
+        guardrail.evaluate(&sample_record(total), &ProtocolDescriptor::acp("2026-01-30"))
+    }
+
+    fn finding(reason: &str, severity: Severity) -> Vec<PaymentPolicyFinding> {
+        vec![PaymentPolicyFinding::new("amount_threshold", reason, severity)]
+    }
+
     #[test]
     fn amount_threshold_escalates_before_hard_limit() {
         let guardrail = AmountThresholdGuardrail::new(Some(5_000), Some(10_000));
-        let decision =
-            guardrail.evaluate(&sample_record(7_500), &ProtocolDescriptor::acp("2026-01-30"));
 
-        assert!(decision.is_escalate());
-        assert_eq!(decision.findings()[0].guardrail, "amount_threshold");
+        assert_eq!(
+            evaluate(&guardrail, Money::new("USD", 7_500, 2)),
+            PaymentPolicyDecision::escalate(finding(
+                "transaction total 75.00 USD exceeds the review threshold of 50.00 USD",
+                Severity::Medium,
+            ))
+        );
+    }
+
+    #[test]
+    fn three_decimal_total_is_compared_by_value() {
+        let guardrail = AmountThresholdGuardrail::new(Some(5_000), Some(10_000));
+
+        assert_eq!(
+            evaluate(&guardrail, Money::new("USD", 40_000, 3)),
+            PaymentPolicyDecision::allow()
+        );
+        assert_eq!(
+            evaluate(&guardrail, Money::new("USD", 100_001, 3)),
+            PaymentPolicyDecision::deny(finding(
+                "transaction total 100.001 USD exceeds the hard limit of 100.00 USD",
+                Severity::High,
+            ))
+        );
+    }
+
+    #[test]
+    fn currency_agnostic_thresholds_use_the_currency_minor_unit() {
+        let guardrail = AmountThresholdGuardrail::new(None, Some(5_000));
+
+        assert_eq!(
+            evaluate(&guardrail, Money::new("JPY", 4_000, 0)),
+            PaymentPolicyDecision::allow()
+        );
+        assert_eq!(
+            evaluate(&guardrail, Money::new("JPY", 10_000, 0)),
+            PaymentPolicyDecision::deny(finding(
+                "transaction total 10000 JPY exceeds the hard limit of 5000 JPY",
+                Severity::High,
+            ))
+        );
+    }
+
+    #[test]
+    fn currency_bound_thresholds_deny_other_currencies() {
+        let guardrail =
+            AmountThresholdGuardrail::new(Some(5_000), Some(10_000)).with_currency("USD", 2);
+
+        assert_eq!(
+            evaluate(&guardrail, Money::new("JPY", 100, 0)),
+            PaymentPolicyDecision::deny(finding(
+                "transaction total 100 JPY is not in the guardrail currency USD",
+                Severity::High,
+            ))
+        );
+        assert_eq!(
+            evaluate(&guardrail, Money::new("usd", 4_999, 2)),
+            PaymentPolicyDecision::allow()
+        );
+    }
+
+    #[test]
+    fn unalignable_amounts_fail_closed() {
+        let guardrail = AmountThresholdGuardrail::new(Some(5_000), None).with_currency("USD", 2);
+
+        assert!(evaluate(&guardrail, Money::new("USD", 1, 40)).is_deny());
     }
 }

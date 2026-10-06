@@ -7,18 +7,21 @@ use serde_json::json;
 
 use crate::domain::{
     CommerceMode, EvidenceReference, InterventionKind, InterventionState, InterventionStatus,
-    ProtocolEnvelopeDigest, ProtocolExtensions, TransactionRecord,
+    ProtocolEnvelopeDigest, ProtocolExtensions, ProtocolReference, TransactionRecord,
+    TransactionState,
 };
 use crate::kernel::{
-    BeginInterventionCommand, CommerceContext, EvidenceLookup, EvidenceStore, InterventionService,
-    MerchantCheckoutService, PaymentExecutionOutcome, PaymentExecutionResult,
-    PaymentExecutionService, StoreEvidenceCommand, StoredEvidence, TransactionLookup,
-    TransactionStore,
+    BeginInterventionCommand, CommerceContext, CreateCheckoutCommand, EvidenceLookup,
+    EvidenceStore, InterventionService, MerchantCheckoutService, PaymentExecutionOutcome,
+    PaymentExecutionResult, PaymentExecutionService, ProtocolCorrelator, ProtocolRefKind,
+    StoreEvidenceCommand, StoredEvidence, TransactionLookup, TransactionStore,
+    UpdateCheckoutCommand,
 };
 use crate::protocol::ap2::error::Ap2Error;
+use crate::protocol::ap2::ledger::{InMemoryPaymentMandateLedger, PaymentMandateLedger};
 use crate::protocol::ap2::mapper::{
-    ap2_descriptor, cart_create_checkout_command, cart_update_checkout_command,
-    execute_payment_command, intent_create_checkout_command, merge_extensions,
+    ap2_descriptor, cart_amount_scale, cart_from_cart_mandate, execute_payment_command,
+    fulfillment_from_cart_mandate, intent_create_checkout_command, merge_extensions,
     sync_payment_outcome_command, update_record_extensions, update_record_state_from_receipt,
 };
 use crate::protocol::ap2::types::{
@@ -27,8 +30,12 @@ use crate::protocol::ap2::types::{
 };
 use crate::protocol::ap2::verification::{
     MerchantAuthorizationVerifier, RequireMerchantAuthorization, RequireUserAuthorization,
-    UserAuthorizationVerifier, VerifiedAuthorization,
+    UserAuthorizationVerifier, VERIFIED_MERCHANT_NAME_CLAIM, VerifiedAuthorization,
 };
+
+/// `ProtocolReference::reference_kind` marking a payment mandate that reached
+/// the payment backend.
+const EXECUTED_PAYMENT_MANDATE_REF_KIND: &str = "ap2_executed_payment_mandate_id";
 
 struct StoredArtifactSet {
     envelope: crate::domain::ProtocolExtensionEnvelope,
@@ -40,22 +47,51 @@ struct ProtocolRefUpdate {
     intent_ref: Option<String>,
     cart_ref: Option<String>,
     payment_ref: Option<String>,
+    executed_payment_ref: Option<String>,
     receipt_ref: Option<String>,
 }
 
 /// AP2 alpha adapter over the canonical commerce kernel.
+///
+/// The adapter fails closed: until a [`MerchantAuthorizationVerifier`] and a
+/// [`UserAuthorizationVerifier`] are configured, every merchant, intent, and
+/// payment authorization artifact is rejected with
+/// [`Ap2Error::AuthorizationVerifierNotConfigured`]. Payment mandates are
+/// single-use: a mandate that reached the payment backend is refused when
+/// resubmitted, and a transaction executes at most one payment mandate.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_payments::protocol::ap2::Ap2Adapter;
+///
+/// let adapter = Ap2Adapter::new(checkout, payments, transactions, evidence)
+///     .with_merchant_authorization_verifier(merchant_jws_verifier)
+///     .with_user_authorization_verifier(user_sd_jwt_verifier)
+///     .with_intervention_service(interventions);
+/// ```
 pub struct Ap2Adapter {
     checkout_service: Arc<dyn MerchantCheckoutService>,
     payment_service: Arc<dyn PaymentExecutionService>,
     transaction_store: Arc<dyn TransactionStore>,
     evidence_store: Arc<dyn EvidenceStore>,
-    merchant_verifier: Arc<dyn MerchantAuthorizationVerifier>,
-    user_verifier: Arc<dyn UserAuthorizationVerifier>,
+    merchant_verifier: Option<Arc<dyn MerchantAuthorizationVerifier>>,
+    user_verifier: Option<Arc<dyn UserAuthorizationVerifier>>,
+    allow_unverified_authorizations: bool,
+    payment_mandate_ledger: Arc<dyn PaymentMandateLedger>,
     intervention_service: Option<Arc<dyn InterventionService>>,
 }
 
 impl Ap2Adapter {
     /// Creates a new AP2 adapter bound to the canonical checkout, journal, and evidence services.
+    ///
+    /// No authorization verifier is configured, so every authorization
+    /// artifact is rejected until
+    /// [`with_merchant_authorization_verifier`](Self::with_merchant_authorization_verifier)
+    /// and [`with_user_authorization_verifier`](Self::with_user_authorization_verifier)
+    /// are called. Executed payment mandates are tracked in an
+    /// [`InMemoryPaymentMandateLedger`] unless
+    /// [`with_payment_mandate_ledger`](Self::with_payment_mandate_ledger) replaces it.
     #[must_use]
     pub fn new(
         checkout_service: Arc<dyn MerchantCheckoutService>,
@@ -68,29 +104,59 @@ impl Ap2Adapter {
             payment_service,
             transaction_store,
             evidence_store,
-            merchant_verifier: Arc::new(RequireMerchantAuthorization),
-            user_verifier: Arc::new(RequireUserAuthorization),
+            merchant_verifier: None,
+            user_verifier: None,
+            allow_unverified_authorizations: false,
+            payment_mandate_ledger: Arc::new(InMemoryPaymentMandateLedger::new()),
             intervention_service: None,
         }
     }
 
-    /// Overrides the merchant authorization verifier.
+    /// Sets the merchant authorization verifier used for cart mandates.
     #[must_use]
     pub fn with_merchant_authorization_verifier(
         mut self,
         verifier: Arc<dyn MerchantAuthorizationVerifier>,
     ) -> Self {
-        self.merchant_verifier = verifier;
+        self.merchant_verifier = Some(verifier);
         self
     }
 
-    /// Overrides the user authorization verifier.
+    /// Sets the user authorization verifier used for intent and payment mandates.
     #[must_use]
     pub fn with_user_authorization_verifier(
         mut self,
         verifier: Arc<dyn UserAuthorizationVerifier>,
     ) -> Self {
-        self.user_verifier = verifier;
+        self.user_verifier = Some(verifier);
+        self
+    }
+
+    /// Accepts any non-empty authorization artifact where no verifier is configured.
+    ///
+    /// **Development only.** Forged merchant signatures and user authorizations
+    /// pass this check, so a payment mandate carrying any non-empty
+    /// `user_authorization` reaches the payment backend. Verifiers configured
+    /// through `with_*_authorization_verifier` still apply. Emits one `warn!`
+    /// when called.
+    #[must_use]
+    pub fn allow_unverified_authorizations(mut self) -> Self {
+        tracing::warn!(
+            merchant_verifier.configured = self.merchant_verifier.is_some(),
+            user_verifier.configured = self.user_verifier.is_some(),
+            "ap2 adapter accepts unverified authorization artifacts; this is unsafe outside local development"
+        );
+        self.allow_unverified_authorizations = true;
+        self
+    }
+
+    /// Replaces the ledger that records consumed payment mandate identifiers.
+    ///
+    /// Use shared durable storage when several adapter instances serve one
+    /// merchant, so a mandate cannot be replayed against another instance.
+    #[must_use]
+    pub fn with_payment_mandate_ledger(mut self, ledger: Arc<dyn PaymentMandateLedger>) -> Self {
+        self.payment_mandate_ledger = ledger;
         self
     }
 
@@ -108,8 +174,9 @@ impl Ap2Adapter {
     ///
     /// # Errors
     ///
-    /// Returns an error when the intent is expired, unsigned, or lacks explicit
-    /// autonomous authority constraints.
+    /// Returns an error when the intent is expired, unsigned, fails user
+    /// authorization verification, or lacks explicit autonomous authority
+    /// constraints.
     pub async fn submit_intent_mandate(
         &self,
         context: CommerceContext,
@@ -118,7 +185,7 @@ impl Ap2Adapter {
     ) -> Result<TransactionRecord> {
         self.validate_intent_mandate(&context, &intent_mandate, authorization_artifact.as_ref())?;
         let verification = if let Some(artifact) = authorization_artifact.as_ref() {
-            Some(self.user_verifier.verify_intent_authorization(&intent_mandate, artifact).await?)
+            Some(self.verify_intent_authorization(&intent_mandate, artifact).await?)
         } else {
             None
         };
@@ -155,8 +222,10 @@ impl Ap2Adapter {
     ///
     /// # Errors
     ///
-    /// Returns an error when the cart is expired, unsigned, or violates the
-    /// stored intent constraints for a human-not-present transaction.
+    /// Returns an error when the cart is expired, unsigned, fails merchant
+    /// authorization verification, names a merchant other than the verified
+    /// signer, carries invalid amounts, or violates the stored intent
+    /// constraints for a human-not-present transaction.
     pub async fn submit_cart_mandate(
         &self,
         context: CommerceContext,
@@ -164,10 +233,6 @@ impl Ap2Adapter {
     ) -> Result<TransactionRecord> {
         self.validate_not_expired("cart_expiry", &cart_mandate.contents.cart_expiry)?;
         let context = self.normalize_context(context, ProtocolExtensions::default());
-        let existing = self.lookup(&context).await?;
-        if let Some(record) = existing.as_ref() {
-            self.validate_intent_constraints(&context, record, &cart_mandate).await?;
-        }
 
         let merchant_authorization = cart_mandate
             .merchant_authorization
@@ -178,21 +243,45 @@ impl Ap2Adapter {
                     cart_id: cart_mandate.contents.id.clone(),
                 })
             })?;
-        let verification = self
-            .merchant_verifier
-            .verify_cart_authorization(&cart_mandate, &merchant_authorization)
-            .await?;
+        let verification =
+            self.verify_cart_authorization(&cart_mandate, &merchant_authorization).await?;
+        if let Some(verified) =
+            verification.claims.get(VERIFIED_MERCHANT_NAME_CLAIM).and_then(|name| name.as_str())
+            && !verified.eq_ignore_ascii_case(&cart_mandate.contents.merchant_name)
+        {
+            return Err(Ap2Error::MerchantIdentityMismatch {
+                claimed: cart_mandate.contents.merchant_name.clone(),
+                verified: verified.to_string(),
+            }
+            .into());
+        }
+
+        let existing = self.lookup(&context).await?;
+        if let Some(record) = existing.as_ref() {
+            self.validate_intent_constraints(&context, record, &cart_mandate).await?;
+        }
+        let cart = cart_from_cart_mandate(&cart_mandate)?;
+        let fulfillment = fulfillment_from_cart_mandate(&cart_mandate)?;
+
         let artifacts = self
             .store_cart_artifacts(&context, &cart_mandate, &merchant_authorization, &verification)
             .await?;
 
         let record = if existing.is_some() {
             self.checkout_service
-                .update_checkout(cart_update_checkout_command(&cart_mandate, context.clone()))
+                .update_checkout(UpdateCheckoutCommand {
+                    context: context.clone(),
+                    cart: Some(cart),
+                    fulfillment,
+                })
                 .await?
         } else {
             self.checkout_service
-                .create_checkout(cart_create_checkout_command(&cart_mandate, context.clone()))
+                .create_checkout(CreateCheckoutCommand {
+                    context: context.clone(),
+                    cart,
+                    fulfillment,
+                })
                 .await?
         };
 
@@ -210,10 +299,19 @@ impl Ap2Adapter {
 
     /// Executes or escalates a payment mandate against the canonical payment service.
     ///
+    /// Payment mandates are single-use. The mandate identifier is consumed in
+    /// the [`PaymentMandateLedger`] immediately before the payment backend is
+    /// called and recorded on the transaction afterwards, so a resubmitted
+    /// mandate never executes twice and a transaction never executes a second
+    /// mandate.
+    ///
     /// # Errors
     ///
-    /// Returns an error when the mandate does not match the current cart or the
-    /// flow lacks user authorization and cannot proceed autonomously.
+    /// Returns an error when the mandate does not match the current cart, fails
+    /// user authorization verification, was already executed, targets a
+    /// transaction that already executed a payment or is bound to another
+    /// mandate, or the flow lacks user authorization and cannot proceed
+    /// autonomously.
     pub async fn submit_payment_mandate(
         &self,
         context: CommerceContext,
@@ -225,6 +323,7 @@ impl Ap2Adapter {
                 transaction_id: context.transaction_id.as_str().to_string(),
             })
         })?;
+        self.ensure_payment_mandate_admissible(&existing, &payment_mandate)?;
         let cart_mandate: CartMandate =
             self.load_latest_json(&context, &existing, "cart_mandate").await?.ok_or_else(|| {
                 AdkError::from(Ap2Error::TransactionNotFound {
@@ -232,56 +331,77 @@ impl Ap2Adapter {
                 })
             })?;
         self.validate_payment_mandate_against_cart(&payment_mandate, &cart_mandate)?;
+        let amount_scale = cart_amount_scale(&cart_mandate)?;
 
-        let (evidence, verification_value) = if let Some(user_authorization) =
-            payment_mandate.user_authorization.clone()
-        {
-            let artifact =
-                AuthorizationArtifact::new("user_authorization", user_authorization, "text/plain");
-            let verification = self
-                .user_verifier
-                .verify_payment_authorization(&payment_mandate, &artifact)
-                .await?;
-            let artifacts = self
-                .store_payment_artifacts(
-                    &context,
-                    &payment_mandate,
-                    Some(&artifact),
-                    Some(&verification),
-                )
-                .await?;
-            (artifacts.evidence, Some(verification))
-        } else {
-            let allowed =
-                self.evaluate_autonomous_authority(&context, &existing, &cart_mandate).await?;
-            let artifacts =
-                self.store_payment_artifacts(&context, &payment_mandate, None, None).await?;
-            if !allowed {
-                return self
-                    .begin_user_reconfirmation(
-                        context,
-                        existing,
-                        cart_mandate,
-                        payment_mandate,
-                        artifacts.envelope,
-                        artifacts.evidence,
-                    )
-                    .await;
+        let authorization = match payment_mandate.user_authorization.clone() {
+            Some(user_authorization) => {
+                let artifact = AuthorizationArtifact::new(
+                    "user_authorization",
+                    user_authorization,
+                    "text/plain",
+                );
+                let verification =
+                    self.verify_payment_authorization(&payment_mandate, &artifact).await?;
+                Some((artifact, verification))
             }
-            (artifacts.evidence, None)
+            None => {
+                if !self.evaluate_autonomous_authority(&context, &existing, &cart_mandate).await? {
+                    let artifacts = self
+                        .store_payment_artifacts(&context, &payment_mandate, None, None)
+                        .await?;
+                    return self
+                        .begin_user_reconfirmation(
+                            context,
+                            existing,
+                            cart_mandate,
+                            payment_mandate,
+                            artifacts.envelope,
+                            artifacts.evidence,
+                        )
+                        .await;
+                }
+                None
+            }
         };
 
+        let payment_mandate_id =
+            payment_mandate.payment_mandate_contents.payment_mandate_id.clone();
+        if let Some(previous) = self
+            .payment_mandate_ledger
+            .consume(&payment_mandate_id, &context.transaction_id)
+            .await?
+        {
+            return Err(Ap2Error::PaymentMandateReplayed {
+                payment_mandate_id,
+                transaction_id: previous.as_str().to_string(),
+            }
+            .into());
+        }
+
+        let artifacts = self
+            .store_payment_artifacts(
+                &context,
+                &payment_mandate,
+                authorization.as_ref().map(|(artifact, _)| artifact),
+                authorization.as_ref().map(|(_, verification)| verification),
+            )
+            .await?;
+        let evidence = artifacts.evidence;
         let supporting_evidence_refs = self.ap2_evidence_refs(&existing, &evidence);
-        let payment_envelope =
-            self.payment_envelope(&payment_mandate, verification_value.as_ref(), &evidence);
+        let payment_envelope = self.payment_envelope(
+            &payment_mandate,
+            authorization.as_ref().map(|(_, verification)| verification),
+            &evidence,
+        );
         let mut command = execute_payment_command(
             &payment_mandate,
+            amount_scale,
             self.normalize_context(
                 context.clone(),
                 ProtocolExtensions::from(vec![payment_envelope.clone()]),
             ),
-            supporting_evidence_refs.clone(),
-        );
+            supporting_evidence_refs,
+        )?;
         command.extensions = ProtocolExtensions::from(vec![payment_envelope.clone()]);
 
         let result = self.payment_service.execute_payment(command).await?;
@@ -291,9 +411,8 @@ impl Ap2Adapter {
                 result.transaction.clone(),
                 StoredArtifactSet { envelope: payment_envelope, evidence: evidence.clone() },
                 ProtocolRefUpdate {
-                    payment_ref: Some(
-                        payment_mandate.payment_mandate_contents.payment_mandate_id.clone(),
-                    ),
+                    payment_ref: Some(payment_mandate_id.clone()),
+                    executed_payment_ref: Some(payment_mandate_id),
                     ..ProtocolRefUpdate::default()
                 },
             )
@@ -319,7 +438,9 @@ impl Ap2Adapter {
     ///
     /// # Errors
     ///
-    /// Returns an error when the underlying transaction does not exist.
+    /// Returns an error when the underlying transaction does not exist or the
+    /// receipt references a payment mandate other than the one bound to the
+    /// transaction.
     pub async fn apply_payment_receipt(
         &self,
         context: CommerceContext,
@@ -327,6 +448,17 @@ impl Ap2Adapter {
     ) -> Result<TransactionRecord> {
         let context = self.normalize_context(context, ProtocolExtensions::default());
         let existing = self.lookup(&context).await?;
+        if let Some(bound) = existing
+            .as_ref()
+            .and_then(|record| record.protocol_refs.ap2_payment_mandate_id.as_deref())
+            && bound != payment_receipt.payment_mandate_id
+        {
+            return Err(Ap2Error::PaymentMandateMismatch {
+                payment_mandate_id: payment_receipt.payment_mandate_id.clone(),
+                field: "payment_receipt.payment_mandate_id".to_string(),
+            }
+            .into());
+        }
         let artifacts = self.store_receipt_artifacts(&context, &payment_receipt).await?;
         let mut command =
             sync_payment_outcome_command(existing.as_ref(), &payment_receipt, context.clone());
@@ -350,6 +482,115 @@ impl Ap2Adapter {
             },
         )
         .await
+    }
+
+    async fn verify_cart_authorization(
+        &self,
+        mandate: &CartMandate,
+        artifact: &AuthorizationArtifact,
+    ) -> Result<VerifiedAuthorization> {
+        match (&self.merchant_verifier, self.allow_unverified_authorizations) {
+            (Some(verifier), _) => verifier.verify_cart_authorization(mandate, artifact).await,
+            (None, true) => {
+                RequireMerchantAuthorization.verify_cart_authorization(mandate, artifact).await
+            }
+            (None, false) => Err(Ap2Error::AuthorizationVerifierNotConfigured {
+                artifact_kind: "merchant_authorization".to_string(),
+            }
+            .into()),
+        }
+    }
+
+    async fn verify_intent_authorization(
+        &self,
+        mandate: &IntentMandate,
+        artifact: &AuthorizationArtifact,
+    ) -> Result<VerifiedAuthorization> {
+        match (&self.user_verifier, self.allow_unverified_authorizations) {
+            (Some(verifier), _) => verifier.verify_intent_authorization(mandate, artifact).await,
+            (None, true) => {
+                RequireUserAuthorization.verify_intent_authorization(mandate, artifact).await
+            }
+            (None, false) => Err(Ap2Error::AuthorizationVerifierNotConfigured {
+                artifact_kind: "intent_authorization".to_string(),
+            }
+            .into()),
+        }
+    }
+
+    async fn verify_payment_authorization(
+        &self,
+        mandate: &PaymentMandate,
+        artifact: &AuthorizationArtifact,
+    ) -> Result<VerifiedAuthorization> {
+        match (&self.user_verifier, self.allow_unverified_authorizations) {
+            (Some(verifier), _) => verifier.verify_payment_authorization(mandate, artifact).await,
+            (None, true) => {
+                RequireUserAuthorization.verify_payment_authorization(mandate, artifact).await
+            }
+            (None, false) => Err(Ap2Error::AuthorizationVerifierNotConfigured {
+                artifact_kind: "user_authorization".to_string(),
+            }
+            .into()),
+        }
+    }
+
+    /// Refuses a payment mandate for a transaction that already executed a
+    /// payment, can no longer be paid, or is bound to a different mandate.
+    fn ensure_payment_mandate_admissible(
+        &self,
+        record: &TransactionRecord,
+        payment_mandate: &PaymentMandate,
+    ) -> Result<()> {
+        let transaction_id = record.transaction_id.as_str().to_string();
+        let payment_mandate_id = &payment_mandate.payment_mandate_contents.payment_mandate_id;
+        if let Some(executed) = record
+            .protocol_refs
+            .additional
+            .iter()
+            .find(|reference| reference.reference_kind == EXECUTED_PAYMENT_MANDATE_REF_KIND)
+        {
+            return Err(if &executed.reference_value == payment_mandate_id {
+                Ap2Error::PaymentMandateReplayed {
+                    payment_mandate_id: payment_mandate_id.clone(),
+                    transaction_id,
+                }
+            } else {
+                Ap2Error::TransactionAlreadyPaid {
+                    transaction_id,
+                    executed_payment_mandate_id: executed.reference_value.clone(),
+                }
+            }
+            .into());
+        }
+        match &record.state {
+            TransactionState::Authorized
+            | TransactionState::Completed
+            | TransactionState::Canceled
+            | TransactionState::Failed => {
+                return Err(Ap2Error::TransactionNotPayable {
+                    transaction_id,
+                    state: format!("{:?}", record.state.tag()),
+                }
+                .into());
+            }
+            TransactionState::Draft
+            | TransactionState::Negotiating
+            | TransactionState::AwaitingUserAuthorization
+            | TransactionState::AwaitingPaymentMethod
+            | TransactionState::InterventionRequired(_) => {}
+        }
+        if let Some(bound) = record.protocol_refs.ap2_payment_mandate_id.as_deref()
+            && bound != payment_mandate_id
+        {
+            return Err(Ap2Error::PaymentMandateRebind {
+                transaction_id,
+                bound_payment_mandate_id: bound.to_string(),
+                payment_mandate_id: payment_mandate_id.clone(),
+            }
+            .into());
+        }
+        Ok(())
     }
 
     async fn begin_user_reconfirmation(
@@ -459,12 +700,23 @@ impl Ap2Adapter {
         Ok(())
     }
 
+    /// Returns `true` when the intent bounds who or what the agent may buy.
+    ///
+    /// `requires_refundability` narrows item terms but not the merchant or
+    /// product, so it does not count on its own.
     fn has_authority_constraints(&self, intent_mandate: &IntentMandate) -> bool {
         intent_mandate.merchants.as_ref().is_some_and(|merchants| !merchants.is_empty())
             || intent_mandate.skus.as_ref().is_some_and(|skus| !skus.is_empty())
-            || intent_mandate.requires_refundability
     }
 
+    /// Checks a cart against the stored human-not-present intent constraints.
+    ///
+    /// The merchant allow-list is compared against `contents.merchant_name`.
+    /// That name is only as trustworthy as the merchant authorization
+    /// verifier: when the verifier sets `VERIFIED_MERCHANT_NAME_CLAIM`,
+    /// `submit_cart_mandate` has already rejected carts whose name differs
+    /// from the verified signer; otherwise the comparison relies on the
+    /// verifier binding the signing key to the named merchant.
     async fn validate_intent_constraints(
         &self,
         context: &CommerceContext,
@@ -982,7 +1234,22 @@ impl Ap2Adapter {
             record.protocol_refs.ap2_cart_mandate_id = Some(cart_ref);
         }
         if let Some(payment_ref) = refs.payment_ref {
-            record.protocol_refs.ap2_payment_mandate_id = Some(payment_ref);
+            ProtocolCorrelator::attach_protocol_ref(
+                &mut record,
+                ProtocolRefKind::Ap2PaymentMandateId,
+                payment_ref,
+            )
+            .map_err(AdkError::from)?;
+        }
+        if let Some(executed) = refs.executed_payment_ref {
+            let marker = ProtocolReference {
+                protocol: ap2_descriptor(),
+                reference_kind: EXECUTED_PAYMENT_MANDATE_REF_KIND.to_string(),
+                reference_value: executed,
+            };
+            if !record.protocol_refs.additional.contains(&marker) {
+                record.protocol_refs.additional.push(marker);
+            }
         }
         if let Some(receipt_ref) = refs.receipt_ref {
             record.protocol_refs.ap2_payment_receipt_id = Some(receipt_ref);

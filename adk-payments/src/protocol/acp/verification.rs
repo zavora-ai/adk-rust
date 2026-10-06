@@ -12,6 +12,9 @@ use tokio::sync::RwLock;
 
 use crate::ACP_STABLE_BASELINE;
 
+/// Clock-skew window [`AcpVerificationConfig::strict`] allows on `Timestamp`.
+const STRICT_MAX_TIMESTAMP_SKEW: Duration = Duration::from_secs(300);
+
 /// Replay policy for ACP POST operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdempotencyMode {
@@ -145,6 +148,11 @@ pub(crate) enum AcpVerificationError {
     #[error("detached request signature verification failed")]
     InvalidSignature,
 
+    #[error(
+        "Signature is required but no signature verifier is configured. Add one with `AcpVerificationConfig::with_signature_verifier`."
+    )]
+    SignatureVerifierNotConfigured,
+
     #[error("Idempotency-Key header is required on all POST requests")]
     MissingIdempotencyKey,
 
@@ -251,15 +259,37 @@ impl Default for AcpVerificationConfig {
 
 impl AcpVerificationConfig {
     /// Creates a permissive ACP verification profile.
+    ///
+    /// Only `API-Version` is enforced. Signatures are verified when both a
+    /// `Signature` header and a verifier are present, but unsigned requests
+    /// pass. Suitable for development and tests.
     #[must_use]
     pub fn permissive() -> Self {
         Self::default()
     }
 
     /// Creates a strict ACP verification profile for production use.
+    ///
+    /// Every request must carry a `Timestamp` within five minutes of the
+    /// server clock and a `Signature` that the configured
+    /// [`DetachedSignatureVerifier`] accepts, and every POST must carry an
+    /// `Idempotency-Key`. Add the verifier with
+    /// [`with_signature_verifier`](Self::with_signature_verifier); building a
+    /// router from a strict profile without one fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_payments::protocol::acp::AcpVerificationConfig;
+    ///
+    /// let verification = AcpVerificationConfig::strict().with_signature_verifier(verifier);
+    /// ```
     #[must_use]
     pub fn strict() -> Self {
-        Self::default().with_idempotency_mode(IdempotencyMode::RequireForPost)
+        Self::default()
+            .with_idempotency_mode(IdempotencyMode::RequireForPost)
+            .with_max_timestamp_skew(STRICT_MAX_TIMESTAMP_SKEW)
+            .require_signature(true)
     }
 
     /// Replaces the supported `API-Version` set.
@@ -292,13 +322,22 @@ impl AcpVerificationConfig {
     }
 
     /// Adds a detached signature verifier.
+    ///
+    /// A present `Signature` header is always verified. Unsigned requests
+    /// still pass unless [`require_signature`](Self::require_signature) is
+    /// enabled.
     #[must_use]
     pub fn with_signature_verifier(mut self, verifier: Arc<dyn DetachedSignatureVerifier>) -> Self {
         self.signature_verifier = Some(verifier);
         self
     }
 
-    /// Requires `Signature` whenever a signature verifier is configured.
+    /// Requires a verified `Signature` header on every request.
+    ///
+    /// Requires a verifier from
+    /// [`with_signature_verifier`](Self::with_signature_verifier): building a
+    /// router with `require_signature(true)` and no verifier fails, and such a
+    /// profile rejects every request.
     #[must_use]
     pub fn require_signature(mut self, require_signature: bool) -> Self {
         self.require_signature = require_signature;
@@ -310,6 +349,14 @@ impl AcpVerificationConfig {
     pub fn with_idempotency_store(mut self, store: Arc<dyn IdempotencyStore>) -> Self {
         self.idempotency_store = store;
         self
+    }
+
+    /// Rejects profiles that would claim signature enforcement without a verifier.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.require_signature && self.signature_verifier.is_none() {
+            return Err(AcpVerificationError::SignatureVerifierNotConfigured.into());
+        }
+        Ok(())
     }
 }
 
@@ -357,15 +404,20 @@ impl AcpRequestVerifier {
         }
 
         let signature = header_value(headers, "Signature");
-        if self.config.require_signature && signature.is_none() {
-            return Err(AcpVerificationError::MissingSignature);
-        }
-
-        if let (Some(verifier), Some(signature)) = (&self.config.signature_verifier, &signature) {
-            verifier
-                .verify(signature, timestamp, method, path, body)
-                .await
-                .map_err(|_| AcpVerificationError::InvalidSignature)?;
+        match (&self.config.signature_verifier, &signature) {
+            (Some(verifier), Some(signature)) => {
+                verifier
+                    .verify(signature, timestamp, method, path, body)
+                    .await
+                    .map_err(|_| AcpVerificationError::InvalidSignature)?;
+            }
+            (None, _) if self.config.require_signature => {
+                return Err(AcpVerificationError::SignatureVerifierNotConfigured);
+            }
+            (_, None) if self.config.require_signature => {
+                return Err(AcpVerificationError::MissingSignature);
+            }
+            (Some(_), None) | (None, _) => {}
         }
 
         let idempotency_key = header_value(headers, "Idempotency-Key");
@@ -482,6 +534,7 @@ impl AcpVerificationError {
             | Self::MissingIdempotencyKey => 400,
             Self::IdempotencyConflict => 409,
             Self::IdempotencyInFlight => 409,
+            Self::SignatureVerifierNotConfigured => 500,
             Self::Internal(error) => error.http_status_code(),
         }
     }
@@ -499,6 +552,7 @@ impl AcpVerificationError {
             {
                 "service_unavailable"
             }
+            Self::SignatureVerifierNotConfigured => "processing_error",
             _ => "invalid_request",
         }
     }
@@ -512,6 +566,7 @@ impl AcpVerificationError {
             Self::TimestampSkew => "timestamp_out_of_range",
             Self::MissingSignature => "signature_required",
             Self::InvalidSignature => "invalid_signature",
+            Self::SignatureVerifierNotConfigured => "signature_verifier_not_configured",
             Self::MissingIdempotencyKey => "idempotency_key_required",
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::IdempotencyInFlight => "idempotency_in_flight",
@@ -574,6 +629,12 @@ impl From<AcpVerificationError> for AdkError {
                 "payments.acp.invalid_signature",
                 "detached request signature verification failed",
             ),
+            AcpVerificationError::SignatureVerifierNotConfigured => AdkError::new(
+                ErrorComponent::Server,
+                ErrorCategory::Internal,
+                "payments.acp.signature_verifier_not_configured",
+                "ACP signature enforcement is enabled but no signature verifier is configured. Add one with `AcpVerificationConfig::with_signature_verifier`, or disable `require_signature`.",
+            ),
             AcpVerificationError::MissingIdempotencyKey => AdkError::new(
                 ErrorComponent::Server,
                 ErrorCategory::InvalidInput,
@@ -603,14 +664,123 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn strict_mode_rejects_post_without_idempotency_key() {
-        let verifier = AcpRequestVerifier::new(AcpVerificationConfig::strict());
+    /// Accepts or rejects every signature without inspecting it.
+    struct FixedVerdictVerifier {
+        accept: bool,
+    }
+
+    #[async_trait]
+    impl DetachedSignatureVerifier for FixedVerdictVerifier {
+        async fn verify(
+            &self,
+            _signature: &str,
+            _timestamp: Option<DateTime<Utc>>,
+            _method: &str,
+            _path: &str,
+            _body: &[u8],
+        ) -> Result<()> {
+            if self.accept {
+                Ok(())
+            } else {
+                Err(AdkError::new(
+                    ErrorComponent::Server,
+                    ErrorCategory::Forbidden,
+                    "payments.acp.test.signature_rejected",
+                    "test verifier rejects every signature",
+                ))
+            }
+        }
+    }
+
+    fn strict_with_verdict(accept: bool) -> AcpRequestVerifier {
+        AcpRequestVerifier::new(
+            AcpVerificationConfig::strict()
+                .with_signature_verifier(Arc::new(FixedVerdictVerifier { accept })),
+        )
+    }
+
+    fn signed_headers(timestamp: DateTime<Utc>) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert("API-Version", HeaderValue::from_static(ACP_STABLE_BASELINE));
+        headers.insert("Timestamp", HeaderValue::from_str(&timestamp.to_rfc3339()).unwrap());
+        headers.insert("Signature", HeaderValue::from_static("sig"));
+        headers
+    }
+
+    #[test]
+    fn strict_profile_without_signature_verifier_fails_validation() {
+        let error = AcpVerificationConfig::strict().validate().unwrap_err();
+        assert_eq!(error.code, "payments.acp.signature_verifier_not_configured");
+
+        let error =
+            AcpVerificationConfig::permissive().require_signature(true).validate().unwrap_err();
+        assert_eq!(error.code, "payments.acp.signature_verifier_not_configured");
+
+        AcpVerificationConfig::permissive().validate().unwrap();
+        AcpVerificationConfig::strict()
+            .with_signature_verifier(Arc::new(FixedVerdictVerifier { accept: true }))
+            .validate()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn required_signature_without_verifier_rejects_even_signed_requests() {
+        let verifier =
+            AcpRequestVerifier::new(AcpVerificationConfig::permissive().require_signature(true));
 
         let error = verifier
-            .verify("POST", "/checkout_sessions", &headers, br#"{"currency":"usd"}"#)
+            .verify("GET", "/checkout_sessions/cs_1", &signed_headers(Utc::now()), b"")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, AcpVerificationError::SignatureVerifierNotConfigured));
+        assert_eq!(error.status_code(), 500);
+    }
+
+    #[tokio::test]
+    async fn strict_profile_requires_timestamp_and_signature() {
+        let verifier = strict_with_verdict(true);
+
+        let mut headers = signed_headers(Utc::now());
+        headers.remove("Timestamp");
+        let error = verifier.verify("GET", "/checkout_sessions/cs_1", &headers, b"").await;
+        assert!(matches!(error, Err(AcpVerificationError::MissingTimestamp)));
+
+        let mut headers = signed_headers(Utc::now());
+        headers.remove("Signature");
+        let error = verifier.verify("GET", "/checkout_sessions/cs_1", &headers, b"").await;
+        assert!(matches!(error, Err(AcpVerificationError::MissingSignature)));
+
+        let stale = signed_headers(Utc::now() - chrono::Duration::minutes(10));
+        let error = verifier.verify("GET", "/checkout_sessions/cs_1", &stale, b"").await;
+        assert!(matches!(error, Err(AcpVerificationError::TimestampSkew)));
+
+        let verified = verifier
+            .verify("GET", "/checkout_sessions/cs_1", &signed_headers(Utc::now()), b"")
+            .await
+            .unwrap();
+        assert!(verified.headers.signature_present);
+    }
+
+    #[tokio::test]
+    async fn strict_profile_rejects_signature_the_verifier_refuses() {
+        let error = strict_with_verdict(false)
+            .verify("GET", "/checkout_sessions/cs_1", &signed_headers(Utc::now()), b"")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, AcpVerificationError::InvalidSignature));
+    }
+
+    #[tokio::test]
+    async fn strict_mode_rejects_post_without_idempotency_key() {
+        let error = strict_with_verdict(true)
+            .verify(
+                "POST",
+                "/checkout_sessions",
+                &signed_headers(Utc::now()),
+                br#"{"currency":"usd"}"#,
+            )
             .await
             .unwrap_err();
 
@@ -620,7 +790,8 @@ mod tests {
     #[tokio::test]
     async fn replays_identical_request_and_rejects_conflicting_payload() {
         let verifier = AcpRequestVerifier::new(
-            AcpVerificationConfig::strict()
+            AcpVerificationConfig::permissive()
+                .with_idempotency_mode(IdempotencyMode::RequireForPost)
                 .with_idempotency_store(Arc::new(InMemoryIdempotencyStore::new())),
         );
         let mut headers = HeaderMap::new();

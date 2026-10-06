@@ -747,6 +747,7 @@ dependencies = [
  "hmac 0.12.1",
  "http-body-util",
  "jsonschema",
+ "proptest",
  "regex",
  "serde",
  "serde_json",
@@ -755,6 +756,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tower 0.5.3",
+ "tracing",
  "trybuild",
  "uuid 1.25.0",
 ]

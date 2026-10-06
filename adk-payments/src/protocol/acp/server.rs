@@ -104,8 +104,10 @@ impl AcpRouterBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error when required backend services are missing.
+    /// Returns an error when required backend services are missing or the
+    /// verification profile requires signatures without a signature verifier.
     pub fn build(self) -> Result<Router> {
+        self.verification.validate()?;
         let merchant_checkout_service =
             self.merchant_checkout_service.ok_or_else(|| missing_service_error("merchant"))?;
         let delegated_payment_service = self
