@@ -115,8 +115,8 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 adk-ui = { git = "https://github.com/zavora-ai/adk-ui" }
-adk-agent = "2.2.0"
-adk-model = "2.2.0"
+adk-agent = "2.3.0"
+adk-model = "2.3.0"
 ```
 
 ### Basic Usage

@@ -12,16 +12,10 @@
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
 and async, across 43 publishable crates for agent orchestration.
 
-> **v2.2.0 Released!** This API-compatible minor release completes the Gemini
-> Enterprise Agent Platform consumption path: the Gen AI Evaluation Service
-> bridge, Vertex AI RAG Engine retrieval and grounding, an Agent Retrieval
-> vector store, Agent Registry discovery and registration, Skill Registry
-> consumption with remote skill loading, and remote ReasoningEngine agents you
-> can call as sub-agents — every one opt-in and composable with any preset, and
-> all appended to `gemini-agent-platform`. Graph workflows gain native tool
-> confirmation pauses. Tracing is fixed so one invocation exports as one trace
-> rather than several disconnected ones. All 43 crates are available on
-> [crates.io](https://crates.io/crates/adk-rust/2.2.0).
+> **v2.3.0 release candidate — unpublished.** This minor release moves `adk-acp`
+> to the `agent-client-protocol` 2.2 SDK and lets Gemini Live sessions pin the
+> spoken language; see the [CHANGELOG](CHANGELOG.md). The published release is
+> 2.2.0, with all 43 crates on [crates.io](https://crates.io/crates/adk-rust/2.2.0).
 >
 > **Milestone:** ADK-Rust has crossed **500K total crates.io downloads** across
 > the workspace crates.
@@ -150,8 +144,8 @@ with tool, graph, and team agents.
 
 ```toml
 [dependencies]
-adk-rust = "2.2.0"                                        # Gemini, agents, runner, sessions
-# adk-rust = { version = "2.2.0", features = ["standard"] }  # + server, auth, graph, eval
+adk-rust = "2.3.0"                                        # Gemini, agents, runner, sessions
+# adk-rust = { version = "2.3.0", features = ["standard"] }  # + server, auth, graph, eval
 ```
 
 | Tier | Includes | Use case |
@@ -427,7 +421,7 @@ per-platform tool matrix and the CI cost tiers.
 
 ## Project
 
-- [ROADMAP.md](ROADMAP.md) — **v2.2.0** (current). Longer-term direction and
+- [ROADMAP.md](ROADMAP.md) — **v2.3.0** (release candidate). Longer-term direction and
   why both orchestration APIs are supported
 - [CHANGELOG.md](CHANGELOG.md) — every release
 - [CONTRIBUTORS.md](CONTRIBUTORS.md) — the people who built this
