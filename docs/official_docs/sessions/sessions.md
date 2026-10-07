@@ -610,7 +610,7 @@ A new session never inherits events left under its path. App names, user IDs, an
 
 > **Note**: Requires the `firestore` feature flag:
 > ```toml
-> adk-session = { version = "2.2.0", features = ["firestore"] }
+> adk-session = { version = "2.3.0", features = ["firestore"] }
 > ```
 
 ## Schema Migrations
