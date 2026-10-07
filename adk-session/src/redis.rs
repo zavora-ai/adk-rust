@@ -39,7 +39,10 @@ use tracing::instrument;
 use uuid::Uuid;
 
 /// Configuration for connecting to Redis.
-#[derive(Debug, Clone)]
+///
+/// The `Debug` output redacts credentials embedded in `url` (the userinfo
+/// password and any `*password*` query parameter), so the config is safe to log.
+#[derive(Clone)]
 pub struct RedisSessionConfig {
     /// Redis connection URL (e.g. `redis://localhost:6379`).
     pub url: String,
@@ -47,6 +50,59 @@ pub struct RedisSessionConfig {
     pub ttl: Option<Duration>,
     /// Optional cluster node addresses for cluster mode.
     pub cluster_nodes: Option<Vec<String>>,
+}
+
+impl std::fmt::Debug for RedisSessionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisSessionConfig")
+            .field("url", &redact_url_credentials(&self.url))
+            .field("ttl", &self.ttl)
+            .field("cluster_nodes", &self.cluster_nodes)
+            .finish()
+    }
+}
+
+const REDACTED: &str = "[REDACTED]";
+
+/// Replaces the userinfo password and every `*password*` query value of a
+/// connection URL with `[REDACTED]`.
+fn redact_url_credentials(url: &str) -> String {
+    let (base, query) = match url.split_once('?') {
+        Some((base, query)) => (base, Some(query)),
+        None => (url, None),
+    };
+
+    let mut redacted = match base.split_once("://") {
+        Some((scheme, rest)) => {
+            let authority_end = rest.find('/').unwrap_or(rest.len());
+            let (authority, path) = rest.split_at(authority_end);
+            match authority.rsplit_once('@') {
+                // Without a `user:` prefix the whole userinfo can be a bare password.
+                Some((userinfo, host)) => match userinfo.split_once(':') {
+                    Some((user, _password)) => format!("{scheme}://{user}:{REDACTED}@{host}{path}"),
+                    None => format!("{scheme}://{REDACTED}@{host}{path}"),
+                },
+                None => base.to_string(),
+            }
+        }
+        None => base.to_string(),
+    };
+
+    if let Some(query) = query {
+        let params: Vec<String> = query
+            .split('&')
+            .map(|param| match param.split_once('=') {
+                Some((name, _value)) if name.to_ascii_lowercase().contains("password") => {
+                    format!("{name}={REDACTED}")
+                }
+                _ => param.to_string(),
+            })
+            .collect();
+        redacted.push('?');
+        redacted.push_str(&params.join("&"));
+    }
+
+    redacted
 }
 
 // --- Key generation functions ---
@@ -392,7 +448,22 @@ impl SessionService for RedisSessionService {
 
         let mut events: Vec<Event> = raw_events
             .into_iter()
-            .filter_map(|(json, _score)| serde_json::from_str(&json).ok())
+            .filter_map(|(json, _score)| match serde_json::from_str::<Event>(&json) {
+                Ok(event) => Some(event),
+                Err(error) => {
+                    let event_id = serde_json::from_str::<Value>(&json)
+                        .ok()
+                        .and_then(|raw| raw.get("id").and_then(Value::as_str).map(str::to_string))
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    tracing::warn!(
+                        session.id = %req.session_id,
+                        event.id = %event_id,
+                        error = %error,
+                        "skipping stored event that failed to deserialize"
+                    );
+                    None
+                }
+            })
             .collect();
 
         if let Some(num) = req.num_recent_events {
@@ -797,6 +868,45 @@ impl Events for RedisSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config(url: &str) -> RedisSessionConfig {
+        RedisSessionConfig { url: url.to_string(), ttl: None, cluster_nodes: None }
+    }
+
+    #[test]
+    fn debug_redacts_userinfo_password() {
+        let rendered = format!("{:?}", config("redis://admin:hunter2@cache.internal:6379/0"));
+        assert_eq!(
+            rendered,
+            "RedisSessionConfig { url: \"redis://admin:[REDACTED]@cache.internal:6379/0\", \
+             ttl: None, cluster_nodes: None }"
+        );
+    }
+
+    #[test]
+    fn debug_redacts_password_only_userinfo() {
+        let rendered = format!("{:?}", config("rediss://:hunter2@cache.internal:6380"));
+        assert!(!rendered.contains("hunter2"), "password leaked: {rendered}");
+        assert!(rendered.contains("rediss://:[REDACTED]@cache.internal:6380"));
+
+        let bare = format!("{:?}", config("redis://hunter2@cache.internal"));
+        assert!(!bare.contains("hunter2"), "bare userinfo leaked: {bare}");
+        assert!(bare.contains("redis://[REDACTED]@cache.internal"));
+    }
+
+    #[test]
+    fn debug_redacts_password_query_parameters() {
+        let url = "redis-sentinel://sentinel.internal:26379/0?sentinelServiceName=main&sentinelPassword=hunter2";
+        let rendered = format!("{:?}", config(url));
+        assert!(!rendered.contains("hunter2"), "query password leaked: {rendered}");
+        assert!(rendered.contains("sentinelServiceName=main&sentinelPassword=[REDACTED]"));
+    }
+
+    #[test]
+    fn debug_keeps_credential_free_urls_unchanged() {
+        assert_eq!(redact_url_credentials("redis://localhost:6379"), "redis://localhost:6379");
+        assert_eq!(redact_url_credentials("localhost:6379"), "localhost:6379");
+    }
 
     #[test]
     fn test_lookup_value_round_trips_identifiers_with_delimiters() {

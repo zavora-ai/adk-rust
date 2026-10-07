@@ -576,13 +576,50 @@ let session_service = RedisSessionService::new(config).await?;
 > adk-session = { version = "2.3.0", features = ["redis"] }
 > ```
 
+### FirestoreSessionService
+
+Stores sessions in Google Cloud Firestore using Application Default Credentials.
+
+```rust
+use adk_session::{FirestoreSessionConfig, FirestoreSessionService};
+
+let config = FirestoreSessionConfig {
+    project_id: "my-gcp-project".to_string(),
+    root_collection: None, // defaults to "adk_sessions"
+};
+let session_service = FirestoreSessionService::new(config).await?;
+```
+
+| Data | Document path |
+|------|---------------|
+| Session | `{root}/{app_name}/sessions/{session_id}` |
+| Event | `{root}/{app_name}/sessions/{session_id}/events/{event_id}` |
+| App state | `{root}/{app_name}/app_state/current` |
+| User state | `{root}/{app_name}/users/{user_id}/state/current` |
+
+A session ID is unique within an app, and the owning `user_id` is a field of the session document. Every write re-reads that document inside its transaction and applies only when the app, user, and session ID match the request:
+
+| Operation | Session missing, or owned by another user |
+|-----------|-------------------------------------------|
+| `create` | Fails with `session.already_exists` when the ID is taken in the app |
+| `get`, `append_event_for_identity` | Fails with `session.not_found` |
+| `delete` | No-op, identical to deleting a missing session |
+| `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed |
+
+A new session never inherits events left under its path. App names, user IDs, and session IDs are document IDs, so they must not contain `/`.
+
+> **Note**: Requires the `firestore` feature flag:
+> ```toml
+> adk-session = { version = "2.2.0", features = ["firestore"] }
+> ```
+
 ## Schema Migrations
 
 All database-backed session services (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned, forward-only migration system. Migrations are tracked in a `_schema_migrations` registry table.
 
 ### Encrypted Sessions
 
-Wrap any `SessionService` with `EncryptedSession` to encrypt session state at rest using AES-256-GCM. Requires the `encrypted-session` feature flag.
+Wrap any `SessionService` with `EncryptedSession` to encrypt session state and event payloads at rest using AES-256-GCM. Requires the `encrypted-session` feature flag.
 
 ```toml
 adk-session = { version = "2.3.0", features = ["encrypted-session"] }
@@ -607,7 +644,18 @@ let service = EncryptedSession::new(inner, key, vec![]);
 let session = service.create(CreateRequest { /* ... */ }).await?;
 ```
 
-State is serialized to JSON, encrypted with a random 96-bit nonce, and stored as `[nonce || ciphertext]` in the inner service. Decryption happens transparently on read.
+Each value is serialized to JSON, encrypted with a random 96-bit nonce, and stored as an `adk-enc:v1:` envelope (base64 of `[nonce || ciphertext]`). Decryption happens transparently on `create`, `get`, and `list`.
+
+| Data | Stored in the inner service as |
+|------|--------------------------------|
+| State values (create state and event `state_delta`) | Encrypted per value; key names stay in plaintext |
+| Event content, LLM response metadata, actions, long-running tool IDs | One encrypted envelope in the event content |
+| Event ID, timestamp, invocation ID, branch, author | Plaintext, so the inner service can order and filter events |
+| `llm_request`, event `provider_metadata` | Not persisted |
+
+- **Identity binding**: the associated data of each ciphertext names its app, user, session, and state key or event ID. A value or event copied to another session fails with `session.encryption.decrypt_failed`.
+- **State tiers**: `app:` and `user:` values are stored encrypted in the shared app and user tiers, so they stay visible to every session of that app or user. `temp:` keys are dropped before encryption.
+- **Addressing**: `append_event(session_id, ..)` returns `session.encryption.identity_required` because a bare session ID does not identify the ciphertext binding. Use `append_event_for_identity()`, which the runner uses.
 
 #### Key Rotation
 
@@ -620,7 +668,23 @@ let old_key = EncryptionKey::from_env("OLD_SESSION_KEY")?;
 let service = EncryptedSession::new(inner, new_key, vec![old_key]);
 ```
 
-On read, the current key is tried first. If decryption fails, each previous key is tried in order. On success with a previous key, the data is automatically re-encrypted with the current key.
+On read, the current key is tried first, then each previous key in order. When `get` finds state values under a previous key, it re-encrypts them with the current key by appending a state-only event (hidden from returned events) and returns any failure.
+
+> **Note:** `SessionService` cannot rewrite stored events, so events written under a previous key stay readable only while that key remains in `previous_keys`. Keep a retired key until the sessions that used it are deleted or expire. In a rolling deployment, first add the new key to `previous_keys` everywhere, then make it the current key.
+
+#### Migrating Data From Earlier Releases
+
+Releases before the per-value format stored `create` state as one `__encrypted_state` blob and passed event content and state deltas through in plaintext. Reads reject such data with `session.encryption.unencrypted_data`. Enable migration while existing sessions are converted:
+
+```rust
+use adk_session::{EncryptedSession, EncryptionKey, InMemorySessionService};
+
+let key = EncryptionKey::from_env("SESSION_ENCRYPTION_KEY")?;
+let service = EncryptedSession::new(InMemorySessionService::new(), key, vec![])
+    .with_legacy_migration(true);
+```
+
+`get` then decrypts the legacy blob, accepts plaintext values and events, and re-encrypts the state into the current format. Plaintext events stay plaintext in the inner service, so a session that holds them stays readable only with migration enabled.
 
 #### Key Management
 
@@ -841,7 +905,7 @@ let session = service.get_for_identity(&identity).await?;
 service.delete_for_identity(&identity).await?;
 ```
 
-All session backends (in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex) support the typed identity path. The legacy `append_event(&str, ...)` method remains available for backward compatibility.
+All session backends (in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex) support the typed identity path. The legacy `append_event(&str, ...)` method remains available for backward compatibility, except on `EncryptedSession`, which binds ciphertext to the full identity and requires `append_event_for_identity()`.
 
 For new code, prefer `append_event_for_identity()` and the other typed identity helpers. The legacy `append_event(&str, ...)` path is retained only for migration and is the first legacy identity API intended for future deprecation once internal callers have fully moved to `AdkIdentity`.
 

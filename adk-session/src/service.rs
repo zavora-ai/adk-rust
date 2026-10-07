@@ -108,13 +108,15 @@ impl GetRequest {
 
 /// Builds the canonical error returned when a session identity has no matching record.
 pub(crate) fn session_not_found(req: &GetRequest) -> AdkError {
+    session_not_found_for(&req.app_name, &req.user_id, &req.session_id)
+}
+
+/// Builds the canonical not-found error for a raw `(app_name, user_id, session_id)` triple.
+pub(crate) fn session_not_found_for(app_name: &str, user_id: &str, session_id: &str) -> AdkError {
     AdkError::not_found(
         ErrorComponent::Session,
         "session.not_found",
-        format!(
-            "session '{}' was not found for app '{}' and user '{}'",
-            req.session_id, req.app_name, req.user_id
-        ),
+        format!("session '{session_id}' was not found for app '{app_name}' and user '{user_id}'"),
     )
 }
 
