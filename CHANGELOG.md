@@ -86,62 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus reasoning that was buffered but never streamed (thinking disabled), and a
   `delta.content` arriving in the same chunk as `finish_reason` is no longer
   dropped.
-- **`#[task]` calls shared one cached result** (`adk-rust-macros`, `adk-graph`):
-  the execution-log key was the task's name alone and the log is consulted within
-  the run, so a task called in a loop returned the first call's result for every
-  later call. Each call is now keyed by its ordinal in the run and a hash of its
-  serializable arguments; see `adk_graph::functional::task_call_id`. The wrapper
-  also uses the context parameter's real name instead of assuming `ctx`.
-- **Dynamic pauses dropped completed siblings' successors** (`adk-graph`): a
-  dynamic or tool-confirmation pause saved only the paused node, so the successors
-  and `goto` targets of nodes that completed in the same super-step never ran after
-  the resume. The saved frontier is now those successors plus the paused node, in
-  `invoke` and in every stream mode.
-- **Fan-in arrivals lost across a pause or crash** (`adk-graph`): a join's
-  recorded arrivals lived only in the executor, so a join whose first predecessor
-  finished before a pause never ran. Arrivals and wait start times are stored in
-  checkpoint metadata (`adk.graph.fanIn`, versioned); a checkpoint without the key
-  loads with no arrivals, as before. `CompiledGraph::update_state` now keeps the
-  arrivals, the answered gate, the retry budget, and the child ledger.
-- **`GraphAgent` answered every later turn with the first** (`adk-graph`): with a
-  checkpointer, the session's finished thread was reloaded with an empty frontier,
-  so no node ran and the old output came back. A turn on a finished thread now
-  runs the graph again from its entry nodes, starting from the previous turn's
-  state; a paused thread still resumes. The recursion limit counts per turn.
-- **Node-cache hits broke super-step isolation** (`adk-graph`, `node-cache`): a
-  hit's updates were applied before uncached siblings read the state, and a miss in
-  the same step stored its result under a key computed from that changed state,
-  which no lookup matched. Hits now join the step's update batch and every key is
-  computed from the pre-step state.
-- **Action nodes trusted interpolated paths and URLs** (`adk-graph`, `action`):
-  file nodes are confined to allowed roots, rejecting `..` and symbolic-link
-  escapes; HTTP nodes reject URLs outside an `HttpActionPolicy` (default `https`
-  and `http`), re-check every redirect, and log URLs without query strings or
-  credentials.
-- **Unimplemented action nodes pointed at feature flags** (`adk-graph`, `action`):
-  database, email, and JavaScript/TypeScript code nodes now report that the node
-  type is not implemented, since `action-db`, `action-email`, and `action-code`
-  compile placeholders only.
-- **Failed retry-budget checkpoint was silent** (`adk-graph`): when a super-step
-  fails and its checkpoint cannot be saved, the executor logs a warning with the
-  error instead of discarding it.
 
 ### Changed
 
-- **`#[task]` execution-log keys** (`adk-rust-macros`): keys change from
-  `{task}` to `{task}#{ordinal}` or `{task}#{ordinal}:{arg_hash}`, so a workflow
-  resumed from a log written before this release runs its tasks again. Every
-  `#[task]` parameter must be a plain identifier.
-- **File action confinement** (`adk-graph`, `action`): file nodes default to the
-  current working directory as their only root; `ActionNodeExecutor::with_file_roots`
-  and `action::file::execute_file_in` name others. Reported paths are the resolved
-  absolute paths, and listing skips symbolic links.
-- **HTTP action policy** (`adk-graph`, `action-http`): new `HttpActionPolicy`,
-  `ActionNodeExecutor::with_http_policy`, and `action::http::execute_http_with_policy`.
-  Redirects are limited to 5 by default (previously reqwest's 10).
-- **Node-cache store lifetime** (`adk-graph`, `node-cache`): the in-memory store
-  belongs to the compiled graph and is shared by every run, so an identical later
-  run hits; previously each run started with an empty store.
 - **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
   move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
   are not part of its public API.
