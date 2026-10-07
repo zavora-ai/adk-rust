@@ -62,7 +62,7 @@ pub(crate) const AARCH64: Abi = Abi {
 
 impl Abi {
     /// The ABI of the architecture this crate was compiled for, when supported.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(feature = "sandbox-linux", target_os = "linux"))]
     pub(crate) fn native() -> Option<&'static Abi> {
         if cfg!(target_arch = "x86_64") {
             Some(&X86_64)
