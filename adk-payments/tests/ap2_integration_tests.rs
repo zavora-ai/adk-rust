@@ -95,13 +95,17 @@ fn make_success_receipt(payment_mandate_id: &str) -> PaymentReceipt {
 }
 
 fn touch_acp_harness_api() {
-    let _ = MultiActorHarnessConfig::acp_defaults;
-    let _ = MultiActorHarness::webhook_context;
-    let _ = MultiActorHarness::acp_context_template;
-    let _ = MultiActorHarness::session_events_dump;
-    let _ = |actors: &MultiActorHarnessActors| {
-        let _ = &actors.webhook;
-    };
+    // The shared harness only defines these under the `acp` feature.
+    #[cfg(feature = "acp")]
+    {
+        let _ = MultiActorHarnessConfig::acp_defaults;
+        let _ = MultiActorHarness::webhook_context;
+        let _ = MultiActorHarness::acp_context_template;
+        let _ = MultiActorHarness::session_events_dump;
+        let _ = |actors: &MultiActorHarnessActors| {
+            let _ = &actors.webhook;
+        };
+    }
 }
 
 #[tokio::test]

@@ -3,13 +3,15 @@
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(feature = "ap2-mcp")]
+use adk_payments::domain::TransactionState;
 use adk_payments::domain::{
     Cart, CartLine, CommerceActor, CommerceActorRole, CommerceMode, MerchantRef, Money,
-    ProtocolExtensions, TransactionId, TransactionRecord, TransactionState,
+    ProtocolExtensions, TransactionId, TransactionRecord,
 };
-use adk_payments::protocol::ap2::{
-    Ap2Role, Ap2RoleMetadata, CartMandate, IntentMandate, PaymentMandate, PaymentReceipt,
-};
+#[cfg(feature = "ap2-a2a")]
+use adk_payments::protocol::ap2::{Ap2Role, Ap2RoleMetadata};
+use adk_payments::protocol::ap2::{CartMandate, IntentMandate, PaymentMandate, PaymentReceipt};
 
 #[cfg(feature = "ap2-a2a")]
 use adk_payments::protocol::ap2::{Ap2A2aArtifact, Ap2A2aMessage, Ap2AgentCardExtension};
@@ -28,6 +30,7 @@ fn load_json(path: &str) -> Value {
     serde_json::from_str(&fs::read_to_string(fixture(path)).unwrap()).unwrap()
 }
 
+#[cfg(feature = "ap2-mcp")]
 fn sample_record() -> TransactionRecord {
     TransactionRecord::new(
         TransactionId::from("tx-ap2-contract"),
