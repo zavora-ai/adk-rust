@@ -1,11 +1,12 @@
 //! `glob` — list workspace files matching a glob pattern.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use walkdir::WalkDir;
 
 use crate::error::DevToolError;
 use crate::tools::read::require_str;
@@ -73,29 +74,52 @@ impl Tool for GlobTool {
             None => self.workspace.root().to_path_buf(),
         };
 
-        // The base is a literal path; unescaped, a `[` or `*` in it would match siblings.
-        let full = format!("{}/{pattern}", glob::Pattern::escape(&base.to_string_lossy()));
-        let entries = glob::glob(&full)
+        let matcher = glob::Pattern::new(&pattern)
             .map_err(|e| DevToolError::Other(format!("invalid glob pattern: {e}")))?;
+        // `*` and `?` stay within one component, as `glob::glob` treats them, so `src/*.rs`
+        // cannot reach `src/a/b.rs`; `**` still spans directories.
+        let options = glob::MatchOptions { require_literal_separator: true, ..Default::default() };
+
+        // Walk from the base and match the path relative to it. Expanding the base through
+        // `glob::glob` broke on Windows, where a canonical root carries the `\\?\` verbatim
+        // prefix and `?` is a wildcard. The pattern's literal leading components narrow the
+        // walk, so `src/**/*.rs` never visits `target/`.
+        let literal: PathBuf = Path::new(&pattern)
+            .components()
+            .take_while(|component| match component {
+                Component::Normal(part) => !part.to_string_lossy().contains(['*', '?', '[']),
+                Component::Prefix(_)
+                | Component::RootDir
+                | Component::CurDir
+                | Component::ParentDir => false,
+            })
+            .collect();
+        let start = base.join(literal);
 
         let mut matches = Vec::new();
         let mut truncated = false;
-        for entry in entries {
-            let path = match entry {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            // `glob` descends into symlinked directories, which can point anywhere.
-            let contained = std::fs::canonicalize(&path)
-                .is_ok_and(|canonical| canonical.starts_with(self.workspace.root()));
-            if !contained {
-                continue;
+        if start.exists() {
+            // Symlinked directories are listed but not descended: one that points outside
+            // the workspace would otherwise be walked before containment is checked.
+            for entry in WalkDir::new(&start).sort_by_file_name().into_iter().flatten() {
+                let path = entry.path();
+                let Ok(relative) = path.strip_prefix(&base) else { continue };
+                if relative.as_os_str().is_empty() || !matcher.matches_path_with(relative, options)
+                {
+                    continue;
+                }
+                // A symlink can point anywhere.
+                let contained = std::fs::canonicalize(path)
+                    .is_ok_and(|canonical| canonical.starts_with(self.workspace.root()));
+                if !contained {
+                    continue;
+                }
+                if matches.len() >= MAX_RESULTS {
+                    truncated = true;
+                    break;
+                }
+                matches.push(self.workspace.display(path));
             }
-            if matches.len() >= MAX_RESULTS {
-                truncated = true;
-                break;
-            }
-            matches.push(self.workspace.display(&path));
         }
 
         Ok(json!({

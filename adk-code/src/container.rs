@@ -263,8 +263,11 @@ impl DockerConfig {
                 .get(1)
                 .is_some_and(|options| options.split(',').any(|o| o == "ro" || o == "readonly"));
 
+            // `has_root` rather than `is_absolute`: on Windows a Linux-container mount such as
+            // `/srv/data` is rooted but not absolute, and containment only needs the path to be
+            // anchored and free of `..` for `starts_with` against the policy root to hold.
             let host = Path::new(host);
-            let confined = host.is_absolute()
+            let confined = host.has_root()
                 && !host.components().any(|component| matches!(component, Component::ParentDir));
             let under = |root: &PathBuf| confined && host.starts_with(root);
 

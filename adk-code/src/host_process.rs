@@ -55,6 +55,12 @@ pub(crate) fn binary_env(policy: &EnvironmentPolicy) -> Vec<(String, OsString)> 
 pub(crate) fn rustc_command(rustc_path: &str) -> Command {
     let mut command = Command::new(rustc_path);
     command.env_clear().envs(ProcessBackend::toolchain_env()).kill_on_drop(true);
+    // Cargo applies the workspace's rust-lld setting, but a direct rustc invocation does
+    // not read .cargo/config.toml. Hosted Windows runners put Git's GNU `link.exe` ahead
+    // of MSVC on PATH, so naming rust-lld keeps rustc from launching the unrelated Unix
+    // utility, as adk-sandbox's ProcessBackend does.
+    #[cfg(windows)]
+    command.arg("-Clinker=rust-lld");
     command
 }
 

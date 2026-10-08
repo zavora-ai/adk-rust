@@ -156,7 +156,10 @@ impl RustExecutor {
             .map_err(|e| CodeError::InvalidCode(format!("failed to create temp directory: {e}")))?;
 
         let source_path = tmp_dir.path().join("main.rs");
-        let binary_path = tmp_dir.path().join("main");
+        // The backend runs the binary as a shell command, and `cmd.exe` does not
+        // try `.exe` for a path that already names a directory, so the output file
+        // carries the platform suffix rustc would otherwise add on its own.
+        let binary_path = tmp_dir.path().join(format!("main{}", std::env::consts::EXE_SUFFIX));
 
         // Write harnessed source.
         let harnessed_source = HARNESS_TEMPLATE.replace("{user_code}", code);

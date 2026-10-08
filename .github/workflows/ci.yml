@@ -458,6 +458,12 @@ jobs:
     - name: Run sandbox Rust compilation portability smoke
       run: cargo test -p adk-sandbox --test process_enforcement_tests a_working_program_still_runs -- --exact
 
+    # adk-code spawns rustc from a cleared environment and adk-devtools resolves
+    # workspace paths; both carry Windows-only behaviour that the compile-only build
+    # cannot exercise and that the merge tier otherwise reports only after landing.
+    - name: Run the Windows-sensitive crate tests
+      run: cargo test -p adk-code -p adk-devtools
+
     - name: Build summary
       if: always()
       run: echo "### 🪟 Windows build and sandbox portability smoke passed" >> $env:GITHUB_STEP_SUMMARY
