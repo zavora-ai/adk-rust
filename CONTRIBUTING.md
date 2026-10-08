@@ -422,6 +422,9 @@ These run post-merge or on a schedule and MUST NOT be branch-protection-required
   `doc-examples`.
 - **Nightly tier** (`ci-nightly.yml`, `on: schedule`): the `features (…)`
   feature-combination matrix jobs, `supply-chain`, `integration-tests`.
+- **Code scanning** (`codeql.yml`, `on: push: branches:[main]` and weekly): the
+  `Analyze (…)` CodeQL jobs. Alerts appear under Security → Code scanning; test
+  code and examples are excluded by `.github/codeql/config.yml`.
 
 ### Applying the required-check set
 
