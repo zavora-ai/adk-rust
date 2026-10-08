@@ -525,6 +525,16 @@ fn create_model(
     }
 }
 
+// Only reachable from the `#[cfg(not(feature = ...))]` arms above; with every provider
+// compiled in there is no caller, and clippy's dead-code lint fails the build.
+#[cfg(not(all(
+    feature = "gemini",
+    feature = "openai",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "ollama"
+)))]
 fn provider_feature_disabled(provider: ModelProvider, feature: &str) -> Result<Arc<dyn Llm>> {
     Err(anyhow::anyhow!(
         "{} support is not compiled into this adk-cli build. Reinstall with `--features {}` or `--features all-providers`.",
