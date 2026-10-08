@@ -500,8 +500,9 @@ jobs:
           ($skippable | split(" ") | map(select(. != ""))) as $ok
           | to_entries[]
           | select(.value.result != "success")
-          | select((.value.result == "skipped" and ($ok | index(.key) != null)) | not)
-          | "\(.key)=\(.value.result)"' <<<"$JOB_RESULTS")"
+          | .key as $job
+          | select((.value.result == "skipped" and ($ok | index($job) != null)) | not)
+          | "\($job)=\(.value.result)"' <<<"$JOB_RESULTS")"
         if [[ -n "$failed_jobs" ]]; then
           echo "::error::PR tier did not pass:"
           echo "$failed_jobs"
