@@ -382,8 +382,10 @@ in [Branch Protection — Required Status Checks](#branch-protection--required-s
 `scripts/validate-pr.sh` runs the PR tier on the current branch, scoped to what it
 changes against a base (default `origin/main`): `fmt` on the workspace; clippy and
 nextest on the changed crates and every crate that depends on them; the
-feature-coverage pairs of the changed crates; the semver gate for changed Stable
-crates when `cargo-semver-checks` is installed; shellcheck and YAML parsing for
+feature-coverage pairs of the changed crates; each changed crate's widest declared
+feature set (`all-providers` or `full`), since a crate such as `adk-model` compiles
+almost nothing under its defaults; the semver gate for changed Stable crates when
+`cargo-semver-checks` is installed; shellcheck and YAML parsing for
 changed scripts and workflows; and the documentation gates. `--examples` adds a
 `cargo check --locked` of every standalone example that depends on a changed crate.
 

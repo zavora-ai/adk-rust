@@ -111,6 +111,19 @@ for crate in $DIRECT; do
     done < scripts/feature-coverage-pairs.txt
 done
 
+# A crate whose code is mostly behind opt-in features (`adk-model`'s providers, for example)
+# compiles almost nothing under defaults, so its widest declared feature set runs too.
+for crate in $DIRECT; do
+    manifest="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; m=json.load(sys.stdin); print(next(p["manifest_path"] for p in m["packages"] if p["name"]==sys.argv[1]))' "$crate")"
+    for wide in all-providers full; do
+        if grep -qE "^$wide\s*=" "$manifest"; then
+            step "clippy $crate --features $wide" cargo clippy -p "$crate" --features "$wide" --all-targets -- -D warnings
+            step "nextest $crate --features $wide" cargo nextest run -p "$crate" --features "$wide"
+            break
+        fi
+    done
+done
+
 STABLE="adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-server adk-graph adk-memory adk-anthropic"
 if command -v cargo-semver-checks >/dev/null 2>&1; then
     for crate in $DIRECT; do
