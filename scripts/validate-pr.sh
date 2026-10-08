@@ -24,6 +24,9 @@ set -uo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not inside a git repository" >&2; exit 2; }
 cd "$ROOT" || exit 1
 export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
+# Every worktree of the repository shares the main checkout's target directory: a
+# workspace build with tests is tens of gigabytes, and one per worktree fills a disk.
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$(git rev-parse --path-format=absolute --git-common-dir)/../target}"
 
 BASE="origin/main"
 WITH_EXAMPLES=0
@@ -137,7 +140,7 @@ step "documentation gates" bash -c '
     bash scripts/check-publish-order.sh'
 
 if [ "$WITH_EXAMPLES" -eq 1 ] && [ -n "$DIRECT" ]; then
-    export CARGO_TARGET_DIR="$ROOT/target/examples-check"
+    export CARGO_TARGET_DIR="$CARGO_TARGET_DIR/examples-check"
     for manifest in examples/*/Cargo.toml; do
         for crate in $DIRECT; do
             if grep -qE "^$crate\s*=" "$manifest"; then

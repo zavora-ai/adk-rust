@@ -392,6 +392,8 @@ scripts/validate-pr.sh                 # against origin/main
 scripts/validate-pr.sh main --examples # against a local ref, with the examples
 ```
 
+All worktrees of the repository share the main checkout's `target/` through `CARGO_TARGET_DIR`, so a second worktree does not cost a second full build on disk.
+
 The script prints one line per gate and exits non-zero when any gate fails. It is the
 maintainer's tool for rebasing a contributor branch and confirming it before pushing;
 CI remains the verification of record.
