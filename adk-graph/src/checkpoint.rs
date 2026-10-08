@@ -221,7 +221,7 @@ impl SqliteCheckpointer {
     /// semver-compatible `sqlx` to construct one:
     ///
     /// ```toml
-    /// sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+    /// sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
     /// ```
     ///
     /// # Errors
@@ -253,10 +253,12 @@ impl SqliteCheckpointer {
         // A database created before `cleared_interrupt` existed keeps its old
         // shape under CREATE TABLE IF NOT EXISTS, so add the column separately
         // and ignore the duplicate-column error on a database that already has it.
-        for column in ["cleared_interrupt", "attempts", "child_ledger"] {
-            let _ = sqlx::query(&format!("ALTER TABLE graph_checkpoints ADD COLUMN {column} TEXT"))
-                .execute(&pool)
-                .await;
+        for alter in [
+            "ALTER TABLE graph_checkpoints ADD COLUMN cleared_interrupt TEXT",
+            "ALTER TABLE graph_checkpoints ADD COLUMN attempts TEXT",
+            "ALTER TABLE graph_checkpoints ADD COLUMN child_ledger TEXT",
+        ] {
+            let _ = sqlx::query(alter).execute(&pool).await;
         }
 
         sqlx::query(

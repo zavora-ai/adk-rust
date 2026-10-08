@@ -27,7 +27,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # Optional SQLite checkpointer
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], optional = true }
+sqlx = { workspace = true, features = ["runtime-tokio", "sqlite"], optional = true }
 
 # Optional node caching dependencies
 blake3 = { version = "1", optional = true }

@@ -349,7 +349,8 @@ impl PostgresMemoryService {
         ];
 
         // Acquire advisory lock to prevent concurrent migration races
-        sqlx::query(&format!("SELECT pg_advisory_lock({})", Self::ADVISORY_LOCK_KEY))
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(Self::ADVISORY_LOCK_KEY)
             .execute(pool)
             .await
             .map_err(|e| {
@@ -372,7 +373,8 @@ impl PostgresMemoryService {
         .await;
 
         // Release advisory lock regardless of migration outcome
-        let _ = sqlx::query(&format!("SELECT pg_advisory_unlock({})", Self::ADVISORY_LOCK_KEY))
+        let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(Self::ADVISORY_LOCK_KEY)
             .execute(pool)
             .await;
 
@@ -502,7 +504,8 @@ impl MemoryService for PostgresMemoryService {
                             LIMIT $4
                             "#
                         );
-                        sqlx::query(&sql)
+                        // `dims` is the only interpolated value, an integer.
+                        sqlx::query(sqlx::AssertSqlSafe(sql))
                             .bind(&req.app_name)
                             .bind(&req.user_id)
                             .bind(&query_vec)
@@ -525,7 +528,8 @@ impl MemoryService for PostgresMemoryService {
                             LIMIT $4
                             "#
                         );
-                        sqlx::query(&sql)
+                        // `dims` is the only interpolated value, an integer.
+                        sqlx::query(sqlx::AssertSqlSafe(sql))
                             .bind(&req.app_name)
                             .bind(&req.user_id)
                             .bind(&query_vec)

@@ -60,6 +60,11 @@ impl std::error::Error for MigrationError {}
 /// Generates `run_sql_migrations` and `sql_schema_version` for a concrete
 /// sqlx pool type. Each SQL backend (`sqlite-memory`, `database-memory`) gets
 /// its own monomorphised copy, avoiding complex generic trait bounds.
+///
+/// Every SQL string is wrapped in `sqlx::AssertSqlSafe`: `registry_table` is a
+/// crate constant at every call site, step SQL is built by the crate from constants
+/// and integer index parameters, and the formatted values are integers, step
+/// descriptions from those constants, and RFC 3339 timestamps.
 #[cfg(any(feature = "sqlite-memory", feature = "database-memory"))]
 macro_rules! impl_sql_migration_runner {
     ($mod_name:ident, $pool_ty:ty, $int_type:expr) => {
@@ -99,16 +104,16 @@ macro_rules! impl_sql_migration_runner {
                     )",
                     $int_type
                 );
-                sqlx::query(&create_sql).execute(pool).await.map_err(|e| {
+                sqlx::query(sqlx::AssertSqlSafe(create_sql)).execute(pool).await.map_err(|e| {
                     adk_core::AdkError::memory(format!("migration registry creation failed: {e}"))
                 })?;
 
                 // Step 2: Read current max applied version
                 let max_sql =
                     format!("SELECT COALESCE(MAX(version), 0) AS max_v FROM {registry_table}");
-                let row = sqlx::query(&max_sql).fetch_one(pool).await.map_err(|e| {
-                    adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
-                })?;
+                let row = sqlx::query(sqlx::AssertSqlSafe(max_sql)).fetch_one(pool).await.map_err(
+                    |e| adk_core::AdkError::memory(format!("migration registry read failed: {e}")),
+                )?;
                 let mut max_applied: i64 = row.try_get("max_v").map_err(|e| {
                     adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
                 })?;
@@ -125,16 +130,18 @@ macro_rules! impl_sql_migration_runner {
                                  (version, description, applied_at) \
                                  VALUES ({v}, '{desc}', '{now}')"
                             );
-                            sqlx::query(&ins).execute(pool).await.map_err(|e| {
-                                adk_core::AdkError::memory(format!(
-                                    "{}",
-                                    MigrationError {
-                                        version: v,
-                                        description: desc.to_string(),
-                                        cause: e.to_string(),
-                                    }
-                                ))
-                            })?;
+                            sqlx::query(sqlx::AssertSqlSafe(ins)).execute(pool).await.map_err(
+                                |e| {
+                                    adk_core::AdkError::memory(format!(
+                                        "{}",
+                                        MigrationError {
+                                            version: v,
+                                            description: desc.to_string(),
+                                            cause: e.to_string(),
+                                        }
+                                    ))
+                                },
+                            )?;
                             max_applied = v;
                         }
                     }
@@ -171,16 +178,18 @@ macro_rules! impl_sql_migration_runner {
 
                     // Execute the migration SQL (raw_sql supports multiple
                     // semicolon-separated statements in a single call).
-                    sqlx::raw_sql(sql).execute(&mut *tx).await.map_err(|e| {
-                        adk_core::AdkError::memory(format!(
-                            "{}",
-                            MigrationError {
-                                version,
-                                description: description.to_string(),
-                                cause: e.to_string(),
-                            }
-                        ))
-                    })?;
+                    sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&mut *tx).await.map_err(
+                        |e| {
+                            adk_core::AdkError::memory(format!(
+                                "{}",
+                                MigrationError {
+                                    version,
+                                    description: description.to_string(),
+                                    cause: e.to_string(),
+                                }
+                            ))
+                        },
+                    )?;
 
                     // Record the step in the registry
                     let now = Utc::now().to_rfc3339();
@@ -189,7 +198,7 @@ macro_rules! impl_sql_migration_runner {
                          (version, description, applied_at) \
                          VALUES ({version}, '{description}', '{now}')"
                     );
-                    sqlx::query(&rec).execute(&mut *tx).await.map_err(|e| {
+                    sqlx::query(sqlx::AssertSqlSafe(rec)).execute(&mut *tx).await.map_err(|e| {
                         adk_core::AdkError::memory(format!(
                             "{}",
                             MigrationError {
@@ -223,7 +232,7 @@ macro_rules! impl_sql_migration_runner {
             ) -> Result<i64, adk_core::AdkError> {
                 let sql =
                     format!("SELECT COALESCE(MAX(version), 0) AS max_v FROM {registry_table}");
-                match sqlx::query(&sql).fetch_one(pool).await {
+                match sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_one(pool).await {
                     Ok(row) => {
                         let version: i64 = row.try_get("max_v").unwrap_or(0);
                         Ok(version)

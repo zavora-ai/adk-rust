@@ -34,7 +34,9 @@ qdrant-client = { version = "1.13", optional = true }
 # -- by lancedb -- and cannot drift out from under us.
 lancedb = { version = "0.31", optional = true }
 futures = { version = "0.3", optional = true }
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"], optional = true }
+# sqlx 0.9 removed the combined runtime+TLS features; `tls-rustls-ring` is what
+# 0.8's `runtime-tokio-rustls` enabled.
+sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls-ring", "postgres"], optional = true }
 surrealdb = { version = "3.0.1", features = ["kv-mem", "kv-rocksdb"], optional = true }
 surrealdb-types = { version = "3.0.1", optional = true }
 

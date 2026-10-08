@@ -58,7 +58,7 @@ impl PostgresAuditSink {
     /// Executes each statement individually since sqlx doesn't support
     /// multi-statement queries.
     pub async fn migrate(&self) -> Result<(), AuthError> {
-        for statement in MIGRATION_STATEMENTS {
+        for &statement in MIGRATION_STATEMENTS {
             sqlx::query(statement)
                 .execute(&self.pool)
                 .await
@@ -258,8 +258,9 @@ impl AuditSink for PostgresAuditSink {
              LIMIT {limit} OFFSET {offset}"
         );
 
-        // Use a dynamic query builder approach
-        let mut query = sqlx::query_as::<_, AuditRow>(&sql);
+        // Only fixed column predicates with numbered placeholders and the integer
+        // limit and offset are formatted in; every filter value is bound.
+        let mut query = sqlx::query_as::<_, AuditRow>(sqlx::AssertSqlSafe(sql));
 
         if let Some(ref user) = filter.user {
             query = query.bind(user);

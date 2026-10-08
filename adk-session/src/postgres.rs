@@ -146,7 +146,8 @@ CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, timestamp
         let pool = &self.pool;
 
         // Acquire advisory lock to prevent concurrent migration races
-        sqlx::query(&format!("SELECT pg_advisory_lock({})", Self::ADVISORY_LOCK_KEY))
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(Self::ADVISORY_LOCK_KEY)
             .execute(pool)
             .await
             .map_err(|e| {
@@ -176,7 +177,8 @@ CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, timestamp
         .await;
 
         // Release advisory lock regardless of migration outcome
-        let _ = sqlx::query(&format!("SELECT pg_advisory_unlock({})", Self::ADVISORY_LOCK_KEY))
+        let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(Self::ADVISORY_LOCK_KEY)
             .execute(pool)
             .await;
 

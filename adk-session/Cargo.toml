@@ -25,7 +25,7 @@ reqwest = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["sync", "time"] }
 google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "chrono", "json"], optional = true }
+sqlx = { workspace = true, features = ["runtime-tokio", "chrono", "json"], optional = true }
 fred = { version = "10", optional = true }
 mongodb = { version = "3", optional = true }
 firestore = { version = "0.48", optional = true }

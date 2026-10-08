@@ -847,8 +847,13 @@ impl MemoryService for GraphMemoryService {
     /// GDPR erasure: drop the user's entire graph + episodic log.
     async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()> {
         let mut tx = self.begin().await?;
-        for table in ["kg_entities", "kg_observations", "kg_relations", "kg_episodic"] {
-            sqlx::query(&format!("DELETE FROM {table} WHERE app_name=?1 AND user_id=?2"))
+        for delete in [
+            "DELETE FROM kg_entities WHERE app_name=?1 AND user_id=?2",
+            "DELETE FROM kg_observations WHERE app_name=?1 AND user_id=?2",
+            "DELETE FROM kg_relations WHERE app_name=?1 AND user_id=?2",
+            "DELETE FROM kg_episodic WHERE app_name=?1 AND user_id=?2",
+        ] {
+            sqlx::query(delete)
                 .bind(app_name)
                 .bind(user_id)
                 .execute(&mut *tx)
