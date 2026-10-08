@@ -795,7 +795,7 @@ pub async fn swap_adapter(&self, adapter_name: &str) -> Result<()> { ... }
 - **Branch naming**: Use `prefix/short-description`. Allowed prefixes: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `chore/`.
 - **Reference**: Include `Fixes #123` or similar in the PR description.
 - **Scope**: Keep PRs focused — one logical change per PR. Don't mix unrelated changes.
-- **Local gates before pushing**: Run `fmt`, `clippy`, `test`, and `check` via `devenv shell`. These are local shorthand, not CI job names — `check` has no CI job at all.
+- **Local gates before pushing**: Run `fmt`, `clippy`, `test`, and `check` via `devenv shell`. These are local shorthand, not CI job names — `check` has no CI job at all. `scripts/validate-pr.sh` runs the PR tier scoped to the branch's changes (see CONTRIBUTING.md, "Validating a Branch Locally").
 - **CI gates that block merge**: `pr-gate` (all `ci.yml` PR-tier jobs) and `semver`; see [CI cost tiers](#ci-cost-tiers). CONTRIBUTING.md ("Branch Protection — Required Status Checks") is authoritative.
 
 ### PR Checklist requirements

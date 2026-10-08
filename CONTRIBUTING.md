@@ -377,6 +377,25 @@ the PR tier; locally, `pre-push` runs the lighter `cargo check --workspace` beca
 CI is the full-suite safety net. The authoritative required-check set is enumerated
 in [Branch Protection — Required Status Checks](#branch-protection--required-status-checks).
 
+## Validating a Branch Locally
+
+`scripts/validate-pr.sh` runs the PR tier on the current branch, scoped to what it
+changes against a base (default `origin/main`): `fmt` on the workspace; clippy and
+nextest on the changed crates and every crate that depends on them; the
+feature-coverage pairs of the changed crates; the semver gate for changed Stable
+crates when `cargo-semver-checks` is installed; shellcheck and YAML parsing for
+changed scripts and workflows; and the documentation gates. `--examples` adds a
+`cargo check --locked` of every standalone example that depends on a changed crate.
+
+```bash
+scripts/validate-pr.sh                 # against origin/main
+scripts/validate-pr.sh main --examples # against a local ref, with the examples
+```
+
+The script prints one line per gate and exits non-zero when any gate fails. It is the
+maintainer's tool for rebasing a contributor branch and confirming it before pushing;
+CI remains the verification of record.
+
 ## Branch Protection — Required Status Checks
 
 CI is organized into cost tiers (see the `ci-pipeline-restructure` spec). Only the
