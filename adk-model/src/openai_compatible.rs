@@ -196,6 +196,31 @@ impl OpenAICompatibleConfig {
         Self::new(api_key, model).with_provider_name("xai").with_base_url("https://api.x.ai/v1")
     }
 
+    /// OrcaRouter preset.
+    ///
+    /// OrcaRouter routes one OpenAI-compatible endpoint to models from several
+    /// vendors; model IDs carry a vendor prefix such as `openai/` or `anthropic/`.
+    ///
+    /// Default model suggestion: `openai/gpt-5.6-terra`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
+    ///
+    /// let config = OpenAICompatibleConfig::orcarouter("sk-orca-...", "openai/gpt-5.6-terra");
+    /// assert_eq!(config.base_url.as_deref(), Some("https://api.orcarouter.ai/v1"));
+    ///
+    /// let model = OpenAICompatible::new(config)?;
+    /// # let _ = model;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn orcarouter(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("orcarouter")
+            .with_base_url("https://api.orcarouter.ai/v1")
+    }
+
     /// Google Gemini (OpenAI-compatible) preset.
     ///
     /// Targets Gemini's OpenAI-compatibility endpoint, letting you use a Gemini
@@ -1479,6 +1504,18 @@ mod tests {
         .expect_err("sampling should be rejected before network I/O");
 
         assert_eq!(error.code, "model.gemini.sampling_unsupported");
+    }
+
+    #[test]
+    fn orcarouter_preset_sets_endpoint_and_provider() {
+        let config = OpenAICompatibleConfig::orcarouter("test-key", "openai/gpt-5.6-terra");
+        assert_eq!(config.provider_name, "orcarouter");
+        assert_eq!(config.model, "openai/gpt-5.6-terra");
+        assert_eq!(config.base_url.as_deref(), Some("https://api.orcarouter.ai/v1"));
+        assert_eq!(config.api_key, "test-key");
+
+        let client = OpenAICompatible::new(config).expect("client builds");
+        assert_eq!(client.name(), "openai/gpt-5.6-terra");
     }
 
     #[test]

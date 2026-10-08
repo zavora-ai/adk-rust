@@ -13,7 +13,7 @@
 //! - [`GeminiModel`] - Google's Gemini models (3 Pro, 2.5 Flash, etc.)
 //! - `OpenAIClient` - OpenAI models (GPT-5, GPT-5-mini, o3, etc.) — requires `openai` feature
 //! - `AzureOpenAIClient` - Azure OpenAI Service — requires `openai` feature
-//! - `OpenAICompatible` - Any OpenAI-compatible API (xAI, Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, or custom) — requires `openai` feature, use `OpenAICompatibleConfig` presets
+//! - `OpenAICompatible` - Any OpenAI-compatible API (xAI, Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, OrcaRouter, or custom) — requires `openai` feature, use `OpenAICompatibleConfig` presets
 //! - `AnthropicClient` - Anthropic Claude models — requires `anthropic` feature
 //! - `DeepSeekClient` - DeepSeek models — requires `deepseek` feature
 //! - `GroqClient` - Groq ultra-fast inference — requires `groq` feature
@@ -101,7 +101,7 @@
 //! let reasoner = DeepSeekClient::reasoner(std::env::var("DEEPSEEK_API_KEY").unwrap()).unwrap();
 //! ```
 //!
-//! ### OpenAI-Compatible Providers (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI)
+//! ### OpenAI-Compatible Providers (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI, OrcaRouter)
 //!
 //! All OpenAI-compatible providers use `OpenAICompatible` with provider presets:
 //!
@@ -207,6 +207,7 @@
 //! | Cerebras | `OpenAICompatibleConfig::cerebras()` | `CEREBRAS_API_KEY` |
 //! | SambaNova | `OpenAICompatibleConfig::sambanova()` | `SAMBANOVA_API_KEY` |
 //! | xAI (Grok) | `OpenAICompatibleConfig::xai()` | `XAI_API_KEY` |
+//! | OrcaRouter | `OpenAICompatibleConfig::orcarouter()` | `ORCAROUTER_API_KEY` |
 //!
 //! ### Other Providers
 //!

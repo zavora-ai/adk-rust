@@ -24,6 +24,7 @@ A flexible framework for developing AI agents with simplicity and power. Model-a
 | Perplexity | `openai` preset | `sonar-pro` |
 | Cerebras | `cerebras` | `gpt-oss-120b` |
 | SambaNova | `sambanova` | `gpt-oss-120b` |
+| OrcaRouter | `openai` preset | `openai/gpt-5.6-terra` |
 | Amazon Bedrock | `bedrock` | (account/region-specific) |
 | Azure AI Inference | `azure-ai` | (endpoint-specific) |
 

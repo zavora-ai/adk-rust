@@ -363,6 +363,42 @@ cargo run -p adk-model --features openai --example gemini_openai_compat
 cargo run -p adk-agent --example gemini_openai_compat_agent
 ```
 
+### OrcaRouter via the OpenAI-Compatible Endpoint
+
+OrcaRouter serves models from several vendors through the OpenAI Chat
+Completions wire format at `https://api.orcarouter.ai/v1`. Use the
+`OpenAICompatibleConfig::orcarouter(...)` preset (under the `openai` feature)
+with an `ORCAROUTER_API_KEY`:
+
+```toml
+[dependencies]
+adk-model = { version = "2.3.0", features = ["openai"] }
+```
+
+```rust
+use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("ORCAROUTER_API_KEY")?;
+    let model = OpenAICompatible::new(
+        OpenAICompatibleConfig::orcarouter(api_key, "openai/gpt-5.6-terra"),
+    )?;
+    let _ = model;
+    Ok(())
+}
+```
+
+Model IDs carry a vendor prefix, so changing the model string switches the
+upstream vendor while the key and client stay the same:
+
+| Model ID | Upstream vendor |
+|----------|-----------------|
+| `openai/gpt-5.6-terra` | OpenAI |
+| `anthropic/claude-sonnet-5` | Anthropic |
+
+Chat, streaming, function calling, and structured output go through the same
+`OpenAICompatible` client as every other preset.
+
 ### Legacy Reasoning-Effort API
 
 The original three-level `ReasoningEffort` API remains available for compatibility:

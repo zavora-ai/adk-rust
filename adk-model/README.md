@@ -1,6 +1,6 @@
 # adk-model
 
-LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, OpenAI, OpenRouter, xAI, Anthropic, DeepSeek, Groq, Ollama, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, Amazon Bedrock, and Azure AI Inference.
+LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, OpenAI, OpenRouter, xAI, Anthropic, DeepSeek, Groq, Ollama, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, OrcaRouter, Amazon Bedrock, and Azure AI Inference.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-model.svg)](https://crates.io/crates/adk-model)
 [![Documentation](https://docs.rs/adk-model/badge.svg)](https://docs.rs/adk-model)
@@ -25,6 +25,7 @@ LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, Op
 - **Perplexity** - Search-augmented LLM (Sonar, etc.)
 - **Cerebras** - Ultra-fast inference (Llama 3.3, etc.)
 - **SambaNova** - Fast inference (Llama 3.3, etc.)
+- **OrcaRouter** - Models from several vendors through one OpenAI-compatible endpoint
 - **Amazon Bedrock** - AWS-hosted models via IAM auth (Claude, Llama, Mistral, etc.)
 - **Azure AI Inference** - Azure-hosted models (Cohere, Llama, Mistral, etc.)
 - **Streaming** - Real-time response streaming for all providers
@@ -532,6 +533,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### OrcaRouter
+
+OrcaRouter serves models from several vendors behind one OpenAI-compatible
+endpoint; model IDs carry a vendor prefix. The preset needs only the `openai` feature.
+
+```rust
+use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("ORCAROUTER_API_KEY")?;
+    let model = OpenAICompatible::new(OpenAICompatibleConfig::orcarouter(
+        api_key, "openai/gpt-5.6-terra",
+    ))?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
 ### Amazon Bedrock
 
 ```rust
@@ -676,6 +702,7 @@ See [Ollama library](https://ollama.com/library) for all available models.
 | Perplexity | `openai` preset | `sonar-pro` | `PERPLEXITY_API_KEY` |
 | Cerebras | `openai` preset | `gpt-oss-120b` | `CEREBRAS_API_KEY` |
 | SambaNova | `openai` preset | `gpt-oss-120b` | `SAMBANOVA_API_KEY` |
+| OrcaRouter | `openai` preset | `openai/gpt-5.6-terra` | `ORCAROUTER_API_KEY` |
 | Amazon Bedrock | `bedrock` | account/region-specific | AWS IAM credentials |
 | Azure AI Inference | `azure-ai` | (endpoint-specific) | `AZURE_AI_API_KEY` |
 
@@ -744,6 +771,9 @@ CEREBRAS_API_KEY=your-cerebras-api-key
 
 # SambaNova
 SAMBANOVA_API_KEY=your-sambanova-api-key
+
+# OrcaRouter
+ORCAROUTER_API_KEY=your-orcarouter-api-key
 
 # Azure AI Inference
 AZURE_AI_API_KEY=your-azure-ai-api-key
