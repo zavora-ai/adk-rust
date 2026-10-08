@@ -82,8 +82,10 @@ When unset, the client uses Anthropic's public API (`https://api.anthropic.com`)
 to every request. Only `https://`, or `http://` with a loopback host
 (`localhost`, `127.0.0.1`, `[::1]`) for local development, is accepted — anything
 else is rejected as a validation error rather than silently sending the key in
-cleartext. The same rule applies to `AnthropicConfig::with_base_url`, which is
-validated when `AnthropicClient::new` builds the underlying client.
+cleartext, unless plain HTTP is acknowledged as described in
+[Internal gateways over HTTP](#internal-gateways-over-http). The same rule applies
+to `AnthropicConfig::with_base_url`, which is validated when `AnthropicClient::new`
+builds the underlying client.
 
 ### Explicit key and endpoint
 
@@ -97,6 +99,55 @@ use adk_anthropic::Anthropic;
 
 let client = Anthropic::new_with_base_url(api_key, "https://gateway.internal/anthropic")?;
 ```
+
+### Internal gateways over HTTP
+
+An internal LLM gateway that is reachable only over plain HTTP needs an explicit
+opt-in. The API key then crosses the network unencrypted, so the opt-in belongs
+where the base URL is configured and applies to that client only.
+
+| Base URL source | Opt-in | Order |
+|-----------------|--------|-------|
+| `Anthropic::with_base_url`, `Anthropic::with_base_url_and_timeout` | `Anthropic::allow_insecure_http()` | Before the base URL — both methods validate when called |
+| `AnthropicConfig::with_base_url` | `AnthropicConfig::allow_insecure_http()` | Either — validation runs in `AnthropicClient::new` |
+| `ANTHROPIC_BASE_URL` (read by `Anthropic::new`, and by `AnthropicClient` when no base URL is configured) | `ANTHROPIC_ALLOW_INSECURE_HTTP` set to `1` or `true` | — |
+
+```rust
+use adk_anthropic::Anthropic;
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+
+fn build(api_key: String) -> Result<(Anthropic, AnthropicClient), Box<dyn std::error::Error>> {
+    // adk-anthropic: the opt-in precedes the base URL.
+    let client = Anthropic::new(Some(api_key.clone()))?
+        .allow_insecure_http()
+        .with_base_url("http://10.60.1.20:8080/api/v1/llm/anthropic".to_string())?;
+
+    // adk-model: the opt-in and the base URL can come in either order.
+    let model = AnthropicClient::new(
+        AnthropicConfig::new(api_key, "claude-sonnet-5")
+            .allow_insecure_http()
+            .with_base_url("http://10.60.1.20:8080/api/v1/llm/anthropic"),
+    )?;
+    Ok((client, model))
+}
+```
+
+For a base URL taken from the environment, the acknowledgement comes from the
+environment as well:
+
+```bash
+export ANTHROPIC_BASE_URL=http://10.60.1.20:8080/api/v1/llm/anthropic
+export ANTHROPIC_ALLOW_INSECURE_HTTP=1
+```
+
+| Behaviour | Rule |
+|-----------|------|
+| Loopback `http://` and `https://` | Accepted without the opt-in |
+| Non-loopback `http://` with the opt-in | Accepted; a `warn`-level log names the host, never the URL path or the key |
+| Non-loopback `http://` without the opt-in | Validation error naming the opt-in for the URL's source |
+| Other schemes (`ftp://`, `ws://`) | Rejected, opt-in or not |
+| `ANTHROPIC_ALLOW_INSECURE_HTTP` | Applies to `ANTHROPIC_BASE_URL` only; ignored for URLs given in code |
+| `FilesClient`, `ManagedAgentsClient` | No opt-in; plain HTTP stays loopback-only |
 
 ## Retries and Streaming
 

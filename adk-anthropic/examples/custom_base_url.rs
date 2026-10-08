@@ -20,6 +20,10 @@
 //! accepted. A rejected `ANTHROPIC_BASE_URL` makes `Anthropic::new` fail rather
 //! than silently falling back to the default endpoint.
 //!
+//! A trusted internal gateway reachable only over plain HTTP needs an opt-in:
+//! `allow_insecure_http()` before `with_base_url`, or
+//! `ANTHROPIC_ALLOW_INSECURE_HTTP=1` alongside `ANTHROPIC_BASE_URL`.
+//!
 //! Run: `ANTHROPIC_API_KEY=sk-... cargo run -p adk-anthropic --example anthropic_custom_base_url`
 
 use adk_anthropic::{Anthropic, KnownModel, MessageCreateParams};

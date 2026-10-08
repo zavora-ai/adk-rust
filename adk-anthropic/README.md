@@ -120,6 +120,30 @@ println!("fallback ran: {}", response.served_by_fallback());
 # }
 ```
 
+### Base URLs and internal gateways
+
+Every request attaches the API key, so a base URL must use `https://`, or `http://`
+with a loopback host (`localhost`, `127.0.0.1`, `[::1]`). A trusted internal
+gateway that is reachable only over plain HTTP needs an explicit opt-in, which
+logs a warning naming the host when the URL is accepted:
+
+| Base URL source | Opt-in |
+|-----------------|--------|
+| `with_base_url`, `with_base_url_and_timeout` | Call `allow_insecure_http()` **before** them — they validate the URL when called |
+| `ANTHROPIC_BASE_URL` (read by `Anthropic::new`) | Set `ANTHROPIC_ALLOW_INSECURE_HTTP` to `1` or `true` |
+
+```rust
+use adk_anthropic::Anthropic;
+
+# fn example() -> Result<(), adk_anthropic::Error> {
+let client = Anthropic::new(None)?
+    .allow_insecure_http()
+    .with_base_url("http://10.60.1.20:8080/api/v1/llm/anthropic".to_string())?;
+# let _ = client;
+# Ok(())
+# }
+```
+
 ### Timeouts, stream errors, and request limits
 
 | Behaviour | Rule |
