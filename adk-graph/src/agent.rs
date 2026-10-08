@@ -45,6 +45,21 @@ pub type InputMapper = Arc<dyn Fn(&dyn InvocationContext) -> State + Send + Sync
 pub type OutputMapper = Arc<dyn Fn(&State) -> Vec<Event> + Send + Sync>;
 
 /// GraphAgent wraps a CompiledGraph as an ADK Agent
+///
+/// # Turns and checkpoints
+///
+/// Each [`Agent::run`] call is one turn on a thread whose id is the session id.
+/// With a checkpointer configured:
+///
+/// | Thread's latest checkpoint | What the turn does |
+/// |----------------------------|--------------------|
+/// | None | Runs the graph from its entry nodes. |
+/// | Paused (non-empty frontier) | Resumes the paused run, with the turn's input merged into its state. |
+/// | Finished (empty frontier) | Runs the graph again from its entry nodes, starting from the previous turn's final state with the turn's input merged on top. |
+///
+/// The recursion limit applies to each turn separately. [`GraphAgent::invoke`]
+/// keeps the direct-graph behaviour, where re-invoking a finished thread returns
+/// its final state without running anything.
 pub struct GraphAgent {
     name: String,
     description: String,
@@ -217,7 +232,12 @@ impl Agent for GraphAgent {
         let ctx_clone = ctx.clone();
 
         let stream = async_stream::stream! {
-            match graph.invoke(input, config).await {
+            // Each call is one turn on the session's thread: a paused thread
+            // resumes, and a finished one runs again from its entry nodes with the
+            // previous turn's state carried over.
+            let mut executor =
+                crate::executor::PregelExecutor::new(&graph, config).restarting_completed_threads();
+            match executor.run(input).await {
                 Ok(state) => {
                     let events = output_mapper(&state);
                     for event in events {
@@ -751,6 +771,13 @@ impl GraphAgentBuilder {
 
         #[cfg(feature = "node-cache")]
         {
+            compiled.node_caches = self
+                .cache_policies
+                .iter()
+                .map(|(name, policy)| {
+                    (name.clone(), Arc::new(crate::cache::NodeCache::from_policy(policy)))
+                })
+                .collect();
             compiled.cache_policies = self.cache_policies;
         }
 

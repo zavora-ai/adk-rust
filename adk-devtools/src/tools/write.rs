@@ -55,7 +55,7 @@ impl Tool for WriteFileTool {
         if let Some(parent) = resolved.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(DevToolError::from)?;
         }
-        tokio::fs::write(&resolved, &content).await.map_err(DevToolError::from)?;
+        self.workspace.write_contained(&resolved, content.as_bytes()).await?;
         // A freshly-written file is considered "read" (its content is known).
         self.workspace.mark_read(&resolved);
 

@@ -2,7 +2,7 @@
 //!
 //! - **Rust mode**: Evaluates the code field as a JSON expression or returns it as a string.
 //!   (Dynamic Rust compilation is not possible at runtime.)
-//! - **JS/TS mode**: Gated behind `action-code` feature; returns an error if not enabled.
+//! - **JS/TS mode**: Not implemented under any feature; returns an error saying so.
 
 use adk_action::{CodeLanguage, CodeNodeConfig};
 use serde_json::Value;
@@ -48,21 +48,15 @@ fn execute_rust_code(
     Ok(NodeOutput::new().with_update(output_key, result))
 }
 
-/// JS/TS code execution — requires the `action-code` feature.
+/// JS/TS code execution: not implemented.
 ///
-/// Currently a placeholder. The `action-code` feature flag is defined but the
-/// `quick-js` dependency is not yet wired. When enabled, this will provide a
-/// sandboxed JavaScript/TypeScript runtime with configurable resource limits
-/// (memory, time, network, filesystem).
+/// No sandboxed JavaScript runtime is integrated, and the `action-code` feature
+/// does not add one.
 fn execute_js_code(node_id: &str) -> Result<NodeOutput> {
     Err(GraphError::NodeExecutionFailed {
         node: node_id.to_string(),
-        message: concat!(
-            "JavaScript/TypeScript code execution is not yet available. ",
-            "The 'action-code' feature is reserved for a future sandboxed JS runtime ",
-            "(quick-js). Use language 'rust' for code nodes, or contribute the ",
-            "quick-js integration to enable JS/TS support."
-        )
-        .to_string(),
+        message: "JavaScript and TypeScript code nodes are not implemented, in any feature \
+                  configuration; use language 'rust'"
+            .to_string(),
     })
 }

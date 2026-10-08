@@ -195,6 +195,8 @@ impl StateGraph {
             retention: None,
             #[cfg(feature = "node-cache")]
             cache_policies: HashMap::new(),
+            #[cfg(feature = "node-cache")]
+            node_caches: HashMap::new(),
         })
     }
 
@@ -406,6 +408,10 @@ pub struct CompiledGraph {
     /// Per-node cache policies, keyed by node name.
     #[cfg(feature = "node-cache")]
     pub(crate) cache_policies: HashMap<String, crate::cache::NodeCachePolicy>,
+    /// Per-node caches built from `cache_policies`, shared by every run of this
+    /// graph so a later run reuses what an earlier one stored.
+    #[cfg(feature = "node-cache")]
+    pub(crate) node_caches: HashMap<String, Arc<crate::cache::NodeCache>>,
 }
 
 impl CompiledGraph {

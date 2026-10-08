@@ -58,11 +58,22 @@ let ws = Workspace::new("./my-repo")
   directory is refused too. A symlink whose target stays inside the workspace keeps
   working, since repositories legitimately contain internal links.
 
-  The check is not a lock. A symlink planted between the check and the subsequent
-  open would still be followed; closing that window needs descriptor-relative
-  traversal with platform no-follow semantics. Treat the file tools as containment
-  against an agent that wanders, not as isolation against an adversary that can
-  write into the workspace concurrently.
+  A **dangling or looping symlink** anywhere on the path is refused wherever it
+  points, because a write would follow it and create its target — a cloned
+  repository containing `link -> ~/.zshenv` must not let `write_file("link", ..)`
+  create `~/.zshenv`. Write to the link's target path directly instead.
+
+  `glob` refuses patterns containing `..` or an absolute path, and drops every
+  match whose resolved path lies outside the root, so a symlinked directory
+  pointing elsewhere is not listed.
+
+  The check is not a lock. `write_file` and `edit_file` re-check the canonical
+  parent immediately before the open and, on Unix, open the final component with
+  `O_NOFOLLOW`, so a symlink planted in that position after the check fails the
+  open. A directory swapped for a symlink in the remaining window is still
+  followed; closing it needs descriptor-relative traversal. Treat the file tools
+  as containment against an agent that wanders, not as isolation against an
+  adversary that can write into the workspace concurrently.
 - **Read-only mode** — `Workspace::read_only(..)` hides the mutating tools
   entirely (the model only ever sees `read_file`/`glob`/`grep`).
 - **`bash` environment is cleared** — the command receives only `PATH`, `HOME`, `LANG`,
@@ -71,7 +82,12 @@ let ws = Workspace::new("./my-repo")
   pass-everything behaviour, and `env_allowlist` replaces the set.
 - **`bash` timeout + output caps** — long or chatty commands are bounded. A timed-out
   command is killed as a **process group**, so anything it started is killed too;
-  previously only the direct child was signalled and descendants survived.
+  previously only the direct child was signalled and descendants survived. Dropping
+  the tool call's future (for example when the run is cancelled) kills the group the
+  same way. Each stream keeps at most `max_output_bytes` (default 1 MiB) as it is
+  read; output past the cap is drained and discarded, so the command still runs to
+  completion and reports its exit code, and the result sets `truncated: true`. The
+  cut falls on a UTF-8 character boundary.
 
 ## Using it directly
 
@@ -100,7 +116,8 @@ timeout and a cleared environment. What that does and does not give you:
 |----------|--------------|
 | File tools cannot resolve outside the root, including through symlinks | `bash` can still use absolute paths — the working directory is not an OS boundary |
 | The command cannot read the agent's environment variables | The command can reach the network |
-| A timeout kills the command and its descendants | Nothing limits memory or CPU |
+| A timeout or a cancelled call kills the command and its descendants | Nothing limits the command's own memory or CPU |
+| Captured output is capped per stream as it is read | |
 
 So it is path-contained, environment-isolated, and bounded, but **not** OS-isolated. The policy vocabulary aligns with `adk-code`'s `SandboxPolicy`; for
 strong isolation, run `bash` behind a containerized executor (see the

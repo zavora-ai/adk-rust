@@ -142,3 +142,92 @@ async fn a_command_that_finishes_is_unaffected() {
     assert_eq!(result["exit_code"], json!(0));
     assert!(result["stdout"].as_str().unwrap_or_default().contains("hello"));
 }
+
+// ── Output is capped while it is read ─────────────────────────────────
+//
+// Output was collected in full and cut afterwards with `String::truncate`, which panics
+// when the cap falls inside a multi-byte character, and which bounded only the report,
+// not the memory spent collecting it.
+
+const TRUNCATION_MARKER: &str = "\n…[truncated]";
+
+#[tokio::test]
+async fn a_cap_inside_a_multi_byte_character_does_not_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    // `€` is three bytes, so a 4-byte cap falls inside the second one.
+    let workspace = Workspace::new(dir.path()).max_output_bytes(4);
+
+    let result = run_bash(workspace, "printf '€€€'", None).await.expect("must run");
+
+    assert_eq!(result["stdout"], json!(format!("€{TRUNCATION_MARKER}")));
+    assert_eq!(result["truncated"], json!(true));
+    assert_eq!(result["exit_code"], json!(0));
+}
+
+#[tokio::test]
+async fn more_than_a_mebibyte_of_multi_byte_output_is_capped() {
+    let (_dir, workspace) = temp_workspace();
+    let cap = workspace.max_output();
+    // Each line is 61 bytes, so the 1 MiB cap lands inside a character.
+    let command = "yes '€€€€€€€€€€€€€€€€€€€€' | head -c 1500000";
+
+    let result = run_bash(workspace, command, None).await.expect("must run");
+    let stdout = result["stdout"].as_str().expect("stdout must be a string");
+    let kept = stdout.strip_suffix(TRUNCATION_MARKER).expect("the output must be marked truncated");
+
+    assert_eq!(result["truncated"], json!(true));
+    assert!(kept.len() <= cap, "kept {} bytes over a {cap}-byte cap", kept.len());
+    assert!(kept.len() > cap - 4, "the cap discarded more than a partial character");
+    assert!(
+        kept.chars().all(|c| c == '€' || c == '\n'),
+        "the cut produced a replacement or partial character"
+    );
+    // Excess output is drained rather than left in the pipe, so the command completes.
+    assert_eq!(result["exit_code"], json!(0));
+}
+
+// ── A cancelled call takes the command with it ────────────────────────
+
+/// Whether the test process's direct child `pid` has exited, reaping it if so.
+fn child_has_exited(pid: i32) -> bool {
+    // SAFETY: a non-blocking `waitpid` on a pid with a null status pointer cannot
+    // violate memory safety.
+    let reaped = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
+    // `pid` means it exited now; -1 (ECHILD) means it was already reaped.
+    reaped == pid || reaped == -1
+}
+
+#[tokio::test]
+async fn dropping_the_call_kills_the_shell_and_its_children() {
+    let dir = tempfile::tempdir().unwrap();
+    let shell_marker = dir.path().join("shell.pid");
+    let child_marker = dir.path().join("child.pid");
+    let workspace = Workspace::new(dir.path());
+
+    let command = format!(
+        "echo $$ > {}; sleep 30 & echo $! > {}; wait",
+        shell_marker.to_string_lossy(),
+        child_marker.to_string_lossy()
+    );
+    let call = run_bash(workspace, &command, Some(60));
+    // The call cannot finish within a second, so the timeout drops it mid-flight.
+    let outcome = tokio::time::timeout(Duration::from_secs(1), call).await;
+    assert!(outcome.is_err(), "the command must still be running when the call is dropped");
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let read_pid = |path: &std::path::Path| -> i32 {
+        std::fs::read_to_string(path)
+            .expect("the command must have recorded its pid")
+            .trim()
+            .parse()
+            .expect("a numeric pid")
+    };
+    let shell = read_pid(&shell_marker);
+    let child = read_pid(&child_marker);
+
+    assert!(child_has_exited(shell), "the shell (pid {shell}) survived the dropped call");
+    // SAFETY: signal 0 only probes for existence and cannot violate memory safety.
+    let child_alive = unsafe { libc::kill(child, 0) } == 0;
+    assert!(!child_alive, "a descendant (pid {child}) survived the dropped call");
+}

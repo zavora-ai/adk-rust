@@ -44,7 +44,8 @@
 //! ## Available Tools
 //!
 //! ### Navigation
-//! - `browser_navigate` - Navigate to a URL
+//! - `browser_navigate` - Navigate to a URL (`http`/`https` unless
+//!   `BrowserToolset::with_allowed_schemes` says otherwise)
 //! - `browser_back` - Go back in history
 //! - `browser_forward` - Go forward in history
 //! - `browser_refresh` - Refresh the page
@@ -73,7 +74,8 @@
 //! - `browser_wait_for_text` - Wait for text to appear
 //!
 //! ### JavaScript
-//! - `browser_evaluate_js` - Execute JavaScript code
+//! - `browser_evaluate_js` - Execute JavaScript code (opt-in via
+//!   `BrowserToolset::with_evaluate_js(true)`)
 //! - `browser_scroll` - Scroll the page
 //! - `browser_hover` - Hover over an element
 //! - `browser_handle_alert` - Handle JavaScript alerts
@@ -188,6 +190,8 @@ pub use tools::{
     ClickTool,
     // Windows/Tabs
     CloseWindowTool,
+    // Navigation scheme allowlist
+    DEFAULT_ALLOWED_SCHEMES,
     DeleteAllCookiesTool,
     DeleteCookieTool,
     DoubleClickTool,

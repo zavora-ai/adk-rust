@@ -1,6 +1,7 @@
 //! Window and tab management tools.
 
 use crate::session::BrowserSession;
+use crate::tools::navigate::{default_allowed_schemes, validate_url};
 use adk_core::{AdkError, Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -47,13 +48,31 @@ impl Tool for ListWindowsTool {
 }
 
 /// Tool for opening a new tab.
+///
+/// A `url` argument must use a scheme in the allowlist, which defaults to
+/// [`DEFAULT_ALLOWED_SCHEMES`](crate::tools::DEFAULT_ALLOWED_SCHEMES).
 pub struct NewTabTool {
     browser: Arc<BrowserSession>,
+    allowed_schemes: Vec<String>,
 }
 
 impl NewTabTool {
     pub fn new(browser: Arc<BrowserSession>) -> Self {
-        Self { browser }
+        Self { browser, allowed_schemes: default_allowed_schemes() }
+    }
+
+    /// Replace the URL schemes accepted for the optional `url` argument.
+    ///
+    /// Schemes are compared case-insensitively. See
+    /// [`NavigateTool::with_allowed_schemes`](crate::tools::NavigateTool::with_allowed_schemes).
+    #[must_use]
+    pub fn with_allowed_schemes<I, S>(mut self, schemes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.allowed_schemes = schemes.into_iter().map(Into::into).collect();
+        self
     }
 }
 
@@ -81,6 +100,9 @@ impl Tool for NewTabTool {
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let url = args.get("url").and_then(|v| v.as_str());
+        if let Some(url) = url {
+            validate_url(url, &self.allowed_schemes)?;
+        }
 
         let handle = self.browser.new_tab().await?;
 
@@ -99,13 +121,31 @@ impl Tool for NewTabTool {
 }
 
 /// Tool for opening a new window.
+///
+/// A `url` argument must use a scheme in the allowlist, which defaults to
+/// [`DEFAULT_ALLOWED_SCHEMES`](crate::tools::DEFAULT_ALLOWED_SCHEMES).
 pub struct NewWindowTool {
     browser: Arc<BrowserSession>,
+    allowed_schemes: Vec<String>,
 }
 
 impl NewWindowTool {
     pub fn new(browser: Arc<BrowserSession>) -> Self {
-        Self { browser }
+        Self { browser, allowed_schemes: default_allowed_schemes() }
+    }
+
+    /// Replace the URL schemes accepted for the optional `url` argument.
+    ///
+    /// Schemes are compared case-insensitively. See
+    /// [`NavigateTool::with_allowed_schemes`](crate::tools::NavigateTool::with_allowed_schemes).
+    #[must_use]
+    pub fn with_allowed_schemes<I, S>(mut self, schemes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.allowed_schemes = schemes.into_iter().map(Into::into).collect();
+        self
     }
 }
 
@@ -133,6 +173,9 @@ impl Tool for NewWindowTool {
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let url = args.get("url").and_then(|v| v.as_str());
+        if let Some(url) = url {
+            validate_url(url, &self.allowed_schemes)?;
+        }
 
         let handle = self.browser.new_window().await?;
 

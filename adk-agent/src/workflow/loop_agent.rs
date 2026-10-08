@@ -50,6 +50,18 @@ impl LoopAgent {
     }
 
     /// Set the maximum number of loop iterations.
+    ///
+    /// Each iteration runs every sub-agent once, in order; an escalation ends the loop early.
+    /// `0` runs no iterations: the before- and after-agent callbacks still run and the agent
+    /// completes immediately without invoking any sub-agent.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_agent::LoopAgent;
+    ///
+    /// let refine = LoopAgent::new("refine", vec![writer, critic]).with_max_iterations(3);
+    /// ```
     pub fn with_max_iterations(mut self, max: u32) -> Self {
         self.max_iterations = max;
         self
@@ -462,9 +474,9 @@ impl Agent for LoopAgent {
                 }
             }
 
-            let mut remaining = max_iterations;
-
-            loop {
+            // A range cannot underflow, so `max_iterations == 0` runs the body zero times
+            // instead of wrapping to `u32::MAX`.
+            for _ in 0..max_iterations {
                 let mut should_exit = false;
 
                 for agent in &sub_agents {
@@ -492,11 +504,6 @@ impl Agent for LoopAgent {
                 }
 
                 if should_exit {
-                    break;
-                }
-
-                remaining -= 1;
-                if remaining == 0 {
                     break;
                 }
             }

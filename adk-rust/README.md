@@ -206,7 +206,7 @@ default features, so each capability is forwarded from this crate:
 
 ## Browser Automation
 
-Give agents web browsing capabilities with 46 tools:
+Give agents web browsing capabilities with 46 tools (`browser_evaluate_js` is opt-in, and navigation accepts only `http`/`https` by default):
 
 ```rust
 use adk_browser::{BrowserSession, BrowserToolset, BrowserConfig};
@@ -215,7 +215,7 @@ use std::sync::Arc;
 let config = BrowserConfig::new().webdriver_url("http://localhost:4444");
 let session = Arc::new(BrowserSession::new(config));
 let toolset = BrowserToolset::new(session);
-let tools = toolset.all_tools();  // 46 browser tools
+let tools = toolset.all_tools();  // 45 browser tools; .with_evaluate_js(true) adds the 46th
 
 let mut builder = LlmAgentBuilder::new("web_agent")
     .model(model);

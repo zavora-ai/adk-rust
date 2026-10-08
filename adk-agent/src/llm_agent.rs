@@ -933,6 +933,10 @@ impl LlmAgentBuilder {
     }
 
     /// Set a state key where the agent's final output will be stored.
+    ///
+    /// The value is the concatenated text of the final model response. When an
+    /// `output_schema` is set, it is written only after the response passes schema
+    /// validation; a response that exhausts `output_max_retries` leaves the key unset.
     pub fn output_key(mut self, key: impl Into<String>) -> Self {
         self.output_key = Some(key.into());
         self
@@ -1131,6 +1135,12 @@ impl LlmAgentBuilder {
     }
 
     /// Configure tool confirmation requirements for this agent.
+    ///
+    /// The effective requirement is the union of this policy and
+    /// [`InvocationContext::requires_tool_confirmation`], so a runtime-injected requirement
+    /// (for example a team relationship with required approval) still pauses the call when
+    /// no decision exists and blocks it when the decision is
+    /// [`ToolConfirmationDecision::Deny`].
     pub fn tool_confirmation_policy(mut self, policy: ToolConfirmationPolicy) -> Self {
         self.tool_confirmation_policy = policy;
         self
@@ -1775,6 +1785,10 @@ impl CallbackContext for ToolOutcomeCallbackContext {
     fn tool_outcome(&self) -> Option<ToolOutcome> {
         Some(self.outcome.clone())
     }
+
+    fn shared_state(&self) -> Option<Arc<adk_core::SharedState>> {
+        self.inner.shared_state()
+    }
 }
 
 /// Per-invocation circuit breaker state.
@@ -1922,8 +1936,11 @@ impl ToolExecutor<'_> {
             }
         };
 
-        // Tool confirmation (deny case; None handled by pre-check)
-        if self.tool_confirmation_policy.requires_confirmation(&name) {
+        // Tool confirmation (deny case; None handled by pre-check). Runtime-injected requirements
+        // such as team relationship approval must gate execution exactly like the agent's policy.
+        if self.tool_confirmation_policy.requires_confirmation(&name)
+            || self.ctx.requires_tool_confirmation(&name)
+        {
             match self.live_confirmation_decisions.get(&function_call_id).copied().or_else(|| {
                 static_confirmation_decision(
                     self.confirmation_decisions,
@@ -2999,28 +3016,6 @@ impl Agent for LlmAgent {
                         content,
                         final_provider_metadata.as_ref(),
                     ));
-
-                    // Handle output_key: save final agent output to state_delta
-                    if let Some(ref output_key) = output_key
-                        && !has_function_calls
-                    {
-                        let mut text_parts = String::new();
-                        for part in &content.parts {
-                            if let Part::Text { text } = part {
-                                text_parts.push_str(text);
-                            }
-                        }
-                        if !text_parts.is_empty() {
-                            // Yield a final state update event
-                            let mut state_event = Event::new(&invocation_id);
-                            state_event.author = agent_name.clone();
-                            state_event.actions.state_delta.insert(
-                                output_key.clone(),
-                                serde_json::Value::String(text_parts),
-                            );
-                            yield Ok(state_event);
-                        }
-                    }
                 }
 
                 if !has_function_calls {
@@ -3068,6 +3063,28 @@ impl Agent for LlmAgent {
                                     parts: vec![Part::Text { text: correction }],
                                 });
                                 continue;
+                        }
+                    }
+
+                    // Persist the final output only once it has passed schema validation, so a
+                    // rejected attempt never lands in `state[output_key]`.
+                    if let Some(ref output_key) = output_key
+                        && let Some(ref content) = accumulated_content
+                    {
+                        let mut text_parts = String::new();
+                        for part in &content.parts {
+                            if let Part::Text { text } = part {
+                                text_parts.push_str(text);
+                            }
+                        }
+                        if !text_parts.is_empty() {
+                            let mut state_event = Event::new(&invocation_id);
+                            state_event.author = agent_name.clone();
+                            state_event.actions.state_delta.insert(
+                                output_key.clone(),
+                                serde_json::Value::String(text_parts),
+                            );
+                            yield Ok(state_event);
                         }
                     }
 

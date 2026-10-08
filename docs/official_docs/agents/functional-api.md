@@ -119,6 +119,57 @@ if log.is_completed("fetch") {
 }
 ```
 
+### Task Identity
+
+`#[task]` generates a wrapper named `__task_<name>` that records each **call** in
+the `ExecutionLog` under its own key, built by `adk_graph::functional::task_call_id`:
+
+| Part | Meaning |
+|------|---------|
+| `<name>` | The task function's name |
+| `#<ordinal>` | How many calls of this task preceded this one in the run, from `0` |
+| `:<arg_hash>` | A stable 64-bit FNV-1a hash of the canonical JSON of the arguments that implement `Serialize`; omitted when none does |
+
+```rust,ignore
+use adk_graph::error::Result;
+use adk_graph::functional::TaskContext;
+use adk_rust_macros::{entrypoint, task};
+use serde_json::{Value, json};
+
+#[task]
+async fn process(_ctx: &mut TaskContext, item: String) -> Result<Value> {
+    Ok(json!(format!("processed {item}")))
+}
+
+#[entrypoint]
+async fn process_all(ctx: &mut TaskContext) -> Result<Value> {
+    let mut outputs = Vec::new();
+    for item in ["a", "b", "c"] {
+        // Logged as process#0:…, process#1:…, process#2:…
+        outputs.push(__task_process(ctx, item.to_string()).await?);
+    }
+    ctx.set("outputs", json!(outputs));
+    Ok(Value::Null)
+}
+```
+
+A resumed run replays the entrypoint from the top. Each call reaches the same
+ordinal it had in the run being resumed, so it returns its own recorded result.
+A call whose arguments differ from the recorded call at that position gets a new
+key and runs again rather than returning another call's result.
+
+> **Note:** Before this scheme a task was keyed by its name alone, so a task called
+> in a loop returned the first call's result for every later call. An execution log
+> written under the old keys does not match the new ones, so a workflow resumed
+> across the upgrade runs its tasks again.
+
+### Execution Guarantees
+
+A task is **at-least-once**. Its body runs, then its completion is checkpointed;
+a crash between the two runs the task again on resume. Make a task with external
+side effects idempotent. `rerun_on_resume` opts a task out of replay entirely, so
+it runs on every resume.
+
 ## Background Runs
 
 The `background` feature in `adk-server` adds REST endpoints for async workflow execution.

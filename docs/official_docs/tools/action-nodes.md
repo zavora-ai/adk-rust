@@ -57,6 +57,49 @@ is being assembled rather than after earlier nodes have already had side effects
 
 Implement `Node::validate` on a custom node to take part in the same check.
 
+A node that bypasses the build-time check and executes anyway fails with an error
+saying its node type is not implemented. Enabling `action-db`, `action-email`, or
+`action-code` does not change that: those features compile the placeholders, not a
+backend.
+
+## Untrusted Paths and URLs
+
+File paths and HTTP URLs are interpolated from workflow state, so `ActionNodeExecutor`
+confines both.
+
+**File nodes** operate only inside the allowed roots — the current working directory
+unless `with_file_roots` names others:
+
+| Path | Outcome |
+|------|---------|
+| Relative | Resolved against the first root |
+| Contains a `..` component | Rejected |
+| Resolves outside every root, including through a symbolic link | Rejected |
+| Ends in a dangling symbolic link | Rejected |
+
+Listing does not follow or report symbolic links. Reported paths are the resolved
+absolute paths.
+
+**HTTP nodes** check the URL, and every redirect, against an `HttpActionPolicy`:
+
+| Setting | Default | Builder |
+|---------|---------|---------|
+| Schemes | `https` and `http`; `file:` and others are rejected | `allow_schemes` |
+| Hosts | Any | `allow_hosts` — exact names or `*.example.com` |
+| Redirects | Up to 5, each re-checked | `max_redirects`; `0` follows none |
+
+Logs and errors show the URL without its query string or credentials.
+
+```rust,ignore
+use adk_graph::action::ActionNodeExecutor;
+use adk_graph::action::http::HttpActionPolicy;
+
+let files = ActionNodeExecutor::new(file_config).with_file_roots(["/srv/workflow-data"]);
+let fetch = ActionNodeExecutor::new(http_config).with_http_policy(
+    HttpActionPolicy::new().allow_schemes(["https"]).allow_hosts(["api.example.com"]),
+);
+```
+
 ## StandardProperties
 
 Every action node carries `StandardProperties` — shared configuration that controls execution behavior:

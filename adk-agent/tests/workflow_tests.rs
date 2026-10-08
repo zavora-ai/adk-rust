@@ -392,6 +392,62 @@ async fn test_loop_agent_no_max_iterations() {
     assert_eq!(events.len(), 5);
 }
 
+/// Runs a loop over one counting sub-agent with an after-agent callback that marks completion.
+/// Returns the number of sub-agent runs and the authors of every emitted event.
+async fn run_counting_loop(max_iterations: u32) -> (u32, Vec<String>) {
+    use futures::StreamExt;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let counter = Arc::new(AtomicU32::new(0));
+    let counter_clone = counter.clone();
+    let agent = CustomAgentBuilder::new("counter")
+        .handler(move |_ctx| {
+            let counter = counter_clone.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut event = Event::new("test-invocation");
+                event.author = "counter".to_string();
+                Ok(Box::pin(stream::iter(vec![Ok(event)])) as adk_core::EventStream)
+            }
+        })
+        .build()
+        .unwrap();
+    let loop_agent = LoopAgent::new("loop", vec![Arc::new(agent)])
+        .with_max_iterations(max_iterations)
+        .after_callback(Box::new(|_ctx| {
+            Box::pin(async { Ok(Some(Content::new("model").with_text("loop finished"))) })
+        }));
+
+    let events = loop_agent
+        .run(Arc::new(TestContext::new("test")))
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<adk_core::Result<Vec<_>>>()
+        .unwrap();
+    (counter.load(Ordering::SeqCst), events.into_iter().map(|event| event.author).collect())
+}
+
+#[tokio::test]
+async fn test_loop_agent_zero_iterations_completes_without_running_sub_agents() {
+    assert_eq!(run_counting_loop(0).await, (0, vec!["loop".to_string()]));
+}
+
+#[tokio::test]
+async fn test_loop_agent_one_iteration() {
+    assert_eq!(run_counting_loop(1).await, (1, vec!["counter".to_string(), "loop".to_string()]));
+}
+
+#[tokio::test]
+async fn test_loop_agent_two_iterations() {
+    assert_eq!(
+        run_counting_loop(2).await,
+        (2, vec!["counter".to_string(), "counter".to_string(), "loop".to_string()])
+    );
+}
+
 #[tokio::test]
 async fn test_conditional_agent_if_branch() {
     let if_agent = CustomAgentBuilder::new("if_agent")

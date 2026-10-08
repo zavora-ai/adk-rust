@@ -19,7 +19,7 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **Fan-out / fan-in**: parallel branches run concurrently in a super-step. A node with more than one incoming direct edge is deferred **automatically**, so it runs once after its branches arrive — branches of unequal length join correctly with no configuration. `mark_deferred` sets a `fan_in_timeout` or an *n*-of-*m* `min_predecessors` quorum
 - **State Management**: Typed state with reducers (overwrite, append, sum, custom)
 - **Checkpointing**: Persistent state after each step (memory, SQLite)
-- **Durable Resume**: Automatically resume from the last checkpoint after a crash — skips already-completed nodes
+- **Durable Resume**: Automatically resume from the last checkpoint after a crash — skips nodes of every checkpointed step. Execution is at-least-once: a crash mid-step re-runs that step's nodes; see [Execution Guarantees](#execution-guarantees)
 - **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts. A pause is resumable, including one raised inside a subgraph
 - **Subgraphs**: run a compiled graph as a node with mapped channels (`SubgraphNode`). A pause inside pauses the parent, and a channel mapping that names a channel neither side declares fails when the parent **compiles**
 - **Routing from inside a node**: `NodeOutput::with_goto` names successors and replaces the node's declared edges; `AgentNode::with_goto_mapper` routes on what the agent answered; `with_goto_parent` hands control to a node of the parent graph
@@ -581,6 +581,32 @@ let result = graph.invoke(State::new(), ExecutionConfig::new("my-thread")).await
 
 When streaming, a `StreamEvent::Resumed` event is emitted to indicate execution was restored from a checkpoint.
 
+A checkpoint records the frontier still to run and the arrivals a fan-in node is
+waiting on. A dynamic or tool-confirmation pause saves the successors of every node
+that completed in the step plus the paused node, so a sibling's downstream work
+still runs after the resume.
+
+### Execution Guarantees
+
+Node execution is **at-least-once**. A super-step runs its nodes and applies their
+updates before it saves its checkpoint:
+
+| Event | Effect on resume |
+|-------|------------------|
+| Crash while a super-step is running | Every node of that step runs again, including nodes that had finished |
+| Pause or completed step | No node of a checkpointed step runs again |
+
+Make a node with external side effects idempotent, for example with an idempotency
+key derived from the thread id and step.
+
+### GraphAgent Turns
+
+`GraphAgent::run` uses the session id as the thread id, and each call is a turn. A
+paused thread resumes; a finished thread runs again from its entry nodes, starting
+from the previous turn's final state with the new input merged on top. The recursion
+limit applies per turn. `invoke` keeps the direct-graph behaviour, where a finished
+thread returns its final state.
+
 ## Examples
 
 Examples are in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo:
@@ -627,7 +653,35 @@ cargo run --example graph_checkpoint
 |------|-------------|
 | `sqlite` | Enable SQLite checkpointer |
 | `functional` | Functional API: TaskContext, typed reducers, schema validation, proc macros |
-| `full` | Enable all features |
+| `node-cache` | Per-node result caching; `redis-cache` adds a Redis store |
+| `delta-checkpoint` | Store the difference between super-steps instead of full state |
+| `time-travel` | Step, fork, and state history |
+| `action` | `ActionNodeExecutor` for `adk-action` node configurations |
+| `action-http`, `action-rss`, `action-trigger` | HTTP and notification nodes, RSS feeds, cron/webhook trigger runtime |
+| `action-db`, `action-email`, `action-code` | Placeholders only — see [Action Nodes](#action-nodes) |
+| `action-full` | Every `action-*` flag |
+| `full` | `sqlite` and `action-full` |
+
+## Action Nodes
+
+`ActionNodeExecutor` runs an `adk-action` configuration as a graph node.
+
+| Node type | Status |
+|-----------|--------|
+| Trigger, Set, Transform, Switch, Loop, Merge, Wait, File | Implemented |
+| Code with `language: rust` | Implemented (evaluates JSON or interpolates text) |
+| HTTP, Notification (`action-http`), RSS (`action-rss`) | Implemented |
+| Database, Email | **Not implemented** in any feature configuration; rejected when the graph compiles |
+| Code with `language: javascript` or `typescript` | **Not implemented**; rejected when the graph compiles |
+
+Paths and URLs come from workflow state, so both are confined:
+
+- **File** nodes stay inside the allowed roots — the working directory unless
+  `with_file_roots` names others. A `..` component, or a path that resolves outside
+  every root through a symbolic link, fails the node.
+- **HTTP** nodes accept only the schemes, hosts, and redirect count an
+  `HttpActionPolicy` permits (`with_http_policy`). The default allows `https` and
+  `http` to any host and up to 5 redirects, each re-checked. Logs omit the query string.
 
 ## License
 
@@ -685,6 +739,18 @@ assert!(log.is_completed("fetch_data")); // Skip on resume
 | `StateSchemaValidator` | Type validation for state and task output |
 | `ExecutionLog` | Task completion tracking for resume-skip |
 | `TypedReducer` | Custom merge strategies (Replace, Append, Merge) |
+
+### Task Identity
+
+`#[task]` records each call of a task under its own key,
+`{task}#{ordinal}:{arg_hash}` (`task_call_id`): the ordinal counts the task's calls
+within the run, and the hash covers the arguments that implement `Serialize`. A
+task called in a loop records one result per call, and a resumed run replays each
+call's own result. A call whose arguments differ from the recorded call at the same
+position runs again.
+
+Tasks are **at-least-once**: a crash after a task's body finishes but before its
+completion is checkpointed runs it again on resume.
 
 ### Examples
 
