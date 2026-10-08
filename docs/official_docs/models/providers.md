@@ -399,6 +399,13 @@ upstream vendor while the key and client stay the same:
 Chat, streaming, function calling, and structured output go through the same
 `OpenAICompatible` client as every other preset.
 
+**Example** (requires `ORCAROUTER_API_KEY`):
+
+```bash
+# Chat, tool calling, and a second vendor on the same client.
+cargo run --manifest-path examples/orcarouter/Cargo.toml
+```
+
 ### Legacy Reasoning-Effort API
 
 The original three-level `ReasoningEffort` API remains available for compatibility:

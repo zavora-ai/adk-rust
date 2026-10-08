@@ -90,6 +90,12 @@ so it needs an interactive session with Accessibility and Screen Recording permi
 | `examples/blender_console` | Multi-turn agent reporting a plan, task progress and live screen captures into a browser console a person can type into. Two MCP servers over two transports (HTTP + stdio) | `cargo run --manifest-path examples/blender_console/Cargo.toml` |
 | `examples/blender_studio` | Models in Blender through its own MCP for anything with an API, and desktop pixels only where Blender exposes no controls. The desktop surface is narrowed by a real toolset filter, not by approval configuration | `cargo run --manifest-path examples/blender_studio/Cargo.toml -- "<task>"` |
 
+**Requires `ORCAROUTER_API_KEY`:**
+
+| Example | Feature | Run |
+|---------|---------|-----|
+| `examples/orcarouter` | OrcaRouter through the `OpenAICompatibleConfig::orcarouter` preset — chat, tool calling, and a second vendor on the same client | `cargo run --manifest-path examples/orcarouter/Cargo.toml` |
+
 **Requires Google Cloud ADC (`gcloud auth application-default login`):**
 
 | Example | Feature | Run |
