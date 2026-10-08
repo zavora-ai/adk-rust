@@ -7,6 +7,7 @@
 // and exposes them as ADK-compatible tools for use with LlmAgent.
 
 use super::reconnect::{DEFAULT_RETRY_TOOL_CALLS, should_retry_mcp_operation};
+use super::schema_limits::McpSchemaLimits;
 use super::task::{McpTaskConfig, TaskError};
 use super::{ConnectionFactory, RefreshConfig, should_refresh_connection};
 use adk_core::{AdkError, ReadonlyContext, Result, Tool, ToolContext, Toolset};
@@ -44,6 +45,9 @@ const MAX_TASK_ID_BYTES: usize = 16 * 1024;
 
 /// Most input requests answered in one MRTR or in-task input round.
 const MAX_INPUT_REQUESTS_PER_ROUND: usize = 64;
+
+/// Longest prefix of a server-chosen tool name written to a discovery log line.
+const MAX_LOGGED_TOOL_NAME_BYTES: usize = 128;
 
 /// Most tasks `cancel_pending_tasks` checks or cancels at once.
 const MAX_CONCURRENT_TASK_CLEANUPS: usize = 16;
@@ -244,6 +248,8 @@ where
     resource_subscriptions: Arc<RwLock<BTreeSet<String>>>,
     /// Policy bridge used to fulfil stateless MRTR and in-task input requests.
     mrtr_handler: Option<super::elicitation::AdkClientHandler>,
+    /// Size limits checked against each discovered tool schema.
+    schema_limits: McpSchemaLimits,
 }
 
 impl<S> Clone for McpToolset<S>
@@ -262,6 +268,7 @@ where
             retry_tool_calls: self.retry_tool_calls,
             resource_subscriptions: Arc::clone(&self.resource_subscriptions),
             mrtr_handler: self.mrtr_handler.clone(),
+            schema_limits: self.schema_limits,
         }
     }
 }
@@ -309,6 +316,7 @@ where
             retry_tool_calls: DEFAULT_RETRY_TOOL_CALLS,
             resource_subscriptions: Arc::new(RwLock::new(BTreeSet::new())),
             mrtr_handler,
+            schema_limits: McpSchemaLimits::default(),
         }
     }
 
@@ -351,6 +359,30 @@ where
     /// ```
     pub fn with_task_support(mut self, config: McpTaskConfig) -> Self {
         self.task_config = config;
+        self
+    }
+
+    /// Set the size limits checked against each discovered tool schema.
+    ///
+    /// Discovery measures every input and output schema before copying or logging
+    /// it. A tool whose schema exceeds a limit is skipped with a warning naming
+    /// this toolset and the tool, and the remaining tools are still registered.
+    /// See [`McpSchemaLimits`] for how size is measured and why the defaults are
+    /// what they are.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_tool::mcp::{McpSchemaLimits, McpToolset};
+    ///
+    /// fn admit_larger_schemas(toolset: McpToolset) -> McpToolset {
+    ///     toolset.with_schema_limits(
+    ///         McpSchemaLimits::default().with_max_bytes(1024 * 1024).with_max_nodes(40_000),
+    ///     )
+    /// }
+    /// ```
+    pub fn with_schema_limits(mut self, limits: McpSchemaLimits) -> Self {
+        self.schema_limits = limits;
         self
     }
 
@@ -861,18 +893,56 @@ where
                 continue;
             }
 
-            let input_schema = Some(Value::Object(mcp_tool.input_schema.as_ref().clone()));
-
+            // The server chooses the name as well as the schema, so the log keeps a prefix.
+            let logged_name =
+                &tool_name[..tool_name.floor_char_boundary(MAX_LOGGED_TOOL_NAME_BYTES)];
+            // Measured from the server's document before anything copies or logs it.
+            let limits = self.schema_limits;
+            let measured = limits
+                .measure(&mcp_tool.input_schema)
+                .map_err(|size| ("input", size))
+                .and_then(|input| {
+                    mcp_tool
+                        .output_schema
+                        .as_deref()
+                        .map(|schema| limits.measure(schema))
+                        .transpose()
+                        .map(|output| (input, output))
+                        .map_err(|size| ("output", size))
+                });
+            let (input_size, output_size) = match measured {
+                Ok(sizes) => sizes,
+                Err((kind, size)) => {
+                    warn!(
+                        toolset.name = %self.name,
+                        tool.name = logged_name,
+                        schema.kind = kind,
+                        schema.bytes = size.bytes,
+                        schema.nodes = size.nodes,
+                        schema.max_bytes = limits.max_bytes,
+                        schema.max_nodes = limits.max_nodes,
+                        "skipping MCP tool whose schema exceeds the size limits; \
+                         raise them with McpToolset::with_schema_limits if the server is trusted"
+                    );
+                    continue;
+                }
+            };
             debug!(
-                tool_name = %tool_name,
-                schema = ?input_schema,
-                "registering MCP tool with raw schema"
+                toolset.name = %self.name,
+                tool.name = logged_name,
+                schema.bytes = input_size.bytes,
+                schema.nodes = input_size.nodes,
+                output_schema.bytes = output_size.map(|size| size.bytes),
+                output_schema.nodes = output_size.map(|size| size.nodes),
+                "registering MCP tool"
             );
             let adk_tool = McpTool {
                 name: tool_name,
                 description: mcp_tool.description.map(|d| d.to_string()).unwrap_or_default(),
-                input_schema,
-                output_schema: mcp_tool.output_schema.map(|s| Value::Object(s.as_ref().clone())),
+                input_schema: Some(Value::Object(Arc::unwrap_or_clone(mcp_tool.input_schema))),
+                output_schema: mcp_tool
+                    .output_schema
+                    .map(|schema| Value::Object(Arc::unwrap_or_clone(schema))),
                 client: self.client.clone(),
                 connection_factory: self.connection_factory.clone(),
                 refresh_config: self.refresh_config.clone(),
@@ -1659,6 +1729,120 @@ mod tests {
         assert_eq!(response.inline_data.len(), 1);
         assert_eq!(response.inline_data[0].mime_type, "image/png");
         assert_eq!(response.inline_data[0].data, vec![1, 2, 3]);
+    }
+
+    /// Publishes a fixed tool catalog over `tools/list`.
+    #[derive(Clone)]
+    struct CatalogServer(Vec<rmcp::model::Tool>);
+
+    impl rmcp::ServerHandler for CatalogServer {
+        fn get_info(&self) -> rmcp::model::ServerInfo {
+            rmcp::model::ServerInfo::new(
+                rmcp::model::ServerCapabilities::builder().enable_tools().build(),
+            )
+        }
+
+        async fn list_tools(
+            &self,
+            _params: Option<rmcp::model::PaginatedRequestParams>,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> std::result::Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+            Ok(rmcp::model::ListToolsResult::with_all_items(self.0.clone()))
+        }
+    }
+
+    /// Runs discovery against `catalog` over an in-process pipe.
+    async fn discover(
+        catalog: Vec<rmcp::model::Tool>,
+        limits: McpSchemaLimits,
+    ) -> Vec<Arc<dyn Tool>> {
+        use rmcp::ServiceExt;
+
+        let (server_io, client_io) = tokio::io::duplex(4096);
+        tokio::spawn(async move {
+            if let Ok(running) = CatalogServer(catalog).serve(server_io).await {
+                let _ = running.waiting().await;
+            }
+        });
+        let client = ().serve(client_io).await.unwrap();
+        let toolset = McpToolset::new(client).with_name("catalog").with_schema_limits(limits);
+        let ctx = Arc::new(crate::SimpleToolContext::new("schema-limits-test"));
+        toolset.tools(ctx).await.unwrap()
+    }
+
+    fn schema_object(value: Value) -> serde_json::Map<String, Value> {
+        match value {
+            Value::Object(map) => map,
+            other => panic!("expected a JSON object, got {other}"),
+        }
+    }
+
+    fn small_schema() -> serde_json::Map<String, Value> {
+        schema_object(json!({
+            "type": "object",
+            "properties": { "id": { "type": "string" } },
+            "required": ["id"]
+        }))
+    }
+
+    #[tokio::test]
+    async fn discovery_skips_oversized_schemas_and_registers_the_other_tools() {
+        let long_text = "x".repeat(300 * 1024);
+        let wide: serde_json::Map<String, Value> =
+            (0..6_000).map(|index| (format!("p{index}"), json!({ "type": "string" }))).collect();
+        let output = schema_object(json!({ "type": "object" }));
+        let catalog = vec![
+            rmcp::model::Tool::new("before", "Valid.", small_schema()),
+            rmcp::model::Tool::new(
+                "long_string",
+                "Input schema over the byte limit.",
+                schema_object(json!({ "type": "object", "description": long_text })),
+            ),
+            rmcp::model::Tool::new(
+                "wide",
+                "Input schema over the node limit.",
+                schema_object(json!({ "type": "object", "properties": wide })),
+            ),
+            rmcp::model::Tool::new(
+                "long_output",
+                "Output schema over the byte limit.",
+                small_schema(),
+            )
+            .with_raw_output_schema(Arc::new(schema_object(json!({ "description": long_text })))),
+            rmcp::model::Tool::new("after", "Valid.", small_schema())
+                .with_raw_output_schema(Arc::new(output.clone())),
+        ];
+
+        let tools = discover(catalog, McpSchemaLimits::default()).await;
+
+        let registered: Vec<_> = tools
+            .iter()
+            .map(|tool| (tool.name(), tool.parameters_schema(), tool.response_schema()))
+            .collect();
+        assert_eq!(
+            registered,
+            vec![
+                ("before", Some(Value::Object(small_schema())), None),
+                ("after", Some(Value::Object(small_schema())), Some(Value::Object(output))),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_accepts_a_schema_exactly_at_the_configured_limits() {
+        let schema = small_schema();
+        let bytes = serde_json::to_string(&schema).unwrap().len();
+        // The root, "type", "properties", the "id" object and its "type", "required", "id".
+        let nodes = 7;
+        let catalog = vec![rmcp::model::Tool::new("lookup", "Valid.", schema)];
+        let at = McpSchemaLimits::default().with_max_bytes(bytes).with_max_nodes(nodes);
+
+        let names = |tools: Vec<Arc<dyn Tool>>| {
+            tools.iter().map(|tool| tool.name().to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(names(discover(catalog.clone(), at).await), vec!["lookup"]);
+        assert!(discover(catalog.clone(), at.with_max_bytes(bytes - 1)).await.is_empty());
+        assert!(discover(catalog, at.with_max_nodes(nodes - 1)).await.is_empty());
     }
 
     #[test]

@@ -131,8 +131,8 @@ pub use function_tool::FunctionTool;
 #[cfg(feature = "mcp")]
 pub use mcp::{
     AutoDeclineElicitationHandler, ElicitationHandler, McpAuth, McpHttpClientBuilder,
-    McpServerManager, McpTaskConfig, McpToolset, OAuth2Config, Resource, ResourceContents,
-    ResourceNotificationHandler, ResourceTemplate,
+    McpSchemaLimits, McpServerManager, McpTaskConfig, McpToolset, OAuth2Config, Resource,
+    ResourceContents, ResourceNotificationHandler, ResourceTemplate,
 };
 pub use simple_context::SimpleToolContext;
 pub use stateful_tool::StatefulTool;
