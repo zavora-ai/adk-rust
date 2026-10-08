@@ -1,0 +1,110 @@
+# Feature-gated modules the default workspace build never compiles, and the CI shard
+# that builds and tests each one (`scripts/check-feature-coverage.sh <shard>`). A shard
+# groups pairs that share heavy dependencies, so each shard compiles them once.
+#
+# Format: <shard> <package> <features>. Features are comma-separated with no spaces.
+# To cover another feature-gated module, add ONE line and pick the shard whose crates it
+# already depends on. Shards are numbered 0 to 6; `ci.yml` lists the same range.
+
+# Shard 0 — adk-rag backends. lancedb pulls the whole lance/datafusion tree and is the
+# slowest pair; it stays in the PR tier because an arrow version mismatch once sat broken
+# on main for weeks with nothing compiling the LanceDB backend.
+0 adk-rag lancedb
+# A surrealdb 3.2 parser change broke create_collection while every required check stayed
+# green; tests run on the embedded kv-mem engine.
+0 adk-rag surrealdb
+# sqlx-backed backend: a second sqlx major entering the graph through pgvector went unnoticed.
+0 adk-rag pgvector
+0 adk-rag vertex-rag
+0 adk-rag agent-retrieval
+
+# Shard 1 — the adk-rust umbrella. `graph` alone gives adk-graph its default (empty)
+# features, so the umbrella forwards are built explicitly.
+1 adk-rust graph-sqlite
+1 adk-rust graph-functional
+# Code-execution opt-ins outside every tier: embedded JS/Python, persistent Docker, and
+# the CodeActAgent + MontyRuntime forward. `code-tools` itself is covered by the `full`
+# builds in docs/examples.
+1 adk-rust code-embedded-js,code-embedded-python,code-docker,codeact-monty
+# Enforces the meta-feature growth rule structurally: a forgotten umbrella forwarding
+# fails this build once the constituent is referenced. The `-full` variant (realtime
+# stack) is nightly-only.
+1 adk-rust gemini-agent-platform
+
+# Shard 2 — adk-server and adk-cli (adk-cli links libdbus through keyring).
+# The background run store and its persistence are behind `background`; nothing compiled
+# them when durable run records were added.
+2 adk-server background
+# Agent Engine dispatch surface; its wire-fixture and dispatch tests need the feature.
+2 adk-server agent-engine
+2 adk-server vertex-remote-engine
+# 11 clippy failures had accumulated unseen behind `a2a-v1`.
+2 adk-server a2a-v1
+2 adk-cli vertex-agent-registry
+2 adk-cli vertex-skill-registry
+# The `deploy agent-engine` subcommand: arg-parse and mock create-contract tests.
+2 adk-cli gcp-deploy
+
+# Shard 3 — adk-graph, adk-managed, adk-code.
+# No workspace member enables these four; four clippy failures and two uncompilable doc
+# examples sat on main as a result. `time-travel` is absent on purpose: adk-cli already
+# enables it, so the workspace build reaches it.
+3 adk-graph functional
+3 adk-graph sqlite
+3 adk-graph node-cache
+3 adk-graph delta-checkpoint
+# Two entries on purpose: `memory` alone left `sandbox` unbuilt, and a renamed
+# EnforcedLimits field kept its old name at a call site for two releases.
+3 adk-managed memory
+3 adk-managed full
+# The Monty Python executors and the Agent Engine sandbox client are both gated.
+3 adk-code embedded-python
+3 adk-code vertex-sandbox
+
+# Shard 4 — adk-tool, adk-agent, adk-model, adk-skill.
+4 adk-tool vertex-agent-registry
+# Example Store client (Vertex AI few-shot retrieval): wire contract and contract tests.
+4 adk-tool example-store
+4 adk-tool code-embedded-python
+# `mcp-sampling` gates three rmcp model types nothing in the workspace enables; an rmcp
+# rename broke the sampling handler while workspace clippy stayed at zero.
+4 adk-tool mcp-sampling
+4 adk-agent codeact
+# Guardrails are not in adk-agent's default features, so `tool_guardrail_tests` ran in no
+# required check.
+4 adk-agent guardrails
+# Two individually green PRs broke the ambient build in combination.
+4 adk-agent ambient
+4 adk-model openrouter
+4 adk-skill vertex-skill-registry
+
+# Shard 5 — adk-realtime, adk-session, adk-memory, adk-eval, adk-deploy.
+5 adk-realtime integration
+# The OpenAI realtime session and its WebSocket transport: compiled by the nightly `full`
+# build but never tested anywhere else.
+5 adk-realtime openai
+5 adk-session vertex-session
+5 adk-session postgres
+# Memory Bank backend; its mock contract tests need the feature.
+5 adk-memory vertex-memory
+# `adk-memory --features database-memory` once stopped compiling entirely while every
+# required check stayed green.
+5 adk-memory database-memory
+5 adk-eval vertex-eval
+# Agent Engine deployment client: golden DTO and mock contract tests.
+5 adk-deploy gcp
+
+# Shard 6 — small opt-in surfaces and adk-sandbox.
+6 adk-audio fx
+# adk-auth's SSO/OAuth surface drifted out of the clippy gate; a jsonwebtoken major bump
+# broke it while every required check stayed green.
+6 adk-auth sso
+# The GCS artifact backend must keep blob-name parity with adk-python.
+6 adk-artifact gcs
+6 adk-telemetry gcp
+# ACP replay and server transport are gated behind the opt-in server feature.
+6 adk-acp server
+6 adk-sandbox wasm
+# Linux-only and feature-gated: nothing built it until a container run found the
+# bubblewrap probe could never succeed and its property tests did not compile.
+6 adk-sandbox sandbox-linux

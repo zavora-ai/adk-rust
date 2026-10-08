@@ -392,17 +392,26 @@ Require exactly these stable contexts in the `main` ruleset:
 | `pr-gate` | `ci.yml` | Aggregate of every PR-tier CI job below |
 | `semver` | `semver.yml` | `semver` (stable-tier strict; beta is warn-only within the same job) |
 
-> **Note:** branch protection also requires some `feature-coverage` entries by
-> their rendered name, such as `feature-coverage (adk-managed, memory)`. Renaming
-> or removing a matrix entry changes that name, and the old requirement then waits
-> forever for a status no job reports — which blocks every PR. Change the matrix
-> entry and the branch-protection entry together, or keep both entries.
+> **Note:** `pr-gate` and `semver` are the only contexts the ruleset requires. Shards
+> and matrix entries report individually for diagnosis, but none is required by name,
+> so the feature-coverage pairs and the example shards can change without a ruleset
+> edit.
 
-`pr-gate` covers `fmt`, `clippy`, Linux workspace tests, every
-`feature-coverage` matrix entry, docs and doctests, every standalone-example
-shard, templates, the macOS build, and the Windows build plus sandbox portability
-smokes. `semver` stays separate because its workflow has an independent trigger
-and keeps stable crates strict while beta/experimental crates remain advisory.
+`pr-gate` covers `fmt`, `webui`, `clippy`, Linux workspace tests, the seven
+`feature-coverage` shards driven by `scripts/feature-coverage-pairs.txt`, docs and
+doctests, the four standalone-example shards, `templates`, the macOS build, and the
+Windows build plus sandbox portability smokes. `semver` stays separate because its
+workflow has an independent trigger and keeps stable crates strict while
+beta/experimental crates remain advisory.
+
+The `scope` job narrows a run to what the change can affect, and `pr-gate` accepts a
+skipped job only when the scope or the event skipped it:
+
+| Run | Jobs that run |
+|-----|---------------|
+| Pull request that touches code | every job |
+| Pull request that touches only `docs/`, Markdown, or `LICENSE*` | `fmt`, `webui`, `templates` (the documentation gates) |
+| Merge-queue build | every job except the standalone-example shards and the macOS and Windows builds, which the pull request already passed |
 
 ### NOT required (informational tiers)
 

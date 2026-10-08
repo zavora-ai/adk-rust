@@ -132,7 +132,7 @@ A default `--workspace` build compiles no feature-gated module and no umbrella
 tier above `minimal`, so those need their own pass:
 
 ```bash
-# Feature-gated modules — mirrors the PR-tier feature-coverage matrix
+# Feature-gated modules — one pair from scripts/feature-coverage-pairs.txt
 cargo clippy -p adk-agent --features codeact --all-targets -- -D warnings
 
 # Umbrella tiers — `standard` and above compile code `minimal` never reaches
@@ -169,10 +169,13 @@ expensive axes move to a later tier.
   coverage: `fmt` (prerequisite gate), `clippy --workspace --all-targets -D warnings`,
   `nextest --workspace` (Linux, runs at most once), `feature-coverage` for
   feature-gated modules default builds skip (e.g. `adk-agent --features codeact`),
+  as seven shards driven by `scripts/feature-coverage-pairs.txt`,
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
   (4 shards), `templates`, a compile-only macOS build, a Windows workspace build
   with a targeted sandbox portability smoke, and `semver` (stable strict,
-  everything else warn-only).
+  everything else warn-only). A `scope` job skips the Rust jobs when a change
+  touches only `docs/` or Markdown, and merge-queue builds skip the standalone
+  examples and the macOS/Windows builds the pull request already passed.
 - **Merge tier** (`ci-merge.yml`, on `push: main`) — cross-platform
   `nextest --workspace` on macOS/Windows and doc-example compilation. Runs
   post-merge; not branch-protection-required.
@@ -183,7 +186,7 @@ expensive axes move to a later tier.
 
 Only the PR tier gates merges. Branch protection requires the aggregate
 `pr-gate` context plus the separate `semver` context; `pr-gate` fails unless
-every `ci.yml` dependency and matrix entry succeeds. See CONTRIBUTING.md
+every `ci.yml` dependency succeeds or was skipped by the change scope. See CONTRIBUTING.md
 ("Branch Protection — Required Status Checks") for the authoritative set.
 
 ### Local git hooks (lefthook)

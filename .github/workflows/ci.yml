@@ -44,6 +44,48 @@ jobs:
     - name: Check formatting
       run: cargo fmt --all -- --check
 
+  # ── Scope: what can this change affect? ───────────────────────
+  # A change under docs/ or to Markdown cannot alter a Rust build, so the Rust jobs
+  # skip and `pr-gate` accepts the skip. Anything else, or any doubt (an API failure,
+  # a truncated file list), runs the full tier. Merge-queue builds compare the group
+  # head against main, so a group that only carries docs is scoped the same way.
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+    - name: Classify the changed files
+      id: scope
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EVENT: ${{ github.event_name }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+        BASE: ${{ github.event.merge_group.base_sha }}
+        HEAD: ${{ github.event.merge_group.head_sha }}
+      run: |
+        set -euo pipefail
+        docs_only=false
+        files=""
+        case "$EVENT" in
+          pull_request)
+            files="$(gh api "repos/$REPO/pulls/$PR/files?per_page=100" --paginate --jq '.[].filename')" || files="" ;;
+          merge_group)
+            # The compare API lists at most 300 files; past that the list is truncated and
+            # cannot prove a docs-only group, so the run stays full.
+            files="$(gh api "repos/$REPO/compare/$BASE...$HEAD" --jq 'if (.files | length) >= 300 then "truncated" else .files[].filename end')" || files="" ;;
+        esac
+        if [[ -n "$files" ]] && ! grep -vqE '^(docs/|LICENSE|[^ ]*\.md$)' <<<"$files"; then
+          docs_only=true
+        fi
+        echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+        printf 'docs_only=%s (%s files)\n' "$docs_only" "$(grep -c . <<<"$files" || true)"
+
   # ── Built-in runtime UI: source, tests, and embedded build ─────
   webui:
     needs: fmt
@@ -70,7 +112,8 @@ jobs:
 
   # ── Lint: clippy (parallel with test) ──────────────────────────
   clippy:
-    needs: fmt
+    needs: [fmt, scope]
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -105,7 +148,8 @@ jobs:
 
   # ── Test: nextest (parallel with clippy) ───────────────────────
   test:
-    needs: fmt
+    needs: [fmt, scope]
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -151,157 +195,24 @@ jobs:
   # ── Feature coverage: feature-gated modules default CI skips ───
   # Default clippy/test builds never compile feature-gated modules (e.g.
   # `adk-agent`'s `codeact`), so a regression there is invisible on the normal
-  # PR path. This job compiles + tests each such module under its feature on a
-  # plain runner via the shared setup-rust action (components + wild-linker
-  # strip + cache come from there — no per-job setup drift).
+  # PR path. scripts/feature-coverage-pairs.txt names every such package/feature
+  # pair and the shard that covers it; each shard compiles and tests its pairs on
+  # one runner with one target directory, so shared dependencies build once
+  # instead of once per pair. One job per pair (48 of them) used to need 48
+  # toolchain installs and 48 apt runs and could not fit the account's
+  # concurrent-job limit alongside the rest of the tier.
   #
-  # System build deps are opted into per entry with a matrix flag on the same
-  # line (currently `protoc: true`, needed only by `adk-rag --features lancedb`),
-  # so the "add ONE line" invariant holds without touching the steps.
-  #
-  # `adk-rag --features lancedb` is the slowest entry — it pulls the whole
-  # lance/datafusion tree. It lives in the PR tier on purpose: an arrow version
-  # mismatch sat broken on main for weeks because nothing in CI compiled the
-  # LanceDB backend, and nightly would let the next bad bump land on main first.
-  #
-  # To cover another feature-gated module, add ONE line to the matrix below:
-  #   - { package: <crate>, features: <feature> }
-  # Append `, protoc: true` when its build scripts run protoc.
+  # To cover another feature-gated module, add ONE line to the pairs file.
   feature-coverage:
-    # Explicit so per-entry flags such as `protoc` do not change the rendered check
-    # names that the ruleset requires.
-    name: feature-coverage (${{ matrix.package }}, ${{ matrix.features }})
-    needs: fmt
+    name: feature-coverage (${{ matrix.shard }}/7)
+    needs: [fmt, scope]
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { package: adk-agent, features: codeact }
-          # Guardrails are not in adk-agent's default features, so `--workspace` never compiled
-          # the adk-guardrail integration and `tool_guardrail_tests` ran in no required check.
-          - { package: adk-agent, features: guardrails }
-          - { package: adk-model, features: openrouter }
-          - { package: adk-sandbox, features: wasm }
-          # The background run store and its persistence are behind `background`, so a
-          # default --workspace build skips their tests entirely. Nothing compiled them
-          # when durable run records were added.
-          - { package: adk-server, features: background }
-          # The Agent Engine dispatch surface (Gemini Enterprise Agent Platform runtime
-          # contract) is behind `agent-engine`; its wire-fixture and dispatch tests only
-          # run with the feature on. Umbrella forwarding follows in the entrypoint PR.
-          - { package: adk-server, features: agent-engine }
-          # The Memory Bank backend (vertex-memory) is opt-in; its mock contract tests
-          # only run with the feature on.
-          - { package: adk-memory, features: vertex-memory }
-          # Wave 4 EAP integrations are opt-in; their mock contract tests only run
-          # with each feature on.
-          - { package: adk-eval, features: vertex-eval }
-          - { package: adk-rag, features: vertex-rag }
-          - { package: adk-rag, features: agent-retrieval }
-          - { package: adk-tool, features: vertex-agent-registry }
-          - { package: adk-skill, features: vertex-skill-registry }
-          - { package: adk-server, features: vertex-remote-engine }
-          - { package: adk-cli, features: vertex-agent-registry }
-          - { package: adk-cli, features: vertex-skill-registry }
-          # The Agent Engine deployment client (gcp) is opt-in; its golden DTO and
-          # mock contract tests only run with the feature on.
-          - { package: adk-deploy, features: gcp }
-          # The `deploy agent-engine` CLI subcommand is behind gcp-deploy; its
-          # arg-parse and mock create-contract tests only run with the feature on.
-          - { package: adk-cli, features: gcp-deploy }
-          # sandbox-linux is Linux-only *and* feature-gated, so nothing built it until a
-          # container run found the bubblewrap probe could never succeed and that its
-          # property tests did not compile.
-          - { package: adk-sandbox, features: sandbox-linux }
-          # ambient and integration carry the webhook trigger, the ambient loop, and the
-          # realtime integration layer. Two individually-green PRs broke the ambient build
-          # in combination because no job compiled it.
-          - { package: adk-agent, features: ambient }
-          - { package: adk-realtime, features: integration }
-          # The OpenAI realtime session and its WebSocket transport are gated behind
-          # `openai`, which is not in adk-realtime's default features, so `--workspace`
-          # never compiled them and no job ever *ran* their tests. The nightly `full`
-          # clippy build compiles them but executes nothing.
-          - { package: adk-realtime, features: openai }
-          # Two entries on purpose. `memory` alone looked like coverage while leaving
-          # `sandbox` unbuilt: adk-sandbox renamed a field of EnforcedLimits in #485 and
-          # a call site behind `sandbox` kept the old name for two releases, because
-          # nothing compiled it. `full` is sandbox + memory and closes that.
-          #
-          # `memory` stays because branch protection requires the check by its rendered
-          # name, `feature-coverage (adk-managed, memory)`. Removing the entry leaves
-          # that requirement waiting for a status no job will ever report, which blocks
-          # every PR. Drop it only together with the branch-protection entry.
-          - { package: adk-managed, features: memory }
-          - { package: adk-managed, features: full }
-          - { package: adk-audio, features: fx }
-          - { package: adk-rag, features: lancedb, protoc: true }
-          # adk-rag's SurrealDB backend: gated behind `surrealdb`, so `--workspace` builds
-          # never compiled it. A surrealdb 3.2 parser change broke create_collection while
-          # every required check stayed green. Tests run on the embedded kv-mem engine.
-          - { package: adk-rag, features: surrealdb }
-          # adk-auth's SSO/OAuth surface: gated behind `sso`, so `--workspace` without
-          # feature flags never compiled it. It had drifted out of the clippy gate, and a
-          # jsonwebtoken major bump broke it while every required check stayed green.
-          - { package: adk-auth, features: sso }
-          # adk-server's A2A v1 surface: gated behind `a2a-v1`, so `--workspace` without feature
-          # flags never compiled it. 11 clippy failures had accumulated unseen.
-          - { package: adk-server, features: a2a-v1 }
-          # Vertex AI sessions use an opt-in Google Cloud transport and wire contract.
-          - { package: adk-session, features: vertex-session }
-          # The GCS artifact backend is opt-in and must keep blob-name parity with adk-python.
-          - { package: adk-artifact, features: gcs }
-          # Google Cloud telemetry export is an opt-in transport; no default build compiles it.
-          - { package: adk-telemetry, features: gcp }
-          # ACP replay and server transport behavior are gated behind the opt-in server feature.
-          - { package: adk-acp, features: server }
-          # The Monty Python executors and the MontyPythonCodeTool live path: both gated,
-          # so default builds skip them entirely.
-          - { package: adk-code, features: embedded-python }
-          - { package: adk-tool, features: code-embedded-python }
-          # The Example Store client (Vertex AI few-shot retrieval) is opt-in; no default
-          # build compiles its wire contract or contract tests.
-          - { package: adk-tool, features: example-store }
-          # The Agent Engine sandbox client (vertex-sandbox) is opt-in; its mock contract
-          # tests only run with the feature on.
-          - { package: adk-code, features: vertex-sandbox }
-          # `mcp-sampling` gates three rmcp model types that the workspace build never
-          # reaches: `adk-computer-use` pulls in `adk-tool/mcp`, but nothing in the
-          # workspace enables `mcp-sampling`. Its only cover was `examples/mcp_sampling`,
-          # so an rmcp rename broke the sampling handler while workspace clippy stayed at
-          # zero. Named here so the coverage no longer depends on an example crate.
-          - { package: adk-tool, features: mcp-sampling }
-          # No workspace member enables these four, so `--workspace` never compiled
-          # them and their only cover was a standalone example crate. Four clippy
-          # failures and two uncompilable doc examples sat on main as a result.
-          # `time-travel` is absent on purpose: adk-cli already enables it, so the
-          # workspace build reaches it.
-          - { package: adk-graph, features: functional }
-          - { package: adk-graph, features: sqlite }
-          - { package: adk-graph, features: node-cache }
-          - { package: adk-graph, features: delta-checkpoint }
-          # The umbrella forwards, because `graph` alone gives adk-graph its
-          # default features, which are empty.
-          - { package: adk-rust, features: graph-sqlite }
-          - { package: adk-rust, features: graph-functional }
-          # The sqlx-backed production backends. None were built by any job, so a
-          # second sqlx major entering the graph through pgvector went unnoticed:
-          # `adk-memory --features database-memory` stopped compiling entirely
-          # while every required check stayed green.
-          - { package: adk-memory, features: database-memory }
-          - { package: adk-rag, features: pgvector }
-          - { package: adk-session, features: postgres }
-          # The umbrella's code-execution opt-ins (not part of any tier): the embedded
-          # JS/Python live paths, persistent Docker, and the CodeActAgent + MontyRuntime
-          # forward. `code-tools` itself is covered by the `full` builds in docs/examples.
-          - { package: adk-rust, features: "code-embedded-js,code-embedded-python,code-docker,codeact-monty" }
-          # The gemini-agent-platform meta-feature (default `minimal` + gemini-agent-platform):
-          # enforces the growth rule structurally — a forgotten umbrella forwarding
-          # fails this build once the constituent is referenced. The `-full` variant
-          # (realtime stack) is nightly-only to keep PR-tier feedback fast.
-          - { package: adk-rust, features: gemini-agent-platform }
+        shard: [0, 1, 2, 3, 4, 5, 6]
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -311,41 +222,32 @@ jobs:
       uses: ./.github/actions/setup-rust
       with:
         components: clippy
-        cache-key: feature-coverage-${{ matrix.package }}-${{ matrix.features }}
+        cache-key: feature-coverage-${{ matrix.shard }}
         cache-save: 'false'
 
-    # Gated on the entry's `protoc` flag: the action queries the GitHub releases
-    # API on every run, and ~50 concurrent calls per workflow run fail often
-    # enough to dequeue PRs. Only lancedb's build script needs protoc.
-    - name: Install protoc
-      if: matrix.protoc
-      uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-    # libdbus-1 is linked at build time by adk-cli's keyring dependency
-    # (sync-secret-service on Linux). The workspace `test` job gets dbus from
-    # the devenv/nix shell; this plain runner must install it. Unconditional
-    # because it comes from the runner's apt mirror, not a rate-limited API.
-    - name: Install libdbus
+    # protoc for lancedb's build script, libdbus for adk-cli's keyring dependency,
+    # cmake and the ALSA/udev headers for the audio and realtime pairs. One apt run
+    # per shard replaces the per-pair protoc action that hit the GitHub API rate
+    # limit under fan-out.
+    - name: Install system dependencies
       # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
       timeout-minutes: 10
-      run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y libdbus-1-dev
+      run: |
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y cmake protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
       with:
         tool: cargo-nextest
 
-    - name: Clippy (${{ matrix.package }} --features ${{ matrix.features }})
-      run: cargo clippy -p ${{ matrix.package }} --features ${{ matrix.features }} --all-targets -- -D warnings
-
-    - name: Test (${{ matrix.package }} --features ${{ matrix.features }})
-      run: cargo nextest run -p ${{ matrix.package }} --features ${{ matrix.features }}
+    - name: Clippy and test the shard's pairs
+      run: bash scripts/check-feature-coverage.sh ${{ matrix.shard }}
 
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:
-    needs: fmt
+    needs: [fmt, scope]
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -409,7 +311,8 @@ jobs:
   # examples to avoid rebuilding common ADK crates.
   examples-compile:
     name: examples-compile (${{ matrix.shard }}/4)
-    needs: fmt
+    needs: [fmt, scope]
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -488,7 +391,8 @@ jobs:
   # (ci-merge.yml). setup-rust supplies the toolchain + build cache;
   # neutralize-wild is false because the wild-linker strip is Linux-only.
   macos:
-    needs: fmt
+    needs: [fmt, scope]
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group'
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -517,7 +421,8 @@ jobs:
   # output-cap suite runs here because its process scripts are platform-specific
   # and must fail before merge when they stop working on Windows.
   windows:
-    needs: fmt
+    needs: [fmt, scope]
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group'
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -553,13 +458,17 @@ jobs:
       run: echo "### 🪟 Windows build and sandbox portability smoke passed" >> $env:GITHUB_STEP_SUMMARY
 
   # ── Stable branch-protection contract ──────────────────────────────────
-  # Matrix entries remain individually visible for diagnosis, while branch
-  # protection only needs this stable aggregate context. Adding a feature or
-  # example shard therefore cannot silently drift out of the required set.
+  # Shards and matrix entries remain individually visible for diagnosis, while
+  # branch protection only needs this stable aggregate context (plus `semver`).
+  # A skipped job passes the gate only when `scope` or the event skipped it:
+  # docs-only changes skip every Rust job, and merge-queue builds skip the
+  # standalone-example shards and the macOS/Windows builds, which the pull
+  # request already passed.
   pr-gate:
     name: pr-gate
     if: always()
     needs:
+      - scope
       - fmt
       - webui
       - clippy
@@ -573,15 +482,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
-    - name: Require every PR-tier job to pass
+    - name: Require every PR-tier job to pass or be scoped out
       shell: bash
       env:
         JOB_RESULTS: ${{ toJSON(needs) }}
+        DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
+        EVENT: ${{ github.event_name }}
       run: |
-        failed_jobs="$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key)=\(.value.result)"' <<<"$JOB_RESULTS")"
+        skippable=""
+        if [[ "$DOCS_ONLY" == "true" ]]; then
+          skippable="clippy test feature-coverage docs examples-compile macos windows"
+        fi
+        if [[ "$EVENT" == "merge_group" ]]; then
+          skippable="$skippable examples-compile macos windows"
+        fi
+        failed_jobs="$(jq -r --arg skippable "$skippable" '
+          ($skippable | split(" ") | map(select(. != ""))) as $ok
+          | to_entries[]
+          | select(.value.result != "success")
+          | select((.value.result == "skipped" and ($ok | index(.key) != null)) | not)
+          | "\(.key)=\(.value.result)"' <<<"$JOB_RESULTS")"
         if [[ -n "$failed_jobs" ]]; then
           echo "::error::PR tier did not pass:"
           echo "$failed_jobs"
           exit 1
         fi
-        echo "All PR-tier jobs passed."
+        echo "All PR-tier jobs passed (skippable: ${skippable:-none})."
