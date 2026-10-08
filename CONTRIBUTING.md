@@ -260,7 +260,14 @@ truth for every publishable crate.
    `python3 scripts/bump-version.py <version>`. Add an empty `## [Unreleased]`
    section above the dated release, and make the changelog comparison links point
    from the new version to `HEAD` and from the previous tag to the new tag.
-2. Keep the README marked `release candidate — unpublished` until every crate is
+2. Assemble the changelog fragments into the release heading and commit the result
+   together with the removed fragment files:
+
+   ```bash
+   bash scripts/changelog-assemble.sh --into <version>
+   ```
+
+3. Keep the README marked `release candidate — unpublished` until every crate is
    visible on crates.io. Run the normal quality gates plus:
 
    ```bash
@@ -273,9 +280,9 @@ truth for every publishable crate.
    artifacts inside crate directories. A warning about yanked `spin 0.9.x` is
    currently expected through upstream `flume/sqlx` and `heapless/postcard`
    dependency chains; it does not prevent packaging.
-3. Merge the preparation pull request and wait for both the PR tier and the
+4. Merge the preparation pull request and wait for both the PR tier and the
    post-merge macOS/Windows tier to pass on the exact release commit.
-4. Create an annotated tag and validate the tagged checkout before pushing it:
+5. Create an annotated tag and validate the tagged checkout before pushing it:
 
    ```bash
    git tag -a v<version> -m "Release <version>"
@@ -283,10 +290,10 @@ truth for every publishable crate.
    git push origin v<version>
    ```
 
-5. Publish with `cargo xtask publish`. If crates.io indexing interrupts the
+6. Publish with `cargo xtask publish`. If crates.io indexing interrupts the
    workspace publish, resume safely with `cargo xtask publish --resume`; it uses
    the computed dependency order and skips versions that already exist.
-6. Confirm all 43 crate versions and their docs.rs builds. Only then change the
+7. Confirm all 43 crate versions and their docs.rs builds. Only then change the
    README banner to `Released!`, mark the roadmap version `(current)`, and create
    the GitHub release from the annotated tag using the matching changelog entry.
 
@@ -619,7 +626,7 @@ Every PR has a template with this checklist. Fill it out when you open your PR.
 
 ### Documentation (if applicable)
 
-- [ ] CHANGELOG.md updated for user-facing changes
+- [ ] Changelog fragment added under `changelog.d/` for user-facing changes
 - [ ] README updated if crate capabilities changed
 - [ ] Examples added or updated for new features
 

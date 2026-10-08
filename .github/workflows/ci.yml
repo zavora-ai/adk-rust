@@ -379,6 +379,9 @@ jobs:
         # check-doc-versions.sh skips CHANGELOG.md and never looked at the
         # banner or roadmap, which is how those three drifted apart.
         bash scripts/check-release-consistency.sh
+        # Changelog fragments: every file under changelog.d/ must name a section and
+        # hold a Markdown list item, so the release assembly cannot fail later.
+        bash scripts/changelog-assemble.sh --check
         # Publish-order guard: publish.sh tiers must satisfy the workspace
         # dependency graph, including versioned dev-deps (what broke v1.0.0).
         bash scripts/check-publish-order.sh

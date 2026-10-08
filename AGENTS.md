@@ -650,7 +650,8 @@ cargo nextest run -p adk-realtime --features full            # with features
 - When making a change that adds or changes an API, ensure that `docs/official_docs/` is up to date.
 - Documented examples (Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/`) are validated in CI by `scripts/check-doc-examples.sh` against `cargo metadata`. The PR tier compiles the standalone example workspaces and cargo-adk templates, so if you change a public API, keep those in sync.
 - Update the crate's `README.md` if capabilities changed.
-- Update `CHANGELOG.md` for user-facing changes.
+- Add a changelog fragment under `changelog.d/` for user-facing changes (`<section>.<slug>.md`,
+  see `changelog.d/README.md`). `CHANGELOG.md` itself changes only in release commits.
 
 ## Adding new code
 
@@ -806,7 +807,7 @@ pub async fn swap_adapter(&self, adapter_name: &str) -> Result<()> { ... }
    - Commit messages follow conventional format.
    - Branch targets `main` branch.
 3. **Documentation**:
-   - `CHANGELOG.md` updated for user-facing changes.
+   - Changelog fragment added under `changelog.d/` for user-facing changes.
    - `README.md` updated if crate capabilities changed.
    - Examples added or updated for new features.
 
@@ -863,7 +864,7 @@ cargo publish -p <crate-name>
 
 - [ ] `[workspace.package] version` in root `Cargo.toml`
 - [ ] All `adk-*` entries in `[workspace.dependencies]`
-- [ ] `CHANGELOG.md` updated
+- [ ] Changelog fragments assembled into `CHANGELOG.md` (`bash scripts/changelog-assemble.sh --into <version>`)
 - [ ] Git tag created and pushed
 - [ ] GitHub release created with release notes
 
