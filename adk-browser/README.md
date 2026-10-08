@@ -6,21 +6,38 @@ Browser automation tools for ADK-Rust agents using WebDriver (via [thirtyfour](h
 
 ```toml
 [dependencies]
-adk-browser = "2.2.0"
+adk-browser = "2.3.0"
 ```
 
 Or via the umbrella crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.2.0", features = ["browser"] }
+adk-rust = { version = "2.3.0", features = ["browser"] }
 ```
 
 ## Overview
 
-This crate provides 46 browser automation tools as ADK `Tool` implementations, allowing LLM agents to interact with web pages. Tools are organized into categories and can be selectively enabled via profiles or builder toggles.
+This crate provides 46 browser automation tools (45 enabled by default) as ADK `Tool` implementations, allowing LLM agents to interact with web pages. Tools are organized into categories and can be selectively enabled via profiles or builder toggles.
 
 `BrowserToolset` implements the `adk_core::Toolset` trait, so it integrates directly with `LlmAgentBuilder::toolset()`.
+
+## Security Defaults
+
+| Default | Opt out |
+|---------|---------|
+| `browser_evaluate_js`, which runs model-written JavaScript in the page, is not included in any toolset or profile | `.with_evaluate_js(true)` (or `.with_js(true)`) |
+| `browser_navigate`, `browser_new_tab`, and `browser_new_window` accept only `http` and `https` URLs, so `file:`, `javascript:`, `data:`, and `chrome:` URLs are refused | `.with_allowed_schemes(["https", "file"])` |
+
+```rust,ignore
+use adk_browser::{BrowserConfig, BrowserSession, BrowserToolset};
+use std::sync::Arc;
+
+let browser = Arc::new(BrowserSession::new(BrowserConfig::new()));
+let toolset = BrowserToolset::new(browser)
+    .with_evaluate_js(true)          // opt in to arbitrary JavaScript
+    .with_allowed_schemes(["https"]); // HTTPS only
+```
 
 ## Requirements
 
@@ -60,14 +77,14 @@ browser.stop().await?;
 
 ## Tool Profiles
 
-Instead of using all 46 tools (which can overwhelm LLM context windows), use a profile:
+Instead of using all 45 default tools (which can overwhelm LLM context windows), use a profile:
 
 | Profile | Tools | Use Case |
 |---------|-------|----------|
 | `Minimal` | 19 | Navigation + interaction + extraction + wait + screenshot |
 | `FormFilling` | 19 | Same as Minimal — optimized for form-filling agents |
-| `Scraping` | 14 | Navigation + extraction + screenshot + JS/scroll (no interaction) |
-| `Full` | 46 | All tools — use only when full browser control is needed |
+| `Scraping` | 13 | Navigation + extraction + screenshot + scroll/hover/alert (no interaction) |
+| `Full` | 45 | Every tool except `browser_evaluate_js` — use only when full browser control is needed |
 
 ```rust,ignore
 let toolset = BrowserToolset::with_profile(browser, BrowserProfile::FormFilling);
@@ -200,7 +217,7 @@ let toolset = BrowserToolset::new(session)
     .with_extraction(true)    // extract_text, extract_attribute, extract_links, page_info, page_source
     .with_wait(true)          // wait_for_element, wait, wait_for_page_load, wait_for_text
     .with_screenshot(true)    // screenshot
-    .with_js(false)           // evaluate_js, scroll, hover, handle_alert
+    .with_js(false)           // scroll, hover, handle_alert (and evaluate_js when true)
     .with_cookies(false)      // get_cookies, get_cookie, add_cookie, delete_cookie, delete_all_cookies
     .with_windows(false)      // list_windows, new_tab, new_window, switch_window, close_window, etc.
     .with_frames(false)       // switch_to_frame, switch_to_parent_frame, switch_to_default_content
@@ -209,12 +226,12 @@ let toolset = BrowserToolset::new(session)
 let tools = toolset.all_tools();
 ```
 
-## Available Tools (46)
+## Available Tools (46, 45 by default)
 
 ### Navigation (4 tools)
 | Tool | Description |
 |------|-------------|
-| `browser_navigate` | Navigate to a URL |
+| `browser_navigate` | Navigate to a URL (`http`/`https` by default) |
 | `browser_back` | Go back in history |
 | `browser_forward` | Go forward in history |
 | `browser_refresh` | Refresh current page |
@@ -253,7 +270,7 @@ let tools = toolset.all_tools();
 ### JavaScript (4 tools)
 | Tool | Description |
 |------|-------------|
-| `browser_evaluate_js` | Execute JavaScript (sync or async) |
+| `browser_evaluate_js` | Execute JavaScript (sync or async); opt-in via `with_evaluate_js(true)` |
 | `browser_scroll` | Scroll by direction, amount, or to element |
 | `browser_hover` | Hover over an element (dispatches mouseenter + mouseover) |
 | `browser_handle_alert` | Handle alerts/confirms/prompts (accept or dismiss) |

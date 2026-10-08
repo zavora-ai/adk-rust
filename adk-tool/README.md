@@ -27,25 +27,26 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 - **LoadMemoryTool** - Agent-callable tool for on-demand memory search (feature: `memory-tools`)
 - **PreloadMemoryTool** - Auto-loads relevant memories at turn start (feature: `memory-tools`)
 - **ExampleStoreClient / ExampleStoreProvider** - Vertex AI Example Store few-shot retrieval (feature: `example-store`)
+- **BigQueryToolset / SpannerToolset** - SQL execution, schema inspection, and table listing (features: `bigquery`, `spanner`); SQL execution is read-only by default
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-tool = "2.2.0"
+adk-tool = "2.3.0"
 
 # For local MCP servers via stdio:
-adk-tool = { version = "2.2.0", features = ["mcp"] }
+adk-tool = { version = "2.3.0", features = ["mcp"] }
 
 # For remote MCP servers via HTTP:
-adk-tool = { version = "2.2.0", features = ["mcp", "http-transport"] }
+adk-tool = { version = "2.3.0", features = ["mcp", "http-transport"] }
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.2.0", features = ["tools"] }
+adk-rust = { version = "2.3.0", features = ["tools"] }
 ```
 
 ## Quick Start
@@ -361,6 +362,24 @@ let search = GoogleSearchTool::new();
 // Add to agent - enables grounded web search
 ```
 
+### BigQuery and Spanner (`bigquery`, `spanner` features)
+
+`bigquery_execute_sql` is **read-only by default**: it accepts a single `SELECT` or
+`WITH … SELECT` statement, a BigQuery dry run must classify it as `SELECT` before it
+runs, and the tool reports `is_read_only() == true`. `spanner_execute_sql` runs in a
+read-only single-use transaction.
+
+```rust
+use adk_tool::bigquery::BigQueryToolset;
+
+let read_only = BigQueryToolset::with_project("my-gcp-project");
+// Allow DML, DDL, and scripts; the tool then reports itself as mutating.
+let read_write = BigQueryToolset::with_project("my-gcp-project").with_read_only(false);
+```
+
+Service-account keys resolved through `from_secret` are parsed in memory and never
+written to disk.
+
 ## Code Execution Tools (`code` feature)
 
 Language-preset tool wrappers over the `adk-code` execution substrate: `CodeTool` (Rust), `JavaScriptCodeTool` (embedded JS via `code-embedded-js`), `PythonCodeTool` (container-backed CPython), and `MontyPythonCodeTool` (in-process Python via `code-embedded-python`).
@@ -389,6 +408,8 @@ let tool = MontyPythonCodeTool::builder()
 | `code-embedded-js` | `JavaScriptCodeTool` live path (boa_engine) |
 | `code-embedded-python` | `MontyPythonCodeTool` live path (Monty interpreter) |
 | `example-store` | Vertex AI Example Store client (v1beta1 data plane) and `ExampleStoreProvider` few-shot retrieval |
+| `bigquery` | `BigQueryToolset`: SQL execution (read-only by default), schemas, datasets, tables |
+| `spanner` | `SpannerToolset`: read-only SQL execution, schemas, tables |
 
 ## MCP examples and guides
 

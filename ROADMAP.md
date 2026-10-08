@@ -199,7 +199,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 | Project | Focus |
 |---------|-------|
-| [ADK-Rust](https://github.com/zavora-ai/adk-rust) | Core framework (36 crates) |
+| [ADK-Rust](https://github.com/zavora-ai/adk-rust) | Core framework (43 crates) |
 | [ADK-Studio](https://github.com/zavora-ai/adk-studio) | Visual agent builder |
 | [ADK-UI](https://github.com/zavora-ai/adk-ui) | Dynamic UI generation |
 | [ADK-Playground](https://github.com/zavora-ai/adk-playground) | 120+ working examples |

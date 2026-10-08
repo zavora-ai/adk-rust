@@ -1,5 +1,7 @@
 //! Type conversions between ADK core types and ollama-rs types.
 
+use std::collections::HashSet;
+
 use crate::attachment;
 use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
 use ollama_rs::generation::chat::{ChatMessage, ChatMessageResponse};
@@ -53,7 +55,13 @@ pub fn content_to_chat_message(content: &Content) -> Option<ChatMessage> {
 }
 
 /// Convert Ollama ChatMessageResponse to ADK LlmResponse.
-pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bool) -> LlmResponse {
+///
+/// Text-encoded tool calls are recognised only for tools in `declared_tools`.
+pub fn chat_response_to_llm_response(
+    response: &ChatMessageResponse,
+    partial: bool,
+    declared_tools: &HashSet<String>,
+) -> LlmResponse {
     let mut parts = Vec::new();
 
     // Extract thinking content if present
@@ -68,9 +76,10 @@ pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bo
         // Check for text-based tool calls (Qwen, Llama, Mistral Nemo format)
         // as a fallback when Ollama doesn't parse them natively
         if response.message.tool_calls.is_empty() {
-            if let Some(parsed_parts) =
-                crate::tool_call_parser::parse_text_tool_calls(&response.message.content)
-            {
+            if let Some(parsed_parts) = crate::tool_call_parser::parse_declared_tool_calls(
+                &response.message.content,
+                declared_tools,
+            ) {
                 parts.extend(parsed_parts);
             } else {
                 parts.push(Part::Text { text: response.message.content.clone() });

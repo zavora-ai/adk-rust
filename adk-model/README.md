@@ -42,21 +42,21 @@ separate from visible message text in all cases.
 
 ```toml
 [dependencies]
-adk-model = "2.2.0"
+adk-model = "2.3.0"
 ```
 
 Enable provider-specific features as needed:
 
 ```toml
 [dependencies]
-adk-model = { version = "2.2.0", features = ["openrouter"] }
+adk-model = { version = "2.3.0", features = ["openrouter"] }
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.2.0", features = ["models"] }
+adk-rust = { version = "2.3.0", features = ["models"] }
 ```
 
 ## Quick Start
@@ -657,9 +657,13 @@ See [Ollama library](https://ollama.com/library) for all available models.
 ## Features
 
 - **Streaming** - Real-time response streaming for all providers
-- **Tool Calling** - Function calling support across all providers
+- **Tool Calling** - Function calling support across all providers. Text-encoded tool calls
+  (Qwen, Llama, Mistral Nemo, DeepSeek, Gemma 4) are recognised only for tools the request
+  declares; malformed streamed arguments fail with `invalid_tool_arguments` instead of becoming `{}`
 - **Async** - Full async/await support with backpressure
-- **Retry** - Automatic retry with exponential backoff
+- **Retry** - Automatic retry with exponential backoff for 408, 429, 500, 502, 503, 504, and 529;
+  a `Retry-After` delay is honoured up to `RetryConfig::max_delay`
+- **Credential hygiene** - Provider configs redact the API key in `Debug` output and omit it when serialized
 - **Generation Config** - Temperature, top_p, top_k, max_tokens
 - **Token Usage Telemetry** - Automatic `gen_ai.usage.*` span recording for all providers via `adk-telemetry`
 
@@ -721,24 +725,24 @@ Enable specific providers with feature flags:
 ```toml
 [dependencies]
 # All providers (default)
-adk-model = { version = "2.2.0", features = ["all-providers"] }
+adk-model = { version = "2.3.0", features = ["all-providers"] }
 
 # Individual providers
-adk-model = { version = "2.2.0", features = ["gemini"] }
-adk-model = { version = "2.2.0", features = ["openai"] }
-adk-model = { version = "2.2.0", features = ["xai"] }
-adk-model = { version = "2.2.0", features = ["anthropic"] }
-adk-model = { version = "2.2.0", features = ["deepseek"] }
-adk-model = { version = "2.2.0", features = ["groq"] }
-adk-model = { version = "2.2.0", features = ["ollama"] }
-adk-model = { version = "2.2.0", features = ["fireworks"] }
-adk-model = { version = "2.2.0", features = ["together"] }
-adk-model = { version = "2.2.0", features = ["mistral"] }
-adk-model = { version = "2.2.0", features = ["perplexity"] }
-adk-model = { version = "2.2.0", features = ["cerebras"] }
-adk-model = { version = "2.2.0", features = ["sambanova"] }
-adk-model = { version = "2.2.0", features = ["bedrock"] }
-adk-model = { version = "2.2.0", features = ["azure-ai"] }
+adk-model = { version = "2.3.0", features = ["gemini"] }
+adk-model = { version = "2.3.0", features = ["openai"] }
+adk-model = { version = "2.3.0", features = ["xai"] }
+adk-model = { version = "2.3.0", features = ["anthropic"] }
+adk-model = { version = "2.3.0", features = ["deepseek"] }
+adk-model = { version = "2.3.0", features = ["groq"] }
+adk-model = { version = "2.3.0", features = ["ollama"] }
+adk-model = { version = "2.3.0", features = ["fireworks"] }
+adk-model = { version = "2.3.0", features = ["together"] }
+adk-model = { version = "2.3.0", features = ["mistral"] }
+adk-model = { version = "2.3.0", features = ["perplexity"] }
+adk-model = { version = "2.3.0", features = ["cerebras"] }
+adk-model = { version = "2.3.0", features = ["sambanova"] }
+adk-model = { version = "2.3.0", features = ["bedrock"] }
+adk-model = { version = "2.3.0", features = ["azure-ai"] }
 ```
 
 ## Related Crates

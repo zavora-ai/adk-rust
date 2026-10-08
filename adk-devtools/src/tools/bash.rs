@@ -16,7 +16,7 @@ use std::time::Duration;
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::error::DevToolError;
 use crate::tools::read::require_str;
@@ -25,8 +25,12 @@ use crate::workspace::Workspace;
 /// Runs a shell command in the workspace root with a timeout.
 ///
 /// Streams stdout and stderr line-by-line via [`ToolContext::emit_progress`]
-/// so UI layers can display live terminal output. The final result still
-/// contains the complete stdout/stderr for the model to consume.
+/// so UI layers can display live terminal output. The final result contains
+/// stdout and stderr, each capped at [`Workspace::max_output`] bytes; output
+/// past the cap is read and discarded, so memory stays bounded.
+///
+/// Cancelling the call (dropping its future) kills the command and every
+/// process it started, as a timeout does.
 pub struct BashTool {
     workspace: Workspace,
 }
@@ -76,7 +80,8 @@ impl Tool for BashTool {
             .arg(&command)
             .current_dir(self.workspace.root())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         // The parent environment of an agent process routinely holds provider API keys,
         // and `env` would print them. Pass through only what tools need, unless the
@@ -88,60 +93,34 @@ impl Tool for BashTool {
             }
         }
 
-        // Run in its own process group so a timeout can terminate descendants. Killing
-        // only the direct child left `sh`'s children running after the tool returned.
+        // Run in its own process group so a timeout or a cancelled call can terminate
+        // descendants. Killing only the direct child left `sh`'s children running.
         #[cfg(unix)]
         cmd.process_group(0);
 
         let mut child = cmd.spawn().map_err(DevToolError::from)?;
-        let child_pid = child.id();
+        let mut group = ProcessGroupGuard { pid: child.id() };
 
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         let cap = self.workspace.max_output();
 
-        // Stream stdout and stderr concurrently, emitting lines as progress events
-        let ctx_out = ctx.clone();
-        let stdout_task = tokio::spawn(async move {
-            let mut output = String::new();
-            if let Some(pipe) = stdout_pipe {
-                let mut reader = BufReader::new(pipe).lines();
-                while let Ok(Some(line)) = reader.next_line().await {
-                    ctx_out.emit_progress("stdout", &format!("{line}\n")).await;
-                    output.push_str(&line);
-                    output.push('\n');
-                }
-            }
-            output
-        });
-
-        let ctx_err = ctx.clone();
-        let stderr_task = tokio::spawn(async move {
-            let mut output = String::new();
-            if let Some(pipe) = stderr_pipe {
-                let mut reader = BufReader::new(pipe).lines();
-                while let Ok(Some(line)) = reader.next_line().await {
-                    ctx_err.emit_progress("stderr", &format!("{line}\n")).await;
-                    output.push_str(&line);
-                    output.push('\n');
-                }
-            }
-            output
-        });
-
-        // Wait for completion with timeout
         let result = tokio::time::timeout(timeout, async {
+            let (stdout, stderr) = tokio::join!(
+                capture(stdout_pipe, cap, ctx.as_ref(), "stdout"),
+                capture(stderr_pipe, cap, ctx.as_ref(), "stderr"),
+            );
             let status = child.wait().await?;
-            let stdout = stdout_task.await.unwrap_or_default();
-            let stderr = stderr_task.await.unwrap_or_default();
+            // The child is reaped, so its pid may be reused and must not be signalled.
+            group.disarm();
             Ok::<_, std::io::Error>((status, stdout, stderr))
         })
         .await;
 
         match result {
-            Ok(Ok((status, stdout, stderr))) => {
-                let (stdout, out_trunc) = truncate(stdout, cap);
-                let (stderr, err_trunc) = truncate(stderr, cap);
+            Ok(Ok((status, (stdout, out_exceeded), (stderr, err_exceeded)))) => {
+                let (stdout, out_trunc) = bound_output(&stdout, cap, out_exceeded);
+                let (stderr, err_trunc) = bound_output(&stderr, cap, err_exceeded);
                 Ok(json!({
                     "command": command,
                     "exit_code": status.code(),
@@ -152,7 +131,9 @@ impl Tool for BashTool {
             }
             Ok(Err(e)) => Err(DevToolError::from(e).into()),
             Err(_) => {
-                terminate_process_group(&mut child, child_pid);
+                group.kill();
+                // Also signal the child directly, which is all that is available off Unix.
+                let _ = child.start_kill();
                 ctx.emit_progress("stderr", &format!("\n[timeout after {}s]\n", timeout.as_secs()))
                     .await;
                 Err(DevToolError::Timeout(timeout).into())
@@ -161,32 +142,127 @@ impl Tool for BashTool {
     }
 }
 
-/// Terminate a timed-out command and everything it started.
+/// Kills the command's whole process group, including when dropped.
 ///
 /// The child leads its own process group, so signalling the negated pid reaches
-/// grandchildren too. Killing only the direct child left descendants — a spawned server,
-/// a background build — running after the tool returned.
-fn terminate_process_group(child: &mut tokio::process::Child, pid: Option<u32>) {
-    #[cfg(unix)]
-    if let Some(pid) = pid {
-        // SAFETY: `killpg` takes a process-group id and a signal, and cannot violate
-        // memory safety. A failure means the group already exited.
-        unsafe {
-            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = pid;
-
-    // Also signal the child directly, which is all that is available off Unix.
-    let _ = child.start_kill();
+/// grandchildren too. `kill_on_drop` reaches only the direct child, which left
+/// descendants — a spawned server, a background build — running after a timeout or a
+/// cancelled call. The guard is disarmed once the child is reaped, because its pid may
+/// then be reused.
+struct ProcessGroupGuard {
+    pid: Option<u32>,
 }
 
-fn truncate(mut s: String, cap: usize) -> (String, bool) {
-    if s.len() <= cap {
-        return (s, false);
+impl ProcessGroupGuard {
+    fn kill(&self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.pid {
+            // SAFETY: `killpg` takes a process-group id and a signal, and cannot violate
+            // memory safety. A failure means the group already exited.
+            unsafe {
+                libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = self.pid;
     }
-    s.truncate(cap);
-    s.push_str("\n…[truncated]");
-    (s, true)
+
+    fn disarm(&mut self) {
+        self.pid = None;
+    }
+}
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// Reads one output stream to EOF, keeping at most `cap` bytes.
+///
+/// Returns the kept bytes and whether the stream exceeded the cap. Output past the
+/// cap is read and discarded rather than left in the pipe, because a writer blocked
+/// on a full pipe would hang until the timeout. Complete lines are forwarded as
+/// progress up to the cap.
+async fn capture(
+    pipe: Option<impl AsyncRead + Unpin>,
+    cap: usize,
+    ctx: &dyn ToolContext,
+    stream: &str,
+) -> (Vec<u8>, bool) {
+    let mut kept = Vec::new();
+    let mut exceeded = false;
+    let Some(mut pipe) = pipe else {
+        return (kept, exceeded);
+    };
+    let mut chunk = [0u8; 8192];
+    // Bytes of `kept` already forwarded as progress.
+    let mut emitted = 0;
+    loop {
+        let read = match pipe.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => read,
+        };
+        let room = cap - kept.len();
+        if read > room && !exceeded {
+            exceeded = true;
+            tracing::debug!(
+                output.stream = stream,
+                output.cap = cap,
+                "discarding output past the cap"
+            );
+        }
+        kept.extend_from_slice(&chunk[..read.min(room)]);
+        if let Some(newline) = kept[emitted..].iter().rposition(|&byte| byte == b'\n') {
+            let end = emitted + newline + 1;
+            ctx.emit_progress(stream, &String::from_utf8_lossy(&kept[emitted..end])).await;
+            emitted = end;
+        }
+    }
+    if emitted < kept.len() {
+        ctx.emit_progress(stream, &String::from_utf8_lossy(&kept[emitted..])).await;
+    }
+    (kept, exceeded)
+}
+
+/// Decodes captured output and bounds it to `cap` bytes on a character boundary.
+///
+/// The byte cap can split a multi-byte character, and lossy decoding can lengthen
+/// the text, so the cut is taken on the nearest boundary at or below `cap`.
+fn bound_output(bytes: &[u8], cap: usize, exceeded: bool) -> (String, bool) {
+    let mut text = String::from_utf8_lossy(bytes).into_owned();
+    let cut = text.len() > cap;
+    if cut {
+        text.truncate(text.floor_char_boundary(cap));
+    }
+    let truncated = exceeded || cut;
+    if truncated {
+        text.push_str("\n…[truncated]");
+    }
+    (text, truncated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cap_inside_a_multi_byte_character_does_not_panic() {
+        // `€` is three bytes, so a cap of 4 falls inside the second one.
+        let (text, truncated) = bound_output("€€€".as_bytes(), 4, false);
+        assert_eq!((text.as_str(), truncated), ("€\n…[truncated]", true));
+    }
+
+    #[test]
+    fn a_character_split_by_the_capture_cap_is_dropped() {
+        // The capture kept `a` and the first byte of `é` before the cap was hit.
+        let (text, truncated) = bound_output(&"aé".as_bytes()[..2], 2, true);
+        assert_eq!((text.as_str(), truncated), ("a\n…[truncated]", true));
+    }
+
+    #[test]
+    fn output_within_the_cap_is_unchanged() {
+        let (text, truncated) = bound_output("héllo\n".as_bytes(), 1024, false);
+        assert_eq!((text.as_str(), truncated), ("héllo\n", false));
+    }
 }

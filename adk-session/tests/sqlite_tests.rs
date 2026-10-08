@@ -249,4 +249,82 @@ mod tests {
             .unwrap();
         assert_eq!(recreated.events().len(), 0);
     }
+
+    /// Collects formatted tracing output so tests can assert on emitted warnings.
+    #[derive(Clone, Default)]
+    struct CapturedLogs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLogs {
+        type Writer = CapturedLogs;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_get_warns_and_skips_undecodable_event() {
+        let logs = CapturedLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
+        service.migrate().await.unwrap();
+        service
+            .create(CreateRequest {
+                app_name: "test_app".to_string(),
+                user_id: "user1".to_string(),
+                session_id: Some("session1".to_string()),
+                state: HashMap::new(),
+            })
+            .await
+            .unwrap();
+
+        let mut kept = Event::new("inv-kept");
+        kept.id = "event-kept".to_string();
+        kept.timestamp = Utc::now();
+        let mut corrupt = Event::new("inv-corrupt");
+        corrupt.id = "event-corrupt".to_string();
+        corrupt.timestamp = kept.timestamp + Duration::seconds(1);
+        service.append_event("session1", kept).await.unwrap();
+        service.append_event("session1", corrupt).await.unwrap();
+
+        sqlx::query("UPDATE events SET actions = 'not json' WHERE id = 'event-corrupt'")
+            .execute(service.pool())
+            .await
+            .unwrap();
+
+        let session = service
+            .get(GetRequest {
+                app_name: "test_app".to_string(),
+                user_id: "user1".to_string(),
+                session_id: "session1".to_string(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .unwrap();
+
+        let event_ids: Vec<String> = session.events().all().into_iter().map(|e| e.id).collect();
+        assert_eq!(event_ids, vec!["event-kept".to_string()]);
+
+        let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("skipping stored event that failed to deserialize"), "{output}");
+        assert!(output.contains("event.id=event-corrupt"), "{output}");
+    }
 }

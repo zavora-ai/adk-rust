@@ -99,9 +99,9 @@ pub struct EnforcedLimits {
     /// Whether the backend prevents *reads* outside the policy's allowed paths.
     ///
     /// Separate from write isolation because they are not equivalent and the platforms
-    /// differ. The macOS Seatbelt profile denies writes, network, and fork but leaves
-    /// reads open, so code can read host files outside the allowed paths even though it
-    /// cannot modify them. Reporting one `filesystem_isolation` flag hid that.
+    /// differ. Linux bubblewrap mounts only the allowed paths, and the macOS Seatbelt
+    /// profile is deny-by-default with read access to the system runtime added, so both
+    /// report it. A backend without an OS enforcer does not.
     pub filesystem_read_isolation: bool,
     /// Whether the backend isolates environment variables.
     pub environment_isolation: bool,

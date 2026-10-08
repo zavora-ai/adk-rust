@@ -49,12 +49,67 @@ use crate::node::{Node, NodeContext, NodeOutput};
 /// 4. Apply error handling (stop/continue/retry/fallback)
 pub struct ActionNodeExecutor {
     config: ActionNodeConfig,
+    /// Directories a file node may touch; empty means the working directory.
+    file_roots: Vec<std::path::PathBuf>,
+    /// URLs an HTTP node may request.
+    #[cfg(feature = "action-http")]
+    http_policy: http::HttpActionPolicy,
 }
 
 impl ActionNodeExecutor {
     /// Create a new executor wrapping the given action node config.
+    ///
+    /// A file node is confined to the current working directory and an HTTP
+    /// node to `https`/`http` URLs; see [`Self::with_file_roots`] and
+    /// `with_http_policy`.
     pub fn new(config: ActionNodeConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            file_roots: Vec::new(),
+            #[cfg(feature = "action-http")]
+            http_policy: http::HttpActionPolicy::default(),
+        }
+    }
+
+    /// Confines a file node to these directories instead of the working directory.
+    ///
+    /// A relative path resolves against the first root. A path that resolves
+    /// outside every root, through `..` or a symbolic link, fails the node; see
+    /// [`mod@file`] for the full rules.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_graph::action::ActionNodeExecutor;
+    ///
+    /// let executor = ActionNodeExecutor::new(config).with_file_roots(["/srv/workflow-data"]);
+    /// ```
+    #[must_use]
+    pub fn with_file_roots<I, P>(mut self, roots: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<std::path::PathBuf>,
+    {
+        self.file_roots = roots.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sets which URLs an HTTP node may request, and how redirects are followed.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_graph::action::ActionNodeExecutor;
+    /// use adk_graph::action::http::HttpActionPolicy;
+    ///
+    /// let executor = ActionNodeExecutor::new(config)
+    ///     .with_http_policy(HttpActionPolicy::new().allow_hosts(["api.example.com"]));
+    /// ```
+    #[cfg(feature = "action-http")]
+    #[must_use]
+    pub fn with_http_policy(mut self, policy: http::HttpActionPolicy) -> Self {
+        self.http_policy = policy;
+        self
     }
 
     /// Returns a reference to the inner config.
@@ -71,13 +126,13 @@ impl ActionNodeExecutor {
     pub fn unavailable_reason(&self) -> Option<String> {
         match &self.config {
             ActionNodeConfig::Database(config) => Some(format!(
-                "database node '{}' cannot execute: the driver is a validated placeholder \
-                 with no backend integrated",
+                "database node '{}' cannot execute: database action nodes are not \
+                 implemented in any feature configuration",
                 config.standard.id
             )),
             ActionNodeConfig::Email(config) => Some(format!(
-                "email node '{}' cannot execute: IMAP monitoring and SMTP sending are \
-                 not implemented",
+                "email node '{}' cannot execute: email action nodes are not implemented \
+                 in any feature configuration",
                 config.standard.id
             )),
             ActionNodeConfig::Code(config)
@@ -87,8 +142,8 @@ impl ActionNodeExecutor {
                 ) =>
             {
                 Some(format!(
-                    "code node '{}' cannot execute: JavaScript and TypeScript have no \
-                     sandboxed runtime yet; use language 'rust'",
+                    "code node '{}' cannot execute: JavaScript and TypeScript code nodes are \
+                     not implemented in any feature configuration; use language 'rust'",
                     config.standard.id
                 ))
             }
@@ -129,11 +184,13 @@ impl ActionNodeExecutor {
             ActionNodeConfig::Loop(c) => loop_node::execute_loop(c, ctx).await,
             ActionNodeConfig::Merge(c) => merge::execute_merge(c, ctx).await,
             ActionNodeConfig::Wait(c) => wait::execute_wait(c, ctx).await,
-            ActionNodeConfig::File(c) => file::execute_file(c, ctx).await,
+            ActionNodeConfig::File(c) => file::execute_file_in(c, ctx, &self.file_roots).await,
             ActionNodeConfig::Code(c) => code::execute_code(c, ctx).await,
 
             #[cfg(feature = "action-http")]
-            ActionNodeConfig::Http(c) => http::execute_http(c, ctx).await,
+            ActionNodeConfig::Http(c) => {
+                http::execute_http_with_policy(c, ctx, &self.http_policy).await
+            }
             #[cfg(not(feature = "action-http"))]
             ActionNodeConfig::Http(_) => Err(GraphError::NodeExecutionFailed {
                 node: self.config.standard().id.clone(),
@@ -142,10 +199,14 @@ impl ActionNodeExecutor {
 
             #[cfg(feature = "action-db")]
             ActionNodeConfig::Database(c) => database::execute_database(c, ctx).await,
+            // Not "enable the feature": the feature compiles a placeholder that
+            // fails the same way, so naming it would send the caller nowhere.
             #[cfg(not(feature = "action-db"))]
             ActionNodeConfig::Database(_) => Err(GraphError::NodeExecutionFailed {
                 node: self.config.standard().id.clone(),
-                message: "Database node requires the 'action-db' feature".into(),
+                message: "database action nodes are not implemented; no database driver is \
+                          integrated"
+                    .into(),
             }),
 
             #[cfg(feature = "action-email")]
@@ -153,7 +214,9 @@ impl ActionNodeExecutor {
             #[cfg(not(feature = "action-email"))]
             ActionNodeConfig::Email(_) => Err(GraphError::NodeExecutionFailed {
                 node: self.config.standard().id.clone(),
-                message: "Email node requires the 'action-email' feature".into(),
+                message: "email action nodes are not implemented; neither IMAP monitoring nor \
+                          SMTP sending is integrated"
+                    .into(),
             }),
 
             #[cfg(feature = "action-http")]

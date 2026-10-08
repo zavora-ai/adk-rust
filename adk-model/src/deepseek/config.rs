@@ -69,9 +69,13 @@ impl std::fmt::Display for ReasoningEffort {
 /// let pro_max = DeepSeekConfig::v4_pro("api-key")
 ///     .with_reasoning_effort(ReasoningEffort::Max);
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The API key is redacted from `Debug` output and omitted when serializing.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DeepSeekConfig {
-    /// DeepSeek API key.
+    /// DeepSeek API key. Never serialized; deserializing a config without it
+    /// yields an empty key.
+    #[serde(skip_serializing, default)]
     pub api_key: String,
     /// Model name (e.g., `"deepseek-flash"`, `"deepseek-v4-pro"`).
     pub model: String,
@@ -101,6 +105,22 @@ pub struct DeepSeekConfig {
     /// Prefer using `thinking` directly for new code.
     #[serde(default)]
     pub thinking_enabled: bool,
+}
+
+impl std::fmt::Debug for DeepSeekConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeepSeekConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("thinking", &self.thinking)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("max_tokens", &self.max_tokens)
+            .field("beta", &self.beta)
+            .field("strict_tools", &self.strict_tools)
+            .field("thinking_enabled", &self.thinking_enabled)
+            .finish()
+    }
 }
 
 impl Default for DeepSeekConfig {

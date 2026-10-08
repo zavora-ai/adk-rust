@@ -609,6 +609,17 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// - The function **must** be `async`
 /// - The function **must** accept `&mut TaskContext` as its first argument
+/// - Every parameter **must** be a plain identifier (`mut` is allowed)
+///
+/// # Call identity
+///
+/// Each call is recorded in the `ExecutionLog` under its own key,
+/// `{task}#{ordinal}:{arg_hash}`: the ordinal counts this task's calls within
+/// the run, and the hash covers every argument that implements `Serialize`
+/// (`:{arg_hash}` is omitted when none does). A task called in a loop therefore
+/// records one result per call, and a resumed run replays each call's own
+/// result. A replayed call whose arguments differ from the recorded call at the
+/// same position runs again. See `adk_graph::functional::task_call_id`.
 ///
 /// # Attributes
 ///
@@ -693,20 +704,59 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     let params = &input_fn.sig.inputs;
     let return_type = &input_fn.sig.output;
 
-    // Collect the argument names for forwarding the call (skip `ctx`)
-    let forward_args: Vec<_> = input_fn
-        .sig
-        .inputs
-        .iter()
-        .skip(1) // Skip ctx
-        .filter_map(|arg| if let FnArg::Typed(pat_type) = arg { Some(&pat_type.pat) } else { None })
-        .collect();
+    // The wrapper refers to every parameter by name, so each must be a plain
+    // identifier; `mut` and `ref` are allowed since the name is what matters.
+    let mut param_idents = Vec::new();
+    for arg in &input_fn.sig.inputs {
+        match arg {
+            FnArg::Typed(pat_type) => match pat_type.pat.as_ref() {
+                syn::Pat::Ident(pat_ident) => param_idents.push(pat_ident.ident.clone()),
+                other => {
+                    return syn::Error::new_spanned(
+                        other,
+                        "#[task] parameters must be plain identifiers, such as `item: Item`, so \
+                         the generated wrapper can forward them",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            },
+            FnArg::Receiver(receiver) => {
+                return syn::Error::new_spanned(
+                    receiver,
+                    "#[task] functions must be free functions, not methods",
+                )
+                .to_compile_error()
+                .into();
+            }
+        }
+    }
+    let (ctx_ident, forward_args) = param_idents.split_first().expect("validated above");
 
     // Build the call expression
     let call_expr = if forward_args.is_empty() {
-        quote! { #fn_name(ctx).await }
+        quote! { #fn_name(#ctx_ident).await }
     } else {
-        quote! { #fn_name(ctx, #(#forward_args),*).await }
+        quote! { #fn_name(#ctx_ident, #(#forward_args),*).await }
+    };
+
+    // The execution-log key: the task's call ordinal in this run plus a hash of
+    // every argument that implements `Serialize`; see `adk_graph::functional::task_call_id`.
+    let task_id_expr = if forward_args.is_empty() {
+        quote! { #ctx_ident.next_task_call_id(#fn_name_str, &[]) }
+    } else {
+        quote! {
+            {
+                #[allow(unused_imports)]
+                use adk_graph::functional::__private::{
+                    OpaqueTaskArg as _, SerializableTaskArg as _,
+                };
+                let __adk_task_args = [
+                    #((&adk_graph::functional::__private::TaskArg(&#forward_args)).task_arg_value()),*
+                ];
+                #ctx_ident.next_task_call_id(#fn_name_str, &__adk_task_args)
+            }
+        }
     };
 
     // Generate retry logic or single-attempt logic
@@ -714,23 +764,23 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
         let max_attempts = retry_config.max_attempts;
         let backoff_secs = retry_config.backoff_secs;
         quote! {
-            let mut attempts: u32 = 0;
-            let max_attempts: u32 = #max_attempts;
-            let backoff = std::time::Duration::from_secs(#backoff_secs);
+            let mut __adk_attempts: u32 = 0;
+            let __adk_max_attempts: u32 = #max_attempts;
+            let __adk_backoff = std::time::Duration::from_secs(#backoff_secs);
 
-            let result = loop {
-                attempts += 1;
+            let __adk_result = loop {
+                __adk_attempts += 1;
                 match #call_expr {
                     Ok(value) => break Ok(value),
-                    Err(e) if attempts < max_attempts => {
-                        tokio::time::sleep(backoff * attempts).await;
+                    Err(_) if __adk_attempts < __adk_max_attempts => {
+                        tokio::time::sleep(__adk_backoff * __adk_attempts).await;
                         continue;
                     }
                     Err(e) => {
-                        ctx.record_failure(task_id, &e.to_string()).await?;
-                        ctx.emit(adk_graph::stream::StreamEvent::error(
+                        #ctx_ident.record_failure(__adk_task_id, &e.to_string()).await?;
+                        #ctx_ident.emit(adk_graph::stream::StreamEvent::error(
                             &e.to_string(),
-                            Some(task_id),
+                            Some(__adk_task_id),
                         ));
                         break Err(e);
                     }
@@ -739,13 +789,13 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     } else {
         quote! {
-            let result = match #call_expr {
+            let __adk_result = match #call_expr {
                 Ok(value) => Ok(value),
                 Err(e) => {
-                    ctx.record_failure(task_id, &e.to_string()).await?;
-                    ctx.emit(adk_graph::stream::StreamEvent::error(
+                    #ctx_ident.record_failure(__adk_task_id, &e.to_string()).await?;
+                    #ctx_ident.emit(adk_graph::stream::StreamEvent::error(
                         &e.to_string(),
-                        Some(task_id),
+                        Some(__adk_task_id),
                     ));
                     Err(e)
                 }
@@ -761,7 +811,7 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
         // Default: check ExecutionLog for cached results (resume-skip path)
         quote! {
             // Check if already completed (resume path)
-            if let Some(cached_result) = ctx.get_cached_result(task_id).await {
+            if let Some(cached_result) = #ctx_ident.get_cached_result(__adk_task_id).await {
                 return Ok(cached_result);
             }
         }
@@ -779,28 +829,32 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
         /// - Retry logic (if configured)
         /// - `record_completion()` on success
         /// - `record_failure()` after all retries exhausted
+        ///
+        /// Each call is logged under its own key, built from the call's ordinal
+        /// and its arguments; see `adk_graph::functional::task_call_id`.
         #fn_vis async fn #wrapper_name(#params) #return_type {
-            let task_id = #fn_name_str;
+            let __adk_task_key: String = #task_id_expr;
+            let __adk_task_id: &str = &__adk_task_key;
 
             #cache_check
 
             // Emit task start event
-            let current_step = ctx.current_step().await;
-            ctx.emit(adk_graph::stream::StreamEvent::node_start(task_id, current_step));
+            let __adk_step = #ctx_ident.current_step().await;
+            #ctx_ident.emit(adk_graph::stream::StreamEvent::node_start(__adk_task_id, __adk_step));
 
-            let start = std::time::Instant::now();
+            let __adk_start = std::time::Instant::now();
 
             #execution_body
 
-            if let Ok(ref value) = result {
+            if let Ok(ref value) = __adk_result {
                 // Record completion and checkpoint
-                ctx.record_completion(task_id, value).await?;
-                let duration = start.elapsed().as_millis() as u64;
-                let step = ctx.current_step().await;
-                ctx.emit(adk_graph::stream::StreamEvent::node_end(task_id, step, duration));
+                #ctx_ident.record_completion(__adk_task_id, value).await?;
+                let duration = __adk_start.elapsed().as_millis() as u64;
+                let step = #ctx_ident.current_step().await;
+                #ctx_ident.emit(adk_graph::stream::StreamEvent::node_end(__adk_task_id, step, duration));
             }
 
-            result
+            __adk_result
         }
     };
 

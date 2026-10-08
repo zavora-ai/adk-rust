@@ -123,7 +123,9 @@ impl SharedState {
 
     /// Blocks until the key appears, or the timeout expires.
     ///
-    /// If the key already exists, returns immediately.
+    /// If the key already exists, returns immediately. A [`SharedState::set_shared`]
+    /// for the key that runs concurrently with this call is never missed: the waiter
+    /// registers for notification before each read of the key.
     ///
     /// # Errors
     ///
@@ -134,41 +136,52 @@ impl SharedState {
         key: &str,
         timeout: Duration,
     ) -> Result<Value, SharedStateError> {
-        // Validate timeout range
+        self.wait_for_key_with(key, timeout, || async {}).await
+    }
+
+    /// Implements [`SharedState::wait_for_key`]; `after_miss` runs each time the key is
+    /// found absent, while this waiter is already registered, which is the window a
+    /// concurrent `set_shared` must not fall into.
+    async fn wait_for_key_with<F, Fut>(
+        &self,
+        key: &str,
+        timeout: Duration,
+        mut after_miss: F,
+    ) -> Result<Value, SharedStateError>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
         if timeout < MIN_TIMEOUT || timeout > MAX_TIMEOUT {
             return Err(SharedStateError::InvalidTimeout { timeout });
         }
 
-        // Check if key already exists
+        // Fast path without taking the notifier write lock.
         if let Some(value) = self.data.read().await.get(key).cloned() {
             return Ok(value);
         }
 
-        // Get or create a Notify for this key
         let notify = {
             let mut notifiers = self.notifiers.write().await;
             notifiers.entry(key.to_string()).or_insert_with(|| Arc::new(Notify::new())).clone()
         };
 
-        // Wait with timeout, re-checking after each notification
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(SharedStateError::Timeout { key: key.to_string(), timeout });
-            }
+            // Register before reading the key: `notify_waiters` wakes every `Notified`
+            // that exists when it is called, so a `set_shared` landing after the read
+            // below still wakes this waiter.
+            let notified = notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
 
-            match tokio::time::timeout(remaining, notify.notified()).await {
-                Ok(()) => {
-                    // Check if our key was set
-                    if let Some(value) = self.data.read().await.get(key).cloned() {
-                        return Ok(value);
-                    }
-                    // Spurious wake or different key — loop and wait again
-                }
-                Err(_) => {
-                    return Err(SharedStateError::Timeout { key: key.to_string(), timeout });
-                }
+            if let Some(value) = self.data.read().await.get(key).cloned() {
+                return Ok(value);
+            }
+            after_miss().await;
+
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return Err(SharedStateError::Timeout { key: key.to_string(), timeout });
             }
         }
     }
@@ -294,6 +307,29 @@ mod tests {
         let state = SharedState::new();
         let err = state.wait_for_key("key", Duration::from_secs(301)).await.unwrap_err();
         assert!(matches!(err, SharedStateError::InvalidTimeout { .. }));
+    }
+
+    /// A `set_shared` landing after the waiter's read of the key, but before it starts
+    /// waiting, must wake it. Paused time turns a lost wakeup into an immediate timeout.
+    #[tokio::test(start_paused = true)]
+    async fn wait_for_key_sees_a_set_between_its_check_and_its_wait() {
+        let state = SharedState::new();
+        let state_ref = &state;
+        let mut misses = 0;
+        let value = state
+            .wait_for_key_with("raced", MAX_TIMEOUT, || {
+                misses += 1;
+                let first_miss = misses == 1;
+                async move {
+                    if first_miss {
+                        state_ref.set_shared("raced", serde_json::json!("val")).await.unwrap();
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(value, serde_json::json!("val"));
+        assert_eq!(misses, 1);
     }
 
     #[tokio::test]

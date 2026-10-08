@@ -1,8 +1,11 @@
 //! [`ProcessBackend`] — subprocess-based code execution via `tokio::process::Command`.
 //!
 //! This backend spawns child processes to execute code in various languages.
-//! It enforces timeout and environment isolation but does **not** enforce
-//! memory limits, network isolation, or filesystem isolation.
+//! It enforces timeout and environment isolation, reads output under a byte cap
+//! while the process runs, and kills the execution's process group on timeout
+//! and on exit. On its own it does **not** enforce memory limits, network
+//! isolation, or filesystem isolation; attach an OS enforcer with
+//! [`ProcessBackend::with_sandbox`] for those.
 //!
 //! # Supported Languages
 //!
@@ -36,16 +39,17 @@
 //! ```
 
 use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::{Span, instrument};
 
 use crate::backend::{BackendCapabilities, EnforcedLimits, SandboxBackend};
+use crate::child_io::{collect_output, note_truncation, truncate_utf8};
 use crate::error::SandboxError;
-use crate::sandbox::{SandboxEnforcer, SandboxPolicy};
+use crate::sandbox::{AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy};
 use crate::types::{ExecRequest, ExecResult, Language};
 
 /// Maximum output size in bytes (1 MB).
@@ -223,6 +227,11 @@ impl ProcessBackend {
     /// policy. The enforcer wraps commands with platform-specific restrictions
     /// (Seatbelt on macOS, bubblewrap on Linux, AppContainer on Windows).
     ///
+    /// Each execution runs in a fresh scratch directory holding its source file
+    /// and compiler output. That directory becomes the working directory and is
+    /// granted read-write on top of the policy, since the enforcers deny every
+    /// path the policy does not name.
+    ///
     /// If different tools need different policies, create multiple
     /// `ProcessBackend` instances.
     pub fn with_sandbox(
@@ -249,70 +258,6 @@ impl std::fmt::Debug for ProcessBackend {
             .field("policy", &self.policy)
             .finish()
     }
-}
-
-/// Truncates a byte buffer to at most `max_bytes`, ensuring the result is
-/// valid UTF-8 by backing off to the nearest char boundary.
-fn truncate_utf8(bytes: Vec<u8>, max_bytes: usize) -> String {
-    if bytes.len() <= max_bytes {
-        return String::from_utf8_lossy(&bytes).into_owned();
-    }
-    let truncated = &bytes[..max_bytes];
-    // Walk backwards to find a valid UTF-8 boundary.
-    let mut end = max_bytes;
-    while end > 0 && std::str::from_utf8(&truncated[..end]).is_err() {
-        end -= 1;
-    }
-    std::str::from_utf8(&bytes[..end]).unwrap_or("").to_string()
-}
-
-/// Appends a truncation notice when output was discarded.
-///
-/// A model that receives silently-cut output has no way to know it is incomplete, so the notice
-/// travels with the data rather than only appearing in a log. Mirrors the convention in
-/// adk-python's `tools/environment` toolset.
-fn note_truncation(mut text: String, discarded: bool) -> String {
-    if discarded {
-        text.push_str("\n... (truncated: output exceeded the configured limit)");
-    }
-    text
-}
-
-/// Reads `reader` to EOF, accumulating at most `cap` bytes.
-///
-/// Bytes past `cap` are read and discarded rather than left in the pipe. Stopping the read
-/// would block the child on a full pipe buffer and stall it until the execution timeout, so
-/// the drain continues even though the data is thrown away.
-///
-/// Returns the retained bytes and whether anything was discarded.
-async fn read_capped<R>(mut reader: R, cap: usize) -> std::io::Result<(Vec<u8>, bool)>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    use tokio::io::AsyncReadExt;
-
-    let mut retained = Vec::new();
-    let mut chunk = [0u8; 8192];
-    let mut discarded = false;
-
-    loop {
-        let read = reader.read(&mut chunk).await?;
-        if read == 0 {
-            break;
-        }
-        let room = cap.saturating_sub(retained.len());
-        if room == 0 {
-            discarded = true;
-            continue;
-        }
-        let take = room.min(read);
-        retained.extend_from_slice(&chunk[..take]);
-        if take < read {
-            discarded = true;
-        }
-    }
-
-    Ok((retained, discarded))
 }
 
 #[async_trait]
@@ -343,10 +288,11 @@ impl SandboxBackend for ProcessBackend {
                 memory: false,
                 network_isolation: has_enforcer && denies_network,
                 filesystem_write_isolation: has_enforcer,
-                // The macOS profile denies writes, network, and fork but leaves reads
-                // open, so read isolation is not claimed there. Linux bubblewrap builds
-                // a filesystem namespace, which does confine reads.
-                filesystem_read_isolation: has_enforcer && cfg!(target_os = "linux"),
+                // Linux bubblewrap builds a filesystem namespace and the macOS Seatbelt
+                // profile is deny-by-default, so both confine reads to the policy's paths
+                // plus the system runtime. The Windows enforcer is not implemented.
+                filesystem_read_isolation: has_enforcer
+                    && cfg!(any(target_os = "linux", target_os = "macos")),
                 environment_isolation: true,
             },
         }
@@ -410,7 +356,7 @@ impl ProcessBackend {
             #[cfg(windows)]
             cmd.arg("-Clinker=rust-lld");
             cmd.arg(&src_path).arg("-o").arg(&bin_path);
-            self.run_command_with_env(cmd, request, &toolchain_env).await?
+            self.run_command_with_env(cmd, request, &toolchain_env, Some(dir.path())).await?
         };
 
         #[cfg(windows)]
@@ -433,7 +379,7 @@ impl ProcessBackend {
         }
 
         // Run the compiled binary
-        self.run_binary(&bin_path, request).await
+        self.run_command(Command::new(&bin_path), request, Some(dir.path())).await
     }
 
     /// Executes Python code: write to temp file → run with python3.
@@ -444,7 +390,7 @@ impl ProcessBackend {
 
         let mut cmd = Command::new(&self.config.python_path);
         cmd.arg(&src_path);
-        self.run_command(cmd, request).await
+        self.run_command(cmd, request, Some(dir.path())).await
     }
 
     /// Executes JavaScript code: write to temp file → run with node.
@@ -455,7 +401,7 @@ impl ProcessBackend {
 
         let mut cmd = Command::new(&self.config.node_path);
         cmd.arg(&src_path);
-        self.run_command(cmd, request).await
+        self.run_command(cmd, request, Some(dir.path())).await
     }
 
     /// Executes a raw shell command via the platform shell.
@@ -479,17 +425,7 @@ impl ProcessBackend {
             c.arg("-c").arg(&request.code);
             c
         };
-        self.run_command(cmd, request).await
-    }
-
-    /// Runs a compiled binary with timeout, env isolation, and stdin piping.
-    async fn run_binary(
-        &self,
-        bin_path: &std::path::Path,
-        request: &ExecRequest,
-    ) -> Result<ExecResult, SandboxError> {
-        let cmd = Command::new(bin_path);
-        self.run_command(cmd, request).await
+        self.run_command(cmd, request, None).await
     }
 
     /// Shared execution logic: env isolation, stdin piping, timeout, output capture.
@@ -500,8 +436,9 @@ impl ProcessBackend {
         &self,
         cmd: Command,
         request: &ExecRequest,
+        scratch_dir: Option<&Path>,
     ) -> Result<ExecResult, SandboxError> {
-        self.run_command_with_env(cmd, request, &[]).await
+        self.run_command_with_env(cmd, request, &[], scratch_dir).await
     }
 
     /// Variables a compiler needs to find its own tools.
@@ -514,7 +451,19 @@ impl ProcessBackend {
     ///
     /// This widens what the compile phase can see compared with the run phase. An OS
     /// enforcer is what constrains it; see [`ProcessBackend::isolation`].
-    fn toolchain_env() -> Vec<(String, OsString)> {
+    ///
+    /// Callers that invoke `rustc` themselves apply this after `env_clear()`, so
+    /// compile-time macros such as `env!` and `option_env!` see only these variables.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_sandbox::ProcessBackend;
+    ///
+    /// let environment = ProcessBackend::toolchain_env();
+    /// assert!(environment.iter().all(|(key, _)| key != "OPENAI_API_KEY"));
+    /// ```
+    pub fn toolchain_env() -> Vec<(String, OsString)> {
         // RUSTUP_TOOLCHAIN matters as much as RUSTUP_HOME: `rustc` on PATH is usually a rustup
         // shim, and without it the shim ignores the caller's selection and resolves
         // `rust-toolchain.toml` instead. That either compiles with a different toolchain than the
@@ -559,46 +508,62 @@ impl ProcessBackend {
     }
 
     /// Shared execution logic, with `extra_env` applied below policy and request values.
+    ///
+    /// `scratch_dir` is the execution's own temporary directory (source file, compiler
+    /// output). Under an enforcer the sandboxed process is granted read-write access to it
+    /// and starts in it; executions that bring none get a fresh one.
     async fn run_command_with_env(
         &self,
         cmd: Command,
         request: &ExecRequest,
         extra_env: &[(String, OsString)],
+        scratch_dir: Option<&Path>,
     ) -> Result<ExecResult, SandboxError> {
-        // If a sandbox enforcer is configured, wrap the command.
-        // We extract the program and args from the pre-built Command,
-        // pass them through the enforcer, and create a new Command.
-        let mut cmd = if let (Some(enforcer), Some(policy)) = (&self.enforcer, &self.policy) {
-            let std_cmd = cmd.as_std();
-            let program = std_cmd.get_program();
-            let args: Vec<OsString> = std_cmd.get_args().map(OsStr::to_owned).collect();
-
-            let wrapped = enforcer.wrap_command(program, &args, policy)?;
-
-            let mut new_cmd = Command::new(&wrapped.program);
-            new_cmd.args(&wrapped.args);
-
-            // Apply any post-construction configuration (e.g., Windows AppContainer)
-            enforcer.configure_command(&mut new_cmd, policy)?;
-
-            new_cmd
-        } else {
-            cmd
-        };
+        // Keeps a scratch directory created here alive until the execution ends.
+        let mut owned_scratch: Option<tempfile::TempDir> = None;
 
         // Resolve a bare program name against the caller's PATH *before* clearing the
         // environment. Clearing first leaves the child with no PATH, and program
         // resolution then fails with ENOENT — so a backend configured with `"rustc"`,
         // `"python3"`, or `"node"` could not execute anything at all.
-        {
-            let program = cmd.as_std().get_program().to_owned();
-            if let Some(resolved) = resolve_program(&program) {
-                let args: Vec<OsString> = cmd.as_std().get_args().map(OsStr::to_owned).collect();
-                let mut resolved_cmd = Command::new(resolved);
-                resolved_cmd.args(&args);
-                cmd = resolved_cmd;
+        let mut cmd = if let (Some(enforcer), Some(policy)) = (&self.enforcer, &self.policy) {
+            let scratch = match scratch_dir {
+                Some(dir) => dir.to_path_buf(),
+                None => owned_scratch.insert(tempfile::tempdir()?).path().to_path_buf(),
+            };
+            // The enforcers deny every path the policy does not name, and the execution's
+            // own files live in the scratch directory. It is created per execution and holds
+            // nothing from the host, so granting it widens nothing.
+            let mut policy = policy.clone();
+            policy
+                .allowed_paths
+                .push(AllowedPath { path: scratch.clone(), mode: AccessMode::ReadWrite });
+
+            let std_cmd = cmd.as_std();
+            let args: Vec<OsString> = std_cmd.get_args().map(OsStr::to_owned).collect();
+            let wrapped = enforcer.wrap_command(std_cmd.get_program(), &args, &policy)?;
+
+            // Resolved before `configure_command`, which may attach spawn-time state (the
+            // Linux seccomp descriptor, Windows process attributes) that rebuilding the
+            // command afterwards would discard.
+            let program = resolve_program(&wrapped.program)
+                .map_or(wrapped.program, std::path::PathBuf::into_os_string);
+            let mut wrapped_cmd = Command::new(program);
+            wrapped_cmd.args(&wrapped.args).current_dir(&scratch);
+            enforcer.configure_command(&mut wrapped_cmd, &policy)?;
+            wrapped_cmd
+        } else {
+            match resolve_program(cmd.as_std().get_program()) {
+                Some(resolved) => {
+                    let args: Vec<OsString> =
+                        cmd.as_std().get_args().map(OsStr::to_owned).collect();
+                    let mut resolved_cmd = Command::new(resolved);
+                    resolved_cmd.args(&args);
+                    resolved_cmd
+                }
+                None => cmd,
             }
-        }
+        };
 
         // Environment precedence: the policy supplies defaults for every execution, and
         // the request overrides them per call. `SandboxPolicy::env` was previously
@@ -621,7 +586,7 @@ impl ProcessBackend {
         // targets the immediate child, which is not enough for shell tools:
         // compilers, scripts, and background jobs can otherwise survive a
         // timeout. Descendants inherit this group unless they deliberately
-        // detach, so the timeout path can terminate the execution tree.
+        // detach, so the group is killed on timeout and again on exit.
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -638,86 +603,42 @@ impl ProcessBackend {
         }
 
         let start = Instant::now();
-        let mut child = cmd.spawn()?;
-        #[cfg(unix)]
-        let process_group = child.id().map(|id| id as i32);
+        let child = cmd.spawn()?;
 
-        // Pipe stdin if provided
-        if let Some(ref input) = request.stdin
-            && let Some(mut stdin_handle) = child.stdin.take()
-        {
-            stdin_handle.write_all(input.as_bytes()).await?;
-            drop(stdin_handle);
-        }
-
-        // Read both pipes concurrently with the cap applied as the bytes arrive. Buffering the
-        // whole output first and truncating afterwards let a process allocate without bound
-        // before the limit was consulted, so the cap did not limit memory at all.
+        // Both pipes are read concurrently with the cap applied as the bytes arrive, and stdin
+        // is written alongside them inside the timeout.
         let cap = self.config.max_output_bytes;
-        let stdout_pipe = child.stdout.take();
-        let stderr_pipe = child.stderr.take();
-        let stdout_reader = tokio::spawn(async move {
-            match stdout_pipe {
-                Some(pipe) => read_capped(pipe, cap).await,
-                None => Ok((Vec::new(), false)),
-            }
-        });
-        let stderr_reader = tokio::spawn(async move {
-            match stderr_pipe {
-                Some(pipe) => read_capped(pipe, cap).await,
-                None => Ok((Vec::new(), false)),
-            }
-        });
-
-        let output = tokio::time::timeout(request.timeout, async {
-            let status = child.wait().await?;
-            let (stdout, stdout_discarded) =
-                stdout_reader.await.map_err(std::io::Error::other)??;
-            let (stderr, stderr_discarded) =
-                stderr_reader.await.map_err(std::io::Error::other)??;
-            Ok::<_, std::io::Error>((status, stdout, stdout_discarded, stderr, stderr_discarded))
-        })
-        .await;
+        let stdin = request.stdin.as_ref().map(|input| input.as_bytes().to_vec());
+        let output = collect_output(child, stdin, request.timeout, cap).await;
         let duration = start.elapsed();
 
         match output {
-            Ok(Ok((status, stdout_bytes, stdout_discarded, stderr_bytes, stderr_discarded))) => {
-                let exit_code = status.code().unwrap_or(-1);
-                if stdout_discarded || stderr_discarded {
+            Ok(Some(captured)) => {
+                let exit_code = captured.status.code().unwrap_or(-1);
+                if captured.stdout_truncated || captured.stderr_truncated {
                     tracing::warn!(
                         max_output_bytes = cap,
-                        stdout.truncated = stdout_discarded,
-                        stderr.truncated = stderr_discarded,
+                        stdout.truncated = captured.stdout_truncated,
+                        stderr.truncated = captured.stderr_truncated,
                         "sandbox output exceeded the cap and was truncated"
                     );
                 }
-                let cap = self.config.max_output_bytes;
-                let stdout = note_truncation(truncate_utf8(stdout_bytes, cap), stdout_discarded);
-                let stderr = note_truncation(truncate_utf8(stderr_bytes, cap), stderr_discarded);
+                let stdout =
+                    note_truncation(truncate_utf8(captured.stdout, cap), captured.stdout_truncated);
+                let stderr =
+                    note_truncation(truncate_utf8(captured.stderr, cap), captured.stderr_truncated);
 
                 Span::current().record("exit_code", exit_code);
                 Span::current().record("duration_ms", duration.as_millis() as u64);
 
                 Ok(ExecResult { stdout, stderr, exit_code, duration })
             }
-            Ok(Err(e)) => {
-                Err(SandboxError::ExecutionFailed(format!("failed to wait for child process: {e}")))
-            }
-            Err(_) => {
-                // Timeout — terminate the Unix process group before
-                // `kill_on_drop` cleans up the immediate child. This prevents
-                // background descendants from escaping the execution limit.
-                #[cfg(unix)]
-                if let Some(group) = process_group {
-                    // SAFETY: `group` is the positive PID returned for the
-                    // child we just placed in a new process group. A negative
-                    // PID asks kill(2) to signal that process group only.
-                    unsafe {
-                        libc::kill(-group, libc::SIGKILL);
-                    }
-                }
+            Ok(None) => {
                 Span::current().record("duration_ms", duration.as_millis() as u64);
                 Err(SandboxError::Timeout { timeout: request.timeout })
+            }
+            Err(e) => {
+                Err(SandboxError::ExecutionFailed(format!("failed to wait for child process: {e}")))
             }
         }
     }
@@ -828,6 +749,66 @@ mod tests {
         assert!(!marker.exists(), "a background descendant survived the execution timeout");
     }
 
+    /// A `nohup … &` descendant must not outlive an execution that exits normally.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_normal_exit_terminates_background_descendants() {
+        let backend = ProcessBackend::default();
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("escaped-child");
+        let escaped_marker = marker.to_string_lossy().replace('\'', "'\\''");
+        let code = format!(
+            "nohup sh -c 'sleep 1; touch \"$0\"' '{escaped_marker}' >/dev/null 2>&1 & echo done"
+        );
+
+        let result = backend.execute(make_request(Language::Command, &code)).await.unwrap();
+        assert_eq!(result.exit_code, 0, "stderr: {}", result.stderr);
+        assert_eq!(result.stdout.trim(), "done");
+
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        assert!(!marker.exists(), "a background descendant survived a normal exit");
+    }
+
+    /// Stdin larger than a pipe buffer reaches a child that writes output before reading.
+    ///
+    /// Writing all of stdin before the output readers started deadlocked here: the child
+    /// blocked on a full stdout pipe, the backend on a full stdin pipe, outside the timeout.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_large_stdin_does_not_deadlock_against_output() {
+        let backend = ProcessBackend::default();
+        let mut request = make_request(Language::Command, "head -c 262144 /dev/zero; wc -c");
+        request.stdin = Some("s".repeat(512 * 1_024));
+
+        let result = tokio::time::timeout(Duration::from_secs(60), backend.execute(request))
+            .await
+            .expect("the execution deadlocked")
+            .expect("the execution completes");
+
+        assert_eq!(result.exit_code, 0, "stderr: {}", result.stderr);
+        assert!(
+            result.stdout.trim_end().ends_with("524288"),
+            "stdin was not fully delivered: {:?}",
+            &result.stdout[result.stdout.len().saturating_sub(32)..]
+        );
+    }
+
+    /// A child that never reads its stdin is still bounded by the request timeout.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_unread_stdin_is_bounded_by_the_timeout() {
+        let backend = ProcessBackend::default();
+        let mut request = make_request(Language::Command, "sleep 30");
+        request.stdin = Some("s".repeat(4 * 1_024 * 1_024));
+        request.timeout = Duration::from_millis(300);
+
+        let started = std::time::Instant::now();
+        let result = backend.execute(request).await;
+
+        assert!(matches!(result, Err(SandboxError::Timeout { .. })), "got: {result:?}");
+        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+    }
+
     #[tokio::test]
     #[cfg(not(windows))]
     async fn test_environment_isolation() {
@@ -890,63 +871,6 @@ mod tests {
             matches!(result, Err(SandboxError::InvalidRequest(_))),
             "expected InvalidRequest, got: {result:?}"
         );
-    }
-
-    /// `read_capped` must retain at most `cap` bytes regardless of how much arrives.
-    ///
-    /// This is the property the streaming read exists for, and it is not observable from
-    /// `ExecResult`: `truncate_utf8` caps the *reported* string either way, so an end-to-end
-    /// test passes even when the whole stream was buffered first. Asserting on the retained
-    /// buffer is what distinguishes bounded memory from a bounded report.
-    #[tokio::test]
-    async fn read_capped_retains_at_most_the_cap() {
-        let cap = 4_096;
-        // 256x the cap, so a buffering implementation would allocate 1 MiB here.
-        let source = vec![b'x'; cap * 256];
-
-        let (retained, discarded) = read_capped(&source[..], cap).await.expect("reads");
-
-        assert_eq!(retained.len(), cap, "retained buffer must stop at the cap");
-        assert!(discarded, "the overflow must be reported as discarded");
-    }
-
-    /// Everything is retained when the stream is smaller than the cap, and nothing is flagged.
-    #[tokio::test]
-    async fn read_capped_retains_everything_under_the_cap() {
-        let source = vec![b'y'; 100];
-
-        let (retained, discarded) = read_capped(&source[..], 4_096).await.expect("reads");
-
-        assert_eq!(retained, source);
-        assert!(!discarded);
-    }
-
-    /// A stream landing exactly on the cap is not reported as truncated.
-    #[tokio::test]
-    async fn read_capped_handles_the_exact_boundary() {
-        let cap = 8_192;
-        let source = vec![b'z'; cap];
-
-        let (retained, discarded) = read_capped(&source[..], cap).await.expect("reads");
-
-        assert_eq!(retained.len(), cap);
-        assert!(!discarded, "reaching the cap exactly discards nothing");
-    }
-
-    #[test]
-    fn test_truncate_utf8_within_limit() {
-        let data = "hello world".as_bytes().to_vec();
-        let result = truncate_utf8(data, 1024);
-        assert_eq!(result, "hello world");
-    }
-
-    #[test]
-    fn test_truncate_utf8_at_boundary() {
-        // Multi-byte UTF-8: "é" is 2 bytes (0xC3 0xA9)
-        let data = "café".as_bytes().to_vec(); // 5 bytes: c a f 0xC3 0xA9
-        // Truncate at 4 bytes — would split the "é"
-        let result = truncate_utf8(data, 4);
-        assert_eq!(result, "caf");
     }
 
     #[test]

@@ -26,7 +26,8 @@ mod wait;
 mod windows;
 
 // Navigation tools
-pub use navigate::{BackTool, ForwardTool, NavigateTool, RefreshTool};
+pub(crate) use navigate::default_allowed_schemes;
+pub use navigate::{BackTool, DEFAULT_ALLOWED_SCHEMES, ForwardTool, NavigateTool, RefreshTool};
 
 // Click/interaction tools
 pub use click::{ClickTool, DoubleClickTool};

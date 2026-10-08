@@ -5,6 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio::io::AsyncWriteExt;
+
 use crate::error::DevToolError;
 
 /// A workspace roots every file/search/shell operation at a directory and
@@ -191,9 +193,12 @@ impl Workspace {
     /// target stays inside the workspace is allowed, since repositories legitimately
     /// contain internal links.
     ///
-    /// This is a check, not a lock. A symlink swapped between this check and the
-    /// subsequent open would still be followed; closing that window needs
-    /// descriptor-relative traversal with platform no-follow semantics.
+    /// A dangling or looping symlink anywhere on the path is refused, wherever it
+    /// points: canonicalization cannot see through it, and a write follows it and
+    /// creates its target.
+    ///
+    /// This is a check, not a lock. [`write_contained`](Self::write_contained)
+    /// narrows the window for a symlink swapped in before the open.
     fn reject_symlink_escape(
         &self,
         normalized: &Path,
@@ -208,14 +213,60 @@ impl Workspace {
                     }
                     return Ok(());
                 }
-                // The path does not exist yet, so step up to what does. A component
-                // that does not exist cannot redirect anything.
-                Err(_) => match existing.parent() {
-                    Some(parent) if parent.starts_with(&self.root) => existing = parent,
-                    _ => return Ok(()),
-                },
+                Err(_) => {
+                    // An entry that exists but does not canonicalize is a symlink whose
+                    // target is missing or loops back on itself.
+                    if std::fs::symlink_metadata(existing).is_ok() {
+                        return Err(DevToolError::PathEscape(requested.to_string()));
+                    }
+                    // Nothing exists here yet, so step up to what does. A component
+                    // that does not exist cannot redirect anything.
+                    match existing.parent() {
+                        Some(parent) if parent.starts_with(&self.root) => existing = parent,
+                        _ => return Ok(()),
+                    }
+                }
             }
         }
+    }
+
+    /// Writes `contents` to a path returned by [`resolve`](Self::resolve), creating
+    /// or truncating the file.
+    ///
+    /// The canonical parent is re-checked against the root immediately before the
+    /// open, and on Unix the final component is opened with `O_NOFOLLOW`, so a
+    /// symlink planted after `resolve` fails the open instead of redirecting the
+    /// write. An existing symlink that `resolve` accepted, which points inside the
+    /// workspace, is written through its canonical target.
+    pub(crate) async fn write_contained(
+        &self,
+        resolved: &Path,
+        contents: &[u8],
+    ) -> Result<(), DevToolError> {
+        let escape = || DevToolError::PathEscape(self.display(resolved));
+        let is_symlink = tokio::fs::symlink_metadata(resolved)
+            .await
+            .is_ok_and(|meta| meta.file_type().is_symlink());
+        let target = if is_symlink {
+            tokio::fs::canonicalize(resolved).await.map_err(|_| escape())?
+        } else {
+            let (Some(parent), Some(name)) = (resolved.parent(), resolved.file_name()) else {
+                return Err(escape());
+            };
+            tokio::fs::canonicalize(parent).await?.join(name)
+        };
+        if !target.starts_with(&self.root) {
+            return Err(escape());
+        }
+
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NOFOLLOW);
+        let mut file = options.open(&target).await?;
+        file.write_all(contents).await?;
+        file.flush().await?;
+        Ok(())
     }
 
     /// Render a path relative to the root for display (falls back to the full path).
@@ -262,6 +313,34 @@ mod tests {
         let ws = Workspace::new(dir.path());
         assert!(ws.resolve("../etc/passwd").is_err());
         assert!(ws.resolve("ok/file.rs").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symlink_planted_after_resolve_is_not_followed() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("existing.txt"), "host").unwrap();
+        let ws = Workspace::new(&root);
+
+        for (name, target) in
+            [("dangling", outside.join("planted.txt")), ("existing", outside.join("existing.txt"))]
+        {
+            let resolved = ws.resolve(name).expect("the path does not exist yet");
+            std::os::unix::fs::symlink(&target, root.join(name)).unwrap();
+
+            let result = ws.write_contained(&resolved, b"payload").await;
+
+            assert!(
+                matches!(result, Err(DevToolError::PathEscape(_))),
+                "a {name} link planted after resolve was followed: {result:?}"
+            );
+        }
+        assert!(!outside.join("planted.txt").exists());
+        assert_eq!(std::fs::read_to_string(outside.join("existing.txt")).unwrap(), "host");
     }
 
     #[test]

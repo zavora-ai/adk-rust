@@ -4,8 +4,41 @@ use adk_session::redis::{app_state_key, events_key, index_key, session_key, user
 use proptest::prelude::*;
 
 /// Generate a non-empty string from `[a-zA-Z0-9_-]+` that never contains `:`.
+///
+/// Key-family prefixes are excluded: an app with one of those names has its
+/// first byte encoded, which `reserved_app_names_do_not_collide_with_other_key_families`
+/// covers.
 fn arb_segment() -> impl Strategy<Value = String> {
-    "[a-zA-Z0-9_-]{1,20}"
+    "[a-zA-Z0-9_-]{1,20}".prop_filter("reserved key prefix", |s| {
+        !matches!(s.as_str(), "app_state" | "user_state" | "sessions_idx" | "session_lookup")
+    })
+}
+
+/// Generate an identifier that may contain the `:` delimiter and `%`.
+fn arb_delimited_segment() -> impl Strategy<Value = String> {
+    "[a-z:%]{1,8}"
+}
+
+#[test]
+fn colon_in_identifiers_does_not_collide() {
+    assert_ne!(session_key("a:b", "c", "s"), session_key("a", "b:c", "s"));
+    assert_ne!(user_state_key("a:b", "c"), user_state_key("a", "b:c"));
+    assert_ne!(index_key("a:b", "c"), index_key("a", "b:c"));
+    // A session id ending in `:events` must not alias another session's event set.
+    assert_ne!(session_key("a", "u", "s:events"), events_key("a", "u", "s"));
+    assert_eq!(
+        [session_key("a:b", "100%", "s"), app_state_key("a:b")],
+        ["a%3Ab:100%25:s".to_string(), "app_state:a%3Ab".to_string()]
+    );
+}
+
+#[test]
+fn reserved_app_names_do_not_collide_with_other_key_families() {
+    assert_ne!(session_key("user_state", "app", "alice"), user_state_key("app", "alice"));
+    assert_ne!(session_key("sessions_idx", "app", "alice"), index_key("app", "alice"));
+    assert_eq!(session_key("user_state", "app", "alice"), "%75ser_state:app:alice");
+    // State keys embed the app name after a prefix, so it is not escaped there.
+    assert_eq!(user_state_key("user_state", "alice"), "user_state:user_state:alice");
 }
 
 proptest! {
@@ -126,6 +159,42 @@ proptest! {
                 let kj = &keys[j];
                 prop_assert_ne!(ki, kj,
                     "keys collided: {} == {}", ki, kj);
+            }
+        }
+    }
+
+    /// With `:` and `%` allowed in identifiers, two keys are equal exactly when
+    /// they belong to the same family and every component they encode is equal.
+    #[test]
+    fn prop_delimited_identifiers_never_collide(
+        a in (arb_delimited_segment(), arb_delimited_segment(), arb_delimited_segment()),
+        b in (arb_delimited_segment(), arb_delimited_segment(), arb_delimited_segment()),
+    ) {
+        let same_app = a.0 == b.0;
+        let same_user = same_app && a.1 == b.1;
+        let same_session = same_user && a.2 == b.2;
+
+        prop_assert_eq!(session_key(&a.0, &a.1, &a.2) == session_key(&b.0, &b.1, &b.2), same_session);
+        prop_assert_eq!(events_key(&a.0, &a.1, &a.2) == events_key(&b.0, &b.1, &b.2), same_session);
+        prop_assert_eq!(user_state_key(&a.0, &a.1) == user_state_key(&b.0, &b.1), same_user);
+        prop_assert_eq!(index_key(&a.0, &a.1) == index_key(&b.0, &b.1), same_user);
+        prop_assert_eq!(app_state_key(&a.0) == app_state_key(&b.0), same_app);
+
+        let family = |(app, user, session): &(String, String, String)| {
+            [
+                session_key(app, user, session),
+                events_key(app, user, session),
+                app_state_key(app),
+                user_state_key(app, user),
+                index_key(app, user),
+            ]
+        };
+        let (keys_a, keys_b) = (family(&a), family(&b));
+        for (i, ka) in keys_a.iter().enumerate() {
+            for (j, kb) in keys_b.iter().enumerate() {
+                if i != j {
+                    prop_assert_ne!(ka, kb, "different key families collided");
+                }
             }
         }
     }

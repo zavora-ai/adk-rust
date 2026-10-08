@@ -2,6 +2,19 @@
 //!
 //! Provisions workspaces as temporary directories on the local filesystem,
 //! executes commands via child processes, and snapshots via tar archives.
+//!
+//! ## Isolation
+//!
+//! Commands run as ordinary host processes with the workspace as their working
+//! directory. They are **not** confined to the workspace: the filesystem and
+//! network are the host's. What the session does enforce:
+//!
+//! | Control | Behaviour |
+//! |---------|-----------|
+//! | Environment | Cleared, then only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, and `TERM` are passed through, so host credentials in other variables never reach the command |
+//! | Output | stdout and stderr are read while the command runs and capped at 1 MiB each; the excess is drained and a truncation notice appended |
+//! | Stdin | Connected to `/dev/null` |
+//! | Lifetime | Each command runs in its own process group, which is killed on timeout and again when the command exits, so background jobs do not outlive it |
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,6 +29,7 @@ use super::path_safety::validate_relative_path;
 use super::session::SandboxSession;
 use super::types::{DirEntry, EntryType, ExecOutput, SessionHandle, SnapshotId};
 use crate::SandboxError;
+use crate::child_io::{collect_output, note_truncation, truncate_utf8};
 
 /// SandboxClient implementation using local filesystem directories.
 ///
@@ -63,11 +77,23 @@ impl LocalUnixClient {
 /// Default command timeout (120 seconds).
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Host variables a workspace command inherits; every other variable is cleared.
+///
+/// `PATH` finds tools, locale and terminal settings keep their output stable, and `HOME` and
+/// `TMPDIR` give them somewhere for caches. Credentials such as API keys are not listed.
+const INHERITED_ENV_KEYS: &[&str] =
+    &["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TERM"];
+
+/// Maximum bytes retained from each of stdout and stderr (1 MiB).
+const MAX_OUTPUT_BYTES: usize = 1_024 * 1_024;
+
 /// A live sandbox session backed by a local Unix filesystem directory.
 ///
 /// Provides workspace operations (exec, read, write, list, patch) against
 /// a local directory. Commands are executed via child processes with
-/// configurable timeouts.
+/// configurable timeouts, a cleared environment, capped output, and
+/// process-group cleanup; see the [module documentation](self) for what is and
+/// is not isolated.
 ///
 /// # Example
 ///
@@ -120,57 +146,62 @@ impl SandboxSession for LocalUnixSession {
             None => self.workspace_dir.clone(),
         };
 
-        let start = std::time::Instant::now();
-
-        let mut child = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .current_dir(&cwd)
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg(command).current_dir(&cwd).env_clear();
+        for key in INHERITED_ENV_KEYS {
+            if let Some(value) = std::env::var_os(key) {
+                cmd.env(key, value);
+            }
+        }
+        cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        // Killing `sh` alone on timeout left its children running; the group takes them too.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.as_std_mut().process_group(0);
+        }
+
+        let start = std::time::Instant::now();
+        let child = cmd
             .spawn()
             .map_err(|e| SandboxError::ExecutionFailed(format!("failed to spawn command: {e}")))?;
 
-        // Take stdout/stderr handles before waiting so we can still kill on timeout
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
+        // The pipes are drained while the command runs. Reading them only after `wait`
+        // deadlocked any command that wrote more than a pipe buffer, which then surfaced as a
+        // timeout.
+        let captured = collect_output(child, None, self.command_timeout, MAX_OUTPUT_BYTES)
+            .await
+            .map_err(|e| SandboxError::ExecutionFailed(format!("command execution failed: {e}")))?;
+        let duration = start.elapsed();
 
-        match tokio::time::timeout(self.command_timeout, child.wait()).await {
-            Ok(Ok(status)) => {
-                let duration = start.elapsed();
-                let stdout_bytes = if let Some(mut out) = stdout {
-                    use tokio::io::AsyncReadExt;
-                    let mut buf = Vec::new();
-                    let _ = out.read_to_end(&mut buf).await;
-                    buf
-                } else {
-                    Vec::new()
-                };
-                let stderr_bytes = if let Some(mut err) = stderr {
-                    use tokio::io::AsyncReadExt;
-                    let mut buf = Vec::new();
-                    let _ = err.read_to_end(&mut buf).await;
-                    buf
-                } else {
-                    Vec::new()
-                };
+        match captured {
+            Some(captured) => {
+                if captured.stdout_truncated || captured.stderr_truncated {
+                    tracing::warn!(
+                        max_output_bytes = MAX_OUTPUT_BYTES,
+                        stdout.truncated = captured.stdout_truncated,
+                        stderr.truncated = captured.stderr_truncated,
+                        "workspace command output exceeded the cap and was truncated"
+                    );
+                }
                 Ok(ExecOutput::new(
-                    String::from_utf8_lossy(&stdout_bytes).into_owned(),
-                    String::from_utf8_lossy(&stderr_bytes).into_owned(),
-                    status.code().unwrap_or(-1),
+                    note_truncation(
+                        truncate_utf8(captured.stdout, MAX_OUTPUT_BYTES),
+                        captured.stdout_truncated,
+                    ),
+                    note_truncation(
+                        truncate_utf8(captured.stderr, MAX_OUTPUT_BYTES),
+                        captured.stderr_truncated,
+                    ),
+                    captured.status.code().unwrap_or(-1),
                     duration,
                     false,
                 ))
             }
-            Ok(Err(e)) => {
-                Err(SandboxError::ExecutionFailed(format!("command execution failed: {e}")))
-            }
-            Err(_) => {
-                // Timeout: kill the process
-                let _ = child.kill().await;
-                let duration = start.elapsed();
-                Ok(ExecOutput::new("", "", -1, duration, true))
-            }
+            None => Ok(ExecOutput::new("", "", -1, duration, true)),
         }
     }
 
@@ -875,6 +906,86 @@ mod tests {
         let output = session.exec_command("sleep 10", None).await.unwrap();
         assert!(output.timed_out);
         assert_eq!(output.exit_code, -1);
+    }
+
+    /// Only the allowlisted host variables, plus what `sh` sets itself, reach a command.
+    #[tokio::test]
+    async fn session_exec_command_environment_is_an_allowlist() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = LocalUnixSession::new(temp.path().to_path_buf(), Duration::from_secs(10));
+
+        let output = session.exec_command("env", None).await.unwrap();
+        assert_eq!(output.exit_code, 0, "stderr: {}", output.stderr);
+
+        const SHELL_SET: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
+        let visible: Vec<&str> = output
+            .stdout
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(key, _)| key))
+            .filter(|key| {
+                !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+            .collect();
+        for key in &visible {
+            assert!(
+                INHERITED_ENV_KEYS.contains(key) || SHELL_SET.contains(key),
+                "host variable {key} leaked into the workspace command: {visible:?}"
+            );
+        }
+        // Set by cargo and nextest on every test process, so it is a parent-only marker.
+        if std::env::var_os("CARGO_MANIFEST_DIR").is_some() {
+            assert!(!output.stdout.contains("CARGO_MANIFEST_DIR="), "{}", output.stdout);
+        }
+    }
+
+    /// Output larger than a pipe buffer completes, and is capped rather than buffered whole.
+    #[tokio::test]
+    async fn session_exec_command_large_output_completes_and_is_capped() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = LocalUnixSession::new(temp.path().to_path_buf(), Duration::from_secs(30));
+
+        let output =
+            session.exec_command("head -c 2097152 /dev/zero | tr '\\0' x", None).await.unwrap();
+
+        assert!(!output.timed_out, "a large write deadlocked and was reported as a timeout");
+        assert_eq!(output.exit_code, 0, "stderr: {}", output.stderr);
+        assert!(output.stdout.starts_with("xxxx"));
+        assert!(output.stdout.contains("truncated"), "the cut must be announced");
+        assert!(
+            output.stdout.len() <= MAX_OUTPUT_BYTES + 128,
+            "retained {} bytes, more than the cap",
+            output.stdout.len()
+        );
+    }
+
+    /// A timeout kills the command's children, not only `sh`.
+    #[tokio::test]
+    async fn session_exec_command_timeout_kills_children() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = LocalUnixSession::new(temp.path().to_path_buf(), Duration::from_millis(200));
+
+        let output = session.exec_command("(sleep 1; touch survivor) & wait", None).await.unwrap();
+        assert!(output.timed_out);
+
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        assert!(!temp.path().join("survivor").exists(), "a child of sh outlived the timeout");
+    }
+
+    /// Background jobs end with the command that started them.
+    #[tokio::test]
+    async fn session_exec_command_exit_kills_background_jobs() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = LocalUnixSession::new(temp.path().to_path_buf(), Duration::from_secs(10));
+
+        let output = session
+            .exec_command("nohup sh -c 'sleep 1; touch survivor' >/dev/null 2>&1 &", None)
+            .await
+            .unwrap();
+        assert!(!output.timed_out);
+        assert_eq!(output.exit_code, 0);
+
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        assert!(!temp.path().join("survivor").exists(), "a background job outlived the command");
     }
 
     #[tokio::test]

@@ -9,7 +9,7 @@ use base64::{Engine as _, engine::general_purpose};
 use serde_json::{Map, Value, json};
 
 use super::error::A2aError;
-use super::task_store::TaskStoreEntry;
+use super::task_store::{OWNER_METADATA_KEY, TaskStoreEntry};
 
 // ── Part conversion ──────────────────────────────────────────────────────────
 
@@ -360,14 +360,16 @@ pub fn wire_task_to_internal(task: &a2a_protocol_types::Task) -> Result<TaskStor
 }
 
 /// Convert a `TaskStoreEntry` to an `a2a_protocol_types::Task`.
+///
+/// The [`OWNER_METADATA_KEY`] entry is server-side bookkeeping and is not copied.
 pub fn internal_task_to_wire(entry: &TaskStoreEntry) -> Result<a2a_protocol_types::Task, A2aError> {
-    let metadata = if entry.metadata.is_empty() {
-        None
-    } else {
-        let obj: Map<String, Value> =
-            entry.metadata.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        Some(Value::Object(obj))
-    };
+    let obj: Map<String, Value> = entry
+        .metadata
+        .iter()
+        .filter(|(key, _)| key.as_str() != OWNER_METADATA_KEY)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let metadata = (!obj.is_empty()).then_some(Value::Object(obj));
 
     let history = if entry.history.is_empty() { None } else { Some(entry.history.clone()) };
 

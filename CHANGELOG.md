@@ -7,11 +7,346 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-07
+
 ### Breaking
 
 - **`adk-acp` moves to `agent-client-protocol` 2.2.** `adk_acp::agent_client_protocol`
   re-exports the SDK, so code that uses it directly compiles against the 2.x API.
   The wire protocol stays stable ACP v1, and the `adk-acp` API is unchanged.
+
+- **AP2 amount conversion is fallible** (`adk-payments`, `ap2`):
+  `PaymentCurrencyAmount::to_money` and `Ap2McpReceiptStatus::from_receipt`
+  return `Result<_, Ap2Error>`. Malformed, over-precise, or overflowing amounts
+  return `Ap2Error::InvalidAmount` instead of a zero or wrapped value.
+
+### Security
+
+- **A2A sessions and tasks bind to the authenticated caller** (`adk-server`): the
+  `/a2a` and `/a2a/stream` routes, and the v1 `jsonrpc_handler` and `rest_router`,
+  use the authenticated principal as the session user and record it as the owner
+  of every task they create. `tasks/get`, `tasks/cancel`, and the v1 task, list,
+  subscribe, and push-config operations answer "not found" for another caller's
+  task; a v1 `messageId` deduplicates per caller; and a v1 `INPUT_REQUIRED` task
+  resumes only for its owner. The session user was derived from the
+  client-supplied `contextId`, so an authenticated caller who knew another
+  caller's `contextId` or task ID could read that caller's history, poll its
+  task, or cancel it. Deployments without authentication keep the
+  `contextId`-derived session user.
+
+- **Debug event lookup checks trace ownership** (`adk-server`):
+  `GET /api/apps/{app}/users/{user}/sessions/{session}/events/{event}` answers 403
+  when spans recorded for the session belong to a different user, as
+  `GET /api/debug/trace/session/{session_id}` does, instead of reading the trace
+  by session ID alone.
+
+- **Background and cron routes mount behind authentication** (`adk-server`,
+  feature `background`): `ServerBuilder::with_background_runs` and
+  `ServerBuilder::with_cron_jobs` serve `/api/runs` and `/api/cron` behind the
+  server's auth middleware. The standalone routers carry no authentication; their
+  rustdoc and the functional API guide state that a standalone mount must sit
+  behind an authentication layer.
+
+- **Push webhook validation covers metadata and internal ranges** (`adk-server`,
+  feature `a2a-v1`): `validate_webhook_url` also rejects `0.0.0.0/8`,
+  `169.254.0.0/16`, `100.64.0.0/10`, `fc00::/7`, `fe80::/10`, multicast,
+  broadcast, `*.localhost`, and IPv4-mapped, IPv4-compatible, and NAT64 forms of
+  blocked IPv4 addresses. `HttpPushNotificationSender::new()` does not follow
+  redirects and bounds each delivery attempt at 10 seconds.
+
+- **Seatbelt profiles escape every interpolated path** (`adk-sandbox`,
+  `sandbox-macos`): allowed paths are written as SBPL string literals with `\`,
+  `"`, and control characters escaped. A directory named
+  `w"))(allow network*)(allow file-write* (subpath "/` previously closed the
+  literal and granted full network access and writes to `/`. Paths that are not
+  valid UTF-8 are rejected with `PolicyViolation`.
+
+- **The Seatbelt profile is deny-by-default** (`adk-sandbox`, `sandbox-macos`):
+  `(allow default)` followed `(deny default)`, so every read and mach lookup was
+  allowed — `~/.ssh` and other host secrets were readable from inside the
+  sandbox. The profile now grants only the system runtime (`/bin`, `/sbin`,
+  `/usr`, `/System`, `/Library/Apple`, `/Library/Frameworks`, `/opt/homebrew`,
+  `/private/etc` minus `master.passwd` and `sudoers`, the dyld cache), a fixed set
+  of startup mach services, and the policy's paths. `ProcessBackend` now reports
+  `filesystem_read_isolation` on macOS. Programs installed elsewhere, such as a
+  rustup toolchain or Xcode, need `allow_read`.
+
+- **Linux `allow_process_spawn = false` is enforced** (`adk-sandbox`,
+  `sandbox-linux`): it previously added only `--new-session`, which does not
+  block `fork` or `exec`. bubblewrap now loads a seccomp program that fails
+  `fork`, `vfork`, and non-thread `clone` with `EPERM` and `clone3` with
+  `ENOSYS` on x86-64 and AArch64; other architectures return `EnforcerFailed`.
+  `SandboxEnforcer::configure_command` installs the program and must be called on
+  the wrapped command.
+
+- **`LocalUnixSession::exec_command` is hardened** (`adk-sandbox`, `workspace`):
+  commands run with a cleared environment (only `PATH`, `HOME`, `USER`,
+  `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, and `TERM` pass
+  through), stdin from `/dev/null`, output read while the command runs and capped
+  at 1 MiB per stream, and their own process group, killed on timeout and on
+  exit. Host credentials in the environment previously reached every command, and
+  a timeout killed only `sh`.
+
+- **`DockerClient` containers drop privileges and network** (`adk-sandbox`,
+  `workspace-docker`): containers start with `cap_drop: ALL`,
+  `no-new-privileges`, a 512-process limit, and network mode `none`.
+  `with_network_mode` and `with_pids_limit` change the defaults; `GitRepo`
+  manifest entries need a network mode other than `none`.
+
+- **`DockerClient` no longer builds shell commands from paths** (`adk-sandbox`,
+  `workspace-docker`): file writes, `git clone`, and `git checkout` pass paths,
+  URLs, and branch names as arguments. A `'` in a path previously injected shell
+  commands into the container. Branch names starting with `-` are rejected.
+
+- **Redis memory `delete_user` erased other users' memories** (`adk-memory`): the
+  index-key `SCAN` pattern was `mem_idx:{app}:{user}*`, with no delimiter after the
+  user id and no glob escaping, so deleting `alice` also deleted the index sets of
+  `alice2` and `alice-admin`, and a `user_id` of `*` matched every user. Both
+  `delete_user` patterns now end the user segment with `:` and escape `*`, `?`,
+  `[`, `]` and `\`.
+
+- **Redis key delimiter collisions** (`adk-memory`, `adk-session`): identifiers were
+  joined with `:`, which identity validation allows, so app `a:b` with user `c`
+  shared keys with app `a` and user `b:c`, and a session id ending in `:events`
+  aliased another session's event set. Key segments are now percent-encoded; the
+  key-format change is listed under Changed.
+
+- **LanceDB delete predicate injection** (`adk-rag`): `LanceDBVectorStore::delete`
+  spliced ids into `id IN ('…')` without escaping, so an id containing `'` failed
+  the delete and the id `x') OR ('1'='1` deleted every row. Ids are now typed
+  string literals in a DataFusion expression.
+
+- **Firestore tenant isolation** (`adk-session`, feature `firestore`): `delete`
+  and every append re-read the session document inside their transaction and
+  apply only when its app, user, and session ID match the request. Deleting
+  another user's session is a no-op, and appending to it fails with
+  `session.not_found`. `create` no longer upserts: an ID already taken in the app
+  fails with `session.already_exists`, so a session and its events cannot be
+  taken over, and a new session never inherits events left under its path.
+  App names, user IDs, and session IDs containing `/` are rejected.
+
+- **`EncryptedSession` encrypts events and binds ciphertext to the session**
+  (`adk-session`, feature `encrypted-session`):
+  - Event content, LLM response metadata, actions, and long-running tool IDs are
+    sealed into one envelope per event; `llm_request` and event
+    `provider_metadata` are not persisted.
+  - State values from `create` and from event `state_delta` are encrypted per
+    value, so `app:` and `user:` values stay in their shared tiers and later
+    writes are encrypted even when the initial state is empty.
+  - Associated data binds each ciphertext to its app, user, session, and state
+    key or event ID; data moved to another session fails with
+    `session.encryption.decrypt_failed`.
+  - `list` returns decrypted state and events instead of ciphertext.
+  - Key rotation re-encrypts state through a state-only event appended with
+    `append_event_for_identity` and returns failures, instead of calling
+    `create` over the existing session and discarding the result.
+  - `append_event(session_id, ..)` returns
+    `session.encryption.identity_required`; use `append_event_for_identity`.
+  - Data in the previous format is rejected with
+    `session.encryption.unencrypted_data`;
+    `EncryptedSession::with_legacy_migration(true)` reads and re-encrypts it.
+    `inner()` and `into_inner()` expose the wrapped service.
+
+- **`RedisSessionConfig` redacts credentials in `Debug`** (`adk-session`,
+  feature `redis`): the URL password and `*password*` query parameters print as
+  `[REDACTED]`.
+
+- **UI sign-in warning** (`adk-cli`): the account name no longer reaches
+  stdout when the launcher warns about UI sign-in.
+
+- **`LoopAgent` with zero iterations** (`adk-agent`): `with_max_iterations(0)`
+  runs no iterations and completes after its callbacks, instead of panicking on
+  `u32` underflow in debug builds and looping `u32::MAX` times in release builds.
+
+- **`output_key` written before schema validation** (`adk-agent`): with
+  `output_schema` set, `state[output_key]` receives only a response that passes
+  validation. Rejected attempts, including every attempt of a run that exhausts
+  `output_max_retries`, are no longer persisted.
+
+- **After-tool callbacks without shared state** (`adk-agent`):
+  `CallbackContext::shared_state()` in after-tool callbacks returns the
+  `ParallelAgent` shared state, matching before-tool callbacks.
+
+- **Two tasks leaked per run with a global cancellation token** (`adk-runner`):
+  each run derives a child of `RunnerConfig::cancellation_token` instead of
+  spawning two watcher tasks that never completed. Cancelling the global token
+  still stops every in-flight run, and `Runner::interrupt` cancels only its target.
+
+- **Lost wakeup in `SharedState::wait_for_key`** (`adk-core`): a waiter registers
+  for notification before it reads the key, so a `set_shared` that lands between
+  the read and the wait wakes it instead of leaving it to time out.
+
+- **adk-devtools: file tools refuse dangling symlinks, and `glob` stays inside the
+  workspace.** `Workspace::resolve` stepped past a path component that failed to
+  canonicalize, so a dangling symlink passed the containment check and `write_file`
+  followed it, creating its target outside the root — a repository containing
+  `link -> ~/.zshenv` let `write_file("link", ..)` create `~/.zshenv`. Dangling and
+  looping symlinks are now refused wherever they point, and `write_file`/`edit_file`
+  re-check the canonical parent before the open and open with `O_NOFOLLOW` on Unix.
+  `glob` joined the pattern onto the root unchecked, so `../*` and symlinked
+  directories listed host paths; it now refuses `..` and absolute patterns, escapes
+  the root path, and drops every match that resolves outside the root.
+
+- **adk-devtools: `bash` output is capped as it is read, and a cancelled call kills
+  the command.** Output was collected in full and cut afterwards with
+  `String::truncate`, which bounded only the report and panicked when the cap fell
+  inside a multi-byte character. Each stream now keeps at most `max_output_bytes`
+  while reading, drains and discards the excess so the command still completes, and
+  cuts on a character boundary. Dropping the tool call left the command and its
+  descendants running; the process group is now killed on drop, as on timeout.
+
+- **adk-tool: `bigquery_execute_sql` no longer runs writes while reporting itself
+  read-only.** The tool returned `is_read_only() == true` but executed any SQL, so
+  parallel dispatch could run a `DROP TABLE` alongside other calls. In read-only mode,
+  now the default, it accepts a single `SELECT` or `WITH` statement (comments and
+  string contents are ignored, multiple statements are refused), and a BigQuery dry
+  run must classify the query as `SELECT` before it runs. `is_read_only()` follows
+  the configuration.
+
+- **adk-tool: BigQuery and Spanner service-account keys stay in memory.** Keys
+  resolved through `from_secret` were written to the shared temp directory with
+  default permissions and removed only on normal completion, so a cancelled call left
+  the key on disk. They are now parsed in memory and never written. A malformed key
+  secret is no longer quoted back in the tool error.
+
+- **adk-browser: navigation accepts only web URLs, and arbitrary JavaScript is
+  opt-in.** `browser_navigate` only checked that the URL parsed, so a model could open
+  `file:///etc/passwd`, `javascript:` and `data:` URLs, or `chrome://` pages;
+  `browser_new_tab` and `browser_new_window` did not check at all. All three now
+  accept only `http` and `https` (`DEFAULT_ALLOWED_SCHEMES`) unless
+  `BrowserToolset::with_allowed_schemes` widens the list, and refuse other schemes
+  before the browser is touched. `browser_evaluate_js` was part of the default
+  toolset and the `Full` and `Scraping` profiles; it is now excluded from all of them.
+
+- **adk-code: Rust executors no longer expose the host environment.**
+  `RustExecutor` and `RustSandboxExecutor` ran `rustc` with the inherited
+  environment, so `env!("OPENAI_API_KEY")` or `option_env!` in model-written
+  code embedded host credentials in the binary, and `RustSandboxExecutor` ran the
+  binary with the full host environment. `rustc` now starts from a cleared
+  environment plus the `ProcessBackend::toolchain_env` allowlist, with
+  `kill_on_drop` and the request timeout. `RustSandboxExecutor` runs the binary
+  with only the variables named by the request's `EnvironmentPolicy` and now
+  reports `enforce_environment_policy: true`. `RustExecutor` compiles inside
+  the `SandboxBackend` when the backend confines filesystem reads, so
+  `include_str!` is confined like the binary; otherwise it compiles on the host.
+
+- **adk-code: `validate_policy` rejects environment policies the backend cannot
+  enforce.** `EnvironmentPolicy::None` passed validation on backends reporting
+  `enforce_environment_policy: false`, although those backends pass the host
+  environment through. Such backends now reject every request with
+  `ExecutionError::UnsupportedPolicy`.
+
+- **adk-code: `EmbeddedJsExecutor` enforces its timeout.** The timeout was
+  checked only after evaluation returned, so `while (true) {}` never returned
+  and pinned a blocking-pool thread. Evaluation runs on a dedicated thread,
+  `execute` returns `ExecutionStatus::Timeout` at the deadline, and Boa runtime
+  limits (10,000,000 loop iterations per call frame, call depth 512, VM stack
+  10,240 values) stop the interpreter with an uncatchable error.
+
+- **adk-code: `DockerExecutor` honours the request's sandbox policy.** Network,
+  bind mounts, and environment came from `DockerConfig` alone while the backend
+  reported network, filesystem, and environment enforcement. Each request is now
+  checked with `DockerConfig::validate_sandbox_policy`, and a request stricter
+  than the container — for example `SandboxPolicy::strict_rust()` against a
+  `with_network()` container — fails with `ExecutionError::UnsupportedPolicy`.
+  Variables named by `EnvironmentPolicy::AllowList` are passed from the host to
+  the exec.
+
+- **Caller-aware A2A handlers** (`adk-server`): the built-in routers mount
+  `handle_jsonrpc_for_caller` and `handle_jsonrpc_stream_for_caller`.
+  `handle_jsonrpc` and `handle_jsonrpc_stream` are deprecated because they ignore
+  the authenticated caller. `tasks/cancel` for an unknown task answers
+  `Task not found` (`-32603`), as `tasks/get` does, instead of a canceled status.
+
+- **v1 `jsonrpc_handler` takes an `AuthenticatedCaller`** (`adk-server`, feature
+  `a2a-v1`): a direct call passes the extractor as the second argument;
+  `post(jsonrpc_handler)` mounts are unchanged.
+
+- **`CronJobStore::enqueue_run` returns `bool`** (`adk-server`, feature
+  `background`): `false` when the job's queue is full or the job does not exist.
+
+- **AP2 adapter requires verifiers** (`adk-payments`, `ap2`): `Ap2Adapter::new`
+  configures no authorization verifier, so merchant, intent, and payment
+  authorizations fail with `Ap2Error::AuthorizationVerifierNotConfigured` until
+  `with_merchant_authorization_verifier` and `with_user_authorization_verifier`
+  are set. `allow_unverified_authorizations()` restores the presence-only checks
+  for local development and logs a warning.
+
+- **`AcpVerificationConfig::strict()` enforces signatures and timestamps**
+  (`adk-payments`, `acp`): the strict profile requires a verified `Signature`, a
+  `Timestamp` within five minutes, and an `Idempotency-Key` on POST, and router
+  `build()` fails until `with_signature_verifier` is set. The previous
+  idempotency-only profile is
+  `permissive().with_idempotency_mode(IdempotencyMode::RequireForPost)`.
+
+- **Amounts follow the currency minor unit** (`adk-payments`): AP2 amounts and ACP
+  delegated-payment allowances use the ISO 4217 minor-unit scale (`JPY` 0, `KWD`
+  3) instead of a fixed scale of 2. `AmountThresholdGuardrail::new` thresholds are
+  minor units at that scale; `with_currency` binds them to one currency and
+  denies the others.
+
+- **AP2 human-not-present authority** (`adk-payments`, `ap2`): an intent needs
+  merchant or SKU constraints; `requires_refundability` alone no longer
+  authorizes autonomous payment.
+
+- **AP2 authorizations are verified, not just present** (`adk-payments`, `ap2`):
+  the default verifiers accepted any non-empty `merchant_authorization` or
+  `user_authorization`, so a forged value reached `execute_payment`. The adapter
+  now rejects every authorization until cryptographic verifiers are configured.
+  A merchant verifier that sets `VERIFIED_MERCHANT_NAME_CLAIM` makes the adapter
+  reject carts whose `merchant_name` differs from the verified signer.
+
+- **AP2 payment mandates are single-use** (`adk-payments`, `ap2`): the adapter
+  consumes each mandate in a `PaymentMandateLedger` before execution and records
+  it on the transaction. A resubmitted mandate returns
+  `Ap2Error::PaymentMandateReplayed`, a second mandate for a paid transaction
+  returns `Ap2Error::TransactionAlreadyPaid`, and `ap2_payment_mandate_id` is
+  never rebound by later receipts. `with_payment_mandate_ledger` plugs in shared
+  storage for multi-instance deployments.
+
+- **ACP signature enforcement without a verifier** (`adk-payments`, `acp`):
+  `require_signature(true)` without `with_signature_verifier` only checked that
+  the header existed. Router `build()` now fails for that profile, and the
+  request verifier rejects every request if reached.
+
+- **Card data in delegated-payment selections** (`adk-payments`, `acp`):
+  `PaymentMethodSelection.extensions` carried the full card, including PAN, CVC,
+  and cryptogram. It now keeps only type, funding type, brand, last four digits,
+  wallet type, and the virtual flag.
+
+- **Team relationship approval honours `Deny`** (`adk-agent`): a tool whose
+  confirmation the invocation context requires — a team `Delegate` relationship
+  with `RelationshipApprovalPolicy::Required` — no longer executes when the static
+  or handler decision for the call is `Deny`. The tool executor applies the union
+  of the agent's `ToolConfirmationPolicy` and
+  `InvocationContext::requires_tool_confirmation`, so a denied delegate call
+  returns the same denied function response as the agent-policy path.
+
+- **Redis key segments are percent-encoded** (`adk-memory`, `adk-session`): `%`
+  becomes `%25` and `:` becomes `%3A` in every app, user, session and project
+  segment. Identifiers containing neither character keep their existing keys.
+  Data stored under an identifier containing `:` or `%` must be renamed to the
+  encoded key, for example memory entries of app `a:b`, user `c`, session `s` move
+  from `mem:a:b:c:s` to `mem:a%3Ab:c:s`. In `adk-session`, an app named
+  `app_state`, `user_state`, `sessions_idx` or `session_lookup` also has its first
+  byte encoded in session and event keys (`user_state:app:alice` →
+  `%75ser_state:app:alice`).
+
+- **Neo4j memory entry ids** (`adk-memory`): new entries use the scoped id format
+  `s:{app}:{user}:{scope}:{session}:{index}` or `d:{app}:{user}:{scope}:{uuid}`.
+  Entries written earlier keep their ids, so re-ingesting a session stored before
+  this release adds a second copy; call `delete_session` first to avoid it.
+
+- **Anthropic API keys in `Debug` output** (`adk-anthropic`): `Anthropic`,
+  `ManagedAgentsClient`, and `FilesClient` redact the API key in `Debug`
+  output, and the `x-api-key` and bearer `Authorization` header values are
+  marked sensitive.
+
+- **Provider API keys in `Debug` and `Serialize` output** (`adk-model`):
+  `OpenAIConfig`, `AzureConfig`, `OpenAIResponsesConfig`, `OpenAICompatibleConfig`,
+  `AnthropicConfig`, `GroqConfig`, `DeepSeekConfig`, `OpenRouterConfig`, and
+  `AzureAIConfig` redact `api_key` in `Debug` output and omit it when serialized.
+  A config deserialized without `api_key` gets an empty key.
 
 ### Added
 
@@ -29,11 +364,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SkillToolset` now adds guidance for its currently available tools to each
   model request through the new `Toolset::process_llm_request` hook. Guidance
   is also applied to invocation-scoped toolsets.
+
+- **`AuthenticatedCaller` extractor** (`adk-server`): reads the request's
+  `RequestContext` from the extensions the auth layer sets, and yields `None`
+  when no authentication ran.
+
+- **`A2aTaskRetention`** (`adk-server`): bounds finished A2A task records — the
+  newest 1,000 for at most one hour by default — configured with
+  `ServerBuilder::with_a2a_task_retention` or `A2aController::with_task_retention`.
+
+- **`RequestHandler::for_caller`** (`adk-server`, feature `a2a-v1`): returns a
+  `CallerScope` that runs every v1 operation for one caller.
+
+- **`ProcessBackend::toolchain_env` is public** (`adk-sandbox`): callers that
+  invoke `rustc` themselves apply the same minimal toolchain allowlist after
+  `env_clear()`.
+
+- **`DockerConfig::validate_sandbox_policy`** (`adk-code`): checks whether a
+  container created from a `DockerConfig` satisfies a `SandboxPolicy`.
+
+### Changed
+
+- **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
+  move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
+  are not part of its public API.
+
+- **Supported versions** (`SECURITY.md`): security fixes target the 2.2.x line
+  and 2.1.x; 2.0.x and 1.x no longer receive updates.
+
+- **`Model::Gemini3ProPreview` is deprecated** (`adk-gemini`): the
+  `gemini-3-pro-preview` model is retired. Use `Model::Gemini31ProPreview`.
+
+- **`#[task]` calls shared one cached result** (`adk-rust-macros`, `adk-graph`):
+  the execution-log key was the task's name alone and the log is consulted within
+  the run, so a task called in a loop returned the first call's result for every
+  later call. Each call is now keyed by its ordinal in the run and a hash of its
+  serializable arguments; see `adk_graph::functional::task_call_id`. The wrapper
+  also uses the context parameter's real name instead of assuming `ctx`.
+
+- **Dynamic pauses dropped completed siblings' successors** (`adk-graph`): a
+  dynamic or tool-confirmation pause saved only the paused node, so the successors
+  and `goto` targets of nodes that completed in the same super-step never ran after
+  the resume. The saved frontier is now those successors plus the paused node, in
+  `invoke` and in every stream mode.
+
+- **Fan-in arrivals lost across a pause or crash** (`adk-graph`): a join's
+  recorded arrivals lived only in the executor, so a join whose first predecessor
+  finished before a pause never ran. Arrivals and wait start times are stored in
+  checkpoint metadata (`adk.graph.fanIn`, versioned); a checkpoint without the key
+  loads with no arrivals, as before. `CompiledGraph::update_state` now keeps the
+  arrivals, the answered gate, the retry budget, and the child ledger.
+
+- **`GraphAgent` answered every later turn with the first** (`adk-graph`): with a
+  checkpointer, the session's finished thread was reloaded with an empty frontier,
+  so no node ran and the old output came back. A turn on a finished thread now
+  runs the graph again from its entry nodes, starting from the previous turn's
+  state; a paused thread still resumes. The recursion limit counts per turn.
+
+- **Node-cache hits broke super-step isolation** (`adk-graph`, `node-cache`): a
+  hit's updates were applied before uncached siblings read the state, and a miss in
+  the same step stored its result under a key computed from that changed state,
+  which no lookup matched. Hits now join the step's update batch and every key is
+  computed from the pre-step state.
+
+- **Action nodes trusted interpolated paths and URLs** (`adk-graph`, `action`):
+  file nodes are confined to allowed roots, rejecting `..` and symbolic-link
+  escapes; HTTP nodes reject URLs outside an `HttpActionPolicy` (default `https`
+  and `http`), re-check every redirect, and log URLs without query strings or
+  credentials.
+
+- **Unimplemented action nodes pointed at feature flags** (`adk-graph`, `action`):
+  database, email, and JavaScript/TypeScript code nodes now report that the node
+  type is not implemented, since `action-db`, `action-email`, and `action-code`
+  compile placeholders only.
+
+- **Failed retry-budget checkpoint was silent** (`adk-graph`): when a super-step
+  fails and its checkpoint cannot be saved, the executor logs a warning with the
+  error instead of discarding it.
+
+- **`#[task]` execution-log keys** (`adk-rust-macros`): keys change from
+  `{task}` to `{task}#{ordinal}` or `{task}#{ordinal}:{arg_hash}`, so a workflow
+  resumed from a log written before this release runs its tasks again. Every
+  `#[task]` parameter must be a plain identifier.
+
+- **File action confinement** (`adk-graph`, `action`): file nodes default to the
+  current working directory as their only root; `ActionNodeExecutor::with_file_roots`
+  and `action::file::execute_file_in` name others. Reported paths are the resolved
+  absolute paths, and listing skips symbolic links.
+
+- **HTTP action policy** (`adk-graph`, `action-http`): new `HttpActionPolicy`,
+  `ActionNodeExecutor::with_http_policy`, and `action::http::execute_http_with_policy`.
+  Redirects are limited to 5 by default (previously reqwest's 10).
+
+- **Node-cache store lifetime** (`adk-graph`, `node-cache`): the in-memory store
+  belongs to the compiled graph and is shared by every run, so an identical later
+  run hits; previously each run started with an empty store.
+
+- **`BigQueryToolset` is read-only by default** (`adk-tool`, feature `bigquery`):
+  `bigquery_execute_sql` refuses DML, DDL, and scripts. Restore the previous
+  behavior with `BigQueryToolset::with_project("my-project").with_read_only(false)`;
+  the tool then reports itself as mutating.
+
+- **`browser_evaluate_js` is opt-in, and navigation is limited to `http`/`https`**
+  (`adk-browser`): `BrowserToolset::new`, `with_pool`, and every `BrowserProfile`
+  leave out `browser_evaluate_js` (`Full` now has 45 tools, `Scraping` 13); the
+  scroll, hover, and alert helpers stay. Opt in with
+  `BrowserToolset::new(browser).with_evaluate_js(true)`; `.with_js(true)` also
+  enables it. Allow other URL schemes with `.with_allowed_schemes(["https", "file"])`.
+
 ### Fixed
 
 - **`acp_full_protocol` permission tests** (`examples/acp_full_protocol`): the
   example reads `tool_confirmation_decisions` by function-call ID, matching the
   key the ACP server populates, so approval and denial resume correctly.
+
 - **OpenAI reasoning history** (`adk-model`): `Part::Thinking` is excluded
   from visible user, assistant, and system message content. By default,
   subsequent model requests omit Thinking entirely instead of replaying it
@@ -42,6 +486,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `with_reasoning_replay_field(ReasoningReplayField::Reasoning)` to send
   `reasoning`. Replay emits only the selected field; standard OpenAI and
   Azure requests omit both fields by default.
+
 - **Open Responses argument identity** (`adk-model`): conflicting item or call
   identities terminate compatible streams before cached arguments can cross
   tool calls. Blank completed snapshots restore matching streamed arguments
@@ -51,14 +496,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retain actual tool results from overlapping turns and omit unresolved calls
   from earlier turns without fabricating interruption results. Persisted events
   remain unchanged.
+
 - **OpenAI Responses stream completion** (`adk-model`): completion events retain
   model errors and usage metadata. Open Responses mode ignores empty SSE data
   frames, restores missing arguments by tool identity or output index, and keeps
   streamed arguments when a terminal snapshot is blank.
+
 - **OpenAI-compatible structured tool arguments** (`adk-model`): Chat
   Completions streaming now preserves structured JSON `function.arguments`
   emitted by compatible intermediaries, including repeated and empty snapshot
   chunks, instead of converting the tool call to empty arguments.
+
 - **OpenAI Responses web search** (`adk-tool`): the stable built-in tool now
   serializes as `web_search`, matching the OpenAI Responses API. The explicit
   preview variant remains `web_search_preview_2025_03_11`. URL annotations from
@@ -66,13 +514,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also accepts compatible endpoints that omit output-message IDs, statuses, or
   empty `output_text.annotations`, and reconstructs final function arguments
   from their streaming events when the completed response omits them.
+
 - **OpenAI-compatible usage metadata** (`adk-model`): Chat Completions
   streaming and non-streaming responses now use one normalization path,
   preserve the complete provider-native `usage` object in `provider_usage`,
   and project reported cache-write tokens alongside cache reads.
+
 - **OpenAI tool request stability** (`adk-model`): Chat Completions and
   Responses requests now serialize function tools in deterministic name order,
   preserving identical cacheable prefixes across repeated executions.
+
 - **DeepSeek streaming emitted every response twice** (`adk-model`): the
   terminal SSE chunk replayed the accumulated text and reasoning buffers on top
   of the deltas it had already yielded as partial chunks. Consumers accumulate
@@ -85,11 +536,204 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `delta.content` arriving in the same chunk as `finish_reason` is no longer
   dropped.
 
-### Changed
+- **Rust sandbox and container stdin delivery** (`adk-code`):
+  `RustSandboxExecutor` and `ContainerCommandExecutor` write stdin concurrently
+  with draining stdout and stderr, inside the execution timeout. A program that
+  stopped reading stdin, or filled an output pipe first, previously blocked the
+  caller indefinitely. Captured output is capped while it is read.
 
-- **wasmtime 48** (`adk-sandbox`, feature `wasm`): `wasmtime` and `wasmtime-wasi`
-  move from 46 to 48.0.3 together. No `adk-sandbox` API changes; wasmtime types
-  are not part of its public API.
+- **A2A task store hygiene** (`adk-server`): finished task records are evicted by
+  count and age instead of accumulating for the life of the process. A
+  `message/send` that reuses the `taskId` of a running task, or of another
+  caller's task, is rejected with JSON-RPC error `-32602` instead of replacing the
+  running task's registration and its abort handle. A task is registered before
+  it is spawned, so a fast failure cannot leave a permanent `working` entry. A
+  failed task's stored status message carries the same sanitized text as the
+  streaming error.
+
+- **Cron pause, queue depth, and execution count** (`adk-server`, feature
+  `background`): resuming a paused job skips the occurrences missed while paused
+  instead of claiming them one per scheduler tick. The `Queue` policy holds at
+  most `DEFAULT_MAX_QUEUE_DEPTH` (100) runs per job, configurable with
+  `CronState::with_max_queue_depth`, and skips an occurrence with a warning when
+  full. `executionCount` reports the runs the scheduler started.
+
+- **`A2aServerBuilder::bind_addr` rustdoc** (`adk-server`): states the actual
+  default, `127.0.0.1:8080`.
+
+- **AP2 amount parsing** (`adk-payments`, `ap2`): the sign comes from the decimal
+  string, so `-0.50` is `-50` minor units rather than `+50`, and exponent
+  notation parses exactly. Every amount in a cart shares one scale, so
+  mixed-precision items no longer produce a spurious `ap2_unallocated_delta`.
+  Cart sums use checked arithmetic; overflow, more than 18 fraction digits, and
+  mixed currencies return `Ap2Error::InvalidAmount` instead of panicking or
+  wrapping.
+
+- **Scale-aware amount guardrail** (`adk-payments`): `AmountThresholdGuardrail`
+  compares totals with thresholds by value across scales and denies when the two
+  cannot be aligned.
+
+- **Seatbelt domain rules fail closed** (`adk-sandbox`, `sandbox-macos`):
+  Seatbelt accepts only `*` or `localhost` as a network host, so `allow_domain`
+  rules produced a profile `sandbox-exec` refused to parse and nothing ran. They
+  are now ignored with a `tracing::warn` and all network access is blocked, as
+  on Linux. The `NetworkRule` documentation no longer claims macOS enforces them.
+
+- **`ProcessBackend` stdin cannot hang an execution** (`adk-sandbox`): stdin is
+  written concurrently with the output reads and inside the timeout. Writing it
+  first deadlocked any child that filled its output pipe before reading stdin, and
+  a child that never read stdin blocked the backend past the timeout.
+
+- **`ProcessBackend` background jobs end with the execution** (`adk-sandbox`):
+  the process group is killed when the main process exits, not only on timeout,
+  so `nohup … &` descendants no longer outlive the call or hold its pipes open.
+
+- **`ProcessBackend` keeps enforcer configuration** (`adk-sandbox`): the
+  wrapped program is resolved before `configure_command` runs. Rebuilding the
+  command afterwards discarded what the enforcer attached to it.
+
+- **Sandboxed `ProcessBackend` executions run in their own scratch directory**
+  (`adk-sandbox`): under an enforcer, the per-execution directory holding the
+  source file and compiler output is the working directory and is granted
+  read-write, so Python, JavaScript, and Rust run under deny-default profiles.
+
+- **`LocalUnixSession` large output** (`adk-sandbox`, `workspace`): output over
+  64 KiB deadlocked the command, which was then reported as `timed_out`.
+
+- **`SandboxTool` clamps `timeout_secs`** (`adk-sandbox`): values outside the
+  schema's 1–300 second range are clamped instead of passed to the backend, and
+  negative or fractional values no longer fall back to the 30-second default.
+
+- **`WasmBackend` enforces memory without a request limit** (`adk-sandbox`,
+  `wasm`): `memory_limit_mb: None` applies `WasmBackend::DEFAULT_MEMORY_LIMIT_MB`
+  (256 MiB) and modules are held to one linear memory, matching the
+  `memory: true` capability. Previously no limit applied.
+
+- **`DockerSession` reads binary files intact and kills timed-out commands**
+  (`adk-sandbox`, `workspace-docker`): `read_file` returns raw bytes instead of
+  lossily decoded UTF-8, and a command that exceeds its timeout is killed inside
+  the container with its descendants instead of running on.
+
+- **Neo4j memory entry ids** (`adk-memory`): `MemoryEntry.id` carries a global
+  uniqueness constraint but was `{session_id}_{i}` or `entry_{millis}`, so a second
+  `add_session` for a session id failed, as did the same session id under another
+  tenant, and two `add_entry_to_project` calls in one millisecond collided. Ids are
+  now scoped by app, user, project and session, direct entries use a UUID, and
+  `add_session` merges on the id, so re-ingesting a session updates it.
+
+- **Neo4j vector search returned nothing for most tenants** (`adk-memory`): search
+  took the global top `limit` from the vector index, then filtered by app, user
+  and project. It now requests `limit × 10` candidates, capped at
+  `DEFAULT_VECTOR_CANDIDATE_CAP` (1000) and configurable with
+  `Neo4jMemoryService::with_vector_candidate_cap`, filters them, then applies
+  `limit`. A tenant whose entries all rank below the cap still gets no vector
+  results.
+
+- **SQLite memory search failed on ordinary text** (`adk-memory`): `search`,
+  `delete_entries` and `delete_entries_in_project` bound the raw query to FTS5
+  `MATCH`, so `what's my name?` raised an FTS5 syntax error. Each word is now a
+  quoted phrase, bare `AND`/`OR`/`NOT`/`NEAR` are dropped, and an entry matches
+  when it contains every word, as with `plainto_tsquery` in the Postgres backend.
+
+- **Chunkers looped forever on multibyte text** (`adk-rag`): when
+  `chunk_size - chunk_overlap` was narrower than a character, `FixedSizeChunker`,
+  `RecursiveChunker` and `MarkdownChunker` stopped advancing and grew memory until
+  the process ran out. Every chunk now advances at least one character. The new
+  `try_new` constructors reject `chunk_size == 0` and `chunk_overlap >= chunk_size`
+  with `RagError::ConfigError`; `new` normalises such pairs with a warning instead
+  of stopping after the first chunk. Docs now state that sizes are bytes of UTF-8.
+
+- **LanceDB `upsert` appended duplicates** (`adk-rag`): `upsert` called
+  `table.add`, so re-ingesting a document duplicated its chunks. It now
+  merge-inserts on `id`, keeping the last duplicate in a batch, and an embedding
+  whose length differs from the collection's dimensions returns
+  `RagError::VectorStoreError` instead of panicking.
+
+- **RAG ingest dropped chunks without embeddings** (`adk-rag`):
+  `RagPipeline::ingest` zipped chunks with embeddings, so a provider returning
+  fewer vectors than chunks silently stored fewer chunks. A count mismatch now
+  fails with `RagError::PipelineError`.
+
+- **Opt-in total stream bound** (`adk-anthropic`): `Anthropic::with_stream_timeout`
+  bounds the whole duration of a streaming request. Streams have no total bound
+  by default.
+
+- **Shared HTTP error helpers** (`adk-model`): `retry::category_for_status_code`,
+  `retry::parse_retry_after`, and `retry::with_retry_after` give every provider
+  client the same status mapping and `Retry-After` handling.
+
+- **Long Anthropic streams** (`adk-anthropic`): streaming requests run on an HTTP
+  client without a total request timeout, so a generation longer than 60 seconds
+  is no longer cut off mid-body. `with_timeout` still bounds non-streaming
+  requests and the wait for streaming response headers.
+
+- **Anthropic stream inactivity timeout** (`adk-anthropic`): the 30-second timeout
+  now measures only the wait on the server, so a stalled server fails the stream
+  and a consumer that pauses between polls does not. A timeout, a transport
+  error, or a buffer overflow ends the stream after one `Err` instead of
+  repeating the error.
+
+- **Mid-stream Anthropic `error` events** (`adk-anthropic`): `AccumulatingStream`
+  yields an SSE `error` event (for example `overloaded_error`) as `Err` and sends
+  the error, not the partial message, through its channel.
+  `From<ApiError> for Error` maps `overloaded_error` and `rate_limit_error` to
+  the retryable `ServiceUnavailable` and `RateLimit` variants.
+
+- **Unknown Anthropic SSE event types** (`adk-anthropic`): an unrecognized event
+  type is logged at `debug` and surfaced as `MessageStreamEvent::Ping` instead
+  of failing the stream.
+
+- **Anthropic request size validation** (`adk-anthropic`):
+  `MessageCreateParams::validate` measures text bytes in place instead of
+  `Debug`-formatting the payload. Base64 images are held to the API's 5 MB
+  limit and PDFs to 32 MB, with 32 MB of text plus base64 media per request, so
+  an 800 KB JPEG or a typical PDF is no longer rejected by the 1 MB text cap.
+
+- **Anthropic server tool input** (`adk-anthropic`): `AccumulatingStream` applies
+  `input_json_delta` fragments to `server_tool_use` blocks, which previously kept
+  the empty `{}` input from `content_block_start`.
+
+- **Text tool-call false positives** (`adk-model`): text-encoded tool calls are
+  parsed only when the request declares the named tool, so a ` ```json ` example
+  with a `"name"` key stays text. The DeepSeek fence format requires an
+  `arguments` or `parameters` object instead of defaulting to `{}`, and text after
+  the closing fence is kept. `parse_declared_tool_calls` and
+  `ToolCallBuffer::for_declared_tools` expose the filtered parse.
+
+- **Transient upstream errors are retried** (`adk-model`): HTTP 500, 502, 503, and
+  504 from OpenAI-compatible, Azure OpenAI, Azure AI, Anthropic, DeepSeek, and
+  Groq map to `ErrorCategory::Unavailable` with the upstream status, so
+  `execute_with_retry` retries them. A `Retry-After` header becomes the error's
+  retry hint for every one of these providers.
+
+- **`Retry-After` capped at `max_delay`** (`adk-model`): a server-provided retry
+  delay no longer exceeds `RetryConfig::max_delay`, so `Retry-After: 3600` cannot
+  stall an agent run for an hour.
+
+- **Stable tool order for cached providers** (`adk-model`): Anthropic and Bedrock
+  send tool definitions sorted by name, so the prompt-cache prefix matches across
+  requests.
+
+- **Malformed streamed tool arguments** (`adk-model`): Anthropic, Bedrock,
+  DeepSeek, Groq, and Azure AI fail with `model.<provider>.invalid_tool_arguments`
+  instead of calling the tool with `{}` or `null`. A zero-argument Bedrock call
+  receives `{}`.
+
+- **Mid-stream Anthropic errors in `AnthropicClient`** (`adk-model`): an SSE
+  `error` event fails the stream with the category of the equivalent HTTP error
+  (`overloaded_error` → `Unavailable`, `rate_limit_error` → `RateLimited`)
+  instead of being logged at `debug`.
+
+- **Firestore app-state path** (`adk-session`, feature `firestore`): app state
+  moves to `{root}/{app_name}/app_state/current`. The previous
+  `{root}/{app_name}/app_state` path is a collection path, so every `create` and
+  `append_event` failed. `app_state_path` and `user_state_path` now return the
+  document paths the backend writes.
+
+- **Undecodable stored events are logged** (`adk-session`): the SQLite,
+  PostgreSQL, Redis, and Firestore backends emit a `warn!` with the session and
+  event ID for each stored event that fails to deserialize, and still return the
+  remaining events.
 
 ## [2.2.0] - 2026-09-01
 
@@ -4419,7 +5063,8 @@ Initial release - Published to crates.io.
 - Tokio async runtime
 - Google API key for Gemini
 
-[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/zavora-ai/adk-rust/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/zavora-ai/adk-rust/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/zavora-ai/adk-rust/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/zavora-ai/adk-rust/compare/v1.0.0...v2.0.0

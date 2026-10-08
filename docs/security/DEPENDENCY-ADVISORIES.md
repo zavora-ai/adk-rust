@@ -8,7 +8,7 @@ The purpose of this file is to provide transparency to consumers about the secur
 
 These accepted advisories are also configured in [`.cargo/audit.toml`](../../.cargo/audit.toml) so that `cargo audit` passes in CI while still surfacing new, unreviewed advisories.
 
-**Last reviewed:** 2026-08-25 (2.1.0 release review)
+**Last reviewed:** 2026-10-06 (post-2.2.0 review)
 
 ---
 
@@ -28,6 +28,22 @@ These accepted advisories are also configured in [`.cargo/audit.toml`](../../.ca
 | RUSTSEC-2026-0176, RUSTSEC-2026-0177 | `pyo3` | Monty updated to 0.0.21, which selects jiter 0.16 and PyO3 0.29.2. The old advisory exceptions were removed from both audit policies. |
 | RUSTSEC-2026-0258 | `h2` | Updated the HTTP/2 1.x stack to h2 0.4.19, moved Azure Identity to its matching 0.22 SDK generation, and disabled the AWS Secrets Manager legacy Hyper 0.14 TLS feature. The vulnerable h2 0.3 line is no longer in the lockfile. |
 
+## Resolved since 2.1.0
+
+| Advisory | Crate | Resolution |
+|---|---|---|
+| RUSTSEC-2026-0098, RUSTSEC-2026-0099, RUSTSEC-2026-0104 | `rustls-webpki` | The lockfile no longer contains a `rustls-webpki` release below 0.103.12. Neither `cargo audit` nor `cargo deny` reports the advisories, and the exceptions were removed from both policies. |
+
+## Open advisories (fix in flight)
+
+These fail the nightly `supply-chain` job today. They are not accepted risks; the
+exceptions are deliberately absent so the job stays red until the fixes land.
+
+| Advisory | Crate | Fix |
+|---|---|---|
+| RUSTSEC-2026-0321, RUSTSEC-2026-0322, RUSTSEC-2026-0323, RUSTSEC-2026-0324, RUSTSEC-2026-0325, RUSTSEC-2026-0326, RUSTSEC-2026-0327 | `wasmtime`, `wasmtime-wasi` 48.0.3 (`adk-sandbox`, feature `wasm`) | Patched in 48.0.5; dependabot PR #704 moves the lockfile. |
+| RUSTSEC-2026-0285 | `rustls` 0.23.43 | Patched in 0.23.45; PR #687 updates the workspace and example lockfiles. |
+
 ---
 
 ## Active Advisories
@@ -35,6 +51,10 @@ These accepted advisories are also configured in [`.cargo/audit.toml`](../../.ca
 ---
 
 ### RUSTSEC-2026-0235 — rkyv 0.7 archive validation
+
+> Listed in `.cargo/audit.toml` only. `cargo audit` scans the lockfile and reports
+> the package; `cargo deny` resolves the feature graph, never reaches it, and
+> would flag the exception as `advisory-not-detected`.
 
 - **Crate:** `rkyv` (0.7.46)
 - **Severity:** Memory safety when validating malicious archives containing shared pointers
@@ -79,22 +99,16 @@ These accepted advisories are also configured in [`.cargo/audit.toml`](../../.ca
 
 ---
 
-### RUSTSEC-2026-0104, RUSTSEC-2026-0098, RUSTSEC-2026-0099 — rustls-webpki
+### RUSTSEC-2026-0174 — http-types: ASCII invariant in `Authorization` values
 
-- **Crate:** `rustls-webpki` (< 0.103.12)
-- **Severity:** Moderate
-- **Advisories:**
-  - [RUSTSEC-2026-0104](https://rustsec.org/advisories/RUSTSEC-2026-0104) — CRL validation bypass
-  - [RUSTSEC-2026-0098](https://rustsec.org/advisories/RUSTSEC-2026-0098) — Name constraint bypass
-  - [RUSTSEC-2026-0099](https://rustsec.org/advisories/RUSTSEC-2026-0099) — Related name constraint issue
-- **ADK Impact:** Transitive dependency via `adk-server`/`adk-auth` → `rustls` → `rustls-webpki`
-- **Status:** Fix available in `rustls-webpki` ≥ 0.103.12, but upgrade is deferred — causes breaking compilation issues across the workspace due to incompatible `rustls` version constraints from multiple downstream crates.
-- **Disposition:** Accepted risk — upgrade deferred to post-1.0 patch release
-- **Conditions:** These vulnerabilities require specific TLS server configurations to be exploitable:
-  1. CRL validation bypass (RUSTSEC-2026-0104): Only affects deployments that rely on Certificate Revocation Lists for client certificate validation
-  2. Name constraint bypass (RUSTSEC-2026-0098, RUSTSEC-2026-0099): Only affects deployments using X.509 name constraints to restrict certificate issuance scope
-- **ADK-Specific Context:** ADK-Rust's TLS usage is primarily outbound HTTPS connections to LLM provider APIs. Inbound TLS (via `adk-server`) typically terminates at a reverse proxy or load balancer, not at the application layer. The CRL and name-constraint features are rarely configured in typical ADK deployments.
-- **Mitigation:** Upgrade to `rustls-webpki` ≥ 0.103.12 in the post-1.0.1 patch release once upstream `rustls` ecosystem version alignment is resolved. Consumers relying on CRL validation or name constraints in their TLS configuration should use an external TLS termination proxy.
+- **Crate:** `http-types` (2.12.0)
+- **Severity:** Informational (unsoundness notice)
+- **Advisory:** [RUSTSEC-2026-0174](https://rustsec.org/advisories/RUSTSEC-2026-0174)
+- **ADK Impact:** Transitive dependency via `adk-auth` → `azure_core` → `http-types`.
+- **Status:** The crate is unmaintained upstream; the Azure SDK is migrating away from it.
+- **Disposition:** Accepted risk — no ADK-reachable path
+- **ADK-Specific Context:** ADK-Rust never constructs `http-types` header values. The Azure SDK builds its own `Authorization` headers from tokens it obtains itself.
+- **Mitigation:** Listed in `deny.toml` only (cargo-audit treats the notice as informational). Remove the exception when the Azure SDK drops `http-types`.
 
 ---
 

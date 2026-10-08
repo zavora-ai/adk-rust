@@ -1,5 +1,6 @@
 //! `glob` — list workspace files matching a glob pattern.
 
+use std::path::{Component, Path};
 use std::sync::Arc;
 
 use adk_core::{Result, Tool, ToolContext};
@@ -33,7 +34,8 @@ impl Tool for GlobTool {
 
     fn description(&self) -> &str {
         "List files matching a glob pattern (e.g. 'src/**/*.rs'). Returns paths \
-         relative to the workspace root."
+         relative to the workspace root. The pattern is relative to the workspace \
+         and may not contain '..' or an absolute path."
     }
 
     fn is_read_only(&self) -> bool {
@@ -57,12 +59,22 @@ impl Tool for GlobTool {
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let pattern = require_str(&args, "pattern")?;
+        // `glob` follows `..` and absolute prefixes literally, so either would list
+        // directories outside the workspace.
+        let escapes = Path::new(&pattern).components().any(|component| match component {
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => true,
+            Component::CurDir | Component::Normal(_) => false,
+        });
+        if escapes {
+            return Err(DevToolError::PathEscape(pattern).into());
+        }
         let base = match args.get("path").and_then(Value::as_str) {
             Some(sub) => self.workspace.resolve(sub)?,
             None => self.workspace.root().to_path_buf(),
         };
 
-        let full = format!("{}/{}", base.display(), pattern);
+        // The base is a literal path; unescaped, a `[` or `*` in it would match siblings.
+        let full = format!("{}/{pattern}", glob::Pattern::escape(&base.to_string_lossy()));
         let entries = glob::glob(&full)
             .map_err(|e| DevToolError::Other(format!("invalid glob pattern: {e}")))?;
 
@@ -73,6 +85,12 @@ impl Tool for GlobTool {
                 Ok(p) => p,
                 Err(_) => continue,
             };
+            // `glob` descends into symlinked directories, which can point anywhere.
+            let contained = std::fs::canonicalize(&path)
+                .is_ok_and(|canonical| canonical.starts_with(self.workspace.root()));
+            if !contained {
+                continue;
+            }
             if matches.len() >= MAX_RESULTS {
                 truncated = true;
                 break;

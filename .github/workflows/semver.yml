@@ -22,8 +22,9 @@ concurrency:
 jobs:
   semver:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         fetch-depth: 0
 
@@ -35,18 +36,23 @@ jobs:
         cache-save: 'false'
 
     - name: Install cargo-semver-checks
-      uses: taiki-e/install-action@v2.87.4
+      uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
       with:
         tool: cargo-semver-checks
 
-    # Stable-tier leaf crates only (skip adk-rust umbrella — it just re-exports)
+    # Stable-tier leaf crates only (skip adk-rust umbrella — it just re-exports).
+    # `--release-type minor` states the kind of release the next publish will be:
+    # additive API changes pass, breaking ones fail. Without it, cargo-semver-checks
+    # compares the version numbers and fails every addition until the workspace
+    # version is bumped, which forced a release-candidate bump before any new API
+    # could merge. The bump happens in the release preparation pull request.
     - name: Semver checks — Stable crates (strict)
       run: |
         echo "### Stable-tier crates (fail on breakage)" >> "$GITHUB_STEP_SUMMARY"
         FAILED=0
         for crate in adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-server adk-graph adk-memory adk-anthropic; do
           echo "Checking $crate..."
-          if cargo semver-checks check-release -p "$crate" --default-features; then
+          if cargo semver-checks check-release -p "$crate" --default-features --release-type minor; then
             echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "❌ $crate — BREAKING" >> "$GITHUB_STEP_SUMMARY"
@@ -76,7 +82,7 @@ jobs:
           adk-managed adk-enterprise adk-payments adk-rag adk-sandbox \
           adk-retry-reflect adk-mistralrs adk-bench cargo-adk; do
           echo "Checking $crate..."
-          if cargo semver-checks check-release -p "$crate" --default-features; then
+          if cargo semver-checks check-release -p "$crate" --default-features --release-type minor; then
             echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "⚠️ $crate — breaking (warn)" >> "$GITHUB_STEP_SUMMARY"

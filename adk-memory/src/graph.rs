@@ -694,7 +694,7 @@ CREATE INDEX IF NOT EXISTS idx_kg_epi ON kg_episodic(app_name, user_id);",
                 ))
             })
             .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
         Ok(scored.into_iter().take(limit).map(|(_, m)| m).collect())
     }
 }

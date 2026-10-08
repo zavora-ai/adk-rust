@@ -107,6 +107,16 @@ impl ToolConfirmationHandler for CountingConfirmationHandler {
     }
 }
 
+#[derive(Debug)]
+struct FixedConfirmationHandler(ToolConfirmationDecision);
+
+#[async_trait]
+impl ToolConfirmationHandler for FixedConfirmationHandler {
+    async fn decide(&self, _request: &ToolConfirmationRequest) -> Result<ToolConfirmationDecision> {
+        Ok(self.0)
+    }
+}
+
 #[async_trait]
 impl Tool for CountingTool {
     fn name(&self) -> &str {
@@ -167,6 +177,8 @@ struct MockContext {
     session: MockSession,
     user_content: Content,
     run_config: RunConfig,
+    /// Tools the runtime requires confirmation for, independent of the agent's own policy.
+    runtime_confirmations: Vec<String>,
 }
 
 impl MockContext {
@@ -175,6 +187,7 @@ impl MockContext {
             session: MockSession { state: MockState },
             user_content: Content::new("user").with_text("start"),
             run_config,
+            runtime_confirmations: Vec::new(),
         }
     }
 }
@@ -239,6 +252,10 @@ impl InvocationContext for MockContext {
 
     fn ended(&self) -> bool {
         false
+    }
+
+    fn requires_tool_confirmation(&self, tool_name: &str) -> bool {
+        self.runtime_confirmations.iter().any(|name| name == tool_name)
     }
 }
 
@@ -530,4 +547,112 @@ async fn a_matching_fingerprint_still_authorises_the_call() {
     }
 
     assert!(approved, "a fingerprint matching the actual call must authorise it");
+}
+
+// ── Runtime-injected confirmation requirements ─────────────────────────
+
+/// Runs an agent whose own policy is `Never` while the invocation context requires
+/// confirmation for `test_tool`, as a team relationship with `approval: Required` does.
+async fn run_with_runtime_confirmation(run_config: RunConfig) -> (Vec<adk_core::Event>, usize) {
+    let model = Arc::new(SequencedModel::new(vec![
+        SequencedModel::function_call_response("test_tool", json!({"x": 1}), "call-runtime"),
+        SequencedModel::text_response("done"),
+    ]));
+    let tool = Arc::new(CountingTool::new());
+    let tool_calls = tool.calls.clone();
+    let agent = LlmAgentBuilder::new("test-agent")
+        .model(model)
+        .tool(tool)
+        .tool_confirmation_policy(adk_core::ToolConfirmationPolicy::Never)
+        .build()
+        .unwrap();
+    let ctx = MockContext {
+        runtime_confirmations: vec!["test_tool".to_string()],
+        ..MockContext::new(run_config)
+    };
+
+    let events = agent
+        .run(Arc::new(ctx))
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+    (events, tool_calls.load(Ordering::SeqCst))
+}
+
+fn runtime_denial_content() -> Value {
+    serde_json::to_value(Content {
+        role: "function".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(
+                "test_tool",
+                json!({ "error": "Tool 'test_tool' execution denied by confirmation policy" }),
+            ),
+            id: Some("call-runtime".to_string()),
+            annotations: None,
+        }],
+    })
+    .unwrap()
+}
+
+#[tokio::test]
+async fn runtime_required_confirmation_honours_a_static_deny() {
+    let run_config = RunConfig::builder()
+        .tool_confirmation_decisions(HashMap::from([(
+            "call-runtime".to_string(),
+            ToolConfirmationDecision::Deny,
+        )]))
+        .build();
+
+    let (events, tool_calls) = run_with_runtime_confirmation(run_config).await;
+
+    assert_eq!(tool_calls, 0, "a denied runtime-confirmed tool must not execute");
+    let denial = events
+        .iter()
+        .find(|event| {
+            event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Deny)
+        })
+        .expect("expected a denied function response");
+    assert_eq!(serde_json::to_value(denial.content()).unwrap(), runtime_denial_content());
+}
+
+#[tokio::test]
+async fn runtime_required_confirmation_honours_a_handler_deny() {
+    let run_config = RunConfig::builder()
+        .tool_confirmation_handler(Arc::new(FixedConfirmationHandler(
+            ToolConfirmationDecision::Deny,
+        )))
+        .build();
+
+    let (events, tool_calls) = run_with_runtime_confirmation(run_config).await;
+
+    assert_eq!(tool_calls, 0, "a denied runtime-confirmed tool must not execute");
+    let denial = events
+        .iter()
+        .find(|event| {
+            event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Deny)
+        })
+        .expect("expected a denied function response");
+    assert_eq!(serde_json::to_value(denial.content()).unwrap(), runtime_denial_content());
+}
+
+#[tokio::test]
+async fn runtime_required_confirmation_executes_after_approval() {
+    let run_config = RunConfig::builder()
+        .tool_confirmation_decisions(HashMap::from([(
+            "call-runtime".to_string(),
+            ToolConfirmationDecision::Approve,
+        )]))
+        .build();
+
+    let (events, tool_calls) = run_with_runtime_confirmation(run_config).await;
+
+    assert_eq!(tool_calls, 1);
+    assert!(events.iter().all(|event| event.actions.tool_confirmation.is_none()));
+    assert!(events.iter().any(|event| {
+        event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Approve)
+    }));
 }

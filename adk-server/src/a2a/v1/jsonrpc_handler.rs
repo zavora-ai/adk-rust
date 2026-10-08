@@ -24,32 +24,40 @@ use a2a_protocol_types::params::{
 };
 
 use super::error::A2aError;
-use super::request_handler::RequestHandler;
+use super::request_handler::{CallerScope, RequestHandler};
 use super::task_store::ListTasksParams;
+use crate::auth_bridge::AuthenticatedCaller;
 
 /// Axum handler for A2A v1.0.0 JSON-RPC requests.
 ///
 /// Deserializes the incoming [`JsonRpcRequest`], dispatches to the appropriate
 /// [`RequestHandler`] method, and returns either a JSON response or an SSE
 /// stream for streaming methods.
+///
+/// Every operation runs for the [`AuthenticatedCaller`] read from the request
+/// extensions (see [`RequestHandler::for_caller`]): an authenticated principal
+/// owns the session and the tasks it creates, and cannot reach anyone else's.
+/// Mount the route behind the middleware that authenticates callers.
 pub async fn jsonrpc_handler(
     State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
     Json(request): Json<JsonRpcRequest>,
 ) -> Response {
     let request_id = request.id.clone();
+    let scope = handler.for_caller(caller.0);
 
     match request.method.as_str() {
-        "SendMessage" => handle_send_message(handler, request).await,
-        "SendStreamingMessage" => handle_send_streaming_message(handler, request).await,
-        "GetTask" => handle_get_task(handler, request).await,
-        "CancelTask" => handle_cancel_task(handler, request).await,
-        "ListTasks" => handle_list_tasks(handler, request).await,
-        "SubscribeToTask" => handle_subscribe_to_task(handler, request).await,
-        "CreateTaskPushNotificationConfig" => handle_push_config_create(handler, request).await,
-        "GetTaskPushNotificationConfig" => handle_push_config_get(handler, request).await,
-        "ListTaskPushNotificationConfigs" => handle_push_config_list(handler, request).await,
-        "DeleteTaskPushNotificationConfig" => handle_push_config_delete(handler, request).await,
-        "GetExtendedAgentCard" => handle_get_extended_agent_card(handler, request).await,
+        "SendMessage" => handle_send_message(&scope, request).await,
+        "SendStreamingMessage" => handle_send_streaming_message(&scope, request).await,
+        "GetTask" => handle_get_task(&scope, request).await,
+        "CancelTask" => handle_cancel_task(&scope, request).await,
+        "ListTasks" => handle_list_tasks(&scope, request).await,
+        "SubscribeToTask" => handle_subscribe_to_task(&scope, request).await,
+        "CreateTaskPushNotificationConfig" => handle_push_config_create(&scope, request).await,
+        "GetTaskPushNotificationConfig" => handle_push_config_get(&scope, request).await,
+        "ListTaskPushNotificationConfigs" => handle_push_config_list(&scope, request).await,
+        "DeleteTaskPushNotificationConfig" => handle_push_config_delete(&scope, request).await,
+        "GetExtendedAgentCard" => handle_get_extended_agent_card(&handler, request).await,
         _ => {
             let err = A2aError::MethodNotFound { method: request.method.clone() };
             a2a_json_response(make_error_response(request_id, &err))
@@ -93,7 +101,7 @@ fn a2a_json_response(value: serde_json::Value) -> Response {
 
 // ── Method handlers ──────────────────────────────────────────────────────────
 
-async fn handle_send_message(handler: Arc<RequestHandler>, request: JsonRpcRequest) -> Response {
+async fn handle_send_message(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
     let id = request.id.clone();
     let params: MessageSendParams = match parse_params(request.params) {
         Ok(p) => p,
@@ -107,7 +115,7 @@ async fn handle_send_message(handler: Arc<RequestHandler>, request: JsonRpcReque
 }
 
 async fn handle_send_streaming_message(
-    handler: Arc<RequestHandler>,
+    handler: &CallerScope<'_>,
     request: JsonRpcRequest,
 ) -> Response {
     let id = request.id.clone();
@@ -149,7 +157,7 @@ async fn handle_send_streaming_message(
     Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
 }
 
-async fn handle_get_task(handler: Arc<RequestHandler>, request: JsonRpcRequest) -> Response {
+async fn handle_get_task(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
     let id = request.id.clone();
     let params: TaskQueryParams = match parse_params(request.params) {
         Ok(p) => p,
@@ -162,7 +170,7 @@ async fn handle_get_task(handler: Arc<RequestHandler>, request: JsonRpcRequest) 
     }
 }
 
-async fn handle_cancel_task(handler: Arc<RequestHandler>, request: JsonRpcRequest) -> Response {
+async fn handle_cancel_task(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
     let id = request.id.clone();
     let params: CancelTaskParams = match parse_params(request.params) {
         Ok(p) => p,
@@ -175,7 +183,7 @@ async fn handle_cancel_task(handler: Arc<RequestHandler>, request: JsonRpcReques
     }
 }
 
-async fn handle_list_tasks(handler: Arc<RequestHandler>, request: JsonRpcRequest) -> Response {
+async fn handle_list_tasks(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
     let id = request.id.clone();
     let params: a2a_protocol_types::params::ListTasksParams = match parse_params(request.params) {
         Ok(p) => p,
@@ -199,10 +207,7 @@ async fn handle_list_tasks(handler: Arc<RequestHandler>, request: JsonRpcRequest
     }
 }
 
-async fn handle_subscribe_to_task(
-    handler: Arc<RequestHandler>,
-    request: JsonRpcRequest,
-) -> Response {
+async fn handle_subscribe_to_task(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
     let id = request.id.clone();
     let params: TaskIdParams = match parse_params(request.params) {
         Ok(p) => p,
@@ -242,10 +247,7 @@ async fn handle_subscribe_to_task(
     Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
 }
 
-async fn handle_push_config_create(
-    handler: Arc<RequestHandler>,
-    request: JsonRpcRequest,
-) -> Response {
+async fn handle_push_config_create(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
     let id = request.id.clone();
     let config: TaskPushNotificationConfig = match parse_params(request.params) {
         Ok(p) => p,
@@ -259,7 +261,7 @@ async fn handle_push_config_create(
     }
 }
 
-async fn handle_push_config_get(handler: Arc<RequestHandler>, request: JsonRpcRequest) -> Response {
+async fn handle_push_config_get(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
     let id = request.id.clone();
     let params: GetPushConfigParams = match parse_params(request.params) {
         Ok(p) => p,
@@ -272,10 +274,7 @@ async fn handle_push_config_get(handler: Arc<RequestHandler>, request: JsonRpcRe
     }
 }
 
-async fn handle_push_config_list(
-    handler: Arc<RequestHandler>,
-    request: JsonRpcRequest,
-) -> Response {
+async fn handle_push_config_list(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
     let id = request.id.clone();
     let params: ListPushConfigsParams = match parse_params(request.params) {
         Ok(p) => p,
@@ -288,10 +287,7 @@ async fn handle_push_config_list(
     }
 }
 
-async fn handle_push_config_delete(
-    handler: Arc<RequestHandler>,
-    request: JsonRpcRequest,
-) -> Response {
+async fn handle_push_config_delete(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
     let id = request.id.clone();
     let params: DeletePushConfigParams = match parse_params(request.params) {
         Ok(p) => p,
@@ -305,7 +301,7 @@ async fn handle_push_config_delete(
 }
 
 async fn handle_get_extended_agent_card(
-    handler: Arc<RequestHandler>,
+    handler: &RequestHandler,
     request: JsonRpcRequest,
 ) -> Response {
     let id = request.id.clone();
@@ -377,11 +373,59 @@ mod tests {
         method: &str,
         params: serde_json::Value,
     ) -> serde_json::Value {
+        call_as(handler, AuthenticatedCaller::default(), method, params).await
+    }
+
+    /// Like [`call_handler`], with `caller` as the request's authenticated principal.
+    async fn call_as(
+        handler: Arc<RequestHandler>,
+        caller: AuthenticatedCaller,
+        method: &str,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
         let request = JsonRpcRequest::with_params(serde_json::json!(1), method, params);
-        let response = jsonrpc_handler(State(handler), Json(request)).await;
+        let response = jsonrpc_handler(State(handler), caller, Json(request)).await;
         let (_, body) = response.into_parts();
         let bytes = body.collect().await.expect("body collection should succeed").to_bytes();
         serde_json::from_slice(&bytes).expect("response should be valid JSON")
+    }
+
+    fn user(user_id: &str) -> AuthenticatedCaller {
+        AuthenticatedCaller(Some(crate::auth_bridge::RequestContext {
+            user_id: user_id.to_string(),
+            scopes: vec![],
+            metadata: Default::default(),
+        }))
+    }
+
+    #[tokio::test]
+    async fn tasks_are_scoped_to_the_authenticated_caller() {
+        let handler = make_handler();
+        let created = call_as(
+            handler.clone(),
+            user("bob"),
+            "SendMessage",
+            serde_json::json!({
+                "message": { "messageId": "msg-bob", "role": "ROLE_USER", "parts": [{"text": "hi"}] }
+            }),
+        )
+        .await;
+        let task_id = created["result"]["id"].as_str().unwrap().to_string();
+
+        for method in ["GetTask", "CancelTask"] {
+            let as_alice = call_as(
+                handler.clone(),
+                user("alice"),
+                method,
+                serde_json::json!({ "id": &task_id }),
+            )
+            .await;
+            assert_eq!(as_alice["error"]["code"], -32001, "{method} must not reach bob's task");
+        }
+
+        let as_bob =
+            call_as(handler, user("bob"), "GetTask", serde_json::json!({ "id": &task_id })).await;
+        assert_eq!(as_bob["result"]["id"], task_id.as_str());
     }
 
     #[tokio::test]
@@ -506,7 +550,8 @@ mod tests {
                 }
             }),
         );
-        let response = jsonrpc_handler(State(handler), Json(request)).await;
+        let response =
+            jsonrpc_handler(State(handler), AuthenticatedCaller::default(), Json(request)).await;
         let (parts, _) = response.into_parts();
         let content_type = parts.headers.get("content-type").expect("should have content-type");
         assert_eq!(content_type, "application/a2a+json");

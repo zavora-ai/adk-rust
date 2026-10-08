@@ -142,6 +142,10 @@ pub async fn get_eval_sets(
 }
 
 /// Get event data by event_id - returns event with invocationId for trace linking
+///
+/// Answers `403 Forbidden` when the path user is not the authenticated caller, or
+/// when any span recorded for `session_id` belongs to a different user — traces are
+/// indexed by session ID alone, and session IDs are chosen by their creators.
 pub async fn get_event(
     State(controller): State<DebugController>,
     Extension(request_context): Extension<Option<adk_core::RequestContext>>,
@@ -152,6 +156,12 @@ pub async fn get_event(
     // Try to find trace data for this event_id
     if let Some(exporter) = &controller.config.span_exporter {
         let traces = exporter.get_session_trace(&session_id);
+        if traces
+            .iter()
+            .any(|trace| trace.get("adk.user_id").is_some_and(|owner| owner != &user_id))
+        {
+            return Err(StatusCode::FORBIDDEN);
+        }
 
         // Find a trace with matching event_id
         for attrs in traces {

@@ -15,9 +15,11 @@
 
 #![cfg(feature = "background")]
 
+use adk_server::background::cron::{CronJobStore, DEFAULT_MAX_QUEUE_DEPTH};
 use adk_server::background::{
-    BackgroundState, CronState, RunStatus, WorkflowRegistry, background_runs_router_with_state,
-    cron_jobs_router_with_state,
+    BackgroundState, ConcurrencyPolicy, CronJob, CronJobStatus, CronState, RunStatus,
+    WorkflowRegistry, background_runs_router_with_state, cron_jobs_router_with_state,
+    start_cron_scheduler,
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -255,6 +257,103 @@ async fn the_cron_detail_route_is_mounted() {
         .await
         .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+// ── Pause, queue depth, and execution count ────────────────────────────
+
+/// A per-minute job created a day ago, so a day's worth of occurrences are missed.
+fn day_old_job(job_id: &str, status: CronJobStatus) -> CronJob {
+    CronJob {
+        job_id: job_id.to_string(),
+        name: "per-minute".to_string(),
+        workflow_id: "scheduled".to_string(),
+        cron_expression: "0 * * * * *".to_string(),
+        input: None,
+        status,
+        concurrency_policy: ConcurrencyPolicy::Queue,
+        created_at: Utc::now() - chrono::Duration::days(1),
+        last_execution: None,
+        execution_count: 0,
+        active_run_count: 0,
+        queued_runs: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn resuming_a_paused_job_skips_the_occurrences_missed_while_paused() {
+    let state = CronState::new(BackgroundState::new());
+    state.cron_store.insert(day_old_job("paused", CronJobStatus::Paused)).await;
+
+    let before_resume = Utc::now();
+    assert!(state.cron_store.update_status("paused", CronJobStatus::Active).await);
+
+    let due = state.cron_store.due_occurrences().await;
+    assert!(
+        due.iter().all(|(job, _)| job.job_id != "paused"),
+        "no occurrence from the pause may be due; previously each one was claimed per tick"
+    );
+    let cursor = state.cron_store.get("paused").await.unwrap().last_execution.unwrap();
+    assert!(cursor >= before_resume, "the cursor moves to the resume instant");
+}
+
+#[tokio::test]
+async fn reactivating_an_active_job_does_not_skip_a_due_occurrence() {
+    let state = CronState::new(BackgroundState::new());
+    state.cron_store.insert(day_old_job("active", CronJobStatus::Active)).await;
+
+    assert!(state.cron_store.update_status("active", CronJobStatus::Active).await);
+
+    let due = state.cron_store.due_occurrences().await;
+    assert!(due.iter().any(|(job, _)| job.job_id == "active"));
+}
+
+#[tokio::test]
+async fn the_run_queue_is_bounded() {
+    let state = CronState::new(BackgroundState::new()).with_max_queue_depth(2);
+    state.cron_store.insert(day_old_job("queued", CronJobStatus::Active)).await;
+
+    let mut accepted = Vec::new();
+    for n in 0..3 {
+        accepted.push(state.cron_store.enqueue_run("queued", format!("run-{n}")).await);
+    }
+
+    assert_eq!(accepted, vec![true, true, false]);
+    assert_eq!(
+        state.cron_store.get("queued").await.unwrap().queued_runs,
+        vec!["run-0".to_string(), "run-1".to_string()]
+    );
+}
+
+#[test]
+fn the_default_queue_depth_is_documented() {
+    assert_eq!(CronJobStore::new().max_queue_depth(), DEFAULT_MAX_QUEUE_DEPTH);
+}
+
+#[tokio::test]
+async fn the_scheduler_reports_how_many_runs_it_started() {
+    let registry = WorkflowRegistry::new()
+        .register("scheduled", |_input, _cancel| async move { Ok::<Value, String>(json!({})) });
+    let state = CronState::new(BackgroundState::new().with_executor(Arc::new(registry)));
+    let job_id = create_job(&state, "* * * * * *").await;
+    let scheduler = start_cron_scheduler(state.clone());
+
+    let mut reported = 0;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let response = cron_jobs_router_with_state(state.clone())
+            .oneshot(Request::builder().uri(format!("/cron/{job_id}")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let job: Value = serde_json::from_slice(&bytes).unwrap();
+        reported = job["executionCount"].as_u64().unwrap();
+        if reported > 0 {
+            break;
+        }
+    }
+    scheduler.abort();
+
+    assert!(reported > 0, "executionCount stayed 0 although the scheduler started runs");
 }
 
 /// Creates a cron job through the router and returns its ID.

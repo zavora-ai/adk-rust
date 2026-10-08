@@ -18,8 +18,10 @@ Mutations require a writable workspace; `bash` requires bash to be enabled.
 The `bash` tool emits its output incrementally as it runs, so UIs can display a
 live terminal (see the `streaming_bash` example). The framework forwards each
 chunk as a partial event on the agent's `EventStream`; consumers detect them
-with `event.tool_progress_stream()`. The complete output is still returned as
-the tool's final result for the model.
+with `event.tool_progress_stream()`. The output is also returned as the tool's
+final result for the model, capped per stream at `Workspace::max_output_bytes`
+(default 1 MiB) as it is read; excess output is drained and discarded, and the
+result sets `truncated: true`.
 
 ## Usage
 
@@ -43,7 +45,12 @@ The toolset only exposes tools the workspace permits: a read-only workspace hide
 ## Sandboxing
 
 `Workspace` enforces **path containment**, **read-only** mode, and a **bash
-timeout**. Phase 1 runs `bash` host-local (`sh -c`, cwd pinned to the root); it is
+timeout**. Containment is checked against resolved paths: a symlink pointing
+outside the root is refused, a dangling or looping symlink is refused wherever it
+points (a write would create its target), and `glob` refuses `..` and absolute
+patterns and never lists through a symlinked directory that leads outside. A
+timed-out or cancelled `bash` call kills the command's whole process group.
+Phase 1 runs `bash` host-local (`sh -c`, cwd pinned to the root); it is
 not strongly isolated. For strong isolation, run `bash` behind a containerized
 `CodeExecutor`. The policy vocabulary aligns with `adk-code`'s `SandboxPolicy` and
 will integrate with it directly in a later phase.

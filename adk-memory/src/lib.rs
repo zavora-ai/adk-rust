@@ -70,6 +70,8 @@ pub mod text;
 pub mod embedding;
 #[cfg(feature = "graph-memory")]
 pub mod graph;
+#[cfg(any(feature = "redis-memory", feature = "neo4j-memory"))]
+mod key;
 #[cfg(feature = "mongodb-memory")]
 pub mod mongodb;
 #[cfg(feature = "neo4j-memory")]

@@ -142,23 +142,19 @@ impl Llm for AzureAIClient {
                     if !resp.status().is_success() {
                         let status = resp.status();
                         let status_code = status.as_u16();
+                        let retry_after = resp
+                            .headers()
+                            .get(reqwest::header::RETRY_AFTER)
+                            .and_then(|value| value.to_str().ok())
+                            .and_then(crate::retry::parse_retry_after);
                         let error_text = resp.text().await.unwrap_or_default();
-                        let category = match status_code {
-                            401 => ErrorCategory::Unauthorized,
-                            403 => ErrorCategory::Forbidden,
-                            404 => ErrorCategory::NotFound,
-                            408 => ErrorCategory::Timeout,
-                            429 => ErrorCategory::RateLimited,
-                            503 | 529 => ErrorCategory::Unavailable,
-                            _ if status_code >= 500 => ErrorCategory::Internal,
-                            _ => ErrorCategory::InvalidInput,
-                        };
-                        return Err(AdkError::new(
+                        let error = AdkError::new(
                             ErrorComponent::Model,
-                            category,
+                            crate::retry::category_for_status_code(status_code),
                             "model.azure_ai.api_error",
                             format!("Azure AI error for endpoint={endpoint}, status={status}: {error_text}"),
-                        ).with_upstream_status(status_code).with_provider("azure-ai"));
+                        ).with_upstream_status(status_code).with_provider("azure-ai");
+                        return Err(crate::retry::with_retry_after(error, retry_after));
                     }
 
                     Ok(resp)
@@ -203,20 +199,23 @@ impl Llm for AzureAIClient {
                                                 tool_call_accumulators.drain().collect();
                                             sorted.sort_by_key(|(idx, _)| *idx);
 
-                                            let parts: Vec<Part> = sorted
+                                            let parts = sorted
                                                 .into_iter()
                                                 .map(|(_, (id, name, args_str))| {
-                                                    let args: Value =
-                                                        serde_json::from_str(&args_str)
-                                                            .unwrap_or(serde_json::json!({}));
-                                                    Part::FunctionCall {
+                                                    let args = crate::tool_args::parse_streamed_tool_arguments(
+                                                        "azure-ai",
+                                                        "model.azure_ai.invalid_tool_arguments",
+                                                        &name,
+                                                        &args_str,
+                                                    )?;
+                                                    Ok(Part::FunctionCall {
                                                         name,
                                                         args,
                                                         id: Some(id),
                                                         thought_signature: None,
-                                                    }
+                                                    })
                                                 })
-                                                .collect();
+                                                .collect::<Result<Vec<Part>, AdkError>>()?;
 
                                             yield LlmResponse {
                                                 content: Some(adk_core::Content {

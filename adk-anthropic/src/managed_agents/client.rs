@@ -49,7 +49,9 @@ const DEFAULT_SSE_TIMEOUT_SECS: u64 = 300;
 ///
 /// let client = ManagedAgentsClient::new("sk-ant-api03-...")?;
 /// ```
-#[derive(Debug, Clone)]
+///
+/// The `Debug` output redacts the API key.
+#[derive(Clone)]
 pub struct ManagedAgentsClient {
     pub(crate) client: reqwest::Client,
     #[allow(dead_code)] // Retained for potential reconnection/refresh scenarios
@@ -57,6 +59,18 @@ pub struct ManagedAgentsClient {
     pub(crate) base_url: String,
     pub(crate) sse_timeout: Duration,
     pub(crate) cached_headers: Arc<HeaderMap>,
+}
+
+impl std::fmt::Debug for ManagedAgentsClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ManagedAgentsClient")
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("base_url", &self.base_url)
+            .field("sse_timeout", &self.sse_timeout)
+            .field("cached_headers", &self.cached_headers)
+            .finish()
+    }
 }
 
 impl ManagedAgentsClient {
@@ -1701,12 +1715,12 @@ fn parse_error_body(body: &str) -> (String, String) {
 /// - `content-type`: JSON content type
 fn build_headers(api_key: &str) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-api-key",
-        HeaderValue::from_str(api_key).map_err(|e| Error::Authentication {
-            message: format!("invalid API key header value: {e}"),
-        })?,
-    );
+    let mut api_key_value = HeaderValue::from_str(api_key).map_err(|e| Error::Authentication {
+        message: format!("invalid API key header value: {e}"),
+    })?;
+    // Keeps the key out of `Debug` output of the header map.
+    api_key_value.set_sensitive(true);
+    headers.insert("x-api-key", api_key_value);
     headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
     headers.insert("anthropic-beta", HeaderValue::from_static("managed-agents-2026-04-01"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -1716,6 +1730,16 @@ fn build_headers(api_key: &str) -> Result<HeaderMap> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_output_redacts_the_api_key() {
+        let client = ManagedAgentsClient::new("sk-ant-secret-key-value").unwrap();
+
+        let debug = format!("{client:?}");
+
+        assert!(!debug.contains("sk-ant-secret-key-value"), "api key leaked: {debug}");
+        assert!(debug.contains("[REDACTED]"));
+    }
 
     #[test]
     fn test_new_creates_client_with_defaults() {

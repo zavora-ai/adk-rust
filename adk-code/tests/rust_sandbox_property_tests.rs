@@ -116,10 +116,13 @@ proptest! {
 
         let requests_network_restriction = matches!(policy.network, NetworkPolicy::Disabled);
         let requests_filesystem_access = !matches!(policy.filesystem, FilesystemPolicy::None);
-        let requests_env_access = !matches!(policy.environment, EnvironmentPolicy::None);
+        // Every environment policy is a restriction, so it fails only on a backend
+        // that cannot enforce environment policies at all. The Rust sandbox can.
+        let requests_unenforced_env = !caps.enforce_environment_policy;
+        prop_assert!(caps.enforce_environment_policy);
 
         let should_fail =
-            requests_network_restriction || requests_filesystem_access || requests_env_access;
+            requests_network_restriction || requests_filesystem_access || requests_unenforced_env;
 
         let result = validate_policy(&caps, &policy);
 

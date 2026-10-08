@@ -78,7 +78,8 @@ pub struct ExecRequest {
     pub stdin: Option<String>,
     /// Maximum wall-clock time allowed for execution. No default — must be set explicitly.
     pub timeout: Duration,
-    /// Optional memory limit in megabytes. Only enforced by `WasmBackend`.
+    /// Optional memory limit in megabytes. Only enforced by `WasmBackend`, which applies
+    /// 256 MiB when this is `None`.
     pub memory_limit_mb: Option<u32>,
     /// Environment variables passed to the child process. The backend clears
     /// the inherited environment and sets only these variables.

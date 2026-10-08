@@ -238,7 +238,9 @@ async fn test_a2a_message_send() {
 }
 
 #[tokio::test]
-async fn test_a2a_tasks_cancel() {
+async fn test_a2a_tasks_cancel_unknown_task_is_not_found() {
+    // An unknown task answers exactly like another caller's task, so cancel cannot be
+    // used to probe which task IDs exist.
     let config = create_test_config();
     let app = create_app_with_a2a(config, Some("http://localhost:8080"));
 
@@ -265,7 +267,12 @@ async fn test_a2a_tasks_cancel() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    // Should return a canceled status
-    assert!(json["result"].is_object());
-    assert_eq!(json["result"]["status"]["state"], "canceled");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32603, "message": "Task not found: task-123" }
+        })
+    );
 }

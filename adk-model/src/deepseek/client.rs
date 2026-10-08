@@ -17,7 +17,6 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
-use serde_json::Value;
 
 /// DeepSeek client for V4 and legacy models.
 ///
@@ -245,23 +244,19 @@ impl Llm for DeepSeekClient {
                     if !response.status().is_success() {
                         let status = response.status();
                         let status_code = status.as_u16();
+                        let retry_after = response
+                            .headers()
+                            .get(reqwest::header::RETRY_AFTER)
+                            .and_then(|value| value.to_str().ok())
+                            .and_then(crate::retry::parse_retry_after);
                         let error_text = response.text().await.unwrap_or_default();
-                        let category = match status_code {
-                            401 => ErrorCategory::Unauthorized,
-                            403 => ErrorCategory::Forbidden,
-                            404 => ErrorCategory::NotFound,
-                            408 => ErrorCategory::Timeout,
-                            429 => ErrorCategory::RateLimited,
-                            503 | 529 => ErrorCategory::Unavailable,
-                            _ if status_code >= 500 => ErrorCategory::Internal,
-                            _ => ErrorCategory::InvalidInput,
-                        };
-                        return Err(AdkError::new(
+                        let error = AdkError::new(
                             ErrorComponent::Model,
-                            category,
+                            crate::retry::category_for_status_code(status_code),
                             "model.deepseek.api_error",
                             format!("DeepSeek API error (HTTP {status}): {error_text}"),
-                        ).with_upstream_status(status_code).with_provider("deepseek"));
+                        ).with_upstream_status(status_code).with_provider("deepseek");
+                        return Err(crate::retry::with_retry_after(error, retry_after));
                     }
 
                     Ok(response)
@@ -358,15 +353,18 @@ impl Llm for DeepSeekClient {
                                                 let mut sorted_calls: Vec<_> =
                                                     tool_call_accumulators.drain().collect();
                                                 sorted_calls.sort_by_key(|(idx, _)| *idx);
-                                                let tool_calls: Vec<_> = sorted_calls
+                                                let tool_calls = sorted_calls
                                                     .into_iter()
                                                     .map(|(_, (id, name, args_str))| {
-                                                        let args: Value =
-                                                            serde_json::from_str(&args_str)
-                                                                .unwrap_or(serde_json::json!({}));
-                                                        (id, name, args)
+                                                        let args = crate::tool_args::parse_streamed_tool_arguments(
+                                                            "deepseek",
+                                                            "model.deepseek.invalid_tool_arguments",
+                                                            &name,
+                                                            &args_str,
+                                                        )?;
+                                                        Ok((id, name, args))
                                                     })
-                                                    .collect();
+                                                    .collect::<Result<Vec<_>, AdkError>>()?;
                                                 let tool_reasoning = convert::pending_reasoning(
                                                     &mut reasoning_buffer,
                                                     thinking_enabled,

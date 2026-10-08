@@ -206,6 +206,10 @@ impl Llm for OllamaModel {
             chat_request = chat_request.format(map_json_value_to_ollama_schema(response_schema)?);
         }
 
+        // Text-encoded tool calls are honoured only for tools this request declared.
+        let declared_tools: std::collections::HashSet<String> =
+            request.tools.keys().cloned().collect();
+
         let response_stream = try_stream! {
             if stream {
                 // Streaming mode — Ollama supports streaming with tool calls since May 2025
@@ -263,7 +267,7 @@ impl Llm for OllamaModel {
 
                             // If done, yield final response with metadata
                             if response.done {
-                                yield convert::chat_response_to_llm_response(&response, false);
+                                yield convert::chat_response_to_llm_response(&response, false, &declared_tools);
                             }
                         }
                         Err(e) => {
@@ -286,7 +290,7 @@ impl Llm for OllamaModel {
                         ollama_error_to_adk(&msg)
                     })?;
 
-                yield convert::chat_response_to_llm_response(&response, false);
+                yield convert::chat_response_to_llm_response(&response, false, &declared_tools);
             }
         };
 

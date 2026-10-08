@@ -36,9 +36,15 @@ fn make_client(base_url: &str) -> OpenAICompatible {
     OpenAICompatible::new(config).expect("client creation should succeed")
 }
 
-/// Build a minimal `LlmRequest`.
+/// Build a minimal `LlmRequest` that declares the `search` tool, since text
+/// tool-call markup is parsed only for declared tools.
 fn make_request() -> LlmRequest {
-    LlmRequest::new("gpt-4o", vec![Content::new("user").with_text("Hello")])
+    let mut request = LlmRequest::new("gpt-4o", vec![Content::new("user").with_text("Hello")]);
+    request.tools.insert(
+        "search".to_string(),
+        serde_json::json!({"description": "Search", "parameters": {"type": "object"}}),
+    );
+    request
 }
 
 /// Build one SSE `chat.completion.chunk` carrying a `delta.content` fragment.

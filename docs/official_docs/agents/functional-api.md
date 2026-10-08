@@ -17,8 +17,8 @@ The Functional API (`functional` feature in `adk-graph`) provides a higher-level
 
 ```toml
 [dependencies]
-adk-graph = { version = "2.2.0", features = ["functional"] }
-adk-rust-macros = "2.2.0"
+adk-graph = { version = "2.3.0", features = ["functional"] }
+adk-rust-macros = "2.3.0"
 ```
 
 ## Core Types
@@ -119,6 +119,57 @@ if log.is_completed("fetch") {
 }
 ```
 
+### Task Identity
+
+`#[task]` generates a wrapper named `__task_<name>` that records each **call** in
+the `ExecutionLog` under its own key, built by `adk_graph::functional::task_call_id`:
+
+| Part | Meaning |
+|------|---------|
+| `<name>` | The task function's name |
+| `#<ordinal>` | How many calls of this task preceded this one in the run, from `0` |
+| `:<arg_hash>` | A stable 64-bit FNV-1a hash of the canonical JSON of the arguments that implement `Serialize`; omitted when none does |
+
+```rust,ignore
+use adk_graph::error::Result;
+use adk_graph::functional::TaskContext;
+use adk_rust_macros::{entrypoint, task};
+use serde_json::{Value, json};
+
+#[task]
+async fn process(_ctx: &mut TaskContext, item: String) -> Result<Value> {
+    Ok(json!(format!("processed {item}")))
+}
+
+#[entrypoint]
+async fn process_all(ctx: &mut TaskContext) -> Result<Value> {
+    let mut outputs = Vec::new();
+    for item in ["a", "b", "c"] {
+        // Logged as process#0:…, process#1:…, process#2:…
+        outputs.push(__task_process(ctx, item.to_string()).await?);
+    }
+    ctx.set("outputs", json!(outputs));
+    Ok(Value::Null)
+}
+```
+
+A resumed run replays the entrypoint from the top. Each call reaches the same
+ordinal it had in the run being resumed, so it returns its own recorded result.
+A call whose arguments differ from the recorded call at that position gets a new
+key and runs again rather than returning another call's result.
+
+> **Note:** Before this scheme a task was keyed by its name alone, so a task called
+> in a loop returned the first call's result for every later call. An execution log
+> written under the old keys does not match the new ones, so a workflow resumed
+> across the upgrade runs its tasks again.
+
+### Execution Guarantees
+
+A task is **at-least-once**. Its body runs, then its completion is checkpointed;
+a crash between the two runs the task again on resume. Make a task with external
+side effects idempotent. `rerun_on_resume` opts a task out of replay entirely, so
+it runs on every resume.
+
 ## Background Runs
 
 The `background` feature in `adk-server` adds REST endpoints for async workflow execution.
@@ -154,6 +205,20 @@ let registry = WorkflowRegistry::new().register("summarize", |input, cancel| asy
 let state = BackgroundState::new().with_executor(Arc::new(registry));
 let app = axum::Router::new().merge(background_runs_router_with_state(state));
 ```
+
+> **Important:** `background_runs_router` and `background_runs_router_with_state` carry no
+> authentication. Anyone who reaches a standalone mount can submit and cancel runs. Mount
+> them behind your own authentication layer, or let `ServerBuilder` mount them under `/api`
+> behind the server's auth middleware:
+>
+> ```rust
+> use adk_server::ServerBuilder;
+>
+> // `config` is a ServerConfig with `.with_request_context(extractor)` applied.
+> let app = ServerBuilder::new(config)
+>     .with_background_runs(state)
+>     .build(); // serves /api/runs and /api/runs/{run_id}
+> ```
 
 Submitting an unregistered `workflowId` returns **404** rather than queuing a run that
 can never execute. Implement `WorkflowExecutor` directly to bridge to `adk-graph`, the
@@ -201,6 +266,21 @@ active produces exactly one queued run rather than one per scheduler poll. Queue
 drain in order, and each is monitored the same way a directly triggered run is, so the
 active count returns to zero even if a run fails or is cancelled.
 
+A job's queue holds at most 100 runs by default (`DEFAULT_MAX_QUEUE_DEPTH`). An occurrence
+that arrives while the queue is full is skipped with a warning. Set the depth with
+`CronState::with_max_queue_depth` before cloning the state into the router and scheduler.
+
+### Pause and Resume
+
+Resuming a paused job (`PATCH` with `"status": "active"`) skips every occurrence that fell
+inside the pause: the next run is the first occurrence after the resume instant, so a
+per-minute job paused for a day fires once at the next minute rather than replaying its
+missed occurrences. `lastExecution` reports the scheduling cursor — the latest claimed
+occurrence, or the resume instant after a pause.
+
+`executionCount` counts the runs the scheduler started, including runs taken off the
+queue. Occurrences dropped by `skip` or by a full queue are not counted.
+
 Cron jobs use the same executor as background runs — a job whose `workflowId` is not
 registered will fail its runs.
 
@@ -216,6 +296,13 @@ let app = axum::Router::new().merge(cron_jobs_router_with_state(cron_state.clone
 // Start the background scheduler
 start_cron_scheduler(cron_state);
 ```
+
+> **Important:** `cron_jobs_router` and `cron_jobs_router_with_state` carry no
+> authentication. Anyone who reaches a standalone mount can schedule recurring work. Mount
+> them behind your own authentication layer, or use
+> `ServerBuilder::with_cron_jobs(cron_state)`, which serves `/api/cron` behind the server's
+> auth middleware. The builder does not start the scheduler — call `start_cron_scheduler`
+> with a clone of the same state.
 
 ## Examples
 

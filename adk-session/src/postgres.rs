@@ -339,15 +339,29 @@ impl SessionService for PostgresSessionService {
         .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         .into_iter()
         .filter_map(|row| {
-            let llm_response_val: Value = row.get("llm_response");
-            let actions_val: Value = row.get("actions");
-            let tool_ids_val: Value = row.get("long_running_tool_ids");
-            let llm_response = serde_json::from_value(llm_response_val).ok()?;
-            let actions = serde_json::from_value(actions_val).ok()?;
-            let long_running_tool_ids = serde_json::from_value(tool_ids_val).ok()?;
+            let event_id: String = row.get("id");
+            let decoded = serde_json::from_value(row.get("llm_response")).and_then(|llm_response| {
+                Ok((
+                    llm_response,
+                    serde_json::from_value(row.get("actions"))?,
+                    serde_json::from_value(row.get("long_running_tool_ids"))?,
+                ))
+            });
+            let (llm_response, actions, long_running_tool_ids) = match decoded {
+                Ok(parts) => parts,
+                Err(error) => {
+                    tracing::warn!(
+                        session.id = %req.session_id,
+                        event.id = %event_id,
+                        error = %error,
+                        "skipping stored event that failed to deserialize"
+                    );
+                    return None;
+                }
+            };
             let timestamp: DateTime<Utc> = row.get("timestamp");
             Some(Event {
-                id: row.get("id"),
+                id: event_id,
                 timestamp,
                 invocation_id: row.get("invocation_id"),
                 branch: row.get("branch"),

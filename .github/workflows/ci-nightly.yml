@@ -69,6 +69,7 @@ jobs:
   feature-combinations:
     name: features (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -130,7 +131,7 @@ jobs:
             neutralize-wild: 'true'
             command: cargo clippy -p adk-rust --no-default-features --features minimal,gemini-agent-platform-full --all-targets -- -D warnings
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -142,10 +143,12 @@ jobs:
     # espeak-ng is required by adk-audio's `kokoro` backend. glib is required by
     # the WebRTC transport in adk-realtime's `full` feature.
     - name: Install system dependencies (Linux)
+      # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
+      timeout-minutes: 10
       if: runner.os == 'Linux'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake protobuf-compiler libespeak-ng-dev libglib2.0-dev
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y cmake protobuf-compiler libespeak-ng-dev libglib2.0-dev
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
@@ -172,8 +175,9 @@ jobs:
   #     the `quick-xml` version floor. Both gates are ENFORCING.
   supply-chain:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -182,7 +186,7 @@ jobs:
         neutralize-wild: 'true'
 
     - name: Install cargo-audit and cargo-deny
-      uses: taiki-e/install-action@v2.87.4
+      uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
       with:
         tool: cargo-audit,cargo-deny
 
@@ -212,12 +216,13 @@ jobs:
   # than failing. Secrets are passed through env so the tests can authenticate.
   integration-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -226,12 +231,14 @@ jobs:
         neutralize-wild: 'true'
 
     - name: Install system dependencies (Linux)
+      # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
+      timeout-minutes: 10
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake protobuf-compiler
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y cmake protobuf-compiler
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@v2.87.4
+      uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
       with:
         tool: cargo-nextest
 

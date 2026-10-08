@@ -1,18 +1,27 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    CacheControlEphemeral, CitationsConfig, ContextManagement, EffortLevel, MessageParam, Metadata,
-    Model, OutputConfig, OutputFormat, SkillRef, SpeedMode, SystemPrompt, TextBlock,
-    ThinkingConfig, ToolChoice, ToolUnionParam,
+    CacheControlEphemeral, CitationsConfig, Content, ContentBlock, ContentBlockSourceContent,
+    ContextManagement, DocumentSource, EffortLevel, ImageBlock, ImageSource, MessageParam,
+    MessageParamContent, Metadata, Model, OutputConfig, OutputFormat, SkillRef, SpeedMode,
+    SystemPrompt, TextBlock, ThinkingConfig, ToolChoice, ToolResultBlockContent, ToolUnionParam,
 };
 
 /// Security limits for DoS prevention
 const MAX_MESSAGE_COUNT: usize = 1000;
-const MAX_MESSAGE_LENGTH: usize = 1_000_000; // 1MB per message
+/// Text bytes per message (1 MB); base64 media is held to the limits below instead.
+const MAX_MESSAGE_LENGTH: usize = 1_000_000;
 const MAX_STOP_SEQUENCES: usize = 100;
 const MAX_STOP_SEQUENCE_LENGTH: usize = 1000;
+/// Text bytes in the system prompt (100 KB).
 const MAX_SYSTEM_PROMPT_LENGTH: usize = 100_000;
 const MAX_TOOLS_COUNT: usize = 100;
+/// Largest image the Messages API accepts (5 MB), compared against the decoded size.
+const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+/// Largest PDF the Messages API accepts (32 MB), compared against the decoded size.
+const MAX_PDF_BYTES: usize = 32 * 1024 * 1024;
+/// Messages API request body limit (32 MB), compared against text plus base64 media.
+const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 
 /// Parameters for creating messages.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -367,20 +376,39 @@ impl MessageCreateParams {
             ));
         }
 
-        // Validate message content sizes
+        // Validate message content sizes. Text and base64 media are measured in
+        // place: images and PDFs are held to the API's own limits, not the text cap.
+        let mut request_bytes = 0;
         for (i, message) in self.messages.iter().enumerate() {
-            let content_str = format!("{:?}", message.content); // Rough size estimate
-            if content_str.len() > MAX_MESSAGE_LENGTH {
+            let mut size = ContentSize { message: i, ..ContentSize::default() };
+            match &message.content {
+                MessageParamContent::String(text) => size.text += text.len(),
+                MessageParamContent::Array(blocks) => {
+                    for block in blocks {
+                        size.add_block(block)?;
+                    }
+                }
+            }
+            if size.text > MAX_MESSAGE_LENGTH {
                 return Err(crate::Error::validation(
                     format!(
-                        "Message {} content size {} exceeds limit of {}",
-                        i,
-                        content_str.len(),
-                        MAX_MESSAGE_LENGTH
+                        "Message {i} text size {} exceeds limit of {MAX_MESSAGE_LENGTH} bytes",
+                        size.text
                     ),
                     Some(format!("messages[{i}]")),
                 ));
             }
+            request_bytes += size.text + size.media;
+        }
+        if request_bytes > MAX_REQUEST_BYTES {
+            return Err(crate::Error::validation(
+                format!(
+                    "Message content of about {request_bytes} bytes exceeds the Messages API \
+                     request limit of {MAX_REQUEST_BYTES} bytes; upload large images or PDFs \
+                     through the Files API and reference them by file ID"
+                ),
+                Some("messages".to_string()),
+            ));
         }
 
         // Validate floating point parameters
@@ -439,13 +467,15 @@ impl MessageCreateParams {
 
         // Validate system prompt size
         if let Some(ref system) = self.system {
-            let system_str = format!("{system:?}"); // Rough size estimate
-            if system_str.len() > MAX_SYSTEM_PROMPT_LENGTH {
+            let system_len = match system {
+                SystemPrompt::String(text) => text.len(),
+                SystemPrompt::Blocks(blocks) => blocks.iter().map(|b| b.block.text.len()).sum(),
+            };
+            if system_len > MAX_SYSTEM_PROMPT_LENGTH {
                 return Err(crate::Error::validation(
                     format!(
-                        "System prompt size {} exceeds limit of {}",
-                        system_str.len(),
-                        MAX_SYSTEM_PROMPT_LENGTH
+                        "System prompt size {system_len} exceeds limit of \
+                         {MAX_SYSTEM_PROMPT_LENGTH} bytes"
                     ),
                     Some("system".to_string()),
                 ));
@@ -599,6 +629,120 @@ impl Default for MessageCreateParams {
             skills: None,
             tool_runner: None,
         }
+    }
+}
+
+/// Byte counts for one message, measured in place without copying the payload.
+#[derive(Default)]
+struct ContentSize {
+    /// Index of the message, for error messages.
+    message: usize,
+    /// Text the model reads: text, tool results, thinking, and tool input strings.
+    text: usize,
+    /// Base64 media as sent on the wire.
+    media: usize,
+}
+
+impl ContentSize {
+    fn add_block(&mut self, block: &ContentBlock) -> Result<(), crate::Error> {
+        match block {
+            ContentBlock::Text(text) => self.text += text.text.len(),
+            ContentBlock::Image(image) => self.add_image(image)?,
+            ContentBlock::ToolUse(tool_use) => self.text += json_text_len(&tool_use.input),
+            ContentBlock::ServerToolUse(tool_use) => self.text += json_text_len(&tool_use.input),
+            ContentBlock::ProgrammaticToolUse(tool_use) => {
+                self.text += json_text_len(&tool_use.input);
+            }
+            ContentBlock::ToolResult(result) => match &result.content {
+                Some(ToolResultBlockContent::String(text)) => self.text += text.len(),
+                Some(ToolResultBlockContent::Array(items)) => {
+                    for item in items {
+                        self.add_content(item)?;
+                    }
+                }
+                None => {}
+            },
+            ContentBlock::Document(document) => match &document.source {
+                DocumentSource::Base64Pdf(pdf) => {
+                    let decoded = decoded_base64_len(&pdf.data);
+                    if decoded > MAX_PDF_BYTES {
+                        return Err(crate::Error::validation(
+                            format!(
+                                "Message {} contains a PDF of about {decoded} bytes, above the \
+                                 API limit of {MAX_PDF_BYTES} bytes per PDF",
+                                self.message
+                            ),
+                            Some(format!("messages[{}]", self.message)),
+                        ));
+                    }
+                    self.media += pdf.data.len();
+                }
+                DocumentSource::PlainText(source) => self.text += source.data.len(),
+                DocumentSource::ContentBlock(source) => match &source.content {
+                    ContentBlockSourceContent::String(text) => self.text += text.len(),
+                    ContentBlockSourceContent::Array(items) => {
+                        for item in items {
+                            self.add_content(item)?;
+                        }
+                    }
+                },
+                DocumentSource::UrlPdf(_) | DocumentSource::File(_) => {}
+            },
+            ContentBlock::Thinking(thinking) => self.text += thinking.thinking.len(),
+            ContentBlock::CodeExecutionResult(result) => self.text += result.output.len(),
+            // Server-generated blocks replayed verbatim; the API produced them within its limits.
+            ContentBlock::WebSearchToolResult(_)
+            | ContentBlock::WebFetchToolResult(_)
+            | ContentBlock::RedactedThinking(_) => {}
+        }
+        Ok(())
+    }
+
+    fn add_content(&mut self, content: &Content) -> Result<(), crate::Error> {
+        match content {
+            Content::Text(text) => self.text += text.text.len(),
+            Content::Image(image) => self.add_image(image)?,
+        }
+        Ok(())
+    }
+
+    fn add_image(&mut self, image: &ImageBlock) -> Result<(), crate::Error> {
+        match &image.source {
+            ImageSource::Base64(source) => {
+                let decoded = decoded_base64_len(&source.data);
+                if decoded > MAX_IMAGE_BYTES {
+                    return Err(crate::Error::validation(
+                        format!(
+                            "Message {} contains an image of about {decoded} bytes, above the \
+                             API limit of {MAX_IMAGE_BYTES} bytes per image; downscale it or \
+                             reference it by URL",
+                            self.message
+                        ),
+                        Some(format!("messages[{}]", self.message)),
+                    ));
+                }
+                self.media += source.data.len();
+            }
+            ImageSource::Url(_) | ImageSource::File(_) => {}
+        }
+        Ok(())
+    }
+}
+
+/// Decoded size of a base64 payload, from its length alone.
+fn decoded_base64_len(data: &str) -> usize {
+    data.len() / 4 * 3
+}
+
+/// Bytes of the strings and keys in a JSON value, without serializing it.
+fn json_text_len(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::String(text) => text.len(),
+        serde_json::Value::Array(items) => items.iter().map(json_text_len).sum(),
+        serde_json::Value::Object(fields) => {
+            fields.iter().map(|(key, value)| key.len() + json_text_len(value)).sum()
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => 0,
     }
 }
 
@@ -821,5 +965,80 @@ mod tests {
             !params.requires_structured_outputs_beta(),
             "params without output_format or strict tools should not require structured outputs beta"
         );
+    }
+
+    fn params_with_blocks(blocks: Vec<ContentBlock>) -> MessageCreateParams {
+        MessageCreateParams::simple(
+            MessageParam::new_with_blocks(blocks, MessageRole::User),
+            KnownModel::ClaudeSonnet46,
+        )
+    }
+
+    fn base64_image(encoded_len: usize) -> ContentBlock {
+        ContentBlock::Image(ImageBlock::new_with_base64(crate::types::Base64ImageSource::new(
+            "A".repeat(encoded_len),
+            crate::types::ImageMediaType::Jpeg,
+        )))
+    }
+
+    #[test]
+    fn validate_accepts_a_2_mb_base64_image_with_text() {
+        let params = params_with_blocks(vec![
+            base64_image(2 * 1024 * 1024),
+            ContentBlock::Text(TextBlock::new("Describe this photo.")),
+        ]);
+
+        params.validate().expect("a 2 MB image is within the API's 5 MB image limit");
+    }
+
+    #[test]
+    fn validate_accepts_a_normal_base64_pdf() {
+        let pdf = ContentBlock::Document(crate::types::DocumentBlock::new_with_base64_pdf(
+            crate::types::Base64PdfSource::new("A".repeat(8 * 1024 * 1024)),
+        ));
+        let params = params_with_blocks(vec![pdf, ContentBlock::Text(TextBlock::new("Summarize"))]);
+
+        params.validate().expect("a 6 MB PDF is within the API's PDF limit");
+    }
+
+    #[test]
+    fn validate_rejects_an_image_above_the_api_limit() {
+        let params = params_with_blocks(vec![base64_image(8 * 1024 * 1024)]);
+
+        let error = params.validate().expect_err("a 6 MB image exceeds the 5 MB limit");
+        assert!(error.is_validation());
+        assert!(error.to_string().contains("image"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn validate_rejects_oversized_text() {
+        let params = MessageCreateParams::simple(
+            "x".repeat(MAX_MESSAGE_LENGTH + 1),
+            KnownModel::ClaudeSonnet46,
+        );
+
+        let error = params.validate().expect_err("text over the per-message cap is rejected");
+        assert!(error.is_validation());
+        assert!(error.to_string().contains("text size"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn validate_rejects_media_beyond_the_request_limit() {
+        let images = (0..8).map(|_| base64_image(5 * 1024 * 1024)).collect();
+        let params = params_with_blocks(images);
+
+        let error = params.validate().expect_err("40 MB of base64 exceeds the 32 MB request limit");
+        assert!(error.to_string().contains("request limit"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn validate_measures_system_prompt_text_only() {
+        let params = MessageCreateParams::simple("Hi", KnownModel::ClaudeSonnet46)
+            .with_system("s".repeat(MAX_SYSTEM_PROMPT_LENGTH));
+        params.validate().expect("a system prompt at the limit is accepted");
+
+        let params = MessageCreateParams::simple("Hi", KnownModel::ClaudeSonnet46)
+            .with_system("s".repeat(MAX_SYSTEM_PROMPT_LENGTH + 1));
+        assert!(params.validate().is_err(), "a system prompt above the limit is rejected");
     }
 }

@@ -258,15 +258,7 @@ fn infer_mime_type(filename: &str) -> &'static str {
 }
 
 fn build_headers(api_key: &str) -> Result<HeaderMap> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-api-key",
-        HeaderValue::from_str(api_key).map_err(|e| Error::Authentication {
-            message: format!("invalid API key header value: {e}"),
-        })?,
-    );
-    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
-    headers.insert("anthropic-beta", HeaderValue::from_static("files-api-2025-04-14"));
+    let mut headers = build_upload_headers(api_key)?;
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     Ok(headers)
 }
@@ -274,12 +266,12 @@ fn build_headers(api_key: &str) -> Result<HeaderMap> {
 /// Headers for multipart uploads — no content-type (reqwest sets it with boundary).
 fn build_upload_headers(api_key: &str) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-api-key",
-        HeaderValue::from_str(api_key).map_err(|e| Error::Authentication {
-            message: format!("invalid API key header value: {e}"),
-        })?,
-    );
+    let mut api_key_value = HeaderValue::from_str(api_key).map_err(|e| Error::Authentication {
+        message: format!("invalid API key header value: {e}"),
+    })?;
+    // Keeps the key out of the client's derived `Debug` output.
+    api_key_value.set_sensitive(true);
+    headers.insert("x-api-key", api_key_value);
     headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
     headers.insert("anthropic-beta", HeaderValue::from_static("files-api-2025-04-14"));
     Ok(headers)
@@ -332,6 +324,15 @@ fn map_api_error(status: reqwest::StatusCode, body: &str) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_output_redacts_the_api_key() {
+        let client = FilesClient::new("sk-ant-secret-key-value").unwrap();
+
+        let debug = format!("{client:?}");
+
+        assert!(!debug.contains("sk-ant-secret-key-value"), "api key leaked: {debug}");
+    }
 
     #[test]
     fn test_default_base_url_is_https() {

@@ -48,7 +48,7 @@ Branch naming conventions:
 CI enforces three gates: format, lint, and test. The easiest way to catch failures before they reach CI is to let [lefthook](https://github.com/evilmartians/lefthook) run them automatically as git hooks (see [Git Hooks with Lefthook](#git-hooks-with-lefthook)):
 
 - **pre-commit** runs `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`, plus `shellcheck --severity=warning` on any staged shell scripts
-- **pre-push** runs `cargo check --workspace` (a fast compilation check — CI runs the full test suite)
+- **pre-push** runs `cargo check --workspace` (a fast compilation check — CI runs the full test suite), plus `scripts/check-examples-compile.sh` when an example or a workspace crate it depends on changed
 
 Once installed, these run on every `git commit` and `git push` — no extra steps required.
 
@@ -172,7 +172,7 @@ cp .env.example .env
 The repo ships a `lefthook.yml` that wires the [Quality Gates](#quality-gates) into git hooks, so they run automatically:
 
 - **pre-commit** — format check (`cargo fmt --all -- --check`), lint (`cargo clippy --workspace --all-targets -- -D warnings`), and shell-script lint (`shellcheck --severity=warning` on staged `*.sh`, mirroring the shellcheck hook in `devenv.nix`)
-- **pre-push** — a fast compilation check (`cargo check --workspace`), not the full test suite. CI is the full-suite safety net, so the local push gate stays quick (see [Quality Gates](#quality-gates) for the CI tier design)
+- **pre-push** — a fast compilation check (`cargo check --workspace`), not the full test suite, plus `scripts/check-examples-compile.sh` over the four example shards when an example or a crate it depends on changed. CI is the full-suite safety net, so the local push gate stays quick (see [Quality Gates](#quality-gates) for the CI tier design)
 
 The shellcheck gate only runs when shell scripts are staged, and runs at `--severity=warning` so informational notes (e.g. SC1091 about sourced files that can't be followed) don't block commits. `publish.sh` is skipped because it's a zsh script, which shellcheck doesn't support. Install shellcheck with `brew install shellcheck` (macOS) or `apt install shellcheck` (Debian/Ubuntu); `scripts/setup-dev.sh` installs it for you.
 
@@ -260,7 +260,14 @@ truth for every publishable crate.
    `python3 scripts/bump-version.py <version>`. Add an empty `## [Unreleased]`
    section above the dated release, and make the changelog comparison links point
    from the new version to `HEAD` and from the previous tag to the new tag.
-2. Keep the README marked `release candidate — unpublished` until every crate is
+2. Assemble the changelog fragments into the release heading and commit the result
+   together with the removed fragment files:
+
+   ```bash
+   bash scripts/changelog-assemble.sh --into <version>
+   ```
+
+3. Keep the README marked `release candidate — unpublished` until every crate is
    visible on crates.io. Run the normal quality gates plus:
 
    ```bash
@@ -273,9 +280,9 @@ truth for every publishable crate.
    artifacts inside crate directories. A warning about yanked `spin 0.9.x` is
    currently expected through upstream `flume/sqlx` and `heapless/postcard`
    dependency chains; it does not prevent packaging.
-3. Merge the preparation pull request and wait for both the PR tier and the
+4. Merge the preparation pull request and wait for both the PR tier and the
    post-merge macOS/Windows tier to pass on the exact release commit.
-4. Create an annotated tag and validate the tagged checkout before pushing it:
+5. Create an annotated tag and validate the tagged checkout before pushing it:
 
    ```bash
    git tag -a v<version> -m "Release <version>"
@@ -283,10 +290,10 @@ truth for every publishable crate.
    git push origin v<version>
    ```
 
-5. Publish with `cargo xtask publish`. If crates.io indexing interrupts the
+6. Publish with `cargo xtask publish`. If crates.io indexing interrupts the
    workspace publish, resume safely with `cargo xtask publish --resume`; it uses
    the computed dependency order and skips versions that already exist.
-6. Confirm all 43 crate versions and their docs.rs builds. Only then change the
+7. Confirm all 43 crate versions and their docs.rs builds. Only then change the
    README banner to `Released!`, mark the roadmap version `(current)`, and create
    the GitHub release from the annotated tag using the matching changelog entry.
 
@@ -360,7 +367,7 @@ expensive axes just move to a later tier.
 
 | Tier | Trigger | Checks | Blocks merge? |
 |------|---------|--------|---------------|
-| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), docs and doctests, standalone examples (4 shards), `templates`, a compile-only macOS build, a Windows workspace build with a targeted sandbox portability smoke, and `semver` (stable strict, beta warn-only) | Yes — aggregated by `pr-gate`, plus `semver` |
+| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), docs and doctests, standalone examples (4 shards), `templates`, a compile-only macOS build, a Windows workspace build with a targeted sandbox portability smoke, and `semver` (stable strict with the next release assumed minor, so additions pass and breakage fails; beta warn-only) | Yes — aggregated by `pr-gate`, plus `semver` |
 | **Merge** | `push: main` (`ci-merge.yml`) | cross-platform `nextest --workspace` on macOS/Windows, doc-example compilation | No — runs post-merge |
 | **Nightly** | `schedule` (`ci-nightly.yml`) | feature-combination matrix, `cargo-audit`/`cargo-deny` supply-chain, `#[ignore]` integration tests gated on secrets | No — runs on a schedule |
 
@@ -392,17 +399,26 @@ Require exactly these stable contexts in the `main` ruleset:
 | `pr-gate` | `ci.yml` | Aggregate of every PR-tier CI job below |
 | `semver` | `semver.yml` | `semver` (stable-tier strict; beta is warn-only within the same job) |
 
-> **Note:** branch protection also requires some `feature-coverage` entries by
-> their rendered name, such as `feature-coverage (adk-managed, memory)`. Renaming
-> or removing a matrix entry changes that name, and the old requirement then waits
-> forever for a status no job reports — which blocks every PR. Change the matrix
-> entry and the branch-protection entry together, or keep both entries.
+> **Note:** `pr-gate` and `semver` are the only contexts the ruleset requires. Shards
+> and matrix entries report individually for diagnosis, but none is required by name,
+> so the feature-coverage pairs and the example shards can change without a ruleset
+> edit.
 
-`pr-gate` covers `fmt`, `clippy`, Linux workspace tests, every
-`feature-coverage` matrix entry, docs and doctests, every standalone-example
-shard, templates, the macOS build, and the Windows build plus sandbox portability
-smokes. `semver` stays separate because its workflow has an independent trigger
-and keeps stable crates strict while beta/experimental crates remain advisory.
+`pr-gate` covers `fmt`, `webui`, `clippy`, Linux workspace tests, the eight
+`feature-coverage` shards driven by `scripts/feature-coverage-pairs.txt`, docs and
+doctests, the four standalone-example shards, `templates`, the macOS build, and the
+Windows build plus sandbox portability smokes. `semver` stays separate because its
+workflow has an independent trigger and keeps stable crates strict while
+beta/experimental crates remain advisory.
+
+The `scope` job narrows a run to what the change can affect, and `pr-gate` accepts a
+skipped job only when the scope or the event skipped it:
+
+| Run | Jobs that run |
+|-----|---------------|
+| Pull request that touches code | every job |
+| Pull request that touches only `docs/`, Markdown, or `LICENSE*` | `fmt`, `webui`, `templates` (the documentation gates) |
+| Merge-queue build | every job except `docs`, the standalone-example shards and the macOS and Windows builds, which the pull request already passed and a merge cannot break on its own |
 
 ### NOT required (informational tiers)
 
@@ -413,6 +429,9 @@ These run post-merge or on a schedule and MUST NOT be branch-protection-required
   `doc-examples`.
 - **Nightly tier** (`ci-nightly.yml`, `on: schedule`): the `features (…)`
   feature-combination matrix jobs, `supply-chain`, `integration-tests`.
+- **Code scanning** (`codeql.yml`, `on: push: branches:[main]` and weekly): the
+  `Analyze (…)` CodeQL jobs. Alerts appear under Security → Code scanning; test
+  code and examples are excluded by `.github/codeql/config.yml`.
 
 ### Applying the required-check set
 
@@ -610,7 +629,7 @@ Every PR has a template with this checklist. Fill it out when you open your PR.
 
 ### Documentation (if applicable)
 
-- [ ] CHANGELOG.md updated for user-facing changes
+- [ ] Changelog fragment added under `changelog.d/` for user-facing changes
 - [ ] README updated if crate capabilities changed
 - [ ] Examples added or updated for new features
 

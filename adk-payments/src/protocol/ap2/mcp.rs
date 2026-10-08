@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{Money, TransactionRecord, TransactionState, TransactionStateTag};
+use crate::protocol::ap2::error::Ap2Error;
 use crate::protocol::ap2::types::{PaymentReceipt, PaymentStatusEnvelope};
 
 /// Safe summary of AP2 mandates for MCP-facing lookup surfaces.
@@ -149,8 +150,15 @@ pub struct Ap2McpReceiptStatus {
 
 impl Ap2McpReceiptStatus {
     /// Builds a safe receipt view without leaking raw payment credentials.
-    #[must_use]
-    pub fn from_receipt(record: &TransactionRecord, receipt: &PaymentReceipt) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Ap2Error::InvalidAmount`] when the receipt amount is not an
+    /// exact decimal that fits in `i64` minor units.
+    pub fn from_receipt(
+        record: &TransactionRecord,
+        receipt: &PaymentReceipt,
+    ) -> Result<Self, Ap2Error> {
         let (status, merchant_confirmation_id, psp_confirmation_id, network_confirmation_id) =
             match &receipt.payment_status {
                 PaymentStatusEnvelope::Success(success) => (
@@ -172,7 +180,7 @@ impl Ap2McpReceiptStatus {
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
 
-        Self {
+        Ok(Self {
             transaction_id: record.transaction_id.as_str().to_string(),
             payment_receipt_id: record
                 .protocol_refs
@@ -181,12 +189,12 @@ impl Ap2McpReceiptStatus {
                 .unwrap_or_else(|| receipt.payment_id.clone()),
             payment_mandate_id: receipt.payment_mandate_id.clone(),
             payment_id: receipt.payment_id.clone(),
-            amount: receipt.amount.to_money(),
+            amount: receipt.amount.to_money()?,
             status,
             merchant_confirmation_id,
             psp_confirmation_id,
             network_confirmation_id,
             method_name,
-        }
+        })
     }
 }

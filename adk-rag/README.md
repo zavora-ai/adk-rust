@@ -24,7 +24,7 @@ The fastest way to get a working RAG pipeline. Uses Gemini for embeddings (free 
 
 ```toml
 [dependencies]
-adk-rag = { version = "2.2.0", features = ["gemini"] }
+adk-rag = { version = "2.3.0", features = ["gemini"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -70,10 +70,10 @@ The practical use case — an agent that searches your knowledge base to answer 
 
 ```toml
 [dependencies]
-adk-rag = { version = "2.2.0", features = ["gemini"] }
-adk-agent = "2.2.0"
-adk-model = "2.2.0"
-adk-cli = "2.2.0"
+adk-rag = { version = "2.3.0", features = ["gemini"] }
+adk-agent = "2.3.0"
+adk-model = "2.3.0"
+adk-cli = "2.3.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -149,7 +149,7 @@ The `RagPipeline` wires these together. The `RagTool` wraps the pipeline as an `
 Uses Google's `gemini-embedding-2` model (3072 dimensions). Free tier available.
 
 ```toml
-adk-rag = { version = "2.2.0", features = ["gemini"] }
+adk-rag = { version = "2.3.0", features = ["gemini"] }
 ```
 
 ```rust
@@ -161,7 +161,7 @@ let provider = GeminiEmbeddingProvider::new(&api_key)?;
 Uses `text-embedding-3-small` (1536 dimensions) by default. Supports dimension truncation via Matryoshka.
 
 ```toml
-adk-rag = { version = "2.2.0", features = ["openai"] }
+adk-rag = { version = "2.3.0", features = ["openai"] }
 ```
 
 ```rust
@@ -217,7 +217,7 @@ let store = InMemoryVectorStore::new();
 Production-ready vector database with filtering, snapshots, and clustering.
 
 ```toml
-adk-rag = { version = "2.2.0", features = ["qdrant"] }
+adk-rag = { version = "2.3.0", features = ["qdrant"] }
 ```
 
 ```rust
@@ -229,7 +229,7 @@ let store = QdrantVectorStore::new("http://localhost:6334").await?;
 Embedded vector database with no server required. Data persists to disk.
 
 ```toml
-adk-rag = { version = "2.2.0", features = ["lancedb"] }
+adk-rag = { version = "2.3.0", features = ["lancedb"] }
 ```
 
 > Requires `protoc` installed: `brew install protobuf` (macOS), `apt install protobuf-compiler` (Ubuntu).
@@ -238,12 +238,16 @@ adk-rag = { version = "2.2.0", features = ["lancedb"] }
 let store = LanceDBVectorStore::new("/tmp/my-vectors").await?;
 ```
 
+`upsert` replaces rows by chunk id, so re-ingesting a document updates its
+chunks instead of duplicating them. An embedding whose length differs from the
+collection's dimensions returns `RagError::VectorStoreError`.
+
 ### pgvector (PostgreSQL)
 
 Use your existing PostgreSQL database for vector search.
 
 ```toml
-adk-rag = { version = "2.2.0", features = ["pgvector"] }
+adk-rag = { version = "2.3.0", features = ["pgvector"] }
 ```
 
 ```rust
@@ -255,7 +259,7 @@ let store = PgVectorStore::new("postgres://user:pass@localhost/mydb").await?;
 Embedded or remote multi-model database with built-in vector search.
 
 ```toml
-adk-rag = { version = "2.2.0", features = ["surrealdb"] }
+adk-rag = { version = "2.3.0", features = ["surrealdb"] }
 ```
 
 ```rust
@@ -273,7 +277,7 @@ retrieval tool (corpus creation and file import stay in the Vertex AI console
 or management APIs):
 
 ```toml
-adk-rag = { version = "2.2.0", features = ["vertex-rag"] }
+adk-rag = { version = "2.3.0", features = ["vertex-rag"] }
 ```
 
 ```rust
@@ -300,12 +304,12 @@ and the [`examples/vertex_rag`](https://github.com/zavora-ai/adk-rust/tree/main/
 
 | Chunker | Best for | How it splits |
 |---------|----------|--------------|
-| `FixedSizeChunker` | General text, logs | Every N characters with overlap |
+| `FixedSizeChunker` | General text, logs | Every N bytes with overlap, on character boundaries |
 | `RecursiveChunker` | Articles, docs, code | Paragraphs → sentences → words (natural boundaries) |
 | `MarkdownChunker` | Markdown files, READMEs | By headers, preserving section hierarchy in metadata |
 
 ```rust
-// Fixed: 512 chars per chunk, 100 char overlap
+// Fixed: 512 bytes per chunk, 100 byte overlap
 let chunker = FixedSizeChunker::new(512, 100);
 
 // Recursive: tries paragraph breaks first, then sentences
@@ -315,12 +319,24 @@ let chunker = RecursiveChunker::new(512, 100);
 let chunker = MarkdownChunker::new(512, 100);
 ```
 
+Sizes are bytes of UTF-8, not characters, and chunks never split a character.
+`new` normalises an invalid size pair (a zero `chunk_size` becomes 1 and a
+`chunk_overlap` that is not smaller than `chunk_size` is ignored, with a
+warning); `try_new` rejects it with `RagError::ConfigError`:
+
+```rust
+use adk_rag::FixedSizeChunker;
+
+let chunker = FixedSizeChunker::try_new(512, 100)?;
+assert!(FixedSizeChunker::try_new(100, 100).is_err());
+```
+
 ## Configuration
 
 ```rust
 let config = RagConfig::builder()
-    .chunk_size(256)            // max characters per chunk (default: 512)
-    .chunk_overlap(50)          // overlap between chunks (default: 100)
+    .chunk_size(256)            // max bytes per chunk (default: 512)
+    .chunk_overlap(50)          // bytes shared by adjacent chunks (default: 100)
     .top_k(5)                   // number of results to return (default: 10)
     .similarity_threshold(0.5)  // minimum score to include (default: 0.0)
     .build()?;
@@ -337,7 +353,7 @@ The default `NoOpReranker` passes results through unchanged. Write your own to i
 
 ```toml
 [dependencies]
-adk-rag = { version = "2.2.0", features = ["gemini"] }
+adk-rag = { version = "2.3.0", features = ["gemini"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 ```
@@ -390,19 +406,19 @@ let pipeline = RagPipeline::builder()
 
 ```toml
 # Core only (in-memory store, all chunkers, no external deps)
-adk-rag = "2.2.0"
+adk-rag = "2.3.0"
 
 # With Gemini embeddings (recommended)
-adk-rag = { version = "2.2.0", features = ["gemini"] }
+adk-rag = { version = "2.3.0", features = ["gemini"] }
 
 # With OpenAI embeddings
-adk-rag = { version = "2.2.0", features = ["openai"] }
+adk-rag = { version = "2.3.0", features = ["openai"] }
 
 # With a persistent vector store
-adk-rag = { version = "2.2.0", features = ["gemini", "qdrant"] }
+adk-rag = { version = "2.3.0", features = ["gemini", "qdrant"] }
 
 # Everything
-adk-rag = { version = "2.2.0", features = ["full"] }
+adk-rag = { version = "2.3.0", features = ["full"] }
 ```
 
 | Feature | Enables | Extra dependency |

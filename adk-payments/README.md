@@ -54,17 +54,17 @@ Choose only the features you need:
 
 ```toml
 [dependencies]
-adk-payments = { version = "2.2.0", features = ["acp"] }
+adk-payments = { version = "2.3.0", features = ["acp"] }
 ```
 
 ```toml
 [dependencies]
-adk-payments = { version = "2.2.0", features = ["ap2", "ap2-a2a", "ap2-mcp"] }
+adk-payments = { version = "2.3.0", features = ["ap2", "ap2-a2a", "ap2-mcp"] }
 ```
 
 ```toml
 [dependencies]
-adk-payments = { version = "2.2.0", features = ["acp", "acp-experimental", "ap2"] }
+adk-payments = { version = "2.3.0", features = ["acp", "acp-experimental", "ap2"] }
 ```
 
 ## Core Concepts
@@ -145,12 +145,17 @@ let router = AcpRouterBuilder::new(AcpContextTemplate {
 })
 .with_merchant_checkout_service(checkout_service)
 .with_delegated_payment_service(delegated_payment_service)
-.with_verification(AcpVerificationConfig::strict())
+.with_verification(AcpVerificationConfig::strict().with_signature_verifier(signature_verifier))
 .build()?;
 ```
 
 Use this route surface when you want HTTP endpoints for checkout session create,
 update, completion, cancelation, status lookup, and delegated payment.
+
+`AcpVerificationConfig::strict()` requires a verified `Signature`, a `Timestamp`
+within five minutes, and an `Idempotency-Key` on every POST. `build()` fails when
+a profile requires signatures but has no `DetachedSignatureVerifier`. For local
+development, `AcpVerificationConfig::permissive()` enforces only `API-Version`.
 
 ### 2. Handle AP2 Mandate Flows
 
@@ -163,6 +168,8 @@ let adapter = Ap2Adapter::new(
     transaction_store,
     evidence_store,
 )
+.with_merchant_authorization_verifier(merchant_signature_verifier)
+.with_user_authorization_verifier(user_authorization_verifier)
 .with_intervention_service(intervention_service);
 
 let record = adapter.submit_cart_mandate(context, cart_mandate).await?;
@@ -172,6 +179,29 @@ let final_record = adapter.apply_payment_receipt(context, payment_receipt).await
 
 Use AP2 when your flow is mandate-based and multiple specialized actors
 participate in authorization and settlement.
+
+The adapter fails closed. Until both verifiers are configured, every merchant,
+intent, and payment authorization is rejected with
+`Ap2Error::AuthorizationVerifierNotConfigured`.
+
+| Setting | Default | Change it with |
+|---------|---------|----------------|
+| Merchant authorization (`CartMandate`) | Rejected | `with_merchant_authorization_verifier` |
+| User authorization (intent and payment mandates) | Rejected | `with_user_authorization_verifier` |
+| Presence-only checks for development | Off | `allow_unverified_authorizations()` (logs a warning) |
+| Executed payment mandate registry | `InMemoryPaymentMandateLedger` | `with_payment_mandate_ledger` |
+
+Verifiers check the artifact cryptographically against the mandate contents and
+compare signatures in constant time. A merchant verifier that sets
+`VERIFIED_MERCHANT_NAME_CLAIM` makes the adapter reject carts whose
+`merchant_name` differs from the verified signer. Payment mandates are
+single-use: a resubmitted mandate returns `Ap2Error::PaymentMandateReplayed`, and
+a second mandate for a paid transaction returns `Ap2Error::TransactionAlreadyPaid`.
+
+AP2 amounts are converted exactly. Every amount in one cart is normalised to the
+currency's ISO 4217 minor-unit scale, or a finer scale when an item needs it;
+malformed values, mixed currencies, more than 18 fraction digits, and overflow
+return `Ap2Error::InvalidAmount`.
 
 ### 3. Register Agent-Facing Payment Tools
 
@@ -204,6 +234,9 @@ The crate is currently shaped around five first-class journeys:
 - Session state and semantic memory retain only masked transaction summaries.
 - `adk-auth` binds requests to session identity and audit metadata.
 - `adk-guardrail` enforces amount, merchant, intervention, and protocol-policy checks before persistence.
+- `AmountThresholdGuardrail` compares totals by value across scales; `with_currency` binds its thresholds to one currency and denies the others.
+- The AP2 adapter rejects authorizations until cryptographic verifiers are configured, and executes each payment mandate at most once.
+- Delegated-payment method selections keep display fields only (type, brand, last four digits); the raw card reaches the tokenization backend and evidence store, not the selection.
 - The kernel refuses lossy protocol-to-protocol conversions rather than approximating semantics.
 
 ## Validation and Examples

@@ -29,10 +29,10 @@ This means your agent can answer questions about product docs, company policies,
 ```toml
 [dependencies]
 # Core only (in-memory store, all chunkers, no external deps)
-adk-rag = "2.2.0"
+adk-rag = "2.3.0"
 
 # With Gemini embeddings (recommended for getting started)
-adk-rag = { version = "2.2.0", features = ["gemini"] }
+adk-rag = { version = "2.3.0", features = ["gemini"] }
 ```
 
 ---
@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 **How it works**:
-1. `FixedSizeChunker` splits the document into 256-character chunks with 50-character overlap
+1. `FixedSizeChunker` splits the document into 256-byte chunks with 50-byte overlap
 2. `MockEmbedder` converts each chunk into a 64-dimensional vector
 3. `InMemoryVectorStore` stores the vectors and searches by cosine similarity
 4. `query()` embeds the question, finds the closest chunks, and returns them ranked by score
@@ -172,7 +172,7 @@ How you split documents affects retrieval quality. `adk-rag` provides three chun
 
 | Chunker | Best for | How it splits |
 |---------|----------|--------------|
-| `FixedSizeChunker` | General text, logs | Every N characters with overlap |
+| `FixedSizeChunker` | General text, logs | Every N bytes with overlap, on character boundaries |
 | `RecursiveChunker` | Articles, docs, code comments | Paragraphs → sentences → words |
 | `MarkdownChunker` | Markdown files, READMEs | By headers, preserving section hierarchy |
 
@@ -189,6 +189,18 @@ let chunker = RecursiveChunker::new(512, 100);
 let chunker = MarkdownChunker::new(512, 100);
 ```
 
+Sizes are bytes of UTF-8, not characters, and chunks never split a character.
+`new` normalises an invalid size pair (a zero `chunk_size` becomes 1 and a
+`chunk_overlap` that is not smaller than `chunk_size` is ignored, with a
+warning); `try_new` rejects it with `RagError::ConfigError`:
+
+```rust
+use adk_rag::FixedSizeChunker;
+
+let chunker = FixedSizeChunker::try_new(512, 100)?;
+assert!(FixedSizeChunker::try_new(100, 100).is_err());
+```
+
 `RecursiveChunker` is the best default choice — it tries paragraph breaks first, then sentence boundaries, then word boundaries, producing more natural chunks than fixed-size splitting.
 
 `MarkdownChunker` adds a `header_path` metadata field to each chunk (e.g. `"Getting Started > Installation"`), which helps the agent cite specific sections.
@@ -201,8 +213,8 @@ let chunker = MarkdownChunker::new(512, 100);
 use adk_rag::RagConfig;
 
 let config = RagConfig::builder()
-    .chunk_size(256)            // max characters per chunk (default: 512)
-    .chunk_overlap(50)          // overlap between chunks (default: 100)
+    .chunk_size(256)            // max bytes per chunk (default: 512)
+    .chunk_overlap(50)          // bytes shared by adjacent chunks (default: 100)
     .top_k(5)                   // results to return (default: 10)
     .similarity_threshold(0.5)  // minimum score to include (default: 0.0)
     .build()?;
@@ -210,8 +222,8 @@ let config = RagConfig::builder()
 
 | Parameter | What it controls | Guidance |
 |-----------|-----------------|----------|
-| `chunk_size` | Max characters per chunk | 200–500 for most use cases. Smaller = more precise, larger = more context |
-| `chunk_overlap` | Shared characters between adjacent chunks | 10–20% of chunk_size prevents losing info at boundaries |
+| `chunk_size` | Max bytes of UTF-8 per chunk | 200–500 for most use cases. Smaller = more precise, larger = more context |
+| `chunk_overlap` | Bytes shared by adjacent chunks | 10–20% of chunk_size prevents losing info at boundaries |
 | `top_k` | Number of results returned | More results = more context for the LLM but higher token usage |
 | `similarity_threshold` | Minimum score to include | 0.0 returns everything; 0.3–0.7 filters weak matches |
 
@@ -353,13 +365,13 @@ Only pull the dependencies you need:
 
 ```toml
 # Just core
-adk-rag = "2.2.0"
+adk-rag = "2.3.0"
 
 # With Gemini embeddings
-adk-rag = { version = "2.2.0", features = ["gemini"] }
+adk-rag = { version = "2.3.0", features = ["gemini"] }
 
 # Everything
-adk-rag = { version = "2.2.0", features = ["full"] }
+adk-rag = { version = "2.3.0", features = ["full"] }
 ```
 
 > **Note:** The `lancedb` feature requires `protoc` installed. Install with `brew install protobuf` (macOS) or `apt install protobuf-compiler` (Ubuntu).

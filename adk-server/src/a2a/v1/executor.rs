@@ -15,7 +15,7 @@ use chrono::Utc;
 
 use super::error::A2aError;
 use super::state_machine::can_transition_to;
-use super::task_store::{TaskStore, TaskStoreEntry};
+use super::task_store::{OWNER_METADATA_KEY, TaskStore, TaskStoreEntry};
 
 /// V1 executor that wraps task lifecycle with [`TaskStore`] persistence
 /// and state machine validation.
@@ -53,14 +53,39 @@ impl V1Executor {
         task_id: &str,
         context_id: &str,
     ) -> Result<TaskStoreEntry, A2aError> {
+        self.create_task_for(task_id, context_id, None).await
+    }
+
+    /// Creates a new task owned by `owner`, the authenticated user that started it.
+    ///
+    /// The owner is recorded under [`OWNER_METADATA_KEY`]; `None` creates an
+    /// ownerless task, which only unauthenticated callers can see.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task store fails to persist the entry.
+    pub async fn create_task_for(
+        &self,
+        task_id: &str,
+        context_id: &str,
+        owner: Option<&str>,
+    ) -> Result<TaskStoreEntry, A2aError> {
         let now = Utc::now();
+        let metadata = owner
+            .map(|owner| {
+                HashMap::from([(
+                    OWNER_METADATA_KEY.to_string(),
+                    serde_json::Value::String(owner.to_string()),
+                )])
+            })
+            .unwrap_or_default();
         let entry = TaskStoreEntry {
             id: task_id.to_string(),
             context_id: context_id.to_string(),
             status: TaskStatus::with_timestamp(TaskState::Submitted),
             artifacts: Vec::new(),
             history: Vec::new(),
-            metadata: HashMap::new(),
+            metadata,
             push_configs: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -105,13 +130,9 @@ impl V1Executor {
 
         self.task_store.update_status(task_id, status.clone()).await?;
 
-        let metadata = if current.metadata.is_empty() {
-            None
-        } else {
-            let obj: serde_json::Map<String, serde_json::Value> =
-                current.metadata.into_iter().collect();
-            Some(serde_json::Value::Object(obj))
-        };
+        let obj: serde_json::Map<String, serde_json::Value> =
+            current.metadata.into_iter().filter(|(key, _)| key != OWNER_METADATA_KEY).collect();
+        let metadata = (!obj.is_empty()).then_some(serde_json::Value::Object(obj));
 
         Ok(TaskStatusUpdateEvent {
             task_id: TaskId::new(task_id),
@@ -138,13 +159,9 @@ impl V1Executor {
         let current = self.task_store.get_task(task_id).await?;
         self.task_store.add_artifact(task_id, artifact.clone()).await?;
 
-        let metadata = if current.metadata.is_empty() {
-            None
-        } else {
-            let obj: serde_json::Map<String, serde_json::Value> =
-                current.metadata.into_iter().collect();
-            Some(serde_json::Value::Object(obj))
-        };
+        let obj: serde_json::Map<String, serde_json::Value> =
+            current.metadata.into_iter().filter(|(key, _)| key != OWNER_METADATA_KEY).collect();
+        let metadata = (!obj.is_empty()).then_some(serde_json::Value::Object(obj));
 
         Ok(TaskArtifactUpdateEvent {
             task_id: TaskId::new(task_id),

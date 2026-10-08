@@ -147,3 +147,10 @@ impl InvocationContext for SentinelContext {
 pub fn test_context(_session_id: &str) -> Arc<dyn InvocationContext> {
     Arc::new(SentinelContext::new(false)) as Arc<dyn InvocationContext>
 }
+
+/// A context whose user message is `text`, for driving several turns.
+pub fn test_context_with_text(text: &str) -> Arc<dyn InvocationContext> {
+    let mut context = SentinelContext::new(false);
+    context.user_content.parts = vec![Part::Text { text: text.to_string() }];
+    Arc::new(context) as Arc<dyn InvocationContext>
+}

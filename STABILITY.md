@@ -57,6 +57,7 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | `awp-types` | **Beta** | AWP protocol types, zero `adk-*` dependencies |
 | `adk-devtools` | **Beta** | Coding-agent dev tools scoped to a `Workspace` (new in 2.0.0) |
 | `adk-computer-use` | **Beta** | Governed orchestration for the `computer-use-mcp` server (new in 2.0.0) |
+| `adk-gcp` | **Beta** | Shared Google Cloud REST plumbing for Vertex AI backends (new in 2.1.0) |
 | `adk-enterprise` | **Experimental** | Enterprise client SDK for ADK-Rust Managed Agent Service |
 | `adk-managed` | **Experimental** | Managed agent runtime engine |
 | `adk-codeact-monty` | **Experimental** | Python CodeRuntime for the CodeActAgent via the Monty interpreter |
@@ -74,6 +75,7 @@ minor release. Every other crate was promoted to Stable in 1.0.0.
 | `awp-types` | Mirrors the AWP wire format, so it moves with the spec | Stabilize alongside `adk-awp` |
 | `adk-devtools` | New in 2.0.0; the coding-agent tool surface is still being shaped by use | Promote after 1-2 release cycles without breaking changes |
 | `adk-computer-use` | New in 2.0.0; tracks the `computer-use-mcp` wire contracts | Stabilize when the upstream contracts are versioned |
+| `adk-gcp` | New in 2.1.0; the shared ADC/LRO surface is still absorbing the per-crate GCP clients | Promote once the remaining Vertex backends consume it without API changes |
 
 ### Excluded from Workspace
 

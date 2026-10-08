@@ -546,5 +546,38 @@ impl From<Utf8Error> for Error {
     }
 }
 
+/// Maps a mid-stream SSE `error` event onto the variant the same failure gets
+/// as an HTTP error response, so retry decisions match.
+///
+/// # Example
+///
+/// ```
+/// use adk_anthropic::{ApiError, Error};
+///
+/// let error = Error::from(ApiError {
+///     error_type: "overloaded_error".to_string(),
+///     message: "Overloaded".to_string(),
+/// });
+/// assert!(error.is_retryable());
+/// ```
+impl From<crate::types::ApiError> for Error {
+    fn from(err: crate::types::ApiError) -> Self {
+        let crate::types::ApiError { error_type, message } = err;
+        match error_type.as_str() {
+            "overloaded_error" => Error::service_unavailable(message, None),
+            "rate_limit_error" => Error::rate_limit(message, None),
+            "api_error" => Error::internal_server(message, None),
+            "timeout_error" => Error::timeout(message, None),
+            "authentication_error" => Error::authentication(message),
+            "permission_error" => Error::permission(message),
+            "not_found_error" => Error::not_found(message, None, None),
+            "invalid_request_error" => Error::bad_request(message, None),
+            "billing_error" => Error::api(402, Some(error_type), message, None),
+            "request_too_large" => Error::api(413, Some(error_type), message, None),
+            _ => Error::streaming(format!("{error_type}: {message}"), None),
+        }
+    }
+}
+
 /// A specialized Result type for adk-anthropic operations.
 pub type Result<T> = std::result::Result<T, Error>;

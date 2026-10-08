@@ -21,7 +21,7 @@ pub use evidence::{
     EvidenceReference, ProtocolDescriptor, ProtocolExtensionEnvelope, ProtocolExtensions,
 };
 pub use intervention::{InterventionKind, InterventionState, InterventionStatus};
-pub use money::Money;
+pub use money::{MAX_MONEY_SCALE, Money, MoneyError};
 pub use order::{OrderSnapshot, OrderState, ReceiptState};
 pub use transaction::{
     CommerceMode, PaymentMethodSelection, ProtocolEnvelopeDigest, ProtocolReference, ProtocolRefs,

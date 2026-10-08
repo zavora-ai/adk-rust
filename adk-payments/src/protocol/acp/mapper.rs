@@ -138,23 +138,42 @@ pub(crate) fn delegate_payment_command(
         None
     };
 
+    // The selection is persisted and logged, so it carries display metadata
+    // only; the raw card stays in the command-level payload for the tokenizer.
+    let card = &request.payment_method;
+    let mut display_card = Map::new();
+    display_card.insert("type".to_string(), json!(card.r#type));
+    display_card.insert("card_number_type".to_string(), json!(card.card_number_type));
+    display_card
+        .insert("display_card_funding_type".to_string(), json!(card.display_card_funding_type));
+    for (key, value) in [
+        ("display_brand", &card.display_brand),
+        ("display_last4", &card.display_last4),
+        ("display_wallet_type", &card.display_wallet_type),
+    ] {
+        if let Some(value) = value {
+            display_card.insert(key.to_string(), json!(value));
+        }
+    }
+    if let Some(is_virtual) = card.r#virtual {
+        display_card.insert("virtual".to_string(), json!(is_virtual));
+    }
+
     DelegatePaymentCommand {
         context,
         selected_payment_method: Some(PaymentMethodSelection {
-            selection_kind: request.payment_method.r#type.clone(),
-            reference: request.payment_method.display_last4.clone(),
-            display_hint: request.payment_method.display_brand.clone(),
-            extensions: payload_extensions(
-                "delegate_payment_method",
-                json!(request.payment_method.clone()),
-            ),
+            selection_kind: card.r#type.clone(),
+            reference: card.display_last4.clone(),
+            display_hint: card.display_brand.clone(),
+            extensions: payload_extensions("delegate_payment_method", Value::Object(display_card)),
         }),
         allowance: DelegatePaymentAllowance {
             reason: request.allowance.reason.clone(),
+            // ACP amounts are integers in the currency's minor unit.
             max_amount: Money::new(
                 request.allowance.currency.clone(),
                 request.allowance.max_amount,
-                2,
+                Money::iso_minor_unit_scale(&request.allowance.currency).unwrap_or(2),
             ),
             merchant_id: request.allowance.merchant_id.clone(),
             checkout_session_id: request.allowance.checkout_session_id.clone(),
@@ -885,53 +904,90 @@ mod tests {
         assert_eq!(session.order.unwrap().checkout_session_id, "checkout_session_123");
     }
 
+    fn delegate_request(currency: &str) -> AcpDelegatePaymentRequest {
+        AcpDelegatePaymentRequest {
+            payment_method: crate::protocol::acp::types::AcpPaymentMethodCard {
+                r#type: "card".to_string(),
+                card_number_type: "fpan".to_string(),
+                number: "4242424242424242".to_string(),
+                exp_month: Some("11".to_string()),
+                exp_year: Some("2026".to_string()),
+                name: Some("Jane Doe".to_string()),
+                cvc: Some("223".to_string()),
+                cryptogram: Some("AgAAAAAAAIR8CQrXcIhbQAAAAAA=".to_string()),
+                eci_value: Some("05".to_string()),
+                checks_performed: vec!["avs".to_string()],
+                iin: Some("424242".to_string()),
+                display_card_funding_type: "credit".to_string(),
+                display_wallet_type: None,
+                display_brand: Some("visa".to_string()),
+                display_last4: Some("4242".to_string()),
+                metadata: BTreeMap::new(),
+                r#virtual: Some(false),
+            },
+            allowance: AcpAllowance {
+                reason: "one_time".to_string(),
+                max_amount: 2_000,
+                currency: currency.to_string(),
+                checkout_session_id: "checkout_session_123".to_string(),
+                merchant_id: "merchant-123".to_string(),
+                expires_at: Utc.with_ymd_and_hms(2026, 3, 22, 11, 0, 0).unwrap(),
+            },
+            billing_address: None,
+            risk_signals: vec![AcpRiskSignal {
+                r#type: "card_testing".to_string(),
+                score: 10,
+                action: "manual_review".to_string(),
+            }],
+            metadata: BTreeMap::from([("source".to_string(), "chatgpt_checkout".to_string())]),
+        }
+    }
+
     #[test]
     fn maps_delegate_payment_request_into_canonical_delegate_command() {
-        let command = delegate_payment_command(
-            AcpDelegatePaymentRequest {
-                payment_method: crate::protocol::acp::types::AcpPaymentMethodCard {
-                    r#type: "card".to_string(),
-                    card_number_type: "fpan".to_string(),
-                    number: "4242424242424242".to_string(),
-                    exp_month: Some("11".to_string()),
-                    exp_year: Some("2026".to_string()),
-                    name: Some("Jane Doe".to_string()),
-                    cvc: Some("223".to_string()),
-                    cryptogram: None,
-                    eci_value: None,
-                    checks_performed: vec!["avs".to_string()],
-                    iin: Some("424242".to_string()),
-                    display_card_funding_type: "credit".to_string(),
-                    display_wallet_type: None,
-                    display_brand: Some("visa".to_string()),
-                    display_last4: Some("4242".to_string()),
-                    metadata: BTreeMap::new(),
-                    r#virtual: Some(false),
-                },
-                allowance: AcpAllowance {
-                    reason: "one_time".to_string(),
-                    max_amount: 2_000,
-                    currency: "usd".to_string(),
-                    checkout_session_id: "checkout_session_123".to_string(),
-                    merchant_id: "merchant-123".to_string(),
-                    expires_at: Utc.with_ymd_and_hms(2026, 3, 22, 11, 0, 0).unwrap(),
-                },
-                billing_address: None,
-                risk_signals: vec![AcpRiskSignal {
-                    r#type: "card_testing".to_string(),
-                    score: 10,
-                    action: "manual_review".to_string(),
-                }],
-                metadata: BTreeMap::from([("source".to_string(), "chatgpt_checkout".to_string())]),
-            },
-            context("checkout_session_123"),
-        );
+        let command =
+            delegate_payment_command(delegate_request("usd"), context("checkout_session_123"));
 
-        assert_eq!(command.allowance.max_amount.amount_minor, 2_000);
+        assert_eq!(command.allowance.max_amount, Money::new("usd", 2_000, 2));
         assert_eq!(
             command.selected_payment_method.as_ref().and_then(|method| method.reference.as_deref()),
             Some("4242")
         );
         assert!(command.extensions.as_slice()[0].fields.contains_key("payment_method"));
+    }
+
+    #[test]
+    fn delegated_payment_selection_keeps_only_display_card_fields() {
+        let command =
+            delegate_payment_command(delegate_request("usd"), context("checkout_session_123"));
+        let selection = command.selected_payment_method.expect("selection should be mapped");
+
+        let display_card = json!({
+            "type": "card",
+            "card_number_type": "fpan",
+            "display_card_funding_type": "credit",
+            "display_brand": "visa",
+            "display_last4": "4242",
+            "virtual": false,
+        });
+        assert_eq!(selection.extensions.as_slice()[0].fields["request"], display_card);
+
+        let serialized = serde_json::to_string(&selection).unwrap();
+        let debug = format!("{selection:?}");
+        for secret in
+            ["4242424242424242", "223", "AgAAAAAAAIR8CQrXcIhbQAAAAAA=", "Jane Doe", "424242"]
+        {
+            assert!(!serialized.contains(secret), "serialized selection leaked `{secret}`");
+            assert!(!debug.contains(secret), "debug selection leaked `{secret}`");
+        }
+    }
+
+    #[test]
+    fn delegated_allowance_uses_the_currency_minor_unit() {
+        for (currency, scale) in [("jpy", 0), ("usd", 2), ("KWD", 3), ("XXX", 2)] {
+            let command =
+                delegate_payment_command(delegate_request(currency), context("checkout_session_1"));
+            assert_eq!(command.allowance.max_amount, Money::new(currency, 2_000, scale));
+        }
     }
 }

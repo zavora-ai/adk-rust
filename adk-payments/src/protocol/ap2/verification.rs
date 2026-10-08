@@ -10,6 +10,19 @@ use crate::protocol::ap2::types::{
     AuthorizationArtifact, CartMandate, IntentMandate, PaymentMandate,
 };
 
+/// Claim a [`MerchantAuthorizationVerifier`] sets to the merchant name bound to
+/// the verified signing key.
+///
+/// When present, `Ap2Adapter` rejects a cart whose self-reported
+/// `contents.merchant_name` differs from this value, so intent-mandate merchant
+/// allow-lists are enforced against the verified identity.
+pub const VERIFIED_MERCHANT_NAME_CLAIM: &str = "verified_merchant_name";
+
+/// Claim recording whether an authorization artifact was cryptographically verified.
+///
+/// The presence-only development verifiers set it to `false`.
+pub const CRYPTOGRAPHICALLY_VERIFIED_CLAIM: &str = "cryptographically_verified";
+
 /// Verification metadata captured after one authorization artifact passes policy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,14 +34,40 @@ pub struct VerifiedAuthorization {
 }
 
 impl VerifiedAuthorization {
-    fn new(artifact_kind: impl Into<String>, claims: Map<String, Value>) -> Self {
+    /// Creates verification metadata stamped with the current time.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_payments::protocol::ap2::{VERIFIED_MERCHANT_NAME_CLAIM, VerifiedAuthorization};
+    /// use serde_json::{Map, json};
+    ///
+    /// let mut claims = Map::new();
+    /// claims.insert(VERIFIED_MERCHANT_NAME_CLAIM.to_string(), json!("Merchant Example"));
+    /// let verified = VerifiedAuthorization::new("merchant_authorization", claims);
+    /// assert_eq!(verified.artifact_kind, "merchant_authorization");
+    /// ```
+    #[must_use]
+    pub fn new(artifact_kind: impl Into<String>, claims: Map<String, Value>) -> Self {
         Self { artifact_kind: artifact_kind.into(), verified_at: Utc::now(), claims }
     }
 }
 
 /// Verifies merchant authorization artifacts bound to `CartMandate`.
+///
+/// Implementations must verify the artifact cryptographically against the
+/// cart contents (for example a JWS over the canonical `contents` payload),
+/// bind the signing key to the merchant named in `contents.merchant_name`, and
+/// compare signatures or digests in constant time. Set
+/// [`VERIFIED_MERCHANT_NAME_CLAIM`] to the merchant name the key is bound to.
 #[async_trait]
 pub trait MerchantAuthorizationVerifier: Send + Sync {
+    /// Verifies `artifact` for `mandate` and returns the verified claims.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the artifact is missing, malformed, expired, or
+    /// does not verify against the mandate contents.
     async fn verify_cart_authorization(
         &self,
         mandate: &CartMandate,
@@ -37,14 +76,29 @@ pub trait MerchantAuthorizationVerifier: Send + Sync {
 }
 
 /// Verifies user authorization artifacts bound to intent or payment mandates.
+///
+/// Implementations must verify the artifact cryptographically against the
+/// mandate contents, check the user's key or credential binding, and compare
+/// signatures or digests in constant time.
 #[async_trait]
 pub trait UserAuthorizationVerifier: Send + Sync {
+    /// Verifies `artifact` for an intent mandate and returns the verified claims.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the artifact does not verify against the intent.
     async fn verify_intent_authorization(
         &self,
         mandate: &IntentMandate,
         artifact: &AuthorizationArtifact,
     ) -> Result<VerifiedAuthorization>;
 
+    /// Verifies `artifact` for a payment mandate and returns the verified claims.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the artifact does not verify against the payment
+    /// mandate contents.
     async fn verify_payment_authorization(
         &self,
         mandate: &PaymentMandate,
@@ -52,7 +106,11 @@ pub trait UserAuthorizationVerifier: Send + Sync {
     ) -> Result<VerifiedAuthorization>;
 }
 
-/// Minimal verifier that requires a non-empty merchant authorization artifact.
+/// Presence-only merchant check that performs **no cryptographic verification**.
+///
+/// Any non-empty value passes, including a forged one. `Ap2Adapter` uses it
+/// only after `allow_unverified_authorizations()` is called, for local
+/// development and tests. Never configure it in production.
 pub struct RequireMerchantAuthorization;
 
 #[async_trait]
@@ -73,11 +131,16 @@ impl MerchantAuthorizationVerifier for RequireMerchantAuthorization {
         claims.insert("merchant_name".to_string(), json!(mandate.contents.merchant_name));
         claims.insert("artifact_type".to_string(), json!(artifact.artifact_type));
         claims.insert("content_type".to_string(), json!(artifact.content_type));
+        claims.insert(CRYPTOGRAPHICALLY_VERIFIED_CLAIM.to_string(), json!(false));
         Ok(VerifiedAuthorization::new("merchant_authorization", claims))
     }
 }
 
-/// Minimal verifier that requires non-empty detached or embedded user authorization.
+/// Presence-only user check that performs **no cryptographic verification**.
+///
+/// Any non-empty value passes, including a forged one. `Ap2Adapter` uses it
+/// only after `allow_unverified_authorizations()` is called, for local
+/// development and tests. Never configure it in production.
 pub struct RequireUserAuthorization;
 
 #[async_trait]
@@ -101,6 +164,7 @@ impl UserAuthorizationVerifier for RequireUserAuthorization {
         );
         claims.insert("artifact_type".to_string(), json!(artifact.artifact_type));
         claims.insert("content_type".to_string(), json!(artifact.content_type));
+        claims.insert(CRYPTOGRAPHICALLY_VERIFIED_CLAIM.to_string(), json!(false));
         Ok(VerifiedAuthorization::new("intent_authorization", claims))
     }
 
@@ -123,6 +187,7 @@ impl UserAuthorizationVerifier for RequireUserAuthorization {
         );
         claims.insert("artifact_type".to_string(), json!(artifact.artifact_type));
         claims.insert("content_type".to_string(), json!(artifact.content_type));
+        claims.insert(CRYPTOGRAPHICALLY_VERIFIED_CLAIM.to_string(), json!(false));
         Ok(VerifiedAuthorization::new("user_authorization", claims))
     }
 }

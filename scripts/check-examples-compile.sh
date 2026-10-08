@@ -30,12 +30,20 @@ SKIP_EXAMPLES=()
 
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target/examples-check}"
 
-mapfile -t MANIFESTS < <(find examples -maxdepth 2 -name Cargo.toml | sort)
+# `mapfile` needs bash 4; stock macOS ships 3.2, so read the list in a loop.
+MANIFESTS=()
+while IFS= read -r manifest; do
+    MANIFESTS+=("$manifest")
+done < <(find examples -maxdepth 2 -name Cargo.toml | sort)
+
+# Per-run scratch file so parallel shards never share one path.
+ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/example-check-err.XXXXXX")"
+trap 'rm -f "$ERR_FILE"' EXIT
 
 declare -a failed=()
 declare -i checked=0 skipped=0 index=0
 
-for manifest in "${MANIFESTS[@]}"; do
+for manifest in ${MANIFESTS[@]+"${MANIFESTS[@]}"}; do
     dir="$(dirname "$manifest")"
 
     skip=0
@@ -56,11 +64,11 @@ for manifest in "${MANIFESTS[@]}"; do
     index+=1
 
     # --locked also catches a lockfile that no longer matches its manifest.
-    if cargo check --manifest-path "$manifest" --locked --quiet 2>/tmp/example-check-err; then
+    if cargo check --manifest-path "$manifest" --locked --quiet 2>"$ERR_FILE"; then
         printf 'ok       %s\n' "$dir"
     else
         printf 'FAILED   %s\n' "$dir"
-        sed 's/^/         /' /tmp/example-check-err | head -20
+        sed 's/^/         /' "$ERR_FILE" | head -20
         failed+=("$dir")
     fi
     checked+=1

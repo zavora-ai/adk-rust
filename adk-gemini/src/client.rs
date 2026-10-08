@@ -68,7 +68,8 @@ pub enum Model {
     Gemini31FlashImage,
 
     // ── Gemini 3 ─────────────────────────────────────────────────
-    /// Gemini 3 Pro preview.
+    /// Gemini 3 Pro preview (retired).
+    #[deprecated(note = "Retired. Use Model::Gemini31ProPreview instead.")]
     #[serde(rename = "models/gemini-3-pro-preview")]
     Gemini3ProPreview,
     /// Gemini 3 Pro Image (Nano Banana Pro) — GA multimodal output.

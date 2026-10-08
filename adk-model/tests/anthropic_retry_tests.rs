@@ -55,7 +55,7 @@ proptest! {
     /// **Feature: anthropic-deep-integration, Property 9: Retry-after header respected**
     /// *For any* HTTP 429 response with a `retry-after` header specifying D seconds,
     /// the retry mechanism SHALL wait at least D seconds before the next attempt,
-    /// regardless of the configured exponential backoff parameters.
+    /// regardless of the configured exponential backoff, up to `RetryConfig::max_delay`.
     /// **Validates: Requirements 5.1**
     #[test]
     fn prop_retry_after_header_respected(delay_ms in arb_retry_after_ms()) {
@@ -68,7 +68,8 @@ proptest! {
             .with_max_retries(1)
             // Set backoff to zero so any observed delay comes from the hint.
             .with_initial_delay(Duration::ZERO)
-            .with_max_delay(Duration::ZERO);
+            // The cap sits above every generated delay, so the hint is honoured in full.
+            .with_max_delay(Duration::from_secs(1));
 
         let hint = ServerRetryHint {
             retry_after: Some(Duration::from_millis(delay_ms)),

@@ -4,18 +4,26 @@ mod support;
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 use adk_payments::ACP_STABLE_BASELINE;
 use adk_payments::domain::{
     CommerceMode, OrderSnapshot, OrderState, ProtocolDescriptor, ProtocolExtensions, ReceiptState,
 };
 use adk_payments::kernel::{MerchantCheckoutService, OrderUpdateCommand};
-use adk_payments::protocol::acp::{AcpRouterBuilder, AcpVerificationConfig, IdempotencyMode};
+use adk_payments::protocol::acp::{
+    AcpRouterBuilder, AcpVerificationConfig, DetachedSignatureVerifier, IdempotencyMode,
+};
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
 use jsonschema::validator_for;
 use serde_json::{Value, json};
+use sha2::Sha256;
 use support::commerce_harness::{
     HarnessActorKind, MultiActorHarness, MultiActorHarnessActors, MultiActorHarnessConfig,
 };
@@ -98,7 +106,8 @@ async fn acp_human_present_flow_updates_journal_memory_and_evidence_end_to_end()
         .with_merchant_checkout_service(harness.backend.clone())
         .with_delegated_payment_service(harness.backend.clone())
         .with_verification(
-            AcpVerificationConfig::strict().with_idempotency_mode(IdempotencyMode::RequireForPost),
+            AcpVerificationConfig::permissive()
+                .with_idempotency_mode(IdempotencyMode::RequireForPost),
         )
         .build()
         .unwrap();
@@ -324,4 +333,118 @@ async fn acp_human_present_flow_updates_journal_memory_and_evidence_end_to_end()
     assert!(actions.iter().any(|action| {
         action.actor == HarnessActorKind::Webhook && action.action == "apply_order_update"
     }));
+}
+
+/// HMAC-SHA256 detached-signature verifier over `method`, `path`, `Timestamp`, and body.
+struct HmacRequestVerifier {
+    key: Vec<u8>,
+}
+
+impl HmacRequestVerifier {
+    fn mac(
+        &self,
+        timestamp: Option<DateTime<Utc>>,
+        method: &str,
+        path: &str,
+        body: &[u8],
+    ) -> Hmac<Sha256> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).unwrap();
+        let timestamp = timestamp.map(|value| value.to_rfc3339()).unwrap_or_default();
+        mac.update(format!("{method}\n{path}\n{timestamp}\n").as_bytes());
+        mac.update(body);
+        mac
+    }
+
+    fn sign(&self, timestamp: DateTime<Utc>, method: &str, path: &str, body: &[u8]) -> String {
+        hex::encode(self.mac(Some(timestamp), method, path, body).finalize().into_bytes())
+    }
+}
+
+#[async_trait]
+impl DetachedSignatureVerifier for HmacRequestVerifier {
+    async fn verify(
+        &self,
+        signature: &str,
+        timestamp: Option<DateTime<Utc>>,
+        method: &str,
+        path: &str,
+        body: &[u8],
+    ) -> adk_core::Result<()> {
+        let signature = hex::decode(signature).map_err(|_| signature_error())?;
+        // `verify_slice` compares in constant time.
+        self.mac(timestamp, method, path, body)
+            .verify_slice(&signature)
+            .map_err(|_| signature_error())
+    }
+}
+
+fn signature_error() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Server,
+        ErrorCategory::Forbidden,
+        "payments.acp.test.invalid_signature",
+        "signature does not match the request",
+    )
+}
+
+fn signed_get(
+    path: &str,
+    timestamp: Option<DateTime<Utc>>,
+    signature: Option<&str>,
+) -> Request<Body> {
+    let mut builder =
+        Request::builder().method(Method::GET).uri(path).header("API-Version", ACP_STABLE_BASELINE);
+    if let Some(timestamp) = timestamp {
+        builder = builder.header("Timestamp", timestamp.to_rfc3339());
+    }
+    if let Some(signature) = signature {
+        builder = builder.header("Signature", signature);
+    }
+    builder.body(Body::empty()).unwrap()
+}
+
+#[tokio::test]
+async fn acp_strict_profile_requires_a_verifier_and_verifies_every_request() {
+    let harness = MultiActorHarness::new(MultiActorHarnessConfig::acp_defaults()).await;
+    let router = |verification: AcpVerificationConfig| {
+        AcpRouterBuilder::new(harness.acp_context_template(CommerceMode::HumanPresent))
+            .with_merchant_checkout_service(harness.backend.clone())
+            .with_delegated_payment_service(harness.backend.clone())
+            .with_verification(verification)
+            .build()
+    };
+
+    let error = router(AcpVerificationConfig::strict()).unwrap_err();
+    assert_eq!(error.code, "payments.acp.signature_verifier_not_configured");
+    let error = router(AcpVerificationConfig::permissive().require_signature(true)).unwrap_err();
+    assert_eq!(error.code, "payments.acp.signature_verifier_not_configured");
+
+    let signer = Arc::new(HmacRequestVerifier { key: b"acp-shared-secret".to_vec() });
+    let mut app =
+        router(AcpVerificationConfig::strict().with_signature_verifier(signer.clone())).unwrap();
+    let path = "/checkout_sessions/checkout_session_missing";
+    let now = Utc::now();
+    let valid = signer.sign(now, "GET", path, b"");
+    let forged = signer.sign(now, "GET", "/checkout_sessions/other", b"");
+
+    let unsigned =
+        response_json(&mut app, signed_get(path, Some(now), None), StatusCode::BAD_REQUEST).await;
+    assert_eq!(unsigned["code"], "signature_required");
+    let untimed =
+        response_json(&mut app, signed_get(path, None, Some(&valid)), StatusCode::BAD_REQUEST)
+            .await;
+    assert_eq!(untimed["code"], "timestamp_required");
+    let rejected = response_json(
+        &mut app,
+        signed_get(path, Some(now), Some(&forged)),
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+    assert_eq!(rejected["code"], "invalid_signature");
+
+    // A verified request reaches the backend, which reports the unknown session.
+    let accepted =
+        response_json(&mut app, signed_get(path, Some(now), Some(&valid)), StatusCode::NOT_FOUND)
+            .await;
+    assert_eq!(accepted["code"], "not_found");
 }

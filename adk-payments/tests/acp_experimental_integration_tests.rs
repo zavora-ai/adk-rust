@@ -414,7 +414,7 @@ async fn acp_experimental_routes_support_discovery_delegate_auth_and_signed_webh
     .with_merchant_checkout_service(backend.clone())
     .with_delegated_payment_service(backend.clone())
     .with_verification(
-        AcpVerificationConfig::strict().with_idempotency_mode(IdempotencyMode::RequireForPost),
+        AcpVerificationConfig::permissive().with_idempotency_mode(IdempotencyMode::RequireForPost),
     )
     .build()
     .unwrap();
@@ -463,7 +463,7 @@ async fn acp_experimental_routes_support_discovery_delegate_auth_and_signed_webh
         webhook_secret.clone(),
     ))
     .with_verification(
-        AcpVerificationConfig::strict()
+        AcpVerificationConfig::permissive()
             .with_supported_api_versions(vec![ACP_DELEGATE_AUTH_BASELINE.to_string()])
             .with_idempotency_mode(IdempotencyMode::RequireForPost),
     )

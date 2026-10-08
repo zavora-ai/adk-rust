@@ -60,7 +60,7 @@ Live — documented there.)
 
 ```toml
 # Voice + tools + the integration layer (recommended)
-adk-realtime = { version = "2.2.0", features = ["openai", "gemini", "integration"] }
+adk-realtime = { version = "2.3.0", features = ["openai", "gemini", "integration"] }
 ```
 
 | Feature | Adds |

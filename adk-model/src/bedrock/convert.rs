@@ -402,13 +402,16 @@ fn mime_to_bedrock_document_format(mime_type: &str) -> Option<DocumentFormat> {
 /// typically contains `description` and `parameters` fields.
 ///
 /// When `prompt_caching` is provided, a `CachePoint` block is appended after
-/// the tool definitions.
+/// the tool definitions. Tools are sorted by name so the cached prefix is
+/// identical across requests built from the same `HashMap`.
 fn adk_tools_to_bedrock(
     tools: &HashMap<String, Value>,
     prompt_caching: Option<&BedrockCacheConfig>,
 ) -> ToolConfiguration {
-    let mut bedrock_tools: Vec<Tool> = tools
-        .iter()
+    let mut sorted_tools = tools.iter().collect::<Vec<_>>();
+    sorted_tools.sort_unstable_by_key(|(name, _)| *name);
+    let mut bedrock_tools: Vec<Tool> = sorted_tools
+        .into_iter()
         .filter_map(|(name, decl)| {
             let description = decl.get("description").and_then(|d| d.as_str()).map(String::from);
 
@@ -768,6 +771,35 @@ mod tests {
         let doc = json_value_to_document(&value);
         let back = document_to_json_value(&doc);
         assert_eq!(value, back);
+    }
+
+    #[test]
+    fn tool_configuration_order_is_stable_across_maps() {
+        let names: Vec<String> = (0..12).map(|i| format!("tool_{i:02}")).collect();
+        let declaration = |name: &str| {
+            serde_json::json!({
+                "description": format!("{name} description"),
+                "parameters": {"type": "object", "properties": {}}
+            })
+        };
+        let forward: HashMap<String, Value> =
+            names.iter().map(|name| (name.clone(), declaration(name))).collect();
+        let reverse: HashMap<String, Value> =
+            names.iter().rev().map(|name| (name.clone(), declaration(name))).collect();
+
+        let from_forward = adk_tools_to_bedrock(&forward, None);
+        let from_reverse = adk_tools_to_bedrock(&reverse, None);
+
+        assert_eq!(from_forward, from_reverse);
+        let converted_names: Vec<String> = from_forward
+            .tools()
+            .iter()
+            .map(|tool| match tool {
+                Tool::ToolSpec(spec) => spec.name().to_string(),
+                other => panic!("unexpected tool entry {other:?}"),
+            })
+            .collect();
+        assert_eq!(converted_names, names);
     }
 
     #[test]

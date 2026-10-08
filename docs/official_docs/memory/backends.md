@@ -40,6 +40,10 @@ let memory = SqliteMemoryService::new("sqlite://memory.db").await?;
 // or build from an existing pool: SqliteMemoryService::from_pool(pool)
 ```
 
+Search treats the query as plain text: an entry matches when it contains every
+word of the query, and FTS5 syntax such as `'`, `?`, `*`, `AND` or `OR` is
+matched literally, the same as `plainto_tsquery` in the Postgres backend.
+
 ## Postgres + pgvector — production semantic search
 
 The backend for real similarity search. It stores embeddings in `pgvector` and
@@ -75,6 +79,11 @@ let memory = RedisMemoryService::new(RedisMemoryConfig {
 `MongoMemoryService::new(...)` and `Neo4jMemoryService::new(...)` follow the same
 shape. All of them honor the `(app, user, project)` isolation from
 [Concepts](concepts.md#isolation-app-user-and-project).
+
+| Backend | Isolation detail |
+|---------|------------------|
+| Redis | Key segments are percent-encoded (`%` → `%25`, `:` → `%3A`), so app `a:b` with user `c` never shares keys with app `a` and user `b:c`. `delete_user` matches only the named user's keys, including ids such as `*`. |
+| Neo4j | Entry ids are scoped by app, user, project and session, so ingesting the same session again updates it. Vector search over-fetches `limit × 10` candidates (capped at 1000) before filtering to the tenant; raise the cap with `with_vector_candidate_cap` when one index holds many tenants. |
 
 ## Embeddings
 

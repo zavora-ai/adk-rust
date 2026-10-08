@@ -424,10 +424,12 @@ fn merge_consecutive_messages(messages: &mut Vec<adk_anthropic::MessageParam>) {
 /// structured context (error type, message, status code, request ID).
 ///
 /// The resulting `AnthropicApiError` is then converted to `AdkError` via its
-/// `From` impl. The request ID, when present, is also recorded on the current
-/// tracing span as `anthropic.request_id` (Requirement 4.2).
+/// `From` impl, carrying any server `Retry-After` delay as the retry hint. The
+/// request ID, when present, is also recorded on the current tracing span as
+/// `anthropic.request_id` (Requirement 4.2).
 pub(super) fn convert_anthropic_error(e: adk_anthropic::Error) -> AdkError {
     let api_error = to_anthropic_api_error(&e);
+    let retry_after = extract_retry_hint(&e).and_then(|hint| hint.retry_after);
 
     // Requirement 4.2: record request-id on the active tracing span when present
     if let Some(ref rid) = api_error.request_id {
@@ -442,7 +444,7 @@ pub(super) fn convert_anthropic_error(e: adk_anthropic::Error) -> AdkError {
         "anthropic api error"
     );
 
-    api_error.into()
+    crate::retry::with_retry_after(api_error.into(), retry_after)
 }
 
 /// Build an [`AnthropicApiError`] from an `adk_anthropic::Error`, extracting the
@@ -528,7 +530,6 @@ fn to_anthropic_api_error(e: &adk_anthropic::Error) -> AnthropicApiError {
 
 /// Extract a [`ServerRetryHint`] from an `adk_anthropic::Error`, if the error
 /// contains a server-provided `retry_after` value.
-#[allow(dead_code)]
 fn extract_retry_hint(e: &adk_anthropic::Error) -> Option<ServerRetryHint> {
     match e {
         adk_anthropic::Error::RateLimit { retry_after: Some(secs), .. }
@@ -718,16 +719,20 @@ impl Llm for AnthropicClient {
                                         .drain(..)
                                         .filter(|(id, name, _)| !id.is_empty() && !name.is_empty())
                                         .map(|(id, name, args_str)| {
-                                            let args: serde_json::Value = serde_json::from_str(&args_str)
-                                                .unwrap_or(serde_json::json!({}));
-                                            Part::FunctionCall {
+                                            let args = crate::tool_args::parse_streamed_tool_arguments(
+                                                "anthropic",
+                                                "model.anthropic.invalid_tool_arguments",
+                                                &name,
+                                                &args_str,
+                                            )?;
+                                            Ok(Part::FunctionCall {
                                                 name,
                                                 args,
                                                 id: Some(id),
                                                 thought_signature: None,
-                                            }
+                                            })
                                         })
-                                        .collect::<Vec<_>>();
+                                        .collect::<Result<Vec<_>, AdkError>>()?;
                                     parts.extend(tool_calls);
                                 }
 
@@ -804,11 +809,18 @@ impl Llm for AnthropicClient {
                                 );
                             }
                         }
+                        // A mid-stream `error` event (for example `overloaded_error`) aborts
+                        // the message; it fails the stream with the category the same error
+                        // gets as an HTTP response, so retry policy can act on it.
+                        MessageStreamEvent::StreamError { error } => {
+                            Err::<(), AdkError>(convert_anthropic_error(
+                                adk_anthropic::Error::from(error),
+                            ))?;
+                        }
                         // New adk-anthropic event variants — log at debug level for now
                         MessageStreamEvent::ToolInputStart { .. }
                         | MessageStreamEvent::ToolInputDelta { .. }
-                        | MessageStreamEvent::CompactionEvent(_)
-                        | MessageStreamEvent::StreamError { .. } => {
+                        | MessageStreamEvent::CompactionEvent(_) => {
                             debug!("unhandled stream event variant received");
                         }
                     }
@@ -863,6 +875,22 @@ mod tests {
             config: None,
             previous_response_id: None,
         }
+    }
+
+    #[test]
+    fn retry_after_from_anthropic_errors_becomes_the_retry_hint() {
+        let rate_limited =
+            convert_anthropic_error(adk_anthropic::Error::rate_limit("slow down", Some(12)));
+        assert_eq!(rate_limited.category, ErrorCategory::RateLimited);
+        assert_eq!(rate_limited.retry.retry_after(), Some(std::time::Duration::from_secs(12)));
+
+        let overloaded =
+            convert_anthropic_error(adk_anthropic::Error::service_unavailable("busy", Some(3)));
+        assert_eq!(overloaded.category, ErrorCategory::Unavailable);
+        assert_eq!(overloaded.retry.retry_after(), Some(std::time::Duration::from_secs(3)));
+
+        let internal = convert_anthropic_error(adk_anthropic::Error::internal_server("oops", None));
+        assert!(internal.is_retryable(), "Anthropic api_error (500) is transient");
     }
 
     #[test]

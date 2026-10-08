@@ -154,10 +154,10 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-graph = { version = "2.2.0", features = ["sqlite"] }
-adk-agent = "2.2.0"
-adk-model = "2.2.0"
-adk-core = "2.2.0"
+adk-graph = { version = "2.3.0", features = ["sqlite"] }
+adk-agent = "2.3.0"
+adk-model = "2.3.0"
+adk-core = "2.3.0"
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"
@@ -1187,23 +1187,44 @@ let graph = StateGraph::with_channels(&["task", "result"])
 
 A checkpoint stores the accumulated state, the step number, and the **frontier** —
 the nodes that still have to run. It is written after the frontier advances, so
-resuming never re-executes a node that already completed and never double-applies
-its updates. A run that finishes checkpoints an empty frontier, so resuming a
-completed thread returns the final state rather than restarting the graph.
+resuming an interrupted run does not re-execute a node whose step was checkpointed
+and never double-applies its updates. A run that finishes checkpoints an empty
+frontier, so resuming a completed thread with `invoke` returns the final state
+rather than restarting the graph.
 
-Two cases deliberately checkpoint the frontier that was *executing* rather than
-the next one, because the interrupted node has not produced its updates yet and
-must run again on resume:
+The frontier saved depends on how the step ended:
 
 | Situation | Frontier saved |
 |-----------|----------------|
 | Super-step completed | The next nodes to run |
 | Run finished | Empty |
-| Interrupt raised (blocking or streaming) | The nodes that were executing |
+| `interrupt_before` gate | The nodes that were executing; the gated node has not run |
+| `interrupt_after` gate | The successors of the nodes that ran |
+| Dynamic or tool-confirmation pause | The successors and `goto` targets of every node that completed in the step, plus each node that paused |
+
+A checkpoint also records the arrivals a fan-in node is still waiting on, so a join
+whose first predecessor finished before a pause or crash runs once the last one
+arrives after the resume. `update_state` keeps those arrivals, the answered gate,
+and the retry budget.
 
 Streamed runs checkpoint on the same schedule as blocking runs, including when an
 interrupt ends the stream, so a human-in-the-loop pause is resumable in either
 execution mode.
+
+### Execution Guarantees
+
+Node execution is **at-least-once**. A super-step runs its nodes, applies their
+updates, and only then saves its checkpoint, so:
+
+| Event | Effect on resume |
+|-------|------------------|
+| Crash while a super-step is running | Every node of that step runs again, including nodes that had finished |
+| Checkpoint save fails | The run fails; the last saved step is where a resume starts |
+| Pause or completed step | No node of a checkpointed step runs again |
+
+Make a node with external side effects — a payment, an email, a write to another
+system — idempotent, for example by deriving an idempotency key from the thread id
+and step, so a repeated execution is harmless.
 
 ### Checkpoint History (Time Travel)
 
@@ -1528,6 +1549,12 @@ of executing the child again — which matters when the child costs a model call
 optional TTL, so an unchanged input skips the work. Requires the `node-cache`
 feature; a Redis-backed store is available behind `redis-cache`.
 
+The key is computed from the state at the start of the super-step, and a hit's
+cached updates are applied with the step's other updates, so a hit is
+indistinguishable from the node running: siblings in the same step never see it.
+The in-memory store belongs to the compiled graph, so every run of that graph
+shares it.
+
 ### Delta checkpoints
 
 The `delta` feature stores the difference between super-steps rather than the whole
@@ -1639,6 +1666,21 @@ let graph_agent = GraphAgent::builder("workflow")
 // GraphAgent implements Agent trait - use with Launcher or Runner
 // See adk-runner README for Runner configuration
 ```
+
+### Turns on a Checkpointed Thread
+
+Each `Agent::run` call is one turn on a thread whose id is the session id. With a
+checkpointer configured:
+
+| Thread's latest checkpoint | What the turn does |
+|----------------------------|--------------------|
+| None | Runs the graph from its entry nodes |
+| Paused (non-empty frontier) | Resumes the paused run, with the turn's input merged into its state |
+| Finished (empty frontier) | Runs the graph again from its entry nodes, starting from the previous turn's final state with the turn's input merged on top |
+
+The recursion limit applies to each turn separately. `GraphAgent::invoke` and
+`CompiledGraph::invoke` keep the direct-graph behaviour: re-invoking a finished
+thread returns its final state without running anything.
 
 ## Examples
 

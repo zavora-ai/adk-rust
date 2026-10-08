@@ -1166,3 +1166,116 @@ async fn test_agent_leaves_previous_response_id_none_without_interaction_id() {
     assert_eq!(requests[0].previous_response_id, None);
     assert_eq!(requests[1].previous_response_id, None);
 }
+
+// ── output_key is persisted only after output-schema validation ─────────
+
+fn score_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "score": { "type": "number" } },
+        "required": ["score"]
+    })
+}
+
+/// Collects every `output_key` value the agent emitted, plus the terminal error, if any.
+async fn output_key_writes(
+    mut stream: EventStream,
+    output_key: &str,
+) -> (Vec<Value>, Option<adk_core::AdkError>) {
+    let mut writes = Vec::new();
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(event) => writes.extend(event.actions.state_delta.get(output_key).cloned()),
+            Err(error) => return (writes, Some(error)),
+        }
+    }
+    (writes, None)
+}
+
+#[tokio::test]
+async fn output_key_is_not_written_when_schema_validation_is_exhausted() {
+    let model = Arc::new(RecordingModel::new(vec![
+        RecordingModel::text_response("not json"),
+        RecordingModel::text_response("still not json"),
+    ]));
+    let agent = LlmAgentBuilder::new("schema-agent")
+        .model(model)
+        .output_schema(score_schema())
+        .output_max_retries(1)
+        .output_key("result")
+        .build()
+        .unwrap();
+
+    let stream = agent.run(Arc::new(TestContext::new("score this"))).await.unwrap();
+    let (writes, error) = output_key_writes(stream, "result").await;
+
+    assert_eq!(writes, Vec::<Value>::new(), "invalid output must not reach state[output_key]");
+    assert_eq!(
+        error.map(|error| error.message),
+        Some("output schema validation failed after 1 attempts".to_string())
+    );
+}
+
+#[tokio::test]
+async fn output_key_holds_only_the_validated_retry() {
+    let model = Arc::new(RecordingModel::new(vec![
+        RecordingModel::text_response("not json"),
+        RecordingModel::text_response(r#"{"score": 7}"#),
+    ]));
+    let agent = LlmAgentBuilder::new("schema-agent")
+        .model(model)
+        .output_schema(score_schema())
+        .output_max_retries(1)
+        .output_key("result")
+        .build()
+        .unwrap();
+
+    let stream = agent.run(Arc::new(TestContext::new("score this"))).await.unwrap();
+    let (writes, error) = output_key_writes(stream, "result").await;
+
+    assert!(error.is_none(), "unexpected error: {error:?}");
+    assert_eq!(writes, vec![json!(r#"{"score": 7}"#)]);
+}
+
+// ── After-tool callbacks see the parallel agent's shared state ─────────
+
+#[tokio::test]
+async fn after_tool_callback_receives_shared_state() {
+    let model = Arc::new(RecordingModel::new(vec![
+        RecordingModel::function_calls(vec![Part::FunctionCall {
+            name: "test_tool".to_string(),
+            args: json!({}),
+            id: Some("call-shared".to_string()),
+            thought_signature: None,
+        }]),
+        RecordingModel::text_response("done"),
+    ]));
+    let observed = Arc::new(Mutex::new(None));
+    let recorder = observed.clone();
+    let agent = LlmAgentBuilder::new("shared-agent")
+        .model(model)
+        .tool(Arc::new(CountingTool::new()))
+        .after_tool_callback(Box::new(move |ctx| {
+            let recorder = recorder.clone();
+            Box::pin(async move {
+                let shared =
+                    ctx.shared_state().expect("after-tool callbacks should see shared state");
+                shared.set_shared("after_tool", json!(ctx.tool_name())).await?;
+                let outcome_seen = ctx.tool_outcome().is_some();
+                *recorder.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((outcome_seen, shared.snapshot().await));
+                Ok(None)
+            })
+        }))
+        .build()
+        .unwrap();
+    let parallel = ParallelAgent::new("parallel", vec![Arc::new(agent)]).with_shared_state();
+
+    let stream = parallel.run(Arc::new(TestContext::new("use the tool"))).await.unwrap();
+    drain_stream(stream).await.unwrap();
+
+    assert_eq!(
+        *observed.lock().unwrap_or_else(|e| e.into_inner()),
+        Some((true, HashMap::from([("after_tool".to_string(), json!("test_tool"))])))
+    );
+}

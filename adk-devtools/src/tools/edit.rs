@@ -77,7 +77,7 @@ impl Tool for EditFileTool {
         } else {
             original.replacen(&old_string, &new_string, 1)
         };
-        tokio::fs::write(&resolved, &updated).await.map_err(DevToolError::from)?;
+        self.workspace.write_contained(&resolved, updated.as_bytes()).await?;
 
         Ok(json!({
             "path": self.workspace.display(&resolved),

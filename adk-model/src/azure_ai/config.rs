@@ -19,15 +19,29 @@ use serde::{Deserialize, Serialize};
 ///     "meta-llama-3.1-8b-instruct",
 /// );
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The API key is redacted from `Debug` output and omitted when serializing.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AzureAIConfig {
     /// Azure AI Inference endpoint URL (e.g.,
     /// `"https://my-endpoint.eastus.inference.ai.azure.com"`).
     pub endpoint: String,
-    /// Azure API key for the endpoint.
+    /// Azure API key for the endpoint. Never serialized; deserializing a config
+    /// without it yields an empty key.
+    #[serde(skip_serializing, default)]
     pub api_key: String,
     /// Model name deployed at the endpoint.
     pub model: String,
+}
+
+impl std::fmt::Debug for AzureAIConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureAIConfig")
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .finish()
+    }
 }
 
 impl AzureAIConfig {

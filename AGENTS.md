@@ -132,7 +132,7 @@ A default `--workspace` build compiles no feature-gated module and no umbrella
 tier above `minimal`, so those need their own pass:
 
 ```bash
-# Feature-gated modules — mirrors the PR-tier feature-coverage matrix
+# Feature-gated modules — one pair from scripts/feature-coverage-pairs.txt
 cargo clippy -p adk-agent --features codeact --all-targets -- -D warnings
 
 # Umbrella tiers — `standard` and above compile code `minimal` never reaches
@@ -169,10 +169,14 @@ expensive axes move to a later tier.
   coverage: `fmt` (prerequisite gate), `clippy --workspace --all-targets -D warnings`,
   `nextest --workspace` (Linux, runs at most once), `feature-coverage` for
   feature-gated modules default builds skip (e.g. `adk-agent --features codeact`),
+  as eight shards driven by `scripts/feature-coverage-pairs.txt`,
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
   (4 shards), `templates`, a compile-only macOS build, a Windows workspace build
-  with a targeted sandbox portability smoke, and `semver` (stable strict,
-  everything else warn-only).
+  with a targeted sandbox portability smoke, and `semver` (stable strict with
+  the next release assumed minor, so additions pass and breakage fails;
+  everything else warn-only). A `scope` job skips the Rust jobs when a change
+  touches only `docs/` or Markdown, and merge-queue builds skip `docs`, the
+  standalone examples and the macOS/Windows builds the pull request already passed.
 - **Merge tier** (`ci-merge.yml`, on `push: main`) — cross-platform
   `nextest --workspace` on macOS/Windows and doc-example compilation. Runs
   post-merge; not branch-protection-required.
@@ -183,7 +187,7 @@ expensive axes move to a later tier.
 
 Only the PR tier gates merges. Branch protection requires the aggregate
 `pr-gate` context plus the separate `semver` context; `pr-gate` fails unless
-every `ci.yml` dependency and matrix entry succeeds. See CONTRIBUTING.md
+every `ci.yml` dependency succeeds or was skipped by the change scope. See CONTRIBUTING.md
 ("Branch Protection — Required Status Checks") for the authoritative set.
 
 ### Local git hooks (lefthook)
@@ -364,7 +368,7 @@ adk-ui/          Dynamic UI generation (forms, cards, tables, charts) — extrac
 ### Examples and docs
 
 ```
-examples/              97 standalone example crates (each with own Cargo.toml) covering all major
+examples/              117 standalone example crates (each with own Cargo.toml) covering all major
                        features. Additional 120+ examples in the adk-playground repo.
 docs/official_docs/    Comprehensive documentation site content
 ```
@@ -464,7 +468,7 @@ Specialist opt-in features:
 - `codeact` — CodeAct agents: the model acts by writing code (forwarded to adk-agent)
 - `codeact-monty` — Python `CodeRuntime` for the CodeActAgent via the Monty interpreter (adk-codeact-monty; implies `codeact`)
 - `slack`, `bigquery`, `spanner` — Native toolsets
-- `action`, `action-http`, `action-trigger`, `action-db`, `action-code`, `action-email`, `action-rss`, `action-full` — Action node executors
+- `action`, `action-http`, `action-trigger`, `action-db`, `action-code`, `action-email`, `action-rss`, `action-full` — Action node executors. Implemented: trigger, set, transform, switch, loop, merge, wait, file (confined to allowed roots), Rust code, HTTP and notification (`action-http`, host/scheme policy), RSS (`action-rss`). `action-db`, `action-email`, and `action-code` compile placeholders only: database, email, and JavaScript/TypeScript code nodes are not implemented and are rejected when the graph compiles
 - `video-avatar` — HeyGen/D-ID avatar providers
 - `acp` — Agent Client Protocol integration
 - `openrouter` — OpenRouter native APIs
@@ -649,7 +653,8 @@ cargo nextest run -p adk-realtime --features full            # with features
 - When making a change that adds or changes an API, ensure that `docs/official_docs/` is up to date.
 - Documented examples (Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/`) are validated in CI by `scripts/check-doc-examples.sh` against `cargo metadata`. The PR tier compiles the standalone example workspaces and cargo-adk templates, so if you change a public API, keep those in sync.
 - Update the crate's `README.md` if capabilities changed.
-- Update `CHANGELOG.md` for user-facing changes.
+- Add a changelog fragment under `changelog.d/` for user-facing changes (`<section>.<slug>.md`,
+  see `changelog.d/README.md`). `CHANGELOG.md` itself changes only in release commits.
 
 ## Adding new code
 
@@ -805,7 +810,7 @@ pub async fn swap_adapter(&self, adapter_name: &str) -> Result<()> { ... }
    - Commit messages follow conventional format.
    - Branch targets `main` branch.
 3. **Documentation**:
-   - `CHANGELOG.md` updated for user-facing changes.
+   - Changelog fragment added under `changelog.d/` for user-facing changes.
    - `README.md` updated if crate capabilities changed.
    - Examples added or updated for new features.
 
@@ -824,21 +829,21 @@ Always verify builds during publish — never use `--no-verify`. Verification en
 Crates must be published in dependency order. `cargo xtask publish` (via
 `./publish.sh`) computes the order from the workspace graph, so this list is
 documentation rather than configuration — `scripts/check-publish-order.sh` is the
-gate that keeps it satisfiable. The current 8 tiers over 43 publishable crates:
+gate that keeps it satisfiable. The current 9 tiers over 43 publishable crates:
 
 ```
-Tier 1: adk-core, adk-anthropic, adk-deploy, adk-enterprise, adk-rust-macros,
-        adk-telemetry, awp-types
-Tier 2: adk-action, adk-artifact, adk-awp, adk-browser, adk-devtools, adk-gcp,
-        adk-gemini, adk-guardrail, adk-memory, adk-mistralrs, adk-plugin,
-        adk-sandbox, adk-session
-Tier 3: adk-code, adk-graph, adk-model, adk-rag, adk-realtime, adk-retry-reflect,
-        adk-skill
-Tier 4: adk-agent, adk-audio, adk-runner, adk-tool
-Tier 5: adk-acp, adk-codeact-monty, adk-eval, adk-managed, adk-server
-Tier 6: adk-auth, adk-bench, adk-cli
-Tier 7: adk-computer-use, adk-payments, cargo-adk
-Tier 8: adk-rust (umbrella — always last)
+Tier 1: adk-anthropic, adk-core, adk-enterprise, adk-rust-macros, adk-telemetry,
+        awp-types
+Tier 2: adk-action, adk-awp, adk-browser, adk-devtools, adk-gcp, adk-gemini,
+        adk-guardrail, adk-mistralrs, adk-plugin, adk-sandbox
+Tier 3: adk-artifact, adk-code, adk-deploy, adk-graph, adk-memory, adk-model,
+        adk-rag, adk-retry-reflect, adk-session, adk-skill
+Tier 4: adk-realtime, adk-runner, adk-tool
+Tier 5: adk-acp, adk-agent, adk-audio, adk-eval
+Tier 6: adk-bench, adk-codeact-monty, adk-managed, adk-server
+Tier 7: adk-auth, adk-cli, cargo-adk
+Tier 8: adk-computer-use, adk-payments
+Tier 9: adk-rust (umbrella — always last)
 ```
 
 > **Note:** internal **dev**-dependencies are declared path-only (no version) so
@@ -862,7 +867,7 @@ cargo publish -p <crate-name>
 
 - [ ] `[workspace.package] version` in root `Cargo.toml`
 - [ ] All `adk-*` entries in `[workspace.dependencies]`
-- [ ] `CHANGELOG.md` updated
+- [ ] Changelog fragments assembled into `CHANGELOG.md` (`bash scripts/changelog-assemble.sh --into <version>`)
 - [ ] Git tag created and pushed
 - [ ] GitHub release created with release notes
 

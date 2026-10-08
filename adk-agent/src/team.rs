@@ -3176,12 +3176,17 @@ mod tests {
     #[cfg(feature = "team-tools")]
     struct ScriptedModel {
         responses: std::sync::Mutex<std::collections::VecDeque<adk_core::LlmResponse>>,
+        /// Conversation contents of every request, in call order.
+        requests: std::sync::Mutex<Vec<Vec<Content>>>,
     }
 
     #[cfg(feature = "team-tools")]
     impl ScriptedModel {
         fn new(responses: Vec<adk_core::LlmResponse>) -> Self {
-            Self { responses: std::sync::Mutex::new(responses.into()) }
+            Self {
+                responses: std::sync::Mutex::new(responses.into()),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }
         }
 
         fn text(text: &str) -> adk_core::LlmResponse {
@@ -3240,9 +3245,10 @@ mod tests {
 
         async fn generate_content(
             &self,
-            _request: adk_core::LlmRequest,
+            request: adk_core::LlmRequest,
             _stream: bool,
         ) -> Result<adk_core::LlmResponseStream> {
+            self.requests.lock().expect("request log lock").push(request.contents);
             let response = self
                 .responses
                 .lock()
@@ -3506,6 +3512,119 @@ mod tests {
             .unwrap();
         assert!(events.iter().any(|event| event.actions.tool_confirmation.is_some()));
         assert_eq!(researcher_runs.load(Ordering::SeqCst), 0);
+    }
+
+    /// Runs a supervisor whose delegate edge requires approval while its own agent policy is
+    /// `Never`, with a static decision recorded for the delegate call.
+    #[cfg(feature = "team-tools")]
+    async fn run_approved_delegate_with_decision(
+        decision: adk_core::ToolConfirmationDecision,
+    ) -> (Vec<Event>, usize, Vec<Vec<Content>>) {
+        let model = Arc::new(ScriptedModel::new(vec![
+            ScriptedModel::call("researcher"),
+            ScriptedModel::text("supervisor final"),
+        ]));
+        let supervisor = Arc::new(
+            crate::LlmAgentBuilder::new("supervisor")
+                .model(model.clone())
+                .tool_confirmation_policy(adk_core::ToolConfirmationPolicy::Never)
+                .build()
+                .unwrap(),
+        ) as Arc<dyn Agent>;
+        let researcher_runs = Arc::new(AtomicUsize::new(0));
+        let researcher = Arc::new(FlakyAgent {
+            name: "researcher".to_string(),
+            failures_before_success: 0,
+            runs: researcher_runs.clone(),
+        }) as Arc<dyn Agent>;
+        let team = TeamSpec {
+            name: "approval_team".to_string(),
+            description: String::new(),
+            coordinator: "supervisor".to_string(),
+            members: vec![TeamMemberSpec::new("supervisor"), TeamMemberSpec::new("researcher")],
+            relationships: vec![
+                TeamRelationship::new("supervisor", "researcher", RelationshipKind::Delegate)
+                    .with_policy(RelationshipPolicy {
+                        approval: RelationshipApprovalPolicy::Required,
+                        ..RelationshipPolicy::default()
+                    }),
+            ],
+            policy: TeamPolicy::default(),
+        }
+        .compile([supervisor, researcher])
+        .unwrap();
+        let config = RunConfig::builder()
+            .tool_confirmation_decisions(HashMap::from([("delegate-1".to_string(), decision)]))
+            .build();
+        let context = Arc::new(TestContext {
+            content: Content::new("user").with_text("approval decided"),
+            config,
+            session: TestSession,
+        });
+        let events = team
+            .run(context)
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        let requests = model.requests.lock().expect("request log lock").clone();
+        (events, researcher_runs.load(Ordering::SeqCst), requests)
+    }
+
+    #[cfg(feature = "team-tools")]
+    #[tokio::test]
+    async fn relationship_approval_deny_blocks_delegate_execution() {
+        let (events, researcher_runs, requests) =
+            run_approved_delegate_with_decision(adk_core::ToolConfirmationDecision::Deny).await;
+
+        assert_eq!(researcher_runs, 0);
+        assert!(events.iter().all(|event| event.actions.tool_confirmation.is_none()));
+        let denied = serde_json::to_value(Content {
+            role: "function".to_string(),
+            parts: vec![adk_core::Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new(
+                    "researcher",
+                    serde_json::json!({
+                        "error": "Tool 'researcher' execution denied by confirmation policy"
+                    }),
+                ),
+                id: Some("delegate-1".to_string()),
+                annotations: None,
+            }],
+        })
+        .unwrap();
+        let denial_event = events
+            .iter()
+            .find(|event| {
+                event.actions.tool_confirmation_decision
+                    == Some(adk_core::ToolConfirmationDecision::Deny)
+            })
+            .expect("the denied delegate call should produce a function response event");
+        assert_eq!(serde_json::to_value(denial_event.content()).unwrap(), denied);
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1].iter().any(|content| serde_json::to_value(content).unwrap() == denied),
+            "the follow-up model request should carry the denial"
+        );
+    }
+
+    #[cfg(feature = "team-tools")]
+    #[tokio::test]
+    async fn relationship_approval_approve_runs_delegate() {
+        let (events, researcher_runs, requests) =
+            run_approved_delegate_with_decision(adk_core::ToolConfirmationDecision::Approve).await;
+
+        assert_eq!(researcher_runs, 1);
+        assert!(events.iter().all(|event| event.actions.tool_confirmation.is_none()));
+        assert!(events.iter().any(|event| {
+            event.actions.tool_confirmation_decision
+                == Some(adk_core::ToolConfirmationDecision::Approve)
+        }));
+        assert!(events.iter().any(|event| event.author == "researcher"));
+        assert_eq!(requests.len(), 2);
     }
 
     #[cfg(feature = "team-tools")]

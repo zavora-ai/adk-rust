@@ -39,7 +39,7 @@ cargo new my_agent && cd my_agent
 
 ```toml
 [dependencies]
-adk-rust = "2.2.0"
+adk-rust = "2.3.0"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -206,7 +206,7 @@ default features, so each capability is forwarded from this crate:
 
 ## Browser Automation
 
-Give agents web browsing capabilities with 46 tools:
+Give agents web browsing capabilities with 46 tools (`browser_evaluate_js` is opt-in, and navigation accepts only `http`/`https` by default):
 
 ```rust
 use adk_browser::{BrowserSession, BrowserToolset, BrowserConfig};
@@ -215,7 +215,7 @@ use std::sync::Arc;
 let config = BrowserConfig::new().webdriver_url("http://localhost:4444");
 let session = Arc::new(BrowserSession::new(config));
 let toolset = BrowserToolset::new(session);
-let tools = toolset.all_tools();  // 46 browser tools
+let tools = toolset.all_tools();  // 45 browser tools; .with_evaluate_js(true) adds the 46th
 
 let mut builder = LlmAgentBuilder::new("web_agent")
     .model(model);
@@ -308,32 +308,32 @@ cargo run -- serve --port 8080
 
 ```toml
 # Minimal (default) — agents, Gemini, runner, sessions (fastest build)
-adk-rust = "2.2.0"
+adk-rust = "2.3.0"
 
 # Standard — minimal + tools, memory, OpenAI, Anthropic, server, auth,
 # graph, eval, guardrails, skills, plugins, artifacts, telemetry
-adk-rust = { version = "2.2.0", features = ["standard"] }
+adk-rust = { version = "2.3.0", features = ["standard"] }
 
 # Enterprise — standard + realtime, browser, rag, payments, awp
-adk-rust = { version = "2.2.0", features = ["enterprise"] }
+adk-rust = { version = "2.3.0", features = ["enterprise"] }
 
 # Full — enterprise + experimental crates (audio, code, sandbox, code-tools)
-adk-rust = { version = "2.2.0", features = ["full"] }
+adk-rust = { version = "2.3.0", features = ["full"] }
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except
 # realtime transports; composable with any tier. The right default for
 # ReasoningEngine BYOC deployments. Deploy-time tooling is host-side and
 # not included.
-adk-rust = { version = "2.2.0", features = ["standard", "gemini-agent-platform"] }
+adk-rust = { version = "2.3.0", features = ["standard", "gemini-agent-platform"] }
 
 # gemini-agent-platform + Vertex AI Live API (pulls in the realtime WebSocket/audio stack)
-adk-rust = { version = "2.2.0", features = ["standard", "gemini-agent-platform-full"] }
+adk-rust = { version = "2.3.0", features = ["standard", "gemini-agent-platform-full"] }
 
 # Custom
-adk-rust = { version = "2.2.0", default-features = false, features = ["agents", "gemini", "tools"] }
+adk-rust = { version = "2.3.0", default-features = false, features = ["agents", "gemini", "tools"] }
 
 # With new providers (forwarded to adk-model)
-adk-model = { version = "2.2.0", features = ["fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova", "bedrock", "azure-ai"] }
+adk-model = { version = "2.3.0", features = ["fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova", "bedrock", "azure-ai"] }
 ```
 
 ## Documentation

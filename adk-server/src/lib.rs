@@ -107,9 +107,11 @@ pub use a2a::{
 };
 #[cfg(feature = "a2a-v1")]
 pub use a2a::{A2aServer, A2aServerApp, A2aServerBuilder};
-pub use auth_bridge::{RequestContext, RequestContextError, RequestContextExtractor};
+pub use auth_bridge::{
+    AuthenticatedCaller, RequestContext, RequestContextError, RequestContextExtractor,
+};
 pub use config::{SecurityConfig, ServerConfig};
 pub use rest::{
-    A2aController, RuntimeController, ServerBuilder, SessionController, ShutdownHandle, create_app,
-    create_app_with_a2a, shutdown_signal,
+    A2aController, A2aTaskRetention, RuntimeController, ServerBuilder, SessionController,
+    ShutdownHandle, create_app, create_app_with_a2a, shutdown_signal,
 };

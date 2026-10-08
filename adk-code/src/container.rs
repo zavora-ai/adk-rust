@@ -24,11 +24,16 @@
 //!
 //! # Isolation Model
 //!
+//! The container's network mode, bind mounts, and environment are fixed by
+//! [`DockerConfig`] when it is created. Each request's [`SandboxPolicy`] is
+//! checked against them with [`DockerConfig::validate_sandbox_policy`], and a
+//! request stricter than the container is rejected before any code runs.
+//!
 //! | Capability | Enforced | Mechanism |
 //! |---|---|---|
-//! | Network policy | Yes | `--network=none` on container create |
-//! | Filesystem policy | Yes | Explicit bind mounts only |
-//! | Environment policy | Yes | Only specified env vars |
+//! | Network policy | Yes | `NetworkPolicy::Disabled` requires a container created with network mode `none` |
+//! | Filesystem policy | Yes | Every bind mount must lie within the paths the policy grants |
+//! | Environment policy | Yes | Container variables must be on the allowlist; allowlisted host variables are passed to the exec |
 //! | Timeout | Yes | `tokio::time::timeout` on exec |
 //! | Structured output | Yes | Last-line JSON extraction from stdout |
 //! | Persistent workspace | Yes | Container survives across executions |
@@ -64,15 +69,18 @@
 //! # }
 //! ```
 
+use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
 use std::time::Instant;
 
 use async_trait::async_trait;
 use tracing::{debug, info, warn};
 
+use crate::host_process;
 use crate::{
     BackendCapabilities, CodeExecutor, EnvironmentPolicy, ExecutionError, ExecutionIsolation,
     ExecutionLanguage, ExecutionPayload, ExecutionRequest, ExecutionResult, ExecutionStatus,
-    FilesystemPolicy, NetworkPolicy, validate_request,
+    FilesystemPolicy, NetworkPolicy, SandboxPolicy, validate_request,
 };
 
 /// Configuration for the Docker executor.
@@ -187,6 +195,113 @@ impl DockerConfig {
         self.environment.push(var.into());
         self
     }
+
+    /// Checks that a container created from this configuration satisfies `policy`.
+    ///
+    /// A persistent container's network mode, bind mounts, and environment are
+    /// fixed when it is created, so a request cannot narrow them afterwards.
+    /// `DockerExecutor` calls this before every execution and rejects a request
+    /// whose policy is stricter than the container:
+    ///
+    /// | Policy | Satisfied when |
+    /// |---|---|
+    /// | `NetworkPolicy::Disabled` | `network_disabled` is `true` |
+    /// | `FilesystemPolicy::None` | there are no bind mounts |
+    /// | `FilesystemPolicy::WorkspaceReadOnly { root }` | every bind mount is read-only (`:ro`) and its host path lies under `root` |
+    /// | `FilesystemPolicy::WorkspaceReadWrite { root }` | every bind mount's host path lies under `root` |
+    /// | `FilesystemPolicy::Paths { read_only, read_write }` | every bind mount lies under a `read_write` path, or is read-only and lies under a `read_only` path |
+    /// | `EnvironmentPolicy::None` | `environment` is empty |
+    /// | `EnvironmentPolicy::AllowList(names)` | every `environment` entry's name is in `names` |
+    ///
+    /// Bind-mount host paths must be absolute and free of `..` components, so a
+    /// named volume never satisfies a filesystem policy. Variables defined by the
+    /// image itself (`PATH`, `LANG`) come from the image, not the host, and are
+    /// not checked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::UnsupportedPolicy`] naming the first setting
+    /// that exceeds the policy.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_code::{DockerConfig, NetworkPolicy, SandboxPolicy};
+    ///
+    /// let strict = SandboxPolicy::strict_rust();
+    /// assert!(DockerConfig::python().validate_sandbox_policy(&strict).is_ok());
+    ///
+    /// // A networked container cannot honour a request that disables the network.
+    /// let networked = DockerConfig::python().with_network();
+    /// assert!(networked.validate_sandbox_policy(&strict).is_err());
+    ///
+    /// let allows_network = SandboxPolicy { network: NetworkPolicy::Enabled, ..strict };
+    /// assert!(networked.validate_sandbox_policy(&allows_network).is_ok());
+    /// ```
+    pub fn validate_sandbox_policy(&self, policy: &SandboxPolicy) -> Result<(), ExecutionError> {
+        if matches!(policy.network, NetworkPolicy::Disabled) && !self.network_disabled {
+            return Err(ExecutionError::UnsupportedPolicy(
+                "the policy disables network access, but the container was created with network \
+                 access; drop `with_network()` from the DockerConfig or use \
+                 `NetworkPolicy::Enabled`"
+                    .to_string(),
+            ));
+        }
+
+        for mount in &self.bind_mounts {
+            // `host:container[:options]`; a Windows drive letter adds a colon to the host part.
+            let parts: Vec<&str> = mount.split(':').collect();
+            let has_drive_letter = parts.len() > 2
+                && parts[0].len() == 1
+                && parts[0].chars().all(|c| c.is_ascii_alphabetic());
+            let (host, rest) = if has_drive_letter {
+                (&mount[..parts[0].len() + 1 + parts[1].len()], &parts[2..])
+            } else {
+                (parts[0], &parts[1..])
+            };
+            let read_only = rest
+                .get(1)
+                .is_some_and(|options| options.split(',').any(|o| o == "ro" || o == "readonly"));
+
+            let host = Path::new(host);
+            let confined = host.is_absolute()
+                && !host.components().any(|component| matches!(component, Component::ParentDir));
+            let under = |root: &PathBuf| confined && host.starts_with(root);
+
+            let permitted = match &policy.filesystem {
+                FilesystemPolicy::None => false,
+                FilesystemPolicy::WorkspaceReadOnly { root } => read_only && under(root),
+                FilesystemPolicy::WorkspaceReadWrite { root } => under(root),
+                FilesystemPolicy::Paths { read_only: read_only_paths, read_write } => {
+                    read_write.iter().any(under) || (read_only && read_only_paths.iter().any(under))
+                }
+            };
+            if !permitted {
+                return Err(ExecutionError::UnsupportedPolicy(format!(
+                    "bind mount `{mount}` exceeds the filesystem policy {:?}; remove the mount \
+                     or grant its host path in the policy",
+                    policy.filesystem
+                )));
+            }
+        }
+
+        for entry in &self.environment {
+            let name = entry.split_once('=').map_or(entry.as_str(), |(name, _)| name);
+            let allowed = match &policy.environment {
+                EnvironmentPolicy::None => false,
+                EnvironmentPolicy::AllowList(names) => names.iter().any(|allowed| allowed == name),
+            };
+            if !allowed {
+                return Err(ExecutionError::UnsupportedPolicy(format!(
+                    "container environment variable `{name}` is not allowed by the environment \
+                     policy; remove it from the DockerConfig or add it to \
+                     `EnvironmentPolicy::AllowList`"
+                )));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for DockerConfig {
@@ -225,6 +340,15 @@ mod docker_impl {
     /// Creates a container once via [`start`](CodeExecutor::start), keeps it running,
     /// and executes code via `docker exec` inside the running container. This matches
     /// the lifecycle model of AutoGen's `DockerCommandLineCodeExecutor`.
+    ///
+    /// # Sandbox Policy
+    ///
+    /// The container's network mode, bind mounts, and environment come from
+    /// [`DockerConfig`] and cannot change per request. [`execute`](CodeExecutor::execute)
+    /// rejects with [`ExecutionError::UnsupportedPolicy`] any request whose policy
+    /// the container does not satisfy; see [`DockerConfig::validate_sandbox_policy`].
+    /// Variables named by an [`EnvironmentPolicy::AllowList`] are passed from the
+    /// host to that request's exec.
     ///
     /// # Cleanup
     ///
@@ -352,15 +476,19 @@ mod docker_impl {
                 "-c".to_string(),
                 format!("echo '{encoded}' | base64 -d > {path}"),
             ];
-            self.exec_in_container(container_id, &cmd, None).await?;
+            self.exec_in_container(container_id, &cmd, None, None).await?;
             Ok(())
         }
 
         /// Execute a command inside the running container and capture output.
+        ///
+        /// `env` entries (`KEY=VALUE`) are added to the container's own environment
+        /// for this exec only.
         async fn exec_in_container(
             &self,
             container_id: &str,
             cmd: &[String],
+            env: Option<Vec<String>>,
             timeout: Option<std::time::Duration>,
         ) -> Result<(String, String, Option<i64>), ExecutionError> {
             let exec = self
@@ -369,6 +497,7 @@ mod docker_impl {
                     container_id,
                     CreateExecOptions {
                         cmd: Some(cmd.to_vec()),
+                        env,
                         attach_stdout: Some(true),
                         attach_stderr: Some(true),
                         working_dir: Some(self.config.work_dir.clone()),
@@ -518,14 +647,14 @@ mod docker_impl {
             // Create workspace directory.
             let mkdir_cmd =
                 vec!["mkdir".to_string(), "-p".to_string(), self.config.work_dir.clone()];
-            let _ = self.exec_in_container(&container_id, &mkdir_cmd, None).await;
+            let _ = self.exec_in_container(&container_id, &mkdir_cmd, None, None).await;
 
             // Run setup commands.
             for setup_cmd in &self.config.setup_commands {
                 info!(cmd = %setup_cmd, "running setup command");
                 let cmd = vec!["sh".to_string(), "-c".to_string(), setup_cmd.clone()];
                 let (_stdout, stderr, exit_code) =
-                    self.exec_in_container(&container_id, &cmd, None).await?;
+                    self.exec_in_container(&container_id, &cmd, None, None).await?;
 
                 if exit_code != Some(0) {
                     warn!(
@@ -581,6 +710,7 @@ mod docker_impl {
                 ExecutionLanguage::Command,
             ];
             validate_request(&self.capabilities(), &supported, &request)?;
+            self.config.validate_sandbox_policy(&request.sandbox)?;
 
             let code = match &request.payload {
                 ExecutionPayload::Source { code } if code.trim().is_empty() => {
@@ -638,14 +768,21 @@ mod docker_impl {
                 "executing code in container"
             );
 
+            // Mirrors `docker run --env NAME`: allowlisted variables carry the host's values.
+            let exec_env = host_process::allowlisted_host_env(&request.sandbox.environment)
+                .into_iter()
+                .map(|(name, value)| format!("{name}={}", value.to_string_lossy()))
+                .collect::<Vec<_>>();
+
             // Execute with timeout.
             let (stdout, stderr, exit_code) = self
-                .exec_in_container(&container_id, &exec_cmd, Some(request.sandbox.timeout))
-                .await
-                .map_err(|e| match e {
-                    ExecutionError::Timeout(_) => e,
-                    other => other,
-                })?;
+                .exec_in_container(
+                    &container_id,
+                    &exec_cmd,
+                    Some(exec_env),
+                    Some(request.sandbox.timeout),
+                )
+                .await?;
 
             let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -956,74 +1093,65 @@ impl CodeExecutor for ContainerCommandExecutor {
             "starting container execution"
         );
 
+        // Structured input takes precedence over raw stdin.
+        let stdin = match (&request.input, &request.stdin) {
+            (Some(input), _) => Some(serde_json::to_vec(input).unwrap_or_default()),
+            (None, Some(raw)) => Some(raw.clone()),
+            (None, None) => None,
+        };
+
         let mut cmd = tokio::process::Command::new(&self.config.runtime);
-        for arg in &run_args {
-            cmd.arg(arg);
-        }
+        cmd.args(&run_args)
+            .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
-        cmd.stdin(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-        cmd.kill_on_drop(true);
-
-        let mut child = cmd.spawn().map_err(|e| {
+        let child = cmd.spawn().map_err(|e| {
             ExecutionError::ExecutionFailed(format!(
                 "failed to spawn container runtime '{}': {e}",
                 self.config.runtime
             ))
         })?;
 
-        if let Some(ref input) = request.input {
-            if let Some(mut stdin) = child.stdin.take() {
-                use tokio::io::AsyncWriteExt;
-                let json_bytes = serde_json::to_vec(input).unwrap_or_default();
-                let _ = stdin.write_all(&json_bytes).await;
-                drop(stdin);
-            }
-        } else if let Some(ref raw_stdin) = request.stdin {
-            if let Some(mut stdin) = child.stdin.take() {
-                use tokio::io::AsyncWriteExt;
-                let _ = stdin.write_all(raw_stdin).await;
-                drop(stdin);
-            }
-        } else {
-            drop(child.stdin.take());
-        }
+        let completed = host_process::run_to_completion(
+            child,
+            stdin,
+            request.sandbox.timeout,
+            request.sandbox.max_stdout_bytes,
+            request.sandbox.max_stderr_bytes,
+        )
+        .await
+        .map_err(|e| {
+            ExecutionError::ExecutionFailed(format!("failed to wait for container: {e}"))
+        })?;
 
-        let output =
-            match tokio::time::timeout(request.sandbox.timeout, child.wait_with_output()).await {
-                Ok(Ok(output)) => output,
-                Ok(Err(e)) => {
-                    return Err(ExecutionError::ExecutionFailed(format!(
-                        "failed to wait for container: {e}"
-                    )));
-                }
-                Err(_) => {
-                    warn!("container execution timed out");
-                    let duration_ms = start.elapsed().as_millis() as u64;
-                    return Ok(ExecutionResult {
-                        status: ExecutionStatus::Timeout,
-                        stdout: String::new(),
-                        stderr: String::new(),
-                        output: None,
-                        exit_code: None,
-                        stdout_truncated: false,
-                        stderr_truncated: false,
-                        duration_ms,
-                        metadata: None,
-                    });
-                }
-            };
+        let Some(output) = completed else {
+            warn!("container execution timed out");
+            return Ok(ExecutionResult {
+                status: ExecutionStatus::Timeout,
+                stdout: String::new(),
+                stderr: String::new(),
+                output: None,
+                exit_code: None,
+                stdout_truncated: false,
+                stderr_truncated: false,
+                duration_ms: start.elapsed().as_millis() as u64,
+                metadata: None,
+            });
+        };
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        let raw_stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let raw_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let raw_stdout = String::from_utf8_lossy(&output.stdout.bytes).into_owned();
+        let raw_stderr = String::from_utf8_lossy(&output.stderr.bytes).into_owned();
 
         let (stdout, stdout_truncated) =
             truncate_output(raw_stdout, request.sandbox.max_stdout_bytes);
         let (stderr, stderr_truncated) =
             truncate_output(raw_stderr, request.sandbox.max_stderr_bytes);
+        let stdout_truncated = stdout_truncated || output.stdout.truncated;
+        let stderr_truncated = stderr_truncated || output.stderr.truncated;
 
         let (structured_output, display_stdout) = extract_structured_output(&stdout);
 
@@ -1183,6 +1311,134 @@ mod tests {
 
         let custom = DockerConfig::custom("ubuntu:24.04");
         assert_eq!(custom.image, "ubuntu:24.04");
+    }
+
+    fn policy(
+        network: NetworkPolicy,
+        filesystem: FilesystemPolicy,
+        environment: EnvironmentPolicy,
+    ) -> SandboxPolicy {
+        SandboxPolicy { network, filesystem, environment, ..SandboxPolicy::strict_rust() }
+    }
+
+    fn assert_rejected(config: &DockerConfig, policy: &SandboxPolicy, mentions: &str) {
+        match config.validate_sandbox_policy(policy) {
+            Err(ExecutionError::UnsupportedPolicy(message)) => {
+                assert!(message.contains(mentions), "{message}");
+            }
+            other => panic!("expected UnsupportedPolicy mentioning `{mentions}`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn docker_policy_default_config_satisfies_strict_policy() {
+        assert_eq!(
+            DockerConfig::python().validate_sandbox_policy(&SandboxPolicy::strict_rust()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn docker_policy_rejects_disabled_network_on_networked_container() {
+        let config = DockerConfig::python().with_network();
+        assert_rejected(&config, &SandboxPolicy::strict_rust(), "network");
+
+        let allows_network =
+            policy(NetworkPolicy::Enabled, FilesystemPolicy::None, EnvironmentPolicy::None);
+        assert_eq!(config.validate_sandbox_policy(&allows_network), Ok(()));
+    }
+
+    #[test]
+    fn docker_policy_allows_enabled_network_on_isolated_container() {
+        let allows_network =
+            policy(NetworkPolicy::Enabled, FilesystemPolicy::None, EnvironmentPolicy::None);
+        assert_eq!(DockerConfig::python().validate_sandbox_policy(&allows_network), Ok(()));
+    }
+
+    #[test]
+    fn docker_policy_rejects_any_mount_without_filesystem_access() {
+        let config = DockerConfig::python().bind_mount("/srv/data:/data:ro");
+        assert_rejected(&config, &SandboxPolicy::strict_rust(), "/srv/data:/data:ro");
+    }
+
+    #[test]
+    fn docker_policy_read_only_workspace_requires_read_only_mounts_under_root() {
+        let read_only = policy(
+            NetworkPolicy::Disabled,
+            FilesystemPolicy::WorkspaceReadOnly { root: PathBuf::from("/srv") },
+            EnvironmentPolicy::None,
+        );
+
+        let ro_under_root = DockerConfig::python().bind_mount("/srv/data:/data:ro");
+        assert_eq!(ro_under_root.validate_sandbox_policy(&read_only), Ok(()));
+
+        let rw_under_root = DockerConfig::python().bind_mount("/srv/data:/data");
+        assert_rejected(&rw_under_root, &read_only, "/srv/data:/data");
+
+        let ro_outside_root = DockerConfig::python().bind_mount("/home/user/.aws:/aws:ro");
+        assert_rejected(&ro_outside_root, &read_only, "/home/user/.aws");
+
+        let escapes_root = DockerConfig::python().bind_mount("/srv/../etc:/etc-host:ro");
+        assert_rejected(&escapes_root, &read_only, "/srv/../etc");
+
+        let sibling_prefix = DockerConfig::python().bind_mount("/srv-secrets:/s:ro");
+        assert_rejected(&sibling_prefix, &read_only, "/srv-secrets");
+
+        let named_volume = DockerConfig::python().bind_mount("cache:/cache:ro");
+        assert_rejected(&named_volume, &read_only, "cache:/cache:ro");
+    }
+
+    #[test]
+    fn docker_policy_read_write_workspace_accepts_any_mode_under_root() {
+        let read_write = policy(
+            NetworkPolicy::Disabled,
+            FilesystemPolicy::WorkspaceReadWrite { root: PathBuf::from("/srv") },
+            EnvironmentPolicy::None,
+        );
+        let config = DockerConfig::python()
+            .bind_mount("/srv/data:/data")
+            .bind_mount("/srv/models:/models:ro");
+        assert_eq!(config.validate_sandbox_policy(&read_write), Ok(()));
+    }
+
+    #[test]
+    fn docker_policy_explicit_paths_match_mode() {
+        let paths = policy(
+            NetworkPolicy::Disabled,
+            FilesystemPolicy::Paths {
+                read_only: vec![PathBuf::from("/srv/models")],
+                read_write: vec![PathBuf::from("/srv/out")],
+            },
+            EnvironmentPolicy::None,
+        );
+
+        let config = DockerConfig::python()
+            .bind_mount("/srv/models:/models:ro,z")
+            .bind_mount("/srv/out:/out:rw");
+        assert_eq!(config.validate_sandbox_policy(&paths), Ok(()));
+
+        let writable_read_only_path = DockerConfig::python().bind_mount("/srv/models:/models");
+        assert_rejected(&writable_read_only_path, &paths, "/srv/models:/models");
+    }
+
+    #[test]
+    fn docker_policy_container_environment_must_be_allowlisted() {
+        let config = DockerConfig::python().env("API_TOKEN=secret").env("MODE");
+        assert_rejected(&config, &SandboxPolicy::strict_rust(), "API_TOKEN");
+
+        let only_mode = policy(
+            NetworkPolicy::Disabled,
+            FilesystemPolicy::None,
+            EnvironmentPolicy::AllowList(vec!["MODE".to_string()]),
+        );
+        assert_rejected(&config, &only_mode, "API_TOKEN");
+
+        let both = policy(
+            NetworkPolicy::Disabled,
+            FilesystemPolicy::None,
+            EnvironmentPolicy::AllowList(vec!["API_TOKEN".to_string(), "MODE".to_string()]),
+        );
+        assert_eq!(config.validate_sandbox_policy(&both), Ok(()));
     }
 
     #[test]

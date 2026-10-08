@@ -45,8 +45,8 @@ let agent = LlmAgentBuilder::new("assistant")
 
 ```toml
 [dependencies]
-adk-tool = { version = "2.2.0", features = ["memory-tools"] }
-adk-memory = "2.2.0"
+adk-tool = { version = "2.3.0", features = ["memory-tools"] }
+adk-memory = "2.3.0"
 ```
 
 ## LoadMemoryTool

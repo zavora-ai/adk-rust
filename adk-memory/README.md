@@ -26,14 +26,14 @@ Semantic memory and search for Rust Agent Development Kit (ADK-Rust) agents.
 
 ```toml
 [dependencies]
-adk-memory = "2.2.0"
+adk-memory = "2.3.0"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.2.0", features = ["memory"] }
+adk-rust = { version = "2.3.0", features = ["memory"] }
 ```
 
 ## Quick Start
@@ -183,11 +183,19 @@ validate_project_id(&"x".repeat(257))?; // Err: exceeds 256 chars
 
 ```toml
 # SQLite
-adk-memory = { version = "2.2.0", features = ["sqlite-memory"] }
+adk-memory = { version = "2.3.0", features = ["sqlite-memory"] }
 
 # PostgreSQL + pgvector
-adk-memory = { version = "2.2.0", features = ["database-memory"] }
+adk-memory = { version = "2.3.0", features = ["database-memory"] }
 ```
+
+## Backend Notes
+
+| Backend | Behaviour |
+|---------|-----------|
+| SQLite | Search matches entries containing every query word; FTS5 syntax in the query is matched literally. |
+| Redis | Key segments are percent-encoded (`%` → `%25`, `:` → `%3A`); identifiers without either character keep their keys. `delete_user` deletes only the named user's keys. |
+| Neo4j | Entry ids are scoped by app, user, project and session; `add_session` merges on them, so re-ingesting a session updates it. Vector search over-fetches candidates before filtering to the tenant — see `Neo4jMemoryService::with_vector_candidate_cap`. |
 
 ## Schema Migrations
 

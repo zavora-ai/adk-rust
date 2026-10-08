@@ -4,7 +4,8 @@
 //! - WASI stdin/stdout/stderr capture
 //! - No filesystem preopens
 //! - No network access
-//! - Memory limit enforcement via `StoreLimitsBuilder`
+//! - Memory limit enforcement via `StoreLimitsBuilder`: one linear memory, capped at the
+//!   request's `memory_limit_mb` or [`WasmBackend::DEFAULT_MEMORY_LIMIT_MB`] when unset
 //! - Timeout enforcement via epoch-based interruption
 //!
 //! # Example
@@ -65,6 +66,12 @@ struct WasmStoreData {
 }
 
 impl WasmBackend {
+    /// Memory limit, in megabytes, applied when a request sets no `memory_limit_mb`.
+    ///
+    /// Without it a module could grow its linear memory to wasmtime's 4 GiB maximum while
+    /// [`capabilities`](SandboxBackend::capabilities) reported memory as enforced.
+    pub const DEFAULT_MEMORY_LIMIT_MB: u32 = 256;
+
     /// Creates a new `WasmBackend`.
     pub fn new() -> Self {
         Self
@@ -113,14 +120,15 @@ impl WasmBackend {
             wasi_builder.stdin(MemoryInputPipe::new(input.clone()));
         }
 
-        // Build memory limits.
-        let mut limits_builder = StoreLimitsBuilder::new();
-        if let Some(limit_mb) = request.memory_limit_mb {
-            limits_builder = limits_builder.memory_size((limit_mb as usize) * 1024 * 1024);
-        }
+        // The limit applies per linear memory, so the module is held to one memory for the
+        // cap to bound its total.
+        let limit_mb = request.memory_limit_mb.unwrap_or(Self::DEFAULT_MEMORY_LIMIT_MB);
+        let limits = StoreLimitsBuilder::new()
+            .memory_size((limit_mb as usize) * 1024 * 1024)
+            .memories(1)
+            .build();
 
-        let store_data =
-            WasmStoreData { wasi: wasi_builder.build_p1(), limits: limits_builder.build() };
+        let store_data = WasmStoreData { wasi: wasi_builder.build_p1(), limits };
 
         let mut store = Store::new(&engine, store_data);
         store.limiter(|data| &mut data.limits);
@@ -145,9 +153,7 @@ impl WasmBackend {
         // Instantiate the module.
         let instance = linker.instantiate(&mut store, &module).map_err(|e| {
             let msg = e.to_string();
-            if let Some(limit_mb) = request.memory_limit_mb
-                && (msg.contains("memory minimum size") || msg.contains("allocat"))
-            {
+            if msg.contains("memory minimum size") || msg.contains("allocat") {
                 return SandboxError::MemoryExceeded { limit_mb };
             }
             SandboxError::ExecutionFailed(format!("failed to instantiate WASM module: {e}"))
@@ -176,9 +182,7 @@ impl WasmBackend {
                 let msg = trap.to_string();
 
                 // Memory limit exceeded.
-                if let Some(limit_mb) = request.memory_limit_mb
-                    && (msg.contains("memory minimum size") || msg.contains("allocat"))
-                {
+                if msg.contains("memory minimum size") || msg.contains("allocat") {
                     return Err(SandboxError::MemoryExceeded { limit_mb });
                 }
 
@@ -521,6 +525,48 @@ mod tests {
         let request = make_wasm_request("this is not valid wasm");
         let result = backend.execute(request).await;
         assert!(matches!(result, Err(SandboxError::ExecutionFailed(_))));
+    }
+
+    /// Grows linear memory by `pages` 64 KiB pages; exits 3 when the growth is refused.
+    fn grow_by(pages: u32) -> ExecRequest {
+        make_wasm_request(&format!(
+            r#"
+            (module
+                (import "wasi_snapshot_preview1" "proc_exit"
+                    (func $proc_exit (param i32)))
+                (memory (export "memory") 1)
+                (func (export "_start")
+                    (if (i32.eq (memory.grow (i32.const {pages})) (i32.const -1))
+                        (then (call $proc_exit (i32.const 3))))
+                    (call $proc_exit (i32.const 0))
+                )
+            )
+        "#
+        ))
+    }
+
+    /// A request without `memory_limit_mb` is still capped, which is what `capabilities`
+    /// reports.
+    #[tokio::test]
+    async fn an_unset_memory_limit_applies_the_default() {
+        let backend = WasmBackend::new();
+        let default_pages = WasmBackend::DEFAULT_MEMORY_LIMIT_MB * 16;
+
+        let within = backend.execute(grow_by(16)).await.unwrap();
+        assert_eq!(within.exit_code, 0, "a 1 MiB growth must fit under the default");
+
+        let beyond = backend.execute(grow_by(default_pages)).await.unwrap();
+        assert_eq!(beyond.exit_code, 3, "growth past the default limit must be refused");
+    }
+
+    #[tokio::test]
+    async fn an_explicit_memory_limit_overrides_the_default() {
+        let backend = WasmBackend::new();
+        let mut request = grow_by(WasmBackend::DEFAULT_MEMORY_LIMIT_MB * 16);
+        request.memory_limit_mb = Some(WasmBackend::DEFAULT_MEMORY_LIMIT_MB * 2);
+
+        let result = backend.execute(request).await.unwrap();
+        assert_eq!(result.exit_code, 0, "a larger explicit limit must allow the growth");
     }
 
     #[test]

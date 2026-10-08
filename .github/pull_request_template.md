@@ -36,6 +36,6 @@ Summary of the approach taken.
 
 ### Documentation (if applicable)
 
-- [ ] CHANGELOG.md updated for user-facing changes
+- [ ] Changelog fragment added under `changelog.d/` for user-facing changes (see `changelog.d/README.md`)
 - [ ] README updated if crate capabilities changed
 - [ ] Examples added or updated for new features

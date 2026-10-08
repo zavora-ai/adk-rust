@@ -89,12 +89,25 @@ const STRUCTURED_OUTPUTS_BETA: &str = "structured-outputs-2025-11-13";
 const SERVER_FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 
 /// Client for the Anthropic API with performance optimizations.
-#[derive(Debug, Clone)]
+///
+/// # Timeouts
+///
+/// | Request kind | Bound |
+/// |--------------|-------|
+/// | Non-streaming | [`with_timeout`](Self::with_timeout) covers the whole request (default 60 seconds) |
+/// | Streaming, until response headers | the same timeout |
+/// | Streaming body | a 30-second inactivity timeout between chunks, plus the optional total bound from [`with_stream_timeout`](Self::with_stream_timeout) |
+///
+/// The `Debug` output redacts the API key.
+#[derive(Clone)]
 pub struct Anthropic {
     api_key: String,
     client: ReqwestClient,
+    /// Client without a total timeout, so long streams are not cut off mid-body.
+    stream_client: ReqwestClient,
     base_url: String,
     timeout: Duration,
+    stream_timeout: Option<Duration>,
     max_retries: usize,
     throughput_ops_sec: f64,
     reserve_capacity: f64,
@@ -102,7 +115,43 @@ pub struct Anthropic {
     cached_headers: Arc<HeaderMap>,
 }
 
+impl std::fmt::Debug for Anthropic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Anthropic")
+            .field("api_key", &"[REDACTED]")
+            .field("client", &self.client)
+            .field("stream_client", &self.stream_client)
+            .field("base_url", &self.base_url)
+            .field("timeout", &self.timeout)
+            .field("stream_timeout", &self.stream_timeout)
+            .field("max_retries", &self.max_retries)
+            .field("throughput_ops_sec", &self.throughput_ops_sec)
+            .field("reserve_capacity", &self.reserve_capacity)
+            .field("cached_headers", &self.cached_headers)
+            .finish()
+    }
+}
+
 impl Anthropic {
+    /// Build the HTTP client. `total_timeout` of `None` leaves response bodies
+    /// unbounded, which the streaming client relies on.
+    fn build_http_client(
+        total_timeout: Option<Duration>,
+        connect_timeout: Duration,
+    ) -> Result<ReqwestClient> {
+        let mut builder = ReqwestClient::builder()
+            .connect_timeout(connect_timeout)
+            .pool_max_idle_per_host(10) // Connection pooling optimization
+            .pool_idle_timeout(Duration::from_secs(90))
+            .tcp_keepalive(Duration::from_secs(60));
+        if let Some(timeout) = total_timeout {
+            builder = builder.timeout(timeout);
+        }
+        builder.build().map_err(|e| {
+            Error::http_client(format!("Failed to build HTTP client: {e}"), Some(Box::new(e)))
+        })
+    }
+
     /// Resolve an API key value, handling file:// URLs
     fn resolve_api_key(key_value: &str) -> Result<String> {
         if let Some(stripped) = key_value.strip_prefix("file://") {
@@ -179,15 +228,8 @@ impl Anthropic {
         };
 
         let timeout = DEFAULT_TIMEOUT;
-        let client = ReqwestClient::builder()
-            .timeout(timeout)
-            .pool_max_idle_per_host(10) // Connection pooling optimization
-            .pool_idle_timeout(Duration::from_secs(90))
-            .tcp_keepalive(Duration::from_secs(60))
-            .build()
-            .map_err(|e| {
-                Error::http_client(format!("Failed to build HTTP client: {e}"), Some(Box::new(e)))
-            })?;
+        let client = Self::build_http_client(Some(timeout), timeout)?;
+        let stream_client = Self::build_http_client(None, timeout)?;
 
         // Pre-build headers for performance
         let cached_headers = Arc::new(Self::build_default_headers(&api_key)?);
@@ -200,8 +242,10 @@ impl Anthropic {
         Ok(Self {
             api_key,
             client,
+            stream_client,
             base_url,
             timeout,
+            stream_timeout: None,
             max_retries: 3,
             throughput_ops_sec: 1.0 / 60.0,
             reserve_capacity: 1.0 / 60.0,
@@ -242,12 +286,14 @@ impl Anthropic {
 
         let mut headers = (*self.cached_headers).clone();
         headers.remove("x-api-key");
-        let value = HeaderValue::from_str(&format!("Bearer {auth_token}")).map_err(|error| {
-            Error::validation(
-                format!("Invalid auth token format: {error}"),
-                Some("auth_token".to_string()),
-            )
-        })?;
+        let mut value =
+            HeaderValue::from_str(&format!("Bearer {auth_token}")).map_err(|error| {
+                Error::validation(
+                    format!("Invalid auth token format: {error}"),
+                    Some("auth_token".to_string()),
+                )
+            })?;
+        value.set_sensitive(true);
         headers.insert(header::AUTHORIZATION, value);
         self.api_key.clear();
         self.cached_headers = Arc::new(headers);
@@ -324,26 +370,39 @@ impl Anthropic {
 
     /// Set a custom timeout for this client.
     ///
-    /// This method allows you to specify a different timeout for API requests.
+    /// The timeout bounds a whole non-streaming request, and the wait for the
+    /// response headers of a streaming request. A streamed body is not bounded
+    /// by it — see [`with_stream_timeout`](Self::with_stream_timeout).
+    ///
+    /// # Errors
+    ///
+    /// Returns an HTTP client error when the underlying client cannot be built.
     pub fn with_timeout(mut self, timeout: Duration) -> Result<Self> {
         self.timeout = timeout;
-
-        // Recreate the client with the new timeout and performance optimizations
-        let client = ReqwestClient::builder()
-            .timeout(timeout)
-            .pool_max_idle_per_host(10)
-            .pool_idle_timeout(Duration::from_secs(90))
-            .tcp_keepalive(Duration::from_secs(60))
-            .build()
-            .map_err(|e| {
-                Error::http_client(
-                    "Failed to build HTTP client with new timeout",
-                    Some(Box::new(e)),
-                )
-            })?;
-
-        self.client = client;
+        self.client = Self::build_http_client(Some(timeout), timeout)?;
+        self.stream_client = Self::build_http_client(None, timeout)?;
         Ok(self)
+    }
+
+    /// Bound the total duration of each streaming request, body included.
+    ///
+    /// Streams have no total bound by default: a long generation keeps running
+    /// for as long as the server keeps sending data, and a stalled stream fails
+    /// after 30 seconds without data. `None` restores that default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use adk_anthropic::Anthropic;
+    ///
+    /// let client = Anthropic::new(Some("placeholder-api-key".to_string()))?
+    ///     .with_stream_timeout(Some(Duration::from_secs(600)));
+    /// # Ok::<(), adk_anthropic::Error>(())
+    /// ```
+    pub fn with_stream_timeout(mut self, stream_timeout: Option<Duration>) -> Self {
+        self.stream_timeout = stream_timeout;
+        self
     }
 
     /// Set the maximum number of retries for this client.
@@ -380,15 +439,12 @@ impl Anthropic {
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
-        headers.insert(
-            "x-api-key",
-            HeaderValue::from_str(api_key).map_err(|e| {
-                Error::validation(
-                    format!("Invalid API key format: {e}"),
-                    Some("api_key".to_string()),
-                )
-            })?,
-        );
+        let mut api_key_value = HeaderValue::from_str(api_key).map_err(|e| {
+            Error::validation(format!("Invalid API key format: {e}"), Some("api_key".to_string()))
+        })?;
+        // Keeps the key out of `Debug` output of the header map and of request logs.
+        api_key_value.set_sensitive(true);
+        headers.insert("x-api-key", api_key_value);
         headers.insert("anthropic-version", HeaderValue::from_static(ANTHROPIC_API_VERSION));
         Ok(headers)
     }
@@ -586,6 +642,41 @@ impl Anthropic {
         response.json::<T>().await.map_err(|e| {
             Error::serialization(format!("Failed to parse response: {e}"), Some(Box::new(e)))
         })
+    }
+
+    /// Send a streaming POST request on the client that has no total timeout.
+    ///
+    /// The configured timeout bounds the wait for the response headers, the SSE
+    /// layer bounds inactivity in the body, and `stream_timeout`, when set,
+    /// bounds the whole request.
+    async fn send_stream_request(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        body: &impl serde::Serialize,
+    ) -> Result<Response> {
+        let mut request = self.stream_client.post(url).headers(headers).json(body);
+        if let Some(stream_timeout) = self.stream_timeout {
+            request = request.timeout(stream_timeout);
+        }
+
+        let response = tokio::time::timeout(self.timeout, request.send())
+            .await
+            .map_err(|_| {
+                Error::timeout(
+                    format!(
+                        "Timed out after {} seconds waiting for the streaming response headers",
+                        self.timeout.as_secs_f64()
+                    ),
+                    Some(self.timeout.as_secs_f64()),
+                )
+            })?
+            .map_err(|e| self.map_request_error(e))?;
+
+        if !response.status().is_success() {
+            return Err(Self::process_error_response(response).await);
+        }
+        Ok(response)
     }
 
     /// Execute a GET request with error handling
@@ -809,21 +900,7 @@ impl Anthropic {
         let response = self
             .retry_with_backoff(|| async {
                 let url = self.build_url("messages");
-
-                let response = self
-                    .client
-                    .post(&url)
-                    .headers(headers.clone())
-                    .json(&params)
-                    .send()
-                    .await
-                    .map_err(|e| self.map_request_error(e))?;
-
-                if !response.status().is_success() {
-                    return Err(Self::process_error_response(response).await);
-                }
-
-                Ok(response)
+                self.send_stream_request(&url, headers.clone(), &params).await
             })
             .await;
 
@@ -955,18 +1032,7 @@ impl Anthropic {
         let response = self
             .retry_with_backoff(|| async {
                 let url = self.build_url("messages");
-                let response = self
-                    .client
-                    .post(&url)
-                    .headers(headers.clone())
-                    .json(&request)
-                    .send()
-                    .await
-                    .map_err(|error| self.map_request_error(error))?;
-                if !response.status().is_success() {
-                    return Err(Self::process_error_response(response).await);
-                }
-                Ok(response)
+                self.send_stream_request(&url, headers.clone(), &request).await
             })
             .await;
 
@@ -1494,13 +1560,34 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[test]
+    fn debug_output_redacts_api_key_and_bearer_token() {
+        let client = Anthropic::new(Some("sk-ant-secret-key-value".to_string())).unwrap();
+        let debug = format!("{client:?}");
+        assert!(!debug.contains("sk-ant-secret-key-value"), "api key leaked: {debug}");
+        assert!(debug.contains("[REDACTED]"));
+
+        let client = Anthropic::new_with_auth_token("secret-bearer-token").unwrap();
+        let debug = format!("{client:?}");
+        assert!(!debug.contains("secret-bearer-token"), "bearer token leaked: {debug}");
+    }
+
+    #[test]
+    fn api_key_header_is_marked_sensitive() {
+        let headers = Anthropic::build_default_headers("sk-ant-secret-key-value").unwrap();
+
+        assert!(headers.get("x-api-key").unwrap().is_sensitive());
+    }
+
     #[tokio::test]
     async fn retry_logic_with_backoff() {
         let client = Anthropic {
             api_key: "test".to_string(),
             client: ReqwestClient::new(),
+            stream_client: ReqwestClient::new(),
             base_url: "http://localhost".to_string(),
             timeout: Duration::from_secs(1),
+            stream_timeout: None,
             max_retries: 2,
             throughput_ops_sec: 1.0 / 60.0,
             reserve_capacity: 1.0 / 60.0,
@@ -1533,8 +1620,10 @@ mod tests {
         let client = Anthropic {
             api_key: "test".to_string(),
             client: ReqwestClient::new(),
+            stream_client: ReqwestClient::new(),
             base_url: "http://localhost".to_string(),
             timeout: Duration::from_secs(1),
+            stream_timeout: None,
             max_retries: 2,
             throughput_ops_sec: 1.0 / 60.0,
             reserve_capacity: 1.0 / 60.0,
@@ -1565,8 +1654,10 @@ mod tests {
         let client = Anthropic {
             api_key: "test".to_string(),
             client: ReqwestClient::new(),
+            stream_client: ReqwestClient::new(),
             base_url: "http://localhost".to_string(),
             timeout: Duration::from_secs(1),
+            stream_timeout: None,
             max_retries: 2,
             throughput_ops_sec: 1.0 / 60.0,
             reserve_capacity: 1.0 / 60.0,
@@ -1598,8 +1689,10 @@ mod tests {
         let client = Anthropic {
             api_key: "test".to_string(),
             client: ReqwestClient::new(),
+            stream_client: ReqwestClient::new(),
             base_url: "http://localhost".to_string(),
             timeout: Duration::from_secs(1),
+            stream_timeout: None,
             max_retries: 2,
             throughput_ops_sec: 1.0 / 60.0,
             reserve_capacity: 1.0 / 60.0,
@@ -1923,8 +2016,10 @@ mod tests {
         let client = Anthropic {
             api_key: "test".to_string(),
             client: ReqwestClient::new(),
+            stream_client: ReqwestClient::new(),
             base_url: "http://localhost".to_string(),
             timeout: Duration::from_secs(1),
+            stream_timeout: None,
             max_retries: 1,
             throughput_ops_sec: 1.0,
             reserve_capacity: 1.0,

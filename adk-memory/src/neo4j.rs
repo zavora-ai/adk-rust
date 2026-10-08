@@ -15,6 +15,21 @@
 //! (:MemoryEntry)-[:FOLLOWS]->(:MemoryEntry)   // temporal ordering
 //! ```
 //!
+//! # Entry Ids
+//!
+//! `MemoryEntry.id` carries a global uniqueness constraint, so ids are scoped by
+//! tenant: `s:{app}:{user}:{scope}:{session}:{index}` for session entries and
+//! `d:{app}:{user}:{scope}:{uuid}` for entries added directly, where `{scope}` is
+//! `g` (global) or `p:{project}` and each identifier is percent-encoded (`%` →
+//! `%25`, `:` → `%3A`). Session entries are merged on their id, so ingesting the
+//! same session again updates its entries instead of failing.
+//!
+//! # Vector Search
+//!
+//! The vector index ranks all tenants together, so a search over-fetches
+//! candidates and filters them to the caller's app, user and project. See
+//! [`Neo4jMemoryService::with_vector_candidate_cap`] for the tradeoff.
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -27,6 +42,7 @@
 //! ```
 
 use crate::embedding::EmbeddingProvider;
+use crate::key::encode_segment;
 use crate::service::*;
 use adk_core::Result;
 use async_trait::async_trait;
@@ -54,6 +70,65 @@ use tracing::instrument;
 pub struct Neo4jMemoryService {
     graph: Graph,
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+    vector_candidate_cap: usize,
+}
+
+/// Default upper bound on the vector-index candidates fetched per search.
+///
+/// See [`Neo4jMemoryService::with_vector_candidate_cap`].
+pub const DEFAULT_VECTOR_CANDIDATE_CAP: usize = 1000;
+
+/// Multiple of the requested `limit` fetched from the vector index before the
+/// tenant filter runs.
+const VECTOR_OVERFETCH_FACTOR: usize = 10;
+
+/// Number of vector-index candidates to request for a search returning `limit` entries.
+///
+/// Never less than `limit`, otherwise `limit * VECTOR_OVERFETCH_FACTOR` bounded by `cap`.
+fn vector_candidate_count(limit: usize, cap: usize) -> usize {
+    limit.saturating_mul(VECTOR_OVERFETCH_FACTOR).min(cap).max(limit)
+}
+
+/// Project segment of an entry id: `g` for global entries, `p:{project}` otherwise.
+///
+/// The two forms have a different number of `:`-separated segments, so a
+/// global id can never equal a project-scoped one.
+fn scope_segment(project_id: Option<&str>) -> String {
+    match project_id {
+        None => "g".to_string(),
+        Some(project) => format!("p:{}", encode_segment(project)),
+    }
+}
+
+/// Id of the `index`-th entry ingested for a session.
+///
+/// Unique per (app, user, project, session, position): ingesting the same
+/// session again resolves to the same nodes, and two tenants that reuse a
+/// session id never share one.
+fn session_entry_id(
+    app_name: &str,
+    user_id: &str,
+    project_id: Option<&str>,
+    session_id: &str,
+    index: usize,
+) -> String {
+    format!(
+        "s:{}:{}:{}:{}:{index}",
+        encode_segment(app_name),
+        encode_segment(user_id),
+        scope_segment(project_id),
+        encode_segment(session_id)
+    )
+}
+
+/// Id of an entry added to a project directly rather than through a session.
+fn direct_entry_id(app_name: &str, user_id: &str, project_id: &str, unique: uuid::Uuid) -> String {
+    format!(
+        "d:{}:{}:{}:{unique}",
+        encode_segment(app_name),
+        encode_segment(user_id),
+        scope_segment(Some(project_id))
+    )
 }
 
 impl Neo4jMemoryService {
@@ -111,7 +186,29 @@ impl Neo4jMemoryService {
         graph: Graph,
         embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     ) -> adk_core::Result<Self> {
-        Ok(Self { graph, embedding_provider })
+        Ok(Self { graph, embedding_provider, vector_candidate_cap: DEFAULT_VECTOR_CANDIDATE_CAP })
+    }
+
+    /// Sets the maximum number of vector-index candidates fetched per search.
+    ///
+    /// Neo4j's vector index ranks every tenant's entries together and cannot
+    /// filter by app, user or project inside the index. A search therefore asks
+    /// the index for `limit * 10` candidates, bounded by this cap, and filters
+    /// those down to the caller's tenant. A tenant whose matching entries all rank
+    /// outside the global top `cap` still receives no vector results, so raise
+    /// the cap when one index holds many tenants; each search then reads more
+    /// candidates. Defaults to [`DEFAULT_VECTOR_CANDIDATE_CAP`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_memory::Neo4jMemoryService;
+    ///
+    /// let service = Neo4jMemoryService::new(graph, Some(provider))?.with_vector_candidate_cap(5000);
+    /// ```
+    pub fn with_vector_candidate_cap(mut self, cap: usize) -> Self {
+        self.vector_candidate_cap = cap;
+        self
     }
 
     /// Returns a reference to the underlying Neo4j graph connection.
@@ -151,11 +248,11 @@ impl Neo4jMemoryService {
         // constraint already exists, record v1 as applied.
         if max_applied == 0 {
             let existing = self.detect_existing_tables().await?;
-            if existing {
-                if let Some(&(version, description, _)) = Self::NEO4J_MEMORY_MIGRATIONS.first() {
-                    self.record_migration(version, description).await?;
-                    max_applied = version;
-                }
+            if existing
+                && let Some(&(version, description, _)) = Self::NEO4J_MEMORY_MIGRATIONS.first()
+            {
+                self.record_migration(version, description).await?;
+                max_applied = version;
             }
         }
 
@@ -282,6 +379,127 @@ impl Neo4jMemoryService {
             })?;
         Ok(())
     }
+
+    /// Writes one session's entries, scoped to `project_id` when given.
+    ///
+    /// Entry nodes are merged on an id derived from the tenant, project, session
+    /// and position, so ingesting the same session again updates the stored
+    /// entries instead of failing on the `memory_entry_unique` constraint.
+    async fn ingest_session(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        project_id: Option<&str>,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<()> {
+        let operation = if project_id.is_some() { "add_session_to_project" } else { "add_session" };
+        let failed =
+            |e: neo4rs::Error| adk_core::AdkError::memory(format!("{operation} failed: {e}"));
+
+        let texts: Vec<String> =
+            entries.iter().map(|e| crate::text::extract_text(&e.content)).collect();
+
+        let embeddings = if let Some(provider) = &self.embedding_provider {
+            let non_empty_texts: Vec<String> = texts
+                .iter()
+                .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
+                .collect();
+            let embeddings = provider.embed(&non_empty_texts).await.map_err(|e| {
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
+            })?;
+            if embeddings.len() != entries.len() {
+                return Err(adk_core::AdkError::memory(format!(
+                    "embedding provider returned {} vectors for {} entries",
+                    embeddings.len(),
+                    entries.len()
+                )));
+            }
+            Some(embeddings)
+        } else {
+            None
+        };
+
+        let mut txn = self
+            .graph
+            .start_txn()
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("transaction failed: {e}")))?;
+
+        txn.run(
+            neo4rs::query(
+                "MERGE (:MemorySession {session_id: $session_id, \
+                 app_name: $app_name, user_id: $user_id})",
+            )
+            .param("session_id", session_id.to_string())
+            .param("app_name", app_name.to_string())
+            .param("user_id", user_id.to_string()),
+        )
+        .await
+        .map_err(failed)?;
+
+        let entry_ids: Vec<String> = (0..entries.len())
+            .map(|i| session_entry_id(app_name, user_id, project_id, session_id, i))
+            .collect();
+
+        for (i, entry) in entries.iter().enumerate() {
+            let content_json = serde_json::to_string(&entry.content)
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+            // Neo4j stores vectors as lists of 64-bit floats.
+            let embedding: Option<Vec<f64>> =
+                embeddings.as_ref().map(|embs| embs[i].iter().map(|&v| f64::from(v)).collect());
+
+            // A null `$embedding` or `$project_id` removes the property, matching
+            // the shape of entries written without one.
+            txn.run(
+                neo4rs::query(
+                    "MATCH (s:MemorySession {session_id: $session_id, \
+                     app_name: $app_name, user_id: $user_id}) \
+                     MERGE (e:MemoryEntry {id: $id}) \
+                     SET e.app_name = $app_name, e.user_id = $user_id, \
+                         e.session_id = $session_id, e.content = $content, \
+                         e.content_text = $content_text, e.author = $author, \
+                         e.timestamp = $timestamp, e.embedding = $embedding, \
+                         e.project_id = $project_id \
+                     MERGE (s)-[:FROM_SESSION]->(e)",
+                )
+                .param("session_id", session_id.to_string())
+                .param("app_name", app_name.to_string())
+                .param("user_id", user_id.to_string())
+                .param("id", entry_ids[i].clone())
+                .param("content", content_json)
+                .param("content_text", texts[i].clone())
+                .param("author", entry.author.clone())
+                .param("timestamp", entry.timestamp.to_rfc3339())
+                .param("embedding", embedding)
+                .param("project_id", project_id.map(str::to_string)),
+            )
+            .await
+            .map_err(failed)?;
+        }
+
+        for pair in entry_ids.windows(2) {
+            txn.run(
+                neo4rs::query(
+                    "MATCH (prev:MemoryEntry {id: $prev_id}) \
+                     MATCH (curr:MemoryEntry {id: $curr_id}) \
+                     MERGE (prev)-[:FOLLOWS]->(curr)",
+                )
+                .param("prev_id", pair[0].clone())
+                .param("curr_id", pair[1].clone()),
+            )
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::memory(format!("{operation} failed: FOLLOWS creation: {e}"))
+            })?;
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("commit failed: {e}")))?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -297,131 +515,7 @@ impl MemoryService for Neo4jMemoryService {
         if entries.is_empty() {
             return Ok(());
         }
-
-        // Collect texts for batch embedding
-        let texts: Vec<String> =
-            entries.iter().map(|e| crate::text::extract_text(&e.content)).collect();
-
-        let embeddings = if let Some(provider) = &self.embedding_provider {
-            let non_empty_texts: Vec<String> = texts
-                .iter()
-                .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
-                .collect();
-            Some(provider.embed(&non_empty_texts).await.map_err(|e| {
-                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
-            })?)
-        } else {
-            None
-        };
-
-        let mut txn = self
-            .graph
-            .start_txn()
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("transaction failed: {e}")))?;
-
-        // MERGE the MemorySession node
-        txn.run(
-            neo4rs::query(
-                "MERGE (:MemorySession {session_id: $session_id, \
-                 app_name: $app_name, user_id: $user_id})",
-            )
-            .param("session_id", session_id.to_string())
-            .param("app_name", app_name.to_string())
-            .param("user_id", user_id.to_string()),
-        )
-        .await
-        .map_err(|e| adk_core::AdkError::memory(format!("add_session failed: {e}")))?;
-
-        // Create MemoryEntry nodes and FROM_SESSION relationships
-        let mut entry_ids: Vec<String> = Vec::with_capacity(entries.len());
-
-        for (i, entry) in entries.iter().enumerate() {
-            let entry_id = format!("{session_id}_{i}");
-            entry_ids.push(entry_id.clone());
-
-            let content_json = serde_json::to_string(&entry.content)
-                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-            let content_text = &texts[i];
-            let timestamp_str = entry.timestamp.to_rfc3339();
-
-            if let Some(ref embs) = embeddings {
-                // Convert Vec<f32> to Vec<f64> for Neo4j
-                let embedding_f64: Vec<f64> = embs[i].iter().map(|&v| v as f64).collect();
-
-                txn.run(
-                    neo4rs::query(
-                        "MATCH (s:MemorySession {session_id: $session_id, \
-                         app_name: $app_name, user_id: $user_id}) \
-                         CREATE (s)-[:FROM_SESSION]->(e:MemoryEntry { \
-                             id: $id, app_name: $app_name, user_id: $user_id, \
-                             session_id: $session_id, content: $content, \
-                             content_text: $content_text, author: $author, \
-                             timestamp: $timestamp, embedding: $embedding, \
-                             project_id: null \
-                         })",
-                    )
-                    .param("session_id", session_id.to_string())
-                    .param("app_name", app_name.to_string())
-                    .param("user_id", user_id.to_string())
-                    .param("id", entry_id)
-                    .param("content", content_json)
-                    .param("content_text", content_text.clone())
-                    .param("author", entry.author.clone())
-                    .param("timestamp", timestamp_str)
-                    .param("embedding", embedding_f64),
-                )
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("add_session failed: {e}")))?;
-            } else {
-                txn.run(
-                    neo4rs::query(
-                        "MATCH (s:MemorySession {session_id: $session_id, \
-                         app_name: $app_name, user_id: $user_id}) \
-                         CREATE (s)-[:FROM_SESSION]->(e:MemoryEntry { \
-                             id: $id, app_name: $app_name, user_id: $user_id, \
-                             session_id: $session_id, content: $content, \
-                             content_text: $content_text, author: $author, \
-                             timestamp: $timestamp, \
-                             project_id: null \
-                         })",
-                    )
-                    .param("session_id", session_id.to_string())
-                    .param("app_name", app_name.to_string())
-                    .param("user_id", user_id.to_string())
-                    .param("id", entry_id)
-                    .param("content", content_json)
-                    .param("content_text", content_text.clone())
-                    .param("author", entry.author.clone())
-                    .param("timestamp", timestamp_str),
-                )
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("add_session failed: {e}")))?;
-            }
-        }
-
-        // Create FOLLOWS relationships between consecutive entries
-        for i in 0..entry_ids.len().saturating_sub(1) {
-            txn.run(
-                neo4rs::query(
-                    "MATCH (prev:MemoryEntry {id: $prev_id}) \
-                     MATCH (curr:MemoryEntry {id: $curr_id}) \
-                     CREATE (prev)-[:FOLLOWS]->(curr)",
-                )
-                .param("prev_id", entry_ids[i].clone())
-                .param("curr_id", entry_ids[i + 1].clone()),
-            )
-            .await
-            .map_err(|e| {
-                adk_core::AdkError::memory(format!("add_session failed: FOLLOWS creation: {e}"))
-            })?;
-        }
-
-        txn.commit()
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("commit failed: {e}")))?;
-
-        Ok(())
+        self.ingest_session(app_name, user_id, session_id, None, entries).await
     }
 
     fn supports_project_scoping(&self) -> bool {
@@ -442,138 +536,7 @@ impl MemoryService for Neo4jMemoryService {
         if entries.is_empty() {
             return Ok(());
         }
-
-        // Collect texts for batch embedding
-        let texts: Vec<String> =
-            entries.iter().map(|e| crate::text::extract_text(&e.content)).collect();
-
-        let embeddings = if let Some(provider) = &self.embedding_provider {
-            let non_empty_texts: Vec<String> = texts
-                .iter()
-                .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
-                .collect();
-            Some(provider.embed(&non_empty_texts).await.map_err(|e| {
-                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
-            })?)
-        } else {
-            None
-        };
-
-        let mut txn = self
-            .graph
-            .start_txn()
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("transaction failed: {e}")))?;
-
-        // MERGE the MemorySession node
-        txn.run(
-            neo4rs::query(
-                "MERGE (:MemorySession {session_id: $session_id, \
-                 app_name: $app_name, user_id: $user_id})",
-            )
-            .param("session_id", session_id.to_string())
-            .param("app_name", app_name.to_string())
-            .param("user_id", user_id.to_string()),
-        )
-        .await
-        .map_err(|e| adk_core::AdkError::memory(format!("add_session_to_project failed: {e}")))?;
-
-        // Create MemoryEntry nodes with project_id and FROM_SESSION relationships
-        let mut entry_ids: Vec<String> = Vec::with_capacity(entries.len());
-
-        for (i, entry) in entries.iter().enumerate() {
-            let entry_id = format!("{session_id}_{i}");
-            entry_ids.push(entry_id.clone());
-
-            let content_json = serde_json::to_string(&entry.content)
-                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-            let content_text = &texts[i];
-            let timestamp_str = entry.timestamp.to_rfc3339();
-
-            if let Some(ref embs) = embeddings {
-                let embedding_f64: Vec<f64> = embs[i].iter().map(|&v| v as f64).collect();
-
-                txn.run(
-                    neo4rs::query(
-                        "MATCH (s:MemorySession {session_id: $session_id, \
-                         app_name: $app_name, user_id: $user_id}) \
-                         CREATE (s)-[:FROM_SESSION]->(e:MemoryEntry { \
-                             id: $id, app_name: $app_name, user_id: $user_id, \
-                             session_id: $session_id, content: $content, \
-                             content_text: $content_text, author: $author, \
-                             timestamp: $timestamp, embedding: $embedding, \
-                             project_id: $project_id \
-                         })",
-                    )
-                    .param("session_id", session_id.to_string())
-                    .param("app_name", app_name.to_string())
-                    .param("user_id", user_id.to_string())
-                    .param("id", entry_id)
-                    .param("content", content_json)
-                    .param("content_text", content_text.clone())
-                    .param("author", entry.author.clone())
-                    .param("timestamp", timestamp_str)
-                    .param("embedding", embedding_f64)
-                    .param("project_id", project_id.to_string()),
-                )
-                .await
-                .map_err(|e| {
-                    adk_core::AdkError::memory(format!("add_session_to_project failed: {e}"))
-                })?;
-            } else {
-                txn.run(
-                    neo4rs::query(
-                        "MATCH (s:MemorySession {session_id: $session_id, \
-                         app_name: $app_name, user_id: $user_id}) \
-                         CREATE (s)-[:FROM_SESSION]->(e:MemoryEntry { \
-                             id: $id, app_name: $app_name, user_id: $user_id, \
-                             session_id: $session_id, content: $content, \
-                             content_text: $content_text, author: $author, \
-                             timestamp: $timestamp, \
-                             project_id: $project_id \
-                         })",
-                    )
-                    .param("session_id", session_id.to_string())
-                    .param("app_name", app_name.to_string())
-                    .param("user_id", user_id.to_string())
-                    .param("id", entry_id)
-                    .param("content", content_json)
-                    .param("content_text", content_text.clone())
-                    .param("author", entry.author.clone())
-                    .param("timestamp", timestamp_str)
-                    .param("project_id", project_id.to_string()),
-                )
-                .await
-                .map_err(|e| {
-                    adk_core::AdkError::memory(format!("add_session_to_project failed: {e}"))
-                })?;
-            }
-        }
-
-        // Create FOLLOWS relationships between consecutive entries
-        for i in 0..entry_ids.len().saturating_sub(1) {
-            txn.run(
-                neo4rs::query(
-                    "MATCH (prev:MemoryEntry {id: $prev_id}) \
-                     MATCH (curr:MemoryEntry {id: $curr_id}) \
-                     CREATE (prev)-[:FOLLOWS]->(curr)",
-                )
-                .param("prev_id", entry_ids[i].clone())
-                .param("curr_id", entry_ids[i + 1].clone()),
-            )
-            .await
-            .map_err(|e| {
-                adk_core::AdkError::memory(format!(
-                    "add_session_to_project failed: FOLLOWS creation: {e}"
-                ))
-            })?;
-        }
-
-        txn.commit()
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("commit failed: {e}")))?;
-
-        Ok(())
+        self.ingest_session(app_name, user_id, session_id, Some(project_id), entries).await
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
@@ -590,7 +553,7 @@ impl MemoryService for Neo4jMemoryService {
         let content_json = serde_json::to_string(&entry.content)
             .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
         let timestamp_str = entry.timestamp.to_rfc3339();
-        let entry_id = format!("entry_{}", chrono::Utc::now().timestamp_millis());
+        let entry_id = direct_entry_id(app_name, user_id, project_id, uuid::Uuid::new_v4());
 
         if let Some(ref provider) = self.embedding_provider {
             let text_for_embed =
@@ -655,7 +618,7 @@ impl MemoryService for Neo4jMemoryService {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
-        let limit = req.limit.unwrap_or(10) as i64;
+        let limit = req.limit.unwrap_or(10);
 
         // Build the project_id filter clause
         let project_filter = match &req.project_id {
@@ -671,12 +634,15 @@ impl MemoryService for Neo4jMemoryService {
                 .map_err(|e| adk_core::AdkError::memory(format!("query embedding failed: {e}")))?;
             let query_vec: Vec<f64> = query_embedding[0].iter().map(|&v| v as f64).collect();
 
+            // The index ranks every tenant's entries together, so it is asked for
+            // more candidates than `limit` and the tenant filter runs on those.
             let cypher = format!(
-                "CALL db.index.vector.queryNodes('memory_embedding', $limit, \
+                "CALL db.index.vector.queryNodes('memory_embedding', $candidates, \
                  $query_embedding) \
                  YIELD node, score \
                  WHERE node.app_name = $app_name AND node.user_id = $user_id \
                  {project_filter} \
+                 WITH node, score ORDER BY score DESC LIMIT $limit \
                  OPTIONAL MATCH (node)-[:FOLLOWS]-(adjacent:MemoryEntry) \
                  RETURN node.id AS id, node.content AS content, \
                         node.author AS author, node.timestamp AS timestamp, \
@@ -688,8 +654,10 @@ impl MemoryService for Neo4jMemoryService {
                  ORDER BY score DESC"
             );
 
+            let candidates = vector_candidate_count(limit, self.vector_candidate_cap);
             let mut query = neo4rs::query(&cypher)
-                .param("limit", limit)
+                .param("candidates", candidates as i64)
+                .param("limit", limit as i64)
                 .param("query_embedding", query_vec)
                 .param("app_name", req.app_name.clone())
                 .param("user_id", req.user_id.clone());
@@ -748,7 +716,7 @@ impl MemoryService for Neo4jMemoryService {
                 .param("query", req.query.clone())
                 .param("app_name", req.app_name.clone())
                 .param("user_id", req.user_id.clone())
-                .param("limit", limit);
+                .param("limit", limit as i64);
 
             if let Some(ref pid) = req.project_id {
                 query = query.param("project_id", pid.clone());
@@ -993,5 +961,81 @@ fn collect_adjacent_entries(
             .unwrap_or_default();
 
         entries.push(MemoryEntry { content, author, timestamp });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_entry_ids_are_scoped_by_tenant_project_and_session() {
+        let base = session_entry_id("app", "alice", None, "s1", 0);
+        let variants = [
+            session_entry_id("other", "alice", None, "s1", 0),
+            session_entry_id("app", "bob", None, "s1", 0),
+            session_entry_id("app", "alice", Some("proj"), "s1", 0),
+            session_entry_id("app", "alice", None, "s2", 0),
+            session_entry_id("app", "alice", None, "s1", 1),
+        ];
+        for variant in &variants {
+            assert_ne!(&base, variant);
+        }
+    }
+
+    #[test]
+    fn test_session_entry_ids_are_stable_for_re_ingestion() {
+        assert_eq!(
+            session_entry_id("app", "alice", Some("proj"), "s1", 3),
+            session_entry_id("app", "alice", Some("proj"), "s1", 3)
+        );
+    }
+
+    #[test]
+    fn test_session_entry_ids_encode_delimiters() {
+        assert_eq!(
+            [
+                session_entry_id("a:b", "u", None, "s", 0),
+                session_entry_id("a", "u", Some("p:1"), "s%", 2),
+            ],
+            ["s:a%3Ab:u:g:s:0".to_string(), "s:a:u:p:p%3A1:s%25:2".to_string()]
+        );
+        assert_ne!(
+            session_entry_id("a:b", "c", None, "s", 0),
+            session_entry_id("a", "b:c", None, "s", 0)
+        );
+        // A global session named like a project scope stays distinct.
+        assert_ne!(
+            session_entry_id("a", "u", None, "p:x:s", 0),
+            session_entry_id("a", "u", Some("x"), "s", 0)
+        );
+    }
+
+    #[test]
+    fn test_direct_entry_ids_never_collide() {
+        let first = direct_entry_id("app", "alice", "proj", uuid::Uuid::new_v4());
+        let second = direct_entry_id("app", "alice", "proj", uuid::Uuid::new_v4());
+        assert_ne!(first, second);
+        assert!(first.starts_with("d:app:alice:p:proj:"), "{first}");
+
+        let fixed = uuid::Uuid::nil();
+        assert_ne!(
+            direct_entry_id("app", "alice", "proj", fixed),
+            direct_entry_id("app", "bob", "proj", fixed)
+        );
+    }
+
+    #[test]
+    fn test_vector_candidate_count() {
+        assert_eq!(
+            [
+                vector_candidate_count(10, DEFAULT_VECTOR_CANDIDATE_CAP),
+                vector_candidate_count(500, DEFAULT_VECTOR_CANDIDATE_CAP),
+                vector_candidate_count(5000, DEFAULT_VECTOR_CANDIDATE_CAP),
+                vector_candidate_count(0, DEFAULT_VECTOR_CANDIDATE_CAP),
+                vector_candidate_count(usize::MAX, 10),
+            ],
+            [100, 1000, 5000, 0, usize::MAX]
+        );
     }
 }

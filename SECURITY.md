@@ -6,9 +6,15 @@ The following versions of ADK-Rust are currently supported with security updates
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.0.x   | :white_check_mark: |
-| 0.9.x   | :white_check_mark: |
-| < 0.9   | :x:                |
+| 2.2.x   | :white_check_mark: |
+| 2.1.x   | :white_check_mark: |
+| 2.0.x   | :x:                |
+| 1.x     | :x:                |
+| < 1.0   | :x:                |
+
+Security fixes land on `main` and ship in the next 2.2.x patch release. Earlier
+minor releases receive fixes only when a reported issue cannot be mitigated by
+upgrading.
 
 We recommend always using the latest version to benefit from security patches and improvements.
 

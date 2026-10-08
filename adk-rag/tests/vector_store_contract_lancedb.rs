@@ -19,16 +19,5 @@ async fn test_lancedb_vector_store_contract() {
         .await
         .expect("connect to embedded lancedb");
 
-    assert_vector_store_contract(
-        &store,
-        ContractOptions {
-            // LanceDB's `upsert` appends via `table.add` instead of replacing
-            // by ID, so a repeated ID yields duplicate rows — a behavioral
-            // divergence from InMemory and SurrealDB. The replacement
-            // assertion is scoped out until the backend gains true upsert
-            // semantics.
-            upsert_replaces_by_id: false,
-        },
-    )
-    .await;
+    assert_vector_store_contract(&store, ContractOptions::default()).await;
 }

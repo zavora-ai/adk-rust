@@ -11,6 +11,8 @@
 //! 2. **Build**: `rustc --edition 2021 -o binary` → compile to binary using harness template
 //! 3. **Execute**: delegate to [`SandboxBackend`] with [`Language::Command`] and the binary path
 //!
+//! See [`RustExecutor`] for where each step runs and what environment it sees.
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -23,16 +25,21 @@
 //! ```
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use adk_sandbox::{ExecRequest, ExecResult, Language, SandboxBackend};
+use adk_sandbox::{
+    ExecRequest, ExecResult, Language, ProcessBackend, SandboxBackend, SandboxError,
+};
 use tracing::{debug, info, instrument};
 
 use crate::diagnostics::{RustDiagnostic, parse_diagnostics};
 use crate::error::CodeError;
 use crate::harness::{HARNESS_TEMPLATE, extract_structured_output, validate_rust_source};
+use crate::host_process;
 
 /// Configuration for the [`RustExecutor`] pipeline.
 ///
@@ -61,6 +68,12 @@ impl Default for RustExecutorConfig {
     }
 }
 
+/// Output of one `rustc` invocation.
+struct RustcOutput {
+    success: bool,
+    stderr: String,
+}
+
 /// Result of a successful [`RustExecutor::execute`] call.
 ///
 /// Contains the sandbox execution result plus any compiler diagnostics
@@ -79,6 +92,21 @@ pub struct CodeResult {
 
 /// Rust-specific executor that compiles code through a check → build → execute pipeline
 /// and delegates execution to a [`SandboxBackend`].
+///
+/// # Isolation
+///
+/// | Step | Where it runs | Environment |
+/// |---|---|---|
+/// | Check, build | Inside the backend when it confines filesystem reads and accepts [`Language::Command`] (Unix only); otherwise on the host | Cleared, plus the toolchain allowlist from [`ProcessBackend::toolchain_env`] |
+/// | Execute | Inside the backend | Whatever the backend exposes; [`ProcessBackend`] clears it |
+///
+/// With the environment cleared, `env!` and `option_env!` in user code cannot
+/// embed host credentials into the binary. Compile-time file access such as
+/// `include_str!` reads with the permissions of wherever `rustc` runs: inside a
+/// read-confining backend it is confined like the binary, and on the host it
+/// reaches no file the binary could not also read at run time, because `rustc`
+/// runs on the host only when the backend does not confine reads. On Windows,
+/// `rustc` always runs on the host.
 ///
 /// # Example
 ///
@@ -191,36 +219,20 @@ impl RustExecutor {
         })?;
         let metadata_out = check_dir.path().join("check_output");
 
-        let mut cmd = tokio::process::Command::new(&self.config.rustc_path);
-        cmd.arg(source_path)
-            .arg("--edition")
-            .arg("2021")
-            .arg("--error-format=json")
-            .arg("--color")
-            .arg("never")
-            .arg("--emit=metadata")
-            .arg("-o")
-            .arg(&metadata_out);
+        let mut args: Vec<OsString> = vec![
+            source_path.into(),
+            "--edition".into(),
+            "2021".into(),
+            "--error-format=json".into(),
+            "--color".into(),
+            "never".into(),
+            "--emit=metadata".into(),
+            "-o".into(),
+            metadata_out.into(),
+        ];
+        args.extend(self.dependency_args(serde_json_path));
 
-        self.add_serde_json_flags(&mut cmd, serde_json_path);
-        self.add_extra_flags(&mut cmd);
-
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        let output = match tokio::time::timeout(timeout, cmd.output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => {
-                return Err(CodeError::InvalidCode(format!(
-                    "failed to invoke rustc for check: {e}"
-                )));
-            }
-            Err(_) => {
-                return Err(CodeError::InvalidCode("check step timed out".to_string()));
-            }
-        };
-
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let RustcOutput { stderr, .. } = self.run_rustc(args, timeout, "check").await?;
         let diagnostics = parse_diagnostics(&stderr);
 
         let has_errors = diagnostics.iter().any(|d| d.level == "error");
@@ -248,55 +260,104 @@ impl RustExecutor {
         serde_json_path: &Option<PathBuf>,
         timeout: Duration,
     ) -> Result<(), CodeError> {
-        let mut cmd = tokio::process::Command::new(&self.config.rustc_path);
-        cmd.arg(source_path).arg("-o").arg(binary_path).arg("--edition").arg("2021");
+        let mut args: Vec<OsString> = vec![
+            source_path.into(),
+            "-o".into(),
+            binary_path.into(),
+            "--edition".into(),
+            "2021".into(),
+        ];
+        args.extend(self.dependency_args(serde_json_path));
 
-        self.add_serde_json_flags(&mut cmd, serde_json_path);
-        self.add_extra_flags(&mut cmd);
-
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        let output = match tokio::time::timeout(timeout, cmd.output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => {
-                return Err(CodeError::InvalidCode(format!(
-                    "failed to invoke rustc for build: {e}"
-                )));
-            }
-            Err(_) => {
-                return Err(CodeError::InvalidCode("build step timed out".to_string()));
-            }
-        };
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let diagnostics = parse_diagnostics(&stderr);
-            return Err(CodeError::CompileError { diagnostics, stderr });
+        let output = self.run_rustc(args, timeout, "build").await?;
+        if !output.success {
+            let diagnostics = parse_diagnostics(&output.stderr);
+            return Err(CodeError::CompileError { diagnostics, stderr: output.stderr });
         }
 
         Ok(())
     }
 
-    /// Add `--extern serde_json=...` and `-L dependency=...` flags to a rustc command.
-    fn add_serde_json_flags(
-        &self,
-        cmd: &mut tokio::process::Command,
-        serde_json_path: &Option<PathBuf>,
-    ) {
+    /// The `--extern serde_json=...` and `-L dependency=...` flags, followed by
+    /// the extra flags from config.
+    fn dependency_args(&self, serde_json_path: &Option<PathBuf>) -> Vec<OsString> {
+        let mut args = Vec::new();
         if let Some(dep_path) = serde_json_path {
-            cmd.arg("--extern").arg(format!("serde_json={}", dep_path.display()));
+            args.push("--extern".into());
+            args.push(format!("serde_json={}", dep_path.display()).into());
 
             if let Some(parent) = dep_path.parent() {
-                cmd.arg("-L").arg(format!("dependency={}", parent.display()));
+                args.push("-L".into());
+                args.push(format!("dependency={}", parent.display()).into());
             }
         }
+        args.extend(self.config.rustc_flags.iter().map(OsString::from));
+        args
     }
 
-    /// Add extra rustc flags from config.
-    fn add_extra_flags(&self, cmd: &mut tokio::process::Command) {
-        for flag in &self.config.rustc_flags {
-            cmd.arg(flag);
+    /// Runs `rustc` with `args` under `timeout`, from a cleared environment plus
+    /// the toolchain allowlist.
+    ///
+    /// When the backend confines filesystem reads, `rustc` runs through it as a
+    /// shell command, so compile-time file access (`include_str!`,
+    /// `include_bytes!`) is confined like the binary. Otherwise it runs on the
+    /// host, where it can read nothing the unconfined binary could not.
+    async fn run_rustc(
+        &self,
+        args: Vec<OsString>,
+        timeout: Duration,
+        step: &str,
+    ) -> Result<RustcOutput, CodeError> {
+        let capabilities = self.backend.capabilities();
+        // The command is quoted for a POSIX shell, so only Unix backends receive it.
+        let compile_in_backend = cfg!(unix)
+            && capabilities.enforced_limits.filesystem_read_isolation
+            && capabilities.supported_languages.contains(&Language::Command);
+
+        if compile_in_backend {
+            let code = std::iter::once(OsString::from(&self.config.rustc_path))
+                .chain(args)
+                .map(|arg| format!("'{}'", arg.to_string_lossy().replace('\'', r"'\''")))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let env = ProcessBackend::toolchain_env()
+                .into_iter()
+                .filter_map(|(key, value)| value.into_string().ok().map(|value| (key, value)))
+                .collect();
+            debug!(step, "running rustc inside the sandbox backend");
+
+            let request = ExecRequest {
+                language: Language::Command,
+                code,
+                stdin: None,
+                timeout,
+                memory_limit_mb: None,
+                env,
+            };
+            return match self.backend.execute(request).await {
+                Ok(result) => {
+                    Ok(RustcOutput { success: result.exit_code == 0, stderr: result.stderr })
+                }
+                Err(SandboxError::Timeout { .. }) => {
+                    Err(CodeError::InvalidCode(format!("{step} step timed out")))
+                }
+                Err(error) => Err(error.into()),
+            };
+        }
+
+        let mut cmd = host_process::rustc_command(&self.config.rustc_path);
+        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        match tokio::time::timeout(timeout, cmd.output()).await {
+            Ok(Ok(output)) => Ok(RustcOutput {
+                success: output.status.success(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }),
+            Ok(Err(e)) => {
+                Err(CodeError::InvalidCode(format!("failed to invoke rustc for {step}: {e}")))
+            }
+            // `kill_on_drop` terminated rustc when the timed-out future was dropped.
+            Err(_) => Err(CodeError::InvalidCode(format!("{step} step timed out"))),
         }
     }
 
@@ -421,6 +482,86 @@ mod tests {
                 .take()
                 .unwrap_or(Err(SandboxError::ExecutionFailed("no canned response".to_string())))
         }
+    }
+
+    /// A backend that confines filesystem reads and records every request.
+    struct ReadConfiningBackend {
+        captured: Mutex<Vec<ExecRequest>>,
+    }
+
+    #[async_trait]
+    impl SandboxBackend for ReadConfiningBackend {
+        fn name(&self) -> &str {
+            "read-confining"
+        }
+
+        fn capabilities(&self) -> BackendCapabilities {
+            BackendCapabilities {
+                supported_languages: vec![Language::Command],
+                isolation_class: "mock".to_string(),
+                enforced_limits: EnforcedLimits {
+                    timeout: true,
+                    memory: false,
+                    network_isolation: true,
+                    filesystem_write_isolation: true,
+                    filesystem_read_isolation: true,
+                    environment_isolation: true,
+                },
+            }
+        }
+
+        async fn execute(&self, request: ExecRequest) -> Result<ExecResult, SandboxError> {
+            self.captured.lock().unwrap().push(request);
+            Ok(ExecResult {
+                stdout: r#"{"ok":true}"#.to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+                duration: Duration::from_millis(1),
+            })
+        }
+    }
+
+    /// Compilation must not escape a backend that confines filesystem reads,
+    /// otherwise `include_str!` reads host files the binary itself cannot.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn compilation_runs_inside_a_read_confining_backend() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let fake_rlib = tmp_dir.path().join("libserde_json-abc123.rlib");
+        tokio::fs::write(&fake_rlib, b"fake rlib").await.unwrap();
+
+        let backend = Arc::new(ReadConfiningBackend { captured: Mutex::new(Vec::new()) });
+        let config = RustExecutorConfig {
+            rustc_path: "/nonexistent/rustc-must-not-run-on-host".to_string(),
+            serde_json_path: Some(fake_rlib),
+            ..Default::default()
+        };
+        let executor = RustExecutor::new(backend.clone(), config);
+
+        let code = "fn run(input: serde_json::Value) -> serde_json::Value { input }";
+        let result = executor.execute(code, None, Duration::from_secs(5)).await.unwrap();
+        assert_eq!(result.output, Some(serde_json::json!({ "ok": true })));
+
+        let captured = backend.captured.lock().unwrap();
+        assert_eq!(captured.len(), 3, "check, build, and execute all go through the backend");
+
+        let toolchain: Vec<String> =
+            ProcessBackend::toolchain_env().into_iter().map(|(key, _)| key).collect();
+        for (request, step_flag) in captured[..2].iter().zip(["'--error-format=json'", "'-o'"]) {
+            assert_eq!(request.language, Language::Command);
+            assert!(
+                request.code.starts_with("'/nonexistent/rustc-must-not-run-on-host' "),
+                "{}",
+                request.code
+            );
+            assert!(request.code.contains(step_flag), "{}", request.code);
+            assert!(
+                request.env.keys().all(|key| toolchain.contains(key)),
+                "compile environment must be the toolchain allowlist: {:?}",
+                request.env.keys()
+            );
+        }
+        assert!(captured[2].env.is_empty());
     }
 
     #[test]

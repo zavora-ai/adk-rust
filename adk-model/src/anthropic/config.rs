@@ -62,9 +62,13 @@ pub enum Effort {
 /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-6")
 ///     .with_prompt_caching(false); // opt out
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The API key is redacted from `Debug` output and omitted when serializing.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AnthropicConfig {
-    /// Anthropic API key.
+    /// Anthropic API key. Never serialized; deserializing a config without it
+    /// yields an empty key.
+    #[serde(skip_serializing, default)]
     pub api_key: String,
     /// Model name (e.g., `"claude-opus-5"`, `"claude-sonnet-5"`).
     pub model: String,
@@ -127,6 +131,28 @@ pub struct AnthropicConfig {
     /// When `None`, all available tools are loaded.
     #[serde(skip)]
     pub tool_search: Option<ToolSearchConfig>,
+}
+
+impl std::fmt::Debug for AnthropicConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnthropicConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("max_tokens", &self.max_tokens)
+            .field("base_url", &self.base_url)
+            .field("prompt_caching", &self.prompt_caching)
+            .field("thinking", &self.thinking)
+            .field("effort", &self.effort)
+            .field("fast_mode", &self.fast_mode)
+            .field("citations", &self.citations)
+            .field("inference_geo", &self.inference_geo)
+            .field("context_management", &self.context_management)
+            .field("service_tier", &self.service_tier)
+            .field("beta_features", &self.beta_features)
+            .field("api_version", &self.api_version)
+            .field("tool_search", &self.tool_search)
+            .finish()
+    }
 }
 
 fn default_max_tokens() -> u32 {

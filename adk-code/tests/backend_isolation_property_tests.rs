@@ -160,9 +160,10 @@ fn isolation_class_is_host_local() {
     assert_ne!(caps.isolation, ExecutionIsolation::ProviderHosted);
 }
 
-/// Host-local isolation MUST NOT claim to enforce network, filesystem,
-/// or environment restrictions — those require container or provider-hosted
-/// isolation.
+/// Host-local isolation MUST NOT claim to enforce network or filesystem
+/// restrictions — those require container or provider-hosted isolation.
+/// Environment restriction needs no OS support: the executor clears the
+/// environment of both `rustc` and the compiled binary.
 /// **Validates: Requirements 2.6, 10.6**
 #[test]
 fn host_local_does_not_claim_os_level_controls() {
@@ -174,8 +175,8 @@ fn host_local_does_not_claim_os_level_controls() {
         "host-local backend must not claim filesystem enforcement"
     );
     assert!(
-        !caps.enforce_environment_policy,
-        "host-local backend must not claim environment enforcement"
+        caps.enforce_environment_policy,
+        "host-local backend clears the environment and must claim environment enforcement"
     );
 }
 
