@@ -6,7 +6,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::multipart;
 
 use super::types::{FileDeleteResponse, FileListResponse, FileObject};
-use crate::base_url::validate_base_url;
+use crate::base_url::{InsecureHttp, validate_base_url};
 use crate::{Error, Result};
 
 /// Default base URL for the Anthropic API.
@@ -83,7 +83,7 @@ impl FilesClient {
     /// ```
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Result<Self> {
         let base_url = base_url.into();
-        validate_base_url(&base_url)?;
+        validate_base_url(&base_url, InsecureHttp::Rejected { opt_in: None })?;
         self.base_url = base_url;
         Ok(self)
     }
@@ -338,7 +338,9 @@ mod tests {
     fn test_default_base_url_is_https() {
         let client = FilesClient::new("placeholder-api-key").unwrap();
         assert_eq!(client.base_url, DEFAULT_BASE_URL);
-        assert!(validate_base_url(&client.base_url).is_ok());
+        assert!(
+            validate_base_url(&client.base_url, InsecureHttp::Rejected { opt_in: None }).is_ok()
+        );
     }
 
     #[test]

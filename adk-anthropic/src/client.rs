@@ -13,7 +13,7 @@ use tokio::time::sleep;
 
 use crate::AccumulatingStream;
 use crate::backoff::ExponentialBackoff;
-use crate::base_url::validate_base_url;
+use crate::base_url::{InsecureHttp, validate_base_url};
 use crate::client_logger::ClientLogger;
 use crate::error::{Error, Result};
 use crate::observability::{
@@ -87,6 +87,12 @@ const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const STRUCTURED_OUTPUTS_BETA: &str = "structured-outputs-2025-11-13";
 const SERVER_FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
+/// Opt-in named when a base URL given in code is rejected for plain HTTP.
+const CODE_INSECURE_HTTP_OPT_IN: &str =
+    "call `allow_insecure_http()` on the client before setting the base URL";
+/// Opt-in named when `ANTHROPIC_BASE_URL` is rejected for plain HTTP.
+const ENV_INSECURE_HTTP_OPT_IN: &str =
+    "set ANTHROPIC_ALLOW_INSECURE_HTTP=1 alongside ANTHROPIC_BASE_URL";
 
 /// Client for the Anthropic API with performance optimizations.
 ///
@@ -113,6 +119,8 @@ pub struct Anthropic {
     reserve_capacity: f64,
     /// Cached headers for performance - Arc for cheap cloning
     cached_headers: Arc<HeaderMap>,
+    /// Whether `with_base_url` accepts `http://` to a non-loopback host.
+    allow_insecure_http: bool,
 }
 
 impl std::fmt::Debug for Anthropic {
@@ -128,6 +136,7 @@ impl std::fmt::Debug for Anthropic {
             .field("throughput_ops_sec", &self.throughput_ops_sec)
             .field("reserve_capacity", &self.reserve_capacity)
             .field("cached_headers", &self.cached_headers)
+            .field("allow_insecure_http", &self.allow_insecure_http)
             .finish()
     }
 }
@@ -177,22 +186,37 @@ impl Anthropic {
         }
     }
 
-    /// Resolve the effective base URL from an optional `ANTHROPIC_BASE_URL` value.
+    /// Resolve the effective base URL from optional `ANTHROPIC_BASE_URL` and
+    /// `ANTHROPIC_ALLOW_INSECURE_HTTP` values.
     ///
-    /// A value supplied through the environment is held to exactly the same rule
-    /// as one supplied through [`Anthropic::with_base_url`]: every request
-    /// attaches the API key, so an unencrypted endpoint would leak the
-    /// credential. When no value is supplied the default Anthropic API URL is
-    /// used.
+    /// A value supplied through the environment is held to the same rule as one
+    /// supplied through [`Anthropic::with_base_url`]: every request attaches the
+    /// API key, so an unencrypted endpoint would leak the credential. The
+    /// acknowledgement for plain HTTP comes from the same source as the URL, so
+    /// an `insecure_http_env` of `1` or `true` (case-insensitive) admits a
+    /// non-loopback `http://` value. When no URL is supplied the default
+    /// Anthropic API URL is used.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the supplied value is not `https://` and
-    /// not `http://` with a loopback host.
-    fn resolve_base_url(env_value: Option<String>) -> Result<String> {
+    /// Returns a validation error when the supplied value is not `https://`, not
+    /// `http://` with a loopback host, and not acknowledged `http://`.
+    fn resolve_base_url(
+        env_value: Option<String>,
+        insecure_http_env: Option<String>,
+    ) -> Result<String> {
         match env_value {
             Some(value) => {
-                validate_base_url(&value)?;
+                let acknowledged = insecure_http_env
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|flag| flag == "1" || flag.eq_ignore_ascii_case("true"));
+                let insecure_http = if acknowledged {
+                    InsecureHttp::Acknowledged
+                } else {
+                    InsecureHttp::Rejected { opt_in: Some(ENV_INSECURE_HTTP_OPT_IN) }
+                };
+                validate_base_url(&value, insecure_http)?;
                 Ok(value)
             }
             None => Ok(DEFAULT_API_URL.to_string()),
@@ -208,13 +232,21 @@ impl Anthropic {
     /// The base URL is resolved from the `ANTHROPIC_BASE_URL` environment
     /// variable. If not set, the default Anthropic API URL is used.
     ///
+    /// `ANTHROPIC_BASE_URL` may name a plain `http://` endpoint on a non-loopback
+    /// host, such as an internal gateway, only when `ANTHROPIC_ALLOW_INSECURE_HTTP`
+    /// is set to `1` or `true` (case-insensitive). The client then logs a warning
+    /// and sends the API key unencrypted. `ANTHROPIC_ALLOW_INSECURE_HTTP` applies
+    /// to the environment URL only; a URL given in code needs
+    /// [`allow_insecure_http`](Self::allow_insecure_http).
+    ///
     /// # Errors
     ///
     /// Returns a validation error when `ANTHROPIC_BASE_URL` is set to an
     /// endpoint that would transmit the API key in cleartext — anything other
     /// than `https://`, or `http://` with a loopback host (`localhost`,
-    /// `127.0.0.1`, `[::1]`). A misconfigured environment fails loudly rather
-    /// than silently falling back to the default URL.
+    /// `127.0.0.1`, `[::1]`), unless `ANTHROPIC_ALLOW_INSECURE_HTTP`
+    /// acknowledges an `http://` endpoint. A misconfigured environment fails
+    /// loudly rather than silently falling back to the default URL.
     pub fn new(api_key: Option<String>) -> Result<Self> {
         let api_key = match api_key {
             Some(key) => Self::resolve_api_key(&key)?,
@@ -228,7 +260,10 @@ impl Anthropic {
             }
         };
 
-        let base_url = Self::resolve_base_url(env::var("ANTHROPIC_BASE_URL").ok())?;
+        let base_url = Self::resolve_base_url(
+            env::var("ANTHROPIC_BASE_URL").ok(),
+            env::var("ANTHROPIC_ALLOW_INSECURE_HTTP").ok(),
+        )?;
         Self::from_values(api_key, base_url)
     }
 
@@ -237,6 +272,11 @@ impl Anthropic {
     /// Unlike [`Anthropic::new`], this constructor reads neither `ANTHROPIC_API_KEY`
     /// nor `ANTHROPIC_BASE_URL`. A `file://` API key is read from that file, as in
     /// [`Anthropic::new`].
+    ///
+    /// The base URL is validated here, so this constructor cannot take a plain
+    /// `http://` URL to a non-loopback host. For one, construct the client with an
+    /// `https://` URL, then call [`allow_insecure_http`](Self::allow_insecure_http)
+    /// followed by [`with_base_url`](Self::with_base_url).
     ///
     /// # Errors
     ///
@@ -256,7 +296,10 @@ impl Anthropic {
         base_url: impl Into<String>,
     ) -> Result<Self> {
         let base_url = base_url.into();
-        validate_base_url(&base_url)?;
+        validate_base_url(
+            &base_url,
+            InsecureHttp::Rejected { opt_in: Some(CODE_INSECURE_HTTP_OPT_IN) },
+        )?;
         Self::from_values(Self::resolve_api_key(&api_key.into())?, base_url)
     }
 
@@ -279,6 +322,7 @@ impl Anthropic {
             throughput_ops_sec: 1.0 / 60.0,
             reserve_capacity: 1.0 / 60.0,
             cached_headers,
+            allow_insecure_http: false,
         })
     }
 
@@ -356,18 +400,54 @@ impl Anthropic {
         Ok(self)
     }
 
+    /// Allow a plain `http://` base URL on a non-loopback host.
+    ///
+    /// Use this for a trusted internal gateway that is reachable only over plain
+    /// HTTP. Every request attaches the API key, which then crosses the network
+    /// unencrypted. Loopback `http://` URLs and `https://` URLs need no opt-in.
+    ///
+    /// [`with_base_url`](Self::with_base_url) and
+    /// [`with_base_url_and_timeout`](Self::with_base_url_and_timeout) validate the
+    /// URL when they are called, so this method must be called **before** them.
+    /// Accepting a non-loopback `http://` URL logs a warning with the host.
+    ///
+    /// The opt-in applies to URLs given in code. A URL from `ANTHROPIC_BASE_URL`
+    /// is acknowledged by `ANTHROPIC_ALLOW_INSECURE_HTTP` instead; see
+    /// [`new`](Self::new).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::Anthropic;
+    ///
+    /// let client = Anthropic::new(Some("placeholder-api-key".to_string()))?
+    ///     .allow_insecure_http()
+    ///     .with_base_url("http://10.60.1.20:8080/api/v1/llm/anthropic".to_string())?;
+    /// assert_eq!(client.base_url(), "http://10.60.1.20:8080/api/v1/llm/anthropic");
+    /// # Ok::<(), adk_anthropic::Error>(())
+    /// ```
+    pub fn allow_insecure_http(mut self) -> Self {
+        self.allow_insecure_http = true;
+        self
+    }
+
     /// Set a custom base URL for this client.
     ///
     /// This method allows you to specify a different API endpoint for the client.
     /// The base URL should be the root URL without the `/v1/` suffix - this will
     /// be added automatically when constructing request URLs.
     ///
+    /// The URL is validated when this method is called. To use a plain `http://`
+    /// URL on a non-loopback host, call
+    /// [`allow_insecure_http`](Self::allow_insecure_http) first.
+    ///
     /// # Errors
     ///
     /// Every request made by this client attaches the Anthropic API key, so the
     /// base URL must be encrypted. Returns a validation error unless the URL uses
     /// `https://`, or `http://` with a loopback host (`localhost`, `127.0.0.1`,
-    /// `[::1]`) for local development.
+    /// `[::1]`) for local development, or `http://` after
+    /// [`allow_insecure_http`](Self::allow_insecure_http).
     ///
     /// # Examples
     ///
@@ -387,7 +467,12 @@ impl Anthropic {
     /// # Ok::<(), adk_anthropic::Error>(())
     /// ```
     pub fn with_base_url(mut self, base_url: String) -> Result<Self> {
-        validate_base_url(&base_url)?;
+        let insecure_http = if self.allow_insecure_http {
+            InsecureHttp::Acknowledged
+        } else {
+            InsecureHttp::Rejected { opt_in: Some(CODE_INSECURE_HTTP_OPT_IN) }
+        };
+        validate_base_url(&base_url, insecure_http)?;
         self.base_url = base_url;
         Ok(self)
     }
@@ -458,7 +543,32 @@ impl Anthropic {
 
     /// Set both a custom base URL and timeout for this client.
     ///
-    /// This is a convenience method that chains with_base_url and with_timeout.
+    /// This is a convenience method that chains [`with_base_url`](Self::with_base_url)
+    /// and [`with_timeout`](Self::with_timeout). The URL is validated when this
+    /// method is called, so a plain `http://` URL on a non-loopback host needs
+    /// [`allow_insecure_http`](Self::allow_insecure_http) to be called first.
+    ///
+    /// # Errors
+    ///
+    /// Returns the validation error of [`with_base_url`](Self::with_base_url), or
+    /// an HTTP client error when the underlying client cannot be built.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use adk_anthropic::Anthropic;
+    ///
+    /// let client = Anthropic::new(Some("placeholder-api-key".to_string()))?
+    ///     .allow_insecure_http()
+    ///     .with_base_url_and_timeout(
+    ///         "http://gateway.corp.internal/anthropic".to_string(),
+    ///         Duration::from_secs(30),
+    ///     )?;
+    /// # let _ = client;
+    /// # Ok::<(), adk_anthropic::Error>(())
+    /// ```
     pub fn with_base_url_and_timeout(self, base_url: String, timeout: Duration) -> Result<Self> {
         self.with_base_url(base_url)?.with_timeout(timeout)
     }
@@ -1644,6 +1754,7 @@ mod tests {
             throughput_ops_sec: 1.0 / 60.0,
             reserve_capacity: 1.0 / 60.0,
             cached_headers: Arc::new(HeaderMap::new()),
+            allow_insecure_http: false,
         };
 
         let attempt_counter = Arc::new(AtomicUsize::new(0));
@@ -1680,6 +1791,7 @@ mod tests {
             throughput_ops_sec: 1.0 / 60.0,
             reserve_capacity: 1.0 / 60.0,
             cached_headers: Arc::new(HeaderMap::new()),
+            allow_insecure_http: false,
         };
 
         let attempt_counter = Arc::new(AtomicUsize::new(0));
@@ -1714,6 +1826,7 @@ mod tests {
             throughput_ops_sec: 1.0 / 60.0,
             reserve_capacity: 1.0 / 60.0,
             cached_headers: Arc::new(HeaderMap::new()),
+            allow_insecure_http: false,
         };
 
         let attempt_counter = Arc::new(AtomicUsize::new(0));
@@ -1749,6 +1862,7 @@ mod tests {
             throughput_ops_sec: 1.0 / 60.0,
             reserve_capacity: 1.0 / 60.0,
             cached_headers: Arc::new(HeaderMap::new()),
+            allow_insecure_http: false,
         };
 
         let attempt_counter = Arc::new(AtomicUsize::new(0));
@@ -1984,6 +2098,98 @@ mod tests {
             "error should explain the cleartext risk, got: {message}"
         );
         assert!(message.contains("'http'"), "error should name the scheme, got: {message}");
+        assert!(
+            message.contains("allow_insecure_http"),
+            "error should name the opt-in, got: {message}"
+        );
+    }
+
+    #[test]
+    fn allow_insecure_http_before_with_base_url_accepts_cleartext_http() {
+        let client = Anthropic::new(Some("placeholder-api-key".to_string()))
+            .unwrap()
+            .allow_insecure_http()
+            .with_base_url("http://10.60.1.20:8080/api/v1/llm/anthropic".to_string())
+            .unwrap();
+        assert_eq!(client.base_url, "http://10.60.1.20:8080/api/v1/llm/anthropic");
+        assert_eq!(
+            client.build_url("messages"),
+            "http://10.60.1.20:8080/api/v1/llm/anthropic/v1/messages"
+        );
+
+        let client = Anthropic::new_with_base_url("placeholder-api-key", DEFAULT_API_URL)
+            .unwrap()
+            .allow_insecure_http()
+            .with_base_url_and_timeout(
+                "http://gateway.corp.internal".to_string(),
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        assert_eq!(client.base_url, "http://gateway.corp.internal");
+        assert_eq!(client.timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn allow_insecure_http_after_with_base_url_is_too_late() {
+        let err = Anthropic::new(Some("placeholder-api-key".to_string()))
+            .unwrap()
+            .with_base_url("http://10.60.1.20:8080".to_string())
+            .map(Anthropic::allow_insecure_http)
+            .expect_err("with_base_url validates before the opt-in is set");
+        assert!(err.is_validation(), "expected a validation error, got {err}");
+        assert!(
+            err.to_string().contains("allow_insecure_http"),
+            "error should name the opt-in, got: {err}"
+        );
+    }
+
+    #[test]
+    fn allow_insecure_http_admits_http_only() {
+        for url in ["ftp://files.example.com", "ws://gateway.example.com", "not-a-url"] {
+            let err = Anthropic::new(Some("placeholder-api-key".to_string()))
+                .unwrap()
+                .allow_insecure_http()
+                .with_base_url(url.to_string())
+                .expect_err("the opt-in must not admit other schemes");
+            assert!(err.is_validation(), "expected a validation error for {url}, got {err}");
+        }
+    }
+
+    #[test]
+    fn new_with_base_url_rejection_names_the_opt_in() {
+        let err = Anthropic::new_with_base_url("placeholder-api-key", "http://10.60.1.20:8080")
+            .expect_err("a non-loopback http base URL must be rejected");
+        assert!(
+            err.to_string().contains("allow_insecure_http"),
+            "error should name the opt-in, got: {err}"
+        );
+    }
+
+    #[test]
+    fn insecure_http_environment() {
+        const GATEWAY: &str = "http://10.60.1.20:8080/api/v1/llm/anthropic";
+        if std::env::var_os("ADK_INSECURE_HTTP_ENV_CHILD").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "client::tests::insecure_http_environment"])
+                .env("ADK_INSECURE_HTTP_ENV_CHILD", "1")
+                .env("ANTHROPIC_BASE_URL", GATEWAY)
+                .env("ANTHROPIC_ALLOW_INSECURE_HTTP", "true")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let client = Anthropic::new(Some("placeholder-api-key".to_string()))
+            .expect("ANTHROPIC_ALLOW_INSECURE_HTTP admits the ANTHROPIC_BASE_URL gateway");
+        assert_eq!(client.base_url(), GATEWAY);
+
+        // The environment acknowledges the environment URL only, not URLs given in code.
+        assert!(!client.allow_insecure_http);
+        let err = client
+            .with_base_url("http://gateway.corp.internal".to_string())
+            .expect_err("a URL given in code needs allow_insecure_http()");
+        assert!(err.to_string().contains("allow_insecure_http"), "got: {err}");
+        assert!(Anthropic::new_with_base_url("placeholder-api-key", GATEWAY).is_err());
     }
 
     #[test]
@@ -2005,22 +2211,26 @@ mod tests {
 
     #[test]
     fn env_base_url_absent_falls_back_to_default() {
-        let resolved = Anthropic::resolve_base_url(None).unwrap();
+        let resolved = Anthropic::resolve_base_url(None, None).unwrap();
+        assert_eq!(resolved, DEFAULT_API_URL);
+        let resolved = Anthropic::resolve_base_url(None, Some("1".to_string())).unwrap();
         assert_eq!(resolved, DEFAULT_API_URL);
     }
 
     #[test]
     fn env_base_url_accepts_https() {
-        let resolved =
-            Anthropic::resolve_base_url(Some("https://gateway.example.com/anthropic".to_string()))
-                .unwrap();
+        let resolved = Anthropic::resolve_base_url(
+            Some("https://gateway.example.com/anthropic".to_string()),
+            None,
+        )
+        .unwrap();
         assert_eq!(resolved, "https://gateway.example.com/anthropic");
     }
 
     #[test]
     fn env_base_url_allows_loopback_http_for_local_dev() {
         for url in ["http://localhost:11434", "http://127.0.0.1:11434", "http://[::1]:11434"] {
-            let resolved = Anthropic::resolve_base_url(Some(url.to_string()))
+            let resolved = Anthropic::resolve_base_url(Some(url.to_string()), None)
                 .unwrap_or_else(|e| panic!("loopback url {url} should be accepted: {e}"));
             assert_eq!(resolved, url);
         }
@@ -2028,23 +2238,45 @@ mod tests {
 
     #[test]
     fn env_base_url_rejects_cleartext_http() {
-        let err =
-            Anthropic::resolve_base_url(Some("http://gateway.internal.example.com".to_string()))
-                .expect_err("a non-loopback http ANTHROPIC_BASE_URL must be rejected");
+        for flag in [None, Some("0"), Some("false"), Some("yes"), Some("")] {
+            let err = Anthropic::resolve_base_url(
+                Some("http://gateway.internal.example.com".to_string()),
+                flag.map(str::to_string),
+            )
+            .expect_err("a non-loopback http ANTHROPIC_BASE_URL must be rejected");
 
-        assert!(err.is_validation(), "expected a validation error, got {err}");
-        let message = err.to_string();
-        assert!(
-            message.contains("unencrypted"),
-            "error should explain the cleartext risk, got: {message}"
-        );
-        assert!(message.contains("'http'"), "error should name the scheme, got: {message}");
+            assert!(err.is_validation(), "expected a validation error, got {err}");
+            let message = err.to_string();
+            assert!(
+                message.contains("unencrypted"),
+                "error should explain the cleartext risk, got: {message}"
+            );
+            assert!(message.contains("'http'"), "error should name the scheme, got: {message}");
+            assert!(
+                message.contains("ANTHROPIC_ALLOW_INSECURE_HTTP=1"),
+                "error should name the environment opt-in for {flag:?}, got: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn env_base_url_accepts_cleartext_http_when_acknowledged() {
+        for flag in ["1", "true", "TRUE", " True "] {
+            let resolved = Anthropic::resolve_base_url(
+                Some("http://10.60.1.20:8080/api/v1/llm/anthropic".to_string()),
+                Some(flag.to_string()),
+            )
+            .unwrap_or_else(|e| {
+                panic!("ANTHROPIC_ALLOW_INSECURE_HTTP={flag:?} should admit http: {e}")
+            });
+            assert_eq!(resolved, "http://10.60.1.20:8080/api/v1/llm/anthropic");
+        }
     }
 
     #[test]
     fn env_base_url_rejects_non_http_schemes_and_garbage() {
         for url in ["ftp://files.example.com", "ws://gateway.example.com", "not-a-url"] {
-            let err = Anthropic::resolve_base_url(Some(url.to_string()))
+            let err = Anthropic::resolve_base_url(Some(url.to_string()), Some("1".to_string()))
                 .expect_err("non-https, non-loopback ANTHROPIC_BASE_URL must be rejected");
             assert!(err.is_validation(), "expected a validation error for {url}, got {err}");
         }
@@ -2111,6 +2343,7 @@ mod tests {
             throughput_ops_sec: 1.0,
             reserve_capacity: 1.0,
             cached_headers: Arc::new(HeaderMap::new()),
+            allow_insecure_http: false,
         };
 
         let attempt_counter = Arc::new(AtomicUsize::new(0));

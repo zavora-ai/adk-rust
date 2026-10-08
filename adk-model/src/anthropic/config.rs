@@ -79,6 +79,14 @@ pub struct AnthropicConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 
+    /// Accept a plain `http://` [`base_url`](AnthropicConfig::base_url) on a
+    /// non-loopback host.
+    ///
+    /// Defaults to `false`. Set with
+    /// [`allow_insecure_http`](AnthropicConfig::allow_insecure_http).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_insecure_http: bool,
+
     /// Enable prompt caching with `cache_control` blocks.
     ///
     /// Defaults to `true`. Anthropic prompt caching reduces costs and latency
@@ -140,6 +148,7 @@ impl std::fmt::Debug for AnthropicConfig {
             .field("model", &self.model)
             .field("max_tokens", &self.max_tokens)
             .field("base_url", &self.base_url)
+            .field("allow_insecure_http", &self.allow_insecure_http)
             .field("prompt_caching", &self.prompt_caching)
             .field("thinking", &self.thinking)
             .field("effort", &self.effort)
@@ -170,6 +179,7 @@ impl Default for AnthropicConfig {
             model: crate::catalog::ANTHROPIC_DEFAULT.to_string(),
             max_tokens: default_max_tokens(),
             base_url: None,
+            allow_insecure_http: false,
             prompt_caching: true,
             thinking: None,
             effort: None,
@@ -198,8 +208,42 @@ impl AnthropicConfig {
     }
 
     /// Set a custom base URL.
+    ///
+    /// The URL is validated when [`AnthropicClient::new`](super::AnthropicClient::new)
+    /// builds the client: it must use `https://`, or `http://` with a loopback host,
+    /// unless [`allow_insecure_http`](Self::allow_insecure_http) is set.
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Allow a plain `http://` base URL on a non-loopback host.
+    ///
+    /// Use this for a trusted internal gateway that is reachable only over plain
+    /// HTTP. Every request attaches the API key, which then crosses the network
+    /// unencrypted. The base URL is validated when
+    /// [`AnthropicClient::new`](super::AnthropicClient::new) builds the client, so
+    /// this method and [`with_base_url`](Self::with_base_url) can be called in
+    /// either order. Accepting a non-loopback `http://` URL logs a warning with
+    /// the host.
+    ///
+    /// The opt-in applies to the configured base URL. Without one, the client
+    /// reads `ANTHROPIC_BASE_URL`, and a plain-HTTP URL from that variable is
+    /// acknowledged by `ANTHROPIC_ALLOW_INSECURE_HTTP=1` instead.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+    ///
+    /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-5")
+    ///     .allow_insecure_http()
+    ///     .with_base_url("http://10.60.1.20:8080/api/v1/llm/anthropic");
+    /// let client = AnthropicClient::new(config)?;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn allow_insecure_http(mut self) -> Self {
+        self.allow_insecure_http = true;
         self
     }
 

@@ -54,6 +54,12 @@ impl AnthropicClient {
     pub fn new(config: AnthropicConfig) -> Result<Self, AdkError> {
         crate::catalog::warn_if_obsolete("anthropic", &config.model);
         let mut client = match &config.base_url {
+            // `with_base_url` validates when called, so the opt-in has to precede it;
+            // the public endpoint only satisfies the explicit constructor.
+            Some(base_url) if config.allow_insecure_http => {
+                Anthropic::new_with_base_url(config.api_key.clone(), "https://api.anthropic.com")
+                    .and_then(|client| client.allow_insecure_http().with_base_url(base_url.clone()))
+            }
             Some(base_url) => {
                 Anthropic::new_with_base_url(config.api_key.clone(), base_url.clone())
             }
@@ -693,6 +699,44 @@ mod tests {
         .unwrap();
 
         assert_eq!(client.client.base_url(), "https://gateway.example.test/anthropic");
+    }
+
+    #[test]
+    fn cleartext_base_url_requires_the_opt_in() {
+        const GATEWAY: &str = "http://10.60.1.20:8080/api/v1/llm/anthropic";
+        let error = AnthropicClient::new(
+            AnthropicConfig::new("test-key", "claude-sonnet-5").with_base_url(GATEWAY),
+        )
+        .err()
+        .expect("a non-loopback http base URL needs allow_insecure_http");
+        assert!(error.message.contains("allow_insecure_http"), "got: {error}");
+
+        for config in [
+            AnthropicConfig::new("test-key", "claude-sonnet-5")
+                .allow_insecure_http()
+                .with_base_url(GATEWAY),
+            AnthropicConfig::new("test-key", "claude-sonnet-5")
+                .with_base_url(GATEWAY)
+                .allow_insecure_http(),
+        ] {
+            let client = AnthropicClient::new(config).unwrap();
+            assert_eq!(client.client.base_url(), GATEWAY);
+            assert_eq!(client.client.api_key(), "test-key");
+        }
+    }
+
+    #[test]
+    fn allow_insecure_http_is_omitted_from_serialized_config_by_default() {
+        let config = AnthropicConfig::new("test-key", "claude-sonnet-5");
+        let value = serde_json::to_value(&config).unwrap();
+        assert!(value.get("allow_insecure_http").is_none(), "got: {value}");
+        let restored: AnthropicConfig = serde_json::from_value(value).unwrap();
+        assert!(!restored.allow_insecure_http);
+
+        let value = serde_json::to_value(config.allow_insecure_http()).unwrap();
+        assert_eq!(value["allow_insecure_http"], true);
+        let restored: AnthropicConfig = serde_json::from_value(value).unwrap();
+        assert!(restored.allow_insecure_http);
     }
 
     #[test]
