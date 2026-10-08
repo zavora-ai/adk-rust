@@ -143,10 +143,12 @@ jobs:
     # espeak-ng is required by adk-audio's `kokoro` backend. glib is required by
     # the WebRTC transport in adk-realtime's `full` feature.
     - name: Install system dependencies (Linux)
+      # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
+      timeout-minutes: 10
       if: runner.os == 'Linux'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake protobuf-compiler libespeak-ng-dev libglib2.0-dev
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y cmake protobuf-compiler libespeak-ng-dev libglib2.0-dev
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
@@ -229,9 +231,11 @@ jobs:
         neutralize-wild: 'true'
 
     - name: Install system dependencies (Linux)
+      # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
+      timeout-minutes: 10
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake protobuf-compiler
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y cmake protobuf-compiler
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4

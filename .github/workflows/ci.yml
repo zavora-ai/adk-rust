@@ -328,7 +328,9 @@ jobs:
     # the devenv/nix shell; this plain runner must install it. Unconditional
     # because it comes from the runner's apt mirror, not a rate-limited API.
     - name: Install libdbus
-      run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+      # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
+      timeout-minutes: 10
+      run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y libdbus-1-dev
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
@@ -363,7 +365,9 @@ jobs:
     # adk-cli's keyring dependency links libdbus on Linux even when rustdoc is
     # only documenting the workspace's default feature sets.
     - name: Install documentation system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+      # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
+      timeout-minutes: 10
+      run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y libdbus-1-dev
 
     - name: Check documentation coverage
       env:
@@ -422,9 +426,11 @@ jobs:
         cache-save: 'false'
 
     - name: Install system dependencies
+      # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
+      timeout-minutes: 10
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y cmake protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
 
     - name: Compile standalone examples (shard ${{ matrix.shard }} of 4)
       run: bash scripts/check-examples-compile.sh ${{ matrix.shard }} 4
@@ -449,9 +455,11 @@ jobs:
         cache-save: 'false'
 
     - name: Install system dependencies
+      # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
+      timeout-minutes: 10
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y cmake protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
 
     - name: Check cargo-adk templates
       run: |
