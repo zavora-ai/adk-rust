@@ -52,7 +52,8 @@ non-reproducible.
 ## Tool discovery and filtering
 
 `McpToolset` converts each published MCP tool into an ADK-Rust `Tool`. It keeps
-the server's input and output schemas unchanged. The selected model provider
+the server's input and output schemas unchanged, provided they are within the
+[schema size limits](#schema-size-limits). The selected model provider
 normalizes a copy of the schema when it builds its request.
 
 The adapter also retains MCP tool annotations. A `readOnlyHint` marks the ADK
@@ -72,6 +73,34 @@ let reviewed = McpToolset::new(client).with_filter(|name| {
 
 Filtering controls model visibility. It does not replace authorization at tool
 execution time.
+
+### Schema size limits
+
+Discovery measures each tool's input and output schema before copying or
+logging it. A tool whose schema exceeds a limit is skipped with a `warn!` that
+names the toolset and the tool, and the remaining tools are still registered.
+Accepted tools log `schema.bytes` and `schema.nodes` at `debug` instead of the
+schema itself.
+
+| Limit | Measures | Default |
+|-------|----------|---------|
+| `max_bytes` | Approximate compact-JSON size of one schema | 256 KiB |
+| `max_nodes` | JSON values in one schema, the root object included | 10 000 |
+
+```rust
+use adk_tool::mcp::{McpSchemaLimits, McpToolset};
+
+let toolset = McpToolset::new(client).with_schema_limits(
+    McpSchemaLimits::default()
+        .with_max_bytes(1024 * 1024)
+        .with_max_nodes(40_000),
+);
+```
+
+The defaults admit every schema a model can reasonably use: 256 KiB is about
+64 000 tokens for a single tool. `McpServerManager::with_schema_limits` applies
+one set of limits to every managed server. Raise the limits only for servers
+inside the application's trust boundary.
 
 ## Resources, prompts, and completion
 

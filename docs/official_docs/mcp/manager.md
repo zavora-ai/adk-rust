@@ -92,6 +92,11 @@ Registry mutations are serialized while a child completes its MCP handshake.
 `start_all` returns an independent result for every enabled server, but startup
 is not currently a parallel-handshake path.
 
+`with_schema_limits` sets the tool-schema size limits for every managed server.
+Each managed toolset is named after its server ID, so the warning for a skipped
+tool names the server. See
+[Schema size limits](client.md#schema-size-limits) for the defaults.
+
 ## Change the registry at runtime
 
 ```rust

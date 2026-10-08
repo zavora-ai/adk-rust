@@ -216,6 +216,26 @@ let cancel_token = toolset.cancellation_token().await;
 cancel_token.cancel();
 ```
 
+### MCP Schema Size Limits
+
+Discovery skips a tool whose input or output schema exceeds `McpSchemaLimits`
+(256 KiB and 10 000 JSON values by default), logs a warning naming the toolset
+and the tool, and registers the remaining tools. Raise the limits for a trusted
+server:
+
+```rust
+use adk_tool::mcp::{McpSchemaLimits, McpToolset};
+
+let toolset = McpToolset::new(client).with_schema_limits(
+    McpSchemaLimits::default()
+        .with_max_bytes(1024 * 1024)
+        .with_max_nodes(40_000),
+);
+```
+
+`McpServerManager::with_schema_limits` applies the same limits to every managed
+server.
+
 ### MCP Tools (Remote Server via HTTP)
 
 Connect to remote MCP servers using HTTP transport (requires `http-transport` feature):

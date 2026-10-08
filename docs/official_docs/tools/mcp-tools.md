@@ -324,7 +324,7 @@ configured grace period and before it cancels the session.
 
 | MCP capability | ADK-Rust 2 surface | Notes |
 |---|---|---|
-| Tool discovery and calls | `McpToolset`, `Toolset` | Raw schemas; multimodal and structured results preserved |
+| Tool discovery and calls | `McpToolset`, `Toolset` | Raw schemas within `McpSchemaLimits`; multimodal and structured results preserved |
 | Tool filtering | `with_filter`, `with_tools` | Filter before exposure to the model |
 | Resources and templates | list/read methods | Method-not-found handled for older servers |
 | Prompts | list/get methods | Typed argument maps |
