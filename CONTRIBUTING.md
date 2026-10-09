@@ -252,9 +252,12 @@ adk-rust/          Umbrella crate re-exporting all of the above
 
 ## Release Process
 
-Release from a clean checkout after the release-preparation pull request and all
-other intended changes have merged. The root workspace version is the source of
-truth for every publishable crate.
+Release from a clean checkout after all other intended changes have merged. The
+root workspace version is the source of truth for every publishable crate. During
+the cycle the README describes the version as `release candidate — unpublished`;
+the release-preparation pull request switches it to its final, released state, so
+the tagged commit is exactly what crates.io receives. Publishing is always the last
+step.
 
 1. If the workspace is not already at the target version, run
    `python3 scripts/bump-version.py <version>`. Add an empty `## [Unreleased]`
@@ -267,8 +270,9 @@ truth for every publishable crate.
    bash scripts/changelog-assemble.sh --into <version>
    ```
 
-3. Keep the README marked `release candidate — unpublished` until every crate is
-   visible on crates.io. Run the normal quality gates plus:
+3. In the same pull request, set the README banner to `v<version> Released!` with
+   the crates.io link for the new version, and mark the roadmap version `(current)`.
+   Run the normal quality gates plus:
 
    ```bash
    bash scripts/check-release-consistency.sh
@@ -282,7 +286,8 @@ truth for every publishable crate.
    dependency chains; it does not prevent packaging.
 4. Merge the preparation pull request and wait for both the PR tier and the
    post-merge macOS/Windows tier to pass on the exact release commit.
-5. Create an annotated tag and validate the tagged checkout before pushing it:
+5. Create an annotated tag and validate the tagged checkout before pushing it.
+   Release mode fails while the README still describes a release candidate:
 
    ```bash
    git tag -a v<version> -m "Release <version>"
@@ -290,12 +295,12 @@ truth for every publishable crate.
    git push origin v<version>
    ```
 
-6. Publish with `cargo xtask publish`. If crates.io indexing interrupts the
+6. Create the GitHub release from the annotated tag, using the matching changelog
+   entry as the release notes.
+7. Publish with `cargo xtask publish`. If crates.io indexing interrupts the
    workspace publish, resume safely with `cargo xtask publish --resume`; it uses
-   the computed dependency order and skips versions that already exist.
-7. Confirm all 43 crate versions and their docs.rs builds. Only then change the
-   README banner to `Released!`, mark the roadmap version `(current)`, and create
-   the GitHub release from the annotated tag using the matching changelog entry.
+   the computed dependency order and skips versions that already exist. Then
+   confirm all 43 crate versions and their docs.rs builds.
 
 ### Excluded from Workspace
 

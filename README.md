@@ -12,12 +12,11 @@
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
 and async, across 43 publishable crates for agent orchestration.
 
-> **v2.3.0 release candidate — unpublished.** This minor release binds A2A tasks to
-> the authenticated caller, adds OpenCode Go and Zen routing and the OrcaRouter
-> preset, starts Chrome with its sandbox on, and makes the last streamed event carry
-> the complete response; see the [CHANGELOG](CHANGELOG.md) for the four breaking
-> entries. The published release is 2.2.0, with all 43 crates on
-> [crates.io](https://crates.io/crates/adk-rust/2.2.0).
+> **v2.3.0 Released!** This minor release binds A2A tasks to the authenticated
+> caller, adds OpenCode Go and Zen routing and the OrcaRouter preset, starts Chrome
+> with its sandbox on, and makes the last streamed event carry the complete
+> response; see the [CHANGELOG](CHANGELOG.md) for the four breaking entries. All 43
+> crates are available on [crates.io](https://crates.io/crates/adk-rust/2.3.0).
 >
 > **Milestone:** ADK-Rust has crossed **500K total crates.io downloads** across
 > the workspace crates.
@@ -424,7 +423,7 @@ per-platform tool matrix and the CI cost tiers.
 
 ## Project
 
-- [ROADMAP.md](ROADMAP.md) — **v2.3.0** (release candidate). Longer-term direction and
+- [ROADMAP.md](ROADMAP.md) — **v2.3.0** (current). Longer-term direction and
   why both orchestration APIs are supported
 - [CHANGELOG.md](CHANGELOG.md) — every release
 - [CONTRIBUTORS.md](CONTRIBUTORS.md) — the people who built this

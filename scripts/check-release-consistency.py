@@ -3,9 +3,11 @@
 
 The workspace version in the root `Cargo.toml` is the single source. The changelog
 heading, README banner, and README roadmap marker are checked against it, so a
-version bump cannot land with any of them stale. The README may describe the
-workspace as an unpublished release candidate before publication or as released
-after publication, but the banner and roadmap must describe the same state.
+version bump cannot land with any of them stale. The README describes the
+workspace as an unpublished release candidate during the cycle and as released from
+the release-preparation pull request onward, and the banner and roadmap must
+describe the same state. Release mode rejects a candidate README, because the tagged
+commit is the one crates.io receives.
 
 `scripts/check-doc-versions.py` covers dependency snippets and feature names; it
 explicitly skips `CHANGELOG.md` and does not look at the banner or the roadmap, which
@@ -211,11 +213,11 @@ def main() -> None:
 
     if banner is not None and banner[1] == "candidate":
         print(f"release state: v{version} is an unpublished release candidate")
-        if tag_type == "tag":
-            print(
-                "post-publication transition: after every workspace crate is available "
-                "on crates.io, change the README banner to `Released!` and the roadmap "
-                "marker to `(current)`"
+        if args.release:
+            failures.append(
+                "README.md still describes a release candidate. The release-preparation "
+                "pull request changes the banner to `Released!` and the roadmap marker to "
+                "`(current)` before the tag is created"
             )
     elif banner is not None:
         print(f"release state: v{version} is marked released")
