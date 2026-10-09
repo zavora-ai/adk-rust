@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.3.0] - 2026-10-07
+## [2.3.0] - 2026-10-09
 
 ### Breaking
 
@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PaymentCurrencyAmount::to_money` and `Ap2McpReceiptStatus::from_receipt`
   return `Result<_, Ap2Error>`. Malformed, over-precise, or overflowing amounts
   return `Ap2Error::InvalidAmount` instead of a zero or wrapped value.
+
+- **Chrome starts with its sandbox on** (`adk-browser`): `BrowserSession` no longer adds
+  `--no-sandbox` to every Chrome session. Containers that run Chrome as root opt in with
+  `BrowserConfig::add_arg("--no-sandbox")`; `chrome_options` cannot replace the argument list.
+  `BrowserConfig` gains the public fields `require_explicit_start` and `chrome_options`, so
+  struct-literal construction needs `..Default::default()`.
+
+- **Terminal streaming events carry the complete response** (`adk-agent`, `adk-server`): the
+  last event of a streamed model response holds the whole response, marked
+  `provider_metadata.content_complete = true`, instead of only the final chunk. Raw
+  `/api/run_sse` clients that append every event's text show the reply twice; replace the
+  content rendered for an event `id` when `content_complete` is set, or pass each event
+  through `adk_core::EventTextDeltas`. Tool-result events arrive in completion order rather
+  than call order.
 
 ### Security
 
@@ -348,6 +362,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AzureAIConfig` redact `api_key` in `Debug` output and omit it when serialized.
   A config deserialized without `api_key` gets an empty key.
 
+- **Model clients no longer follow HTTP redirects** (`adk-anthropic`, `adk-gemini`,
+  `adk-model`): the Anthropic client, the Gemini Studio and Vertex backends, and the
+  OpenAI-compatible, Azure OpenAI, OpenAI Responses (generation), Azure AI Inference and
+  DeepSeek clients return a 3xx response as an error instead of re-sending the request and
+  its credentials to another host. Proxies configured through `HTTP_PROXY`/`HTTPS_PROXY`
+  are unaffected. The Groq, OpenRouter and Conversations clients still follow redirects.
+
+- **Direct MCP tool calls follow ADK's MRTR input policy** (`adk-tool`):
+  `McpToolset::call_tool_value` went through rmcp's `call_tool`, which answered a
+  server's MRTR sampling requests with the configured sampling handler. Every toolset on
+  `AdkClientHandler`, including one passed to `McpToolset::new`, now applies ADK's input
+  policy, which rejects MRTR sampling and roots. On any other client handler, MRTR
+  sampling and roots requests reach the handler only when it declared those capabilities.
+
+- **rustls upgraded to 0.23.45** (workspace and every standalone example): resolves
+  RUSTSEC-2026-0285. No API change; the lockfiles move together so `cargo check --locked`
+  keeps passing for each example.
+
 ### Added
 
 - **Gemini Live spoken language** (`adk-realtime`): `RealtimeConfig::with_language`
@@ -382,6 +414,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`DockerConfig::validate_sandbox_policy`** (`adk-code`): checks whether a
   container created from a `DockerConfig` satisfies a `SandboxPolicy`.
+
+- **Plain-HTTP base URLs for internal gateways** (`adk-anthropic`, `adk-model`):
+  `Anthropic::allow_insecure_http()` and `AnthropicConfig::allow_insecure_http()` accept
+  an `http://` base URL on a non-loopback host and log a warning naming the host. On
+  `Anthropic`, call it before `with_base_url`, which validates when called. A base URL
+  from `ANTHROPIC_BASE_URL` is acknowledged by `ANTHROPIC_ALLOW_INSECURE_HTTP=1` instead.
+  Without the opt-in, the validation error now names it (#700).
+
+- **Host-managed browser sessions** (`adk-browser`): `BrowserConfig::require_explicit_start`
+  makes tools wait for the host to call `BrowserSession::start()`, which now keeps a live
+  session and replaces one that no longer responds; `chrome_option` passes Chrome options
+  such as `binary` and `prefs`.
+
+- **`EventTextDeltas`** (`adk-core`): converts complete response snapshots back into text and
+  thinking deltas for append-only output such as terminals and chat streams.
+
+- **`McpToolset::cancel_pending_tasks`** (`adk-tool`): cancels remote MCP tasks whose
+  tool-call future was dropped, and in-flight ones, and releases each task once the
+  server reports it terminal or no longer knows it. `McpServerManager` runs it within the
+  grace period when it stops a server.
+
+- **OpenCode Go and Zen** (`adk-model`): the `opencode` feature adds `OpenCodeClient`, which
+  routes documented models through Chat Completions, Responses, Anthropic Messages or Gemini
+  `generateContent` and sends the application's `User-Agent` and `x-opencode-session` headers
+  with every request. Unknown models take an explicit `OpenCodeApi`.
+
+- **Default HTTP headers on model clients** (`adk-anthropic`, `adk-model`):
+  `Anthropic::with_default_headers`, `AnthropicClient::with_default_headers`,
+  `OpenAICompatible::with_default_headers` and `OpenAIResponsesClient::with_default_headers`
+  add headers to every request. Authentication headers and disabled redirects are kept, and
+  the Responses client keeps its request rewriting and adapter in either call order.
+
+- **OrcaRouter preset** (`adk-model`): `OpenAICompatibleConfig::orcarouter()` targets
+  `https://api.orcarouter.ai/v1` through the shared OpenAI-compatible client and needs only the
+  `openai` feature.
 
 ### Changed
 
@@ -471,6 +538,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scroll, hover, and alert helpers stay. Opt in with
   `BrowserToolset::new(browser).with_evaluate_js(true)`; `.with_js(true)` also
   enables it. Allow other URL schemes with `.with_allowed_schemes(["https", "file"])`.
+
+- **`a2a-protocol-types` upgraded from 0.5 to 0.12.1** (`adk-server`, feature `a2a-v1`): the
+  pin was five minor versions behind. Two changes in the dependency's 0.7.0 release reach this
+  crate's `a2a-v1` surface. `JsonRpcRequest.id` is now the three-state `JsonRpcRequestId`
+  (`Absent`/`Null`/`Value`), so an explicit `"id": null` is treated as the call JSON-RPC 2.0
+  says it is rather than collapsing into a notification; responses are unchanged, because
+  `to_response_id()` maps both `Absent` and `Null` to the `None` the previous `Option<Value>`
+  produced. `TaskPushNotificationConfig::task_id` and `AuthenticationInfo.credentials` are now
+  `Option<String>`, matching the canonical schema that previously rejected valid cross-SDK
+  payloads at parse time; a standalone push-config create with no task id is now refused with
+  a structured invalid-params error, and a push notification whose config carries no
+  credentials now omits the `Authorization` header rather than sending an empty or placeholder
+  bearer token.
+
+- **Anthropic streams must end with `message_stop`** (`adk-model`): a stream that closes
+  without `message_stop`, or whose message has no stop reason, now fails instead of
+  ending quietly. Anthropic-compatible proxies that drop the final event are affected.
+
+- **Azure OpenAI streams on the shared Chat Completions transport** (`adk-model`):
+  `AzureOpenAIClient` now streams when asked instead of always making a non-streaming
+  call, and accepts `with_reasoning_effort`. Error codes stay `model.azure_openai.*`,
+  including the status-specific ones.
+
+- **`GeminiBuilder::with_http_client` applies to AI Studio** (`adk-gemini`): the configured
+  `reqwest::ClientBuilder` was previously ignored on the AI Studio path and now carries its
+  proxy, timeout and default-header settings into every request. The redirect policy is
+  always replaced with `Policy::none()`, and a client build failure returns
+  `Error::PerformRequestNew` instead of panicking.
+
+- **Gemini grounding is no longer appended to the answer** (`adk-model`): the
+  "Searched" and "Sources" text that followed Google Search grounded responses is gone. The
+  queries, sources and supports remain in `provider_metadata` (`webSearchQueries`,
+  `groundingChunks`, `groundingSupports`) for applications that display them.
+
+- **Model-facing MCP tools forward MRTR input to a custom client handler** (`adk-tool`):
+  on `McpToolset::new` with a handler other than `AdkClientHandler`, an MRTR input
+  request from a tool call returned an error. It now reaches the handler, whose default
+  `create_elicitation` declines.
+
+- **Local quality gates run on the pinned toolchain** (`lefthook.yml`, `scripts/cargo-pinned.sh`):
+  the pre-commit and pre-push hooks and the examples gate route through
+  `scripts/cargo-pinned.sh`, which resolves the `rust-toolchain.toml` pin via rustup and refuses
+  to run on any other cargo, so a shadowing toolchain cannot lint with the wrong compiler.
+  `scripts/setup-dev.sh` reports the cargo the gates resolve and installs the ALSA headers
+  `examples/desktop_audio` needs on Linux.
+
+- **Streams end with a complete snapshot** (`adk-model`): Anthropic streaming, and OpenAI
+  Responses streaming with commentary, emit a final response carrying the full message with
+  `provider_metadata.content_complete` set to `true`. Code that consumes `Llm` streams
+  directly replaces the earlier deltas with that response instead of appending it.
+
+- **Token usage counts cache and thought tokens** (`adk-model`): Anthropic
+  `prompt_token_count` now includes cache-read and cache-creation input tokens, and Gemini
+  `candidates_token_count` now includes thought tokens; `provider_usage` carries the
+  provider's raw usage. `adk-eval`'s `CostTracker` prices `prompt_token_count` at the full
+  input rate, so cached Anthropic input is counted at that rate, and Claude through Bedrock
+  still reports `prompt_token_count` without cache tokens, so the two paths differ for the
+  same request.
+
+- **Vertex requests are no longer replayed over REST** (`adk-gemini`, `adk-model`): a gRPC
+  transport failure on a non-streaming Vertex `generateContent` call is returned instead of
+  being re-sent over REST, because the first request may already have reached the model.
+  `adk-model` maps those failures to `ErrorCategory::Unavailable`, so `RetryConfig` decides
+  whether to retry.
 
 ### Fixed
 
@@ -734,6 +865,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PostgreSQL, Redis, and Firestore backends emit a `warn!` with the session and
   event ID for each stored event that fails to deserialize, and still return the
   remaining events.
+
+- **Agent event fidelity** (`adk-agent`, `adk-runner`, `adk-cli`, `adk-graph`): preserve
+  citations and complete terminal content, continue provider-native paused turns, and emit
+  individual tool results while sibling approvals are pending. An approval failure ends the
+  turn with an error once running tools finish, approvals are requested one at a time, and
+  tool-start events no longer end responses. Built-in streaming consumers render complete
+  snapshots once, and later agents in the same invocation see each streamed response once.
+
+- **Direct MCP tool calls keep the task lifecycle** (`adk-tool`):
+  `McpToolset::call_tool_value` polls server-materialized tasks, answers MRTR and in-task
+  input through the connection's handler, and restores resource subscriptions after a
+  reconnect, as model-facing calls do. A task returned while task support is disabled is
+  cancelled, and the error names `McpToolset::with_task_support(McpTaskConfig::enabled())`.
+  Each input round is capped at 64 requests, a pending elicitation no longer holds the
+  connection lock, and an error result without a text block reports its structured
+  content.
+
+- **MCP tool schemas are bounded at discovery** (`adk-tool`): `McpToolset` measures
+  each tool's input and output schema against `McpSchemaLimits` (256 KiB and 10 000
+  JSON values by default) before copying or logging it. A tool over a limit is skipped
+  with a warning naming the toolset and the tool, and discovery continues with the
+  remaining tools. Accepted tools log `schema.bytes` and `schema.nodes` at `debug`
+  instead of the full schema. `McpToolset::with_schema_limits` and
+  `McpServerManager::with_schema_limits` configure the limits, and managed toolsets
+  are named after their server ID.
+
+- **Native provider fidelity** (`adk-model`, `adk-anthropic`, `adk-gemini`): retain
+  streamed Unicode, tool images, PDF inputs, native search/reasoning blocks and usage;
+  preserve commentary for application rendering and honor explicit request/retry
+  configuration.
+
+- **Windows: the Rust sandbox links again, Docker policy accepts rooted mounts, and the
+  devtools `glob` tool finds files** (`adk-code`, `adk-devtools`): `rustc` is pinned to
+  `rust-lld` as in `adk-sandbox`, so Git's GNU `link.exe` on PATH no longer intercepts the
+  link step; bind-mount containment checks for a rooted rather than an absolute path, so
+  Linux-container mounts such as `/srv/data` validate on a Windows host; and `glob` walks
+  the workspace instead of expanding a canonical root whose `\\?\` prefix the glob crate
+  read as a wildcard.
 
 ## [2.2.0] - 2026-09-01
 
