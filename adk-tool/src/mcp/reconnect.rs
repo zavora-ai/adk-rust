@@ -7,6 +7,7 @@
 // - Connection closed errors
 // - EOF errors
 // - Session not found errors
+// - HTTP 401 rejections, so a factory can reconnect with fresh credentials
 // - Automatic retry with reconnection
 
 use rmcp::{
@@ -45,7 +46,20 @@ pub fn should_refresh_connection(error: &str) -> bool {
         return true;
     }
 
-    false
+    is_auth_rejection(error)
+}
+
+/// Returns `true` when the transport reports that the server rejected the
+/// request's credentials with HTTP 401.
+///
+/// rmcp reports a 401 that carries `WWW-Authenticate` as `Auth required`, and
+/// one without it as `HTTP 401 Unauthorized` or reqwest's status error. All of
+/// them arrive as transport errors, so a JSON-RPC error whose message merely
+/// mentions authorization is not matched: that request reached the server.
+pub(crate) fn is_auth_rejection(error: &str) -> bool {
+    let error_lower = error.to_lowercase();
+    error_lower.starts_with("transport")
+        && (error_lower.contains("auth required") || error_lower.contains("401 unauthorized"))
 }
 
 /// Replay of `tools/call` after an ambiguous connection failure is opt-in.
@@ -55,6 +69,8 @@ pub fn should_refresh_connection(error: &str) -> bool {
 /// or deletion executing more than once. See #504.
 pub(crate) const DEFAULT_RETRY_TOOL_CALLS: bool = false;
 
+/// A request rejected with HTTP 401 never ran, so it is retried after a
+/// reconnect even when replay is not allowed.
 pub(crate) fn should_retry_mcp_operation(
     error: &str,
     attempt: u32,
@@ -62,7 +78,7 @@ pub(crate) fn should_retry_mcp_operation(
     has_connection_factory: bool,
     replay_allowed: bool,
 ) -> bool {
-    replay_allowed
+    (replay_allowed || is_auth_rejection(error))
         && has_connection_factory
         && attempt < refresh_config.max_attempts
         && should_refresh_connection(error)
@@ -560,6 +576,38 @@ mod tests {
         assert!(!should_refresh_connection("invalid argument"));
         assert!(!should_refresh_connection("permission denied"));
         assert!(!should_refresh_connection("tool not found"));
+    }
+
+    #[test]
+    fn http_401_rejections_trigger_a_refresh() {
+        let with_challenge = "Transport send error: Transport [rmcp::transport::\
+            StreamableHttpClientTransport] error: Auth required";
+        let post_without_challenge = "Transport send error: Transport [rmcp::transport::\
+            StreamableHttpClientTransport] error: unexpected server response: \
+            HTTP 401 Unauthorized: ";
+        let get_without_challenge = "Transport send error: Transport [rmcp::transport::\
+            StreamableHttpClientTransport] error: Client error: HTTP status client error \
+            (401 Unauthorized) for url (https://mcp.example.com/)";
+
+        for error in [with_challenge, post_without_challenge, get_without_challenge] {
+            assert!(is_auth_rejection(error), "{error}");
+            assert!(should_refresh_connection(error), "{error}");
+        }
+    }
+
+    #[test]
+    fn server_errors_that_mention_authorization_are_not_auth_rejections() {
+        let error = "Mcp error: -32001: upstream returned 401 Unauthorized; auth required";
+        assert!(!is_auth_rejection(error));
+        assert!(!should_refresh_connection(error));
+    }
+
+    #[test]
+    fn a_rejected_tool_call_is_retried_without_replay_opt_in() {
+        let config = RefreshConfig::default();
+        let rejected = "Transport send error: Transport [http] error: Auth required";
+        assert!(should_retry_mcp_operation(rejected, 0, &config, true, false));
+        assert!(!should_retry_mcp_operation("Transport closed EOF", 0, &config, true, false));
     }
 
     #[test]

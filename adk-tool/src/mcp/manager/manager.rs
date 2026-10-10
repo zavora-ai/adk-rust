@@ -1888,8 +1888,8 @@ mod tests {
     }
 
     impl rmcp::ServerHandler for HeldTaskServer {
-        fn get_info(&self) -> rmcp::model::ServerInfo {
-            rmcp::model::ServerInfo::new(
+        fn get_info(&self) -> rmcp::model::InitializeResult {
+            rmcp::model::InitializeResult::new(
                 rmcp::model::ServerCapabilities::builder().enable_tools().enable_tasks().build(),
             )
         }

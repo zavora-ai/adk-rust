@@ -10,12 +10,13 @@
 #![cfg_attr(feature = "mcp-sampling", allow(deprecated))]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::FutureExt;
 use rmcp::model::{
-    ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability,
-    ElicitationSchema, FormElicitationCapability, InputRequest, InputRequests, InputResponses,
-    UrlElicitationCapability,
+    ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability, ElicitationSchema,
+    FormElicitationCapability, InitializeRequestParams, InputRequest, InputRequests,
+    InputResponses, UrlElicitationCapability,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleClient};
 use serde_json::Value;
@@ -130,6 +131,9 @@ pub struct AdkClientHandler {
     handler: Arc<dyn ElicitationHandler>,
     resource_notification_handler: Option<Arc<dyn ResourceNotificationHandler>>,
     tasks: bool,
+    /// `notifications/tools/list_changed` received on this connection; a
+    /// toolset compares it against its cached `tools/list` result.
+    tool_list_changes: Arc<AtomicU64>,
     #[cfg(feature = "mcp-sampling")]
     sampling_handler: Option<Arc<dyn crate::sampling::SamplingHandler>>,
 }
@@ -141,9 +145,14 @@ impl AdkClientHandler {
             handler,
             resource_notification_handler: None,
             tasks: false,
+            tool_list_changes: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "mcp-sampling")]
             sampling_handler: None,
         }
+    }
+
+    pub(crate) fn tool_list_changes(&self) -> u64 {
+        self.tool_list_changes.load(Ordering::Acquire)
     }
 
     /// Declare the SEP-2663 tasks extension during the handshake.
@@ -255,8 +264,8 @@ impl AdkClientHandler {
 }
 
 impl rmcp::handler::client::ClientHandler for AdkClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> InitializeRequestParams {
+        let mut info = InitializeRequestParams::default();
         let elicitation = ElicitationCapability::new()
             .with_form(FormElicitationCapability::new())
             .with_url(UrlElicitationCapability::new());
@@ -397,6 +406,10 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
 
     async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {
         dispatch_resource_list_changed(&self.resource_notification_handler).await;
+    }
+
+    async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        self.tool_list_changes.fetch_add(1, Ordering::AcqRel);
     }
 }
 

@@ -224,7 +224,9 @@ The builder applies request timeouts, custom headers, bearer tokens, custom
 API-key headers, and bounded recovery when an HTTP session expires.
 
 `OAuth2Config` implements a fixed OAuth 2.0 client-credentials token request.
-It is useful for a server with a known token endpoint. It is not the complete
+It is useful for a server with a known token endpoint. The connection attaches
+the current token to each request, refreshing it before its `expires_in` and
+again when the server answers 401. It is not the complete
 MCP authorization flow: it does not perform protected-resource metadata
 discovery, authorization-server discovery, browser authorization, PKCE, or
 resource-indicator negotiation. Use `rmcp`'s authorization APIs or an external

@@ -533,6 +533,7 @@ Intercept agent behavior:
 | `instruction(text)` | System prompt |
 | `tool(Arc<dyn Tool>)` | Adds a static tool |
 | `toolset(Arc<dyn Toolset>)` | Adds a dynamic toolset resolved per invocation |
+| `strict_toolsets(bool)` | Fails the turn when a toolset cannot resolve its tools (default: skip it) |
 | `output_schema(json)` | JSON schema for structured output |
 | `output_key(key)` | Saves response to state |
 | `include_contents(mode)` | History visibility |
@@ -586,6 +587,18 @@ let agent = LlmAgentBuilder::new("web_agent")
 ```
 
 You can mix static `.tool()` and dynamic `.toolset()` on the same agent. Duplicate tool names across static tools and toolsets produce a deterministic error.
+
+A toolset whose `tools()` call fails, such as an MCP server that is down, is skipped for that resolution: the agent logs a `warn` naming the toolset and the error, and the model runs with the tools that did resolve. The toolset is tried again at the next resolution. Enable strict mode when the agent must not run without every toolset:
+
+```rust
+let agent = LlmAgentBuilder::new("operator")
+    .model(model)
+    .toolset(Arc::new(mcp_toolset))
+    .strict_toolsets(true) // a failing toolset fails the turn
+    .build()?;
+```
+
+Strict mode covers toolsets added with `.toolset()` and `RunConfig::runtime_toolsets`. Duplicate tool names fail the turn in both modes.
 
 `RealtimeAgentBuilder` also supports `.toolset()` with the same semantics, so realtime voice agents get dynamic tool resolution too.
 

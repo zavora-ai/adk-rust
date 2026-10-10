@@ -37,7 +37,8 @@ The JSON-loading and runtime add/update paths validate server IDs.
 - bearer tokens;
 - a caller-selected API-key header;
 - arbitrary reviewed headers;
-- fixed OAuth 2.0 client-credentials token acquisition;
+- fixed OAuth 2.0 client-credentials token acquisition, refreshed before the
+  token's `expires_in` and after a 401;
 - request timeouts; and
 - one bounded session reinitialization after an expired-session response.
 

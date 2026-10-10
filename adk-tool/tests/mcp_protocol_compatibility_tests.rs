@@ -108,6 +108,10 @@ fn test_tool() -> Tool {
 /// This is the backward-compatibility contract: all connection sites in this
 /// crate use `ServiceExt::serve`, so if that ever starts probing with
 /// `server/discover`, every server that predates `2026-07-28` breaks.
+///
+/// Since rmcp 3.5 the request advertises `2026-07-28`, and a legacy server
+/// answers with the version it supports, as lifecycle version negotiation
+/// requires. A change to the advertised version is a wire change to review.
 #[tokio::test]
 async fn the_default_handshake_is_still_legacy_initialize() {
     let (server_io, client_io) = tokio::io::duplex(4096);
@@ -120,9 +124,11 @@ async fn the_default_handshake_is_still_legacy_initialize() {
 
     let client = ().serve(client_io).await.expect("a legacy-only server must still connect");
     let advertised = server_task.await.expect("server task");
+    let negotiated =
+        client.peer_info().expect("peer info is set after the handshake").protocol_version.clone();
 
-    // The upgrade to rmcp 3.x must not move the version we put on the wire.
-    assert_eq!(advertised, ProtocolVersion::V_2025_11_25);
+    assert_eq!(advertised, ProtocolVersion::V_2026_07_28);
+    assert_eq!(negotiated, ProtocolVersion::V_2025_11_25);
     client.cancel().await.expect("cancel");
 }
 
@@ -424,8 +430,8 @@ async fn a_server_from_another_implementation_still_works() {
 struct DualStackServer;
 
 impl rmcp::ServerHandler for DualStackServer {
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        rmcp::model::ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> rmcp::model::InitializeResult {
+        rmcp::model::InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("dual-stack-server", "1.0.0"))
     }
 
@@ -572,10 +578,11 @@ async fn a_tool_call_over_2026_07_28_returns_its_result() {
 struct AncientServer;
 
 impl rmcp::ServerHandler for AncientServer {
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        let mut info =
-            rmcp::model::ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-                .with_server_info(Implementation::new("ancient-server", "0.1.0"));
+    fn get_info(&self) -> rmcp::model::InitializeResult {
+        let mut info = rmcp::model::InitializeResult::new(
+            ServerCapabilities::builder().enable_tools().build(),
+        )
+        .with_server_info(Implementation::new("ancient-server", "0.1.0"));
         info.protocol_version = ProtocolVersion::V_2024_11_05;
         info
     }
@@ -629,8 +636,8 @@ struct TaskServer {
 }
 
 impl rmcp::ServerHandler for TaskServer {
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        rmcp::model::ServerInfo::new(
+    fn get_info(&self) -> rmcp::model::InitializeResult {
+        rmcp::model::InitializeResult::new(
             ServerCapabilities::builder().enable_tools().enable_tasks().build(),
         )
         .with_server_info(Implementation::new("task-server", "1.0.0"))

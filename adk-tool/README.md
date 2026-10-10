@@ -236,6 +236,17 @@ let toolset = McpToolset::new(client).with_schema_limits(
 `McpServerManager::with_schema_limits` applies the same limits to every managed
 server.
 
+### MCP Discovery Cache and Concurrency
+
+`McpToolset` reuses a `tools/list` result for 60 seconds, dropping it early on a
+reconnect, on `notifications/tools/list_changed` (connections served by
+`AdkClientHandler`), or on `invalidate_tool_list_cache()`. Set the TTL with
+`with_tool_list_cache_ttl`; `Duration::ZERO` disables the cache.
+
+Calls and discovery on one toolset run concurrently over its shared connection.
+A `tools/call` dropped before it completes, such as by an agent tool timeout,
+sends `notifications/cancelled` to the server.
+
 ### MCP Tools (Remote Server via HTTP)
 
 Connect to remote MCP servers using HTTP transport (requires `http-transport` feature):
@@ -285,6 +296,10 @@ let toolset = McpHttpClientBuilder::new("https://mcp.example.com/v1")
     .connect()
     .await?;
 ```
+
+With OAuth2, each request carries the current access token. The token is
+refreshed before the `expires_in` its token response declared, and a request the
+server rejects with HTTP 401 is sent once more with a newly fetched token.
 
 ### MCP Task Support (Long-Running Operations)
 
