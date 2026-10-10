@@ -137,3 +137,45 @@ async fn a_graph_tool_is_long_running() {
     let tool = NodeTool::for_graph(doubling_graph(Arc::new(AtomicUsize::new(0))));
     assert!(tool.is_long_running());
 }
+
+/// A tool call's thread is the caller's identity, not its bare session id.
+///
+/// A finished thread returns its final state when invoked again, so two callers
+/// sharing a session id used to receive each other's results.
+#[tokio::test]
+async fn callers_with_the_same_session_id_do_not_share_a_thread() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let graph = Arc::new(
+        StateGraph::with_channels(&["input", "doubled"])
+            .add_node_fn("double", {
+                let calls = Arc::clone(&calls);
+                move |ctx| {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        let value = ctx.get("input").and_then(|v| v.as_i64()).unwrap_or(0);
+                        Ok(NodeOutput::new().with_update("doubled", json!(value * 2)))
+                    }
+                }
+            })
+            .add_edge(START, "double")
+            .add_edge("double", END)
+            .compile()
+            .unwrap()
+            .with_checkpointer(adk_graph::checkpoint::MemoryCheckpointer::new()),
+    );
+    let tool = NodeTool::for_graph(graph);
+    let caller = |app: &str| {
+        Arc::new(SimpleToolContext::new(app).with_session_id("shared-session"))
+            as Arc<dyn ToolContext>
+    };
+
+    let first = tool.execute(caller("app-a"), json!({ "input": 21 })).await.expect("runs");
+    let second = tool.execute(caller("app-b"), json!({ "input": 5 })).await.expect("runs");
+
+    assert_eq!(
+        (first.get("doubled"), second.get("doubled"), calls.load(Ordering::SeqCst)),
+        (Some(&json!(42)), Some(&json!(10)), 2),
+        "the second caller must run its own thread, not read the first caller's result"
+    );
+}

@@ -48,8 +48,10 @@ pub type OutputMapper = Arc<dyn Fn(&State) -> Vec<Event> + Send + Sync>;
 ///
 /// # Turns and checkpoints
 ///
-/// Each [`Agent::run`] call is one turn on a thread whose id is the session id.
-/// With a checkpointer configured:
+/// Each [`Agent::run`] call is one turn on the session's thread, whose id
+/// [`session_thread_id`] derives from the app name, user id, and session id, so
+/// two users who choose the same session id never share checkpoints. With a
+/// checkpointer configured:
 ///
 /// | Thread's latest checkpoint | What the turn does |
 /// |----------------------------|--------------------|
@@ -223,7 +225,8 @@ impl Agent for GraphAgent {
         // Create execution config from context, carrying the invocation so an
         // `AgentNode` inside the graph presents this run's identity, services, and
         // cancellation rather than a synthetic standalone context.
-        let config = ExecutionConfig::new(ctx.session_id()).with_parent_context(ctx.clone());
+        let thread_id = session_thread_id(ctx.app_name(), ctx.user_id(), ctx.session_id());
+        let config = ExecutionConfig::new(&thread_id).with_parent_context(ctx.clone());
 
         // Execute graph
         let graph = self.graph.clone();
@@ -287,6 +290,41 @@ impl Agent for GraphAgent {
 
         Ok(Box::pin(stream))
     }
+}
+
+/// Returns the checkpoint thread id for an ADK session.
+///
+/// [`GraphAgent`] and [`NodeTool`](crate::tool::NodeTool) key their checkpoints
+/// by this id. It joins the app name, user id, and session id with `:`, and
+/// percent-encodes `%` and `:` inside each part, so distinct identities never
+/// produce the same thread id. Use it to find a session's checkpoints with
+/// [`Checkpointer::load`] or [`Checkpointer::list`].
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::agent::session_thread_id;
+///
+/// assert_eq!(session_thread_id("shop", "alice", "s-1"), "shop:alice:s-1");
+/// assert_eq!(session_thread_id("shop", "a:b", "c"), "shop:a%3Ab:c");
+/// assert_ne!(session_thread_id("shop", "alice", "s-1"), session_thread_id("shop", "bob", "s-1"));
+/// ```
+pub fn session_thread_id(app_name: &str, user_id: &str, session_id: &str) -> String {
+    let mut thread_id =
+        String::with_capacity(app_name.len() + user_id.len() + session_id.len() + 2);
+    for (index, part) in [app_name, user_id, session_id].into_iter().enumerate() {
+        if index > 0 {
+            thread_id.push(':');
+        }
+        for c in part.chars() {
+            match c {
+                '%' => thread_id.push_str("%25"),
+                ':' => thread_id.push_str("%3A"),
+                other => thread_id.push(other),
+            }
+        }
+    }
+    thread_id
 }
 
 /// Default input mapper - extracts content from InvocationContext
