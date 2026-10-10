@@ -21,6 +21,12 @@ pub struct ExecutionConfig {
     pub thread_id: String,
     /// Resume from a specific checkpoint
     pub resume_from: Option<String>,
+    /// Values for functional-API interrupt sites, keyed by continuation key.
+    ///
+    /// An `#[entrypoint]` run hands these to its `TaskContext`, so an interrupt
+    /// whose key is present returns the value instead of suspending. The graph
+    /// executor does not read them: a graph node resumes from its state.
+    pub resume_values: HashMap<String, Value>,
     /// Recursion limit for cycles
     pub recursion_limit: usize,
     /// Additional configuration
@@ -42,6 +48,7 @@ impl ExecutionConfig {
         Self {
             thread_id: thread_id.to_string(),
             resume_from: None,
+            resume_values: HashMap::new(),
             recursion_limit: 50,
             metadata: HashMap::new(),
             parent_context: None,
@@ -68,6 +75,30 @@ impl ExecutionConfig {
     /// Resume from a specific checkpoint
     pub fn with_resume_from(mut self, checkpoint_id: &str) -> Self {
         self.resume_from = Some(checkpoint_id.to_string());
+        self
+    }
+
+    /// Supplies the value for a functional-API interrupt site.
+    ///
+    /// `continuation_key` is the key a suspended `#[entrypoint]` run reported,
+    /// such as `interrupt-1`. The resumed run's interrupt at that site returns
+    /// `value` instead of suspending.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::ExecutionConfig;
+    /// use serde_json::json;
+    ///
+    /// let config = ExecutionConfig::new("refund-42")
+    ///     .with_resume_from("checkpoint-id")
+    ///     .with_resume_value("interrupt-1", json!({ "approved": true }));
+    ///
+    /// assert_eq!(config.resume_values.get("interrupt-1"), Some(&json!({ "approved": true })));
+    /// ```
+    #[must_use]
+    pub fn with_resume_value(mut self, continuation_key: impl Into<String>, value: Value) -> Self {
+        self.resume_values.insert(continuation_key.into(), value);
         self
     }
 

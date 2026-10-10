@@ -170,6 +170,39 @@ a crash between the two runs the task again on resume. Make a task with external
 side effects idempotent. `rerun_on_resume` opts a task out of replay entirely, so
 it runs on every resume.
 
+### Resuming a Run
+
+`invoke` starts fresh unless `ExecutionConfig::resume_from` names a checkpoint. It then
+restores that checkpoint's state and execution log, and completed tasks replay from the
+log.
+
+| `resume_from` | Result |
+|---------------|--------|
+| Unset | Starts from `initial_state` with an empty log |
+| A checkpoint id of this thread | Restores that checkpoint's state and execution log |
+| An id this thread does not have, including another thread's | `GraphError::CheckpointError`; nothing runs |
+
+Every checkpoint a run writes — pre-execution, task completion, task failure,
+interrupt, and final — carries the execution log, so a run resumed from any of them
+replays the tasks completed before it, however many times the workflow crashes and
+resumes. To resume where the thread left off, pass the id of its latest checkpoint:
+
+```rust,ignore
+use adk_graph::checkpoint::Checkpointer;
+use adk_graph::node::ExecutionConfig;
+use adk_graph::state::State;
+
+let latest = checkpointer.load("order-7").await?.expect("the thread has run");
+let state = agent
+    .invoke(State::new(), ExecutionConfig::new("order-7").with_resume_from(&latest.checkpoint_id))
+    .await?;
+```
+
+> **Note:** `resume_from` previously loaded the thread's latest checkpoint whatever
+> value it held, and the pre-execution checkpoint of a resumed run dropped the log. A
+> crash during a resumed run therefore left a log-less latest checkpoint, and the next
+> resume ran every completed task again.
+
 ## Background Runs
 
 The `background` feature in `adk-server` adds REST endpoints for async workflow execution.
@@ -350,6 +383,29 @@ let approval: Approval = ctx.interrupt("approve the refund").await?;
 ```
 
 The key is also written to the interrupt checkpoint under `continuation_key`.
+
+Through a generated `#[entrypoint]` agent, supply the value on the `ExecutionConfig`.
+`invoke` hands `resume_values` to the run's `TaskContext`:
+
+```rust,ignore
+use adk_graph::checkpoint::Checkpointer;
+use adk_graph::node::ExecutionConfig;
+use adk_graph::state::State;
+
+// The first run suspends at `interrupt-1`.
+let error = agent.invoke(State::new(), ExecutionConfig::new("refund-42")).await.unwrap_err();
+
+// Resume the thread with the value for that site.
+let latest = checkpointer.load("refund-42").await?.expect("the run left a checkpoint");
+let state = agent
+    .invoke(
+        State::new(),
+        ExecutionConfig::new("refund-42")
+            .with_resume_from(&latest.checkpoint_id)
+            .with_resume_value("interrupt-1", serde_json::json!({ "approved": true, "approver": "alice" })),
+    )
+    .await?;
+```
 
 | Situation | Result |
 |-----------|--------|

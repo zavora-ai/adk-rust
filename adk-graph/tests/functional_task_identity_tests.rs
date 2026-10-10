@@ -114,8 +114,16 @@ async fn a_resumed_run_replays_each_matching_call() {
     assert!(first.is_err(), "the first run fails in `finish`");
     assert_eq!(PROCESS_RUNS.load(Ordering::SeqCst), 3);
 
+    let latest = checkpointer
+        .load("process-all")
+        .await
+        .expect("the checkpointer reads")
+        .expect("the failed run left a checkpoint");
     let state = agent
-        .invoke(State::new(), ExecutionConfig::new("process-all").with_resume_from("latest"))
+        .invoke(
+            State::new(),
+            ExecutionConfig::new("process-all").with_resume_from(&latest.checkpoint_id),
+        )
         .await
         .expect("the resumed run completes");
 
