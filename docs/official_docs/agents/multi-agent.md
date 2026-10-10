@@ -147,11 +147,21 @@ relationship boundaries. Hooks can observe success/failure or deny a pending
 operation without widening its target. Runner also calls the root's async
 `govern_transfer` hook immediately before a validated handoff.
 
+`TeamPolicy::budget` caps a root invocation and its delegates. Model calls,
+tokens, cost (`maxCostMicrousd`), tool calls and wall time are enforced by a
+`BudgetTracker` that every member shares and that counts against the run's
+`RunBudget` too, so a member stops before the call that would start past either
+limit. Events, delegations and handoffs are counted from non-partial team events.
+Under a cost cap, a response with no known cost stops the team unless
+`allowUnpricedModels` is set. The runtime retains the receipts of the 64 most
+recently finished invocations for `execution_snapshot`; every receipt is also
+persisted to session state under `TEAM_EXECUTION_STATE_KEY`.
+
 Native `team.run`, `team.member.run`, and `team.relationship.execute` tracing
 spans carry team/member/edge identity, status, and relationship duration through
 the normal `adk-telemetry` exporter. Runtime failures use stable structured
-codes such as `agent.team.policy_denied`, `agent.team.budget_exceeded`, and
-`agent.team.resume_unsafe`.
+codes such as `agent.team.policy_denied`, `agent.team.budget_exceeded`,
+`budget.cost`, and `agent.team.resume_unsafe`.
 
 Delegate contracts distinguish state reads (`stateKeys`) from writes
 (`stateWriteKeys`). `stateMerge: rejectConflicts` rejects a child write when the

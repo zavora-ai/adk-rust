@@ -306,6 +306,8 @@ full-webrtc  ──► full + openai-webrtc
 | `after_agent_callback` | Called after agent completes |
 | `before_tool_callback` | Called before tool execution |
 | `after_tool_callback` | Called after tool execution |
+| `tool_timeout(duration)` | Answer a tool call that runs too long with an error (default 5 min) |
+| Run-wide governance | The run's `ToolPolicy`, kill switch, confirmation, and runner plugin hooks apply to every tool call |
 
 ### Realtime-Specific
 

@@ -540,7 +540,7 @@ Intercept agent behavior:
 | `max_iterations(n)` | Maximum LLM round-trips (default: 100) |
 | `tool_execution_strategy(strategy)` | Tool dispatch mode: `Sequential`, `Parallel`, or `Auto` |
 | `parallelize_agent_delegations(bool)` | Overlap consecutive agent-delegation calls without parallelizing ordinary tools |
-| `default_retry_budget(RetryBudget)` | Retry failed tools up to N times with delay |
+| `default_retry_budget(RetryBudget)` | Retry failed read-only and idempotent tools up to N times with exponential backoff |
 | `tool_retry_budget(name, RetryBudget)` | Per-tool retry override |
 | `circuit_breaker_threshold(u32)` | Disable tool after N consecutive failures |
 | `on_tool_error(callback)` | Register fallback handler for tool failures |
@@ -677,7 +677,7 @@ use std::time::Duration;
 let agent = LlmAgentBuilder::new("resilient_agent")
     .model(model)
     .tool(Arc::new(my_tool))
-    // Retry all tools up to 2 times with 500ms delay
+    // Retry read-only and idempotent tools up to 2 times, starting at 500ms
     .default_retry_budget(RetryBudget::new(2, Duration::from_millis(500)))
     // Override for a specific tool
     .tool_retry_budget("flaky_api", RetryBudget::new(4, Duration::from_secs(1)))
@@ -692,6 +692,8 @@ let agent = LlmAgentBuilder::new("resilient_agent")
     }))
     .build()?;
 ```
+
+A retry budget applies only to tools whose `effect()` is `ReadOnly` or `Idempotent`, and only after a retryable error (rate limited, unavailable, timed out). A `NonIdempotent` tool — the default for any tool not marked read-only — runs once. The delay doubles on each retry up to `RetryBudget::max_delay`, with jitter. A `NonIdempotent` call that times out is answered with `{"status": "outcome_unknown"}` rather than an error, and an `AgentTool` delegation is bounded by its own `timeout` rather than `tool_timeout`. See [Tool Effects and the Action Ledger](../tools/tool-effects.md).
 
 After-tool callbacks can inspect structured `ToolOutcome` metadata via `CallbackContext::tool_outcome()`:
 

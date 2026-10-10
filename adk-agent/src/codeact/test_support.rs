@@ -198,6 +198,21 @@ impl MockInvocationContext {
         self
     }
 
+    /// Set static confirmation decisions keyed by call ID.
+    pub(crate) fn with_confirmation_decisions(
+        mut self,
+        decisions: HashMap<String, adk_core::ToolConfirmationDecision>,
+    ) -> Self {
+        self.run_config.tool_confirmation_decisions = decisions;
+        self
+    }
+
+    /// Replace the run config wholesale.
+    pub(crate) fn with_run_config(mut self, run_config: RunConfig) -> Self {
+        self.run_config = run_config;
+        self
+    }
+
     /// Add a run-wide hook, as a runner installs its plugin manager.
     pub(crate) fn with_invocation_hook(mut self, hook: Arc<dyn adk_core::InvocationHooks>) -> Self {
         self.run_config.invocation_hooks.push(hook);
@@ -511,11 +526,19 @@ impl Tool for SleepingTool {
 /// A tool named `flaky` that fails its first `fail_times` calls, then succeeds
 /// with `{"ok": true}`. Used to exercise retry budgets.
 pub(crate) fn flaky_tool(fail_times: usize) -> Arc<dyn Tool> {
-    Arc::new(FlakyTool { fail_times, calls: AtomicUsize::new(0) })
+    flaky_tool_with_effect(fail_times, adk_core::ToolEffect::Idempotent)
+}
+
+pub(crate) fn flaky_tool_with_effect(
+    fail_times: usize,
+    effect: adk_core::ToolEffect,
+) -> Arc<dyn Tool> {
+    Arc::new(FlakyTool { fail_times, effect, calls: AtomicUsize::new(0) })
 }
 
 struct FlakyTool {
     fail_times: usize,
+    effect: adk_core::ToolEffect,
     calls: AtomicUsize,
 }
 
@@ -526,6 +549,9 @@ impl Tool for FlakyTool {
     }
     fn description(&self) -> &str {
         "fails a few times, then succeeds"
+    }
+    fn effect(&self) -> adk_core::ToolEffect {
+        self.effect
     }
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> adk_core::Result<Value> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);

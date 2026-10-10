@@ -575,6 +575,9 @@ impl AcpSessionHandler {
         // authorizes only the call it was granted for). The map grows one decision
         // per resume as the runner pauses at each still-undecided confirmation.
         let mut decisions: HashMap<String, ToolConfirmationDecision> = HashMap::new();
+        // The same decisions keyed by call fingerprint, so a resumed model that re-issues the
+        // call under a new ID still receives the client's answer.
+        let mut approvals: HashMap<String, adk_core::ToolApproval> = HashMap::new();
         // The first run carries the client's prompt content; every resume run
         // carries an empty user turn so the runner replays persisted history and
         // continues from the paused tool call rather than re-appending the
@@ -589,10 +592,11 @@ impl AcpSessionHandler {
         const MAX_CONFIRMATION_ROUNDS: usize = 64;
 
         for _round in 0..MAX_CONFIRMATION_ROUNDS {
-            let run_config = RunConfig::builder()
+            let mut run_config = RunConfig::builder()
                 .runtime_toolsets(runtime_toolsets.clone())
                 .tool_confirmation_decisions(decisions.clone())
                 .build();
+            run_config.tool_approvals = approvals.clone();
             let runner = Runner::builder()
                 .app_name(&self.app_name)
                 .agent(self.agent.clone())
@@ -677,6 +681,10 @@ impl AcpSessionHandler {
                     ));
                 };
                 decisions.insert(call_id, decision);
+                approvals.insert(
+                    confirmation.fingerprint(),
+                    adk_core::ToolApproval { decision, expires_at: None },
+                );
             }
             is_resume = true;
         }

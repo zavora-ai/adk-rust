@@ -1145,7 +1145,7 @@ impl Agent for InterruptedHistoryAgent {
 }
 
 #[tokio::test]
-async fn interrupted_run_does_not_leave_an_orphaned_call_in_the_next_request() {
+async fn interrupted_run_answers_its_in_flight_call_with_an_unknown_outcome() {
     let session_service = Arc::new(InMemorySessionService::new());
     session_service
         .create(adk_session::CreateRequest {
@@ -1211,16 +1211,27 @@ async fn interrupted_run_does_not_leave_an_orphaned_call_in_the_next_request() {
         .unwrap_or_else(|error| error.into_inner())
         .clone()
         .expect("the second invocation must capture history");
-    assert_eq!(history.len(), 2);
-    assert!(history.iter().all(|content| content.role == "user"));
-    assert!(!history.iter().flat_map(|content| &content.parts).any(|part| {
-        matches!(
-            part,
-            Part::FunctionCall { id: Some(id), .. }
-                | Part::FunctionResponse { id: Some(id), .. }
-                if id == "call-1"
-        )
-    }));
+    // The call stays visible and is answered exactly once, so the model knows the
+    // tool may have taken effect instead of the call silently disappearing.
+    let roles: Vec<&str> = history.iter().map(|content| content.role.as_str()).collect();
+    assert_eq!(roles, ["user", "model", "function", "user"]);
+    let responses: Vec<_> = history
+        .iter()
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse { function_response, id, .. } => Some((
+                id.clone(),
+                function_response.name.clone(),
+                function_response.response.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(responses.len(), 1);
+    let (id, name, response) = &responses[0];
+    assert_eq!(id.as_deref(), Some("call-1"));
+    assert_eq!(name, "slow_tool");
+    assert!(adk_core::is_outcome_unknown(response), "{response}");
 }
 
 // Agent that emits events in a loop until cancelled or `max_ticks` is reached.

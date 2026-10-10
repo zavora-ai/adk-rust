@@ -105,7 +105,7 @@ pub mod example_store;
 #[cfg(feature = "vertex-agent-registry")]
 pub mod vertex;
 
-pub use adk_core::{AdkError, Result, Tool, ToolContext, Toolset};
+pub use adk_core::{AdkError, Result, Tool, ToolContext, ToolEffect, Toolset};
 pub use adk_rust_macros::tool;
 
 // Re-export async_trait so the #[tool] macro's generated code can reference it

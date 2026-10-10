@@ -65,6 +65,8 @@ fn base(
         error_message: error_message.map(str::to_string),
         provider_metadata: None,
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 

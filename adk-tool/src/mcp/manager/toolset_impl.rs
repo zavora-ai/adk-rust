@@ -64,6 +64,14 @@ impl Tool for PrefixedTool {
         self.inner.is_concurrency_safe()
     }
 
+    fn effect(&self) -> adk_core::ToolEffect {
+        self.inner.effect()
+    }
+
+    fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+        self.inner.timeout_override()
+    }
+
     fn is_builtin(&self) -> bool {
         self.inner.is_builtin()
     }

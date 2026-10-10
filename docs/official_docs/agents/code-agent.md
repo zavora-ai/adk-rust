@@ -48,8 +48,9 @@ freeform prompt. The intended production adapter wraps
 
 On suspension, the live interpreter continuation is serialized into a
 `CodeActCheckpoint` and written to session state; the next `run()` reads it back
-and resumes — the confirmation decision arrives via
-`RunConfig::tool_confirmation_decisions`, and a long-running result arrives as a
+and resumes — the confirmation decision arrives via `RunConfig::tool_approvals`
+(keyed by the request's fingerprint), an `ApprovalStore`, or
+`RunConfig::tool_confirmation_decisions` (keyed by call ID), and a long-running result arrives as a
 `FunctionResponse` in the next message. Inline tool calls are bracketed with
 write-ahead (SAVE-BEFORE) and SAVE-AFTER checkpoints: once the SAVE-AFTER
 checkpoint is persisted, recovery resumes with the stored result and never
@@ -94,7 +95,9 @@ The builder mirrors `LlmAgentBuilder`:
   `default_retry_budget`/`tool_retry_budget`, `circuit_breaker_threshold`, and
   `on_tool_error` fallbacks.
 - **Authorization**: `ToolConfirmationPolicy`
-  (`require_tool_confirmation`/`require_tool_confirmation_for_all`).
+  (`require_tool_confirmation`/`require_tool_confirmation_for_all`), and the run's
+  `ToolPolicy` and kill switch, applied through the same governed path as `LlmAgent`
+  after before-tool plugins and callbacks.
 - **Transfer**: `sub_agent`s and `disallow_transfer_to_parent`/
   `disallow_transfer_to_peers`.
 - **Output**: `output_key`, `output_schema`/`output_type` with a

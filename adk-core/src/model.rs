@@ -142,6 +142,20 @@ pub struct LlmResponse {
     /// the generateContent transport and non-Gemini providers.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub interaction_id: Option<String>,
+    /// Model that produced this response: the version the provider reports when
+    /// it reports one, otherwise the identifier the request was sent to.
+    ///
+    /// Set by every `adk-model` provider. Budgets and pricing read it to
+    /// attribute usage and cost; `None` means the producer did not attribute it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub model: Option<String>,
+    /// Provider that served this response, such as `"gemini"`, `"openai"`,
+    /// `"anthropic"` or `"bedrock"`.
+    ///
+    /// Set by every `adk-model` provider; `None` means the producer did not
+    /// attribute it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub provider: Option<String>,
 }
 
 /// Trait for LLM providers that support prompt caching.
@@ -252,6 +266,10 @@ pub struct UsageMetadata {
     pub audio_output_token_count: Option<i32>,
 
     /// Estimated cost in USD for this request.
+    ///
+    /// `adk-model` providers fill this from the provider's own report when it
+    /// sends one (OpenRouter), otherwise from `adk_model::pricing::PricingCatalog`.
+    /// `None` means the cost is unknown, never that the request was free.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cost: Option<f64>,
 
@@ -348,6 +366,8 @@ impl LlmResponse {
             error_message: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         }
     }
 }
@@ -457,6 +477,8 @@ mod tests {
             error_message: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         };
 
         let encoded = serde_json::to_string(&response).expect("serialize");
@@ -554,6 +576,8 @@ mod tests {
                 }
             })),
             interaction_id: None,
+            model: None,
+            provider: None,
         };
 
         let encoded = serde_json::to_string(&response).expect("serialize");

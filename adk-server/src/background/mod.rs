@@ -649,6 +649,8 @@ impl WorkflowExecutor for WorkflowRegistry {
 pub struct BackgroundRunner {
     store: RunStore,
     executor: Option<Arc<dyn WorkflowExecutor>>,
+    /// Shared by every clone, so pausing one pauses the runner the scheduler holds.
+    paused: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl std::fmt::Debug for BackgroundRunner {
@@ -656,6 +658,7 @@ impl std::fmt::Debug for BackgroundRunner {
         f.debug_struct("BackgroundRunner")
             .field("store", &self.store)
             .field("has_executor", &self.executor.is_some())
+            .field("paused", &self.is_paused())
             .finish()
     }
 }
@@ -666,7 +669,23 @@ impl BackgroundRunner {
     /// Without an executor a run cannot do any work, and is failed rather than
     /// reported complete.
     pub fn new(store: RunStore) -> Self {
-        Self { store, executor: None }
+        Self { store, executor: None, paused: Arc::default() }
+    }
+
+    /// Stops starting runs: submissions are refused and a run due to start, including a
+    /// retry, is failed instead. Runs already executing are not interrupted.
+    pub fn pause(&self) {
+        self.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Starts runs again after [`pause`](Self::pause).
+    pub fn resume(&self) {
+        self.paused.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether starting runs is paused.
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The configured executor, if any.
@@ -689,12 +708,22 @@ impl BackgroundRunner {
     pub fn execute(&self, run_id: String) {
         let store = self.store.clone();
         let executor = self.executor.clone();
+        let runner = self.clone();
         tokio::spawn(async move {
             // Retrieve the run record
             let run = match store.get(&run_id).await {
                 Some(r) => r,
                 None => return,
             };
+            if runner.is_paused() {
+                store
+                    .set_failed(
+                        &run_id,
+                        "run scheduling is paused by the governance kill switch".into(),
+                    )
+                    .await;
+                return;
+            }
 
             let cancel_token = run.cancel_token.clone();
             let timeout_duration = run.timeout;
@@ -719,17 +748,8 @@ impl BackgroundRunner {
                 RunOutcome::Failed(error) => {
                     // Attempt retry
                     if store.retry(&run_id).await {
-                        // Re-execute after retry
-                        let store_clone = store.clone();
-                        let run_id_clone = run_id.clone();
-                        let executor_clone = executor.clone();
-                        tokio::spawn(async move {
-                            let mut runner = BackgroundRunner::new(store_clone);
-                            if let Some(executor) = executor_clone {
-                                runner = runner.with_executor(executor);
-                            }
-                            runner.execute(run_id_clone);
-                        });
+                        // The retry shares this runner's pause flag.
+                        runner.execute(run_id.clone());
                     } else {
                         store.set_failed(&run_id, error).await;
                     }
@@ -846,6 +866,16 @@ async fn submit_run(
     State(state): State<BackgroundState>,
     Json(request): Json<SubmitRunRequest>,
 ) -> impl IntoResponse {
+    if state.runner.is_paused() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "run scheduling is paused by the governance kill switch"
+            })),
+        )
+            .into_response();
+    }
+
     // Reject an unknown workflow before it is queued, rather than accepting it and
     // reporting a status for work that can never run.
     if let Some(executor) = state.runner.executor()

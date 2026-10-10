@@ -226,6 +226,13 @@ fails unless the caller holds the scope the tool declares (`payments:checkout:cr
 the calling agent as the acting `CommerceActor` and binds the transaction to the
 caller's session identity.
 
+`payments_checkout_create` and `payments_checkout_complete` declare
+`ToolEffect::NonIdempotent`, so an agent never retries them, and every checkout tool
+passes the call's `ToolContext::idempotency_key()` to the commerce backend in the
+`idempotency_key` extension field — where the ACP adapter places the `Idempotency-Key`
+header. A created checkout's transaction ID derives from that key, so a replayed call
+names the same transaction.
+
 Checkout creation and completion run through a `GovernedCheckoutService`, which
 evaluates the policies passed to `with_payment_policies` on every call. A denial
 refuses the checkout, an escalation goes through the run's tool confirmation flow, and

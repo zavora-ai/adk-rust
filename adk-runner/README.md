@@ -120,6 +120,27 @@ before executing the target. The default allows the transfer, preserving
 existing behavior; portable teams and other composite roots can deny it with an
 auditable reason. Denials surface as `agent.transfer.denied`.
 
+## Run Budgets
+
+`RunnerConfigBuilder::budget(RunBudget)` limits model calls, total tokens, cost,
+wall time and tool calls. Each run gets a fresh `BudgetTracker`, shared with
+transfer targets, workflow sub-agents and agent tools through the run config.
+Limits are checked before every model call and tool dispatch; a run that reaches
+one ends with a persisted event explaining why and an `AdkError` with category
+`ResourceExhausted`. Under a cost cap, a response with no known cost stops the
+run unless `RunBudget::allow_unpriced_models()` is set.
+
+```rust,ignore
+use adk_core::RunBudget;
+
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(agent)
+    .session_service(sessions)
+    .budget(RunBudget::new().max_cost_usd(50.0).max_tool_calls(100))
+    .build()?;
+```
+
 ## Model History After Overlapping or Interrupted Turns
 
 - **Actual results:** late tool responses are paired with their calls before a later user turn.

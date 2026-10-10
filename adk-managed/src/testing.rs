@@ -182,6 +182,8 @@ impl ScriptedLlm {
             error_message: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         }
     }
 }
@@ -230,6 +232,8 @@ impl Llm for ScriptedLlm {
                 error_message: None,
                 provider_metadata: None,
                 interaction_id: None,
+                model: None,
+                provider: None,
             }
         };
 

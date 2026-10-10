@@ -189,6 +189,20 @@ The `ShutdownHandle::signal()` also responds to Ctrl+C and SIGTERM, combining al
 
 The A2A v1.0.0 implementation includes: RFC 3339 timestamps, capabilities declaration, message ID idempotency, push notification authentication, INPUT_REQUIRED multi-turn flow, input validation, `application/a2a+json` Content-Type, and Task-as-first-SSE-event. See [A2A docs](../docs/official_docs/deployment/a2a.md) for details.
 
+### Governance Kill Switch
+
+`ServerConfig::governance` is shared by every runner the server builds. Freezing it fails new
+runs and stops running ones before their next model or tool call.
+`ServerBuilder::enable_governance_endpoints()` mounts `POST /api/admin/freeze`,
+`POST /api/admin/unfreeze`, and `GET /api/admin/governance` behind the auth middleware; a
+freeze also pauses background-run and cron scheduling mounted on the same builder.
+
+```rust,ignore
+let control = adk_core::GovernanceControl::new();
+let config = ServerConfig::new(loader, sessions).with_governance(control.clone());
+let app = ServerBuilder::new(config).enable_governance_endpoints().build();
+```
+
 ### Remote Agent Client
 
 ```rust

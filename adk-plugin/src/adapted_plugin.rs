@@ -12,8 +12,11 @@
 //!
 //! - Delegates `name()` to the inner [`Plugin::name()`]
 //! - Uses a configurable priority (default 100)
-//! - Invokes legacy `before_tool` / `after_tool` callbacks for side effects,
-//!   but always returns `Continue` with unchanged args/result
+//! - Invokes legacy `before_tool` / `after_tool` callbacks with a context that
+//!   carries the tool name and arguments. A `before_tool` callback that returns
+//!   content refuses the call: the adapter short-circuits with that content as the
+//!   tool's result, exactly as an agent's own before-tool callback does. Arguments
+//!   and `after_tool` results pass through unchanged
 //! - Maps legacy [`BeforeModelResult`] to [`BeforeModelCallResult`]
 //! - Maps legacy `AfterModelCallback` results to [`AfterModelCallResult`]
 //! - Delegates `close()` to the inner [`Plugin::close()`]
@@ -41,7 +44,8 @@
 use std::sync::Arc;
 
 use adk_core::{
-    BeforeModelResult, CallbackContext, LlmRequest, LlmResponse, Result, Tool, async_trait,
+    BeforeModelResult, CallbackContext, Content, LlmRequest, LlmResponse, Part, Result, Tool,
+    ToolCallbackContext, async_trait,
 };
 use serde_json::Value;
 
@@ -55,9 +59,9 @@ use crate::plugin::Plugin;
 /// Wraps a legacy closure-based [`Plugin`] as an [`EnhancedPlugin`].
 ///
 /// This adapter enables existing plugins to participate in the enhanced
-/// pipeline without modification. Legacy callbacks are invoked for their
-/// side effects, but the adapter does not modify tool arguments or results
-/// (legacy callbacks don't have access to them).
+/// pipeline without modification. A legacy `before_tool` callback that returns
+/// content refuses the call, as it does when registered on an agent; the adapter
+/// never modifies tool arguments or results.
 ///
 /// For model hooks, the adapter maps between the legacy [`BeforeModelResult`]
 /// and the new [`BeforeModelCallResult`], preserving short-circuit semantics.
@@ -104,26 +108,27 @@ impl EnhancedPlugin for AdaptedPlugin {
 
     async fn before_tool_call(
         &self,
-        _tool: Arc<dyn Tool>,
+        tool: Arc<dyn Tool>,
         args: Value,
         ctx: Arc<dyn CallbackContext>,
         _plugin_ctx: &PluginContext,
     ) -> Result<BeforeToolCallResult> {
-        // Legacy before_tool callbacks only receive CallbackContext and return
-        // Ok(None) to continue or Ok(Some(content)) to skip. They cannot modify
-        // tool arguments. We invoke for side effects and always return Continue.
+        // A legacy callback returns `Ok(Some(content))` to skip the tool. Dropping that
+        // return let a denying plugin report a refusal while the tool ran anyway.
         if let Some(callback) = self.inner.before_tool() {
-            // Invoke the legacy callback for its side effects (logging, etc.)
-            // We ignore the return value since legacy callbacks can't modify args.
-            let _ = callback(ctx).await?;
+            let tool_ctx: Arc<dyn CallbackContext> =
+                Arc::new(ToolCallbackContext::new(ctx, tool.name().to_string(), args.clone()));
+            if let Some(content) = callback(tool_ctx).await? {
+                return Ok(BeforeToolCallResult::ShortCircuit(refusal_result(&content)));
+            }
         }
         Ok(BeforeToolCallResult::Continue(args))
     }
 
     async fn after_tool_call(
         &self,
-        _tool: Arc<dyn Tool>,
-        _args: &Value,
+        tool: Arc<dyn Tool>,
+        args: &Value,
         result: Value,
         ctx: Arc<dyn CallbackContext>,
         _plugin_ctx: &PluginContext,
@@ -132,7 +137,9 @@ impl EnhancedPlugin for AdaptedPlugin {
         // Ok(None) to continue or Ok(Some(content)). They cannot modify tool results.
         // We invoke for side effects and always return Continue with unchanged result.
         if let Some(callback) = self.inner.after_tool() {
-            let _ = callback(ctx).await?;
+            let tool_ctx: Arc<dyn CallbackContext> =
+                Arc::new(ToolCallbackContext::new(ctx, tool.name().to_string(), args.clone()));
+            let _ = callback(tool_ctx).await?;
         }
         Ok(AfterToolCallResult::Continue(result))
     }
@@ -181,6 +188,20 @@ impl EnhancedPlugin for AdaptedPlugin {
     async fn close(&self) {
         self.inner.close().await;
     }
+}
+
+/// The tool result for a legacy before-tool callback's refusal.
+///
+/// A function response part is used as-is; text is reported as the call's error,
+/// matching how an agent answers a call its own before-tool callback skipped.
+fn refusal_result(content: &Content) -> Value {
+    for part in &content.parts {
+        if let Part::FunctionResponse { function_response, .. } = part {
+            return function_response.response.clone();
+        }
+    }
+    let text: String = content.parts.iter().filter_map(Part::text).collect();
+    serde_json::json!({ "error": text })
 }
 
 #[cfg(test)]
@@ -535,5 +556,43 @@ mod tests {
                 assert!(resp.content.is_some());
             }
         }
+    }
+
+    #[tokio::test]
+    async fn a_legacy_before_tool_refusal_short_circuits_the_call() {
+        let seen_tool = Arc::new(std::sync::Mutex::new(None));
+        let seen = seen_tool.clone();
+        let plugin = Plugin::new(PluginConfig {
+            name: "deny".to_string(),
+            before_tool: Some(Box::new(move |ctx| {
+                let seen = seen.clone();
+                Box::pin(async move {
+                    *seen.lock().unwrap() =
+                        Some((ctx.tool_name().map(str::to_string), ctx.tool_input().cloned()));
+                    Ok(Some(Content::new("function").with_text("blocked by policy")))
+                })
+            })),
+            ..Default::default()
+        });
+
+        let adapted = AdaptedPlugin::new(plugin, 100);
+        let ctx: Arc<dyn CallbackContext> = Arc::new(MockCallbackContext);
+        let tool: Arc<dyn Tool> = Arc::new(MockTool);
+        let args = serde_json::json!({ "key": "value" });
+
+        let result =
+            adapted.before_tool_call(tool, args.clone(), ctx, &PluginContext::new()).await.unwrap();
+
+        match result {
+            BeforeToolCallResult::ShortCircuit(value) => {
+                assert_eq!(value, serde_json::json!({ "error": "blocked by policy" }));
+            }
+            BeforeToolCallResult::Continue(_) => panic!("a refusal must not continue the call"),
+        }
+        assert_eq!(
+            *seen_tool.lock().unwrap(),
+            Some((Some("mock-tool".to_string()), Some(args))),
+            "the callback must see the tool it is deciding"
+        );
     }
 }
