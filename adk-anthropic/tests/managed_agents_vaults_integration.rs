@@ -11,7 +11,7 @@
 #![cfg(feature = "managed-agents")]
 
 use adk_anthropic::managed_agents::{
-    CreateCredentialParams, CreateVaultParams, ManagedAgentsClient,
+    CreateCredentialParams, CreateVaultParams, ManagedAgentsClient, UpdateCredentialParams,
 };
 
 // ─── Test Infrastructure ─────────────────────────────────────────────────────
@@ -126,6 +126,19 @@ async fn test_create_static_bearer_credential() {
     let retrieved =
         client.get_credential(&vault.id, &credential.id).await.expect("failed to get credential");
     assert_eq!(retrieved.id, credential.id);
+
+    // Rotate the token (the API accepts POST only; PATCH returns 405)
+    let rotated = client
+        .update_credential(
+            &vault.id,
+            &credential.id,
+            UpdateCredentialParams {
+                auth: serde_json::json!({"type": "static_bearer", "token": "rotated-token-67890"}),
+            },
+        )
+        .await
+        .expect("failed to rotate credential");
+    assert_eq!(rotated.id, credential.id);
 
     // Archive credential
     client
