@@ -5,12 +5,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use adk_core::{
-    Content, Event, Llm, LlmRequest, LlmResponseStream, Part, Result as AdkResult, SchemaAdapter,
-    Tool, ToolContext,
+    Content, ErrorCategory, Event, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part,
+    Result as AdkResult, RunConfig, SchemaAdapter, SessionId, Tool, ToolContext, UserId,
 };
 use adk_model::anthropic::AnthropicConfig;
 use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
-use adk_model::{AnthropicClient, OpenAIClient, OpenAIConfig};
+use adk_model::{AnthropicClient, GeminiModel, OpenAIClient, OpenAIConfig};
 use adk_runner::Runner;
 use adk_session::{GetRequest, SessionService};
 use async_trait::async_trait;
@@ -28,6 +28,8 @@ pub enum Provider {
     /// OpenAI through Chat Completions (`OpenAIClient`).
     OpenAiChat,
     Anthropic,
+    /// Gemini through the Gemini API (`GeminiModel`).
+    Gemini,
 }
 
 impl Provider {
@@ -36,6 +38,16 @@ impl Provider {
             Self::OpenAi => "openai",
             Self::OpenAiChat => "openai-chat",
             Self::Anthropic => "anthropic",
+            Self::Gemini => "gemini",
+        }
+    }
+
+    /// The vendor model spend is attributed to.
+    pub fn vendor(self) -> &'static str {
+        match self {
+            Self::OpenAi | Self::OpenAiChat => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Gemini => "gemini",
         }
     }
 }
@@ -59,10 +71,18 @@ pub fn fail(context: &str, error: impl std::fmt::Display) -> Verdict {
 pub struct Config {
     openai_key: Option<String>,
     anthropic_key: Option<String>,
+    gemini_key: Option<String>,
     pub openai_model: String,
     pub openai_chat_model: String,
+    /// GPT-5.6 model sent through the Chat Completions client, which routes tool calls to
+    /// the Responses API.
+    pub openai_routed_model: String,
     pub anthropic_model: String,
     pub anthropic_web_model: String,
+    /// Model that thinks on every turn, so a tool-use turn replayed without its thinking
+    /// block is rejected.
+    pub anthropic_thinking_model: String,
+    pub gemini_model: String,
 }
 
 impl Config {
@@ -71,13 +91,20 @@ impl Config {
         Self {
             openai_key: key("OPENAI_API_KEY"),
             anthropic_key: key("ANTHROPIC_API_KEY"),
+            gemini_key: key("GEMINI_API_KEY").or_else(|| key("GOOGLE_API_KEY")),
             openai_model: key("OPENAI_MODEL").unwrap_or_else(|| "gpt-5.6-luna".to_string()),
             openai_chat_model: key("OPENAI_CHAT_MODEL")
                 .unwrap_or_else(|| "gpt-5.4-mini".to_string()),
+            openai_routed_model: key("OPENAI_ROUTED_MODEL")
+                .unwrap_or_else(|| "gpt-5.6-luna".to_string()),
             anthropic_model: key("ANTHROPIC_MODEL")
                 .unwrap_or_else(|| "claude-haiku-5-5".to_string()),
             anthropic_web_model: key("ANTHROPIC_WEB_MODEL")
                 .unwrap_or_else(|| "claude-sonnet-5-5".to_string()),
+            anthropic_thinking_model: key("ANTHROPIC_THINKING_MODEL")
+                .unwrap_or_else(|| "claude-haiku-4-5".to_string()),
+            gemini_model: key("GEMINI_MODEL")
+                .unwrap_or_else(|| "gemini-3.5-flash-lite".to_string()),
         }
     }
 
@@ -85,6 +112,7 @@ impl Config {
         match provider {
             Provider::OpenAi | Provider::OpenAiChat => self.openai_key.is_some(),
             Provider::Anthropic => self.anthropic_key.is_some(),
+            Provider::Gemini => self.gemini_key.is_some(),
         }
     }
 
@@ -105,7 +133,17 @@ impl Config {
                 Ok(CountingLlm::wrap(Arc::new(client)))
             }
             Provider::Anthropic => self.anthropic(&self.anthropic_model, |config| config),
+            Provider::Gemini => {
+                let key = self.gemini_key.clone().unwrap_or_default();
+                Ok(CountingLlm::wrap(Arc::new(GeminiModel::new(key, &self.gemini_model)?)))
+            }
         }
+    }
+
+    /// An OpenAI model on the Chat Completions client, counted.
+    pub fn openai_chat(&self, model: &str) -> anyhow::Result<Arc<CountingLlm>> {
+        let key = self.openai_key.clone().unwrap_or_default();
+        Ok(CountingLlm::wrap(Arc::new(OpenAIClient::new(OpenAIConfig::new(key, model))?)))
     }
 
     /// An Anthropic model with a customised configuration, counted.
@@ -220,6 +258,8 @@ impl Tool for CountingTool {
 pub struct Turn {
     pub events: Vec<Event>,
     pub error: Option<String>,
+    /// Code and category of the `Err` item that ended the stream, if one did.
+    pub failure: Option<(String, ErrorCategory)>,
 }
 
 impl Turn {
@@ -243,14 +283,41 @@ impl Turn {
 /// A provider error reported inside a response (`error_code` / `error_message`) counts as an
 /// error, as does an `Err` item.
 pub async fn run_turn(runner: &Runner, user_id: &str, session_id: &str, text: &str) -> Turn {
-    let stream =
-        match runner.run_str(user_id, session_id, Content::new("user").with_text(text)).await {
-            Ok(stream) => stream,
-            Err(error) => return Turn { events: Vec::new(), error: Some(error.to_string()) },
-        };
+    run_turn_with(runner, user_id, session_id, text, None).await
+}
+
+/// [`run_turn`] with a run configuration for this turn only.
+pub async fn run_turn_with(
+    runner: &Runner,
+    user_id: &str,
+    session_id: &str,
+    text: &str,
+    run_config: Option<RunConfig>,
+) -> Turn {
+    let started = async {
+        runner
+            .run_with_config(
+                UserId::new(user_id)?,
+                SessionId::new(session_id)?,
+                Content::new("user").with_text(text),
+                run_config,
+            )
+            .await
+    };
+    let stream = match started.await {
+        Ok(stream) => stream,
+        Err(error) => {
+            return Turn {
+                events: Vec::new(),
+                error: Some(error.to_string()),
+                failure: Some((error.code.to_string(), error.category)),
+            };
+        }
+    };
     let mut stream = stream;
     let mut events = Vec::new();
     let mut error = None;
+    let mut failure = None;
     while let Some(item) = stream.next().await {
         match item {
             Ok(event) => {
@@ -268,11 +335,59 @@ pub async fn run_turn(runner: &Runner, user_id: &str, session_id: &str, text: &s
             }
             Err(err) => {
                 error = Some(err.to_string());
+                failure = Some((err.code.to_string(), err.category));
                 break;
             }
         }
     }
-    Turn { events, error }
+    Turn { events, error, failure }
+}
+
+/// The function responses in `events` for calls to `tool`, in order.
+pub fn responses_for(events: &[Event], tool: &str) -> Vec<Value> {
+    let (pairings, _) = pair_calls(events);
+    pairings
+        .into_iter()
+        .filter(|pairing| pairing.name == tool)
+        .flat_map(|pairing| pairing.responses)
+        .collect()
+}
+
+/// A model that replays scripted responses, one per call, then answers with text.
+pub struct ScriptedLlm {
+    name: String,
+    responses: Mutex<std::collections::VecDeque<LlmResponse>>,
+}
+
+impl ScriptedLlm {
+    pub fn new(name: &str, responses: Vec<LlmResponse>) -> Arc<Self> {
+        Arc::new(Self { name: name.to_string(), responses: Mutex::new(responses.into()) })
+    }
+}
+
+#[async_trait]
+impl Llm for ScriptedLlm {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn generate_content(
+        &self,
+        _req: LlmRequest,
+        _stream: bool,
+    ) -> AdkResult<LlmResponseStream> {
+        let next = self
+            .responses
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop_front()
+            .unwrap_or_else(|| LlmResponse {
+                content: Some(Content::new("model").with_text("done")),
+                turn_complete: true,
+                ..Default::default()
+            });
+        Ok(Box::pin(futures::stream::iter([Ok(next)])))
+    }
 }
 
 /// Loads every persisted event of a session.

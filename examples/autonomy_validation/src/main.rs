@@ -1,4 +1,5 @@
-//! Live validation of the autonomy-readiness Phase 0 fixes against OpenAI and Anthropic.
+//! Live validation of the autonomy-readiness Phase 0 and Phase 1 fixes against OpenAI,
+//! Anthropic, and Gemini.
 //!
 //! Each scenario drives real model calls through the public ADK APIs and asserts on observable
 //! facts — session history, tool execution counters, persisted state, checkpoints, and usage —
@@ -6,7 +7,7 @@
 //! the retry is reported.
 //!
 //! ```bash
-//! cargo run --manifest-path examples/autonomy_validation/Cargo.toml -- --provider both --scenario all
+//! cargo run --manifest-path examples/autonomy_validation/Cargo.toml -- --provider all --scenario all
 //! ```
 
 mod common;
@@ -19,6 +20,7 @@ use common::{API_CALLS, Config, Provider, Verdict, brief};
 use tracing_subscriber::EnvFilter;
 
 const SCENARIO_TIMEOUT: Duration = Duration::from_secs(600);
+const RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(60);
 
 struct Row {
     scenario: &'static str,
@@ -29,8 +31,9 @@ struct Row {
 
 fn usage() -> String {
     format!(
-        "usage: autonomy-validation [--provider openai|openai-chat|anthropic|both|all] [--scenario <name>[,<name>]|all]\n\
-         openai uses the Responses API; openai-chat uses Chat Completions; both = openai + anthropic\n\
+        "usage: autonomy-validation [--provider openai|openai-chat|anthropic|gemini|both|all] [--scenario <name>[,<name>]|all]\n\
+         openai uses the Responses API; openai-chat uses Chat Completions; both = openai + anthropic;\n\
+         all = openai + openai-chat + anthropic + gemini\n\
          scenarios: {}",
         scenarios::ALL.join(", ")
     )
@@ -48,8 +51,14 @@ fn parse_args() -> Result<(Vec<Provider>, Vec<&'static str>), String> {
                     "openai" => vec![Provider::OpenAi],
                     "openai-chat" => vec![Provider::OpenAiChat],
                     "anthropic" => vec![Provider::Anthropic],
+                    "gemini" => vec![Provider::Gemini],
                     "both" => vec![Provider::OpenAi, Provider::Anthropic],
-                    "all" => vec![Provider::OpenAi, Provider::OpenAiChat, Provider::Anthropic],
+                    "all" => vec![
+                        Provider::OpenAi,
+                        Provider::OpenAiChat,
+                        Provider::Anthropic,
+                        Provider::Gemini,
+                    ],
                     other => return Err(format!("unknown provider {other}\n{}", usage())),
                 }
             }
@@ -94,6 +103,19 @@ async fn run_with_retry(name: &'static str, cfg: &Config, provider: Provider) ->
             tracing::warn!(scenario = name, provider = provider.label(), reason = %reason, "retrying after model non-compliance");
             (run_once(name, cfg, provider).await, Some(reason))
         }
+        // A provider quota or rate limit is not a finding; wait it out once.
+        Verdict::Fail(evidence) if evidence.contains("model.rate_limited") => {
+            tracing::warn!(
+                scenario = name,
+                provider = provider.label(),
+                "retrying after a provider rate limit"
+            );
+            tokio::time::sleep(RATE_LIMIT_BACKOFF).await;
+            (
+                run_once(name, cfg, provider).await,
+                Some("provider rate limit (HTTP 429)".to_string()),
+            )
+        }
         other => (other, None),
     };
     let note = |evidence: String| match &retried {
@@ -111,8 +133,9 @@ async fn run_with_retry(name: &'static str, cfg: &Config, provider: Provider) ->
 #[tokio::main]
 async fn main() -> ExitCode {
     match std::env::var("ADK_ENV_FILE") {
+        // The named file wins over variables already in the environment.
         Ok(path) => {
-            if let Err(error) = dotenvy::from_path(&path) {
+            if let Err(error) = dotenvy::from_path_override(&path) {
                 eprintln!("could not load ADK_ENV_FILE: {error}");
                 return ExitCode::from(2);
             }
@@ -139,15 +162,17 @@ async fn main() -> ExitCode {
     let cfg = Config::from_env();
 
     println!("════════════════════════════════════════════════════════════════");
-    println!(" ADK-Rust autonomy validation — Phase 0 fixes against live models");
+    println!(" ADK-Rust autonomy validation — Phase 0 and Phase 1 against live models");
     println!("════════════════════════════════════════════════════════════════");
     for provider in &providers {
         let model = match provider {
             Provider::OpenAi => format!("{} (Responses API)", cfg.openai_model),
             Provider::OpenAiChat => format!("{} (Chat Completions)", cfg.openai_chat_model),
-            Provider::Anthropic => {
-                format!("{} (web search: {})", cfg.anthropic_model, cfg.anthropic_web_model)
-            }
+            Provider::Anthropic => format!(
+                "{} (web search: {}, thinking: {})",
+                cfg.anthropic_model, cfg.anthropic_web_model, cfg.anthropic_thinking_model
+            ),
+            Provider::Gemini => cfg.gemini_model.clone(),
         };
         println!(" {:<12} {model}", provider.label());
     }
