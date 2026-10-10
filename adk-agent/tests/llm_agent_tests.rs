@@ -495,6 +495,115 @@ async fn test_llm_agent_injects_skill_after_cacheable_prefix() {
     assert!(messages[5].ends_with("Please search this repository"));
 }
 
+/// Replies once with a fixed set of function calls.
+struct FunctionCallLlm {
+    calls: Vec<Part>,
+}
+
+#[async_trait]
+impl adk_core::Llm for FunctionCallLlm {
+    fn name(&self) -> &str {
+        "function-call-llm"
+    }
+
+    async fn generate_content(
+        &self,
+        _request: adk_core::LlmRequest,
+        _stream: bool,
+    ) -> adk_core::Result<adk_core::LlmResponseStream> {
+        let parts = self.calls.clone();
+        let s = async_stream::stream! {
+            yield Ok(adk_core::LlmResponse {
+                content: Some(adk_core::Content { role: "model".to_string(), parts }),
+                usage_metadata: None,
+                finish_reason: None,
+                citation_metadata: None,
+                partial: false,
+                turn_complete: true,
+                interrupted: false,
+                error_code: None,
+                error_message: None,
+                provider_metadata: None,
+                interaction_id: None,
+            });
+        };
+        Ok(Box::pin(s))
+    }
+}
+
+fn function_call(name: &str, id: &str, args: serde_json::Value) -> Part {
+    Part::FunctionCall {
+        name: name.to_string(),
+        args,
+        id: Some(id.to_string()),
+        thought_signature: None,
+    }
+}
+
+#[tokio::test]
+async fn test_transfer_event_answers_every_call_in_the_turn() {
+    let child = LlmAgentBuilder::new("child")
+        .description("Child agent")
+        .model(Arc::new(MockLlm::new("child answer")))
+        .build()
+        .unwrap();
+    let parent = LlmAgentBuilder::new("parent")
+        .description("Parent agent")
+        .model(Arc::new(FunctionCallLlm {
+            calls: vec![
+                function_call("lookup", "call_1", serde_json::json!({})),
+                function_call(
+                    "transfer_to_agent",
+                    "call_2",
+                    serde_json::json!({"agent_name": "child"}),
+                ),
+            ],
+        }))
+        .sub_agent(Arc::new(child))
+        .build()
+        .unwrap();
+
+    let mut stream = parent.run(Arc::new(TestContext::new("hand this off"))).await.unwrap();
+    use futures::StreamExt;
+    let mut transfer_event = None;
+    while let Some(event) = stream.next().await {
+        let event = event.unwrap();
+        if event.actions.transfer_to_agent.is_some() {
+            transfer_event = Some(event);
+        }
+    }
+
+    let event = transfer_event.expect("expected a transfer event");
+    assert_eq!(event.actions.transfer_to_agent.as_deref(), Some("child"));
+    let content = event.llm_response.content.expect("transfer event content");
+    assert_eq!(content.role, "function");
+    let responses: Vec<_> = content
+        .parts
+        .iter()
+        .map(|part| match part {
+            Part::FunctionResponse { function_response, id, .. } => {
+                (id.clone(), function_response.name.clone(), function_response.response.clone())
+            }
+            other => panic!("unexpected part {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        responses,
+        vec![
+            (
+                Some("call_1".to_string()),
+                "lookup".to_string(),
+                serde_json::json!({"error": "not run: control transferred to child"})
+            ),
+            (
+                Some("call_2".to_string()),
+                "transfer_to_agent".to_string(),
+                serde_json::json!({"transferred_to": "child"})
+            ),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn test_llm_agent_sends_instructions_as_system_contents() {
     let model = SpyLlm::new("{}");
