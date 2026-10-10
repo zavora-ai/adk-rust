@@ -255,8 +255,9 @@ async fn test_streaming_chunks() {
             assert!(!event.provider_metadata.contains_key("gcp.vertex.agent.llm_response"));
         } else {
             terminal_payloads += 1;
+            // One bounded request copy; the duplicate in `provider_metadata` is gone.
             assert!(event.llm_request.is_some());
-            assert!(event.provider_metadata.contains_key("gcp.vertex.agent.llm_request"));
+            assert!(!event.provider_metadata.contains_key("gcp.vertex.agent.llm_request"));
             assert!(event.provider_metadata.contains_key("gcp.vertex.agent.llm_response"));
         }
         if let Some(content) = event.llm_response.content {
