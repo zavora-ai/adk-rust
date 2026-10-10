@@ -2368,6 +2368,14 @@ impl Tool for BoundedDelegateTool {
         self.inner.is_agent_delegation()
     }
 
+    fn effect(&self) -> adk_core::ToolEffect {
+        self.inner.effect()
+    }
+
+    fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+        self.inner.timeout_override()
+    }
+
     async fn execute(
         &self,
         ctx: Arc<dyn adk_core::ToolContext>,

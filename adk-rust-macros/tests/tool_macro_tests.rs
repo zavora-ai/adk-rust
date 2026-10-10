@@ -160,6 +160,29 @@ fn tool_no_attributes_defaults_false() {
     assert!(!tool.is_read_only());
     assert!(!tool.is_concurrency_safe());
     assert!(!tool.is_long_running());
+    assert_eq!(tool.effect(), adk_tool::ToolEffect::NonIdempotent);
+}
+
+// === Test 8b: idempotent maps to ToolEffect::Idempotent ===
+
+/// Sets the thermostat; repeating it changes nothing.
+#[tool(idempotent)]
+async fn set_thermostat(args: WeatherArgs) -> Result<Value, AdkError> {
+    Ok(json!({ "city": args.city }))
+}
+
+/// A read-only lookup also marked idempotent.
+#[tool(read_only, idempotent)]
+async fn idempotent_lookup(args: WeatherArgs) -> Result<Value, AdkError> {
+    Ok(json!({ "city": args.city }))
+}
+
+#[test]
+fn tool_effect_attributes() {
+    assert_eq!(SetThermostat.effect(), adk_tool::ToolEffect::Idempotent);
+    assert!(!SetThermostat.is_read_only());
+    assert_eq!(ReadOnlyLookup.effect(), adk_tool::ToolEffect::ReadOnly);
+    assert_eq!(IdempotentLookup.effect(), adk_tool::ToolEffect::ReadOnly);
 }
 
 // === Test 9: Arg type names containing "Arc" are still args ===

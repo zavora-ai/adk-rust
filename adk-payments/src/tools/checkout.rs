@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result, Tool, ToolContext};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result, Tool, ToolContext, ToolEffect};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,7 +11,8 @@ use crate::auth::{
 };
 use crate::domain::{
     Cart, CommerceMode, FulfillmentSelection, MerchantRef, PaymentMethodSelection,
-    ProtocolDescriptor, ProtocolExtensions, SafeTransactionSummary, TransactionId,
+    ProtocolDescriptor, ProtocolExtensionEnvelope, ProtocolExtensions, SafeTransactionSummary,
+    TransactionId,
 };
 use crate::guardrail::redact_tool_output;
 use crate::kernel::commands::{
@@ -83,6 +84,11 @@ fn parse_args<T: serde::de::DeserializeOwned>(tool_name: &str, args: Value) -> R
     })
 }
 
+/// Builds the commerce context for one tool call.
+///
+/// The call's idempotency key travels in the `idempotency_key` extension field, where
+/// the ACP adapter places the `Idempotency-Key` header, so a backend deduplicates a
+/// retried or replayed tool call the same way it deduplicates a replayed HTTP request.
 fn tool_context(
     ctx: &dyn ToolContext,
     transaction_id: &str,
@@ -90,6 +96,9 @@ fn tool_context(
     merchant_name: &str,
     mode: Option<CommerceMode>,
 ) -> CommerceContext {
+    let protocol = ProtocolDescriptor::new("adk-tool", Some("1.0".to_string()));
+    let idempotency = ProtocolExtensionEnvelope::new(protocol.clone())
+        .with_field("idempotency_key", Value::String(ctx.idempotency_key()));
     CommerceContext {
         transaction_id: TransactionId::from(transaction_id),
         session_identity: caller_identity(ctx),
@@ -105,8 +114,8 @@ fn tool_context(
         },
         payment_processor: None,
         mode: mode.unwrap_or(CommerceMode::HumanPresent),
-        protocol: ProtocolDescriptor::new("adk-tool", Some("1.0".to_string())),
-        extensions: ProtocolExtensions::default(),
+        protocol,
+        extensions: ProtocolExtensions::from(vec![idempotency]),
     }
 }
 
@@ -143,6 +152,11 @@ impl Tool for CreateCheckoutTool {
 
     fn required_scopes(&self) -> &[&str] {
         CHECKOUT_CREATE_SCOPES
+    }
+
+    // Each call opens a new checkout session.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
@@ -230,6 +244,11 @@ impl Tool for CompleteCheckoutTool {
 
     fn required_scopes(&self) -> &[&str] {
         CHECKOUT_COMPLETE_SCOPES
+    }
+
+    // Completing a checkout authorizes payment and places an order.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {

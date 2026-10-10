@@ -51,7 +51,10 @@ use syn::{FnArg, ItemFn, Meta, Type, parse_macro_input};
 ///
 /// Optional attributes can be passed to configure tool metadata:
 ///
-/// - `read_only` — marks the tool as having no side effects (`is_read_only() → true`)
+/// - `read_only` — marks the tool as having no side effects (`is_read_only() → true`,
+///   `effect() → ToolEffect::ReadOnly`)
+/// - `idempotent` — marks the tool as safe to repeat (`effect() → ToolEffect::Idempotent`),
+///   so a retry budget may retry it after a retryable error. Ignored alongside `read_only`.
 /// - `concurrency_safe` — marks the tool as safe for concurrent execution (`is_concurrency_safe() → true`)
 /// - `long_running` — marks the tool as long-running (`is_long_running() → true`)
 ///
@@ -70,6 +73,12 @@ use syn::{FnArg, ItemFn, Meta, Type, parse_macro_input};
 ///     // ...
 /// }
 ///
+/// /// Set a ticket's status; setting the same status twice changes nothing.
+/// #[tool(idempotent)]
+/// async fn set_ticket_status(args: StatusArgs) -> Result<serde_json::Value, adk_tool::AdkError> {
+///     // ...
+/// }
+///
 /// // Generated: pub struct SearchDocs; implements Tool
 /// // Use: agent_builder.tool(Arc::new(SearchDocs))
 /// ```
@@ -77,14 +86,16 @@ use syn::{FnArg, ItemFn, Meta, Type, parse_macro_input};
 pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
 
-    // Parse optional attributes: #[tool(read_only, concurrency_safe, long_running)]
+    // Parse optional attributes: #[tool(read_only, idempotent, concurrency_safe, long_running)]
     let mut is_read_only = false;
+    let mut is_idempotent = false;
     let mut is_concurrency_safe = false;
     let mut is_long_running = false;
 
     if !attr.is_empty() {
         let meta = parse_macro_input!(attr as ToolAttrs);
         is_read_only = meta.read_only;
+        is_idempotent = meta.idempotent;
         is_concurrency_safe = meta.concurrency_safe;
         is_long_running = meta.long_running;
     }
@@ -237,6 +248,15 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {}
     };
 
+    // `read_only` already yields `ToolEffect::ReadOnly` through the trait default.
+    let effect_override = if is_idempotent && !is_read_only {
+        quote! {
+            fn effect(&self) -> adk_tool::ToolEffect { adk_tool::ToolEffect::Idempotent }
+        }
+    } else {
+        quote! {}
+    };
+
     let concurrency_safe_override = if is_concurrency_safe {
         quote! {
             fn is_concurrency_safe(&self) -> bool { true }
@@ -275,6 +295,7 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             #read_only_override
+            #effect_override
             #concurrency_safe_override
             #long_running_override
 
@@ -321,17 +342,22 @@ fn has_tool_context_param(func: &ItemFn) -> bool {
     })
 }
 
-/// Parsed attributes from `#[tool(read_only, concurrency_safe, long_running)]`.
+/// Parsed attributes from `#[tool(read_only, idempotent, concurrency_safe, long_running)]`.
 struct ToolAttrs {
     read_only: bool,
+    idempotent: bool,
     concurrency_safe: bool,
     long_running: bool,
 }
 
 impl syn::parse::Parse for ToolAttrs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let mut attrs =
-            ToolAttrs { read_only: false, concurrency_safe: false, long_running: false };
+        let mut attrs = ToolAttrs {
+            read_only: false,
+            idempotent: false,
+            concurrency_safe: false,
+            long_running: false,
+        };
 
         let punctuated =
             syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated(input)?;
@@ -340,6 +366,8 @@ impl syn::parse::Parse for ToolAttrs {
             if let Meta::Path(path) = &meta {
                 if path.is_ident("read_only") {
                     attrs.read_only = true;
+                } else if path.is_ident("idempotent") {
+                    attrs.idempotent = true;
                 } else if path.is_ident("concurrency_safe") {
                     attrs.concurrency_safe = true;
                 } else if path.is_ident("long_running") {
@@ -347,7 +375,7 @@ impl syn::parse::Parse for ToolAttrs {
                 } else {
                     return Err(syn::Error::new_spanned(
                         path,
-                        "unknown tool attribute; expected `read_only`, `concurrency_safe`, or `long_running`",
+                        "unknown tool attribute; expected `read_only`, `idempotent`, `concurrency_safe`, or `long_running`",
                     ));
                 }
             } else {

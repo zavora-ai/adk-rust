@@ -2,14 +2,14 @@
 
 use std::sync::Arc;
 
-use adk_core::{CallbackContext, Result, Tool, async_trait};
+use adk_core::{CallbackContext, Result, Tool, ToolEffect, async_trait};
 use adk_plugin::{AfterToolCallResult, EnhancedPlugin, PluginContext};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::backoff::compute_backoff;
 use crate::config::RetryReflectConfig;
-use crate::detection::is_error_result;
+use crate::detection::{is_authorization_denial, is_error_result, is_timeout};
 use crate::filter::is_tool_eligible;
 use crate::template::render_reflection;
 use crate::tracker::{GlobalRetryTracker, RetryTracker};
@@ -19,6 +19,12 @@ use crate::tracker::{GlobalRetryTracker, RetryTracker};
 /// Intercepts tool call failures via the `after_tool_call` hook, tracks retry state,
 /// computes backoff delays, and injects structured reflection prompts to help the
 /// agent self-correct on the next turn.
+///
+/// Two failures pass through unchanged, with no retry suggested:
+///
+/// - **Authorization or approval refusals** — repeating the call is refused again.
+/// - **Timeouts of a [`ToolEffect::NonIdempotent`] tool** — the call may have taken
+///   effect, so repeating it could repeat a payment or other side effect.
 ///
 /// # Architecture
 ///
@@ -126,6 +132,17 @@ impl EnhancedPlugin for RetryReflectPlugin {
 
         let tool_name = tool.name();
 
+        // A refusal or a possibly-applied side effect is never worth a retry suggestion.
+        let error_msg = Self::extract_error_message(&result);
+        if is_authorization_denial(&error_msg) {
+            tracing::info!(tool_name = %tool_name, error = %error_msg, "retry_reflect.skipped_authorization_denial");
+            return Ok(AfterToolCallResult::Continue(result));
+        }
+        if tool.effect() == ToolEffect::NonIdempotent && is_timeout(&error_msg) {
+            tracing::warn!(tool_name = %tool_name, error = %error_msg, "retry_reflect.skipped_non_idempotent_timeout");
+            return Ok(AfterToolCallResult::Continue(result));
+        }
+
         // Step 2: Check tool eligibility
         if !is_tool_eligible(&self.config.tool_filter, tool_name) {
             return Ok(AfterToolCallResult::Continue(result));
@@ -161,7 +178,6 @@ impl EnhancedPlugin for RetryReflectPlugin {
 
         if current_count >= effective_limit {
             // Retry limit exceeded — emit exhaustion event and propagate error
-            let error_msg = Self::extract_error_message(&result);
             tracing::warn!(
                 tool_name = %tool_name,
                 total_attempts = current_count,
@@ -175,7 +191,6 @@ impl EnhancedPlugin for RetryReflectPlugin {
         if let Some(global_limit) = self.config.global_limit
             && tracker.total() >= global_limit
         {
-            let error_msg = Self::extract_error_message(&result);
             tracing::warn!(
                 tool_name = %tool_name,
                 total_attempts = tracker.total(),
@@ -202,7 +217,6 @@ impl EnhancedPlugin for RetryReflectPlugin {
         }
 
         // Step 7: Render reflection prompt
-        let error_msg = Self::extract_error_message(&result);
         let args_str = serde_json::to_string_pretty(args).unwrap_or_else(|_| args.to_string());
         let reflection = render_reflection(
             &self.config.template,

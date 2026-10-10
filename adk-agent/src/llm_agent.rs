@@ -1042,6 +1042,11 @@ impl LlmAgentBuilder {
 
     /// Set the timeout for individual tool executions.
     /// Default is 5 minutes. Tools that exceed this timeout will return an error.
+    ///
+    /// A tool whose [`Tool::timeout_override`] returns `Some` uses that instead,
+    /// so an `AgentTool` delegation is bounded by its own timeout. A timed-out
+    /// [`NonIdempotent`](adk_core::ToolEffect::NonIdempotent) call is never
+    /// retried, because its side effect may already have happened.
     pub fn tool_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.tool_timeout = timeout;
         self
@@ -1169,8 +1174,12 @@ impl LlmAgentBuilder {
     /// a per-tool override.
     ///
     /// When a tool execution fails and a retry budget applies, the agent
-    /// retries up to `budget.max_retries` times with the configured delay
-    /// between attempts.
+    /// retries up to `budget.max_retries` times, with the backoff described on
+    /// [`RetryBudget::backoff_delay`]. Only a tool whose [`Tool::effect`] is
+    /// [`ReadOnly`](adk_core::ToolEffect::ReadOnly) or
+    /// [`Idempotent`](adk_core::ToolEffect::Idempotent) is retried, and
+    /// only after a retryable error or a timeout. Each attempt gets a fresh tool
+    /// context, so a retried attempt's state delta and escalation are discarded.
     pub fn default_retry_budget(mut self, budget: RetryBudget) -> Self {
         self.default_retry_budget = Some(budget);
         self
@@ -2270,11 +2279,18 @@ impl ToolExecutor<'_> {
         // Execute tool with retry budget and tracing
         if response_content.is_none() {
             if let Some(tool) = self.tool_map.get(&name) {
-                let tool_ctx: Arc<dyn ToolContext> = Arc::new(
-                    AgentToolContext::new(self.ctx.clone(), function_call_id.clone())
-                        .with_tool_name(tool.name())
-                        .with_progress(self.progress_tx.clone()),
-                );
+                // Each attempt gets its own context, so the state delta and escalation of an
+                // attempt that is retried are never committed.
+                let attempt_context = || -> Arc<dyn ToolContext> {
+                    Arc::new(
+                        AgentToolContext::new(self.ctx.clone(), function_call_id.clone())
+                            .with_tool_name(tool.name())
+                            .with_progress(self.progress_tx.clone()),
+                    )
+                };
+                let mut tool_ctx = attempt_context();
+                let effect = tool.effect();
+
                 let span_name = format!("execute_tool {name}");
                 let tool_span = tracing::info_span!(
                     "",
@@ -2286,10 +2302,14 @@ impl ToolExecutor<'_> {
                     "gen_ai.conversation.id" = %self.ctx.session_id()
                 );
 
-                let budget =
-                    self.tool_retry_budgets.get(&name).or(self.default_retry_budget.as_ref());
+                // Only a call that cannot repeat a side effect is retried.
+                let budget = self
+                    .tool_retry_budgets
+                    .get(&name)
+                    .or(self.default_retry_budget.as_ref())
+                    .filter(|_| effect.is_retry_safe());
                 let max_attempts = budget.map(|b| b.max_retries + 1).unwrap_or(1);
-                let retry_delay = budget.map(|b| b.delay).unwrap_or_default();
+                let timeout = tool.timeout_override().unwrap_or(Some(self.tool_timeout));
 
                 let mut started = Event::new(self.invocation_id);
                 started.author = self.ctx.agent_name().to_owned();
@@ -2310,9 +2330,12 @@ impl ToolExecutor<'_> {
                 for attempt in 0..max_attempts {
                     final_attempt = attempt;
                     if attempt > 0 {
-                        tokio::time::sleep(retry_delay).await;
+                        if let Some(budget) = budget {
+                            tokio::time::sleep(budget.backoff_delay(attempt)).await;
+                        }
+                        tool_ctx = attempt_context();
                     }
-                    match async {
+                    let attempt_result = async {
                         let args_payload = trace_json_payload(
                             &final_args,
                             self.ctx.run_config().record_payloads,
@@ -2320,21 +2343,27 @@ impl ToolExecutor<'_> {
                         );
                         tracing::debug!(tool.name = %name, tool.args = %args_payload, attempt = attempt, "tool_call");
                         let exec_future = tool_clone.execute(tool_ctx.clone(), final_args.clone());
-                        let unwind_safe_future = std::panic::AssertUnwindSafe(
-                            tokio::time::timeout(self.tool_timeout, exec_future),
-                        );
-                        match futures::FutureExt::catch_unwind(unwind_safe_future).await {
-                            Ok(result) => result,
-                            Err(_panic) => Ok(Err(adk_core::AdkError::tool(format!(
-                                "tool '{}' panicked during execution",
-                                name
-                            )))),
+                        let bounded = async {
+                            match timeout {
+                                Some(limit) => tokio::time::timeout(limit, exec_future)
+                                    .await
+                                    .map_err(|_| limit),
+                                None => Ok(exec_future.await),
+                            }
+                        };
+                        match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(bounded)).await {
+                            Ok(Ok(result)) => result.map_err(|error| (error.to_string(), error.is_retryable())),
+                            Ok(Err(limit)) => Err((
+                                format!("Tool '{name}' timed out after {} seconds", limit.as_secs()),
+                                true,
+                            )),
+                            Err(_panic) => Err((format!("tool '{name}' panicked during execution"), false)),
                         }
                     }
                     .instrument(tool_span.clone())
-                    .await
-                    {
-                        Ok(Ok(value)) => {
+                    .await;
+                    match attempt_result {
+                        Ok(value) => {
                             let result_payload = trace_json_payload(
                                 &value,
                                 self.ctx.run_config().record_payloads,
@@ -2344,24 +2373,13 @@ impl ToolExecutor<'_> {
                             retry_result = Some(value);
                             break;
                         }
-                        Ok(Err(e)) => {
-                            last_error = e.to_string();
-                            if attempt + 1 < max_attempts {
+                        Err((message, retryable)) => {
+                            last_error = message;
+                            if retryable && attempt + 1 < max_attempts {
                                 tracing::warn!(tool.name = %name, attempt = attempt, error = %last_error, "tool execution failed, retrying");
                             } else {
                                 tracing::warn!(tool.name = %name, error = %last_error, "tool_error");
-                            }
-                        }
-                        Err(_) => {
-                            last_error = format!(
-                                "Tool '{}' timed out after {} seconds",
-                                name,
-                                self.tool_timeout.as_secs()
-                            );
-                            if attempt + 1 < max_attempts {
-                                tracing::warn!(tool.name = %name, attempt = attempt, timeout_secs = self.tool_timeout.as_secs(), "tool timed out, retrying");
-                            } else {
-                                tracing::warn!(tool.name = %name, timeout_secs = self.tool_timeout.as_secs(), "tool_timeout");
+                                break;
                             }
                         }
                     }
