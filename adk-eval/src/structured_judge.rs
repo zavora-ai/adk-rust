@@ -408,9 +408,12 @@ fn try_parse_json_object(text: &str) -> Option<serde_json::Value> {
     None
 }
 
-/// Truncate text for inclusion in error messages.
-fn truncate_for_error(text: &str) -> String {
-    if text.len() <= 200 { text.to_string() } else { format!("{}...", &text[..200]) }
+/// Truncate text to 200 characters for inclusion in error messages.
+pub(crate) fn truncate_for_error(text: &str) -> String {
+    match text.char_indices().nth(200) {
+        Some((end, _)) => format!("{}...", &text[..end]),
+        None => text.to_string(),
+    }
 }
 
 #[cfg(test)]

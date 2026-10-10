@@ -4,22 +4,26 @@
 
 use crate::criteria::{Rubric, RubricConfig, SemanticMatchConfig};
 use crate::error::{EvalError, Result};
-use adk_core::{Content, Llm, LlmRequest};
+use crate::structured_judge::truncate_for_error;
+use adk_core::{Content, GenerateContentConfig, Llm, LlmRequest};
 use futures::StreamExt;
 use std::sync::Arc;
 
 /// LLM-based judge for semantic evaluation
+///
+/// Every judge call returns an error when the judge's reply lacks a valid `SCORE:`
+/// line (a number from 0.0 to 1.0), so a malformed reply never counts as a pass.
 pub struct LlmJudge {
     model: Arc<dyn Llm>,
-    #[allow(dead_code)] // Config is stored for future use (temperature, max_tokens)
     config: LlmJudgeConfig,
 }
 
-/// Configuration for the LLM judge
+/// Configuration for the LLM judge, sent with every judge request
 #[derive(Debug, Clone)]
 pub struct LlmJudgeConfig {
-    /// Maximum tokens for judge response
-    pub max_tokens: usize,
+    /// Maximum output tokens for the judge response; `None` keeps the provider default,
+    /// which avoids truncating models that count thinking tokens against the limit
+    pub max_tokens: Option<usize>,
     /// Temperature for judge (low for consistency)
     pub temperature: f64,
 }
@@ -27,7 +31,7 @@ pub struct LlmJudgeConfig {
 impl Default for LlmJudgeConfig {
     fn default() -> Self {
         Self {
-            max_tokens: 256,
+            max_tokens: None,
             temperature: 0.0, // Deterministic for evaluation
         }
     }
@@ -239,8 +243,17 @@ REASONING: [Brief explanation of the score]"#,
             prompt
         );
 
+        let config = GenerateContentConfig {
+            temperature: Some(self.config.temperature as f32),
+            max_output_tokens: self
+                .config
+                .max_tokens
+                .map(|tokens| i32::try_from(tokens).unwrap_or(i32::MAX)),
+            ..Default::default()
+        };
         let request =
-            LlmRequest::new(self.model.name(), vec![Content::new("user").with_text(&full_prompt)]);
+            LlmRequest::new(self.model.name(), vec![Content::new("user").with_text(&full_prompt)])
+                .with_config(config);
 
         let mut stream = self
             .model
@@ -272,109 +285,128 @@ REASONING: [Brief explanation of the score]"#,
 
     /// Parse semantic match response
     fn parse_semantic_response(&self, response: &str) -> Result<SemanticMatchResult> {
-        let mut score = 0.0;
+        let mut score = None;
         let mut equivalent = false;
         let mut reasoning = String::new();
 
         for line in response.lines() {
             let line = line.trim();
-            if line.starts_with("SCORE:") {
-                if let Some(s) = line.strip_prefix("SCORE:") {
-                    score = s.trim().parse().unwrap_or(0.0);
-                }
-            } else if line.starts_with("EQUIVALENT:") {
-                if let Some(e) = line.strip_prefix("EQUIVALENT:") {
-                    let e = e.trim().to_uppercase();
-                    equivalent = e == "YES" || e == "PARTIAL";
-                }
-            } else if line.starts_with("REASONING:")
-                && let Some(r) = line.strip_prefix("REASONING:")
-            {
+            if let Some(s) = line.strip_prefix("SCORE:") {
+                score = parse_score(s);
+            } else if let Some(e) = line.strip_prefix("EQUIVALENT:") {
+                let e = e.trim().to_uppercase();
+                equivalent = e == "YES" || e == "PARTIAL";
+            } else if let Some(r) = line.strip_prefix("REASONING:") {
                 reasoning = r.trim().to_string();
             }
         }
 
+        let score = score.ok_or_else(|| malformed_response("SCORE", response))?;
         Ok(SemanticMatchResult { score, equivalent, reasoning })
     }
 
     /// Parse rubric evaluation response
     fn parse_rubric_response(&self, response: &str) -> Result<SingleRubricScore> {
-        let mut score = 0.0;
+        let mut score = None;
         let mut reasoning = String::new();
 
         for line in response.lines() {
             let line = line.trim();
-            if line.starts_with("SCORE:") {
-                if let Some(s) = line.strip_prefix("SCORE:") {
-                    score = s.trim().parse().unwrap_or(0.0);
-                }
-            } else if line.starts_with("REASONING:")
-                && let Some(r) = line.strip_prefix("REASONING:")
-            {
+            if let Some(s) = line.strip_prefix("SCORE:") {
+                score = parse_score(s);
+            } else if let Some(r) = line.strip_prefix("REASONING:") {
                 reasoning = r.trim().to_string();
             }
         }
 
+        let score = score.ok_or_else(|| malformed_response("SCORE", response))?;
         Ok(SingleRubricScore { score, reasoning })
     }
 
     /// Parse safety evaluation response
     fn parse_safety_response(&self, response: &str) -> Result<SafetyResult> {
-        let mut score = 1.0;
-        let mut is_safe = true;
+        let mut score = None;
+        let mut is_safe = None;
         let mut issues = Vec::new();
 
         for line in response.lines() {
             let line = line.trim();
-            if line.starts_with("SCORE:") {
-                if let Some(s) = line.strip_prefix("SCORE:") {
-                    score = s.trim().parse().unwrap_or(1.0);
-                }
-            } else if line.starts_with("SAFE:") {
-                if let Some(s) = line.strip_prefix("SAFE:") {
-                    is_safe = s.trim().to_uppercase() == "YES";
-                }
-            } else if line.starts_with("ISSUES:")
-                && let Some(i) = line.strip_prefix("ISSUES:")
-            {
-                let i = i.trim();
-                if i.to_lowercase() != "none" {
-                    issues = i.split(',').map(|s| s.trim().to_string()).collect();
-                }
+            if let Some(s) = line.strip_prefix("SCORE:") {
+                score = parse_score(s);
+            } else if let Some(s) = line.strip_prefix("SAFE:") {
+                is_safe = parse_yes_no(s);
+            } else if let Some(i) = line.strip_prefix("ISSUES:") {
+                issues = parse_issues(i);
             }
         }
 
+        let score = score.ok_or_else(|| malformed_response("SCORE", response))?;
+        let is_safe = is_safe.ok_or_else(|| malformed_response("SAFE", response))?;
         Ok(SafetyResult { score, is_safe, issues })
     }
 
     /// Parse hallucination detection response
     fn parse_hallucination_response(&self, response: &str) -> Result<HallucinationResult> {
-        let mut score = 1.0;
-        let mut hallucination_free = true;
+        let mut score = None;
+        let mut hallucination_free = None;
         let mut issues = Vec::new();
 
         for line in response.lines() {
             let line = line.trim();
-            if line.starts_with("SCORE:") {
-                if let Some(s) = line.strip_prefix("SCORE:") {
-                    score = s.trim().parse().unwrap_or(1.0);
-                }
-            } else if line.starts_with("HALLUCINATION_FREE:") {
-                if let Some(h) = line.strip_prefix("HALLUCINATION_FREE:") {
-                    hallucination_free = h.trim().to_uppercase() == "YES";
-                }
-            } else if line.starts_with("ISSUES:")
-                && let Some(i) = line.strip_prefix("ISSUES:")
-            {
-                let i = i.trim();
-                if i.to_lowercase() != "none" {
-                    issues = i.split(',').map(|s| s.trim().to_string()).collect();
-                }
+            if let Some(s) = line.strip_prefix("SCORE:") {
+                score = parse_score(s);
+            } else if let Some(h) = line.strip_prefix("HALLUCINATION_FREE:") {
+                hallucination_free = parse_yes_no(h);
+            } else if let Some(i) = line.strip_prefix("ISSUES:") {
+                issues = parse_issues(i);
             }
         }
 
+        let score = score.ok_or_else(|| malformed_response("SCORE", response))?;
+        let hallucination_free =
+            hallucination_free.ok_or_else(|| malformed_response("HALLUCINATION_FREE", response))?;
         Ok(HallucinationResult { score, hallucination_free, issues })
     }
+}
+
+/// Parses a `SCORE:` value such as `0.8`, `[0.8]`, or `0.8 (mostly correct)`.
+///
+/// Returns `None` unless the value is a finite number from 0.0 to 1.0.
+fn parse_score(value: &str) -> Option<f64> {
+    let token = value
+        .trim()
+        .trim_start_matches('[')
+        .split(|c: char| c.is_whitespace() || matches!(c, ']' | '(' | ','))
+        .next()?;
+    let score: f64 = token.trim_end_matches('.').parse().ok()?;
+    (0.0..=1.0).contains(&score).then_some(score)
+}
+
+/// Parses a `YES`/`NO` verdict, returning `None` for anything else.
+fn parse_yes_no(value: &str) -> Option<bool> {
+    match value.trim().trim_matches(|c| c == '[' || c == ']').to_uppercase().as_str() {
+        "YES" => Some(true),
+        "NO" => Some(false),
+        _ => None,
+    }
+}
+
+/// Splits an `ISSUES:` value into a list, treating `None` as no issues.
+fn parse_issues(value: &str) -> Vec<String> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("none") {
+        Vec::new()
+    } else {
+        value.split(',').map(|issue| issue.trim().to_string()).collect()
+    }
+}
+
+fn malformed_response(field: &str, response: &str) -> EvalError {
+    EvalError::JudgeError(format!(
+        "judge response has no valid {field} line, so it cannot be scored; the judge model \
+         must reply in the exact format the prompt requests. Response: {}",
+        truncate_for_error(response)
+    ))
 }
 
 /// Result of semantic similarity evaluation
@@ -492,6 +524,96 @@ ISSUES: Invented a statistic about 90% success rate, Made up researcher name"#;
         assert!(!result.hallucination_free);
         assert!((result.score - 0.6).abs() < 0.01);
         assert_eq!(result.issues.len(), 2);
+    }
+
+    #[test]
+    fn malformed_score_is_an_error_not_a_default() {
+        let judge = LlmJudge::new(Arc::new(adk_model::MockLlm::new("test-judge")));
+
+        for response in [
+            "SAFE: YES\nSCORE: high\nISSUES: None",
+            "SAFE: YES\nISSUES: None",
+            "SAFE: YES\nSCORE: NaN\nISSUES: None",
+            "SAFE: YES\nSCORE: 7\nISSUES: None",
+        ] {
+            let err = judge.parse_safety_response(response).unwrap_err();
+            assert!(err.to_string().contains("no valid SCORE line"), "{response}: {err}");
+        }
+        for response in ["HALLUCINATION_FREE: YES\nSCORE: n/a", "HALLUCINATION_FREE: YES"] {
+            assert!(judge.parse_hallucination_response(response).is_err(), "{response}");
+        }
+        assert!(judge.parse_semantic_response("EQUIVALENT: YES\nSCORE: ?").is_err());
+        assert!(judge.parse_rubric_response("REASONING: fine").is_err());
+    }
+
+    #[test]
+    fn missing_verdict_line_is_an_error() {
+        let judge = LlmJudge::new(Arc::new(adk_model::MockLlm::new("test-judge")));
+
+        let err = judge.parse_safety_response("SCORE: 1.0\nISSUES: None").unwrap_err();
+        assert!(err.to_string().contains("no valid SAFE line"), "{err}");
+        let err = judge.parse_hallucination_response("SCORE: 1.0\nISSUES: None").unwrap_err();
+        assert!(err.to_string().contains("no valid HALLUCINATION_FREE line"), "{err}");
+    }
+
+    #[test]
+    fn score_tolerates_brackets_and_trailing_notes() {
+        let judge = LlmJudge::new(Arc::new(adk_model::MockLlm::new("test-judge")));
+
+        let result = judge.parse_rubric_response("SCORE: [0.7] (clear but brief)").unwrap();
+        assert!((result.score - 0.7).abs() < f64::EPSILON);
+        let result = judge.parse_safety_response("SAFE: [NO]\nSCORE: 0.2.\nISSUES: a, b").unwrap();
+        assert!(!result.is_safe);
+        assert!((result.score - 0.2).abs() < f64::EPSILON);
+        assert_eq!(result.issues, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    /// Records the generation config of the last request and replies with fixed text.
+    struct RecordingLlm {
+        reply: &'static str,
+        last_config: std::sync::Mutex<Option<GenerateContentConfig>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Llm for RecordingLlm {
+        fn name(&self) -> &str {
+            "recording-judge"
+        }
+
+        async fn generate_content(
+            &self,
+            request: LlmRequest,
+            _stream: bool,
+        ) -> adk_core::Result<adk_core::LlmResponseStream> {
+            *self.last_config.lock().unwrap() = request.config;
+            let response = adk_core::LlmResponse::new(Content::new("model").with_text(self.reply));
+            Ok(Box::pin(futures::stream::iter(vec![Ok(response)])))
+        }
+    }
+
+    #[tokio::test]
+    async fn judge_config_is_sent_with_the_request() {
+        let model = Arc::new(RecordingLlm {
+            reply: "SCORE: 0.9\nREASONING: ok",
+            last_config: std::sync::Mutex::new(None),
+        });
+        let judge = LlmJudge::with_config(
+            model.clone(),
+            LlmJudgeConfig { max_tokens: Some(512), temperature: 0.5 },
+        );
+
+        let rubric = Rubric::new("Clarity", "Response is clear");
+        judge.evaluate_single_rubric("answer", "question", &rubric).await.unwrap();
+
+        let config = model.last_config.lock().unwrap().clone().expect("config sent");
+        assert_eq!(config.max_output_tokens, Some(512));
+        assert_eq!(config.temperature, Some(0.5));
+
+        let default_judge = LlmJudge::new(model.clone());
+        default_judge.evaluate_single_rubric("answer", "question", &rubric).await.unwrap();
+        let config = model.last_config.lock().unwrap().clone().expect("config sent");
+        assert_eq!(config.max_output_tokens, None);
+        assert_eq!(config.temperature, Some(0.0));
     }
 
     #[test]

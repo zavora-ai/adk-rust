@@ -92,103 +92,76 @@ impl ToolTrajectoryScorer {
 
     /// Score tool trajectory
     ///
-    /// Returns a score from 0.0 to 1.0 indicating how well the actual
-    /// tool calls match the expected tool calls.
+    /// Returns a score from 0.0 to 1.0: the number of matched calls divided by the
+    /// length of the longer of the two trajectories.
     pub fn score(&self, expected: &[ToolUse], actual: &[ToolUse]) -> f64 {
         if expected.is_empty() && actual.is_empty() {
             return 1.0;
         }
+        let matches = self.match_pairs(expected, actual).len();
+        matches as f64 / expected.len().max(actual.len()) as f64
+    }
 
-        if expected.is_empty() || actual.is_empty() {
-            return 0.0;
-        }
+    /// Pairs each matched expected call with the actual call it matched, as indices.
+    ///
+    /// With `strict_order`, each match must come after the previous match in `actual`;
+    /// otherwise each expected call takes the first unmatched actual call that satisfies it.
+    fn match_pairs(&self, expected: &[ToolUse], actual: &[ToolUse]) -> Vec<(usize, usize)> {
+        let strict_args = self.config.strict_args;
+        let mut pairs = Vec::new();
 
         if self.config.strict_order {
-            self.score_ordered(expected, actual)
+            let mut next_actual = 0;
+            for (exp_idx, exp) in expected.iter().enumerate() {
+                if let Some(offset) =
+                    actual[next_actual..].iter().position(|act| exp.matches(act, strict_args))
+                {
+                    pairs.push((exp_idx, next_actual + offset));
+                    next_actual += offset + 1;
+                }
+            }
         } else {
-            self.score_unordered(expected, actual)
-        }
-    }
-
-    /// Score with strict ordering
-    fn score_ordered(&self, expected: &[ToolUse], actual: &[ToolUse]) -> f64 {
-        let mut matches = 0;
-        let mut exp_idx = 0;
-        let mut act_idx = 0;
-
-        while exp_idx < expected.len() && act_idx < actual.len() {
-            if expected[exp_idx].matches(&actual[act_idx], self.config.strict_args) {
-                matches += 1;
-                exp_idx += 1;
-                act_idx += 1;
-            } else {
-                // Try to find the expected tool in remaining actual calls
-                let mut found = false;
-                for i in (act_idx + 1)..actual.len() {
-                    if expected[exp_idx].matches(&actual[i], self.config.strict_args) {
-                        matches += 1;
-                        exp_idx += 1;
-                        act_idx = i + 1;
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
-                    exp_idx += 1;
+            let mut used = vec![false; actual.len()];
+            for (exp_idx, exp) in expected.iter().enumerate() {
+                if let Some(act_idx) =
+                    (0..actual.len()).find(|&i| !used[i] && exp.matches(&actual[i], strict_args))
+                {
+                    used[act_idx] = true;
+                    pairs.push((exp_idx, act_idx));
                 }
             }
         }
 
-        let max_len = expected.len().max(actual.len());
-        matches as f64 / max_len as f64
-    }
-
-    /// Score without strict ordering (set comparison)
-    fn score_unordered(&self, expected: &[ToolUse], actual: &[ToolUse]) -> f64 {
-        let mut matched_actual: HashSet<usize> = HashSet::new();
-        let mut matches = 0;
-
-        for exp in expected {
-            for (i, act) in actual.iter().enumerate() {
-                if !matched_actual.contains(&i) && exp.matches(act, self.config.strict_args) {
-                    matches += 1;
-                    matched_actual.insert(i);
-                    break;
-                }
-            }
-        }
-
-        let max_len = expected.len().max(actual.len());
-        matches as f64 / max_len as f64
+        pairs
     }
 
     /// Get detailed comparison
+    ///
+    /// Uses the same matching as [`score`](Self::score), so `strict_order` decides
+    /// which calls count as matched, missing, or extra.
     pub fn compare(&self, expected: &[ToolUse], actual: &[ToolUse]) -> ToolTrajectoryComparison {
-        let mut matched = Vec::new();
-        let mut missing = Vec::new();
-        let mut extra = Vec::new();
-        let mut matched_actual: HashSet<usize> = HashSet::new();
-
-        for exp in expected {
-            let mut found = false;
-            for (i, act) in actual.iter().enumerate() {
-                if !matched_actual.contains(&i) && exp.matches(act, self.config.strict_args) {
-                    matched.push((exp.clone(), act.clone()));
-                    matched_actual.insert(i);
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                missing.push(exp.clone());
-            }
+        let pairs = self.match_pairs(expected, actual);
+        let mut expected_matched = vec![false; expected.len()];
+        let mut actual_matched = vec![false; actual.len()];
+        let mut matched = Vec::with_capacity(pairs.len());
+        for (exp_idx, act_idx) in pairs {
+            expected_matched[exp_idx] = true;
+            actual_matched[act_idx] = true;
+            matched.push((expected[exp_idx].clone(), actual[act_idx].clone()));
         }
 
-        for (i, act) in actual.iter().enumerate() {
-            if !matched_actual.contains(&i) {
-                extra.push(act.clone());
-            }
-        }
+        let missing = expected
+            .iter()
+            .zip(&expected_matched)
+            .filter(|(_, is_matched)| !**is_matched)
+            .map(|(tool, _)| tool.clone())
+            .collect();
+        let extra = actual
+            .iter()
+            .zip(&actual_matched)
+            .filter(|(_, is_matched)| !**is_matched)
+            .map(|(tool, _)| tool.clone())
+            .collect();
 
         ToolTrajectoryComparison { matched, missing, extra, score: self.score(expected, actual) }
     }
@@ -450,6 +423,35 @@ mod tests {
         let actual = vec![ToolUse::new("tool_b"), ToolUse::new("tool_a")];
 
         assert_eq!(scorer.score(&expected, &actual), 1.0);
+    }
+
+    #[test]
+    fn compare_honours_strict_order() {
+        let expected = vec![ToolUse::new("tool_a"), ToolUse::new("tool_b")];
+        let actual = vec![ToolUse::new("tool_b"), ToolUse::new("tool_a")];
+
+        let ordered = ToolTrajectoryScorer::new().compare(&expected, &actual);
+        assert_eq!(ordered.matched.len(), 1);
+        assert_eq!(ordered.matched[0].0.name, "tool_a");
+        assert_eq!(
+            ordered.missing.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            vec!["tool_b"]
+        );
+        assert_eq!(
+            ordered.extra.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            vec!["tool_b"]
+        );
+        assert_eq!(ordered.score, 0.5);
+
+        let unordered = ToolTrajectoryScorer::with_config(ToolTrajectoryConfig {
+            strict_order: false,
+            strict_args: false,
+        })
+        .compare(&expected, &actual);
+        assert_eq!(unordered.matched.len(), 2);
+        assert!(unordered.missing.is_empty());
+        assert!(unordered.extra.is_empty());
+        assert_eq!(unordered.score, 1.0);
     }
 
     #[test]

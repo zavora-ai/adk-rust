@@ -11,7 +11,7 @@
 //! - **Trajectory Evaluation**: Validate tool call sequences
 //! - **Response Quality**: Assess final output quality with multiple metrics
 //! - **Multiple Criteria**: Ground truth, rubric-based, and LLM-judged evaluation
-//! - **Automation**: Run evaluations programmatically or via CLI
+//! - **Automation**: Run evaluations programmatically, for example from integration tests in CI
 //!
 //! ## Quick Start
 //!
@@ -37,11 +37,11 @@
 //!     let evaluator = Evaluator::new(config);
 //!
 //!     // Run evaluation
-//!     let result = evaluator
+//!     let report = evaluator
 //!         .evaluate_file(agent, "tests/my_agent.test.json")
 //!         .await?;
 //!
-//!     assert!(result.passed, "Evaluation failed: {:?}", result.failures);
+//!     assert!(report.all_passed(), "{}", report.format_summary());
 //!     Ok(())
 //! }
 //! ```
