@@ -496,6 +496,52 @@ async fn test_llm_agent_injects_skill_after_cacheable_prefix() {
 }
 
 #[tokio::test]
+async fn test_llm_agent_sends_instructions_as_system_contents() {
+    let model = SpyLlm::new("{}");
+    let captured = model.last_request.clone();
+
+    let agent = LlmAgentBuilder::new("system_role_agent")
+        .description("Agent with instructions")
+        .model(Arc::new(model))
+        .global_instruction("GLOBAL INSTRUCTION")
+        .instruction("AGENT INSTRUCTION")
+        .output_schema(serde_json::json!({"type": "object"}))
+        .build()
+        .unwrap();
+    let ctx = Arc::new(TestContext::with_history(
+        "Second question",
+        vec![
+            Content::new("user").with_text("First question"),
+            Content::new("model").with_text("First answer"),
+            Content::new("user").with_text("Second question"),
+        ],
+    ));
+    let mut stream = agent.run(ctx).await.unwrap();
+
+    use futures::StreamExt;
+    while let Some(result) = stream.next().await {
+        result.unwrap();
+    }
+
+    let request = captured.lock().unwrap().clone().expect("expected captured request");
+    let messages = request
+        .contents
+        .iter()
+        .map(|content| {
+            let text = content.parts.iter().filter_map(Part::text).collect::<Vec<_>>().join("\n");
+            (content.role.as_str(), text)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 6);
+    assert_eq!(messages[0], ("system", "GLOBAL INSTRUCTION".to_string()));
+    assert_eq!(messages[1], ("system", "AGENT INSTRUCTION".to_string()));
+    assert_eq!(messages[2].0, "system");
+    assert_eq!(messages[3], ("user", "First question".to_string()));
+    assert_eq!(messages[4], ("model", "First answer".to_string()));
+    assert_eq!(messages[5], ("user", "Second question".to_string()));
+}
+
+#[tokio::test]
 async fn test_llm_agent_legacy_builder_path_has_no_skill_injection() {
     let model = SpyLlm::new("ok");
     let captured = model.last_request.clone();
