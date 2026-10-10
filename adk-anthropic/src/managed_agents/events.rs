@@ -47,9 +47,21 @@ pub enum UserEvent {
         deny_message: Option<String>,
     },
 
-    /// Define success criteria for the session.
+    /// Start an outcome: the agent works toward `description`, and a separate
+    /// grader scores each iteration against `rubric` until it is satisfied or
+    /// the iteration limit is reached.
+    ///
+    /// The agent starts on receipt, so no `user.message` is needed to begin.
     #[serde(rename = "user.define_outcome")]
-    DefineOutcome { criteria: String },
+    DefineOutcome {
+        /// The task the agent works toward.
+        description: String,
+        /// The rubric each iteration is graded against.
+        rubric: OutcomeRubric,
+        /// Maximum grading iterations. The API defaults to 3 and allows at most 20.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_iterations: Option<u32>,
+    },
 
     /// Return the result of a built-in tool execution (self-hosted environments only).
     #[serde(rename = "user.tool_result")]
@@ -152,6 +164,36 @@ pub enum SessionEvent {
     Unknown,
 }
 
+/// The rubric a `user.define_outcome` grader scores each iteration against.
+///
+/// The rubric is Markdown with explicit, independently gradeable criteria.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OutcomeRubric {
+    /// A rubric passed inline.
+    Text {
+        /// The rubric's Markdown.
+        content: String,
+    },
+    /// A rubric uploaded through the Files API, reusable across sessions.
+    File {
+        /// The uploaded file's ID.
+        file_id: String,
+    },
+}
+
+impl OutcomeRubric {
+    /// Create an inline Markdown rubric.
+    pub fn text(content: impl Into<String>) -> Self {
+        Self::Text { content: content.into() }
+    }
+
+    /// Reference a rubric uploaded through the Files API.
+    pub fn file(file_id: impl Into<String>) -> Self {
+        Self::File { file_id: file_id.into() }
+    }
+}
+
 /// A content block within a message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -201,6 +243,22 @@ impl UserEvent {
             deny_message: Some(reason.into()),
         }
     }
+
+    /// Create a `user.define_outcome` event with the API's default iteration limit.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_anthropic::managed_agents::{OutcomeRubric, UserEvent};
+    ///
+    /// let event = UserEvent::define_outcome(
+    ///     "Build a DCF model for Costco in .xlsx",
+    ///     OutcomeRubric::text("- The workbook has a sheet named `DCF`\n- Revenue covers five years"),
+    /// );
+    /// ```
+    pub fn define_outcome(description: impl Into<String>, rubric: OutcomeRubric) -> Self {
+        Self::DefineOutcome { description: description.into(), rubric, max_iterations: None }
+    }
 }
 
 /// Wrapper for sending events to the API.
@@ -209,4 +267,58 @@ impl UserEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct SendEventsRequest {
     pub events: Vec<UserEvent>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn define_outcome_serializes_description_and_text_rubric() {
+        let event = UserEvent::define_outcome(
+            "Build a DCF model for Costco in .xlsx",
+            OutcomeRubric::text("- The workbook has a sheet named `DCF`"),
+        );
+
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            json!({
+                "type": "user.define_outcome",
+                "description": "Build a DCF model for Costco in .xlsx",
+                "rubric": { "type": "text", "content": "- The workbook has a sheet named `DCF`" },
+            })
+        );
+    }
+
+    #[test]
+    fn define_outcome_serializes_file_rubric_and_max_iterations() {
+        let event = UserEvent::DefineOutcome {
+            description: "Summarise the quarterly report".to_string(),
+            rubric: OutcomeRubric::file("file_01abc"),
+            max_iterations: Some(5),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            json!({
+                "type": "user.define_outcome",
+                "description": "Summarise the quarterly report",
+                "rubric": { "type": "file", "file_id": "file_01abc" },
+                "max_iterations": 5,
+            })
+        );
+    }
+
+    #[test]
+    fn define_outcome_round_trips() {
+        let event = UserEvent::DefineOutcome {
+            description: "Write the migration guide".to_string(),
+            rubric: OutcomeRubric::text("- Covers every renamed field"),
+            max_iterations: Some(2),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(serde_json::from_str::<UserEvent>(&json).unwrap(), event);
+    }
 }
