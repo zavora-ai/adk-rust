@@ -467,6 +467,20 @@ impl Runner {
             // Find which agent should handle this request
             let agent_to_run = Self::find_agent_to_run(&root_agent, session.as_ref());
 
+            // A resumed sub-agent gets the same parent and peer targets as on the
+            // transfer path, so it can still hand the conversation on.
+            if agent_to_run.name() != root_agent.name() {
+                let (parent_name, peer_names) =
+                    Self::compute_transfer_context(&root_agent, agent_to_run.name());
+                let mut targets = Vec::new();
+                if let Some(ref parent) = parent_name {
+                    targets.push(parent.clone());
+                }
+                targets.extend(peer_names);
+                run_config.transfer_targets = targets;
+                run_config.parent_agent = parent_name;
+            }
+
             // Let validated composite roots apply policy for the concrete agent
             // selected for this turn. Ordinary agents keep the default no-op.
             root_agent.configure_run(agent_to_run.name(), &mut run_config);
