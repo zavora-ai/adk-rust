@@ -3249,8 +3249,32 @@ impl Agent for LlmAgent {
                                 continue;
                             }
 
+                            // Every call in this model turn gets a response, so providers that
+                            // require one per call accept any later history containing it.
+                            let responses = fc_parts
+                                .iter()
+                                .map(|other| {
+                                    let response = if other.index == call.index {
+                                        serde_json::json!({ "transferred_to": target_agent })
+                                    } else {
+                                        serde_json::json!({
+                                            "error": format!("not run: control transferred to {target_agent}")
+                                        })
+                                    };
+                                    Part::FunctionResponse {
+                                        function_response: FunctionResponseData::new(
+                                            other.name.clone(),
+                                            response,
+                                        ),
+                                        id: other.id.clone(),
+                                        annotations: None,
+                                    }
+                                })
+                                .collect();
                             let mut transfer_event = Event::new(&invocation_id);
                             transfer_event.author = agent_name.clone();
+                            transfer_event.llm_response.content =
+                                Some(Content { role: "function".to_string(), parts: responses });
                             transfer_event.actions.transfer_to_agent = Some(target_agent);
                             yield Ok(transfer_event);
                             transfer_handled = true;
