@@ -489,6 +489,33 @@ use adk_session::SqliteSessionService;
 // The Launcher uses InMemorySessionService by default
 ```
 
+### Kill Switch
+
+`ServerConfig::governance` is a `GovernanceControl` shared by every runner the server builds.
+Freezing it fails new runs and stops running ones before their next model or tool call. Mount
+the admin endpoints to operate it over HTTP:
+
+```rust
+use adk_core::GovernanceControl;
+use adk_server::{ServerBuilder, ServerConfig};
+
+let control = GovernanceControl::new();
+let config = ServerConfig::new(agent_loader, session_service)
+    .with_request_context(extractor)
+    .with_governance(control.clone());
+let app = ServerBuilder::new(config).enable_governance_endpoints().build();
+```
+
+| Route | Effect |
+|-------|--------|
+| `POST /api/admin/freeze` | Body `{"reason": "..."}`. Freezes the control, refuses `POST /api/runs` with `503`, fails background runs due to start, and skips cron occurrences |
+| `POST /api/admin/unfreeze` | Lifts the freeze and resumes scheduling |
+| `GET /api/admin/governance` | Returns `{"frozen": bool, "reason": ...}` |
+
+> **Important:** the endpoints sit behind the auth middleware. Without a
+> `RequestContextExtractor` anyone who reaches the server can call them, so enable them only
+> behind an authenticating layer.
+
 ## Error Handling
 
 The API uses structured error responses with HTTP status codes derived from the error category:

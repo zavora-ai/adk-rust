@@ -14,6 +14,33 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::RwLock;
 
+/// How long a realtime tool may run before its call is answered with a timeout error.
+pub const DEFAULT_REALTIME_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Parses a provider's tool-call arguments.
+///
+/// Empty arguments are an empty object. Anything that is not a JSON object is refused,
+/// so a malformed call is answered with an error instead of running with `{}`.
+pub(crate) fn parse_tool_arguments(
+    arguments: &str,
+) -> std::result::Result<serde_json::Value, String> {
+    if arguments.trim().is_empty() {
+        return Ok(serde_json::Value::Object(Default::default()));
+    }
+    match serde_json::from_str::<serde_json::Value>(arguments) {
+        Ok(value @ serde_json::Value::Object(_)) => Ok(value),
+        Ok(_) => Err("its arguments are not a JSON object".to_string()),
+        Err(error) => Err(format!("its arguments are not valid JSON ({error})")),
+    }
+}
+
+/// The run-wide governance a runner applies to every tool call it dispatches.
+#[derive(Clone)]
+pub(crate) struct ToolGovernance {
+    pub(crate) config: adk_core::RunConfig,
+    pub(crate) scope: adk_core::ApprovalScope,
+}
+
 /// Internal state machine tracking the resumability status of the RealtimeRunner.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum RunnerState {
@@ -199,6 +226,8 @@ pub struct RealtimeRunnerBuilder {
     runner_config: RunnerConfig,
     tools: HashMap<String, (ToolDefinition, Arc<dyn ToolHandler>)>,
     event_handler: Option<Arc<dyn EventHandler>>,
+    governance: Option<ToolGovernance>,
+    tool_timeout: std::time::Duration,
 }
 
 impl Default for RealtimeRunnerBuilder {
@@ -216,7 +245,48 @@ impl RealtimeRunnerBuilder {
             runner_config: RunnerConfig::default(),
             tools: HashMap::new(),
             event_handler: None,
+            governance: None,
+            tool_timeout: DEFAULT_REALTIME_TOOL_TIMEOUT,
         }
+    }
+
+    /// Governs every tool call this runner dispatches.
+    ///
+    /// The config's `tool_policy`, `governance` kill switches, confirmation handler,
+    /// approvals, and approval store apply exactly as they do to an agent run, through
+    /// [`adk_core::authorize_tool_call`]. A call held for confirmation is answered with an
+    /// error and recorded in the approval store under `scope`. A frozen kill switch ends
+    /// [`run`](RealtimeRunner::run) with an error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::{ApprovalScope, DeclarativePolicy, RunConfig};
+    ///
+    /// let runner = RealtimeRunner::builder()
+    ///     .model(model)
+    ///     .tool_governance(
+    ///         RunConfig::builder()
+    ///             .tool_policy(Arc::new(DeclarativePolicy::builder().allow("get_weather").build()))
+    ///             .build(),
+    ///         ApprovalScope::new("voice", "user-1", "call-42"),
+    ///     )
+    ///     .build()?;
+    /// ```
+    pub fn tool_governance(
+        mut self,
+        config: adk_core::RunConfig,
+        scope: adk_core::ApprovalScope,
+    ) -> Self {
+        self.governance = Some(ToolGovernance { config, scope });
+        self
+    }
+
+    /// Sets how long a tool may run before its call is answered with a timeout error.
+    /// Defaults to [`DEFAULT_REALTIME_TOOL_TIMEOUT`].
+    pub fn tool_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.tool_timeout = timeout;
+        self
     }
 
     /// Set the realtime model.
@@ -315,6 +385,8 @@ impl RealtimeRunnerBuilder {
             tool_permits: Arc::new(tokio::sync::Semaphore::new(max_concurrent_tools)),
             outstanding_tools: Arc::new(AtomicUsize::new(0)),
             response_closed_awaiting_tools: Arc::new(AtomicBool::new(false)),
+            governance: self.governance,
+            tool_timeout: self.tool_timeout,
         })
     }
 }
@@ -375,6 +447,10 @@ pub struct RealtimeRunner {
     /// Set when the dispatching response closed while tool calls were still running, so
     /// the follow-up `create_response` is owed by whichever tool finishes last.
     response_closed_awaiting_tools: Arc<AtomicBool>,
+    /// Policy, kill switch, and confirmation applied to every dispatched call.
+    governance: Option<ToolGovernance>,
+    /// How long one tool call may run.
+    tool_timeout: std::time::Duration,
 }
 
 impl RealtimeRunner {
@@ -1015,27 +1091,80 @@ impl RealtimeRunner {
         Ok(())
     }
 
+    /// Runs one call through the governed path configured with
+    /// [`RealtimeRunnerBuilder::tool_governance`]. Without one, every call executes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RealtimeError::ToolError`] when the kill switch is frozen or the
+    /// confirmation handler or approval store fails; the run ends.
+    pub(crate) async fn authorize_tool_call(
+        &self,
+        call: adk_core::GovernedCall,
+    ) -> Result<adk_core::ToolAuthorization> {
+        let Some(governance) = &self.governance else {
+            return Ok(adk_core::ToolAuthorization::Execute {
+                args: call.args,
+                confirmation: None,
+            });
+        };
+        let gate = adk_core::ToolGate::new(
+            &governance.config,
+            "realtime",
+            &governance.scope.session_id,
+            governance.scope.clone(),
+        );
+        adk_core::authorize_tool_call(&gate, call)
+            .await
+            .map_err(|error| RealtimeError::ToolError(error.to_string()))
+    }
+
+    /// How long one tool call may run.
+    #[cfg(feature = "integration")]
+    pub(crate) fn tool_timeout(&self) -> std::time::Duration {
+        self.tool_timeout
+    }
+
     /// Execute a tool call and optionally send the response.
     async fn execute_tool_call(&self, call_id: &str, name: &str, arguments: &str) -> Result<()> {
         let handler = self.tools.get(name).map(|(_, h)| h.clone());
 
-        let result = if let Some(handler) = handler {
-            let args: serde_json::Value = serde_json::from_str(arguments)
-                .unwrap_or(serde_json::Value::Object(Default::default()));
-
-            let call =
-                ToolCall { call_id: call_id.to_string(), name: name.to_string(), arguments: args };
-
-            match handler.execute(&call).await {
-                Ok(value) => value,
-                Err(e) => serde_json::json!({
-                    "error": e.to_string()
-                }),
+        let result = match (handler, parse_tool_arguments(arguments)) {
+            (None, _) => serde_json::json!({ "error": format!("Unknown tool: {name}") }),
+            (Some(_), Err(reason)) => {
+                serde_json::json!({ "error": format!("Tool '{name}' was not run: {reason}") })
             }
-        } else {
-            serde_json::json!({
-                "error": format!("Unknown tool: {}", name)
-            })
+            (Some(handler), Ok(args)) => {
+                // Native handlers declare no read-only flag, so the policy treats them as
+                // having side effects.
+                match self
+                    .authorize_tool_call(adk_core::GovernedCall::new(name, call_id, args))
+                    .await?
+                {
+                    adk_core::ToolAuthorization::Execute { args, .. } => {
+                        let call = ToolCall {
+                            call_id: call_id.to_string(),
+                            name: name.to_string(),
+                            arguments: args,
+                        };
+                        match tokio::time::timeout(self.tool_timeout, handler.execute(&call)).await
+                        {
+                            Ok(Ok(value)) => value,
+                            Ok(Err(e)) => serde_json::json!({ "error": e.to_string() }),
+                            Err(_) => serde_json::json!({
+                                "error": format!(
+                                    "Tool '{name}' timed out after {:?}",
+                                    self.tool_timeout
+                                )
+                            }),
+                        }
+                    }
+                    adk_core::ToolAuthorization::Refuse { reason, .. }
+                    | adk_core::ToolAuthorization::Pending { reason, .. } => {
+                        serde_json::json!({ "error": reason })
+                    }
+                }
+            }
         };
 
         if self.runner_config.auto_respond_tools {
@@ -1166,6 +1295,7 @@ mod runner_tests {
         tool_output: AtomicUsize,
         tool_response: AtomicUsize,
         create_response: AtomicUsize,
+        last_output: parking_lot::Mutex<Option<serde_json::Value>>,
     }
 
     struct RecordingSession {
@@ -1196,8 +1326,9 @@ mod runner_tests {
             self.counts.tool_response.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
-        async fn send_tool_output(&self, _response: ToolResponse) -> Result<()> {
+        async fn send_tool_output(&self, response: ToolResponse) -> Result<()> {
             self.counts.tool_output.fetch_add(1, Ordering::SeqCst);
+            *self.counts.last_output.lock() = Some(response.output);
             Ok(())
         }
         async fn commit_audio(&self) -> Result<()> {
@@ -1263,6 +1394,66 @@ mod runner_tests {
         // that `connect` would publish after provider setup.
         *runner.session.write().await = Some(session);
         runner
+    }
+
+    /// A runner whose `pay` tool counts executions, governed by `config`.
+    async fn governed_runner(
+        counts: Arc<Counts>,
+        executions: Arc<AtomicUsize>,
+        config: adk_core::RunConfig,
+    ) -> RealtimeRunner {
+        let runner = RealtimeRunner::builder()
+            .model(Arc::new(MockModel) as BoxedModel)
+            .tool_fn(tool_def("pay"), move |_call| {
+                executions.fetch_add(1, Ordering::SeqCst);
+                Ok(serde_json::json!({ "paid": true }))
+            })
+            .tool_governance(config, adk_core::ApprovalScope::new("voice", "user", "session"))
+            .build()
+            .unwrap();
+        *runner.session.write().await =
+            Some(Arc::new(RecordingSession { counts }) as Arc<dyn RealtimeSession>);
+        runner
+    }
+
+    #[tokio::test]
+    async fn malformed_tool_arguments_are_refused() {
+        let counts = Arc::new(Counts::default());
+        let executions = Arc::new(AtomicUsize::new(0));
+        let runner = governed_runner(
+            Arc::clone(&counts),
+            Arc::clone(&executions),
+            adk_core::RunConfig::default(),
+        )
+        .await;
+
+        runner.dispatch_tool_call("c1", "pay", r#"{"amount": 5"#).await.unwrap();
+
+        assert_eq!(executions.load(Ordering::SeqCst), 0, "a malformed call must not run");
+        let output = counts.last_output.lock().clone().expect("the call is answered");
+        assert!(output["error"].as_str().unwrap_or_default().contains("not valid JSON"));
+    }
+
+    #[tokio::test]
+    async fn the_runner_policy_and_kill_switch_govern_dispatched_calls() {
+        let counts = Arc::new(Counts::default());
+        let executions = Arc::new(AtomicUsize::new(0));
+        let control = adk_core::GovernanceControl::new();
+        let config = adk_core::RunConfig::builder()
+            .tool_policy(Arc::new(adk_core::DeclarativePolicy::builder().allow("get_*").build()))
+            .governance(control.clone())
+            .build();
+        let runner = governed_runner(Arc::clone(&counts), Arc::clone(&executions), config).await;
+
+        runner.dispatch_tool_call("c1", "pay", "{}").await.unwrap();
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        let output = counts.last_output.lock().clone().unwrap();
+        assert!(output["error"].as_str().unwrap_or_default().contains("denied by policy"));
+
+        control.freeze("drill");
+        let error = runner.dispatch_tool_call("c2", "pay", "{}").await.unwrap_err();
+        assert!(error.to_string().contains("frozen"), "{error}");
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

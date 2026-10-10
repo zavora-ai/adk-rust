@@ -141,8 +141,8 @@ Next: [Multimodal →](multimodal.md)
 
 | Registered as | Dispatch | Policy applied |
 |---------------|----------|----------------|
-| `adk_tool(...)` — an ADK `Tool` | The integration policy pipeline | Configured plugins, transcript recording, tool-event persistence |
-| A native realtime handler | `RealtimeRunner` dispatch | None — the handler is trusted by construction |
+| `adk_tool(...)` — an ADK `Tool` | The integration policy pipeline | Configured plugins, then the governed path on the rewritten arguments, transcript recording, tool-event persistence |
+| A native realtime handler | `RealtimeRunner` dispatch | The governed path, when `tool_governance` is set |
 
 An ADK tool previously reached the provider through a `ToolBridgeAdapter`, which creates a
 context and calls `Tool::execute` with no plugins, callbacks, or confirmation. A tool governed
@@ -162,10 +162,52 @@ If the `before_tool_call` pipeline returns an error, the tool is **refused**:
 > became no guard.
 
 After-tool plugin errors leave the tool's own result in place, since the tool has already run.
+### The governed path
+
+Every realtime dispatch runs the same governed path as `LlmAgent`
+(`adk_core::authorize_tool_call`): the kill switch, the `ToolPolicy`, and confirmation, on the
+call's final arguments.
+
+| Runtime | Where the governance comes from |
+|---------|---------------------------------|
+| `RealtimeAgent` under a `Runner` | The run's `RunConfig`: `tool_policy`, `governance`, confirmation handler, approvals, approval store |
+| `RealtimeRunner` | `RealtimeRunnerBuilder::tool_governance(run_config, approval_scope)` |
+| `IntegratedRealtimeRunner` | `IntegratedRealtimeRunnerBuilder::tool_governance(run_config)`, scoped to the runner's identity |
+
+```rust
+use adk_core::{ApprovalScope, DeclarativePolicy, RunConfig};
+use adk_realtime::RealtimeRunner;
+use std::sync::Arc;
+use std::time::Duration;
+
+let runner = RealtimeRunner::builder()
+    .model(model)
+    .tool_governance(
+        RunConfig::builder()
+            .tool_policy(Arc::new(DeclarativePolicy::builder().allow("get_weather").build()))
+            .build(),
+        ApprovalScope::new("voice", "user-1", "call-42"),
+    )
+    .tool_timeout(Duration::from_secs(30))
+    .build()?;
+```
+
+| Situation | What the provider receives |
+|-----------|----------------------------|
+| Arguments are not a JSON object | `{"error": "Tool '<name>' was not run: its arguments are not valid JSON (...)"}` — the tool does not run with `{}` |
+| The policy denies the call | `{"error": "Tool '<name>' denied by policy: <reason>"}` |
+| The call needs confirmation and no decision exists | `{"error": "Tool '<name>' requires confirmation"}`; `RealtimeAgent` also emits an event carrying the `ToolConfirmationRequest`, and the request is recorded in the approval store |
+| The tool runs past its timeout (default five minutes) | `{"error": "Tool '<name>' timed out after ..."}` |
+| The kill switch is frozen | Nothing — the session ends with a `governance.frozen` error |
+
+The session keeps running while a call is held, so a decision recorded in the approval store
+authorizes the call when the model issues it again.
+
 ## Tool callbacks on the direct agent
 
 `RealtimeAgent` applies before- and after-tool callbacks with the same contract as the
-standard agent loop:
+standard agent loop. A runner's plugin `before_tool`, `after_tool`, `before_agent`, and
+`after_agent` callbacks run ahead of the agent's own:
 
 | Callback returns | Effect |
 |------------------|--------|

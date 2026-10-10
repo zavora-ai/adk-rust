@@ -810,6 +810,14 @@ control.unfreeze();
 The error is `ErrorCategory::Forbidden` and not retryable, so a caller's retry loop does not
 spin against a frozen runner.
 
+`adk-server` shares one control across every runner it builds (`ServerConfig::governance`) and
+exposes `POST /api/admin/freeze` and `POST /api/admin/unfreeze` through
+`ServerBuilder::enable_governance_endpoints`; freezing also pauses background-run and cron
+scheduling. See [Server](../deployment/server.md#kill-switch).
+
+Realtime tool calls go through the same governed path — see
+[Realtime Tools](../realtime/tools.md#the-governed-path).
+
 ## Related
 
 - [Access Control](access-control.md) — RBAC, SSO, audit logging

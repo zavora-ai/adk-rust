@@ -645,7 +645,11 @@ by call ID (`RunConfig::tool_confirmation_decisions`) still apply to the exact c
 5. **Graph interrupts** (`adk-graph`) — checkpoint-based pauses with durable state for complex approval workflows.
 
 `GovernanceControl` is the org kill switch: `runner.governance().freeze(reason)` fails new runs at
-their start and stops running ones before their next model call or tool call.
+their start and stops running ones before their next model call or tool call. `adk-server` shares
+one through `ServerConfig::governance` and exposes `POST /api/admin/freeze` / `unfreeze`
+(`ServerBuilder::enable_governance_endpoints`), which also pause background and cron scheduling.
+`RealtimeAgent`, `RealtimeRunner`, and `IntegratedRealtimeRunner` dispatch through the same
+governed path.
 
 Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`:
 

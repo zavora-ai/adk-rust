@@ -101,6 +101,7 @@ pub struct RealtimeAgent {
     after_callbacks: Arc<Vec<AfterAgentCallback>>,
     before_tool_callbacks: Arc<Vec<BeforeToolCallback>>,
     after_tool_callbacks: Arc<Vec<AfterToolCallback>>,
+    tool_timeout: std::time::Duration,
 
     // Realtime-specific callbacks
     on_audio: Option<AudioCallback>,
@@ -169,6 +170,7 @@ pub struct RealtimeAgentBuilder {
     after_callbacks: Vec<AfterAgentCallback>,
     before_tool_callbacks: Vec<BeforeToolCallback>,
     after_tool_callbacks: Vec<AfterToolCallback>,
+    tool_timeout: std::time::Duration,
     on_audio: Option<AudioCallback>,
     on_transcript: Option<TranscriptCallback>,
     on_speech_started: Option<SpeechCallback>,
@@ -202,6 +204,7 @@ impl RealtimeAgentBuilder {
             after_callbacks: Vec::new(),
             before_tool_callbacks: Vec::new(),
             after_tool_callbacks: Vec::new(),
+            tool_timeout: crate::runner::DEFAULT_REALTIME_TOOL_TIMEOUT,
             on_audio: None,
             on_transcript: None,
             on_speech_started: None,
@@ -314,6 +317,13 @@ impl RealtimeAgentBuilder {
         self
     }
 
+    /// Sets how long a tool may run before its call is answered with a timeout error.
+    /// Defaults to [`DEFAULT_REALTIME_TOOL_TIMEOUT`](crate::runner::DEFAULT_REALTIME_TOOL_TIMEOUT).
+    pub fn tool_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.tool_timeout = timeout;
+        self
+    }
+
     /// Add a before-tool callback.
     pub fn before_tool_callback(mut self, callback: BeforeToolCallback) -> Self {
         self.before_tool_callbacks.push(callback);
@@ -415,6 +425,7 @@ impl RealtimeAgentBuilder {
             after_callbacks: Arc::new(self.after_callbacks),
             before_tool_callbacks: Arc::new(self.before_tool_callbacks),
             after_tool_callbacks: Arc::new(self.after_tool_callbacks),
+            tool_timeout: self.tool_timeout,
             on_audio: self.on_audio,
             on_transcript: self.on_transcript,
             on_speech_started: self.on_speech_started,
@@ -571,64 +582,6 @@ impl RealtimeAgent {
 
         Ok(config)
     }
-
-    /// Execute a tool call.
-    #[allow(dead_code)]
-    async fn execute_tool(
-        &self,
-        ctx: &Arc<dyn InvocationContext>,
-        call_id: &str,
-        name: &str,
-        arguments: &str,
-    ) -> (serde_json::Value, EventActions) {
-        // Find the tool
-        let tool = self.tools.iter().find(|t| t.name() == name);
-
-        if let Some(tool) = tool {
-            let args: serde_json::Value =
-                serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
-
-            // Create tool context
-            let tool_ctx: Arc<dyn ToolContext> =
-                Arc::new(RealtimeToolContext::new(ctx.clone(), call_id.to_string()));
-
-            // Execute before_tool callbacks
-            let tool_cb_ctx =
-                Arc::new(ToolCallbackContext::new(ctx.clone(), name.to_string(), args.clone()));
-            for callback in self.before_tool_callbacks.as_ref() {
-                if let Err(e) = callback(tool_cb_ctx.clone() as Arc<dyn CallbackContext>).await {
-                    return (
-                        serde_json::json!({ "error": e.to_string() }),
-                        EventActions::default(),
-                    );
-                }
-            }
-
-            // Execute the tool
-            let result = match tool.execute(tool_ctx.clone(), args.clone()).await {
-                Ok(result) => result,
-                Err(e) => serde_json::json!({ "error": e.to_string() }),
-            };
-
-            let actions = tool_ctx.actions();
-
-            // Execute after_tool callbacks
-            let tool_cb_ctx =
-                Arc::new(ToolCallbackContext::new(ctx.clone(), name.to_string(), args.clone()));
-            for callback in self.after_tool_callbacks.as_ref() {
-                if let Err(e) = callback(tool_cb_ctx.clone() as Arc<dyn CallbackContext>).await {
-                    return (serde_json::json!({ "error": e.to_string() }), actions);
-                }
-            }
-
-            (result, actions)
-        } else {
-            (
-                serde_json::json!({ "error": format!("Tool {} not found", name) }),
-                EventActions::default(),
-            )
-        }
-    }
 }
 
 #[async_trait]
@@ -660,6 +613,7 @@ impl Agent for RealtimeAgent {
         let after_callbacks = self.after_callbacks.clone();
         let before_tool_callbacks = self.before_tool_callbacks.clone();
         let after_tool_callbacks = self.after_tool_callbacks.clone();
+        let tool_timeout = self.tool_timeout;
         let tools = self.tools.clone();
         let toolsets = self.toolsets.clone();
 
@@ -711,6 +665,23 @@ impl Agent for RealtimeAgent {
 
         let s = stream! {
             // ===== BEFORE AGENT CALLBACKS =====
+            // Runner plugins reach this agent through the run config, ahead of its own callbacks.
+            for hook in &ctx.run_config().invocation_hooks {
+                match hook.before_agent(ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut early_event = Event::new(&invocation_id);
+                        early_event.author = agent_name.clone();
+                        early_event.llm_response.content = Some(content);
+                        yield Ok(early_event);
+                        return;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                }
+            }
             for callback in before_callbacks.as_ref() {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
@@ -993,51 +964,71 @@ impl Agent for RealtimeAgent {
                             } => {
                                 // Handle transfer_to_agent
                                 if name == "transfer_to_agent" {
-                                    let args: serde_json::Value = serde_json::from_str(&arguments)
-                                        .unwrap_or(serde_json::json!({}));
-                                    let target = args.get("agent_name")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or_default()
-                                        .to_string();
+                                    let target = crate::runner::parse_tool_arguments(&arguments)
+                                        .ok()
+                                        .and_then(|args| {
+                                            args.get("agent_name")
+                                                .and_then(|v| v.as_str())
+                                                .map(str::to_string)
+                                        })
+                                        .filter(|target| !target.is_empty());
+                                    if let Some(target) = target {
+                                        let mut transfer_event = Event::new(&invocation_id);
+                                        transfer_event.author = agent_name.clone();
+                                        transfer_event.actions.transfer_to_agent = Some(target);
+                                        yield Ok(transfer_event);
 
-                                    let mut transfer_event = Event::new(&invocation_id);
-                                    transfer_event.author = agent_name.clone();
-                                    transfer_event.actions.transfer_to_agent = Some(target);
-                                    yield Ok(transfer_event);
-
-                                    let _ = session.close().await;
-                                    return;
+                                        let _ = session.close().await;
+                                        return;
+                                    }
+                                    // A transfer with no readable target is answered, not followed.
+                                    let response = ToolResponse {
+                                        call_id,
+                                        output: serde_json::json!({
+                                            "error": "transfer_to_agent needs an `agent_name` argument"
+                                        }),
+                                    };
+                                    if let Err(e) = session.send_tool_response(response).await {
+                                        yield Err(AdkError::model(format!("Failed to send tool response: {}", e)));
+                                        let _ = session.close().await;
+                                        return;
+                                    }
+                                    continue;
                                 }
 
-                                // Execute tool
+                                // Execute tool through the governed path.
                                 let tool = resolved_tools.iter().find(|t| t.name() == name);
 
                                 let (result, actions) = if let Some(tool) = tool {
-                                    let args: serde_json::Value = serde_json::from_str(&arguments)
-                                        .unwrap_or(serde_json::json!({}));
-
-                                    let tool_ctx: Arc<dyn ToolContext> = Arc::new(
-                                        RealtimeToolContext::new(ctx.clone(), call_id.clone())
-                                    );
-
-                                    let cb_ctx: Arc<dyn CallbackContext> =
-                                        Arc::new(ToolCallbackContext::new(
-                                            ctx.clone(),
-                                            name.clone(),
-                                            args.clone(),
-                                        ));
-
-                                    let result = execute_tool_with_callbacks(
-                                        tool.as_ref(),
-                                        tool_ctx.clone(),
-                                        cb_ctx,
-                                        args.clone(),
+                                    match dispatch_tool(
+                                        &ctx,
+                                        tool,
+                                        &call_id,
+                                        &arguments,
                                         before_tool_callbacks.as_ref(),
                                         after_tool_callbacks.as_ref(),
+                                        tool_timeout,
                                     )
-                                    .await;
-
-                                    (result, tool_ctx.actions())
+                                    .await
+                                    {
+                                        Ok(outcome) => {
+                                            if let Some(request) = outcome.held {
+                                                // Surfaced for an approver; the session continues
+                                                // and the model is told the call was not run.
+                                                let mut held_event = Event::new(&invocation_id);
+                                                held_event.author = agent_name.clone();
+                                                held_event.actions.tool_confirmation = Some(request);
+                                                yield Ok(held_event);
+                                            }
+                                            (outcome.result, outcome.actions)
+                                        }
+                                        Err(error) => {
+                                            // The kill switch or the approval service ended the run.
+                                            yield Err(error);
+                                            let _ = session.close().await;
+                                            return;
+                                        }
+                                    }
                                 } else {
                                     (
                                         serde_json::json!({ "error": format!("Tool {} not found", name) }),
@@ -1122,7 +1113,25 @@ impl Agent for RealtimeAgent {
             }
 
             // ===== AFTER AGENT CALLBACKS =====
-            for callback in after_callbacks.as_ref() {
+            let mut after_handled = false;
+            for hook in &ctx.run_config().invocation_hooks {
+                match hook.after_agent(ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut after_event = Event::new(&invocation_id);
+                        after_event.author = agent_name.clone();
+                        after_event.llm_response.content = Some(content);
+                        yield Ok(after_event);
+                        after_handled = true;
+                        break;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                }
+            }
+            for callback in after_callbacks.iter().filter(|_| !after_handled) {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
                         let mut after_event = Event::new(&invocation_id);
@@ -1163,29 +1172,60 @@ fn pcm16_mono_wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
     wav
 }
 
-/// Tool context for realtime agent tool execution.
-/// Runs one tool through its before- and after-tool callbacks.
+/// What one realtime tool call produced.
+struct ToolDispatch {
+    /// The result sent back to the provider.
+    result: serde_json::Value,
+    /// The actions the tool set, carried on the tool event.
+    actions: EventActions,
+    /// The request for a call held for a confirmation decision.
+    held: Option<adk_core::ToolConfirmationRequest>,
+}
+
+/// Runs one realtime tool call: its arguments are parsed strictly, the run's invocation
+/// hooks and the agent's before-tool callbacks run, the governed path
+/// ([`adk_core::authorize_tool_call`]) authorizes the call, the tool runs under `timeout`,
+/// and the after-tool hooks and callbacks run.
 ///
-/// The callback contract matches the standard agent loop, which the realtime path did not
-/// honour: a before-callback returning `Ok(Some(content))` substitutes a result and the tool
-/// does **not** run, `Ok(None)` allows it, and an error refuses it and skips the after
-/// callbacks. Previously the loop evaluated `(error_result, EventActions::default())` as a
-/// discarded expression statement and fell through to `tool.execute`, so a gate could neither
-/// deny nor substitute — it reported a decision while the tool ran regardless. After-callback
-/// results were dropped by `let _ =`.
-async fn execute_tool_with_callbacks(
-    tool: &dyn Tool,
-    tool_ctx: Arc<dyn ToolContext>,
-    cb_ctx: Arc<dyn CallbackContext>,
-    args: serde_json::Value,
+/// The callback contract matches the standard agent loop: a before-callback returning
+/// `Ok(Some(content))` substitutes a result and the tool does **not** run, `Ok(None)`
+/// allows it, and an error refuses it and skips the after callbacks. Malformed arguments
+/// are answered with an error instead of running the tool with `{}`.
+///
+/// # Errors
+///
+/// Returns an error, which ends the session, when the kill switch is frozen or the
+/// confirmation handler or approval store fails.
+async fn dispatch_tool(
+    ctx: &Arc<dyn InvocationContext>,
+    tool: &Arc<dyn Tool>,
+    call_id: &str,
+    arguments: &str,
     before_tool_callbacks: &[BeforeToolCallback],
     after_tool_callbacks: &[AfterToolCallback],
-) -> serde_json::Value {
+    timeout: std::time::Duration,
+) -> Result<ToolDispatch> {
+    let name = tool.name().to_string();
+    let args = match crate::runner::parse_tool_arguments(arguments) {
+        Ok(args) => args,
+        Err(reason) => {
+            return Ok(ToolDispatch {
+                result: serde_json::json!({ "error": format!("Tool '{name}' was not run: {reason}") }),
+                actions: EventActions::default(),
+                held: None,
+            });
+        }
+    };
+    let tool_ctx: Arc<dyn ToolContext> =
+        Arc::new(RealtimeToolContext::new(ctx.clone(), call_id.to_string()));
+    let cb_ctx: Arc<dyn CallbackContext> =
+        Arc::new(ToolCallbackContext::new(ctx.clone(), name.clone(), args.clone()));
+    let hooks = &ctx.run_config().invocation_hooks;
+
     let mut short_circuit: Option<serde_json::Value> = None;
     let mut run_after_tool_callbacks = true;
-
-    for callback in before_tool_callbacks {
-        match callback(cb_ctx.clone()).await {
+    for hook in hooks {
+        match hook.before_tool(cb_ctx.clone()).await {
             Ok(Some(content)) => {
                 short_circuit = Some(content_to_tool_result(&content));
                 break;
@@ -1198,17 +1238,75 @@ async fn execute_tool_with_callbacks(
             }
         }
     }
+    if short_circuit.is_none() {
+        for callback in before_tool_callbacks {
+            match callback(cb_ctx.clone()).await {
+                Ok(Some(content)) => {
+                    short_circuit = Some(content_to_tool_result(&content));
+                    break;
+                }
+                Ok(None) => continue,
+                Err(e) => {
+                    short_circuit = Some(serde_json::json!({ "error": e.to_string() }));
+                    run_after_tool_callbacks = false;
+                    break;
+                }
+            }
+        }
+    }
 
+    let mut held = None;
+    let mut confirmation = None;
     let mut result = match short_circuit {
         Some(result) => result,
-        None => match tool.execute(tool_ctx, args).await {
-            Ok(value) => value,
-            Err(e) => serde_json::json!({ "error": e.to_string() }),
-        },
+        None => {
+            let gate = adk_core::ToolGate::for_context(ctx.as_ref());
+            let call = adk_core::GovernedCall::for_tool(tool.as_ref(), call_id, args)
+                .requiring_confirmation(ctx.requires_tool_confirmation(&name));
+            match adk_core::authorize_tool_call(&gate, call).await? {
+                adk_core::ToolAuthorization::Execute { args, confirmation: decision } => {
+                    confirmation = decision;
+                    match tokio::time::timeout(timeout, tool.execute(tool_ctx.clone(), args)).await
+                    {
+                        Ok(Ok(value)) => value,
+                        Ok(Err(e)) => serde_json::json!({ "error": e.to_string() }),
+                        Err(_) => serde_json::json!({
+                            "error": format!("Tool '{name}' timed out after {timeout:?}")
+                        }),
+                    }
+                }
+                adk_core::ToolAuthorization::Refuse { reason, confirmation: decision } => {
+                    confirmation = decision;
+                    run_after_tool_callbacks = false;
+                    serde_json::json!({ "error": reason })
+                }
+                adk_core::ToolAuthorization::Pending { request, reason } => {
+                    held = Some(request);
+                    run_after_tool_callbacks = false;
+                    serde_json::json!({ "error": reason })
+                }
+            }
+        }
     };
 
     if run_after_tool_callbacks {
-        for callback in after_tool_callbacks {
+        let mut replaced = false;
+        for hook in hooks {
+            match hook.after_tool(cb_ctx.clone()).await {
+                Ok(Some(modified)) => {
+                    result = content_to_tool_result(&modified);
+                    replaced = true;
+                    break;
+                }
+                Ok(None) => continue,
+                Err(e) => {
+                    result = serde_json::json!({ "error": e.to_string() });
+                    replaced = true;
+                    break;
+                }
+            }
+        }
+        for callback in after_tool_callbacks.iter().filter(|_| !replaced) {
             match callback(cb_ctx.clone()).await {
                 Ok(Some(modified)) => {
                     result = content_to_tool_result(&modified);
@@ -1223,7 +1321,11 @@ async fn execute_tool_with_callbacks(
         }
     }
 
-    result
+    let mut actions = tool_ctx.actions();
+    if actions.tool_confirmation_decision.is_none() {
+        actions.tool_confirmation_decision = confirmation;
+    }
+    Ok(ToolDispatch { result, actions, held })
 }
 
 /// Turns a callback's substitute `Content` into the result sent back to the provider.
@@ -1391,83 +1493,152 @@ mod tool_safety_tests {
         }
     }
 
-    /// The minimum context the callback path needs.
-    struct TestToolContext {
-        actions: Mutex<EventActions>,
-        content: Content,
-    }
-
-    impl TestToolContext {
-        fn new() -> Self {
-            Self { actions: Mutex::new(EventActions::default()), content: Content::new("user") }
-        }
-    }
-
-    #[async_trait]
-    impl ReadonlyContext for TestToolContext {
-        fn invocation_id(&self) -> &str {
-            "inv"
-        }
-        fn agent_name(&self) -> &str {
-            "agent"
-        }
-        fn user_id(&self) -> &str {
-            "user"
-        }
-        fn app_name(&self) -> &str {
-            "app"
-        }
-        fn session_id(&self) -> &str {
-            "session"
-        }
-        fn branch(&self) -> &str {
-            ""
-        }
-        fn user_content(&self) -> &Content {
-            &self.content
-        }
-    }
-
-    #[async_trait]
-    impl CallbackContext for TestToolContext {
-        fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-            None
-        }
-    }
-
-    #[async_trait]
-    impl ToolContext for TestToolContext {
-        fn function_call_id(&self) -> &str {
-            "call-1"
-        }
-        fn actions(&self) -> EventActions {
-            self.actions.lock().unwrap().clone()
-        }
-        fn set_actions(&self, actions: EventActions) {
-            *self.actions.lock().unwrap() = actions;
-        }
-        async fn search_memory(&self, _query: &str) -> Result<Vec<MemoryEntry>> {
-            Ok(vec![])
-        }
-    }
-
     /// Runs the tool through the callback gate with the supplied callbacks.
     async fn dispatch(
         before: Vec<BeforeToolCallback>,
         after: Vec<AfterToolCallback>,
         executions: Arc<AtomicUsize>,
     ) -> serde_json::Value {
-        let tool = CountingTool { executions };
-        let ctx = Arc::new(TestToolContext::new());
-        execute_tool_with_callbacks(
-            &tool,
-            ctx.clone() as Arc<dyn ToolContext>,
-            ctx as Arc<dyn CallbackContext>,
-            serde_json::json!({}),
+        let tool: Arc<dyn Tool> = Arc::new(CountingTool { executions });
+        dispatch_with(RunConfig::default(), &tool, "{}", before, after).await.unwrap().result
+    }
+
+    /// Runs `tool` through the governed realtime dispatch under `config`.
+    async fn dispatch_with(
+        config: RunConfig,
+        tool: &Arc<dyn Tool>,
+        arguments: &str,
+        before: Vec<BeforeToolCallback>,
+        after: Vec<AfterToolCallback>,
+    ) -> Result<ToolDispatch> {
+        let ctx = Arc::new(CapableParent {
+            content: Content::new("user"),
+            config,
+            session: TestSession,
+            shared: Arc::new(SharedState::new()),
+        }) as Arc<dyn InvocationContext>;
+        dispatch_tool(
+            &ctx,
+            tool,
+            "call-1",
+            arguments,
             &before,
             &after,
+            std::time::Duration::from_millis(50),
         )
         .await
+    }
+
+    fn counting(executions: &Arc<AtomicUsize>) -> Arc<dyn Tool> {
+        Arc::new(CountingTool { executions: Arc::clone(executions) })
+    }
+
+    #[tokio::test]
+    async fn malformed_arguments_are_refused_instead_of_running_with_an_empty_object() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let outcome = dispatch_with(
+            RunConfig::default(),
+            &counting(&executions),
+            r#"{"amount": "#,
+            vec![],
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        let error = outcome.result["error"].as_str().unwrap_or_default();
+        assert!(error.contains("not valid JSON"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_run_policy_governs_realtime_tool_calls() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let deny_all = RunConfig::builder()
+            .tool_policy(Arc::new(adk_core::DeclarativePolicy::builder().build()))
+            .build();
+        let outcome =
+            dispatch_with(deny_all, &counting(&executions), "{}", vec![], vec![]).await.unwrap();
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert!(outcome.result["error"].as_str().unwrap_or_default().contains("denied by policy"));
+
+        let approval = RunConfig::builder()
+            .tool_policy(Arc::new(
+                adk_core::DeclarativePolicy::builder()
+                    .require_approval("*", "voice actions")
+                    .build(),
+            ))
+            .build();
+        let held =
+            dispatch_with(approval, &counting(&executions), "{}", vec![], vec![]).await.unwrap();
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert_eq!(held.held.map(|request| request.tool_name), Some("counting".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_frozen_run_refuses_the_tool_and_ends() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let control = adk_core::GovernanceControl::new();
+        control.freeze("drill");
+        let config = RunConfig::builder().governance(control).build();
+
+        let error = dispatch_with(config, &counting(&executions), "{}", vec![], vec![])
+            .await
+            .err()
+            .expect("a frozen run must end");
+
+        assert_eq!(error.code, "governance.frozen");
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+    }
+
+    /// Sleeps well past the dispatch timeout.
+    struct SlowTool;
+
+    #[async_trait]
+    impl Tool for SlowTool {
+        fn name(&self) -> &str {
+            "slow"
+        }
+        fn description(&self) -> &str {
+            "never finishes in time"
+        }
+        async fn execute(
+            &self,
+            _ctx: Arc<dyn ToolContext>,
+            _args: serde_json::Value,
+        ) -> Result<serde_json::Value> {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            Ok(serde_json::json!({ "late": true }))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tool_that_outlives_its_timeout_is_answered_with_an_error() {
+        let tool: Arc<dyn Tool> = Arc::new(SlowTool);
+        let outcome =
+            dispatch_with(RunConfig::default(), &tool, "{}", vec![], vec![]).await.unwrap();
+        assert!(outcome.result["error"].as_str().unwrap_or_default().contains("timed out"));
+    }
+
+    /// A runner plugin that refuses every tool.
+    #[derive(Debug)]
+    struct RefuseTools;
+
+    #[async_trait]
+    impl adk_core::InvocationHooks for RefuseTools {
+        async fn before_tool(&self, _ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
+            Ok(Some(Content::new("function").with_text("tools are paused")))
+        }
+    }
+
+    #[tokio::test]
+    async fn runner_plugin_tool_hooks_reach_realtime_calls() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let config = RunConfig::builder().invocation_hook(Arc::new(RefuseTools)).build();
+        let outcome =
+            dispatch_with(config, &counting(&executions), "{}", vec![], vec![]).await.unwrap();
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert_eq!(outcome.result, serde_json::json!({ "result": "tools are paused" }));
     }
 
     #[tokio::test]
