@@ -4,11 +4,10 @@
 use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Agent, Llm, LlmRequest, LlmResponseStream, Result as AdkResult, SchemaAdapter};
+use adk_core::{Agent, Llm};
 use adk_eval::criteria::EvaluationCriteria;
 use adk_eval::schema::ContentData;
 use adk_eval::{EvalCase, EvaluationConfig, EvaluationResult, Evaluator, Turn};
-use async_trait::async_trait;
 
 use crate::common::{Config, Provider, Verdict, brief, fail};
 
@@ -51,31 +50,6 @@ fn describe(result: &EvaluationResult) -> String {
     format!("passed={} [{}]", result.passed, failures.join("; "))
 }
 
-/// Drops sampling parameters a model rejects, as a diagnostic of the judge path only.
-struct WithoutSampling(Arc<dyn Llm>);
-
-#[async_trait]
-impl Llm for WithoutSampling {
-    fn name(&self) -> &str {
-        self.0.name()
-    }
-
-    async fn generate_content(
-        &self,
-        mut req: LlmRequest,
-        stream: bool,
-    ) -> AdkResult<LlmResponseStream> {
-        if let Some(config) = req.config.as_mut() {
-            config.temperature = None;
-        }
-        self.0.generate_content(req, stream).await
-    }
-
-    fn schema_adapter(&self) -> &dyn SchemaAdapter {
-        self.0.schema_adapter()
-    }
-}
-
 pub async fn run(cfg: &Config, provider: Provider) -> Verdict {
     match scenario(cfg, provider).await {
         Ok(verdict) => verdict,
@@ -92,17 +66,18 @@ async fn scenario(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
     )?;
     let wrong_instruction = "Whatever the user asks, reply with exactly one word: Berlin";
     let wrong = agent(Arc::clone(&model), "wrong_bot", wrong_instruction)?;
-    let wrong_again = agent(Arc::clone(&model), "wrong_bot", wrong_instruction)?;
     let case = capital_case();
     let criteria = EvaluationCriteria { semantic_match_score: Some(0.8), ..Default::default() };
 
+    // The judge runs on the provider's own model with the default config, which sends no
+    // sampling parameters, so models that reject them can judge.
     let judged = Evaluator::with_llm_judge(
         EvaluationConfig::with_criteria(criteria.clone()),
         Arc::clone(&model),
     );
     let good = judged.evaluate_case(Arc::clone(&honest), &case).await?;
     let bad = judged.evaluate_case(wrong, &case).await?;
-    let unjudged = Evaluator::new(EvaluationConfig::with_criteria(criteria.clone()))
+    let unjudged = Evaluator::new(EvaluationConfig::with_criteria(criteria))
         .evaluate_case(Arc::clone(&honest), &case)
         .await?;
 
@@ -123,41 +98,19 @@ async fn scenario(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
         issues.push(format!("wrong answer passed: {}", describe(&bad)));
     }
     if !good.passed {
-        let mut issue = format!("correct answer failed: {}", describe(&good));
-        if judge_error(&good).is_some() {
-            // Diagnostic: the same judge with sampling parameters stripped.
-            let stripped = Evaluator::with_llm_judge(
-                EvaluationConfig::with_criteria(criteria),
-                Arc::new(WithoutSampling(Arc::clone(&model))),
-            );
-            let good_again = stripped.evaluate_case(honest, &case).await?;
-            let bad_again = stripped.evaluate_case(wrong_again, &case).await?;
-            issue = format!(
-                "correct answer failed: LLM judge error ({}) | same judge with temperature removed: correct passed={} (score {:.2}), wrong passed={} (score {:.2})",
-                judge_error(&good)
-                    .map(|detail| brief(&detail))
-                    .unwrap_or_default()
-                    .chars()
-                    .skip_while(|c| *c != 'm')
-                    .take(170)
-                    .collect::<String>(),
-                good_again.passed,
-                good_again.scores.get("semantic_match").copied().unwrap_or_default(),
-                bad_again.passed,
-                bad_again.scores.get("semantic_match").copied().unwrap_or_default()
-            );
-        }
-        issues.push(issue);
+        issues.push(format!("correct answer failed: {}", describe(&good)));
     }
-    let bad_detail = if judge_error(&bad).is_some() {
-        "judge errored (fails closed)".to_string()
-    } else {
-        format!("judge score {:.2}", bad.scores.get("semantic_match").copied().unwrap_or_default())
-    };
+    // A judge error fails closed, but here it means the judge request itself was rejected.
+    for (label, result) in [("correct", &good), ("wrong", &bad)] {
+        if let Some(detail) = judge_error(result) {
+            issues.push(format!("{label} case: {}", brief(&detail)));
+        }
+    }
     Ok(if issues.is_empty() {
         Verdict::Pass(format!(
-            "correct case passed (score {:.2}); wrong case failed ({bad_detail}); no-judge case failed ({})",
+            "correct case passed (score {:.2}); wrong case failed (judge score {:.2}); no-judge case failed ({})",
             good.scores.get("semantic_match").copied().unwrap_or_default(),
+            bad.scores.get("semantic_match").copied().unwrap_or_default(),
             unjudged
                 .failures
                 .first()

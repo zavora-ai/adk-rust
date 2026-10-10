@@ -17,7 +17,7 @@ the scenario is retried once and the retry is reported next to the result.
 | `failing_toolset_skipped` | #760 | A toolset whose `tools()` fails is skipped and the working tool runs; with `strict_toolsets(true)` the turn fails before any model call |
 | `shared_state_fresh` | #763 | SQLite sessions: a tool on session A reads `app:kill_switch` written through session B; 12 concurrent `app:`/`user:` deltas across three sessions all persist |
 | `graph_resume_once` | #757 | `#[entrypoint]` workflow on `SqliteCheckpointer`: an LLM task, then a charge that crashes twice; after two resumes the LLM task and the charge each ran once |
-| `eval_judge_fail_closed` | #758 | `Evaluator` with an `LlmJudge`: a correct answer passes, a wrong answer fails, a semantic criterion without a judge fails |
+| `eval_judge_fail_closed` | #758 | `Evaluator` with an `LlmJudge` on the provider's own model and the default judge config: a correct answer passes, a wrong answer fails on the judge's score, a semantic criterion without a judge fails, and a judge request the provider rejects fails the scenario |
 | `anthropic_web_tools` | #754, #759 | `web_search_20260209` with `allowed_callers(["direct"])` and with dynamic filtering: a second turn replaying the server tool history is accepted |
 | `anthropic_cache_cost` | #735, #759 | 1-hour prompt cache: call 1 writes only 1h entries, call 2 reads them, `estimate_cost` bills the write at 2x base input |
 | `mcp_concurrency` | #760 | Two tool calls from one model response, dispatched in parallel to an in-process MCP server, are in flight together on one `McpToolset` connection |
