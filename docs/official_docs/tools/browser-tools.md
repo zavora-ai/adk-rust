@@ -104,14 +104,15 @@ let tools = toolset.all_tools();
 
 ## Security Defaults
 
-Four defaults limit what a model can reach through the browser:
+Five defaults limit what a model can reach through the browser:
 
 | Default | Why | Opt out |
 |---------|-----|---------|
 | `browser_evaluate_js` is excluded from every toolset and profile | It runs model-written JavaScript in the page, with the page's cookies and session | `.with_evaluate_js(true)` or `.with_js(true)` |
 | `browser_file_upload` is excluded from every toolset and profile | It hands a local file to the page, and the model chooses the path | `.with_file_upload([roots])` — uploads only existing files inside `roots`, after resolving symlinks |
 | `browser_navigate`, `browser_new_tab`, and `browser_new_window` accept only `http` and `https` | `file:` reads the host filesystem, `javascript:` and `data:` run script, and `chrome:` reaches browser settings | `.with_allowed_schemes([...])` |
-| The same tools refuse loopback, private, link-local, and cloud metadata addresses | A page on `localhost` or `169.254.169.254` reaches services the operator never exposed, such as a metadata endpoint holding credentials | `.with_private_network_access(true)` |
+| The same tools refuse loopback, private, link-local, and cloud metadata addresses, and check the page they and `browser_back`, `browser_forward`, and `browser_refresh` end on after redirects | A page on `localhost` or `169.254.169.254` reaches services the operator never exposed, such as a metadata endpoint holding credentials | `.with_private_network_access(true)` |
+| The same tools refuse host names that do not resolve on the agent host | The agent cannot tell where such a name leads, and the browser may resolve it to a private address | `.with_unresolved_hosts(true)` |
 
 ```rust
 use adk_browser::{BrowserConfig, BrowserSession, BrowserToolset};
@@ -123,11 +124,18 @@ let toolset = BrowserToolset::new(browser)
     .with_allowed_schemes(["https"]); // HTTPS only
 ```
 
-A refused URL fails with `URL scheme '<scheme>' is not allowed` or `points at a private
-network address` before the browser is touched. Host names are resolved, and one that
-resolves to a private address is refused; the check covers the URL the model asks for,
-not redirects or subresources the page loads afterwards, so isolate the browser's network
-when it must not reach internal services at all.
+A refused URL fails with `URL scheme '<scheme>' is not allowed`, `points at a private
+network address`, or `does not resolve on the agent host` before the browser is touched.
+Host names are resolved, and one that resolves to a private address, or does not resolve
+at all, is refused.
+
+After a navigation, the page the browser ends on is checked the same way, so a public page
+that redirects to `169.254.169.254` fails the call and the page is replaced with
+`about:blank` before the model can read it. The check runs after the browser has loaded the
+page, so the request itself still reaches the address. Navigation started by the page or by
+an interaction tool, such as a link click or a form submission, and the subresources a page
+loads are not checked. Isolate the browser's network when it must not reach internal
+services at all.
 
 ## Multi-Tenant Usage with Pool-Backed Toolsets
 

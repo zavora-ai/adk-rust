@@ -76,7 +76,9 @@ pub enum BrowserProfile {
 ///   `file:`, `javascript:`, `data:`, and browser-internal URLs are refused.
 /// - Navigation refuses loopback, private, link-local, and cloud metadata
 ///   addresses until [`with_private_network_access`](Self::with_private_network_access)
-///   permits them.
+///   permits them, checks the page it ends on after redirects, and refuses host
+///   names that do not resolve on the agent host until
+///   [`with_unresolved_hosts`](Self::with_unresolved_hosts) permits them.
 pub struct BrowserToolset {
     resolver: SessionResolver,
     /// Include navigation tools (navigate, back, forward, refresh)
@@ -105,8 +107,11 @@ pub struct BrowserToolset {
     upload_roots: Option<Vec<PathBuf>>,
     /// URL schemes the navigation and new-tab/window tools accept
     allowed_schemes: Vec<String>,
-    /// Whether the navigation and new-tab/window tools may open private network addresses
+    /// Whether the navigation, history, and new-tab/window tools may open private network
+    /// addresses
     allow_private_network: bool,
+    /// Whether those tools may open host names that do not resolve on the agent host
+    allow_unresolved_hosts: bool,
 }
 
 impl BrowserToolset {
@@ -186,6 +191,7 @@ impl BrowserToolset {
             upload_roots: None,
             allowed_schemes: default_allowed_schemes(),
             allow_private_network: false,
+            allow_unresolved_hosts: false,
         }
     }
 
@@ -283,8 +289,9 @@ impl BrowserToolset {
     /// metadata addresses.
     ///
     /// Refused by default, in `browser_navigate`, `browser_new_tab`, and
-    /// `browser_new_window`. Enable this only for an agent meant to browse an
-    /// internal network; see
+    /// `browser_new_window`, and for the page those tools and `browser_back`,
+    /// `browser_forward`, and `browser_refresh` end on after redirects. Enable this
+    /// only for an agent meant to browse an internal network; see
     /// [`NavigateTool::with_private_network_access`](crate::tools::NavigateTool::with_private_network_access).
     ///
     /// # Example
@@ -299,6 +306,28 @@ impl BrowserToolset {
     #[must_use]
     pub fn with_private_network_access(mut self, enabled: bool) -> Self {
         self.allow_private_network = enabled;
+        self
+    }
+
+    /// Permit or refuse navigation to host names that do not resolve on the agent host.
+    ///
+    /// Refused by default, since the agent cannot check where such a name leads. Enable
+    /// this when the browser resolves names the agent host cannot, such as behind a proxy
+    /// or on a remote WebDriver host; see
+    /// [`NavigateTool::with_unresolved_hosts`](crate::tools::NavigateTool::with_unresolved_hosts).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_browser::{BrowserConfig, BrowserSession, BrowserToolset};
+    /// use std::sync::Arc;
+    ///
+    /// let browser = Arc::new(BrowserSession::new(BrowserConfig::default()));
+    /// let proxied = BrowserToolset::new(browser).with_unresolved_hosts(true);
+    /// ```
+    #[must_use]
+    pub fn with_unresolved_hosts(mut self, enabled: bool) -> Self {
+        self.allow_unresolved_hosts = enabled;
         self
     }
 
@@ -391,11 +420,24 @@ impl BrowserToolset {
             tools.push(Arc::new(
                 NavigateTool::new(browser.clone())
                     .with_allowed_schemes(self.allowed_schemes.clone())
-                    .with_private_network_access(self.allow_private_network),
+                    .with_private_network_access(self.allow_private_network)
+                    .with_unresolved_hosts(self.allow_unresolved_hosts),
             ));
-            tools.push(Arc::new(BackTool::new(browser.clone())));
-            tools.push(Arc::new(ForwardTool::new(browser.clone())));
-            tools.push(Arc::new(RefreshTool::new(browser.clone())));
+            tools.push(Arc::new(
+                BackTool::new(browser.clone())
+                    .with_private_network_access(self.allow_private_network)
+                    .with_unresolved_hosts(self.allow_unresolved_hosts),
+            ));
+            tools.push(Arc::new(
+                ForwardTool::new(browser.clone())
+                    .with_private_network_access(self.allow_private_network)
+                    .with_unresolved_hosts(self.allow_unresolved_hosts),
+            ));
+            tools.push(Arc::new(
+                RefreshTool::new(browser.clone())
+                    .with_private_network_access(self.allow_private_network)
+                    .with_unresolved_hosts(self.allow_unresolved_hosts),
+            ));
         }
 
         if self.include_interaction {
@@ -448,12 +490,14 @@ impl BrowserToolset {
             tools.push(Arc::new(
                 NewTabTool::new(browser.clone())
                     .with_allowed_schemes(self.allowed_schemes.clone())
-                    .with_private_network_access(self.allow_private_network),
+                    .with_private_network_access(self.allow_private_network)
+                    .with_unresolved_hosts(self.allow_unresolved_hosts),
             ));
             tools.push(Arc::new(
                 NewWindowTool::new(browser.clone())
                     .with_allowed_schemes(self.allowed_schemes.clone())
-                    .with_private_network_access(self.allow_private_network),
+                    .with_private_network_access(self.allow_private_network)
+                    .with_unresolved_hosts(self.allow_unresolved_hosts),
             ));
             tools.push(Arc::new(SwitchWindowTool::new(browser.clone())));
             tools.push(Arc::new(CloseWindowTool::new(browser.clone())));
