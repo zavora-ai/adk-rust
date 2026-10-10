@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use adk_core::{Event, Part, Result};
+use adk_core::{BudgetTracker, BudgetUsage, Event, Part, Result, RunBudget};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -23,15 +23,15 @@ pub const TEAM_EDGE_ID_KEY: &str = "adk.team.edge_id";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamExecutionUsage {
-    /// Events emitted by all members and nested delegates.
+    /// Non-partial events emitted by all members and nested delegates.
     pub events: u64,
-    /// Model responses carrying usage metadata.
+    /// Model calls made by members and nested delegates.
     pub model_requests: u64,
-    /// Tool calls requested by model events.
+    /// Tool calls dispatched by members and nested delegates.
     pub tool_calls: u64,
     /// Total reported input and output tokens.
     pub tokens: u64,
-    /// Estimated cost in millionths of a US dollar.
+    /// Cost in millionths of a US dollar, from the providers' priced usage.
     pub cost_microusd: u64,
     /// Delegation relationship executions.
     pub delegations: u64,
@@ -146,13 +146,28 @@ pub(crate) struct TeamEdgeStart<'a> {
     pub(crate) attempt: u32,
 }
 
+/// Finished invocations whose receipts stay readable through
+/// `execution_snapshot`; older finished receipts are evicted. Every receipt is
+/// also persisted to session state under [`TEAM_EXECUTION_STATE_KEY`].
+pub(crate) const RETAINED_FINISHED_INVOCATIONS: usize = 64;
+
+/// Runtime state of one root team invocation.
+struct TeamInvocation {
+    snapshot: Mutex<TeamExecutionSnapshot>,
+    /// Shared counters for the team budget, chained to the run budget.
+    tracker: Mutex<Option<Arc<BudgetTracker>>>,
+    /// Team streams of this invocation currently alive.
+    active_streams: Mutex<usize>,
+}
+
 pub(crate) struct TeamRuntimeRegistry {
     team: String,
     roster: Vec<ResolvedTeamMember>,
     budget: TeamBudget,
     termination: TeamTerminationPolicy,
     lifecycle: TeamLifecycleManager,
-    invocations: RwLock<HashMap<String, Arc<Mutex<TeamExecutionSnapshot>>>>,
+    invocations: RwLock<HashMap<String, Arc<TeamInvocation>>>,
+    finished: Mutex<VecDeque<String>>,
 }
 
 impl TeamRuntimeRegistry {
@@ -174,6 +189,7 @@ impl TeamRuntimeRegistry {
             termination,
             lifecycle: TeamLifecycleManager::new(hooks),
             invocations: RwLock::new(HashMap::new()),
+            finished: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -199,8 +215,7 @@ impl TeamRuntimeRegistry {
             .unwrap_or_else(|error| error.into_inner())
             .get(invocation_id)
             .cloned()?;
-        let snapshot = ledger.lock().unwrap_or_else(|error| error.into_inner()).clone();
-        Some(snapshot)
+        Some(ledger.synced_snapshot())
     }
 
     pub(crate) fn snapshots(&self) -> Vec<TeamExecutionSnapshot> {
@@ -208,8 +223,88 @@ impl TeamRuntimeRegistry {
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .values()
-            .map(|ledger| ledger.lock().unwrap_or_else(|error| error.into_inner()).clone())
+            .map(|ledger| ledger.synced_snapshot())
             .collect()
+    }
+
+    /// Returns the invocation's team budget tracker, creating it on first use.
+    ///
+    /// `run_tracker` is the run budget the team runs under; the team tracker
+    /// counts against it, so members stop at whichever limit is reached first.
+    pub(crate) fn budget_tracker(
+        &self,
+        invocation_id: &str,
+        run_tracker: Option<Arc<BudgetTracker>>,
+    ) -> Arc<BudgetTracker> {
+        let ledger = self.ledger(invocation_id);
+        self.tracker_for(&ledger, run_tracker)
+    }
+
+    fn tracker_for(
+        &self,
+        ledger: &TeamInvocation,
+        run_tracker: Option<Arc<BudgetTracker>>,
+    ) -> Arc<BudgetTracker> {
+        let mut slot = ledger.tracker.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(tracker) = slot.as_ref() {
+            return tracker.clone();
+        }
+        let snapshot = ledger.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        // A restored receipt continues from its recorded usage and start time.
+        let usage = BudgetUsage {
+            model_calls: snapshot.usage.model_requests,
+            total_tokens: snapshot.usage.tokens,
+            cost_micro_usd: snapshot.usage.cost_microusd,
+            tool_calls: snapshot.usage.tool_calls,
+            elapsed: Duration::from_millis(now_ms().saturating_sub(snapshot.started_at_ms)),
+        };
+        let tracker = Arc::new(BudgetTracker::resume(self.budget.run_budget(), usage, run_tracker));
+        *slot = Some(tracker.clone());
+        tracker
+    }
+
+    /// Marks one team stream of the invocation as alive.
+    pub(crate) fn enter(self: &Arc<Self>, invocation_id: &str) -> ActiveTeamStream {
+        let ledger = self.ledger(invocation_id);
+        *ledger.active_streams.lock().unwrap_or_else(|error| error.into_inner()) += 1;
+        ActiveTeamStream { runtime: self.clone(), invocation_id: invocation_id.to_string() }
+    }
+
+    /// Ends one team stream; the invocation finishes when none remain and no
+    /// handoff is in flight.
+    fn leave(&self, invocation_id: &str) {
+        let Some(ledger) = self
+            .invocations
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(invocation_id)
+            .cloned()
+        else {
+            return;
+        };
+        let mut active = ledger.active_streams.lock().unwrap_or_else(|error| error.into_inner());
+        *active = active.saturating_sub(1);
+        if *active > 0 || ledger.has_running_edges() {
+            return;
+        }
+        drop(active);
+        // Counters move into the receipt; a later resume builds a fresh tracker from it.
+        ledger.synced_snapshot();
+        ledger.tracker.lock().unwrap_or_else(|error| error.into_inner()).take();
+        let mut finished = self.finished.lock().unwrap_or_else(|error| error.into_inner());
+        if !finished.iter().any(|id| id == invocation_id) {
+            finished.push_back(invocation_id.to_string());
+        }
+        while finished.len() > RETAINED_FINISHED_INVOCATIONS {
+            let Some(evicted) = finished.pop_front() else {
+                break;
+            };
+            let mut invocations =
+                self.invocations.write().unwrap_or_else(|error| error.into_inner());
+            if invocations.get(&evicted).is_some_and(|ledger| ledger.is_idle()) {
+                invocations.remove(&evicted);
+            }
+        }
     }
 
     pub(crate) fn restore(
@@ -235,7 +330,7 @@ impl TeamRuntimeRegistry {
         self.invocations
             .write()
             .unwrap_or_else(|error| error.into_inner())
-            .insert(snapshot.invocation_id.clone(), Arc::new(Mutex::new(snapshot)));
+            .insert(snapshot.invocation_id.clone(), Arc::new(TeamInvocation::new(snapshot)));
         Ok(())
     }
 
@@ -258,7 +353,7 @@ impl TeamRuntimeRegistry {
         }
     }
 
-    fn ledger(&self, invocation_id: &str) -> Arc<Mutex<TeamExecutionSnapshot>> {
+    fn ledger(&self, invocation_id: &str) -> Arc<TeamInvocation> {
         if let Some(ledger) = self
             .invocations
             .read()
@@ -269,7 +364,7 @@ impl TeamRuntimeRegistry {
             return ledger;
         }
         let now = now_ms();
-        let ledger = Arc::new(Mutex::new(TeamExecutionSnapshot {
+        let ledger = Arc::new(TeamInvocation::new(TeamExecutionSnapshot {
             team: self.team.clone(),
             invocation_id: invocation_id.to_string(),
             roster: self.roster.clone(),
@@ -290,7 +385,15 @@ impl TeamRuntimeRegistry {
 
     pub(crate) fn check_budget(&self, invocation_id: &str) -> Result<()> {
         let ledger = self.ledger(invocation_id);
-        let mut snapshot = ledger.lock().unwrap_or_else(|error| error.into_inner());
+        let tracker = self.tracker_for(&ledger, None);
+        let mut snapshot = ledger.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        sync_usage(&mut snapshot, &tracker);
+        if let Err(exceeded) = tracker.check() {
+            snapshot.status = TeamExecutionStatus::BudgetExceeded;
+            snapshot.reason = Some(exceeded.to_string());
+            snapshot.updated_at_ms = now_ms();
+            return Err(exceeded.into());
+        }
         if let Some(reason) = self.budget_violation(&snapshot) {
             snapshot.status = TeamExecutionStatus::BudgetExceeded;
             snapshot.reason = Some(reason.clone());
@@ -307,7 +410,7 @@ impl TeamRuntimeRegistry {
     ) -> Result<String> {
         self.check_budget(invocation_id)?;
         let ledger = self.ledger(invocation_id);
-        let mut snapshot = ledger.lock().unwrap_or_else(|error| error.into_inner());
+        let mut snapshot = ledger.snapshot.lock().unwrap_or_else(|error| error.into_inner());
         snapshot.status = TeamExecutionStatus::Running;
         snapshot.reason = None;
         match start.kind {
@@ -338,7 +441,7 @@ impl TeamRuntimeRegistry {
 
     pub(crate) fn finish_edge(&self, invocation_id: &str, id: &str, error: Option<String>) {
         let ledger = self.ledger(invocation_id);
-        let mut snapshot = ledger.lock().unwrap_or_else(|failure| failure.into_inner());
+        let mut snapshot = ledger.snapshot.lock().unwrap_or_else(|failure| failure.into_inner());
         if let Some(edge) = snapshot.edges.iter_mut().find(|edge| edge.id == id) {
             edge.finished_at_ms = Some(now_ms());
             edge.status = if error.is_some() {
@@ -358,28 +461,21 @@ impl TeamRuntimeRegistry {
         event: &mut Event,
     ) -> Result<EventDisposition> {
         let ledger = self.ledger(invocation_id);
-        let mut snapshot = ledger.lock().unwrap_or_else(|error| error.into_inner());
+        let tracker = self.tracker_for(&ledger, None);
+        let mut snapshot = ledger.snapshot.lock().unwrap_or_else(|error| error.into_inner());
         let already_recorded = event
             .provider_metadata
             .get(TEAM_ROOT_INVOCATION_KEY)
             .is_some_and(|root| root == invocation_id);
-        if !already_recorded {
+        // Partial streaming chunks repeat their usage and are never counted.
+        if !already_recorded && !event.llm_response.partial {
             snapshot.usage.events += 1;
-            snapshot.usage.tool_calls += event.tool_calls().len() as u64;
-            if let Some(usage) = &event.llm_response.usage_metadata {
-                snapshot.usage.model_requests += 1;
-                snapshot.usage.tokens += u64::try_from(usage.total_token_count.max(0)).unwrap_or(0);
-                if let Some(cost) = usage.cost
-                    && cost.is_finite()
-                    && cost > 0.0
-                {
-                    snapshot.usage.cost_microusd = snapshot
-                        .usage
-                        .cost_microusd
-                        .saturating_add((cost * 1_000_000.0).round() as u64);
-                }
-            }
         }
+        // Model calls metered by their call site are already in the tracker; this
+        // counts usage from members that call models directly and audits the limits.
+        let tracker_violation =
+            if already_recorded { tracker.exceeded() } else { tracker.record_event(event).err() };
+        sync_usage(&mut snapshot, &tracker);
         snapshot.updated_at_ms = now_ms();
         event
             .provider_metadata
@@ -388,6 +484,13 @@ impl TeamRuntimeRegistry {
             event.provider_metadata.insert(TEAM_EDGE_ID_KEY.to_string(), edge_id.to_string());
         }
 
+        // Tracker violations keep their `budget.*` code and limit details.
+        if let Some(exceeded) = tracker_violation {
+            snapshot.status = TeamExecutionStatus::BudgetExceeded;
+            snapshot.reason = Some(exceeded.to_string());
+            persist_snapshot_if_absent(event, &snapshot);
+            return Err(exceeded.into());
+        }
         if let Some(reason) = self.budget_violation(&snapshot) {
             snapshot.status = TeamExecutionStatus::BudgetExceeded;
             snapshot.reason = Some(reason.clone());
@@ -414,11 +517,15 @@ impl TeamRuntimeRegistry {
         Ok(termination.map_or(EventDisposition::Continue, |_| EventDisposition::Terminate))
     }
 
-    pub(crate) fn fail(&self, invocation_id: &str, reason: String) {
+    pub(crate) fn fail(&self, invocation_id: &str, error: &adk_core::AdkError) {
         let ledger = self.ledger(invocation_id);
-        let mut snapshot = ledger.lock().unwrap_or_else(|error| error.into_inner());
-        snapshot.status = TeamExecutionStatus::Failed;
-        snapshot.reason = Some(reason);
+        let mut snapshot = ledger.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        snapshot.status = if error.category == adk_core::ErrorCategory::ResourceExhausted {
+            TeamExecutionStatus::BudgetExceeded
+        } else {
+            TeamExecutionStatus::Failed
+        };
+        snapshot.reason = Some(error.to_string());
         snapshot.updated_at_ms = now_ms();
     }
 
@@ -444,35 +551,101 @@ impl TeamRuntimeRegistry {
         None
     }
 
+    /// Limits the budget tracker does not own: events, delegations and handoffs.
     fn budget_violation(&self, snapshot: &TeamExecutionSnapshot) -> Option<String> {
         let usage = &snapshot.usage;
         let limits = [
             ("events", usage.events, self.budget.max_events),
-            ("model requests", usage.model_requests, self.budget.max_model_requests),
-            ("tool calls", usage.tool_calls, self.budget.max_tool_calls),
-            ("tokens", usage.tokens, self.budget.max_tokens),
-            ("costMicrousd", usage.cost_microusd, self.budget.max_cost_microusd),
             ("delegations", usage.delegations, self.budget.max_delegations),
             ("handoffs", usage.handoffs, self.budget.max_handoffs),
         ];
-        if let Some((name, used, limit)) =
-            limits.into_iter().find(|(_, used, limit)| limit.is_some_and(|max| *used > max))
-        {
-            return Some(format!(
-                "team budget exceeded for {name}: used {used}, maximum {}",
-                limit.unwrap_or_default()
-            ));
-        }
-        if let Some(max_wall_time_ms) = self.budget.max_wall_time_ms {
-            let elapsed = now_ms().saturating_sub(snapshot.started_at_ms);
-            if elapsed > max_wall_time_ms {
-                return Some(format!(
-                    "team wall-time budget exceeded: elapsed {elapsed}ms, maximum {max_wall_time_ms}ms"
-                ));
-            }
-        }
-        None
+        let (name, used, limit) =
+            limits.into_iter().find(|(_, used, limit)| limit.is_some_and(|max| *used > max))?;
+        Some(format!(
+            "team budget exceeded for {name}: used {used}, maximum {}",
+            limit.unwrap_or_default()
+        ))
     }
+}
+
+impl TeamInvocation {
+    fn new(snapshot: TeamExecutionSnapshot) -> Self {
+        Self {
+            snapshot: Mutex::new(snapshot),
+            tracker: Mutex::new(None),
+            active_streams: Mutex::new(0),
+        }
+    }
+
+    /// The receipt with its usage refreshed from the live tracker.
+    fn synced_snapshot(&self) -> TeamExecutionSnapshot {
+        let tracker = self.tracker.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let mut snapshot = self.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(tracker) = tracker {
+            sync_usage(&mut snapshot, &tracker);
+        }
+        snapshot.clone()
+    }
+
+    fn has_running_edges(&self) -> bool {
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .edges
+            .iter()
+            .any(|edge| edge.status == TeamExecutionStatus::Running)
+    }
+
+    fn is_idle(&self) -> bool {
+        *self.active_streams.lock().unwrap_or_else(|error| error.into_inner()) == 0
+            && !self.has_running_edges()
+    }
+}
+
+/// Keeps a team invocation active while a team stream is alive.
+pub(crate) struct ActiveTeamStream {
+    runtime: Arc<TeamRuntimeRegistry>,
+    invocation_id: String,
+}
+
+impl Drop for ActiveTeamStream {
+    fn drop(&mut self) {
+        self.runtime.leave(&self.invocation_id);
+    }
+}
+
+impl TeamBudget {
+    /// The limits the budget tracker enforces before each model and tool call.
+    pub(crate) fn run_budget(&self) -> RunBudget {
+        let mut budget = RunBudget::new();
+        if let Some(max) = self.max_model_requests {
+            budget = budget.max_model_calls(max);
+        }
+        if let Some(max) = self.max_tokens {
+            budget = budget.max_total_tokens(max);
+        }
+        if let Some(max) = self.max_cost_microusd {
+            budget = budget.max_cost_micro_usd(max);
+        }
+        if let Some(max) = self.max_tool_calls {
+            budget = budget.max_tool_calls(max);
+        }
+        if let Some(max) = self.max_wall_time_ms {
+            budget = budget.max_wall_time(Duration::from_millis(max));
+        }
+        if self.allow_unpriced_models {
+            budget = budget.allow_unpriced_models();
+        }
+        budget
+    }
+}
+
+fn sync_usage(snapshot: &mut TeamExecutionSnapshot, tracker: &BudgetTracker) {
+    let usage = tracker.usage();
+    snapshot.usage.model_requests = usage.model_calls;
+    snapshot.usage.tool_calls = usage.tool_calls;
+    snapshot.usage.tokens = usage.total_tokens;
+    snapshot.usage.cost_microusd = usage.cost_micro_usd;
 }
 
 fn persist_snapshot(event: &mut Event, snapshot: &TeamExecutionSnapshot) {

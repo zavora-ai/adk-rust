@@ -78,6 +78,8 @@ pub mod agent;
 pub mod agent_invoker;
 /// Dynamic agent loading by name.
 pub mod agent_loader;
+/// Run budgets: limits on model calls, tokens, cost, wall time, and tool calls.
+pub mod budget;
 /// Callback type aliases for agent, model, and tool lifecycle hooks.
 pub mod callbacks;
 /// Invocation context traits: state, session, artifacts, memory, and run configuration.
@@ -119,6 +121,10 @@ pub use agent::{
 };
 pub use agent_invoker::AgentInvoker;
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
+pub use budget::{
+    BUDGET_LIMIT_KEY, BUDGET_RECORDED_KEY, BudgetExceeded, BudgetLimit, BudgetTracker, BudgetUsage,
+    ModelCallMeter, RunBudget, budget_exceeded_event, generate_with_budget, meter_stream,
+};
 pub use callbacks::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull,
     BaseEventsSummarizer, BeforeAgentCallback, BeforeModelCallback, BeforeModelResult,

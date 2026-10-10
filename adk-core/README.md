@@ -372,6 +372,24 @@ pub enum StreamingMode {
 }
 ```
 
+## Run Budgets
+
+`RunBudget` states limits on model calls, total tokens, cost (micro-USD), wall
+time and tool calls; `RunConfig::budget` carries it and `RunConfig::budget_tracker`
+carries the shared `BudgetTracker`. Call sites reserve work with
+`BudgetTracker::begin_model_call` and `begin_tool_calls`; `generate_with_budget`
+wraps a model call. Violations convert to `AdkError` with category
+`ErrorCategory::ResourceExhausted` and a `budget.*` code. `LlmResponse` carries
+`model` and `provider` so usage and cost are attributable.
+
+```rust
+use adk_core::{BudgetTracker, RunBudget};
+
+let tracker = BudgetTracker::new(RunBudget::new().max_tool_calls(2));
+assert!(tracker.begin_tool_calls(2).is_ok());
+assert!(tracker.begin_tool_calls(1).is_err());
+```
+
 ## ToolExecutionStrategy
 
 Controls how multiple tool calls from a single LLM response are dispatched:

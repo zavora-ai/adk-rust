@@ -250,11 +250,14 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
         // Callback context for model-level hooks (the invocation context is also a
         // callback context). Tool-level callbacks get a fresh per-call context.
         let model_ctx: Arc<dyn CallbackContext> = invocation_ctx.clone();
+        // Shared with every agent in the invocation through the run config.
+        let budget_tracker = invocation_ctx.run_config().budget_tracker.clone();
         let model_hooks = ModelHooks {
             before: before_model_callbacks.as_slice(),
             after: after_model_callbacks.as_slice(),
             hooks: &hook_callbacks,
             ctx: &model_ctx,
+            budget: budget_tracker.as_ref(),
             #[cfg(feature = "enhanced-plugins")]
             plugins: enhanced_plugin_manager.as_deref(),
         };
@@ -575,6 +578,14 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                     continue 'script;
                                 }
                             }
+                        }
+
+                        // The call counts against the run budget before it starts.
+                        if let Some(tracker) = budget_tracker.as_ref()
+                            && let Err(exceeded) = tracker.begin_tool_calls(1)
+                        {
+                            yield Err(exceeded.into());
+                            return;
                         }
 
                         // Long-running deferral (needs suspension).
@@ -1263,6 +1274,8 @@ struct ModelHooks<'a> {
     /// The run's invocation hooks, iterated ahead of `before` and `after`.
     hooks: &'a HookCallbacks,
     ctx: &'a Arc<dyn CallbackContext>,
+    /// The run budget model calls count against.
+    budget: Option<&'a Arc<adk_core::BudgetTracker>>,
     #[cfg(feature = "enhanced-plugins")]
     plugins: Option<&'a EnhancedPluginManager>,
 }
@@ -1309,7 +1322,8 @@ async fn next_script(
     }
 
     if content.is_none() {
-        let mut stream = model.generate_content(request, false).await?;
+        let mut stream =
+            adk_core::generate_with_budget(model, request, false, hooks.budget).await?;
         let mut text = String::new();
         while let Some(chunk) = stream.next().await {
             if let Some(c) = chunk?.content {

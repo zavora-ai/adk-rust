@@ -1108,11 +1108,13 @@ pub struct RunConfig {
     /// The default (`ToolConcurrencyConfig::default()`) imposes no limits,
     /// preserving backward compatibility with the previous `max_tool_concurrency: None`.
     pub tool_concurrency: ToolConcurrencyConfig,
-    /// Whether tracing spans may include full request, response, and tool
-    /// payloads when the `record-payloads` crate feature is enabled.
+    /// Whether tracing spans and the `llm_request` debug copy on model events
+    /// may include the full request, response, and tool payloads when the
+    /// `record-payloads` crate feature is enabled.
     pub record_payloads: bool,
-    /// Maximum serialized bytes recorded for tracing payload fields when full
-    /// payload recording is disabled.
+    /// Maximum serialized bytes recorded for tracing payload fields, and for the
+    /// `llm_request` debug copy on model events, when full payload recording is
+    /// disabled.
     pub trace_payload_max_bytes: usize,
     /// Maximum number of agent-to-agent transfers allowed in a single run.
     ///
@@ -1126,6 +1128,15 @@ pub struct RunConfig {
     /// `RunConfig` travels with the invocation, transfer targets and agents behind an agent tool
     /// run these hooks too. See [`InvocationHooks`](crate::InvocationHooks).
     pub invocation_hooks: Vec<Arc<dyn crate::InvocationHooks>>,
+    /// Resource limits for the run. `Runner` creates a fresh
+    /// [`budget_tracker`](Self::budget_tracker) from it for every run.
+    pub budget: Option<crate::RunBudget>,
+    /// Shared counters enforcing a budget across the invocation.
+    ///
+    /// `Runner` sets this from [`budget`](Self::budget) at the start of each run
+    /// when it is `None`; a tracker that is already set is kept, so callers can
+    /// share one tracker across runs. See [`crate::budget`].
+    pub budget_tracker: Option<Arc<crate::BudgetTracker>>,
 }
 
 impl Default for RunConfig {
@@ -1146,6 +1157,8 @@ impl Default for RunConfig {
             trace_payload_max_bytes: 2048,
             max_transfer_depth: None,
             invocation_hooks: Vec::new(),
+            budget: None,
+            budget_tracker: None,
         }
     }
 }
@@ -1304,6 +1317,14 @@ impl RunConfigBuilder {
     /// See [`RunConfig::invocation_hooks`].
     pub fn invocation_hook(mut self, hook: Arc<dyn crate::InvocationHooks>) -> Self {
         self.config.invocation_hooks.push(hook);
+        self
+    }
+
+    /// Sets the resource limits for the run.
+    ///
+    /// See [`RunConfig::budget`] and [`crate::budget`].
+    pub fn budget(mut self, budget: crate::RunBudget) -> Self {
+        self.config.budget = Some(budget);
         self
     }
 
