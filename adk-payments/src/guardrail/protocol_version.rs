@@ -2,7 +2,11 @@ use adk_guardrail::Severity;
 
 use crate::domain::{ProtocolDescriptor, TransactionRecord};
 
-use super::{PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail};
+use async_trait::async_trait;
+
+use super::{
+    PaymentPolicyContext, PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail,
+};
 
 /// Restricts payment execution to explicit protocol name and version combinations.
 pub struct ProtocolVersionGuardrail {
@@ -30,15 +34,17 @@ impl ProtocolVersionGuardrail {
     }
 }
 
+#[async_trait]
 impl PaymentPolicyGuardrail for ProtocolVersionGuardrail {
     fn name(&self) -> &str {
         "protocol_version"
     }
 
-    fn evaluate(
+    async fn evaluate(
         &self,
         _record: &TransactionRecord,
         protocol: &ProtocolDescriptor,
+        _context: &PaymentPolicyContext,
     ) -> PaymentPolicyDecision {
         if self.allows(protocol) {
             PaymentPolicyDecision::allow()
@@ -111,7 +117,11 @@ mod tests {
     #[test]
     fn protocol_version_guardrail_denies_unknown_version() {
         let guardrail = ProtocolVersionGuardrail::new([ProtocolDescriptor::acp("2026-01-30")]);
-        let decision = guardrail.evaluate(&sample_record(), &ProtocolDescriptor::acp("2025-12-01"));
+        let decision = crate::guardrail::evaluate_now(
+            &guardrail,
+            &sample_record(),
+            &ProtocolDescriptor::acp("2025-12-01"),
+        );
 
         assert!(decision.is_deny());
         assert_eq!(decision.findings()[0].guardrail, "protocol_version");

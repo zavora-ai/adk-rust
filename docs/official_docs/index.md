@@ -136,6 +136,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Guardrails](security/guardrails.md) - PII redaction, content filtering, schema validation
 - [Memory](security/memory.md) - Long-term semantic memory for agents
 - [Payments and Commerce](security/payments.md) - Agentic commerce journeys, protocol support, and validation paths
+- [Spend Ledger](security/spend-ledger.md) - One budget for model calls and payments, with daily, monthly, and lifetime caps
 
 ## Compliance
 

@@ -1177,6 +1177,11 @@ pub struct RunConfig {
     /// to decide one call before it is denied. Defaults to
     /// [`DEFAULT_TOOL_CONFIRMATION_TIMEOUT`](crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT).
     pub tool_confirmation_timeout: std::time::Duration,
+    /// Ledger that model calls and payment tools reserve budget against.
+    ///
+    /// When set, the runner reserves an estimate before each model call and commits its
+    /// reported cost, and payment tools reserve checkout totals. See [`crate::SpendLedger`].
+    pub spend_ledger: Option<Arc<dyn crate::SpendLedger>>,
 }
 
 impl Default for RunConfig {
@@ -1205,6 +1210,7 @@ impl Default for RunConfig {
             tool_approvals: HashMap::new(),
             approval_store: None,
             tool_confirmation_timeout: crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
+            spend_ledger: None,
         }
     }
 }
@@ -1425,6 +1431,14 @@ impl RunConfigBuilder {
     /// Sets how long the confirmation handler may take to decide one call.
     pub fn tool_confirmation_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.config.tool_confirmation_timeout = timeout;
+        self
+    }
+
+    /// Sets the ledger that model calls and payment tools reserve budget against.
+    ///
+    /// See [`RunConfig::spend_ledger`].
+    pub fn spend_ledger(mut self, ledger: Arc<dyn crate::SpendLedger>) -> Self {
+        self.config.spend_ledger = Some(ledger);
         self
     }
 

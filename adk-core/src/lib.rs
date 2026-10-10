@@ -115,6 +115,8 @@ pub mod schema_cache;
 pub mod schema_utils;
 /// Thread-safe shared state for parallel agent coordination.
 pub mod shared_state;
+/// One spend ledger for model calls and payments: reservations, limits, and committed spend.
+pub mod spend;
 /// Tool trait, toolset, execution strategy, and registry.
 pub mod tool;
 /// Semaphore-based tool concurrency management.
@@ -180,6 +182,10 @@ pub use request_context::RequestContext;
 pub use schema_adapter::{GenericSchemaAdapter, SchemaAdapter};
 pub use schema_cache::SchemaCache;
 pub use shared_state::{SharedState, SharedStateError};
+pub use spend::{
+    DEFAULT_RESERVATION_TTL, InMemorySpendLedger, ReservationId, SPEND_LIMIT_EXCEEDED_CODE,
+    SpendError, SpendKey, SpendLedger, SpendLimit, SpendLimits, SpendPeriod, usd_to_micro_usd,
+};
 pub use tool::{
     RetryBudget, Tool, ToolContext, ToolEffect, ToolExecutionStrategy, ToolPredicate, ToolRegistry,
     Toolset, ValidationMode,

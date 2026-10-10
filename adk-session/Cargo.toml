@@ -35,7 +35,7 @@ rand = { version = "0.9", optional = true }
 base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 axum = "0.8"
 futures.workspace = true
 http = "1"

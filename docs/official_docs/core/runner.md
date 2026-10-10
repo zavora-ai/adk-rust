@@ -356,6 +356,14 @@ pub struct RunConfig {
 }
 ```
 
+### Spend ledger
+
+`RunConfig::spend_ledger` caps what a run spends. When it is set, the runner reserves an
+estimate in the ledger before each model call and commits the call's reported
+`UsageMetadata::cost` once the final chunk arrives; a reservation the ledger refuses fails
+the call with `spend.limit_exceeded`. `Runner::with_llm_spend_estimate` sizes the hold. See
+[Spend Ledger](../security/spend-ledger.md).
+
 ### ToolExecutionStrategy
 
 Controls how multiple tool calls from a single LLM response are dispatched:

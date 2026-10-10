@@ -25,7 +25,8 @@ conversation history or semantic memory.
 - Durable transaction state lives in `adk-session` via the structured journal, not in fragile conversation-only context.
 - Semantic recall uses masked summaries through `adk-memory`.
 - `adk-auth` binds request identity, tenant scope, and audit metadata.
-- `adk-guardrail` applies amount, merchant, protocol-version, intervention, and redaction policy before state is persisted.
+- `GovernedCheckoutService` evaluates a `PaymentPolicySet` (amount, merchant, currency, protocol-version, intervention, and spend policies) before every checkout creation and completion; the payment tools apply it automatically.
+- Redaction guardrails mask card numbers and personal data in tool outputs and telemetry.
 
 ## Verification Defaults
 
@@ -51,6 +52,54 @@ configured verifier rejects requests instead of accepting them.
 - **ACP `strict()`** requires a verified `Signature`, a `Timestamp` within five
   minutes, and an `Idempotency-Key` on every POST. `AcpRouterBuilder::build`
   fails when a profile requires signatures but has no `DetachedSignatureVerifier`.
+
+## Payment Policies
+
+`GovernedCheckoutService` wraps any `MerchantCheckoutService` and evaluates its
+`PaymentPolicySet` on every checkout creation and completion. Completion is evaluated
+against the stored checkout, so a cart changed after creation is judged as it will be paid.
+
+| Outcome | Effect | Error code |
+|---------|--------|------------|
+| Allow | The backend runs; spend holds are committed on success and released on failure | — |
+| Escalate | The caller's `PaymentApprover` decides | `payments.policy.approval_required` (no decision), `payments.policy.approval_denied` |
+| Deny | The backend is not reached | `payments.policy.denied` |
+
+`PaymentToolsetBuilder` governs its create and complete tools with the policies passed to
+`with_payment_policies`. An escalation goes through the run's tool confirmation flow: a
+static decision for the call ID in `RunConfig::tool_confirmation_decisions` answers first,
+then `RunConfig::tool_confirmation_handler`. Without either, the call fails with
+`payments.policy.approval_required` and its event carries `actions.tool_confirmation`.
+
+```rust
+use adk_payments::guardrail::{
+    AmountThresholdGuardrail, MerchantAllowlistGuardrail, PaymentPolicySet, SpendLimitGuardrail,
+};
+use adk_payments::tools::PaymentToolsetBuilder;
+
+let toolset = PaymentToolsetBuilder::new(checkout_service, transaction_store)
+    .with_payment_policies(
+        PaymentPolicySet::new()
+            // Review above 50 USD, refuse above 500 USD.
+            .with(AmountThresholdGuardrail::new(Some(5_000), Some(50_000)).with_currency("USD", 2))
+            .with(MerchantAllowlistGuardrail::new(["merchant-1", "merchant-2"]))
+            // Refuse completion when no spend ledger is configured.
+            .with(SpendLimitGuardrail::new()),
+    )
+    .build();
+```
+
+`SpendLimitGuardrail` reserves each checkout total in the [spend ledger](spend-ledger.md)
+under `app / agent / merchant_id` when the checkout completes. The ledger is the one passed
+to `PaymentToolsetBuilder::with_spend_ledger`, or else `RunConfig::spend_ledger`. A refused
+reservation and an unreachable ledger both deny the payment. When the policy set has no
+spend guardrail, the toolset adds `SpendLimitGuardrail::when_configured()`, which reserves
+only when a ledger is configured. Only USD totals can be reserved; other currencies are
+denied.
+
+For ACP and AP2 traffic, hand the protocol adapters a `GovernedCheckoutService`. The
+adapters supply no approver, so an escalated protocol request is refused rather than
+completed.
 
 ## Amounts
 

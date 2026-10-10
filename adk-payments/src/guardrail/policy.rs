@@ -1,6 +1,8 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use adk_core::{ReservationId, SpendLedger};
 use adk_guardrail::Severity;
+use async_trait::async_trait;
 
 use crate::domain::{ProtocolDescriptor, TransactionRecord};
 
@@ -32,7 +34,10 @@ impl PaymentPolicyFinding {
 pub enum PaymentPolicyDecision {
     /// The payment passed every configured guardrail.
     Allow,
-    /// The payment may continue only after explicit human confirmation.
+    /// The payment may continue only after explicit approval.
+    ///
+    /// The payment tools route this outcome through the tool confirmation flow; see
+    /// [`GovernedCheckoutService`](crate::kernel::GovernedCheckoutService).
     Escalate { findings: Vec<PaymentPolicyFinding> },
     /// The payment must not continue under the current policy.
     Deny { findings: Vec<PaymentPolicyFinding> },
@@ -94,16 +99,157 @@ impl PaymentPolicyDecision {
     }
 }
 
+/// The checkout operation a payment policy is evaluated for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PaymentOperation {
+    /// A checkout session is being created.
+    CreateCheckout,
+    /// A checkout is being completed, which moves money.
+    CompleteCheckout,
+}
+
+/// Budget a policy reserved while evaluating one operation.
+///
+/// The enforcer commits every hold when the operation succeeds and releases them when it
+/// is denied, left awaiting approval, or fails.
+#[derive(Debug, Clone)]
+pub struct SpendHold {
+    /// Ledger the reservation was taken in.
+    pub ledger: Arc<dyn SpendLedger>,
+    /// The reservation to commit or release.
+    pub reservation: ReservationId,
+    /// Amount reserved, committed when the completed transaction's total cannot be read.
+    pub amount_micro_usd: u64,
+}
+
+/// What a payment policy sees beside the transaction: the operation, who is paying, and
+/// the spend ledger.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::InMemorySpendLedger;
+/// use adk_payments::guardrail::{PaymentOperation, PaymentPolicyContext};
+/// use std::sync::Arc;
+///
+/// let context = PaymentPolicyContext::new(PaymentOperation::CompleteCheckout)
+///     .with_org("store")
+///     .with_agent("shopper")
+///     .with_spend_ledger(Arc::new(InMemorySpendLedger::default()));
+/// assert_eq!(context.org(), Some("store"));
+/// ```
+#[derive(Debug)]
+pub struct PaymentPolicyContext {
+    operation: PaymentOperation,
+    spend_ledger: Option<Arc<dyn SpendLedger>>,
+    org: Option<String>,
+    agent: Option<String>,
+    holds: Mutex<Vec<SpendHold>>,
+}
+
+impl PaymentPolicyContext {
+    /// Creates a context for `operation` with no ledger and no attribution.
+    #[must_use]
+    pub fn new(operation: PaymentOperation) -> Self {
+        Self {
+            operation,
+            spend_ledger: None,
+            org: None,
+            agent: None,
+            holds: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Gives policies access to `ledger`.
+    #[must_use]
+    pub fn with_spend_ledger(mut self, ledger: Arc<dyn SpendLedger>) -> Self {
+        self.spend_ledger = Some(ledger);
+        self
+    }
+
+    /// Attributes the payment to `org`, such as the calling application.
+    #[must_use]
+    pub fn with_org(mut self, org: impl Into<String>) -> Self {
+        self.org = Some(org.into());
+        self
+    }
+
+    /// Attributes the payment to `agent`.
+    #[must_use]
+    pub fn with_agent(mut self, agent: impl Into<String>) -> Self {
+        self.agent = Some(agent.into());
+        self
+    }
+
+    /// Returns the operation being evaluated.
+    #[must_use]
+    pub fn operation(&self) -> PaymentOperation {
+        self.operation
+    }
+
+    /// Returns the spend ledger, when one is configured.
+    #[must_use]
+    pub fn spend_ledger(&self) -> Option<&Arc<dyn SpendLedger>> {
+        self.spend_ledger.as_ref()
+    }
+
+    /// Returns the organization the payment is attributed to.
+    #[must_use]
+    pub fn org(&self) -> Option<&str> {
+        self.org.as_deref()
+    }
+
+    /// Returns the agent the payment is attributed to.
+    #[must_use]
+    pub fn agent(&self) -> Option<&str> {
+        self.agent.as_deref()
+    }
+
+    /// Records budget a policy reserved, for the enforcer to commit or release.
+    pub fn hold(&self, hold: SpendHold) {
+        self.holds.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(hold);
+    }
+
+    fn take_holds(&self) -> Vec<SpendHold> {
+        std::mem::take(&mut *self.holds.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+    }
+
+    /// Commits every hold, at `actual_micro_usd` when known and the reserved amount
+    /// otherwise. A failed commit is logged: the payment already happened.
+    pub async fn commit_holds(&self, actual_micro_usd: Option<u64>) {
+        for hold in self.take_holds() {
+            let amount = actual_micro_usd.unwrap_or(hold.amount_micro_usd);
+            if let Err(error) = hold.ledger.commit(hold.reservation, amount).await {
+                tracing::error!(error = %error, spend.amount_micro_usd = amount, "failed to commit payment spend");
+            }
+        }
+    }
+
+    /// Releases every hold. A failed release is logged; the hold expires by its TTL.
+    pub async fn release_holds(&self) {
+        for hold in self.take_holds() {
+            if let Err(error) = hold.ledger.release(hold.reservation).await {
+                tracing::warn!(error = %error, "failed to release payment spend reservation");
+            }
+        }
+    }
+}
+
 /// Trait implemented by payment-specific policy guardrails.
+///
+/// Evaluation is asynchronous so a policy can consult the
+/// [`spend_ledger`](PaymentPolicyContext::spend_ledger) or another service.
+#[async_trait]
 pub trait PaymentPolicyGuardrail: Send + Sync {
     /// Stable name of the guardrail.
     fn name(&self) -> &str;
 
     /// Evaluates one canonical transaction under a specific protocol surface.
-    fn evaluate(
+    async fn evaluate(
         &self,
         record: &TransactionRecord,
         protocol: &ProtocolDescriptor,
+        context: &PaymentPolicyContext,
     ) -> PaymentPolicyDecision;
 }
 
@@ -139,18 +285,27 @@ impl PaymentPolicySet {
         &self.guardrails
     }
 
-    /// Evaluates all configured guardrails and returns the strongest outcome.
+    /// Returns `true` when a guardrail named `name` is configured.
     #[must_use]
-    pub fn evaluate(
+    pub fn contains(&self, name: &str) -> bool {
+        self.guardrails.iter().any(|guardrail| guardrail.name() == name)
+    }
+
+    /// Evaluates all configured guardrails and returns the strongest outcome.
+    ///
+    /// A denial releases any budget the guardrails reserved in `context`. After an allow
+    /// or an escalation, the caller commits or releases the holds once the operation ends.
+    pub async fn evaluate(
         &self,
         record: &TransactionRecord,
         protocol: &ProtocolDescriptor,
+        context: &PaymentPolicyContext,
     ) -> PaymentPolicyDecision {
         let mut denied = Vec::new();
         let mut escalated = Vec::new();
 
         for guardrail in &self.guardrails {
-            match guardrail.evaluate(record, protocol) {
+            match guardrail.evaluate(record, protocol, context).await {
                 PaymentPolicyDecision::Allow => {}
                 PaymentPolicyDecision::Escalate { findings } => escalated.extend(findings),
                 PaymentPolicyDecision::Deny { findings } => denied.extend(findings),
@@ -161,6 +316,7 @@ impl PaymentPolicySet {
         sort_findings(&mut escalated);
 
         if !denied.is_empty() {
+            context.release_holds().await;
             PaymentPolicyDecision::deny(denied)
         } else if !escalated.is_empty() {
             PaymentPolicyDecision::escalate(escalated)
@@ -210,15 +366,17 @@ mod tests {
         decision: PaymentPolicyDecision,
     }
 
+    #[async_trait]
     impl PaymentPolicyGuardrail for StaticDecisionGuardrail {
         fn name(&self) -> &str {
             self.name
         }
 
-        fn evaluate(
+        async fn evaluate(
             &self,
             _record: &TransactionRecord,
             _protocol: &ProtocolDescriptor,
+            _context: &PaymentPolicyContext,
         ) -> PaymentPolicyDecision {
             self.decision.clone()
         }
@@ -266,8 +424,8 @@ mod tests {
         )
     }
 
-    #[test]
-    fn policy_set_prefers_denials_over_escalations() {
+    #[tokio::test]
+    async fn policy_set_prefers_denials_over_escalations() {
         let set = PaymentPolicySet::new()
             .with(StaticDecisionGuardrail {
                 name: "amount_threshold",
@@ -286,7 +444,13 @@ mod tests {
                 )]),
             });
 
-        let decision = set.evaluate(&sample_record(), &ProtocolDescriptor::acp("2026-01-30"));
+        let decision = set
+            .evaluate(
+                &sample_record(),
+                &ProtocolDescriptor::acp("2026-01-30"),
+                &PaymentPolicyContext::new(PaymentOperation::CreateCheckout),
+            )
+            .await;
 
         assert!(decision.is_deny());
         assert_eq!(decision.findings().len(), 1);

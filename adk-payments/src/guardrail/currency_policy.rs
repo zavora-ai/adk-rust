@@ -4,7 +4,11 @@ use adk_guardrail::Severity;
 
 use crate::domain::{ProtocolDescriptor, TransactionRecord};
 
-use super::{PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail};
+use async_trait::async_trait;
+
+use super::{
+    PaymentPolicyContext, PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail,
+};
 
 /// Restricts payment execution to an explicit currency allowlist.
 pub struct CurrencyPolicyGuardrail {
@@ -23,15 +27,17 @@ impl CurrencyPolicyGuardrail {
     }
 }
 
+#[async_trait]
 impl PaymentPolicyGuardrail for CurrencyPolicyGuardrail {
     fn name(&self) -> &str {
         "currency_policy"
     }
 
-    fn evaluate(
+    async fn evaluate(
         &self,
         record: &TransactionRecord,
         _protocol: &ProtocolDescriptor,
+        _context: &PaymentPolicyContext,
     ) -> PaymentPolicyDecision {
         let currency = record.cart.total.currency.as_str();
 
@@ -102,7 +108,11 @@ mod tests {
     #[test]
     fn currency_policy_denies_disallowed_currency() {
         let guardrail = CurrencyPolicyGuardrail::new(["USD", "EUR"]);
-        let decision = guardrail.evaluate(&sample_record(), &ProtocolDescriptor::acp("2026-01-30"));
+        let decision = crate::guardrail::evaluate_now(
+            &guardrail,
+            &sample_record(),
+            &ProtocolDescriptor::acp("2026-01-30"),
+        );
 
         assert!(decision.is_deny());
         assert_eq!(decision.findings()[0].guardrail, "currency_policy");
