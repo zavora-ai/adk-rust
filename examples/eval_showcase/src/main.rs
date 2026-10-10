@@ -209,9 +209,10 @@ fn demo_baseline_store() {
     let regressions = store.check_regressions(&degraded, 0.05).expect("check");
     println!("  Degraded case_1 to 0.78 (tolerance=0.05):");
     for reg in &regressions {
+        let current = reg.current_value.map_or_else(|| "missing".to_string(), |v| format!("{v:.2}"));
         println!(
-            "    REGRESSION: {} / {} — baseline={:.2}, current={:.2}, delta={:.2}",
-            reg.metric_name, reg.case_id, reg.baseline_value, reg.current_value, reg.delta
+            "    REGRESSION: {} / {} — baseline={:.2}, current={current}, delta={:.2}",
+            reg.metric_name, reg.case_id, reg.baseline_value, reg.delta
         );
     }
 

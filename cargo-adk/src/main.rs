@@ -173,38 +173,36 @@ enum AdkCommand {
         stream_output: bool,
     },
 
-    /// Run agent evaluations
+    /// Run agent evaluations (not supported yet: exits non-zero without running any case)
+    ///
+    /// The CLI cannot construct your agent, so it cannot execute eval cases. Run eval sets
+    /// from a Rust test with `adk_eval::Evaluator` instead.
     Eval {
         /// Path to eval set file or directory
         path: PathBuf,
 
-        /// Model override (e.g., "gemini-3.7-flash")
-        #[arg(long)]
-        model: Option<String>,
+        // The flags below are accepted, and ignored, so existing invocations reach the
+        // not-supported error instead of a usage error.
+        #[arg(long = "model", hide = true)]
+        _model: Option<String>,
 
-        /// Save results as baseline
-        #[arg(long)]
-        save_baseline: bool,
+        #[arg(long = "save-baseline", hide = true)]
+        _save_baseline: bool,
 
-        /// Check for regressions against saved baseline
-        #[arg(long)]
-        check_regression: bool,
+        #[arg(long = "check-regression", hide = true)]
+        _check_regression: bool,
 
-        /// Regression tolerance (default 0.05)
-        #[arg(long, default_value = "0.05")]
-        tolerance: f64,
+        #[arg(long = "tolerance", hide = true)]
+        _tolerance: Option<f64>,
 
-        /// Output format: "table" (default), "json", "junit"
-        #[arg(long, default_value = "table")]
-        format: String,
+        #[arg(long = "format", hide = true)]
+        _format: Option<String>,
 
-        /// Output file (for junit/json formats)
-        #[arg(long)]
-        output: Option<PathBuf>,
+        #[arg(long = "output", hide = true)]
+        _output: Option<PathBuf>,
 
-        /// Concurrency level for parallel evaluation
-        #[arg(long, default_value = "1")]
-        concurrency: usize,
+        #[arg(long = "concurrency", hide = true)]
+        _concurrency: Option<usize>,
     },
 
     /// Run performance benchmarks against real LLM APIs
@@ -451,31 +449,8 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        AdkCommand::Eval {
-            path,
-            model,
-            save_baseline,
-            check_regression,
-            tolerance,
-            format,
-            output,
-            concurrency,
-        } => {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("failed to create tokio runtime");
-
-            if let Err(e) = rt.block_on(run_eval(
-                path,
-                model,
-                save_baseline,
-                check_regression,
-                tolerance,
-                format,
-                output,
-                concurrency,
-            )) {
+        AdkCommand::Eval { path, .. } => {
+            if let Err(e) = run_eval(&path) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -1342,235 +1317,50 @@ async fn run_bench(
 
 // ── Eval command ────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
-async fn run_eval(
-    path: PathBuf,
-    _model: Option<String>,
-    save_baseline: bool,
-    check_regression: bool,
-    tolerance: f64,
-    format: String,
-    output: Option<PathBuf>,
-    _concurrency: usize,
-) -> Result<(), String> {
-    use adk_eval::{BaselineStore, EvaluationReport, EvaluationResult, TestFile};
-
-    // Load eval set from path
-    let reports: Vec<EvaluationReport> = if path.is_dir() {
-        // Load all .test.json files from directory
-        let mut reports = Vec::new();
-        let entries =
-            std::fs::read_dir(&path).map_err(|e| format!("failed to read directory: {e}"))?;
-        for entry in entries.flatten() {
-            let entry_path = entry.path();
-            if entry_path.extension().is_some_and(|ext| ext == "json")
-                && let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
-                && name.ends_with(".test.json")
-            {
-                let test_file = TestFile::load(&entry_path)
-                    .map_err(|e| format!("failed to load {}: {e}", entry_path.display()))?;
-                let report = build_report_from_test_file(&test_file, name);
-                reports.push(report);
-            }
-        }
-        if reports.is_empty() {
+/// Loads the eval set at `path`, then refuses to report results.
+///
+/// The CLI has no way to construct the user's agent, so it cannot execute any case.
+/// Reporting loaded cases as passed would turn every CI gate green, so this always
+/// returns an error that points at the library API instead.
+fn run_eval(path: &Path) -> Result<(), String> {
+    let files: Vec<PathBuf> = if path.is_dir() {
+        let entries = std::fs::read_dir(path)
+            .map_err(|e| format!("failed to read directory {}: {e}", path.display()))?;
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|file| {
+                file.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".test.json"))
+            })
+            .collect();
+        if files.is_empty() {
             return Err(format!("no .test.json files found in {}", path.display()));
         }
-        reports
+        files.sort();
+        files
     } else {
-        // Load single file
-        let test_file =
-            TestFile::load(&path).map_err(|e| format!("failed to load eval set: {e}"))?;
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("eval");
-        vec![build_report_from_test_file(&test_file, name)]
+        vec![path.to_path_buf()]
     };
 
-    // Aggregate all results across reports
-    let all_results: Vec<&EvaluationResult> = reports.iter().flat_map(|r| &r.results).collect();
-    let total_cases = all_results.len();
-    let passed_cases = all_results.iter().filter(|r| r.passed).count();
-    let failed_cases = total_cases - passed_cases;
-
-    // Build metrics map for baseline operations
-    let mut metrics: std::collections::HashMap<String, std::collections::HashMap<String, f64>> =
-        std::collections::HashMap::new();
-    for result in &all_results {
-        for (criterion, &score) in &result.scores {
-            metrics.entry(criterion.clone()).or_default().insert(result.eval_id.clone(), score);
-        }
+    let mut cases = 0;
+    for file in &files {
+        let test_file = adk_eval::TestFile::load(file)
+            .map_err(|e| format!("failed to load {}: {e}", file.display()))?;
+        cases += test_file.eval_cases.len();
     }
 
-    // Handle --save-baseline
-    if save_baseline {
-        let baseline_path = path.parent().unwrap_or(Path::new(".")).join(".eval-baseline.json");
-        let store = BaselineStore::new(&baseline_path);
-        let eval_set_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("eval");
-        store.save(eval_set_id, &metrics).map_err(|e| format!("failed to save baseline: {e}"))?;
-        eprintln!("Baseline saved to {}", baseline_path.display());
-    }
-
-    // Handle --check-regression
-    let mut has_regressions = false;
-    if check_regression {
-        let baseline_path = path.parent().unwrap_or(Path::new(".")).join(".eval-baseline.json");
-        let store = BaselineStore::new(&baseline_path);
-        let regressions = store
-            .check_regressions(&metrics, tolerance)
-            .map_err(|e| format!("failed to check regressions: {e}"))?;
-
-        if !regressions.is_empty() {
-            has_regressions = true;
-            eprintln!("\n⚠ Regressions detected ({} metric(s)):\n", regressions.len());
-            for reg in &regressions {
-                eprintln!(
-                    "  {} [{}]: {:.3} → {:.3} (delta: -{:.3}, tolerance: {:.3})",
-                    reg.metric_name,
-                    reg.case_id,
-                    reg.baseline_value,
-                    reg.current_value,
-                    reg.delta,
-                    tolerance
-                );
-            }
-            eprintln!();
-        }
-    }
-
-    // Format and output results
-    match format.as_str() {
-        "json" => {
-            let json_output = serde_json::to_string_pretty(&reports)
-                .map_err(|e| format!("failed to serialize results: {e}"))?;
-            if let Some(ref output_path) = output {
-                std::fs::write(output_path, &json_output)
-                    .map_err(|e| format!("failed to write output file: {e}"))?;
-                eprintln!("JSON output written to {}", output_path.display());
-            } else {
-                println!("{json_output}");
-            }
-        }
-        "junit" => {
-            use adk_eval::JunitReporter;
-            // Combine all reports into a single JUnit output
-            // Use the first report or merge them
-            for report in &reports {
-                let suite_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("eval");
-                let xml = JunitReporter::generate(report, suite_name)
-                    .map_err(|e| format!("failed to generate JUnit XML: {e}"))?;
-                if let Some(ref output_path) = output {
-                    std::fs::write(output_path, &xml)
-                        .map_err(|e| format!("failed to write output file: {e}"))?;
-                    eprintln!("JUnit XML written to {}", output_path.display());
-                } else {
-                    println!("{xml}");
-                }
-            }
-        }
-        _ => {
-            // Display summary table
-            println!("\n╔══════════════════════════════════════════════════════════════╗");
-            println!("║                    Evaluation Results                        ║");
-            println!("╠══════════════════════════════════════════════════════════════╣");
-            println!(
-                "║  Total cases: {:<4}  Passed: {:<4}  Failed: {:<4}             ║",
-                total_cases, passed_cases, failed_cases
-            );
-            println!("╠══════════════════════════════════════════════════════════════╣");
-
-            // Per-criterion summary
-            let mut criterion_scores: std::collections::HashMap<String, Vec<f64>> =
-                std::collections::HashMap::new();
-            for result in &all_results {
-                for (criterion, &score) in &result.scores {
-                    criterion_scores.entry(criterion.clone()).or_default().push(score);
-                }
-            }
-
-            if !criterion_scores.is_empty() {
-                println!(
-                    "║  {:<20} {:>8} {:>8} {:>8}          ║",
-                    "Criterion", "Mean", "Min", "Max"
-                );
-                println!(
-                    "║  {:<20} {:>8} {:>8} {:>8}          ║",
-                    "─────────", "────", "───", "───"
-                );
-                let mut criteria: Vec<_> = criterion_scores.keys().collect();
-                criteria.sort();
-                for criterion in criteria {
-                    let scores = &criterion_scores[criterion];
-                    let mean = scores.iter().sum::<f64>() / scores.len() as f64;
-                    let min = scores.iter().cloned().fold(f64::INFINITY, f64::min);
-                    let max = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                    let name = if criterion.len() > 20 { &criterion[..20] } else { criterion };
-                    println!("║  {:<20} {:>8.3} {:>8.3} {:>8.3}          ║", name, mean, min, max);
-                }
-            }
-
-            // Cost/latency summary if available
-            let total_duration: std::time::Duration = reports.iter().map(|r| r.duration).sum();
-            println!("╠══════════════════════════════════════════════════════════════╣");
-            println!(
-                "║  Total duration: {:.2}s                                      ║",
-                total_duration.as_secs_f64()
-            );
-            println!("╚══════════════════════════════════════════════════════════════╝");
-
-            // Show failures
-            if failed_cases > 0 {
-                println!("\nFailed cases:");
-                for result in &all_results {
-                    if !result.passed {
-                        println!("  ✗ {}", result.eval_id);
-                        for failure in &result.failures {
-                            println!(
-                                "    - {}: {:.3} < {:.3}",
-                                failure.criterion, failure.score, failure.threshold
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Exit non-zero on regressions
-    if has_regressions {
-        std::process::exit(1);
-    }
-
-    Ok(())
-}
-
-/// Build a simple evaluation report from a loaded test file.
-///
-/// This creates a report with basic pass/fail status based on whether
-/// expected responses are defined. For a full evaluation, an actual agent
-/// invocation would be needed.
-fn build_report_from_test_file(
-    test_file: &adk_eval::TestFile,
-    name: &str,
-) -> adk_eval::EvaluationReport {
-    use adk_eval::{EvaluationReport, EvaluationResult};
-    use std::collections::HashMap;
-    use std::time::Duration;
-
-    let mut results = Vec::new();
-    for case in &test_file.eval_cases {
-        let case_id = case.eval_id.clone();
-        let mut scores = HashMap::new();
-
-        // Check if expected response is defined — mark as needing evaluation
-        let has_expected = case.conversation.iter().any(|t| t.final_response.is_some());
-        if has_expected {
-            scores.insert("defined".to_string(), 1.0);
-        }
-
-        results.push(EvaluationResult::passed(&case_id, scores, Duration::from_millis(0)));
-    }
-
-    let started_at = chrono::Utc::now();
-    EvaluationReport::new(name, results, started_at)
+    Err(format!(
+        "cargo adk eval cannot run agents yet, so none of the {cases} case(s) in {} were \
+         executed and no results, baseline, or report were written.\n\
+         Run the eval set from a Rust test, where your agent is constructed:\n\n\
+         \x20   let evaluator = adk_eval::Evaluator::new(adk_eval::EvaluationConfig::with_criteria(criteria));\n\
+         \x20   let report = evaluator.evaluate_file(agent, \"{}\").await?;\n\
+         \x20   assert!(report.all_passed(), \"{{}}\", report.format_summary());\n\n\
+         See \"Running Evaluations in CI\" in \
+         https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/evaluation/evaluation.md",
+        path.display(),
+        files[0].display()
+    ))
 }
 
 /// Create a .tar.gz bundle with paths that have NO `./` prefix.
@@ -2648,6 +2438,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eval_refuses_to_report_cases_it_did_not_run() {
+        let dir = std::env::temp_dir().join(format!("cargo-adk-eval-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("weather.test.json");
+        fs::write(
+            &file,
+            r#"{
+                "eval_set_id": "weather",
+                "name": "Weather",
+                "eval_cases": [{
+                    "eval_id": "current_weather",
+                    "conversation": [{
+                        "invocation_id": "inv_1",
+                        "user_content": {"parts": [{"text": "Weather in Nairobi?"}]},
+                        "final_response": {"parts": [{"text": "Sunny."}], "role": "model"}
+                    }]
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        for path in [&file, &dir] {
+            let err = run_eval(path).unwrap_err();
+            assert!(err.contains("cannot run agents yet"), "{err}");
+            assert!(err.contains("none of the 1 case(s)"), "{err}");
+            assert!(err.contains("Evaluator"), "{err}");
+        }
+
+        fs::write(&file, "not json").unwrap();
+        assert!(run_eval(&file).unwrap_err().contains("failed to load"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn eval_accepts_legacy_flags_so_users_reach_the_error() {
+        let cli = Cargo::try_parse_from([
+            "cargo",
+            "adk",
+            "eval",
+            "tests/",
+            "--model",
+            "gemini-3.7-flash",
+            "--save-baseline",
+            "--check-regression",
+            "--tolerance",
+            "0.05",
+            "--format",
+            "junit",
+            "--output",
+            "results.xml",
+            "--concurrency",
+            "4",
+        ])
+        .unwrap();
+        let CargoSubcommand::Adk(adk) = cli.command;
+        assert!(
+            matches!(adk.command, AdkCommand::Eval { ref path, .. } if path == Path::new("tests/"))
+        );
+    }
 
     fn assert_current_template(cargo_toml: &str) {
         assert!(

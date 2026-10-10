@@ -11,11 +11,11 @@
 //!
 //! let store = BaselineStore::new(".eval-baseline.json");
 //!
-//! // Save current metrics as baseline
+//! // Save current metrics as baseline: metric name → case id → score
 //! let mut metrics = HashMap::new();
-//! let mut case_metrics = HashMap::new();
-//! case_metrics.insert("accuracy".to_string(), 0.95);
-//! metrics.insert("case_1".to_string(), case_metrics);
+//! let mut accuracy = HashMap::new();
+//! accuracy.insert("case_1".to_string(), 0.95);
+//! metrics.insert("accuracy".to_string(), accuracy);
 //! store.save("my_eval_set", &metrics).unwrap();
 //!
 //! // Check for regressions on a later run
@@ -42,7 +42,7 @@ pub struct Baseline {
 }
 
 /// A regression detected between baseline and current run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Regression {
     /// Name of the metric that regressed
     pub metric_name: String,
@@ -50,9 +50,11 @@ pub struct Regression {
     pub case_id: String,
     /// Score from the baseline
     pub baseline_value: f64,
-    /// Score from the current run
-    pub current_value: f64,
-    /// Difference (baseline - current)
+    /// Score from the current run, or `None` when the current run has no score for
+    /// this metric and case, for example because the case errored or was not run
+    pub current_value: Option<f64>,
+    /// Difference (baseline - current); the full `baseline_value` when `current_value`
+    /// is `None`
     pub delta: f64,
 }
 
@@ -111,8 +113,17 @@ impl BaselineStore {
 
     /// Compare current metrics against baseline and detect regressions.
     ///
-    /// A regression is detected when `baseline_value - current_value > tolerance`.
+    /// Every metric and case recorded in the baseline must be present in `current`.
+    /// A regression is reported when `baseline_value - current_value > tolerance`, when
+    /// the current score is NaN, or when the current run has no score for a baseline
+    /// metric and case. Metrics and cases that appear only in `current` are ignored.
+    /// Regressions are sorted by metric name, then case id.
+    ///
     /// If no baseline file exists, returns an empty vector (no regressions).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvalError::BaselineError`] when the baseline file cannot be read or parsed.
     pub fn check_regressions(
         &self,
         current: &HashMap<String, HashMap<String, f64>>,
@@ -132,24 +143,29 @@ impl BaselineStore {
         let mut regressions = Vec::new();
 
         for (metric_name, baseline_cases) in &baseline.metrics {
-            if let Some(current_cases) = current.get(metric_name) {
-                for (case_id, &baseline_value) in baseline_cases {
-                    if let Some(&current_value) = current_cases.get(case_id) {
-                        let delta = baseline_value - current_value;
-                        if delta > tolerance {
-                            regressions.push(Regression {
-                                metric_name: metric_name.clone(),
-                                case_id: case_id.clone(),
-                                baseline_value,
-                                current_value,
-                                delta,
-                            });
-                        }
-                    }
+            let current_cases = current.get(metric_name);
+            for (case_id, &baseline_value) in baseline_cases {
+                let current_value = current_cases.and_then(|cases| cases.get(case_id)).copied();
+                let delta = baseline_value - current_value.unwrap_or(0.0);
+                let regressed = match current_value {
+                    Some(_) => delta > tolerance || delta.is_nan(),
+                    None => true,
+                };
+                if regressed {
+                    regressions.push(Regression {
+                        metric_name: metric_name.clone(),
+                        case_id: case_id.clone(),
+                        baseline_value,
+                        current_value,
+                        delta,
+                    });
                 }
             }
         }
 
+        regressions.sort_by(|a, b| {
+            a.metric_name.cmp(&b.metric_name).then_with(|| a.case_id.cmp(&b.case_id))
+        });
         Ok(regressions)
     }
 }
@@ -243,8 +259,76 @@ mod tests {
         assert_eq!(reg.metric_name, "accuracy");
         assert_eq!(reg.case_id, "case_1");
         assert!((reg.baseline_value - 0.95).abs() < f64::EPSILON);
-        assert!((reg.current_value - 0.80).abs() < f64::EPSILON);
+        assert_eq!(reg.current_value, Some(0.80));
         assert!((reg.delta - 0.15).abs() < 1e-10);
+    }
+
+    #[test]
+    fn missing_case_is_a_regression() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        store.save("test_set", &sample_metrics()).unwrap();
+
+        // case_2 errored in the current run, so it has no scores at all.
+        let mut current = sample_metrics();
+        for cases in current.values_mut() {
+            cases.remove("case_2");
+        }
+
+        let regressions = store.check_regressions(&current, 0.05).unwrap();
+        assert_eq!(
+            regressions,
+            vec![
+                Regression {
+                    metric_name: "accuracy".to_string(),
+                    case_id: "case_2".to_string(),
+                    baseline_value: 0.88,
+                    current_value: None,
+                    delta: 0.88,
+                },
+                Regression {
+                    metric_name: "latency".to_string(),
+                    case_id: "case_2".to_string(),
+                    baseline_value: 0.6,
+                    current_value: None,
+                    delta: 0.6,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_metric_is_a_regression_even_at_zero_baseline() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        let mut baseline = HashMap::new();
+        baseline.insert("safety".to_string(), HashMap::from([("case_1".to_string(), 0.0)]));
+        store.save("test_set", &baseline).unwrap();
+
+        let regressions = store.check_regressions(&HashMap::new(), 0.05).unwrap();
+        assert_eq!(
+            regressions,
+            vec![Regression {
+                metric_name: "safety".to_string(),
+                case_id: "case_1".to_string(),
+                baseline_value: 0.0,
+                current_value: None,
+                delta: 0.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn new_cases_in_current_run_are_not_regressions() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        store.save("test_set", &sample_metrics()).unwrap();
+
+        let mut current = sample_metrics();
+        current.get_mut("accuracy").unwrap().insert("case_3".to_string(), 0.1);
+        current.insert("coverage".to_string(), HashMap::from([("case_1".to_string(), 0.0)]));
+
+        assert!(store.check_regressions(&current, 0.05).unwrap().is_empty());
     }
 
     #[test]

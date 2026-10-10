@@ -201,7 +201,10 @@ pub struct IntermediateData {
 pub struct ToolUse {
     /// Tool/function name
     pub name: String,
-    /// Arguments passed to the tool
+    /// Arguments passed to the tool.
+    ///
+    /// In an expected tool use, `Value::Null` (the value when `args` is omitted from a
+    /// test file) places no constraint on the actual arguments.
     #[serde(default)]
     pub args: Value,
     /// Expected response (optional, for mocking)
@@ -225,23 +228,60 @@ impl ToolUse {
         self
     }
 
-    /// Check if this tool use matches another (name and args)
+    /// Checks whether `other`, an actual tool call, satisfies this expected tool use.
+    ///
+    /// Names must be equal. Expected arguments of `Value::Null` match any arguments.
+    /// Otherwise arguments are compared recursively, and numbers compare by value, so
+    /// `1` matches `1.0`.
+    ///
+    /// | `strict_args` | Objects | Arrays |
+    /// |---------------|---------|--------|
+    /// | `false` | every expected key is present with a matching value; extra keys are allowed at any depth | same length, matched element by element |
+    /// | `true` | same key set, values matched recursively | same length, matched element by element |
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_eval::ToolUse;
+    /// use serde_json::json;
+    ///
+    /// let expected = ToolUse::new("search").with_args(json!({"filter": {"limit": 10}}));
+    /// let actual = ToolUse::new("search")
+    ///     .with_args(json!({"query": "rust", "filter": {"limit": 10.0, "page": 2}}));
+    ///
+    /// assert!(expected.matches(&actual, false));
+    /// assert!(!expected.matches(&actual, true));
+    /// ```
     pub fn matches(&self, other: &ToolUse, strict_args: bool) -> bool {
-        if self.name != other.name {
-            return false;
-        }
+        self.name == other.name
+            && (self.args.is_null() || json_matches(&self.args, &other.args, strict_args))
+    }
+}
 
-        if strict_args {
-            self.args == other.args
-        } else {
-            // Partial match: check that expected args are present in actual
-            match (&self.args, &other.args) {
-                (Value::Object(expected), Value::Object(actual)) => {
-                    expected.iter().all(|(k, v)| actual.get(k) == Some(v))
-                }
-                _ => self.args == other.args,
+/// Compares an expected JSON value against an actual one; see [`ToolUse::matches`].
+fn json_matches(expected: &Value, actual: &Value, strict: bool) -> bool {
+    match (expected, actual) {
+        (Value::Number(expected), Value::Number(actual)) => {
+            // Integers compare exactly so values beyond 2^53 do not collapse in f64.
+            if let (Some(expected), Some(actual)) = (expected.as_i64(), actual.as_i64()) {
+                expected == actual
+            } else if let (Some(expected), Some(actual)) = (expected.as_u64(), actual.as_u64()) {
+                expected == actual
+            } else {
+                expected.as_f64() == actual.as_f64()
             }
         }
+        (Value::Object(expected), Value::Object(actual)) => {
+            (!strict || expected.len() == actual.len())
+                && expected.iter().all(|(key, value)| {
+                    actual.get(key).is_some_and(|actual| json_matches(value, actual, strict))
+                })
+        }
+        (Value::Array(expected), Value::Array(actual)) => {
+            expected.len() == actual.len()
+                && expected.iter().zip(actual).all(|(e, a)| json_matches(e, a, strict))
+        }
+        _ => expected == actual,
     }
 }
 
@@ -311,6 +351,51 @@ mod tests {
         let actual_wrong = ToolUse::new("get_weather").with_args(json!({"location": "LA"}));
         assert!(!expected.matches(&actual_wrong, true));
         assert!(!expected.matches(&actual_wrong, false));
+    }
+
+    #[test]
+    fn partial_args_match_nested_objects_as_subsets() {
+        let expected = ToolUse::new("book")
+            .with_args(json!({"trip": {"from": "NBO", "legs": [{"seat": "12A"}]}}));
+        let actual = ToolUse::new("book").with_args(json!({
+            "trip": {"from": "NBO", "to": "LHR", "legs": [{"seat": "12A", "meal": "veg"}]},
+            "currency": "KES"
+        }));
+        assert!(expected.matches(&actual, false));
+        assert!(!expected.matches(&actual, true));
+
+        let wrong_nested = ToolUse::new("book")
+            .with_args(json!({"trip": {"from": "MBA", "legs": [{"seat": "12A"}]}}));
+        assert!(!expected.matches(&wrong_nested, false));
+
+        let missing_element =
+            ToolUse::new("book").with_args(json!({"trip": {"from": "NBO", "legs": []}}));
+        assert!(!expected.matches(&missing_element, false));
+    }
+
+    #[test]
+    fn numbers_match_by_value() {
+        let expected = ToolUse::new("set_volume").with_args(json!({"level": 1, "gain": 0.5}));
+        let actual = ToolUse::new("set_volume").with_args(json!({"level": 1.0, "gain": 0.5}));
+        assert!(expected.matches(&actual, false));
+        assert!(expected.matches(&actual, true));
+
+        let different = ToolUse::new("set_volume").with_args(json!({"level": 2, "gain": 0.5}));
+        assert!(!expected.matches(&different, true));
+
+        let large = ToolUse::new("seek").with_args(json!({"offset": 9_007_199_254_740_993_u64}));
+        let off_by_one =
+            ToolUse::new("seek").with_args(json!({"offset": 9_007_199_254_740_992_u64}));
+        assert!(!large.matches(&off_by_one, true));
+    }
+
+    #[test]
+    fn omitted_expected_args_match_any_args() {
+        let expected: ToolUse = serde_json::from_value(json!({"name": "get_time"})).unwrap();
+        let actual = ToolUse::new("get_time").with_args(json!({"timezone": "Africa/Nairobi"}));
+        assert!(expected.matches(&actual, false));
+        assert!(expected.matches(&actual, true));
+        assert!(!expected.matches(&ToolUse::new("get_date"), false));
     }
 
     #[test]

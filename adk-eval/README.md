@@ -29,7 +29,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **Vertex AI Gen AI Evaluation Service**: Service-backed judge and trajectory metrics via `evaluateInstances` (feature: `vertex-eval`)
 - **Test Case Generation**: LLM-driven or event-based eval case creation
 - **Conversation Metrics**: Multi-turn scoring for context retention, goal completion, coherence, topic drift
-- **CLI Integration**: `cargo adk eval` with baselines, regression checks, and parallel execution
+- **CI Integration**: Eval sets run from integration tests, with JUnit XML and baseline regression checks
 
 ## Quick Start
 
@@ -121,6 +121,8 @@ let criteria = EvaluationCriteria {
 };
 ```
 
+Arguments are compared recursively. With `strict_args: false` (the default), every expected key must be present with a matching value at any depth and extra keys are allowed; with `strict_args: true`, objects must have the same keys at every depth. Arrays match element by element, numbers compare by value (`1` matches `1.0`), and an expected tool use without `args` matches any arguments.
+
 ### Response Similarity
 
 Compare response text using various algorithms:
@@ -193,6 +195,12 @@ let criteria = EvaluationCriteria {
     ..Default::default()
 };
 ```
+
+A `SAFE: NO` or `HALLUCINATION_FREE: NO` verdict fails the criterion regardless of its score.
+
+### Criteria That Cannot Be Judged
+
+LLM-judged criteria fail the case with a score of 0.0, rather than being skipped, when no LLM judge is configured, the agent produced no text response, `rubric_quality_score` is set without rubrics, or the judge reply lacks a valid `SCORE:` line. A structured judge `fail` verdict also fails the case. A criterion's case score is the arithmetic mean of its per-turn scores, and an agent stream error fails the case with an `execution` failure.
 
 ## Result Reporting
 
@@ -312,6 +320,8 @@ store.save("my_eval", &metrics)?;
 let regressions = store.check_regressions(&new_metrics, 0.05)?;
 ```
 
+A baseline metric or case with no score in the new run, such as a case that errored, is a regression with `current_value: None`.
+
 ### JUnit XML (CI Integration)
 
 ```rust
@@ -358,12 +368,11 @@ let metrics = scorer.score(&conversation, "goal").await?;
 // → ConversationMetrics { context_retention, goal_completion, coherence, topic_drift }
 ```
 
-### CLI
+### Running Evaluations in CI
 
-```bash
-cargo adk eval tests/ --save-baseline
-cargo adk eval tests/ --check-regression --format junit --output results.xml
-```
+Run eval sets from an integration test, where the agent is constructed, and fail on case failures or baseline regressions. See "Running Evaluations in CI" in the [evaluation guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/evaluation/evaluation.md) for a complete test with JUnit XML output.
+
+> **Note:** `cargo adk eval` cannot run agents yet. It loads the eval set and exits with status 1 without reporting results.
 
 ## License
 

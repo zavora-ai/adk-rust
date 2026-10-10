@@ -102,9 +102,18 @@ let criteria = EvaluationCriteria {
 ```
 
 **Options:**
-- `strict_order`: Require exact sequence matching
-- `strict_args`: Require exact argument matching (no extra args allowed)
+- `strict_order` (default `true`): Require expected calls in order. `ToolTrajectoryScorer::score` and `ToolTrajectoryScorer::compare` both apply it.
+- `strict_args` (default `false`): Require exact arguments instead of a subset match
 - Partial matching with configurable thresholds
+
+Expected and actual arguments are compared recursively:
+
+| Arguments | `strict_args: false` | `strict_args: true` |
+|-----------|----------------------|---------------------|
+| Objects | Every expected key present with a matching value, at any depth; extra keys allowed | Same keys at every depth |
+| Arrays | Same length, matched element by element | Same length, matched element by element |
+| Numbers | Compared by value (`1` matches `1.0`) | Compared by value |
+| `args` omitted from the expected tool use | Matches any arguments | Matches any arguments |
 
 ### Response Similarity
 
@@ -155,6 +164,8 @@ The LLM judge assesses:
 - Factual accuracy
 - Completeness of response
 
+Judge requests carry no temperature and use the provider's default output limit, so models that reject sampling parameters (Claude 5 models, OpenAI reasoning models) can judge. `LlmJudge::with_config` takes an `LlmJudgeConfig { temperature, max_tokens }`; `Some` values are sent on every judge request. `StructuredJudgeConfig::temperature` behaves the same way.
+
 ### Rubric-Based Evaluation
 
 Evaluate against custom criteria with weighted scoring:
@@ -177,7 +188,7 @@ Each rubric is scored 0-1 by the LLM judge, then combined using weights.
 
 ### Safety and Hallucination Detection
 
-Check responses for safety issues and hallucinations:
+Check responses for safety issues and hallucinations. Both criteria need an LLM judge:
 
 ```rust
 let criteria = EvaluationCriteria {
@@ -185,7 +196,28 @@ let criteria = EvaluationCriteria {
     hallucination_score: Some(0.9),  // Require low hallucination rate
     ..Default::default()
 };
+let evaluator = Evaluator::with_llm_judge(EvaluationConfig::with_criteria(criteria), judge_model);
 ```
+
+A `SAFE: NO` or `HALLUCINATION_FREE: NO` verdict from the judge fails the criterion regardless of its score.
+
+### Criteria That Cannot Be Judged
+
+`semantic_match_score`, `rubric_quality_score`, `safety_score`, and `hallucination_score` fail the case, with a score of 0.0, when they cannot be judged. The failure details state the reason:
+
+| Condition | Failure details |
+|-----------|-----------------|
+| No LLM judge (`Evaluator::new` without `set_llm_judge`) | `this criterion needs an LLM judge; ...` |
+| The agent produced no text response | `the agent produced no text response to judge` |
+| `rubric_quality_score` set without rubrics | `rubric_quality_score is set but rubric_config has no rubrics; ...` |
+| The judge reply lacks a valid `SCORE:` line (a number from 0.0 to 1.0), or a `SAFE:` / `HALLUCINATION_FREE:` line for those criteria | `LLM judge error: judge response has no valid SCORE line ...` |
+| The judge call fails | `LLM judge error: ...` |
+
+`semantic_match_score` skips turns that have no expected `final_response`, as `response_similarity` does.
+
+### Scores Across Turns and Errors
+
+A criterion's case score is the arithmetic mean of its per-turn scores. When the agent fails to start or its event stream yields an error, the case fails with an `execution` failure and carries no scores.
 
 ## Result Reporting
 
@@ -304,6 +336,8 @@ println!("Reasoning: {}", verdict.reasoning);
 
 The judge attempts function-calling (response schema) first, then falls back to prompting for JSON with a lenient parser that handles raw JSON, markdown fences, and embedded JSON in prose.
 
+`Evaluator::set_structured_judge` runs the judge on the last turn's expected and actual responses. A `fail` verdict, a judge error, or a missing agent response fails the case; `pass` and `partial` verdicts record the score without failing it.
+
 ### Cost and Latency Tracking
 
 Track token usage and compute estimated dollar costs per evaluation:
@@ -347,18 +381,22 @@ use adk_eval::BaselineStore;
 
 let store = BaselineStore::new(".eval-baseline.json");
 
-// Save current metrics
+// Save current metrics (metric name → case id → score)
 store.save("my_eval_set", &metrics)?;
 
 // On next run, check for regressions
 let regressions = store.check_regressions(&current_metrics, 0.05)?;
-if !regressions.is_empty() {
-    for reg in &regressions {
-        println!("REGRESSION: {} dropped from {:.3} to {:.3}",
-            reg.metric_name, reg.baseline_value, reg.current_value);
+for reg in &regressions {
+    match reg.current_value {
+        Some(current) => println!("REGRESSION: {} [{}] dropped from {:.3} to {:.3}",
+            reg.metric_name, reg.case_id, reg.baseline_value, current),
+        None => println!("REGRESSION: {} [{}] has no score in this run",
+            reg.metric_name, reg.case_id),
     }
 }
 ```
+
+Every metric and case recorded in the baseline must have a score in the current run. A case that errored or did not run has no scores, so it is reported as a regression with `current_value: None`.
 
 ### CI Output (JUnit XML)
 
@@ -462,33 +500,65 @@ let score = scorer.score("expected text", "actual text").await?;
 
 All other features (structured judge, cost tracker, trace analyzer, baselines, annotations, test generator, conversation scorer) work without any additional feature flags.
 
-## CLI Integration
+## Running Evaluations in CI
 
-Run evaluations from the command line via `cargo adk eval`:
+Run eval sets from an integration test, where the agent under test is constructed. The test fails when any case fails or any baseline metric regresses, and writes JUnit XML for the CI test reporter.
 
-```bash
-# Basic evaluation
-cargo adk eval tests/my_agent.test.json
-
-# Save baseline
-cargo adk eval tests/ --save-baseline
-
-# Check for regressions
-cargo adk eval tests/ --check-regression --tolerance 0.05
-
-# JUnit XML output for CI
-cargo adk eval tests/ --format junit --output results.xml
-
-# JSON output
-cargo adk eval tests/ --format json
-
-# Parallel execution
-cargo adk eval tests/ --concurrency 4
+```toml
+[dev-dependencies]
+adk-core = "3.0.0"
+adk-eval = { version = "3.0.0", features = ["ci-helpers"] }
+tokio = { version = "1", features = ["macros", "rt"] }
 ```
 
-Exit codes:
-- `0` — all evaluations passed, no regressions
-- `1` — regressions detected (when `--check-regression` is set)
+```rust
+// tests/eval.rs
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use adk_core::Agent;
+use adk_eval::{BaselineStore, EvaluationConfig, EvaluationCriteria, Evaluator, JunitReporter};
+
+/// Builds the agent under test the same way the application does.
+fn build_agent() -> Arc<dyn Agent> {
+    my_app::build_weather_agent()
+}
+
+#[tokio::test]
+async fn weather_agent_meets_its_eval_set() {
+    let evaluator = Evaluator::new(EvaluationConfig::with_criteria(
+        EvaluationCriteria::exact_tools().with_response_similarity(0.8),
+    ));
+    let report = evaluator
+        .evaluate_file(build_agent(), "tests/weather_agent.test.json")
+        .await
+        .expect("eval set loads");
+
+    let xml = JunitReporter::generate(&report, "weather_agent").expect("JUnit XML renders");
+    std::fs::write("target/eval-results.xml", xml).expect("JUnit XML is written");
+
+    // Metric name → case id → score. Errored cases have no scores and so regress.
+    let mut metrics: HashMap<String, HashMap<String, f64>> = HashMap::new();
+    for result in &report.results {
+        for (metric, score) in &result.scores {
+            metrics.entry(metric.clone()).or_default().insert(result.eval_id.clone(), *score);
+        }
+    }
+    let store = BaselineStore::new("tests/.eval-baseline.json");
+    if std::env::var_os("SAVE_EVAL_BASELINE").is_some() {
+        store.save("weather_agent", &metrics).expect("baseline is saved");
+    }
+    let regressions = store.check_regressions(&metrics, 0.05).expect("baseline is readable");
+
+    assert!(report.all_passed(), "{}", report.format_summary());
+    assert!(regressions.is_empty(), "regressions: {regressions:#?}");
+}
+```
+
+1. Run `SAVE_EVAL_BASELINE=1 cargo test --test eval` once and commit `tests/.eval-baseline.json`.
+2. Run `cargo test --test eval` in CI and publish `target/eval-results.xml` with the CI test reporter.
+
+> **Note:** `cargo adk eval` cannot run agents yet, because the CLI has no way to construct your agent. It loads the eval set, reports that no case was executed, and exits with status 1 whatever flags are passed, so use the integration test above as the CI gate.
 
 ## Best Practices
 
@@ -498,7 +568,7 @@ Exit codes:
 4. **Combine Criteria**: Use multiple criteria for comprehensive evaluation
 5. **Version Test Files**: Keep test files in version control alongside agent code
 6. **CI/CD Integration**: Run evaluations in CI to catch regressions
-7. **Save Baselines**: Use `--save-baseline` after establishing a quality bar, then `--check-regression` in CI
+7. **Save Baselines**: Save a baseline after establishing a quality bar, then check for regressions in CI (see [Running Evaluations in CI](#running-evaluations-in-ci))
 8. **Use Structured Judges**: Prefer `StructuredJudge` over plain LLM judge for machine-parseable results
 9. **Track Costs**: Enable `CostTracker` to monitor efficiency regressions alongside quality
 10. **Detect Loops**: Enable `TraceAnalyzer` to catch agents stuck in repetitive patterns

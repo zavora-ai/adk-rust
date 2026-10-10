@@ -19,7 +19,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 adk-deploy = { workspace = true }
-adk-eval = { workspace = true, features = ["ci-helpers"] }
+adk-eval = { workspace = true }
 adk-bench = { workspace = true }
 adk-model = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
