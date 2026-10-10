@@ -487,7 +487,11 @@ pub(crate) fn bedrock_response_to_adk(
             "inputTokens":u.input_tokens, "outputTokens":u.output_tokens, "totalTokens":u.total_tokens,
             "cacheReadInputTokens":u.cache_read_input_tokens, "cacheWriteInputTokens":u.cache_write_input_tokens,
         })),
-        prompt_token_count: u.input_tokens,
+        // Converse reports uncached input separately from cache reads and writes.
+        prompt_token_count: u
+            .input_tokens
+            .saturating_add(u.cache_read_input_tokens.unwrap_or(0))
+            .saturating_add(u.cache_write_input_tokens.unwrap_or(0)),
         candidates_token_count: u.output_tokens,
         total_token_count: u.total_tokens,
         cache_read_input_token_count: u.cache_read_input_tokens,
@@ -508,6 +512,8 @@ pub(crate) fn bedrock_response_to_adk(
         error_message: None,
         provider_metadata: None,
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 
@@ -621,6 +627,8 @@ pub(crate) fn bedrock_stream_content_start_to_adk(
                 error_message: None,
                 provider_metadata: None,
                 interaction_id: None,
+                model: None,
+                provider: None,
             })
         }
         _ => None,
@@ -651,6 +659,8 @@ pub(crate) fn bedrock_stream_delta_to_adk(delta: &ContentBlockDelta) -> Option<L
                     error_message: None,
                     provider_metadata: None,
                     interaction_id: None,
+                    model: None,
+                    provider: None,
                 })
             }
         }
@@ -677,6 +687,8 @@ pub(crate) fn bedrock_stream_delta_to_adk(delta: &ContentBlockDelta) -> Option<L
                         error_message: None,
                         provider_metadata: None,
                         interaction_id: None,
+                        model: None,
+                        provider: None,
                     })
                 }
             } else {
@@ -702,6 +714,8 @@ pub(crate) fn bedrock_stream_stop_to_adk(stop_reason: &StopReason) -> LlmRespons
         error_message: None,
         provider_metadata: None,
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 
@@ -1177,6 +1191,35 @@ mod tests {
         // Signature deltas are not emitted as LlmResponse; they are
         // accumulated in the streaming client and emitted at block stop.
         assert!(bedrock_stream_delta_to_adk(&delta).is_none());
+    }
+
+    #[test]
+    fn prompt_tokens_include_cache_reads_and_writes() {
+        let message = Message::builder()
+            .role(ConversationRole::Assistant)
+            .content(ContentBlock::Text("ok".to_string()))
+            .build()
+            .unwrap();
+        // Converse reports uncached input apart from the cache: 12 + 3109 + 50 + 150 = 3321.
+        let usage = bedrock::TokenUsage::builder()
+            .input_tokens(12)
+            .output_tokens(150)
+            .total_tokens(3321)
+            .cache_read_input_tokens(3109)
+            .cache_write_input_tokens(50)
+            .build()
+            .unwrap();
+        let response = bedrock_response_to_adk(
+            &ConverseOutput::Message(message),
+            &StopReason::EndTurn,
+            Some(&usage),
+        );
+        let usage = response.usage_metadata.unwrap();
+        assert_eq!(usage.prompt_token_count, 3171);
+        assert_eq!(
+            usage.prompt_token_count + usage.candidates_token_count,
+            usage.total_token_count
+        );
     }
 
     #[test]

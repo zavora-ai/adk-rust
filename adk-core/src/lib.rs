@@ -74,12 +74,16 @@
 //! - `app:` - Application state (application-wide)
 //! - `temp:` - Temporary data (cleared each turn)
 
+/// Durable record of non-idempotent tool calls.
+pub mod action_ledger;
 /// Core agent trait and event stream type.
 pub mod agent;
 /// Starting an agent turn without owning the runner's construction.
 pub mod agent_invoker;
 /// Dynamic agent loading by name.
 pub mod agent_loader;
+/// Run budgets: limits on model calls, tokens, cost, wall time, and tool calls.
+pub mod budget;
 /// Callback type aliases for agent, model, and tool lifecycle hooks.
 pub mod callbacks;
 /// Invocation context traits: state, session, artifacts, memory, and run configuration.
@@ -118,6 +122,10 @@ pub mod tool_concurrency;
 /// Content, Part, and multimodal data types.
 pub mod types;
 
+pub use action_ledger::{
+    ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, OUTCOME_UNKNOWN_STATUS,
+    is_outcome_unknown, json_digest, outcome_unknown_response,
+};
 pub use agent::{
     Agent, AgentCapabilities, AgentInteractionMode, AgentRelationshipKind, AgentTopology,
     AgentTopologyMember, AgentTopologyRelationship, AgentTransferDecision, AgentTransferRequest,
@@ -125,6 +133,10 @@ pub use agent::{
 };
 pub use agent_invoker::AgentInvoker;
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
+pub use budget::{
+    BUDGET_LIMIT_KEY, BUDGET_RECORDED_KEY, BudgetExceeded, BudgetLimit, BudgetTracker, BudgetUsage,
+    ModelCallMeter, RunBudget, budget_exceeded_event, generate_with_budget, meter_stream,
+};
 pub use callbacks::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull,
     BaseEventsSummarizer, BeforeAgentCallback, BeforeModelCallback, BeforeModelResult,
@@ -169,8 +181,8 @@ pub use schema_adapter::{GenericSchemaAdapter, SchemaAdapter};
 pub use schema_cache::SchemaCache;
 pub use shared_state::{SharedState, SharedStateError};
 pub use tool::{
-    RetryBudget, Tool, ToolContext, ToolExecutionStrategy, ToolPredicate, ToolRegistry, Toolset,
-    ValidationMode,
+    RetryBudget, Tool, ToolContext, ToolEffect, ToolExecutionStrategy, ToolPredicate, ToolRegistry,
+    Toolset, ValidationMode,
 };
 pub use tool_concurrency::{ConcurrencyPermit, ToolConcurrencyManager};
 pub use types::{

@@ -263,6 +263,12 @@ approved edges must honor exact-call confirmation. Ordered async
 ordinary Runner plugins and existing agent callbacks continue to apply. Team
 execution emits native `team.*` telemetry spans and stable structured errors.
 
+`TeamBudget` caps model calls, tokens, cost, tool calls and wall time through
+a `BudgetTracker` that every member shares and that counts against the run's
+`RunBudget`; members stop before the call that would start past a limit.
+Partial streaming chunks never count. The runtime keeps the receipts of the 64
+most recently finished invocations.
+
 Relationship contracts separately allow state reads and writes, reject
 concurrent state conflicts, and restrict artifact-name prefixes. Dynamic
 registry resolution can require health, version, digest, and trust labels.
@@ -362,7 +368,7 @@ let agent = LlmAgentBuilder::new("resilient_agent")
     .build()?;
 ```
 
-Per-tool budgets take precedence over the default. When no budget is configured, tools execute once.
+Per-tool budgets take precedence over the default. When no budget is configured, tools execute once. A budget retries only tools whose `effect()` is `ReadOnly` or `Idempotent`, only after a retryable error, with exponential backoff and jitter; each attempt gets a fresh tool context. A `NonIdempotent` tool runs once, and one that times out is answered with an `outcome_unknown` response. With `RunConfig::action_ledger` set, a replayed `NonIdempotent` call is answered from the ledger instead of executing again.
 
 ### Circuit Breaker
 

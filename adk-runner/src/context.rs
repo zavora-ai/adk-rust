@@ -216,12 +216,13 @@ struct PendingFunctionCall {
 /// Makes persisted conversation history valid for the next model turn without
 /// rewriting the source events.
 ///
-/// A runner interruption can happen after a model function call is persisted
-/// but before its tool response is available. Responses from overlapping runs
-/// may also be persisted after a later user message, so known responses are
-/// paired first. An unmatched call is closed only when a later user turn exists
-/// and has no durable response in the retained history. Such calls are omitted
-/// from the model projection rather than assigned a result that did not occur.
+/// A cancelled run persists an outcome-unknown response for each call still in
+/// flight, but a crash can leave a model function call persisted without its
+/// tool response. Responses from overlapping runs may also be persisted after a
+/// later user message, so known responses are paired first. An unmatched call is
+/// closed only when a later user turn exists and has no durable response in the
+/// retained history. Such calls are omitted from the model projection rather
+/// than assigned a result that did not occur.
 fn close_interrupted_tool_calls(history: Vec<HistoryContent>) -> Vec<Content> {
     let mut pending = Vec::<PendingFunctionCall>::new();
     let mut removed_parts = std::collections::HashSet::<PartLocation>::new();

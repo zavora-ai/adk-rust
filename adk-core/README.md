@@ -62,9 +62,13 @@ pub trait Tool: Send + Sync {
     fn is_read_only(&self) -> bool;           // default: false
     fn is_concurrency_safe(&self) -> bool;    // default: false
     fn is_agent_delegation(&self) -> bool;    // default: false
+    fn effect(&self) -> ToolEffect;           // default: ReadOnly if is_read_only(), else NonIdempotent
+    fn timeout_override(&self) -> Option<Option<Duration>>; // default: None (agent's tool_timeout)
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
 ```
+
+`effect()` governs retries and the action ledger: only `ReadOnly` and `Idempotent` tools are retried, and only after a retryable error. With an `ActionLedger` on `RunConfig::action_ledger` (`InMemoryActionLedger` here, `SqliteActionLedger` in `adk-session`), a `NonIdempotent` call executes at most once per `ToolContext::idempotency_key()`; a replay of a call that never recorded an outcome is answered with `outcome_unknown_response()` instead of executing again.
 
 `ToolExecutionStrategy::Auto` includes a call in its concurrent subset only when the selected tool returns `true` from both `is_read_only()` and `is_concurrency_safe()`. It runs that safe subset first, then executes the remaining calls sequentially. Both methods default to `false`, so existing implementations remain sequential.
 
@@ -395,6 +399,24 @@ pub enum StreamingMode {
     SSE,   // Server-Sent Events (default)
     Bidi,  // Bidirectional (realtime)
 }
+```
+
+## Run Budgets
+
+`RunBudget` states limits on model calls, total tokens, cost (micro-USD), wall
+time and tool calls; `RunConfig::budget` carries it and `RunConfig::budget_tracker`
+carries the shared `BudgetTracker`. Call sites reserve work with
+`BudgetTracker::begin_model_call` and `begin_tool_calls`; `generate_with_budget`
+wraps a model call. Violations convert to `AdkError` with category
+`ErrorCategory::ResourceExhausted` and a `budget.*` code. `LlmResponse` carries
+`model` and `provider` so usage and cost are attributable.
+
+```rust
+use adk_core::{BudgetTracker, RunBudget};
+
+let tracker = BudgetTracker::new(RunBudget::new().max_tool_calls(2));
+assert!(tracker.begin_tool_calls(2).is_ok());
+assert!(tracker.begin_tool_calls(1).is_err());
 ```
 
 ## ToolExecutionStrategy

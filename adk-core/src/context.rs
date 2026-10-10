@@ -907,7 +907,7 @@ pub fn tool_call_fingerprint(tool_name: &str, args: &Value) -> String {
 }
 
 /// Writes `value` as canonical JSON, with object keys sorted at every level.
-fn write_canonical(value: &Value, out: &mut String) {
+pub(crate) fn write_canonical(value: &Value, out: &mut String) {
     match value {
         Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();
@@ -1122,11 +1122,13 @@ pub struct RunConfig {
     /// The default (`ToolConcurrencyConfig::default()`) imposes no limits,
     /// preserving backward compatibility with the previous `max_tool_concurrency: None`.
     pub tool_concurrency: ToolConcurrencyConfig,
-    /// Whether tracing spans may include full request, response, and tool
-    /// payloads when the `record-payloads` crate feature is enabled.
+    /// Whether tracing spans and the `llm_request` debug copy on model events
+    /// may include the full request, response, and tool payloads when the
+    /// `record-payloads` crate feature is enabled.
     pub record_payloads: bool,
-    /// Maximum serialized bytes recorded for tracing payload fields when full
-    /// payload recording is disabled.
+    /// Maximum serialized bytes recorded for tracing payload fields, and for the
+    /// `llm_request` debug copy on model events, when full payload recording is
+    /// disabled.
     pub trace_payload_max_bytes: usize,
     /// Maximum number of agent-to-agent transfers allowed in a single run.
     ///
@@ -1140,6 +1142,19 @@ pub struct RunConfig {
     /// `RunConfig` travels with the invocation, transfer targets and agents behind an agent tool
     /// run these hooks too. See [`InvocationHooks`](crate::InvocationHooks).
     pub invocation_hooks: Vec<Arc<dyn crate::InvocationHooks>>,
+    /// Resource limits for the run. `Runner` creates a fresh
+    /// [`budget_tracker`](Self::budget_tracker) from it for every run.
+    pub budget: Option<crate::RunBudget>,
+    /// Shared counters enforcing a budget across the invocation.
+    ///
+    /// `Runner` sets this from [`budget`](Self::budget) at the start of each run
+    /// when it is `None`; a tracker that is already set is kept, so callers can
+    /// share one tracker across runs. See [`crate::budget`].
+    pub budget_tracker: Option<Arc<crate::BudgetTracker>>,
+    /// Ledger that records non-idempotent tool calls so a replayed call never
+    /// executes twice. `None` disables ledgering. See
+    /// [`ActionLedger`](crate::ActionLedger).
+    pub action_ledger: Option<Arc<dyn crate::ActionLedger>>,
     /// Policy evaluated for every tool call on its final arguments.
     ///
     /// `None` allows every call the agent's own confirmation settings allow. See
@@ -1182,6 +1197,9 @@ impl Default for RunConfig {
             trace_payload_max_bytes: 2048,
             max_transfer_depth: None,
             invocation_hooks: Vec::new(),
+            budget: None,
+            budget_tracker: None,
+            action_ledger: None,
             tool_policy: None,
             governance: Vec::new(),
             tool_approvals: HashMap::new(),
@@ -1358,6 +1376,22 @@ impl RunConfigBuilder {
         self
     }
 
+    /// Sets the resource limits for the run.
+    ///
+    /// See [`RunConfig::budget`] and [`crate::budget`].
+    pub fn budget(mut self, budget: crate::RunBudget) -> Self {
+        self.config.budget = Some(budget);
+        self
+    }
+
+    /// Sets the ledger that records non-idempotent tool calls.
+    ///
+    /// See [`RunConfig::action_ledger`].
+    pub fn action_ledger(mut self, ledger: Arc<dyn crate::ActionLedger>) -> Self {
+        self.config.action_ledger = Some(ledger);
+        self
+    }
+
     /// Sets the policy evaluated for every tool call. See [`RunConfig::tool_policy`].
     pub fn tool_policy(mut self, policy: Arc<dyn crate::ToolPolicy>) -> Self {
         self.config.tool_policy = Some(policy);
@@ -1417,6 +1451,7 @@ mod tests {
         assert!(config.tool_confirmation_decisions.is_empty());
         assert_eq!(config.max_transfer_depth, None);
         assert!(config.invocation_hooks.is_empty());
+        assert!(config.action_ledger.is_none());
     }
 
     #[test]

@@ -78,6 +78,6 @@ tempfile = "3"
 # `rt-multi-thread`: the span-parenting regression test must run on a
 # multi-threaded runtime — a current-thread runtime can mask the thread-affinity
 # half of the bug it covers.
-tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread", "test-util"] }
 # Capture layer for the span-parenting regression test.
 tracing-subscriber = { workspace = true }

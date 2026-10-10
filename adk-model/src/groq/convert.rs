@@ -325,6 +325,8 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         error_message: None,
         provider_metadata: None,
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 
@@ -356,6 +358,8 @@ pub fn create_tool_call_response(
         error_message: None,
         provider_metadata: None,
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 
