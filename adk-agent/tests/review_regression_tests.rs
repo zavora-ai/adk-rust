@@ -571,6 +571,61 @@ async fn toolsets_are_refreshed_between_model_turns_after_a_tool_call() {
     assert!(requests[1].tools.contains_key("activated_capability"));
 }
 
+/// A toolset whose backing server is unreachable.
+struct UnreachableToolset;
+
+#[async_trait]
+impl Toolset for UnreachableToolset {
+    fn name(&self) -> &str {
+        "unreachable"
+    }
+
+    async fn tools(&self, _ctx: Arc<dyn adk_core::ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
+        Err(adk_core::AdkError::tool("Failed to list MCP tools: connection refused"))
+    }
+}
+
+#[tokio::test]
+async fn a_failing_toolset_is_skipped_and_the_turn_continues() {
+    let model = Arc::new(RecordingModel::new(vec![RecordingModel::text_response("answered")]));
+    let agent = LlmAgentBuilder::new("resilient-agent")
+        .model(model.clone())
+        .tool(Arc::new(IdCapturingTool::new()))
+        .toolset(Arc::new(UnreachableToolset))
+        .build()
+        .expect("agent builds");
+
+    let stream = agent.run(Arc::new(TestContext::new("hello"))).await.expect("run");
+    let events = drain_stream(stream).await.expect("a failing toolset must not fail the turn");
+
+    let answer = events
+        .iter()
+        .filter_map(|event| event.llm_response.content.as_ref())
+        .flat_map(|content| content.parts.iter())
+        .find_map(Part::text);
+    assert_eq!(answer, Some("answered"));
+    let requests = model.requests.lock().unwrap_or_else(|error| error.into_inner());
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].tools.keys().collect::<Vec<_>>(), vec!["test_tool"]);
+}
+
+#[tokio::test]
+async fn strict_toolsets_fail_the_turn_when_a_toolset_fails() {
+    let model = Arc::new(RecordingModel::new(vec![RecordingModel::text_response("answered")]));
+    let agent = LlmAgentBuilder::new("strict-agent")
+        .model(model.clone())
+        .toolset(Arc::new(UnreachableToolset))
+        .strict_toolsets(true)
+        .build()
+        .expect("agent builds");
+
+    let stream = agent.run(Arc::new(TestContext::new("hello"))).await.expect("run");
+    let error = drain_stream(stream).await.expect_err("strict mode must surface the failure");
+
+    assert!(error.to_string().contains("connection refused"), "{error}");
+    assert!(model.requests.lock().unwrap_or_else(|error| error.into_inner()).is_empty());
+}
+
 #[tokio::test]
 async fn test_parallel_agent_callbacks_execute() {
     let call_order = Arc::new(Mutex::new(Vec::new()));

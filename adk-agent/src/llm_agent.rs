@@ -242,6 +242,8 @@ pub struct LlmAgent {
     include_contents: adk_core::IncludeContents,
     tools: Vec<Arc<dyn Tool>>,
     toolsets: Vec<Arc<dyn Toolset>>,
+    /// Whether a toolset that fails to resolve its tools fails the turn.
+    strict_toolsets: bool,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
     /// Default generation config (temperature, top_p, etc.) applied to every LLM request.
@@ -392,6 +394,7 @@ impl PromptConfig {
 struct ToolSetup {
     tools: Vec<Arc<dyn Tool>>,
     toolsets: Vec<Arc<dyn Toolset>>,
+    strict_toolsets: bool,
     sub_agents: Vec<Arc<dyn Agent>>,
     disallow_transfer_to_parent: bool,
     disallow_transfer_to_peers: bool,
@@ -408,6 +411,7 @@ impl ToolSetup {
         Self {
             tools: agent.tools.clone(),
             toolsets: agent.toolsets.clone(),
+            strict_toolsets: agent.strict_toolsets,
             sub_agents: agent.sub_agents.clone(),
             disallow_transfer_to_parent: agent.disallow_transfer_to_parent,
             disallow_transfer_to_peers: agent.disallow_transfer_to_peers,
@@ -426,7 +430,21 @@ impl ToolSetup {
         );
 
         for toolset in active_toolsets {
-            for tool in toolset.tools(ctx.clone() as Arc<dyn ReadonlyContext>).await? {
+            let provided = match toolset.tools(ctx.clone() as Arc<dyn ReadonlyContext>).await {
+                Ok(provided) => provided,
+                // One unreachable server costs the model that server's tools, not the turn.
+                Err(error) if !self.strict_toolsets => {
+                    tracing::warn!(
+                        agent.name = %ctx.agent_name(),
+                        toolset.name = %toolset.name(),
+                        error = %error,
+                        "toolset failed to resolve its tools; continuing without them"
+                    );
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            for tool in provided {
                 let name = tool.name().to_string();
                 if static_tool_names.contains(&name) {
                     return Err(adk_core::AdkError::agent(format!(
@@ -721,6 +739,7 @@ pub struct LlmAgentBuilder {
     include_contents: adk_core::IncludeContents,
     tools: Vec<Arc<dyn Tool>>,
     toolsets: Vec<Arc<dyn Toolset>>,
+    strict_toolsets: bool,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
     generate_content_config: Option<adk_core::GenerateContentConfig>,
@@ -773,6 +792,7 @@ impl LlmAgentBuilder {
             include_contents: adk_core::IncludeContents::Default,
             tools: Vec::new(),
             toolsets: Vec::new(),
+            strict_toolsets: false,
             sub_agents: Vec::new(),
             output_key: None,
             generate_content_config: None,
@@ -1034,11 +1054,40 @@ impl LlmAgentBuilder {
 
     /// Register a dynamic toolset for per-invocation tool resolution.
     ///
-    /// Toolsets are resolved at the start of each `run()` call using the
-    /// invocation's `ReadonlyContext`. This enables context-dependent tools
-    /// like per-user browser sessions from a pool.
+    /// Toolsets are resolved at the start of each `run()` call, and again after
+    /// each round of tool calls, using the invocation's `ReadonlyContext`. This
+    /// enables context-dependent tools like per-user browser sessions from a
+    /// pool.
+    ///
+    /// A toolset whose `tools()` call fails is skipped for that resolution with
+    /// a `warn`-level trace naming the toolset and the error, and the turn
+    /// continues with the remaining tools. Use
+    /// [`strict_toolsets`](Self::strict_toolsets) to fail the turn instead.
     pub fn toolset(mut self, toolset: Arc<dyn Toolset>) -> Self {
         self.toolsets.push(toolset);
+        self
+    }
+
+    /// Fail the turn when any toolset cannot resolve its tools.
+    ///
+    /// Off by default: a failing toolset, such as an MCP server that is down,
+    /// is skipped and the model runs with the tools that did resolve. Turn this
+    /// on when the agent must not run without every toolset, for example when
+    /// a toolset supplies the only tools that can complete its task. It applies
+    /// to toolsets registered here and to `RunConfig::runtime_toolsets`.
+    /// Duplicate tool names fail the turn either way.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let agent = LlmAgentBuilder::new("operator")
+    ///     .model(model)
+    ///     .toolset(Arc::new(mcp_toolset))
+    ///     .strict_toolsets(true)
+    ///     .build()?;
+    /// ```
+    pub fn strict_toolsets(mut self, strict: bool) -> Self {
+        self.strict_toolsets = strict;
         self
     }
 
@@ -1402,6 +1451,7 @@ impl LlmAgentBuilder {
             include_contents: self.include_contents,
             tools: self.tools,
             toolsets: self.toolsets,
+            strict_toolsets: self.strict_toolsets,
             sub_agents: self.sub_agents,
             output_key: self.output_key,
             generate_content_config: self.generate_content_config,
