@@ -1118,7 +1118,9 @@ impl GeminiModel {
         // Add contents using proper builder methods
         for content in &req.contents {
             match content.role.as_str() {
-                "user" => {
+                // System contents stay leading user turns: a `system_instruction` would
+                // conflict with the context cache, which already carries one.
+                "user" | "system" => {
                     // For user messages, build gemini Content with potentially multiple parts
                     let mut gemini_parts = Vec::new();
                     for part in &content.parts {
