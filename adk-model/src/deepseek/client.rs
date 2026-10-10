@@ -451,7 +451,12 @@ impl Llm for DeepSeekClient {
             }
         };
 
-        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
+        Ok(crate::usage_tracking::with_priced_usage_tracking(
+            Box::pin(response_stream),
+            usage_span,
+            "deepseek",
+            &self.config.model,
+        ))
     }
 }
 

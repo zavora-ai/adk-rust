@@ -626,6 +626,47 @@ async fn main() -> anyhow::Result<()> {
 
 ---
 
+## Usage Attribution and Cost
+
+Every `adk-model` provider sets `LlmResponse::provider` and `LlmResponse::model`
+— the model version the provider reports when it reports one, otherwise the
+configured identifier — and fills `UsageMetadata::cost` in USD when the provider
+did not report a cost itself. Rates come from `adk_model::pricing::PricingCatalog`,
+which consolidates the Gemini, OpenAI and Anthropic pricing modules and adds
+DeepSeek list prices.
+
+| Rule | Behaviour |
+|------|-----------|
+| Cached tokens | `prompt_token_count` includes cache reads and writes; each prompt token is billed once, at the uncached, cache-read or cache-write rate |
+| Anthropic cache writes | The 1-hour share of `cache_creation_input_tokens` bills at the 1-hour rate, the rest at the 5-minute rate |
+| Long context | Gemini (over 200K), OpenAI GPT-5.4/5.5 (272K and above) and Claude Haiku 5.5 (over 100K) switch the whole request to the long-context rates |
+| Dated aliases | `gpt-4.1-2025-04-14`, `claude-sonnet-4-5-20250929`, `claude-sonnet-4-5@20250929` and `us.anthropic.claude-sonnet-4-5-20250929-v1:0` resolve to the listed model |
+| Billing provider | A vendor's list price applies only to providers that bill it at that price; an OpenAI model name served by another gateway stays unpriced |
+| Ollama | Local models cost zero; `*cloud*` models stay unpriced |
+| OpenCode | Responses are attributed to `opencode` / `opencode-go` and stay unpriced |
+| Unknown models | `cost` stays `None`, which means unknown, never free |
+
+```rust
+use adk_core::UsageMetadata;
+use adk_model::pricing::{PRICING_EFFECTIVE_DATE, PricingCatalog};
+
+fn main() {
+    let usage = UsageMetadata {
+        prompt_token_count: 1_000_000,
+        candidates_token_count: 200_000,
+        cache_read_input_token_count: Some(400_000),
+        ..Default::default()
+    };
+    let catalog = PricingCatalog::standard();
+    let cost = catalog.cost_usd(Some("gemini"), "gemini-2.5-flash", &usage);
+    // 600K × $0.30 + 400K × $0.03 + 200K × $2.50 per million tokens.
+    assert!((cost.unwrap() - 0.692).abs() < 1e-9);
+    assert_eq!(catalog.version(), PRICING_EFFECTIVE_DATE);
+}
+```
+
+---
+
 ## Retries, Tool Calls, and Credentials
 
 These rules apply to every HTTP provider client in `adk-model` (OpenAI and

@@ -53,6 +53,8 @@ impl Llm for MockModel {
                     error_message: None,
                     provider_metadata: None,
                     interaction_id: None,
+                    model: None,
+                    provider: None,
                 });
             }
         };

@@ -525,6 +525,8 @@ impl MistralRsAdapterModel {
             citation_metadata: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         }
     }
 }
@@ -590,6 +592,8 @@ impl Llm for MistralRsAdapterModel {
                                             error_message: None,
                                             provider_metadata: None,
                                             interaction_id: None,
+                                            model: None,
+                                            provider: None,
                                         };
                                         yield Ok(response);
                                     }
@@ -614,6 +618,8 @@ impl Llm for MistralRsAdapterModel {
                                         citation_metadata: None,
                                         provider_metadata: None,
                                         interaction_id: None,
+                                        model: None,
+                                        provider: None,
                                     };
                                     yield Ok(response);
                                 }

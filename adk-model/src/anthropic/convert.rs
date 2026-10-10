@@ -350,6 +350,8 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
             error_message: None,
             provider_metadata: paused.then(|| serde_json::json!({"continue_turn": true})),
             interaction_id: None,
+            model: Some(message.model.to_string()).filter(|model| !model.is_empty()),
+            provider: None,
         },
         cache_meta,
     )
@@ -372,6 +374,8 @@ pub fn from_text_delta(text: &str) -> LlmResponse {
         error_message: None,
         provider_metadata: None,
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 
@@ -402,6 +406,8 @@ pub fn from_stream_error(error_type: &str, message: &str) -> LlmResponse {
         error_message: Some(message.to_string()),
         provider_metadata: None,
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 
