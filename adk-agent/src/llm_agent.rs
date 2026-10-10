@@ -38,13 +38,25 @@ pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
 /// Default tool execution timeout (5 minutes).
 pub const DEFAULT_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// Recorded in place of a request, response, or tool payload when
+/// [`RunConfig::record_payloads`](adk_core::RunConfig::record_payloads) is off.
+const PAYLOAD_OMITTED: &str = "[omitted: set RunConfig::record_payloads to record payloads]";
+
+/// Renders a payload for a span field or debug log.
+///
+/// Payloads carry user text and tool data, so nothing of them is recorded unless
+/// `record_payloads` is set: in full with the `record-payloads` feature, otherwise
+/// truncated to `max_bytes`.
 fn trace_json_payload<T: serde::Serialize>(
     value: &T,
     record_payloads: bool,
     max_bytes: usize,
 ) -> String {
+    if !record_payloads {
+        return PAYLOAD_OMITTED.to_string();
+    }
     let json = serde_json::to_string(value).unwrap_or_default();
-    if cfg!(feature = "record-payloads") && record_payloads {
+    if cfg!(feature = "record-payloads") {
         return json;
     }
 
