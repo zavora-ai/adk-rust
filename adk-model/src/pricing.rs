@@ -1,7 +1,7 @@
-//! Token prices for every provider and cost calculation from [`UsageMetadata`].
+//! Token prices for every provider and cost calculation from [`UsageMetadata`](adk_core::UsageMetadata).
 //!
 //! [`PricingCatalog`] is the single table `adk-model` uses to fill
-//! [`UsageMetadata::cost`] on provider responses that do not report a cost
+//! [`UsageMetadata::cost`](adk_core::UsageMetadata::cost) on provider responses that do not report a cost
 //! themselves. It consolidates the vendor tables in `adk_gemini::pricing`,
 //! `adk_model::openai::pricing` and `adk_anthropic::pricing` (tests keep the
 //! rates in step) and adds DeepSeek list prices. Every rate is USD per one
