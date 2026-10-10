@@ -4,10 +4,11 @@ use super::error::ConversionError;
 use crate::attachment;
 use adk_anthropic::ImageMediaType;
 use adk_anthropic::{
-    Base64ImageSource, Base64PdfSource, CacheControlEphemeral, ContentBlock, ContextManagement,
-    DocumentBlock, ImageBlock, Message, MessageCreateParams, MessageParam, MessageRole, Model,
-    PlainTextSource, StopReason, SystemPrompt, TextBlock, ToolParam, ToolResultBlock,
-    ToolResultBlockContent, ToolUnionParam, ToolUseBlock, UrlImageSource, UrlPdfSource,
+    Base64ImageSource, Base64PdfSource, CacheControlEphemeral, CacheTtl, ContentBlock,
+    ContextManagement, DocumentBlock, ImageBlock, Message, MessageCreateParams, MessageParam,
+    MessageRole, Model, PlainTextSource, StopReason, SystemPrompt, TextBlock, ToolParam,
+    ToolResultBlock, ToolResultBlockContent, ToolUnionParam, ToolUseBlock, UrlImageSource,
+    UrlPdfSource,
 };
 use adk_core::{
     Content, FinishReason, LlmResponse, Part, SchemaAdapter, SchemaCache, UsageMetadata,
@@ -419,6 +420,7 @@ pub fn build_message_params(
     top_p: Option<f32>,
     top_k: Option<i32>,
     prompt_caching: bool,
+    prompt_cache_ttl: Option<&CacheTtl>,
     thinking: Option<&super::config::ThinkingMode>,
     effort: Option<super::config::Effort>,
     fast_mode: bool,
@@ -428,6 +430,11 @@ pub fn build_message_params(
 ) -> MessageCreateParams {
     let mut params =
         MessageCreateParams::new(max_tokens, messages, Model::Custom(model.to_string()));
+    // Both breakpoints share one TTL: the API rejects a longer TTL after a shorter one.
+    let cache_control = || match prompt_cache_ttl {
+        Some(ttl) => CacheControlEphemeral::new().with_ttl(ttl.clone()),
+        None => CacheControlEphemeral::new(),
+    };
 
     if !tools.is_empty() {
         params.tools = Some(tools);
@@ -435,7 +442,7 @@ pub fn build_message_params(
 
     if let Some(sys) = system_prompt {
         if prompt_caching {
-            let block = TextBlock::new(sys).with_cache_control(CacheControlEphemeral::new());
+            let block = TextBlock::new(sys).with_cache_control(cache_control());
             params.system = Some(SystemPrompt::from_blocks(vec![block]));
         } else {
             params.system = Some(SystemPrompt::from_string(sys));
@@ -494,7 +501,7 @@ pub fn build_message_params(
 
     // Automatic prompt caching (top-level cache_control)
     if prompt_caching {
-        params.cache_control = Some(CacheControlEphemeral::new());
+        params.cache_control = Some(cache_control());
     }
 
     // Context management (beta)
