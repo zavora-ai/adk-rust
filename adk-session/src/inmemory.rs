@@ -199,8 +199,22 @@ impl SessionService for InMemorySessionService {
             }
         }
 
+        drop(sessions);
+
         // Sort by updated_at descending for consistency with other backends
         result.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+
+        let app_state_lock = self.app_state.read().unwrap_or_else(|e| e.into_inner());
+        let app_state = app_state_lock.get(&req.app_name).cloned().unwrap_or_default();
+        drop(app_state_lock);
+
+        let user_state_lock = self.user_state.read().unwrap_or_else(|e| e.into_inner());
+        let user_state = user_state_lock
+            .get(&req.app_name)
+            .and_then(|m| m.get(&req.user_id))
+            .cloned()
+            .unwrap_or_default();
+        drop(user_state_lock);
 
         let result: Vec<Box<dyn Session>> = result
             .into_iter()
@@ -209,7 +223,7 @@ impl SessionService for InMemorySessionService {
             .map(|data| {
                 Box::new(InMemorySession {
                     identity: data.identity,
-                    state: data.state,
+                    state: state_utils::merge_current_tiers(&app_state, &user_state, &data.state),
                     events: data.events,
                     updated_at: data.updated_at,
                 }) as Box<dyn Session>

@@ -313,8 +313,36 @@ enum SessionGuard {
 enum SessionWrite {
     /// Write the document, replacing the current one.
     Put(SessionDoc),
+    /// Merge keys into the session state of the document read inside the transaction.
+    Merge(StateMerge),
     /// Delete the document together with its `events` subcollection.
     Delete,
+}
+
+/// Keys merged into a stored state map inside the commit transaction, so a concurrent
+/// writer's keys are read and kept rather than overwritten.
+#[derive(Debug, Clone, PartialEq)]
+struct StateMerge {
+    delta: HashMap<String, Value>,
+    updated_at: DateTime<Utc>,
+}
+
+impl StateMerge {
+    /// Returns `None` for an empty delta, which leaves the stored document untouched.
+    fn non_empty(delta: HashMap<String, Value>, updated_at: DateTime<Utc>) -> Option<Self> {
+        (!delta.is_empty()).then_some(Self { delta, updated_at })
+    }
+
+    /// Applies the merge to `stored`.
+    ///
+    /// Session documents written by earlier releases also hold a copy of the app and user
+    /// tiers; `session_tier` drops it.
+    fn apply(&self, stored: &HashMap<String, Value>, session_tier: bool) -> HashMap<String, Value> {
+        let mut state =
+            if session_tier { state_utils::extract_state_deltas(stored).2 } else { stored.clone() };
+        state.extend(self.delta.clone());
+        state
+    }
 }
 
 /// One atomic write against a single session, applied by [`SessionStore::commit`].
@@ -325,8 +353,8 @@ struct SessionCommit {
     session_id: String,
     guard: SessionGuard,
     session: SessionWrite,
-    app_state: Option<AppStateDoc>,
-    user_state: Option<UserStateDoc>,
+    app_state: Option<StateMerge>,
+    user_state: Option<StateMerge>,
     event: Option<EventDoc>,
 }
 
@@ -336,7 +364,7 @@ impl SessionCommit {
     fn purges_events(&self) -> bool {
         match (self.guard, &self.session) {
             (SessionGuard::Absent, _) | (_, SessionWrite::Delete) => true,
-            (SessionGuard::Owned, SessionWrite::Put(_)) => false,
+            (SessionGuard::Owned, SessionWrite::Put(_) | SessionWrite::Merge(_)) => false,
         }
     }
 }
@@ -576,8 +604,63 @@ impl SessionStore for FirestoreStore {
                 }
             }
 
-            match &commit.session {
-                SessionWrite::Put(doc) => {
+            // Reads through `tx_db` hold these documents until the commit, so the merges
+            // below apply to the stored state rather than a copy read earlier.
+            let app_state = match &commit.app_state {
+                Some(merge) => {
+                    let stored = tx_db
+                        .fluent()
+                        .select()
+                        .by_id_in(APP_STATE_COLLECTION)
+                        .parent(&app_parent)
+                        .obj::<AppStateDoc>()
+                        .one(STATE_DOCUMENT_ID)
+                        .await
+                        .map_err(|e| firestore_error("query failed", e))?
+                        .map(|doc| doc.state)
+                        .unwrap_or_default();
+                    Some(AppStateDoc {
+                        state: merge.apply(&stored, false),
+                        updated_at: merge.updated_at,
+                    })
+                }
+                None => None,
+            };
+            let user_state = match &commit.user_state {
+                Some(merge) => {
+                    let stored = tx_db
+                        .fluent()
+                        .select()
+                        .by_id_in(USER_STATE_COLLECTION)
+                        .parent(&user_parent)
+                        .obj::<UserStateDoc>()
+                        .one(STATE_DOCUMENT_ID)
+                        .await
+                        .map_err(|e| firestore_error("query failed", e))?
+                        .map(|doc| doc.state)
+                        .unwrap_or_default();
+                    Some(UserStateDoc {
+                        state: merge.apply(&stored, false),
+                        updated_at: merge.updated_at,
+                    })
+                }
+                None => None,
+            };
+
+            let session_doc = match (&commit.session, current) {
+                (SessionWrite::Put(doc), _) => Some(doc.clone()),
+                (SessionWrite::Merge(merge), Some(current)) => Some(SessionDoc {
+                    state: merge.apply(&current.state, true),
+                    updated_at: merge.updated_at,
+                    ..current
+                }),
+                // The `Owned` guard above guarantees a current document.
+                (SessionWrite::Merge(_), None) => return Ok(false),
+                (SessionWrite::Delete, _) => None,
+            };
+
+            match &session_doc {
+                Some(doc) => {
                     // Backs up the in-transaction guard check at commit time.
                     let precondition = match commit.guard {
                         SessionGuard::Absent => FirestoreWritePrecondition::Exists(false),
@@ -594,7 +677,7 @@ impl SessionStore for FirestoreStore {
                         .add_to_transaction(&mut transaction)
                         .map_err(|e| firestore_error("write failed", e))?;
                 }
-                SessionWrite::Delete => {
+                None => {
                     self.db
                         .fluent()
                         .delete()
@@ -606,7 +689,7 @@ impl SessionStore for FirestoreStore {
                 }
             }
 
-            if let Some(app_state) = &commit.app_state {
+            if let Some(app_state) = &app_state {
                 self.db
                     .fluent()
                     .update()
@@ -617,7 +700,7 @@ impl SessionStore for FirestoreStore {
                     .add_to_transaction(&mut transaction)
                     .map_err(|e| firestore_error("write failed", e))?;
             }
-            if let Some(user_state) = &commit.user_state {
+            if let Some(user_state) = &user_state {
                 self.db
                     .fluent()
                     .update()
@@ -688,8 +771,7 @@ impl<S: SessionStore> SessionCore<S> {
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
         let not_found = || session_not_found_for(app_name, user_id, session_id);
 
-        let session_doc = self
-            .store
+        self.store
             .session(app_name, session_id)
             .await?
             .filter(|doc| is_owned_by(doc, app_name, user_id, session_id))
@@ -697,30 +779,16 @@ impl<S: SessionStore> SessionCore<S> {
 
         let (app_delta, user_delta, session_delta) =
             state_utils::extract_state_deltas(&event.actions.state_delta);
-        let (_, _, mut session_state) = state_utils::extract_state_deltas(&session_doc.state);
-        session_state.extend(session_delta);
-
-        let mut app_state = self.store.app_state(app_name).await?;
-        app_state.extend(app_delta.clone());
-        let mut user_state = self.store.user_state(app_name, user_id).await?;
-        user_state.extend(user_delta.clone());
 
         let now = event.timestamp;
-        let merged_state = state_utils::merge_states(&app_state, &user_state, &session_state);
         let commit = SessionCommit {
             app_name: app_name.to_string(),
             user_id: user_id.to_string(),
             session_id: session_id.to_string(),
             guard: SessionGuard::Owned,
-            session: SessionWrite::Put(SessionDoc {
-                state: merged_state,
-                updated_at: now,
-                ..session_doc
-            }),
-            app_state: (!app_delta.is_empty())
-                .then_some(AppStateDoc { state: app_state, updated_at: now }),
-            user_state: (!user_delta.is_empty())
-                .then_some(UserStateDoc { state: user_state, updated_at: now }),
+            session: SessionWrite::Merge(StateMerge { delta: session_delta, updated_at: now }),
+            app_state: StateMerge::non_empty(app_delta, now),
+            user_state: StateMerge::non_empty(user_delta, now),
             event: Some(event_to_doc(&event)?),
         };
 
@@ -742,13 +810,7 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
 
         let (app_delta, user_delta, session_state) = state_utils::extract_state_deltas(&req.state);
 
-        let mut app_state = self.store.app_state(&req.app_name).await?;
-        app_state.extend(app_delta.clone());
-        let mut user_state = self.store.user_state(&req.app_name, &req.user_id).await?;
-        user_state.extend(user_delta.clone());
-
         let now = Utc::now();
-        let merged_state = state_utils::merge_states(&app_state, &user_state, &session_state);
         let commit = SessionCommit {
             app_name: req.app_name.clone(),
             user_id: req.user_id.clone(),
@@ -758,26 +820,28 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
                 app_name: req.app_name.clone(),
                 user_id: req.user_id.clone(),
                 session_id: session_id.clone(),
-                state: merged_state.clone(),
+                state: session_state.clone(),
                 created_at: now,
                 updated_at: now,
             }),
-            app_state: (!app_delta.is_empty())
-                .then_some(AppStateDoc { state: app_state, updated_at: now }),
-            user_state: (!user_delta.is_empty())
-                .then_some(UserStateDoc { state: user_state, updated_at: now }),
+            app_state: StateMerge::non_empty(app_delta, now),
+            user_state: StateMerge::non_empty(user_delta, now),
             event: None,
         };
 
         match self.store.commit(commit).await? {
-            CommitOutcome::Committed => Ok(Box::new(FirestoreSession {
-                app_name: req.app_name,
-                user_id: req.user_id,
-                session_id,
-                state: merged_state,
-                events: Vec::new(),
-                updated_at: now,
-            })),
+            CommitOutcome::Committed => {
+                let app_state = self.store.app_state(&req.app_name).await?;
+                let user_state = self.store.user_state(&req.app_name, &req.user_id).await?;
+                Ok(Box::new(FirestoreSession {
+                    app_name: req.app_name,
+                    user_id: req.user_id,
+                    session_id,
+                    state: state_utils::merge_states(&app_state, &user_state, &session_state),
+                    events: Vec::new(),
+                    updated_at: now,
+                }))
+            }
             CommitOutcome::GuardFailed => Err(session_already_exists(&req.app_name, &session_id)),
         }
     }
@@ -793,6 +857,8 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
             .filter(|doc| is_owned_by(doc, &req.app_name, &req.user_id, &req.session_id))
             .ok_or_else(|| crate::service::session_not_found(&req))?;
 
+        let app_state = self.store.app_state(&req.app_name).await?;
+        let user_state = self.store.user_state(&req.app_name, &req.user_id).await?;
         let event_docs = self.store.events(&req.app_name, &req.session_id).await?;
         let mut events = decode_event_docs(&event_docs, &req.session_id);
 
@@ -808,7 +874,7 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
             app_name: req.app_name,
             user_id: req.user_id,
             session_id: req.session_id,
-            state: session_doc.state,
+            state: state_utils::merge_current_tiers(&app_state, &user_state, &session_doc.state),
             events,
             updated_at: session_doc.updated_at,
         }))
@@ -829,6 +895,9 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
             .collect();
         docs.sort_by_key(|doc| std::cmp::Reverse(doc.updated_at));
 
+        let app_state = self.store.app_state(&req.app_name).await?;
+        let user_state = self.store.user_state(&req.app_name, &req.user_id).await?;
+
         Ok(docs
             .into_iter()
             .skip(req.offset.unwrap_or(0))
@@ -838,7 +907,7 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
                     app_name: doc.app_name,
                     user_id: doc.user_id,
                     session_id: doc.session_id,
-                    state: doc.state,
+                    state: state_utils::merge_current_tiers(&app_state, &user_state, &doc.state),
                     events: Vec::new(),
                     updated_at: doc.updated_at,
                 }) as Box<dyn Session>
@@ -1148,15 +1217,29 @@ mod tests {
                 SessionWrite::Put(doc) => {
                     data.sessions.insert(session_key.clone(), doc);
                 }
+                SessionWrite::Merge(merge) => {
+                    let doc = data.sessions.get_mut(&session_key).expect("guarded by Owned");
+                    doc.state = merge.apply(&doc.state, true);
+                    doc.updated_at = merge.updated_at;
+                }
                 SessionWrite::Delete => {
                     data.sessions.remove(&session_key);
                 }
             }
-            if let Some(app_state) = commit.app_state {
-                data.app_states.insert(commit.app_name.clone(), app_state);
+            if let Some(merge) = commit.app_state {
+                let stored = data.app_states.get(&commit.app_name).map(|doc| doc.state.clone());
+                let state = merge.apply(&stored.unwrap_or_default(), false);
+                data.app_states.insert(
+                    commit.app_name.clone(),
+                    AppStateDoc { state, updated_at: merge.updated_at },
+                );
             }
-            if let Some(user_state) = commit.user_state {
-                data.user_states.insert(key(&commit.app_name, &commit.user_id), user_state);
+            if let Some(merge) = commit.user_state {
+                let user_key = key(&commit.app_name, &commit.user_id);
+                let stored = data.user_states.get(&user_key).map(|doc| doc.state.clone());
+                let state = merge.apply(&stored.unwrap_or_default(), false);
+                data.user_states
+                    .insert(user_key, UserStateDoc { state, updated_at: merge.updated_at });
             }
             if let Some(event) = commit.event {
                 data.events.entry(session_key).or_default().push(event);
@@ -1455,6 +1538,82 @@ mod tests {
             delta,
             serde_json::from_value::<HashMap<String, Value>>(json!({"k": 2, "user:lang": "en"}))
                 .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn get_and_list_serve_the_current_shared_tiers() {
+        let core = service();
+        core.create(create_req("app", "alice", "s1", json!({"app:theme": "light", "k": 1})))
+            .await
+            .unwrap();
+        core.create(create_req("app", "alice", "s2", json!({}))).await.unwrap();
+        core.append_event_for_identity(append_req(
+            "app",
+            "alice",
+            "s2",
+            event_with_delta("e1", json!({"app:theme": "dark", "user:lang": "fr"})),
+        ))
+        .await
+        .unwrap();
+
+        let expected: HashMap<String, Value> =
+            serde_json::from_value(json!({"app:theme": "dark", "user:lang": "fr", "k": 1}))
+                .unwrap();
+        let session = core.get(get_req("app", "alice", "s1")).await.unwrap();
+        assert_eq!(session.state().all(), expected);
+
+        let listed = core
+            .list(ListRequest {
+                app_name: "app".to_string(),
+                user_id: "alice".to_string(),
+                limit: None,
+                offset: None,
+            })
+            .await
+            .unwrap();
+        let listed = listed.iter().find(|session| session.id() == "s1").unwrap();
+        assert_eq!(listed.state().all(), expected);
+    }
+
+    #[tokio::test]
+    async fn append_keeps_keys_a_concurrent_writer_committed_first() {
+        let core = service();
+        core.create(create_req("app", "alice", "s1", json!({}))).await.unwrap();
+
+        // Between the append's ownership read and its commit, another writer commits its
+        // own key to every tier.
+        *core.store.before_commit.lock().unwrap() = Some(Box::new(|data: &mut FakeData| {
+            let theirs: HashMap<String, Value> = HashMap::from([("theirs".to_string(), json!(1))]);
+            data.app_states.insert(
+                "app".to_string(),
+                AppStateDoc { state: theirs.clone(), updated_at: Utc::now() },
+            );
+            data.user_states.insert(
+                key("app", "alice"),
+                UserStateDoc { state: theirs.clone(), updated_at: Utc::now() },
+            );
+            data.sessions.get_mut(&key("app", "s1")).unwrap().state = theirs;
+        }));
+
+        core.append_event_for_identity(append_req(
+            "app",
+            "alice",
+            "s1",
+            event_with_delta("e1", json!({"app:mine": 2, "user:mine": 2, "mine": 2})),
+        ))
+        .await
+        .unwrap();
+
+        let session = core.get(get_req("app", "alice", "s1")).await.unwrap();
+        assert_eq!(
+            session.state().all(),
+            serde_json::from_value::<HashMap<String, Value>>(json!({
+                "app:theirs": 1, "app:mine": 2,
+                "user:theirs": 1, "user:mine": 2,
+                "theirs": 1, "mine": 2,
+            }))
+            .unwrap()
         );
     }
 

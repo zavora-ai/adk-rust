@@ -576,6 +576,8 @@ let session_service = RedisSessionService::new(config).await?;
 > adk-session = { version = "3.0.0", features = ["redis"] }
 > ```
 
+Appends run as a Lua script (`EVAL`) so the event and its state delta are written in one atomic step; the server must allow scripting.
+
 ### FirestoreSessionService
 
 Stores sessions in Google Cloud Firestore using Application Default Credentials.
@@ -723,6 +725,8 @@ println!("Current schema version: {version}");
 ### Baseline Detection
 
 If you have an existing database created before the migration system was added, `migrate()` detects the pre-existing tables and registers them as already applied. This avoids destructive re-creation and allows incremental adoption.
+
+On PostgreSQL only tables in the connection's current schema (`current_schema()`) count, so tables that another deployment created in a different schema of the same database are not taken as a baseline.
 
 ### Migration Guarantees
 

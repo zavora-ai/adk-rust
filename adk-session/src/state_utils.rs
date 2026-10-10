@@ -53,3 +53,18 @@ pub fn merge_states(
     }
     merged
 }
+
+/// Builds the state a session exposes from its stored session state and the current
+/// app and user tiers.
+///
+/// `app:` and `user:` keys in `stored` are ignored. Session records written by earlier
+/// releases hold a copy of both tiers taken at their last write, and the tiers are the
+/// current values.
+pub(crate) fn merge_current_tiers(
+    app: &HashMap<String, Value>,
+    user: &HashMap<String, Value>,
+    stored: &HashMap<String, Value>,
+) -> HashMap<String, Value> {
+    let (_, _, session) = extract_state_deltas(stored);
+    merge_states(app, user, &session)
+}

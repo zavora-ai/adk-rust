@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{
     Row,
-    sqlite::{SqlitePool, SqliteRow},
+    sqlite::{SqliteConnection, SqlitePool, SqliteRow},
 };
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -176,6 +176,184 @@ CREATE TABLE IF NOT EXISTS user_states (\
     }
 }
 
+/// Statement that opens every transaction which reads state and writes it back.
+///
+/// `BEGIN IMMEDIATE` takes the database write lock before the first read, so a concurrent
+/// writer waits for the commit instead of overwriting a delta it never read.
+const BEGIN_WRITE: &str = "BEGIN IMMEDIATE";
+
+type StateMap = HashMap<String, Value>;
+
+/// Decodes a stored state column; a missing row is empty state.
+fn decode_state(json: Option<&str>) -> Result<StateMap> {
+    match json {
+        Some(json) => serde_json::from_str(json)
+            .map_err(|e| adk_core::AdkError::session(format!("deserialize failed: {e}"))),
+        None => Ok(HashMap::new()),
+    }
+}
+
+fn encode_state(state: &StateMap) -> Result<String> {
+    serde_json::to_string(state)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))
+}
+
+/// Reads the current app and user state tiers.
+async fn read_tiers(
+    conn: &mut SqliteConnection,
+    app_name: &str,
+    user_id: &str,
+) -> Result<(StateMap, StateMap)> {
+    let app_state: Option<String> =
+        sqlx::query_scalar("SELECT state FROM app_states WHERE app_name = ?")
+            .bind(app_name)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
+    let user_state: Option<String> =
+        sqlx::query_scalar("SELECT state FROM user_states WHERE app_name = ? AND user_id = ?")
+            .bind(app_name)
+            .bind(user_id)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
+    Ok((decode_state(app_state.as_deref())?, decode_state(user_state.as_deref())?))
+}
+
+/// Merges each non-empty tier delta into the stored tier and returns both tiers after
+/// the write.
+///
+/// Runs inside a [`BEGIN_WRITE`] transaction, so no other writer commits between the read
+/// and the write.
+async fn apply_tier_deltas(
+    conn: &mut SqliteConnection,
+    app_name: &str,
+    user_id: &str,
+    app_delta: StateMap,
+    user_delta: StateMap,
+    now: DateTime<Utc>,
+) -> Result<(StateMap, StateMap)> {
+    let (mut app_state, mut user_state) = read_tiers(conn, app_name, user_id).await?;
+
+    if !app_delta.is_empty() {
+        app_state.extend(app_delta);
+        sqlx::query(
+            "INSERT OR REPLACE INTO app_states (app_name, state, updated_at) VALUES (?, ?, ?)",
+        )
+        .bind(app_name)
+        .bind(encode_state(&app_state)?)
+        .bind(now.to_rfc3339())
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
+    }
+
+    if !user_delta.is_empty() {
+        user_state.extend(user_delta);
+        sqlx::query(
+            "INSERT OR REPLACE INTO user_states (app_name, user_id, state, updated_at) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind(encode_state(&user_state)?)
+        .bind(now.to_rfc3339())
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
+    }
+
+    Ok((app_state, user_state))
+}
+
+/// Applies `event` to the session `(app_name, user_id, session_id)` inside a
+/// [`BEGIN_WRITE`] transaction: merges each tier's delta, bumps `updated_at`, and inserts
+/// the event.
+async fn apply_event(
+    conn: &mut SqliteConnection,
+    app_name: &str,
+    user_id: &str,
+    session_id: &str,
+    event: &Event,
+) -> Result<()> {
+    let stored: Option<String> = sqlx::query_scalar(
+        "SELECT state FROM sessions WHERE app_name = ? AND user_id = ? AND session_id = ?",
+    )
+    .bind(app_name)
+    .bind(user_id)
+    .bind(session_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
+    let Some(stored) = stored else {
+        return Err(adk_core::AdkError::session("session not found"));
+    };
+
+    let (app_delta, user_delta, session_delta) =
+        state_utils::extract_state_deltas(&event.actions.state_delta);
+    apply_tier_deltas(conn, app_name, user_id, app_delta, user_delta, event.timestamp).await?;
+
+    if session_delta.is_empty() {
+        sqlx::query(
+            "UPDATE sessions SET updated_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ?",
+        )
+        .bind(event.timestamp.to_rfc3339())
+        .bind(app_name)
+        .bind(user_id)
+        .bind(session_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
+    } else {
+        // Rows written by earlier releases also hold a copy of the app and user tiers; the
+        // rewrite keeps only the session tier.
+        let (_, _, mut session_state) =
+            state_utils::extract_state_deltas(&decode_state(Some(&stored))?);
+        session_state.extend(session_delta);
+        sqlx::query(
+            "UPDATE sessions SET state = ?, updated_at = ? \
+             WHERE app_name = ? AND user_id = ? AND session_id = ?",
+        )
+        .bind(encode_state(&session_state)?)
+        .bind(event.timestamp.to_rfc3339())
+        .bind(app_name)
+        .bind(user_id)
+        .bind(session_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
+    }
+
+    let llm_response_json = serde_json::to_string(&event.llm_response)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+    let actions_json = serde_json::to_string(&event.actions)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+    let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+
+    sqlx::query(
+        "INSERT INTO events (id, app_name, user_id, session_id, invocation_id, branch, author, \
+         timestamp, llm_response, actions, long_running_tool_ids) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&event.id)
+    .bind(app_name)
+    .bind(user_id)
+    .bind(session_id)
+    .bind(&event.invocation_id)
+    .bind(&event.branch)
+    .bind(&event.author)
+    .bind(event.timestamp.to_rfc3339())
+    .bind(&llm_response_json)
+    .bind(&actions_json)
+    .bind(&tool_ids_json)
+    .execute(&mut *conn)
+    .await
+    .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
+
+    Ok(())
+}
+
 #[async_trait]
 impl SessionService for SqliteSessionService {
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
@@ -186,94 +364,37 @@ impl SessionService for SqliteSessionService {
 
         let mut tx = self
             .pool
-            .begin()
+            .begin_with(BEGIN_WRITE)
             .await
-            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {}", e)))?;
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
-        // Get or create app state
-        let app_state: HashMap<String, Value> =
-            sqlx::query("SELECT state FROM app_states WHERE app_name = ?")
-                .bind(&req.app_name)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?
-                .map(|row| {
-                    serde_json::from_str::<HashMap<String, Value>>(row.get("state"))
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default();
-
-        let mut new_app_state = app_state.clone();
-        new_app_state.extend(app_delta);
-
-        let app_state_json = serde_json::to_string(&new_app_state)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
+        let (app_state, user_state) =
+            apply_tier_deltas(&mut tx, &req.app_name, &req.user_id, app_delta, user_delta, now)
+                .await?;
 
         sqlx::query(
-            "INSERT OR REPLACE INTO app_states (app_name, state, updated_at) VALUES (?, ?, ?)",
+            "INSERT INTO sessions (app_name, user_id, session_id, state, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(&req.app_name)
-        .bind(&app_state_json)
+        .bind(&req.user_id)
+        .bind(&session_id)
+        .bind(encode_state(&session_state)?)
+        .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .execute(&mut *tx)
         .await
-        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
-
-        // Get or create user state
-        let user_state: HashMap<String, Value> =
-            sqlx::query("SELECT state FROM user_states WHERE app_name = ? AND user_id = ?")
-                .bind(&req.app_name)
-                .bind(&req.user_id)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?
-                .map(|row| {
-                    serde_json::from_str::<HashMap<String, Value>>(row.get("state"))
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default();
-
-        let mut new_user_state = user_state.clone();
-        new_user_state.extend(user_delta);
-
-        let user_state_json = serde_json::to_string(&new_user_state)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-        sqlx::query("INSERT OR REPLACE INTO user_states (app_name, user_id, state, updated_at) VALUES (?, ?, ?, ?)")
-            .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(&user_state_json)
-            .bind(now.to_rfc3339())
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
-
-        // Create session
-        let merged_state =
-            state_utils::merge_states(&new_app_state, &new_user_state, &session_state);
-        let merged_state_json = serde_json::to_string(&merged_state)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-        sqlx::query("INSERT INTO sessions (app_name, user_id, session_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
-            .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(&session_id)
-            .bind(&merged_state_json)
-            .bind(now.to_rfc3339())
-            .bind(now.to_rfc3339())
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
+        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         tx.commit()
             .await
-            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {}", e)))?;
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
         Ok(Box::new(DatabaseSession {
             app_name: req.app_name,
             user_id: req.user_id,
             session_id,
-            state: merged_state,
+            state: state_utils::merge_states(&app_state, &user_state, &session_state),
             events: Vec::new(),
             updated_at: now,
         }))
@@ -281,42 +402,56 @@ impl SessionService for SqliteSessionService {
 
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
         req.try_identity()?;
-        let row = sqlx::query("SELECT state, updated_at FROM sessions WHERE app_name = ? AND user_id = ? AND session_id = ?")
-            .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(&req.session_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            .ok_or_else(|| crate::service::session_not_found(&req))?;
+        let row = sqlx::query(
+            "SELECT s.state, s.updated_at, a.state AS app_state, u.state AS user_state \
+             FROM sessions s \
+             LEFT JOIN app_states a ON a.app_name = s.app_name \
+             LEFT JOIN user_states u ON u.app_name = s.app_name AND u.user_id = s.user_id \
+             WHERE s.app_name = ? AND s.user_id = ? AND s.session_id = ?",
+        )
+        .bind(&req.app_name)
+        .bind(&req.user_id)
+        .bind(&req.session_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+        .ok_or_else(|| crate::service::session_not_found(&req))?;
 
-        let state: HashMap<String, Value> = serde_json::from_str(row.get("state"))
-            .map_err(|e| adk_core::AdkError::session(format!("deserialize failed: {}", e)))?;
+        let state = state_utils::merge_current_tiers(
+            &decode_state(row.get("app_state"))?,
+            &decode_state(row.get("user_state"))?,
+            &decode_state(Some(row.get("state")))?,
+        );
         let updated_at: String = row.get("updated_at");
         let updated_at = DateTime::parse_from_rfc3339(&updated_at)
             .map_err(|e| adk_core::AdkError::session(format!("parse date failed: {}", e)))?
             .with_timezone(&Utc);
 
-        let events: Vec<Event> = sqlx::query("SELECT * FROM events WHERE app_name = ? AND user_id = ? AND session_id = ? ORDER BY timestamp")
-            .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(&req.session_id)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?
-            .iter()
-            .filter_map(|row| decode_event_row(row, &req.session_id))
-            .collect();
-
-        let mut events = events;
-
-        if let Some(num) = req.num_recent_events {
-            let start = events.len().saturating_sub(num);
-            events = events[start..].to_vec();
-        }
-        if let Some(after) = req.after {
-            events.retain(|e| e.timestamp >= after);
-        }
+        // Timestamps are RFC 3339 strings in one format, so text order is time order. The
+        // inner query keeps the most recent `num_recent_events` (-1 is no limit); the outer
+        // one restores chronological order.
+        let after = req.after.map(|after| after.to_rfc3339());
+        let limit = req.num_recent_events.map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
+        let events: Vec<Event> = sqlx::query(
+            "SELECT * FROM (\
+                 SELECT *, rowid AS seq FROM events \
+                 WHERE app_name = ? AND user_id = ? AND session_id = ? \
+                   AND (? IS NULL OR timestamp >= ?) \
+                 ORDER BY timestamp DESC, rowid DESC LIMIT ?\
+             ) ORDER BY timestamp, seq",
+        )
+        .bind(&req.app_name)
+        .bind(&req.user_id)
+        .bind(&req.session_id)
+        .bind(&after)
+        .bind(&after)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?
+        .iter()
+        .filter_map(|row| decode_event_row(row, &req.session_id))
+        .collect();
 
         Ok(Box::new(DatabaseSession {
             app_name: req.app_name,
@@ -332,6 +467,12 @@ impl SessionService for SqliteSessionService {
         let limit = req.limit.map(|l| l as i64).unwrap_or(i64::MAX);
         let offset = req.offset.unwrap_or(0) as i64;
 
+        let mut conn =
+            self.pool.acquire().await.map_err(|e| {
+                adk_core::AdkError::session(format!("database connection failed: {e}"))
+            })?;
+        let (app_state, user_state) = read_tiers(&mut conn, &req.app_name, &req.user_id).await?;
+
         let rows = sqlx::query(
             "SELECT session_id, state, updated_at FROM sessions \
              WHERE app_name = ? AND user_id = ? \
@@ -341,14 +482,13 @@ impl SessionService for SqliteSessionService {
         .bind(&req.user_id)
         .bind(limit)
         .bind(offset)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *conn)
         .await
         .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?;
 
         let mut sessions = Vec::new();
         for row in rows {
-            let state: HashMap<String, Value> =
-                serde_json::from_str(row.get("state")).unwrap_or_default();
+            let stored: StateMap = serde_json::from_str(row.get("state")).unwrap_or_default();
             let updated_at: String = row.get("updated_at");
             let updated_at = DateTime::parse_from_rfc3339(&updated_at)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -358,7 +498,7 @@ impl SessionService for SqliteSessionService {
                 app_name: req.app_name.clone(),
                 user_id: req.user_id.clone(),
                 session_id: row.get("session_id"),
-                state,
+                state: state_utils::merge_current_tiers(&app_state, &user_state, &stored),
                 events: Vec::new(),
                 updated_at,
             }) as Box<dyn Session>);
@@ -436,75 +576,12 @@ impl SessionService for SqliteSessionService {
 
         let mut tx = self
             .pool
-            .begin()
+            .begin_with(BEGIN_WRITE)
             .await
             .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {}", e)))?;
 
-        if event.actions.state_delta.is_empty() {
-            let session_rows =
-                sqlx::query("SELECT app_name, user_id FROM sessions WHERE session_id = ?")
-                    .bind(session_id)
-                    .fetch_all(&mut *tx)
-                    .await
-                    .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?;
-
-            if session_rows.is_empty() {
-                return Err(adk_core::AdkError::session("session not found"));
-            }
-            if session_rows.len() > 1 {
-                return Err(adk_core::AdkError::session(format!(
-                    "ambiguous session_id '{}'; expected a unique session identifier",
-                    session_id
-                )));
-            }
-
-            let row = &session_rows[0];
-            let app_name: String = row.get("app_name");
-            let user_id: String = row.get("user_id");
-
-            sqlx::query(
-                "UPDATE sessions SET updated_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ?",
-            )
-            .bind(event.timestamp.to_rfc3339())
-            .bind(&app_name)
-            .bind(&user_id)
-            .bind(session_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("update failed: {}", e)))?;
-
-            let llm_response_json = serde_json::to_string(&event.llm_response)
-                .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-            let actions_json = serde_json::to_string(&event.actions)
-                .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-            let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
-                .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-            sqlx::query("INSERT INTO events (id, app_name, user_id, session_id, invocation_id, branch, author, timestamp, llm_response, actions, long_running_tool_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(&event.id)
-                .bind(&app_name)
-                .bind(&user_id)
-                .bind(session_id)
-                .bind(&event.invocation_id)
-                .bind(&event.branch)
-                .bind(&event.author)
-                .bind(event.timestamp.to_rfc3339())
-                .bind(&llm_response_json)
-                .bind(&actions_json)
-                .bind(&tool_ids_json)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
-
-            tx.commit()
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("commit failed: {}", e)))?;
-
-            return Ok(());
-        }
-
         let session_rows =
-            sqlx::query("SELECT app_name, user_id, state FROM sessions WHERE session_id = ?")
+            sqlx::query("SELECT app_name, user_id FROM sessions WHERE session_id = ?")
                 .bind(session_id)
                 .fetch_all(&mut *tx)
                 .await
@@ -523,118 +600,8 @@ impl SessionService for SqliteSessionService {
         let row = &session_rows[0];
         let app_name: String = row.get("app_name");
         let user_id: String = row.get("user_id");
-        let session_state_json: String = row.get("state");
-        let existing_state: HashMap<String, Value> = serde_json::from_str(&session_state_json)
-            .map_err(|e| adk_core::AdkError::session(format!("deserialize failed: {}", e)))?;
-        let (_, _, mut session_state) = state_utils::extract_state_deltas(&existing_state);
 
-        let app_state: HashMap<String, Value> =
-            match sqlx::query("SELECT state FROM app_states WHERE app_name = ?")
-                .bind(&app_name)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?
-            {
-                Some(row) => {
-                    let state_json: String = row.get("state");
-                    serde_json::from_str(&state_json).map_err(|e| {
-                        adk_core::AdkError::session(format!("deserialize failed: {}", e))
-                    })?
-                }
-                None => HashMap::new(),
-            };
-
-        let user_state: HashMap<String, Value> =
-            match sqlx::query("SELECT state FROM user_states WHERE app_name = ? AND user_id = ?")
-                .bind(&app_name)
-                .bind(&user_id)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?
-            {
-                Some(row) => {
-                    let state_json: String = row.get("state");
-                    serde_json::from_str(&state_json).map_err(|e| {
-                        adk_core::AdkError::session(format!("deserialize failed: {}", e))
-                    })?
-                }
-                None => HashMap::new(),
-            };
-
-        let (app_delta, user_delta, session_delta) =
-            state_utils::extract_state_deltas(&event.actions.state_delta);
-
-        let mut new_app_state = app_state.clone();
-        new_app_state.extend(app_delta);
-        let app_state_json = serde_json::to_string(&new_app_state)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-        sqlx::query(
-            "INSERT OR REPLACE INTO app_states (app_name, state, updated_at) VALUES (?, ?, ?)",
-        )
-        .bind(&app_name)
-        .bind(&app_state_json)
-        .bind(event.timestamp.to_rfc3339())
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
-
-        let mut new_user_state = user_state.clone();
-        new_user_state.extend(user_delta);
-        let user_state_json = serde_json::to_string(&new_user_state)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-        sqlx::query(
-            "INSERT OR REPLACE INTO user_states (app_name, user_id, state, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&app_name)
-        .bind(&user_id)
-        .bind(&user_state_json)
-        .bind(event.timestamp.to_rfc3339())
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
-
-        session_state.extend(session_delta);
-        let merged_state =
-            state_utils::merge_states(&new_app_state, &new_user_state, &session_state);
-        let merged_state_json = serde_json::to_string(&merged_state)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-        sqlx::query(
-            "UPDATE sessions SET state = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ?",
-        )
-        .bind(&merged_state_json)
-        .bind(event.timestamp.to_rfc3339())
-        .bind(&app_name)
-        .bind(&user_id)
-        .bind(session_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("update failed: {}", e)))?;
-
-        let llm_response_json = serde_json::to_string(&event.llm_response)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-        let actions_json = serde_json::to_string(&event.actions)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-        let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-        sqlx::query("INSERT INTO events (id, app_name, user_id, session_id, invocation_id, branch, author, timestamp, llm_response, actions, long_running_tool_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(&event.id)
-            .bind(&app_name)
-            .bind(&user_id)
-            .bind(session_id)
-            .bind(&event.invocation_id)
-            .bind(&event.branch)
-            .bind(&event.author)
-            .bind(event.timestamp.to_rfc3339())
-            .bind(&llm_response_json)
-            .bind(&actions_json)
-            .bind(&tool_ids_json)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
+        apply_event(&mut tx, &app_name, &user_id, session_id, &event).await?;
 
         tx.commit()
             .await
@@ -647,185 +614,20 @@ impl SessionService for SqliteSessionService {
         let mut event = req.event;
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
 
-        let app_name = req.identity.app_name.as_ref();
-        let user_id = req.identity.user_id.as_ref();
-        let session_id = req.identity.session_id.as_ref();
-
         let mut tx = self
             .pool
-            .begin()
+            .begin_with(BEGIN_WRITE)
             .await
             .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {}", e)))?;
 
-        if event.actions.state_delta.is_empty() {
-            let result = sqlx::query(
-                "UPDATE sessions SET updated_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ?",
-            )
-            .bind(event.timestamp.to_rfc3339())
-            .bind(app_name)
-            .bind(user_id)
-            .bind(session_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("update failed: {}", e)))?;
-            if result.rows_affected() == 0 {
-                return Err(adk_core::AdkError::session("session not found"));
-            }
-
-            let llm_response_json = serde_json::to_string(&event.llm_response)
-                .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-            let actions_json = serde_json::to_string(&event.actions)
-                .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-            let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
-                .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-            sqlx::query("INSERT INTO events (id, app_name, user_id, session_id, invocation_id, branch, author, timestamp, llm_response, actions, long_running_tool_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(&event.id)
-                .bind(app_name)
-                .bind(user_id)
-                .bind(session_id)
-                .bind(&event.invocation_id)
-                .bind(&event.branch)
-                .bind(&event.author)
-                .bind(event.timestamp.to_rfc3339())
-                .bind(&llm_response_json)
-                .bind(&actions_json)
-                .bind(&tool_ids_json)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
-
-            tx.commit()
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("commit failed: {}", e)))?;
-
-            return Ok(());
-        }
-
-        // Use the full composite key — no ambiguity possible.
-        let session_row = sqlx::query(
-            "SELECT state FROM sessions WHERE app_name = ? AND user_id = ? AND session_id = ?",
+        apply_event(
+            &mut tx,
+            req.identity.app_name.as_ref(),
+            req.identity.user_id.as_ref(),
+            req.identity.session_id.as_ref(),
+            &event,
         )
-        .bind(app_name)
-        .bind(user_id)
-        .bind(session_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?
-        .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
-
-        let session_state_json: String = session_row.get("state");
-        let existing_state: HashMap<String, Value> = serde_json::from_str(&session_state_json)
-            .map_err(|e| adk_core::AdkError::session(format!("deserialize failed: {}", e)))?;
-        let (_, _, mut session_state) = state_utils::extract_state_deltas(&existing_state);
-
-        let app_state: HashMap<String, Value> =
-            match sqlx::query("SELECT state FROM app_states WHERE app_name = ?")
-                .bind(app_name)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?
-            {
-                Some(row) => {
-                    let state_json: String = row.get("state");
-                    serde_json::from_str(&state_json).map_err(|e| {
-                        adk_core::AdkError::session(format!("deserialize failed: {}", e))
-                    })?
-                }
-                None => HashMap::new(),
-            };
-
-        let user_state: HashMap<String, Value> =
-            match sqlx::query("SELECT state FROM user_states WHERE app_name = ? AND user_id = ?")
-                .bind(app_name)
-                .bind(user_id)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("query failed: {}", e)))?
-            {
-                Some(row) => {
-                    let state_json: String = row.get("state");
-                    serde_json::from_str(&state_json).map_err(|e| {
-                        adk_core::AdkError::session(format!("deserialize failed: {}", e))
-                    })?
-                }
-                None => HashMap::new(),
-            };
-
-        let (app_delta, user_delta, session_delta) =
-            state_utils::extract_state_deltas(&event.actions.state_delta);
-
-        let mut new_app_state = app_state.clone();
-        new_app_state.extend(app_delta);
-        let app_state_json = serde_json::to_string(&new_app_state)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-        sqlx::query(
-            "INSERT OR REPLACE INTO app_states (app_name, state, updated_at) VALUES (?, ?, ?)",
-        )
-        .bind(app_name)
-        .bind(&app_state_json)
-        .bind(event.timestamp.to_rfc3339())
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
-
-        let mut new_user_state = user_state.clone();
-        new_user_state.extend(user_delta);
-        let user_state_json = serde_json::to_string(&new_user_state)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-        sqlx::query(
-            "INSERT OR REPLACE INTO user_states (app_name, user_id, state, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(app_name)
-        .bind(user_id)
-        .bind(&user_state_json)
-        .bind(event.timestamp.to_rfc3339())
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
-
-        session_state.extend(session_delta);
-        let merged_state =
-            state_utils::merge_states(&new_app_state, &new_user_state, &session_state);
-        let merged_state_json = serde_json::to_string(&merged_state)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-        sqlx::query(
-            "UPDATE sessions SET state = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ?",
-        )
-        .bind(&merged_state_json)
-        .bind(event.timestamp.to_rfc3339())
-        .bind(app_name)
-        .bind(user_id)
-        .bind(session_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("update failed: {}", e)))?;
-
-        let llm_response_json = serde_json::to_string(&event.llm_response)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-        let actions_json = serde_json::to_string(&event.actions)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-        let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {}", e)))?;
-
-        sqlx::query("INSERT INTO events (id, app_name, user_id, session_id, invocation_id, branch, author, timestamp, llm_response, actions, long_running_tool_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(&event.id)
-            .bind(app_name)
-            .bind(user_id)
-            .bind(session_id)
-            .bind(&event.invocation_id)
-            .bind(&event.branch)
-            .bind(&event.author)
-            .bind(event.timestamp.to_rfc3339())
-            .bind(&llm_response_json)
-            .bind(&actions_json)
-            .bind(&tool_ids_json)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("insert failed: {}", e)))?;
+        .await?;
 
         tx.commit()
             .await
@@ -837,7 +639,7 @@ impl SessionService for SqliteSessionService {
     async fn rewind(&self, session_id: &str, target_event_id: &str) -> Result<Box<dyn Session>> {
         let mut tx = self
             .pool
-            .begin()
+            .begin_with(BEGIN_WRITE)
             .await
             .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
@@ -945,17 +747,14 @@ impl SessionService for SqliteSessionService {
                 })
                 .unwrap_or_default();
 
-        // Merge state and update session
         let merged_state =
             state_utils::merge_states(&app_state, &user_state, &rebuilt_session_state);
-        let merged_state_json = serde_json::to_string(&merged_state)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
 
         let now = Utc::now();
         sqlx::query(
             "UPDATE sessions SET state = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ?",
         )
-        .bind(&merged_state_json)
+        .bind(encode_state(&rebuilt_session_state)?)
         .bind(now.to_rfc3339())
         .bind(&app_name)
         .bind(&user_id)
@@ -1042,7 +841,7 @@ impl SessionService for SqliteSessionService {
             // Rewind all events: delete all and reset state
             let mut tx = self
                 .pool
-                .begin()
+                .begin_with(BEGIN_WRITE)
                 .await
                 .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
@@ -1082,14 +881,11 @@ impl SessionService for SqliteSessionService {
 
             let merged_state =
                 state_utils::merge_states(&app_state, &user_state_map, &HashMap::new());
-            let merged_state_json = serde_json::to_string(&merged_state)
-                .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
 
             let now = Utc::now();
             sqlx::query(
-                "UPDATE sessions SET state = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ?",
+                "UPDATE sessions SET state = '{}', updated_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ?",
             )
-            .bind(&merged_state_json)
             .bind(now.to_rfc3339())
             .bind(&app_name)
             .bind(&user_id)

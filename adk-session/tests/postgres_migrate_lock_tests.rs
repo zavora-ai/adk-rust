@@ -17,32 +17,52 @@
 #![cfg(feature = "postgres")]
 
 use adk_session::PostgresSessionService;
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::{Connection, PgConnection};
+use std::str::FromStr;
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
+
+/// `application_name` of every connection this test opens, so lock counts exclude the
+/// migration lock that other tests running `migrate` against the same database hold.
+const APPLICATION_NAME: &str = "adk-session-migrate-lock-test";
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres@localhost:5432/postgres".to_string())
 }
 
+fn connect_options() -> PgConnectOptions {
+    PgConnectOptions::from_str(&database_url())
+        .expect("parse DATABASE_URL")
+        .application_name(APPLICATION_NAME)
+}
+
 async fn pool(max_connections: u32) -> PgPool {
     PgPoolOptions::new()
         .max_connections(max_connections)
-        .connect(&database_url())
+        .connect_with(connect_options())
         .await
         .expect("connect to postgres")
 }
 
-/// Advisory locks granted in the current database, as seen from outside any pool.
+/// Grants of the migration advisory lock in the current database held by this test's
+/// connections, as seen from outside any pool. Other advisory locks, such as another
+/// crate's migration lock, and other processes' connections are not counted.
 async fn advisory_locks_held(observer: &mut PgConnection) -> i64 {
+    // `pg_locks` shows a bigint key as its high and low 32 bits.
+    let key = PostgresSessionService::ADVISORY_LOCK_KEY as u64;
     sqlx::query_scalar(
-        "SELECT count(*) FROM pg_locks \
-         WHERE locktype = 'advisory' AND granted \
-           AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+        "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+         WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1 \
+           AND l.classid::bigint = $1 AND l.objid::bigint = $2 \
+           AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database()) \
+           AND a.application_name = $3",
     )
+    .bind((key >> 32) as i64)
+    .bind((key & 0xffff_ffff) as i64)
+    .bind(APPLICATION_NAME)
     .fetch_one(observer)
     .await
     .expect("query pg_locks")
@@ -57,7 +77,32 @@ async fn migrate(service: &PostgresSessionService, label: &str) -> adk_core::Res
 #[tokio::test]
 #[ignore = "requires a PostgreSQL server at DATABASE_URL"]
 async fn postgres_migrate_releases_advisory_lock_across_instances() {
-    let mut observer = PgConnection::connect(&database_url()).await.expect("connect observer");
+    let mut observer =
+        PgConnection::connect_with(&connect_options()).await.expect("connect observer");
+
+    // The key counted above is the one `migrate` waits on.
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(PostgresSessionService::ADVISORY_LOCK_KEY)
+        .execute(&mut observer)
+        .await
+        .expect("take the migration lock");
+    assert_eq!(advisory_locks_held(&mut observer).await, 1);
+    let blocked = PostgresSessionService::from_pool(pool(4).await);
+    let mut waiting = Box::pin(blocked.migrate());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), &mut waiting).await.is_err(),
+        "migrate() ran while another connection held ADVISORY_LOCK_KEY"
+    );
+    sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(PostgresSessionService::ADVISORY_LOCK_KEY)
+        .execute(&mut observer)
+        .await
+        .expect("release the migration lock");
+    tokio::time::timeout(TIMEOUT, waiting)
+        .await
+        .expect("migrate() still blocked after the lock was released")
+        .expect("migrate after the lock was released");
+    assert_eq!(advisory_locks_held(&mut observer).await, 0);
 
     // Two pools model two replicas of one application.
     let first = PostgresSessionService::from_pool(pool(4).await);

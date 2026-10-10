@@ -222,12 +222,12 @@ impl PostgresMemoryService {
         CREATE INDEX IF NOT EXISTS idx_memory_app_user_project \
             ON memory_entries(app_name, user_id, project_id);";
 
-    /// Advisory lock key derived from the registry table name.
+    /// Advisory lock key that [`migrate`](Self::migrate) holds while it runs.
     ///
-    /// This is a fixed `i64` used with `pg_advisory_lock` /
-    /// `pg_advisory_unlock` to prevent concurrent migration races.
-    /// The value is a compile-time FNV-1a hash of the registry table name.
-    const ADVISORY_LOCK_KEY: i64 = {
+    /// Concurrent instances take this `pg_advisory_lock` key so only one migrates at a
+    /// time. The value is an FNV-1a hash of the registry table name, and `pg_locks` shows
+    /// it with the high 32 bits in `classid` and the low 32 bits in `objid`.
+    pub const ADVISORY_LOCK_KEY: i64 = {
         let bytes = Self::REGISTRY_TABLE.as_bytes();
         let mut hash: u64 = 0xcbf29ce484222325;
         let mut i = 0;
@@ -374,7 +374,8 @@ impl PostgresMemoryService {
                     let row = sqlx::query(
                         "SELECT EXISTS(\
                              SELECT 1 FROM information_schema.tables \
-                             WHERE table_name = 'memory_entries'\
+                             WHERE table_schema = current_schema() \
+                               AND table_name = 'memory_entries'\
                          ) AS exists_flag",
                     )
                     .fetch_one(conn)

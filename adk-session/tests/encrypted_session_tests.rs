@@ -249,10 +249,14 @@ async fn list_returns_decrypted_state() {
         .unwrap();
 
     assert_eq!(listed.len(), 1);
-    // The in-memory backend lists session-tier state only.
     assert_eq!(
         listed[0].state().all(),
-        state(json!({"name": "Alice Example", "plan": "secret-plan"}))
+        state(json!({
+            "name": "Alice Example",
+            "plan": "secret-plan",
+            "user:card": "4111-1111",
+            "app:feature": "hidden-flag",
+        }))
     );
     assert_eq!(event_values(listed[0].as_ref()), vec![persisted(secret_event("e1"))]);
 }

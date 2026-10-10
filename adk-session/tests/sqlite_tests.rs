@@ -327,4 +327,48 @@ mod tests {
         assert!(output.contains("skipping stored event that failed to deserialize"), "{output}");
         assert!(output.contains("event.id=event-corrupt"), "{output}");
     }
+
+    #[tokio::test]
+    async fn test_sqlite_get_ignores_tier_copies_in_session_row() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
+        service.migrate().await.unwrap();
+        service
+            .create(CreateRequest {
+                app_name: "test_app".to_string(),
+                user_id: "user1".to_string(),
+                session_id: Some("session1".to_string()),
+                state: HashMap::from([
+                    ("app:theme".to_string(), json!("dark")),
+                    ("topic".to_string(), json!("rust")),
+                ]),
+            })
+            .await
+            .unwrap();
+
+        // Session rows written by earlier releases hold the tiers as of their last write.
+        sqlx::query("UPDATE sessions SET state = ? WHERE session_id = 'session1'")
+            .bind(r#"{"app:theme":"light","app:retired":true,"user:name":"old","topic":"rust"}"#)
+            .execute(service.pool())
+            .await
+            .unwrap();
+
+        let session = service
+            .get(GetRequest {
+                app_name: "test_app".to_string(),
+                user_id: "user1".to_string(),
+                session_id: "session1".to_string(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            session.state().all(),
+            HashMap::from([
+                ("app:theme".to_string(), json!("dark")),
+                ("topic".to_string(), json!("rust")),
+            ])
+        );
+    }
 }
