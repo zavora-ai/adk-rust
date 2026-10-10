@@ -174,13 +174,20 @@ impl TaskContext {
     /// resumed with an interrupt value, the value is deserialized into `T`
     /// and returned.
     ///
+    /// The first answer an interrupt receives is recorded in the execution log
+    /// and checkpointed before it is returned. A run resumed from any later
+    /// checkpoint, such as one written before a crash, replays the recorded
+    /// answer without it being supplied again. A recorded answer takes
+    /// precedence over a different value supplied later, because the tasks that
+    /// ran after the interrupt already acted on it.
+    ///
     /// # Errors
     ///
     /// Returns [`FunctionalError::InterruptTypeMismatch`] if the resume
     /// value cannot be deserialized into `T`.
     ///
     /// Returns [`FunctionalError::CheckpointFailed`] if persisting the
-    /// interrupt checkpoint fails.
+    /// interrupt checkpoint, or the checkpoint that records an answer, fails.
     ///
     /// # Example
     ///
@@ -197,10 +204,26 @@ impl TaskContext {
             format!("interrupt-{ordinal}")
         };
 
-        // Resume: a value supplied for this site is returned to the call site, which is what the
-        // signature promised and what previously could not happen.
-        if let Some(value) = self.resume_values.get(&continuation_key) {
-            return serde_json::from_value(value.clone()).map_err(|e| {
+        // Resume: an answer recorded by an earlier run wins, then a value supplied for this
+        // site. Either is returned to the call site, as the signature promises.
+        let recorded = self.execution_log.read().await.interrupt_answer(&continuation_key).cloned();
+        let supplied = self.resume_values.get(&continuation_key);
+        let answer = match (recorded, supplied) {
+            (Some(recorded), supplied) => {
+                if supplied.is_some_and(|value| *value != recorded) {
+                    tracing::warn!(
+                        interrupt.key = %continuation_key,
+                        "ignoring a resume value that differs from the answer this interrupt \
+                         already recorded"
+                    );
+                }
+                Some((recorded, false))
+            }
+            (None, Some(value)) => Some((value.clone(), true)),
+            (None, None) => None,
+        };
+        if let Some((value, newly_supplied)) = answer {
+            let typed: T = serde_json::from_value(value.clone()).map_err(|e| {
                 FunctionalError::InterruptTypeMismatch {
                     task: continuation_key.clone(),
                     message: format!(
@@ -208,8 +231,11 @@ impl TaskContext {
                          type this interrupt expects: {e}"
                     ),
                 }
-                .into()
-            });
+            })?;
+            if newly_supplied {
+                self.record_interrupt_answer(&continuation_key, value).await?;
+            }
+            return Ok(typed);
         }
 
         // Emit the interrupt event for stream listeners.
@@ -538,6 +564,31 @@ impl TaskContext {
             FunctionalError::CheckpointFailed { task: task_id.to_string(), message: e.to_string() }
         })?;
 
+        Ok(())
+    }
+
+    /// Records an interrupt's answer in the execution log and checkpoints it, so a
+    /// crash before the next task completes cannot lose it.
+    async fn record_interrupt_answer(&self, continuation_key: &str, value: Value) -> Result<()> {
+        let checkpoint = {
+            let mut log = self.execution_log.write().await;
+            log.record_interrupt_answer(continuation_key, value);
+            crate::state::Checkpoint::new(
+                &self.thread_id,
+                self.state.clone(),
+                log.current_step(),
+                vec![],
+            )
+            .with_metadata("answered_interrupt", Value::String(continuation_key.to_string()))
+            .with_metadata("execution_log", serde_json::to_value(&*log)?)
+        };
+
+        self.checkpointer.save(&checkpoint).await.map_err(|e| {
+            FunctionalError::CheckpointFailed {
+                task: continuation_key.to_string(),
+                message: e.to_string(),
+            }
+        })?;
         Ok(())
     }
 
