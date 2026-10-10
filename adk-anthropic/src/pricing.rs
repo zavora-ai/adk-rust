@@ -2,12 +2,18 @@
 //!
 //! Provides per-model cost calculation from [`Usage`] data returned by the API.
 //! Rates are the published standard-tier list prices, last verified against
-//! <https://docs.claude.com/en/docs/about-claude/pricing> on 2026-08-23.
+//! <https://platform.claude.com/docs/en/about-claude/pricing> on 2026-10-10.
 //!
 //! # Limitations
 //!
-//! - **Fast mode** is priced separately. Claude Opus 5 and Opus 4.8 in fast mode
-//!   cost 2× standard; use [`ModelPricing::OPUS_5_FAST`].
+//! - **Fast mode** is priced separately. Claude Opus 5.5, Opus 5, and Opus 4.8 in
+//!   fast mode cost 2× standard; use [`ModelPricing::OPUS_55_FAST`] or
+//!   [`ModelPricing::OPUS_5_FAST`].
+//! - **Claude Haiku 5.5** has two rate cards chosen by prompt length.
+//!   [`ModelPricing::for_model_id`] returns [`ModelPricing::HAIKU_55`], the rate
+//!   for prompts of 100,000 tokens or fewer. Apply
+//!   [`ModelPricing::HAIKU_55_LONG_PROMPT`] when a request's input tokens,
+//!   including cache reads and cache writes, exceed 100,000.
 //! - **Data residency** adds a 1.1× multiplier on every token category for
 //!   Claude 4.6 and later when `inference_geo` is `"us"`. Not applied here.
 //! - **Batch processing** halves input and output. Not applied here.
@@ -29,7 +35,7 @@ use crate::types::{Model, Usage};
 /// Per-million-token prices for a single model tier.
 ///
 /// All values are in USD per 1 million tokens.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelPricing {
     /// Base input token price ($/MTok).
     pub input: f64,
@@ -37,13 +43,31 @@ pub struct ModelPricing {
     pub cache_write_5m: f64,
     /// 1-hour cache write price ($/MTok). 2× base input.
     pub cache_write_1h: f64,
-    /// Cache read / refresh price ($/MTok). 0.1× base input.
+    /// Cache read / refresh price ($/MTok). 0.1× base input on most models,
+    /// 0.05× on Claude Opus 5.5 and Sonnet 5.5, and 0.025× on Claude Fable 5.1
+    /// and Mythos 5.1.
     pub cache_read: f64,
     /// Output token price ($/MTok).
     pub output: f64,
 }
 
 impl ModelPricing {
+    /// Claude Fable 5.1 — cache reads at 0.025× base input.
+    pub const FABLE_51: Self = Self {
+        input: 10.0,
+        cache_write_5m: 12.5,
+        cache_write_1h: 20.0,
+        cache_read: 0.25,
+        output: 50.0,
+    };
+    /// Claude Mythos 5.1 — limited availability, same rates as Fable 5.1.
+    pub const MYTHOS_51: Self = Self {
+        input: 10.0,
+        cache_write_5m: 12.5,
+        cache_write_1h: 20.0,
+        cache_read: 0.25,
+        output: 50.0,
+    };
     /// Claude Fable 5.
     pub const FABLE_5: Self = Self {
         input: 10.0,
@@ -60,6 +84,14 @@ impl ModelPricing {
         cache_read: 1.0,
         output: 50.0,
     };
+    /// Claude Opus 5.5 — cache reads at 0.05× base input.
+    pub const OPUS_55: Self = Self {
+        input: 4.0,
+        cache_write_5m: 5.0,
+        cache_write_1h: 8.0,
+        cache_read: 0.20,
+        output: 20.0,
+    };
     /// Claude Opus 5.
     pub const OPUS_5: Self = Self {
         input: 5.0,
@@ -67,6 +99,14 @@ impl ModelPricing {
         cache_write_1h: 10.0,
         cache_read: 0.50,
         output: 25.0,
+    };
+    /// Claude Sonnet 5.5 — cache reads at 0.05× base input.
+    pub const SONNET_55: Self = Self {
+        input: 2.0,
+        cache_write_5m: 2.5,
+        cache_write_1h: 4.0,
+        cache_read: 0.10,
+        output: 10.0,
     };
     /// Claude Sonnet 5.
     ///
@@ -78,6 +118,42 @@ impl ModelPricing {
         cache_write_1h: 4.0,
         cache_read: 0.20,
         output: 10.0,
+    };
+
+    /// Claude Haiku 5.5 for prompts of 100,000 tokens or fewer.
+    ///
+    /// Prompt length counts every input token, including cache reads and cache
+    /// writes. Longer prompts bill at [`Self::HAIKU_55_LONG_PROMPT`].
+    pub const HAIKU_55: Self = Self {
+        input: 0.10,
+        cache_write_5m: 0.125,
+        cache_write_1h: 0.20,
+        cache_read: 0.01,
+        output: 0.50,
+    };
+    /// Claude Haiku 5.5 for prompts over 100,000 tokens.
+    ///
+    /// The whole request bills at this rate once its prompt crosses the
+    /// threshold, cached tokens included.
+    pub const HAIKU_55_LONG_PROMPT: Self = Self {
+        input: 0.50,
+        cache_write_5m: 0.625,
+        cache_write_1h: 1.0,
+        cache_read: 0.05,
+        output: 2.50,
+    };
+
+    /// Fast mode rates for Claude Opus 5.5.
+    ///
+    /// Fast mode is a research preview on the first-party Claude API only, and
+    /// applies across the full context window. Prompt caching multipliers apply
+    /// on top of the fast mode base rate.
+    pub const OPUS_55_FAST: Self = Self {
+        input: 8.0,
+        cache_write_5m: 10.0,
+        cache_write_1h: 16.0,
+        cache_read: 0.40,
+        output: 40.0,
     };
 
     /// Fast mode rates for Claude Opus 5 and Claude Opus 4.8.
@@ -190,7 +266,9 @@ impl ModelPricing {
     /// unrecognised identifiers — treat that as unpriced, never as free.
     ///
     /// Rates are the standard tier. Apply the fast-mode constants
-    /// ([`Self::OPUS_5_FAST`]) and the data-residency multiplier separately.
+    /// ([`Self::OPUS_55_FAST`], [`Self::OPUS_5_FAST`]) and the data-residency
+    /// multiplier separately. Claude Haiku 5.5 resolves to its rate for prompts
+    /// of 100,000 tokens or fewer; see [`Self::HAIKU_55_LONG_PROMPT`].
     ///
     /// # Example
     ///
@@ -207,15 +285,32 @@ impl ModelPricing {
     /// Returns the standard pricing for a raw Anthropic model ID.
     ///
     /// Accepts dated aliases (for example `claude-sonnet-4-5-20250929`) by
-    /// matching on the undated family prefix.
+    /// matching on the undated family prefix. Point releases match before their
+    /// base generation, so `claude-opus-5-5` resolves to [`Self::OPUS_55`], not
+    /// [`Self::OPUS_5`].
     ///
     /// Returns `None` when Anthropic publishes no rate for the identifier.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::pricing::ModelPricing;
+    ///
+    /// let opus = ModelPricing::for_model_id("claude-opus-5-5").unwrap();
+    /// assert_eq!(opus.input, 4.0);
+    /// assert!(ModelPricing::for_model_id("claude-unknown").is_none());
+    /// ```
     pub fn for_model_id(model_id: &str) -> Option<Self> {
         let pricing = match model_id {
+            id if id.starts_with("claude-fable-5-1") => Self::FABLE_51,
             id if id.starts_with("claude-fable-5") => Self::FABLE_5,
+            id if id.starts_with("claude-mythos-5-1") => Self::MYTHOS_51,
             id if id.starts_with("claude-mythos-5") => Self::MYTHOS_5,
+            id if id.starts_with("claude-opus-5-5") => Self::OPUS_55,
             id if id.starts_with("claude-opus-5") => Self::OPUS_5,
+            id if id.starts_with("claude-sonnet-5-5") => Self::SONNET_55,
             id if id.starts_with("claude-sonnet-5") => Self::SONNET_5,
+            id if id.starts_with("claude-haiku-5-5") => Self::HAIKU_55,
             id if id.starts_with("claude-opus-4-8") => Self::OPUS_48,
             id if id.starts_with("claude-opus-4-7") => Self::OPUS_47,
             id if id.starts_with("claude-opus-4-6") => Self::OPUS_46,
@@ -352,22 +447,27 @@ mod tests {
         assert!(cost.total() > 0.0);
     }
 
-    /// Anchor values from <https://docs.claude.com/en/docs/about-claude/pricing>
-    /// verified 2026-08-23. Update only against the vendor page.
+    /// Anchor values from <https://platform.claude.com/docs/en/about-claude/pricing>
+    /// verified 2026-10-10. Update only against the vendor page.
     #[test]
     fn published_rates_match_vendor_page() {
         for (id, input, output, cache_read) in [
+            ("claude-fable-5-1", 10.0, 50.0, 0.25),
+            ("claude-mythos-5-1", 10.0, 50.0, 0.25),
             ("claude-fable-5", 10.0, 50.0, 1.0),
             ("claude-mythos-5", 10.0, 50.0, 1.0),
+            ("claude-opus-5-5", 4.0, 20.0, 0.20),
             ("claude-opus-5", 5.0, 25.0, 0.50),
             ("claude-opus-4-8", 5.0, 25.0, 0.50),
             ("claude-opus-4-7", 5.0, 25.0, 0.50),
             ("claude-opus-4-6", 5.0, 25.0, 0.50),
             ("claude-opus-4-5", 5.0, 25.0, 0.50),
             ("claude-opus-4-1", 15.0, 75.0, 1.50),
+            ("claude-sonnet-5-5", 2.0, 10.0, 0.10),
             ("claude-sonnet-5", 2.0, 10.0, 0.20),
             ("claude-sonnet-4-6", 3.0, 15.0, 0.30),
             ("claude-sonnet-4-5", 3.0, 15.0, 0.30),
+            ("claude-haiku-5-5", 0.10, 0.50, 0.01),
             ("claude-haiku-4-5", 1.0, 5.0, 0.10),
             ("claude-haiku-3-5", 0.80, 4.0, 0.08),
         ] {
@@ -386,6 +486,10 @@ mod tests {
     #[test]
     fn factory_models_all_resolve_to_pricing() {
         for model in [
+            Model::claude_opus_5_5(),
+            Model::claude_sonnet_5_5(),
+            Model::claude_haiku_5_5(),
+            Model::claude_fable_5_1(),
             Model::claude_sonnet_5(),
             Model::claude_opus_5(),
             Model::claude_fable_5(),
@@ -405,24 +509,66 @@ mod tests {
         assert!(ModelPricing::for_model_id("claude-99-turbo").is_none());
     }
 
+    /// Point releases share a prefix with their base generation, so the more
+    /// specific prefix has to match first.
+    #[test]
+    fn point_releases_resolve_before_base_generation() {
+        for (id, expected) in [
+            ("claude-fable-5-1", ModelPricing::FABLE_51),
+            ("claude-fable-5", ModelPricing::FABLE_5),
+            ("claude-mythos-5-1", ModelPricing::MYTHOS_51),
+            ("claude-mythos-5", ModelPricing::MYTHOS_5),
+            ("claude-opus-5-5", ModelPricing::OPUS_55),
+            ("claude-opus-5", ModelPricing::OPUS_5),
+            ("claude-sonnet-5-5", ModelPricing::SONNET_55),
+            ("claude-sonnet-5", ModelPricing::SONNET_5),
+            ("claude-haiku-5-5", ModelPricing::HAIKU_55),
+            ("claude-haiku-4-5", ModelPricing::HAIKU_45),
+        ] {
+            assert_eq!(ModelPricing::for_model_id(id), Some(expected), "{id}");
+        }
+    }
+
+    /// Claude Haiku 5.5 prompts over 100,000 tokens bill at the long-prompt card.
+    #[test]
+    fn haiku_55_long_prompt_rates_match_vendor_page() {
+        assert_eq!(
+            ModelPricing::HAIKU_55_LONG_PROMPT,
+            ModelPricing {
+                input: 0.50,
+                cache_write_5m: 0.625,
+                cache_write_1h: 1.0,
+                cache_read: 0.05,
+                output: 2.50,
+            }
+        );
+    }
+
     /// Anthropic documents cache writes as 1.25× (5m) and 2× (1h) base input, and
-    /// cache reads as 0.1×. Asserting the ratios keeps this meaningful when list
-    /// prices move.
+    /// cache reads as 0.1× except on the models listed with a lower read rate.
+    /// Asserting the ratios keeps this meaningful when list prices move.
     #[test]
     fn cache_multipliers_follow_documented_ratios() {
-        for p in [
-            ModelPricing::FABLE_5,
-            ModelPricing::MYTHOS_5,
-            ModelPricing::OPUS_5,
-            ModelPricing::OPUS_48,
-            ModelPricing::SONNET_5,
-            ModelPricing::SONNET_46,
-            ModelPricing::HAIKU_45,
-            ModelPricing::HAIKU_35,
+        for (p, read_ratio) in [
+            (ModelPricing::FABLE_51, 0.025),
+            (ModelPricing::MYTHOS_51, 0.025),
+            (ModelPricing::FABLE_5, 0.1),
+            (ModelPricing::MYTHOS_5, 0.1),
+            (ModelPricing::OPUS_55, 0.05),
+            (ModelPricing::OPUS_55_FAST, 0.05),
+            (ModelPricing::OPUS_5, 0.1),
+            (ModelPricing::OPUS_48, 0.1),
+            (ModelPricing::SONNET_55, 0.05),
+            (ModelPricing::SONNET_5, 0.1),
+            (ModelPricing::SONNET_46, 0.1),
+            (ModelPricing::HAIKU_55, 0.1),
+            (ModelPricing::HAIKU_55_LONG_PROMPT, 0.1),
+            (ModelPricing::HAIKU_45, 0.1),
+            (ModelPricing::HAIKU_35, 0.1),
         ] {
-            assert!((p.cache_write_5m - p.input * 1.25).abs() < 1e-9);
-            assert!((p.cache_write_1h - p.input * 2.0).abs() < 1e-9);
-            assert!((p.cache_read - p.input * 0.1).abs() < 1e-9);
+            assert!((p.cache_write_5m - p.input * 1.25).abs() < 1e-9, "{p:?}");
+            assert!((p.cache_write_1h - p.input * 2.0).abs() < 1e-9, "{p:?}");
+            assert!((p.cache_read - p.input * read_ratio).abs() < 1e-9, "{p:?}");
         }
     }
 
@@ -434,6 +580,18 @@ mod tests {
             (ModelPricing::OPUS_5_FAST.output - ModelPricing::OPUS_5.output * 2.0).abs() < 1e-9
         );
         assert!((ModelPricing::OPUS_5_FAST.input - ModelPricing::OPUS_48.input * 2.0).abs() < 1e-9);
+
+        let standard = ModelPricing::OPUS_55;
+        assert_eq!(
+            ModelPricing::OPUS_55_FAST,
+            ModelPricing {
+                input: standard.input * 2.0,
+                cache_write_5m: standard.cache_write_5m * 2.0,
+                cache_write_1h: standard.cache_write_1h * 2.0,
+                cache_read: standard.cache_read * 2.0,
+                output: standard.output * 2.0,
+            }
+        );
     }
 
     #[test]

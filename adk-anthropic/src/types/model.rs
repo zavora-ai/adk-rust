@@ -100,21 +100,49 @@ impl fmt::Display for KnownModel {
 }
 
 impl Model {
-    /// Return the current balanced Claude Sonnet 5 model identifier.
+    /// Return the Claude Opus 5.5 model identifier.
     ///
     /// Claude 5 models use future-proof custom identifiers here so adding a
     /// model generation does not add variants to the public exhaustive
     /// [`KnownModel`] enum and break downstream matches.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::Model;
+    ///
+    /// assert_eq!(Model::claude_opus_5_5().to_string(), "claude-opus-5-5");
+    /// ```
+    pub fn claude_opus_5_5() -> Self {
+        Self::Custom("claude-opus-5-5".to_string())
+    }
+
+    /// Return the Claude Sonnet 5.5 model identifier.
+    pub fn claude_sonnet_5_5() -> Self {
+        Self::Custom("claude-sonnet-5-5".to_string())
+    }
+
+    /// Return the Claude Haiku 5.5 model identifier.
+    pub fn claude_haiku_5_5() -> Self {
+        Self::Custom("claude-haiku-5-5".to_string())
+    }
+
+    /// Return the Claude Fable 5.1 model identifier.
+    pub fn claude_fable_5_1() -> Self {
+        Self::Custom("claude-fable-5-1".to_string())
+    }
+
+    /// Return the Claude Sonnet 5 model identifier.
     pub fn claude_sonnet_5() -> Self {
         Self::Custom("claude-sonnet-5".to_string())
     }
 
-    /// Return the current Claude Opus 5 model identifier.
+    /// Return the Claude Opus 5 model identifier.
     pub fn claude_opus_5() -> Self {
         Self::Custom("claude-opus-5".to_string())
     }
 
-    /// Return the current Claude Fable 5 model identifier.
+    /// Return the Claude Fable 5 model identifier.
     pub fn claude_fable_5() -> Self {
         Self::Custom("claude-fable-5".to_string())
     }
@@ -210,6 +238,10 @@ mod tests {
 
     #[test]
     fn claude_5_factories_use_current_wire_ids() {
+        assert_eq!(Model::claude_opus_5_5(), Model::Custom("claude-opus-5-5".to_string()));
+        assert_eq!(Model::claude_sonnet_5_5(), Model::Custom("claude-sonnet-5-5".to_string()));
+        assert_eq!(Model::claude_haiku_5_5(), Model::Custom("claude-haiku-5-5".to_string()));
+        assert_eq!(Model::claude_fable_5_1(), Model::Custom("claude-fable-5-1".to_string()));
         assert_eq!(Model::claude_sonnet_5().to_string(), "claude-sonnet-5");
         assert_eq!(Model::claude_opus_5().to_string(), "claude-opus-5");
         assert_eq!(Model::claude_fable_5().to_string(), "claude-fable-5");

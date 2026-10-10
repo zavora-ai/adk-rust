@@ -34,8 +34,12 @@ This project is an **unofficial** community-maintained library. It is not affili
 
 | Model | API ID | Generation |
 |-------|--------|------------|
-| Claude Opus 5 | `claude-opus-5` | Current flagship |
-| Claude Sonnet 5 | `claude-sonnet-5` | Recommended default |
+| Claude Fable 5.1 | `claude-fable-5-1` | Most capable; demanding reasoning and long-horizon work |
+| Claude Opus 5.5 | `claude-opus-5-5` | Current Opus; fast mode supported |
+| Claude Sonnet 5.5 | `claude-sonnet-5-5` | Current Sonnet |
+| Claude Haiku 5.5 | `claude-haiku-5-5` | Current Haiku; economy |
+| Claude Opus 5 | `claude-opus-5` | Previous Opus; fast mode supported |
+| Claude Sonnet 5 | `claude-sonnet-5` | ADK default |
 | Claude Fable 5 | `claude-fable-5` | Creative and long-form |
 | Claude Opus 4.8 | `claude-opus-4-8` | Previous flagship; fast mode supported |
 | Claude Opus 4.7 | `claude-opus-4-7` | Previous generation |
