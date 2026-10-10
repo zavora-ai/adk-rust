@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{
     ToolBash20241022, ToolBash20250124, ToolParam, ToolTextEditor20250124, ToolTextEditor20250429,
-    ToolTextEditor20250728, WebFetchTool20250910, WebSearchTool20250305,
+    ToolTextEditor20250728, WebFetchTool20250910, WebFetchTool20260209, WebSearchTool20250305,
+    WebSearchTool20260209,
 };
 
 /// Union type for different tool parameter types.
@@ -48,6 +49,14 @@ pub enum ToolUnionParam {
     /// A web fetch tool for fetching the content of a user-provided URL (version 20250910)
     #[serde(rename = "web_fetch_20250910")]
     WebFetch20250910(WebFetchTool20250910),
+
+    /// A web search tool with dynamic filtering (version 20260209)
+    #[serde(rename = "web_search_20260209")]
+    WebSearch20260209(WebSearchTool20260209),
+
+    /// A web fetch tool with dynamic filtering (version 20260209)
+    #[serde(rename = "web_fetch_20260209")]
+    WebFetch20260209(WebFetchTool20260209),
 }
 
 impl ToolUnionParam {
@@ -91,6 +100,16 @@ impl ToolUnionParam {
         Self::WebFetch20250910(WebFetchTool20250910::new())
     }
 
+    /// Creates a new web search tool with dynamic filtering (version 20260209).
+    pub fn new_web_search_20260209_tool() -> Self {
+        Self::WebSearch20260209(WebSearchTool20260209::new())
+    }
+
+    /// Creates a new web fetch tool with dynamic filtering (version 20260209).
+    pub fn new_web_fetch_20260209_tool() -> Self {
+        Self::WebFetch20260209(WebFetchTool20260209::new())
+    }
+
     /// Check if this tool has strict mode enabled.
     ///
     /// Only custom tools can have strict mode enabled. All other tool types
@@ -105,7 +124,9 @@ impl ToolUnionParam {
             | Self::TextEditor20250429(_)
             | Self::TextEditor20250728(_)
             | Self::WebSearch20250305(_)
-            | Self::WebFetch20250910(_) => false,
+            | Self::WebFetch20250910(_)
+            | Self::WebSearch20260209(_)
+            | Self::WebFetch20260209(_) => false,
         }
     }
 }
@@ -335,5 +356,56 @@ mod tests {
             }
             _ => panic!("Expected Bash20250124 variant"),
         }
+    }
+
+    #[test]
+    fn web_tools_20260209_round_trip_with_type_tags() {
+        let search =
+            ToolUnionParam::WebSearch20260209(WebSearchTool20260209::new().with_max_uses(1));
+        let fetch = ToolUnionParam::WebFetch20260209(
+            WebFetchTool20260209::new()
+                .with_allowed_domains(vec!["example.com".to_string()])
+                .with_citations(crate::types::CitationsConfig::enabled())
+                .with_max_uses(1)
+                .with_max_content_tokens(4000),
+        );
+
+        let search_json =
+            json!({"type": "web_search_20260209", "name": "web_search", "max_uses": 1});
+        let fetch_json = json!({
+            "type": "web_fetch_20260209",
+            "name": "web_fetch",
+            "allowed_domains": ["example.com"],
+            "citations": {"enabled": true},
+            "max_uses": 1,
+            "max_content_tokens": 4000
+        });
+
+        assert_eq!(to_value(&search).unwrap(), search_json);
+        assert_eq!(to_value(&fetch).unwrap(), fetch_json);
+        assert_eq!(serde_json::from_value::<ToolUnionParam>(search_json).unwrap(), search);
+        assert_eq!(serde_json::from_value::<ToolUnionParam>(fetch_json).unwrap(), fetch);
+        assert_eq!(
+            ToolUnionParam::new_web_search_20260209_tool(),
+            ToolUnionParam::WebSearch20260209(WebSearchTool20260209::new())
+        );
+        assert_eq!(
+            ToolUnionParam::new_web_fetch_20260209_tool(),
+            ToolUnionParam::WebFetch20260209(WebFetchTool20260209::new())
+        );
+        assert!(!search.is_strict());
+        assert!(!fetch.is_strict());
+    }
+
+    #[test]
+    fn web_tool_versions_keep_their_own_type_tags() {
+        assert_eq!(
+            to_value(ToolUnionParam::new_web_search_tool()).unwrap()["type"],
+            "web_search_20250305"
+        );
+        assert_eq!(
+            to_value(ToolUnionParam::new_web_fetch_tool()).unwrap()["type"],
+            "web_fetch_20250910"
+        );
     }
 }

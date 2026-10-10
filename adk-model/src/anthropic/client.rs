@@ -1063,6 +1063,49 @@ mod tests {
     }
 
     #[test]
+    fn test_extension_accepts_dynamic_filtering_web_tools() {
+        let mut request = make_request(vec![Content::new("user").with_text("hello")]);
+        let mut extensions = serde_json::Map::new();
+        extensions.insert(
+            "anthropic".to_string(),
+            serde_json::json!({
+                "built_in_tools": [
+                    {"type": "web_search_20260209", "name": "web_search", "max_uses": 1},
+                    {
+                        "type": "web_fetch_20260209",
+                        "name": "web_fetch",
+                        "citations": {"enabled": true},
+                        "max_content_tokens": 4000
+                    }
+                ]
+            }),
+        );
+        request.config = Some(GenerateContentConfig { extensions, ..Default::default() });
+
+        let params = AnthropicClient::build_message_params(
+            "claude-sonnet-5",
+            4096,
+            &request,
+            &AnthropicConfig::default(),
+        )
+        .expect("20260209 web tools should be accepted");
+
+        assert_eq!(
+            params.tools,
+            Some(vec![
+                adk_anthropic::ToolUnionParam::WebSearch20260209(
+                    adk_anthropic::WebSearchTool20260209::new().with_max_uses(1)
+                ),
+                adk_anthropic::ToolUnionParam::WebFetch20260209(
+                    adk_anthropic::WebFetchTool20260209::new()
+                        .with_citations(adk_anthropic::CitationsConfig::enabled())
+                        .with_max_content_tokens(4000)
+                ),
+            ])
+        );
+    }
+
+    #[test]
     fn test_invalid_extension_builtin_tool_returns_error() {
         let mut request = make_request(vec![]);
         let mut extensions = serde_json::Map::new();

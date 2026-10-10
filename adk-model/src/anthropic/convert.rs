@@ -755,6 +755,40 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_tools_supports_dynamic_filtering_web_search() {
+        use super::super::schema_adapter::AnthropicSchemaAdapter;
+        let mut tools = HashMap::new();
+        tools.insert(
+            "web_search".to_string(),
+            serde_json::json!({
+                "name": "web_search",
+                "x-adk-anthropic-tool": {
+                    "type": "web_search_20260209",
+                    "name": "web_search",
+                    "allowed_domains": null,
+                    "blocked_domains": ["spam.example"],
+                    "max_uses": 2,
+                    "user_location": null
+                }
+            }),
+        );
+
+        let adapter = AnthropicSchemaAdapter;
+        let cache = SchemaCache::for_adapter(std::sync::Arc::new(AnthropicSchemaAdapter));
+        let claude_tools =
+            convert_tools(&tools, &adapter, &cache).expect("tool conversion should succeed");
+
+        assert_eq!(
+            claude_tools,
+            vec![ToolUnionParam::WebSearch20260209(
+                adk_anthropic::WebSearchTool20260209::new()
+                    .with_blocked_domains(vec!["spam.example".to_string()])
+                    .with_max_uses(2)
+            )]
+        );
+    }
+
+    #[test]
     fn test_function_response_string_is_not_double_encoded() {
         let content = Content {
             role: "function".to_string(),
