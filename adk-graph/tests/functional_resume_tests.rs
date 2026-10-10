@@ -229,3 +229,73 @@ async fn a_checkpoint_of_another_thread_is_refused() {
         "a refused resume must not write to the thread"
     );
 }
+
+// ─── Interrupt answers survive a later crash ────────────────────────────────
+
+static PAYOUT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Never finishes on its first attempt, standing in for a process that dies
+/// after the interrupt was answered.
+#[task]
+async fn send_payout(_ctx: &mut TaskContext, approver: String) -> Result<Value> {
+    if PAYOUT_ATTEMPTS.fetch_add(1, Ordering::SeqCst) == 0 {
+        std::future::pending::<()>().await;
+    }
+    Ok(json!(format!("paid, approved by {approver}")))
+}
+
+#[entrypoint]
+async fn approve_payout(ctx: &mut TaskContext) -> Result<Value> {
+    let approval: Approval = ctx.interrupt("approve the payout").await?;
+    let receipt = __task_send_payout(ctx, approval.approver).await?;
+    ctx.set("receipt", receipt);
+    Ok(Value::Null)
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_answered_interrupt_is_not_asked_again_after_a_crash() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new()) as Arc<dyn Checkpointer>;
+    let agent = ApprovePayoutAgent::new(Arc::clone(&checkpointer));
+    let thread = "payout-9";
+
+    agent
+        .invoke(State::new(), ExecutionConfig::new(thread))
+        .await
+        .expect_err("the first run must suspend at the interrupt");
+
+    // The answered run crashes inside `send_payout`.
+    let interrupt_checkpoint = latest_checkpoint_id(&checkpointer, thread).await;
+    let crashed = tokio::time::timeout(
+        Duration::from_secs(1),
+        agent.invoke(
+            State::new(),
+            ExecutionConfig::new(thread)
+                .with_resume_from(&interrupt_checkpoint)
+                .with_resume_value("interrupt-1", json!({ "approved": true, "approver": "alice" })),
+        ),
+    )
+    .await;
+    assert!(crashed.is_err(), "the answered run must crash inside `send_payout`");
+
+    // Resuming from the latest checkpoint needs no value; a different one is ignored.
+    let resume_from = latest_checkpoint_id(&checkpointer, thread).await;
+    let state = agent
+        .invoke(
+            State::new(),
+            ExecutionConfig::new(thread).with_resume_from(&resume_from).with_resume_value(
+                "interrupt-1",
+                json!({ "approved": true, "approver": "mallory" }),
+            ),
+        )
+        .await
+        .expect("the recorded answer must resume the workflow");
+    assert_eq!(state.get("receipt"), Some(&json!("paid, approved by alice")));
+
+    let resume_from = latest_checkpoint_id(&checkpointer, thread).await;
+    let state = agent
+        .invoke(State::new(), ExecutionConfig::new(thread).with_resume_from(&resume_from))
+        .await
+        .expect("a resume without values replays the recorded answer");
+    assert_eq!(state.get("receipt"), Some(&json!("paid, approved by alice")));
+    assert_eq!(PAYOUT_ATTEMPTS.load(Ordering::SeqCst), 2, "the payout completes exactly once");
+}

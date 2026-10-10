@@ -151,6 +151,34 @@ impl ExecutionLog {
         }
     }
 
+    /// Records the value an interrupt was answered with, under its continuation key.
+    ///
+    /// The answer is stored in [`Self::tasks`] as a completed record keyed by the
+    /// continuation key (`interrupt-N`), which cannot collide with a task call key
+    /// (`{task}#{ordinal}`). A run resumed from any later checkpoint replays the answer,
+    /// so it does not have to be supplied again.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::functional::ExecutionLog;
+    /// use serde_json::json;
+    ///
+    /// let mut log = ExecutionLog::new();
+    /// log.record_interrupt_answer("interrupt-1", json!({"approved": true}));
+    ///
+    /// assert_eq!(log.interrupt_answer("interrupt-1"), Some(&json!({"approved": true})));
+    /// assert_eq!(log.interrupt_answer("interrupt-2"), None);
+    /// ```
+    pub fn record_interrupt_answer(&mut self, continuation_key: &str, value: Value) {
+        self.record_completion(continuation_key, value);
+    }
+
+    /// Returns the answer recorded for an interrupt, if a run already received one.
+    pub fn interrupt_answer(&self, continuation_key: &str) -> Option<&Value> {
+        self.get_result(continuation_key)
+    }
+
     /// Get the current step number.
     pub fn current_step(&self) -> usize {
         self.current_step

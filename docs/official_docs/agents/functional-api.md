@@ -409,9 +409,17 @@ let state = agent
 
 | Situation | Result |
 |-----------|--------|
-| No value for the key | `FunctionalError::Suspended { continuation_key, message }` |
-| A value that deserializes into `T` | `Ok(value)` |
+| No value for the key, and none recorded | `FunctionalError::Suspended { continuation_key, message }` |
+| A value that deserializes into `T` | `Ok(value)`, recorded in the execution log |
 | A value that does not deserialize into `T` | `FunctionalError::InterruptTypeMismatch` naming the site |
+| An answer recorded by an earlier run | `Ok(recorded)`, whether or not a value is supplied |
+
+The first answer an interrupt receives is recorded in the execution log, under its continuation
+key, and checkpointed before `interrupt` returns. A run resumed from any later checkpoint — for
+example after a crash in a task that ran on the approval — replays the recorded answer, so the
+caller does not supply it again. A different value supplied later is ignored with a warning,
+because the tasks that ran after the interrupt already acted on the recorded one.
+`ExecutionLog::interrupt_answer` reads a recorded answer.
 
 > **Important:** `interrupt` previously returned `InterruptTypeMismatch` with "workflow
 > interrupted" on **every** call, and nothing outside the method consumed a resume value. A caller

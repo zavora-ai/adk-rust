@@ -7,13 +7,14 @@ use crate::criteria::EvaluationCriteria;
 use crate::error::Result;
 use crate::llm_judge::LlmJudge;
 use crate::report::{EvaluationReport, EvaluationResult, Failure, TurnResult};
-use crate::schema::{EvalCase, TestFile, ToolUse, Turn};
+use crate::schema::{EvalCase, SessionInput, TestFile, ToolUse, Turn};
 use crate::scoring::{ResponseScorer, ToolTrajectoryScorer};
 use crate::structured_judge::StructuredJudge;
 use crate::trace_analyzer::TraceAnalyzer;
 
-use adk_core::{Agent, Content, Event, Llm};
-use async_trait::async_trait;
+use adk_core::{Agent, Content, Event, Llm, SessionId, UserId};
+use adk_runner::Runner;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -254,12 +255,19 @@ impl Evaluator {
 
     /// Evaluate a single test case
     ///
+    /// The turns run in order through one session of an in-memory session service, so
+    /// each turn sees the conversation history of the turns before it, as it would in a
+    /// [`Runner`]. The session is created from the case's
+    /// [`session_input`](EvalCase::session_input): its `app_name` and `user_id` (default
+    /// `eval_app` and `eval_user` when empty) and its initial `state`.
+    ///
     /// Each criterion's case score is the arithmetic mean of its per-turn scores. Cost
     /// and trace analysis use the events from every turn of this run.
     ///
     /// # Errors
     ///
-    /// Returns an error when the agent fails to start or its event stream yields an error.
+    /// Returns an error when the session cannot be created from `session_input`, the
+    /// agent fails to start, or its event stream yields an error.
     pub async fn evaluate_case(
         &self,
         agent: Arc<dyn Agent>,
@@ -272,9 +280,11 @@ impl Evaluator {
         let mut all_events: Vec<Event> = Vec::new();
         let mut last_turn: Option<TurnResult> = None;
 
+        let conversation = EvalConversation::start(agent, &eval_case.session_input).await?;
+
         // Execute each turn in the conversation
         for turn in &eval_case.conversation {
-            let (turn_result, events) = self.execute_turn(agent.clone(), turn).await?;
+            let (turn_result, events) = self.execute_turn(&conversation, turn).await?;
             all_events.extend(events);
 
             // Score this turn
@@ -403,14 +413,10 @@ impl Evaluator {
     /// Execute a single turn, returning its result and the events the agent emitted
     async fn execute_turn(
         &self,
-        agent: Arc<dyn Agent>,
+        conversation: &EvalConversation,
         turn: &Turn,
     ) -> Result<(TurnResult, Vec<Event>)> {
-        // Create input content
-        let input_content = turn.user_content.to_adk_content();
-
-        // Run the agent
-        let events = self.run_agent(agent, input_content).await?;
+        let events = conversation.send(turn.user_content.to_adk_content()).await?;
 
         // Extract response and tool calls from events
         let (actual_response, actual_tool_calls) = self.extract_from_events(&events);
@@ -429,31 +435,6 @@ impl Evaluator {
             scores: HashMap::new(),
         };
         Ok((turn_result, events))
-    }
-
-    /// Run agent and collect events, failing on the first stream error
-    async fn run_agent(&self, agent: Arc<dyn Agent>, input: Content) -> Result<Vec<Event>> {
-        // Create a minimal invocation context for evaluation
-        let invocation_id = uuid::Uuid::new_v4().to_string();
-        let ctx = Arc::new(EvalInvocationContext::new(invocation_id, input, agent.clone()));
-
-        // Run the agent and collect all events
-        let mut stream = agent.run(ctx).await.map_err(|e| {
-            crate::error::EvalError::ExecutionError(format!("Agent run failed: {}", e))
-        })?;
-
-        let mut events = Vec::new();
-        while let Some(item) = stream.next().await {
-            let event = item.map_err(|e| {
-                crate::error::EvalError::ExecutionError(format!(
-                    "agent event stream failed after {} event(s): {e}",
-                    events.len()
-                ))
-            })?;
-            events.push(event);
-        }
-
-        Ok(events)
     }
 
     /// Extract response text and tool calls from events
@@ -575,7 +556,8 @@ impl Evaluator {
 
         // The LLM-judged criteria below fail, rather than skip, a turn they cannot judge.
 
-        // LLM-judged semantic matching; turns without an expected response are not compared
+        // LLM-judged semantic matching; turns without an expected response are not compared.
+        // An EQUIVALENT: NO verdict fails regardless of the score.
         if let Some(threshold) = self.config.criteria.semantic_match_score
             && let Some(expected) = &result.expected_response
         {
@@ -590,7 +572,12 @@ impl Evaluator {
                 {
                     Ok(semantic_result) => {
                         scores.insert("semantic_match".to_string(), semantic_result.score);
-                        if semantic_result.score < threshold {
+                        if !semantic_result.equivalent || semantic_result.score < threshold {
+                            let verdict = if semantic_result.equivalent {
+                                "equivalent"
+                            } else {
+                                "not equivalent"
+                            };
                             failures.push(
                                 Failure::new(
                                     "semantic_match",
@@ -599,7 +586,10 @@ impl Evaluator {
                                     semantic_result.score,
                                     threshold,
                                 )
-                                .with_details(&semantic_result.reasoning),
+                                .with_details(&format!(
+                                    "Judge verdict: {verdict}. {}",
+                                    semantic_result.reasoning
+                                )),
                             );
                         }
                     }
@@ -896,14 +886,15 @@ impl Evaluator {
         num_turns: usize,
     ) -> Result<Vec<Content>> {
         let mut history: Vec<Content> = Vec::new();
+        let conversation = EvalConversation::start(agent, &SessionInput::default()).await?;
 
         for _turn_idx in 0..num_turns {
             // 1. Generate user message from the simulator
             let user_message = simulator.generate_message(&history).await?;
             history.push(user_message.clone());
 
-            // 2. Run the agent with the user message
-            let events = self.run_agent(agent.clone(), user_message).await?;
+            // 2. Run the agent with the user message, in the same session as earlier turns
+            let events = conversation.send(user_message).await?;
 
             // 3. Extract the agent's response text
             let (response_text, _tool_calls) = self.extract_from_events(&events);
@@ -932,160 +923,89 @@ impl Default for Evaluator {
     }
 }
 
-// ============================================================================
-// EvalInvocationContext - Minimal context for running agents during evaluation
-// ============================================================================
+/// App name for a case whose `session_input.app_name` is empty.
+const DEFAULT_APP_NAME: &str = "eval_app";
 
-/// Minimal InvocationContext implementation for evaluation
-struct EvalInvocationContext {
-    invocation_id: String,
-    user_content: Content,
-    agent: Arc<dyn Agent>,
-    session: EvalSession,
-    run_config: adk_core::RunConfig,
-    ended: std::sync::atomic::AtomicBool,
+/// User id for a case whose `session_input.user_id` is empty.
+const DEFAULT_USER_ID: &str = "eval_user";
+
+/// One conversation with the agent under test.
+///
+/// Every turn runs through a [`Runner`] against the same session of a private in-memory
+/// session service, so the agent sees the history and state that earlier turns left.
+struct EvalConversation {
+    runner: Runner,
+    user_id: UserId,
+    session_id: SessionId,
 }
 
-impl EvalInvocationContext {
-    fn new(invocation_id: String, user_content: Content, agent: Arc<dyn Agent>) -> Self {
-        let session_id = format!("eval-session-{}", uuid::Uuid::new_v4());
-        Self {
-            invocation_id,
-            user_content,
-            agent,
-            session: EvalSession::new(session_id),
-            run_config: adk_core::RunConfig::default(),
-            ended: std::sync::atomic::AtomicBool::new(false),
+impl EvalConversation {
+    /// Creates the session described by `session_input` and a runner for `agent`.
+    async fn start(agent: Arc<dyn Agent>, session_input: &SessionInput) -> Result<Self> {
+        let app_name = if session_input.app_name.is_empty() {
+            DEFAULT_APP_NAME
+        } else {
+            session_input.app_name.as_str()
+        };
+        let user_id = if session_input.user_id.is_empty() {
+            DEFAULT_USER_ID
+        } else {
+            session_input.user_id.as_str()
+        };
+        let invalid_input = |e: String| {
+            crate::error::EvalError::ConfigError(format!(
+                "cannot create the eval session from session_input (app_name '{app_name}', \
+                 user_id '{user_id}'): {e}"
+            ))
+        };
+
+        let session_service = Arc::new(InMemorySessionService::new());
+        let session = session_service
+            .create(CreateRequest {
+                app_name: app_name.to_string(),
+                user_id: user_id.to_string(),
+                session_id: None,
+                state: session_input.state.clone(),
+            })
+            .await
+            .map_err(|e| invalid_input(e.to_string()))?;
+        let session_id =
+            SessionId::try_from(session.id()).map_err(|e| invalid_input(e.to_string()))?;
+        let user_id = UserId::try_from(user_id).map_err(|e| invalid_input(e.to_string()))?;
+
+        let runner = Runner::builder()
+            .app_name(app_name)
+            .agent(agent)
+            .session_service(session_service)
+            .build()
+            .map_err(|e| {
+                crate::error::EvalError::ExecutionError(format!(
+                    "cannot build the eval runner: {e}"
+                ))
+            })?;
+
+        Ok(Self { runner, user_id, session_id })
+    }
+
+    /// Runs one turn and collects its events, failing on the first stream error.
+    async fn send(&self, input: Content) -> Result<Vec<Event>> {
+        let mut stream =
+            self.runner.run(self.user_id.clone(), self.session_id.clone(), input).await.map_err(
+                |e| crate::error::EvalError::ExecutionError(format!("Agent run failed: {e}")),
+            )?;
+
+        let mut events = Vec::new();
+        while let Some(item) = stream.next().await {
+            let event = item.map_err(|e| {
+                crate::error::EvalError::ExecutionError(format!(
+                    "agent event stream failed after {} event(s): {e}",
+                    events.len()
+                ))
+            })?;
+            events.push(event);
         }
-    }
-}
 
-impl adk_core::ReadonlyContext for EvalInvocationContext {
-    fn invocation_id(&self) -> &str {
-        &self.invocation_id
-    }
-
-    fn agent_name(&self) -> &str {
-        self.agent.name()
-    }
-
-    fn user_id(&self) -> &str {
-        "eval_user"
-    }
-
-    fn app_name(&self) -> &str {
-        "eval_app"
-    }
-
-    fn session_id(&self) -> &str {
-        &self.session.id
-    }
-
-    fn branch(&self) -> &str {
-        "main"
-    }
-
-    fn user_content(&self) -> &Content {
-        &self.user_content
-    }
-}
-
-#[async_trait]
-impl adk_core::CallbackContext for EvalInvocationContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-        None
-    }
-}
-
-#[async_trait]
-impl adk_core::InvocationContext for EvalInvocationContext {
-    fn agent(&self) -> Arc<dyn Agent> {
-        self.agent.clone()
-    }
-
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
-        None
-    }
-
-    fn session(&self) -> &dyn adk_core::Session {
-        &self.session
-    }
-
-    fn run_config(&self) -> &adk_core::RunConfig {
-        &self.run_config
-    }
-
-    fn end_invocation(&self) {
-        self.ended.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    fn ended(&self) -> bool {
-        self.ended.load(std::sync::atomic::Ordering::SeqCst)
-    }
-}
-
-/// Minimal Session implementation for evaluation
-struct EvalSession {
-    id: String,
-    state: EvalState,
-}
-
-impl EvalSession {
-    fn new(id: String) -> Self {
-        Self { id, state: EvalState::new() }
-    }
-}
-
-impl adk_core::Session for EvalSession {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn app_name(&self) -> &str {
-        "eval_app"
-    }
-
-    fn user_id(&self) -> &str {
-        "eval_user"
-    }
-
-    fn state(&self) -> &dyn adk_core::State {
-        &self.state
-    }
-
-    fn conversation_history(&self) -> Vec<Content> {
-        vec![]
-    }
-}
-
-/// Minimal State implementation for evaluation
-struct EvalState {
-    data: std::sync::RwLock<HashMap<String, serde_json::Value>>,
-}
-
-impl EvalState {
-    fn new() -> Self {
-        Self { data: std::sync::RwLock::new(HashMap::new()) }
-    }
-}
-
-impl adk_core::State for EvalState {
-    fn get(&self, key: &str) -> Option<serde_json::Value> {
-        self.data.read().ok()?.get(key).cloned()
-    }
-
-    fn set(&mut self, key: String, value: serde_json::Value) {
-        if let Err(msg) = adk_core::validate_state_key(&key) {
-            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
-            return;
-        }
-        if let Ok(mut data) = self.data.write() {
-            data.insert(key, value);
-        }
-    }
-
-    fn all(&self) -> HashMap<String, serde_json::Value> {
-        self.data.read().ok().map(|d| d.clone()).unwrap_or_default()
+        Ok(events)
     }
 }
 
@@ -1094,6 +1014,7 @@ mod tests {
     use super::*;
     use crate::criteria::{ResponseMatchConfig, SimilarityAlgorithm};
     use crate::schema::ContentData;
+    use async_trait::async_trait;
 
     /// Replies with the user's message, optionally followed by a stream error.
     struct EchoAgent {
@@ -1279,6 +1200,109 @@ mod tests {
 
         assert!(!result.passed);
         assert_eq!(result.failures[0].criterion, "hallucination");
+    }
+
+    #[tokio::test]
+    async fn not_equivalent_verdict_fails_despite_high_score() {
+        let evaluator = Evaluator::with_llm_judge(
+            criteria(EvaluationCriteria::semantic_match(0.8)),
+            judge_replying("EQUIVALENT: NO\nSCORE: 0.95\nREASONING: names the wrong city"),
+        );
+
+        let result =
+            evaluator.evaluate_case(echo_agent(), &case(vec![turn("hi", "hi")])).await.unwrap();
+
+        assert!(!result.passed);
+        assert_eq!(
+            failure_details(&result),
+            vec![(
+                "semantic_match".to_string(),
+                "Judge verdict: not equivalent. names the wrong city".to_string()
+            )]
+        );
+    }
+
+    /// Replies with the user text of every earlier turn in its session, then the
+    /// session's `topic` state value, so a test can see what the agent was given.
+    struct HistoryAgent;
+
+    #[async_trait]
+    impl Agent for HistoryAgent {
+        fn name(&self) -> &str {
+            "history"
+        }
+
+        fn description(&self) -> &str {
+            "reports the conversation it can see"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+
+        async fn run(
+            &self,
+            ctx: Arc<dyn adk_core::InvocationContext>,
+        ) -> adk_core::Result<adk_core::EventStream> {
+            let earlier: Vec<String> = ctx
+                .session()
+                .conversation_history()
+                .iter()
+                .filter(|content| content.role == "user")
+                .map(|content| content.parts.iter().filter_map(|p| p.text()).collect())
+                .collect();
+            let topic = ctx.session().state().get("topic").unwrap_or(Value::Null);
+            let mut event = Event::new(ctx.invocation_id());
+            event.author = self.name().to_string();
+            event.llm_response.content = Some(Content::new("model").with_text(format!(
+                "{} | {topic} | {}",
+                earlier.join(","),
+                ctx.user_id()
+            )));
+            Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
+        }
+    }
+
+    #[tokio::test]
+    async fn later_turns_see_the_history_of_earlier_turns() {
+        let evaluator = Evaluator::new(criteria(EvaluationCriteria {
+            response_similarity: Some(1.0),
+            response_match_config: Some(ResponseMatchConfig {
+                algorithm: SimilarityAlgorithm::Exact,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        let eval_case = case(vec![
+            turn("my name is Ada", "my name is Ada | null | eval_user"),
+            turn("what is my name?", "my name is Ada,what is my name? | null | eval_user"),
+        ]);
+
+        let result = evaluator.evaluate_case(Arc::new(HistoryAgent), &eval_case).await.unwrap();
+
+        assert!(result.passed, "{:?}", result.turn_results);
+    }
+
+    #[tokio::test]
+    async fn session_input_sets_the_user_and_initial_state() {
+        let evaluator = Evaluator::new(criteria(EvaluationCriteria {
+            response_similarity: Some(1.0),
+            response_match_config: Some(ResponseMatchConfig {
+                algorithm: SimilarityAlgorithm::Exact,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        let mut eval_case = case(vec![turn("hi", "hi | \"billing\" | ada")]);
+        eval_case.session_input = SessionInput {
+            app_name: "support".to_string(),
+            user_id: "ada".to_string(),
+            state: HashMap::from([("topic".to_string(), serde_json::json!("billing"))]),
+        };
+
+        let result = evaluator.evaluate_case(Arc::new(HistoryAgent), &eval_case).await.unwrap();
+
+        assert!(result.passed, "{:?}", result.turn_results);
     }
 
     #[tokio::test]
