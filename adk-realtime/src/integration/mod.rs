@@ -620,11 +620,19 @@ impl IntegratedRealtimeRunner {
             return self.runner.dispatch_tool_call(call_id, name, arguments).await;
         };
 
+        let arguments = match crate::runner::parse_tool_arguments(arguments) {
+            Ok(arguments) => arguments,
+            Err(reason) => {
+                let refusal = serde_json::json!({
+                    "error": format!("Tool '{name}' was not run: {reason}")
+                });
+                return self.runner.send_tool_result(call_id, refusal).await;
+            }
+        };
         let call = crate::events::ToolCall {
             call_id: call_id.to_string(),
             name: name.to_string(),
-            arguments: serde_json::from_str(arguments)
-                .unwrap_or(serde_json::Value::Object(Default::default())),
+            arguments,
         };
 
         let result = self.execute_tool_with_plugins(&tool, &call).await?;
@@ -666,11 +674,9 @@ impl IntegratedRealtimeRunner {
                     value
                 }
                 Ok(adk_plugin::BeforeToolCallResult::Continue(args)) => {
-                    // Execute tool with potentially modified args
-                    let tool_result = tool
-                        .execute(ctx.clone() as Arc<dyn adk_core::ToolContext>, args)
-                        .await
-                        .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }));
+                    // The governed path sees the plugin-rewritten arguments.
+                    let tool_result =
+                        self.governed_execute(tool, &ctx, &call.call_id, args).await?;
 
                     // Run after_tool_call pipeline
                     match pm
@@ -708,10 +714,7 @@ impl IntegratedRealtimeRunner {
                 }
             }
         } else {
-            // No plugin manager — execute directly
-            tool.execute(ctx as Arc<dyn adk_core::ToolContext>, call.arguments.clone())
-                .await
-                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+            self.governed_execute(tool, &ctx, &call.call_id, call.arguments.clone()).await?
         };
 
         // Record completed tool call in aggregator
@@ -748,6 +751,35 @@ impl IntegratedRealtimeRunner {
         }
 
         Ok(result)
+    }
+
+    /// Authorizes one call through the inner runner's governed path, then executes it
+    /// under the runner's tool timeout.
+    async fn governed_execute(
+        &self,
+        tool: &Arc<dyn adk_core::Tool>,
+        ctx: &Arc<context::RealtimeToolContext>,
+        call_id: &str,
+        args: Value,
+    ) -> Result<Value> {
+        let call = adk_core::GovernedCall::for_tool(tool.as_ref(), call_id, args);
+        Ok(match self.runner.authorize_tool_call(call).await? {
+            adk_core::ToolAuthorization::Execute { args, .. } => {
+                let timeout = self.runner.tool_timeout();
+                let execution = tool.execute(ctx.clone() as Arc<dyn adk_core::ToolContext>, args);
+                match tokio::time::timeout(timeout, execution).await {
+                    Ok(Ok(value)) => value,
+                    Ok(Err(e)) => serde_json::json!({ "error": e.to_string() }),
+                    Err(_) => serde_json::json!({
+                        "error": format!("Tool '{}' timed out after {timeout:?}", tool.name())
+                    }),
+                }
+            }
+            adk_core::ToolAuthorization::Refuse { reason, .. }
+            | adk_core::ToolAuthorization::Pending { reason, .. } => {
+                serde_json::json!({ "error": reason })
+            }
+        })
     }
 
     /// Create a [`RealtimeToolContext`](context::RealtimeToolContext) for the given
