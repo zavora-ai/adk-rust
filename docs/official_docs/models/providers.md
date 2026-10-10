@@ -206,6 +206,23 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### Tool Calls on GPT-5.6 and Later
+
+OpenAI's Chat Completions endpoint rejects function tools on GPT-5.6 and later models
+(`gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-6-*`) unless reasoning is disabled,
+with HTTP 400 `Function tools with reasoning_effort are not supported`. `OpenAIClient`
+handles this per request:
+
+| Request | Endpoint |
+|---------|----------|
+| Declares tools, model GPT-5.6 or later, reasoning not `none` | Responses API (`/responses`), same key, base URL, reasoning effort, and retries; `store: false` |
+| No tools | Chat Completions |
+| Model before GPT-5.6, or reasoning effort `None` | Chat Completions |
+| Client built with `OpenAIClient::compatible` | Chat Completions |
+
+Use [`OpenAIResponsesClient`](./openai-responses.md) directly for reasoning summaries,
+built-in tools, or server-side conversation state.
+
 ### Structured Output (JSON Schema)
 
 OpenAI supports guaranteed JSON output via `output_schema`. ADK-Rust automatically wires this to OpenAI's `response_format` API:
