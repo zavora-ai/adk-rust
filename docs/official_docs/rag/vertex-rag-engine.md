@@ -26,7 +26,7 @@ or the `RagCorpora`/`RagFiles` management APIs.
 
 ```toml
 [dependencies]
-adk-rag = { version = "2.3.0", features = ["vertex-rag"] }
+adk-rag = { version = "3.0.0", features = ["vertex-rag"] }
 ```
 
 Authentication uses Application Default Credentials:

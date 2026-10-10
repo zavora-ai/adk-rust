@@ -14,6 +14,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # The kind of release the next publish will be. `major` while the workspace is
+  # the 3.0.0 release candidate; the first pull request after 3.0.0 is published
+  # sets it back to `minor`. `scripts/validate-pr.sh` reads this value.
+  SEMVER_RELEASE_TYPE: major
 
 concurrency:
   group: semver-${{ github.ref }}
@@ -41,8 +45,10 @@ jobs:
         tool: cargo-semver-checks
 
     # Stable-tier leaf crates only (skip adk-rust umbrella — it just re-exports).
-    # `--release-type minor` states the kind of release the next publish will be:
-    # additive API changes pass, breaking ones fail. Without it, cargo-semver-checks
+    # `--release-type` states the kind of release the next publish will be: with
+    # `minor`, additive API changes pass and breaking ones fail; with `major`, every
+    # change passes and the `breaking` changelog fragments record the breaking-change
+    # inventory, as for 2.0.0 (STABILITY.md). Without the flag, cargo-semver-checks
     # compares the version numbers and fails every addition until the workspace
     # version is bumped, which forced a release-candidate bump before any new API
     # could merge. The bump happens in the release preparation pull request.
@@ -52,7 +58,7 @@ jobs:
         FAILED=0
         for crate in adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-server adk-graph adk-memory adk-anthropic; do
           echo "Checking $crate..."
-          if cargo semver-checks check-release -p "$crate" --default-features --release-type minor; then
+          if cargo semver-checks check-release -p "$crate" --default-features --release-type "$SEMVER_RELEASE_TYPE"; then
             echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "❌ $crate — BREAKING" >> "$GITHUB_STEP_SUMMARY"
@@ -82,7 +88,7 @@ jobs:
           adk-managed adk-enterprise adk-payments adk-rag adk-sandbox \
           adk-retry-reflect adk-mistralrs adk-bench cargo-adk; do
           echo "Checking $crate..."
-          if cargo semver-checks check-release -p "$crate" --default-features --release-type minor; then
+          if cargo semver-checks check-release -p "$crate" --default-features --release-type "$SEMVER_RELEASE_TYPE"; then
             echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "⚠️ $crate — breaking (warn)" >> "$GITHUB_STEP_SUMMARY"

@@ -372,7 +372,7 @@ expensive axes just move to a later tier.
 
 | Tier | Trigger | Checks | Blocks merge? |
 |------|---------|--------|---------------|
-| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), docs and doctests, standalone examples (4 shards), `templates`, a compile-only macOS build, a Windows workspace build with a targeted sandbox portability smoke, and `semver` (stable strict with the next release assumed minor, so additions pass and breakage fails; beta warn-only) | Yes — aggregated by `pr-gate`, plus `semver` |
+| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), docs and doctests, standalone examples (4 shards), `templates`, a compile-only macOS build, a Windows workspace build with a targeted sandbox portability smoke, and `semver` (stable strict against `SEMVER_RELEASE_TYPE` in `semver.yml`: `minor` fails breakage, `major` during a major release candidate accepts it, and `breaking` changelog fragments record it; beta warn-only) | Yes — aggregated by `pr-gate`, plus `semver` |
 | **Merge** | `push: main` (`ci-merge.yml`) | cross-platform `nextest --workspace` on macOS/Windows, doc-example compilation | No — runs post-merge |
 | **Nightly** | `schedule` (`ci-nightly.yml`) | feature-combination matrix, `cargo-audit`/`cargo-deny` supply-chain, `#[ignore]` integration tests gated on secrets | No — runs on a schedule |
 

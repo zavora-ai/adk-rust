@@ -154,10 +154,10 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-graph = { version = "2.3.0", features = ["sqlite"] }
-adk-agent = "2.3.0"
-adk-model = "2.3.0"
-adk-core = "2.3.0"
+adk-graph = { version = "3.0.0", features = ["sqlite"] }
+adk-agent = "3.0.0"
+adk-model = "3.0.0"
+adk-core = "3.0.0"
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"

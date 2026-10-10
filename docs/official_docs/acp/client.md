@@ -9,7 +9,7 @@ offered to the coding agent.
 
 ```toml
 [dependencies]
-adk-acp = "2.3.0"
+adk-acp = "3.0.0"
 ```
 
 The default feature set is the client implementation. The `server` feature is

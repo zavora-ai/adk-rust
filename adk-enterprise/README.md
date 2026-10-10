@@ -48,7 +48,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-enterprise = "2.3.0"
+adk-enterprise = "3.0.0"
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
 ```
@@ -57,7 +57,7 @@ Or via the umbrella crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.3.0", features = ["enterprise-client"] }
+adk-rust = { version = "3.0.0", features = ["enterprise-client"] }
 ```
 
 ## Quick Start

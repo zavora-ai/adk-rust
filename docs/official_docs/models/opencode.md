@@ -10,7 +10,7 @@ Enable the `opencode` feature on `adk-model`, or the same feature on `adk-rust`:
 
 ```toml
 [dependencies]
-adk-model = { version = "2.3.0", features = ["opencode"] }
+adk-model = { version = "3.0.0", features = ["opencode"] }
 ```
 
 ## Usage
