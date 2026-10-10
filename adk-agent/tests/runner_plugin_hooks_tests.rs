@@ -4,7 +4,7 @@
 //! model, tool, and agent callbacks had no caller, so a plugin that denied a tool or replaced a
 //! model call silently did nothing.
 
-use adk_agent::LlmAgentBuilder;
+use adk_agent::{LlmAgent, LlmAgentBuilder};
 use adk_core::{
     BeforeModelResult, CallbackContext, Content, Event, Llm, LlmRequest, LlmResponse,
     LlmResponseStream, Part, Result, SessionId, Tool, ToolContext, UserId,
@@ -95,11 +95,18 @@ impl Tool for DeleteTool {
 }
 
 async fn run(model: Arc<ScriptedModel>, tool: DeleteTool, plugin: Plugin) -> Vec<Event> {
-    let agent = LlmAgentBuilder::new("ops")
-        .model(model as Arc<dyn Llm>)
-        .tool(Arc::new(tool))
-        .build()
-        .unwrap();
+    run_agent(
+        LlmAgentBuilder::new("ops")
+            .model(model as Arc<dyn Llm>)
+            .tool(Arc::new(tool))
+            .build()
+            .unwrap(),
+        plugin,
+    )
+    .await
+}
+
+async fn run_agent(agent: LlmAgent, plugin: Plugin) -> Vec<Event> {
     let sessions = Arc::new(InMemorySessionService::new());
     sessions
         .create(CreateRequest {
@@ -260,4 +267,33 @@ async fn runner_plugin_agent_model_and_tool_callbacks_all_run() {
             ("after_tool", 1),
         ])
     );
+}
+
+#[tokio::test]
+async fn runner_plugin_callbacks_reach_an_agent_behind_an_agent_tool() {
+    let models = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&models);
+    let plugin = Plugin::new(PluginConfig {
+        name: "model-audit".to_string(),
+        before_model: Some(Box::new(move |ctx, request| {
+            seen.lock().unwrap().push(ctx.agent_name().to_string());
+            Box::pin(async move { Ok(BeforeModelResult::Continue(request)) })
+        })),
+        ..Default::default()
+    });
+    let child = LlmAgentBuilder::new("researcher")
+        .description("Looks things up")
+        .model(ScriptedModel::new(vec![text_response("found it")]) as Arc<dyn Llm>)
+        .build()
+        .unwrap();
+    let parent = LlmAgentBuilder::new("lead")
+        .model(ScriptedModel::new(vec![call_response("researcher"), text_response("done")])
+            as Arc<dyn Llm>)
+        .tool(Arc::new(adk_tool::AgentTool::new(Arc::new(child))))
+        .build()
+        .unwrap();
+
+    run_agent(parent, plugin).await;
+
+    assert_eq!(*models.lock().unwrap(), vec!["lead", "researcher", "lead"]);
 }
