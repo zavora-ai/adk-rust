@@ -252,6 +252,12 @@ approved edges must honor exact-call confirmation. Ordered async
 ordinary Runner plugins and existing agent callbacks continue to apply. Team
 execution emits native `team.*` telemetry spans and stable structured errors.
 
+`TeamBudget` caps model calls, tokens, cost, tool calls and wall time through
+a `BudgetTracker` that every member shares and that counts against the run's
+`RunBudget`; members stop before the call that would start past a limit.
+Partial streaming chunks never count. The runtime keeps the receipts of the 64
+most recently finished invocations.
+
 Relationship contracts separately allow state reads and writes, reject
 concurrent state conflicts, and restrict artifact-name prefixes. Dynamic
 registry resolution can require health, version, digest, and trust labels.

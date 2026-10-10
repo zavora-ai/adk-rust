@@ -825,6 +825,7 @@ impl Llm for OpenAICompatible {
     ) -> Result<LlmResponseStream, AdkError> {
         let model = self.model.clone();
         let provider_name = self.provider_name.clone();
+        let attribution = (self.provider_name.clone(), self.model.clone());
         let http = self.http.clone();
         let retry_config = self.retry_config.clone();
         let reasoning_effort = self.reasoning_effort;
@@ -1027,6 +1028,8 @@ impl Llm for OpenAICompatible {
                                         error_message: None,
                                         provider_metadata: None,
                                         interaction_id: None,
+                                        model: None,
+                                        provider: None,
                                     };
                                     if response.usage_metadata.is_some() {
                                         yield response;
@@ -1060,6 +1063,8 @@ impl Llm for OpenAICompatible {
                                     error_message: None,
                                     provider_metadata: None,
                                     interaction_id: None,
+                                    model: None,
+                                    provider: None,
                                 };
                                 if response.usage_metadata.is_some() {
                                     yield response;
@@ -1094,6 +1099,8 @@ impl Llm for OpenAICompatible {
                                         error_message: None,
                                         provider_metadata: None,
                                         interaction_id: None,
+                                        model: None,
+                                        provider: None,
                                     };
                                 }
 
@@ -1121,6 +1128,8 @@ impl Llm for OpenAICompatible {
                                                     error_message: None,
                                                     provider_metadata: None,
                                                     interaction_id: None,
+                                                    model: None,
+                                                    provider: None,
                                                 };
                                             }
                                         }
@@ -1155,11 +1164,18 @@ impl Llm for OpenAICompatible {
                         error_message: None,
                         provider_metadata: None,
                         interaction_id: None,
+                        model: None,
+                        provider: None,
                     };
                 }
             };
 
-            Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
+            Ok(crate::usage_tracking::with_priced_usage_tracking(
+                Box::pin(response_stream),
+                usage_span,
+                attribution.0,
+                attribution.1,
+            ))
         } else {
             // ── Non-streaming path (preserved identically) ──────────
             let response_stream = try_stream! {
@@ -1208,7 +1224,12 @@ impl Llm for OpenAICompatible {
                 yield adk_response;
             };
 
-            Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
+            Ok(crate::usage_tracking::with_priced_usage_tracking(
+                Box::pin(response_stream),
+                usage_span,
+                attribution.0,
+                attribution.1,
+            ))
         }
     }
 }

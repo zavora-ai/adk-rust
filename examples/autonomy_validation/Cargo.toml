@@ -1,0 +1,32 @@
+[package]
+name = "autonomy-validation"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Live OpenAI and Anthropic validation of the autonomy-readiness Phase 0 fixes"
+
+[workspace]
+
+[dependencies]
+adk-agent = { path = "../../adk-agent", features = ["guardrails"] }
+adk-anthropic = { path = "../../adk-anthropic" }
+adk-core = { path = "../../adk-core" }
+adk-eval = { path = "../../adk-eval" }
+adk-graph = { path = "../../adk-graph", features = ["functional", "sqlite"] }
+adk-model = { path = "../../adk-model", default-features = false, features = ["openai", "anthropic"] }
+adk-plugin = { path = "../../adk-plugin" }
+adk-runner = { path = "../../adk-runner" }
+adk-rust-macros = { path = "../../adk-rust-macros" }
+adk-session = { path = "../../adk-session", features = ["sqlite"] }
+adk-tool = { path = "../../adk-tool", features = ["mcp"] }
+anyhow = "1.0"
+async-trait = "0.1"
+dotenvy = "0.15"
+futures = "0.3"
+rmcp = { version = "3.1", features = ["client", "server"] }
+serde_json = "1.0"
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

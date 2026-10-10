@@ -488,6 +488,14 @@ impl Runner {
         #[cfg(feature = "skills")]
         let skill_injector = self.skill_injector.clone();
         let mut run_config = run_config.unwrap_or_else(|| self.run_config.clone());
+        // Each run counts against fresh counters unless the caller supplied a tracker to share.
+        // Transfer targets, workflow sub-agents and agent tools inherit it through the config.
+        if run_config.budget_tracker.is_none()
+            && let Some(budget) = run_config.budget.clone()
+        {
+            run_config.budget_tracker = Some(Arc::new(adk_core::BudgetTracker::new(budget)));
+        }
+        let budget_tracker = run_config.budget_tracker.clone();
         // Plugin model and tool callbacks run inside the agent, which reaches them through the
         // run config; transfer targets and agent tools inherit the config, and with it the hooks.
         #[cfg(feature = "plugins")]
@@ -539,6 +547,10 @@ impl Runner {
         // dropped before it is ever polled. Moving the guard into the generator
         // keeps it alive exactly as long as the stream.
         let cleanup = ActiveRunCleanup { active_runs: active_runs.clone(), run_id };
+        let stop_session_service = self.session_service.clone();
+        let stop_identity = identity.clone();
+        let stop_invocation_id = invocation_id.to_string();
+        let stop_default_author = self.root_agent.name().to_string();
 
         let s = stream! {
             let _cleanup = cleanup;
@@ -1054,6 +1066,11 @@ impl Runner {
                         }
 
                         preserve_streamed_content(&mut streamed_content, &mut event);
+                        // Counts usage from agents that call models directly and
+                        // audits the budget after every event.
+                        let budget_check = budget_tracker
+                            .as_ref()
+                            .map_or(Ok(()), |tracker| tracker.record_event(&mut event));
                         in_flight.observe(&event);
 
                         // Check for transfer action
@@ -1117,6 +1134,14 @@ impl Runner {
                                 return;
                             }
                         yield Ok(event);
+                        if let Err(exceeded) = budget_check {
+                            #[cfg(feature = "plugins")]
+                            if let Some(manager) = plugin_manager.as_ref() {
+                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                            }
+                            yield Err(exceeded.into());
+                            return;
+                        }
                     }
                     Err(e) => {
                         #[cfg(feature = "plugins")]
@@ -1333,6 +1358,9 @@ impl Runner {
                             }
 
                             preserve_streamed_content(&mut streamed_content, &mut event);
+                            let budget_check = budget_tracker
+                                .as_ref()
+                                .map_or(Ok(()), |tracker| tracker.record_event(&mut event));
                             in_flight.observe(&event);
 
                             // Capture further transfer requests
@@ -1387,6 +1415,14 @@ impl Runner {
                                     return;
                                 }
                             yield Ok(event);
+                            if let Err(exceeded) = budget_check {
+                                #[cfg(feature = "plugins")]
+                                if let Some(manager) = plugin_manager.as_ref() {
+                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                }
+                                yield Err(exceeded.into());
+                                return;
+                            }
                         }
                         Err(e) => {
                             #[cfg(feature = "plugins")]
@@ -1499,7 +1535,43 @@ impl Runner {
             }
         };
 
-        Ok(RunnerInvocation { invocation_id, events: Box::pin(s) })
+        // A run stopped by its budget ends with an event that explains why, persisted like
+        // any other, followed by the structured `ResourceExhausted` error.
+        let events = stream! {
+            use futures::StreamExt;
+            let mut inner = Box::pin(s);
+            let mut author = stop_default_author;
+            while let Some(item) = inner.next().await {
+                match item {
+                    Ok(event) => {
+                        if !event.author.is_empty() && event.author != "user" {
+                            author.clone_from(&event.author);
+                        }
+                        yield Ok(event);
+                    }
+                    Err(error) => {
+                        if let Some(stop_event) =
+                            adk_core::budget_exceeded_event(&stop_invocation_id, &author, &error)
+                        {
+                            if let Err(persist_error) = stop_session_service
+                                .append_event_for_identity(adk_session::AppendEventRequest {
+                                    identity: stop_identity.clone(),
+                                    event: stop_event.clone(),
+                                })
+                                .await
+                            {
+                                tracing::warn!(error = %persist_error, "failed to persist the budget stop event");
+                            }
+                            yield Ok(stop_event);
+                        }
+                        yield Err(error);
+                        return;
+                    }
+                }
+            }
+        };
+
+        Ok(RunnerInvocation { invocation_id, events: Box::pin(events) })
     }
 
     /// Convenience method that accepts string arguments.
