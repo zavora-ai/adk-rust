@@ -300,8 +300,11 @@ impl ToolGuardrail for DeniedArgumentPattern {
 
 /// Denies a call whose path-valued arguments fall outside a set of allowed roots.
 ///
-/// Checks the named arguments when present, and requires each to be an absolute path contained by
-/// one of the allowed roots. Containment is compared by path component and after resolving the
+/// Requires every named argument to be present and to be an absolute path contained by one of the
+/// allowed roots. A call that omits one is denied, because the guardrail cannot vouch for a path it
+/// was not shown; [`allow_missing`](Self::allow_missing) permits calls without it. Without
+/// [`on_tools`](Self::on_tools) the guardrail applies to every tool, so a tool that takes no path
+/// is denied too — scope it to the tools that take paths. Containment is compared by path component and after resolving the
 /// allowed root and every existing candidate component, so string-prefix, dangling-symlink, and
 /// resolved-symlink escapes are refused. Any path containing a `..` component is denied outright.
 ///
@@ -319,7 +322,8 @@ impl ToolGuardrail for DeniedArgumentPattern {
 ///     "launch-agents-only",
 ///     ["path"],
 ///     ["/Users/me/Library/LaunchAgents"],
-/// );
+/// )
+/// .on_tools(["plist_write", "plist_read"]);
 /// ```
 pub struct PathAllowList {
     name: String,
@@ -327,6 +331,7 @@ pub struct PathAllowList {
     allowed_roots: Vec<PathBuf>,
     severity: Severity,
     tools: Option<Vec<String>>,
+    allow_missing: bool,
 }
 
 impl PathAllowList {
@@ -344,6 +349,7 @@ impl PathAllowList {
             allowed_roots: allowed_roots.into_iter().map(Into::into).collect(),
             severity: Severity::Critical,
             tools: None,
+            allow_missing: false,
         }
     }
 
@@ -354,12 +360,35 @@ impl PathAllowList {
     }
 
     /// Restricts this guardrail to the named tools. Without this it applies to every tool.
+    ///
+    /// A tool not named here is not checked: its calls pass this guardrail whatever their
+    /// arguments. List every tool that takes one of the configured path arguments.
     pub fn on_tools<I, S>(mut self, tools: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
         self.tools = Some(tools.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Permits a call that omits a configured path argument.
+    ///
+    /// By default such a call is denied. Use this when the guardrail names arguments that only
+    /// some of its tools take, such as `source` and `destination` beside `path`; every argument
+    /// that is present is still checked.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_guardrail::PathAllowList;
+    ///
+    /// let guardrail = PathAllowList::new("workspace", ["path", "source", "destination"], ["/srv"])
+    ///     .on_tools(["read_file", "move_file"])
+    ///     .allow_missing();
+    /// ```
+    pub fn allow_missing(mut self) -> Self {
+        self.allow_missing = true;
         self
     }
 
@@ -436,7 +465,17 @@ impl ToolGuardrail for PathAllowList {
     async fn validate_call(&self, tool_name: &str, args: &Value) -> ToolGuardrailResult {
         for arg_name in &self.arg_names {
             let Some(value) = args.get(arg_name) else {
-                continue;
+                if self.allow_missing {
+                    continue;
+                }
+                return ToolGuardrailResult::deny(
+                    format!(
+                        "argument `{arg_name}` of `{tool_name}` is missing, so its path cannot be \
+                         checked; configure the guardrail with allow_missing() to permit calls \
+                         without it"
+                    ),
+                    self.severity,
+                );
             };
 
             let Some(candidate) = value.as_str() else {
@@ -719,12 +758,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_absent_path_argument_is_not_checked() {
+    async fn an_absent_path_argument_is_denied() {
         let guardrail = PathAllowList::new("agents", ["path"], ["/tmp"]);
 
+        for args in [json!({ "other": 1 }), json!({ "Path": "/etc/passwd" }), json!("/etc/passwd")]
+        {
+            assert!(
+                !guardrail.validate_call("write", &args).await.is_allowed(),
+                "a call without `path` cannot be shown to stay inside the roots: {args}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn allow_missing_permits_an_absent_argument_but_checks_a_present_one() {
+        let root = tempfile::tempdir().expect("allowed root");
+        let guardrail =
+            PathAllowList::new("moves", ["source", "destination"], [root.path()]).allow_missing();
+        let inside = root.path().join("a.txt");
+
+        assert!(guardrail.validate_call("rm", &json!({ "source": inside })).await.is_allowed());
         assert!(
-            guardrail.validate_call("write", &json!({ "other": 1 })).await.is_allowed(),
-            "a guardrail on `path` says nothing about a call that has no `path`"
+            !guardrail
+                .validate_call("mv", &json!({ "source": inside, "destination": "/etc/x" }))
+                .await
+                .is_allowed()
         );
+    }
+
+    #[tokio::test]
+    async fn a_tool_outside_on_tools_is_not_checked() {
+        let set = ToolGuardrailSet::new()
+            .with(PathAllowList::new("writes", ["path"], ["/srv"]).on_tools(["write_file"]));
+
+        assert!(set.evaluate("read_file", &json!({ "path": "/etc/passwd" })).await.is_allowed());
+        assert!(!set.evaluate("write_file", &json!({ "path": "/etc/passwd" })).await.is_allowed());
+        assert!(!set.evaluate("write_file", &json!({})).await.is_allowed());
     }
 }

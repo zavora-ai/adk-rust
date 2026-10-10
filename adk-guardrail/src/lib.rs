@@ -4,11 +4,14 @@
 //!
 //! ## Overview
 //!
-//! Guardrails run in parallel with agent execution and can:
+//! Input guardrails validate the user's message before the agent runs, and output guardrails
+//! validate the final response; the guardrails in one set run concurrently. They can:
 //! - Block harmful or off-topic content
 //! - Enforce output schemas
 //! - Redact PII (emails, phones, SSNs)
-//! - Limit costs and token usage
+//! - Allow, deny, or narrow tool-call arguments before a tool runs ([`ToolGuardrail`])
+//!
+//! No guardrail tracks cost or token usage.
 //!
 //! ## Quick Start
 //!
@@ -54,9 +57,12 @@
 //! Two implementations ship: [`DeniedArgumentPattern`] refuses calls whose serialized arguments
 //! match a regular expression, and [`PathAllowList`] confines path-valued arguments to a set of
 //! roots — comparing by path component, resolving each existing component to reject symlink
-//! escapes, and refusing any path with a `..` component. It is a preflight check; filesystem tools
-//! exposed across a hostile local trust boundary still need platform secure-open primitives to
-//! eliminate time-of-check/time-of-use races.
+//! escapes, and refusing any path with a `..` component or a missing path argument. It is a
+//! preflight check; filesystem tools exposed across a hostile local trust boundary still need
+//! platform secure-open primitives to eliminate time-of-check/time-of-use races.
+//!
+//! `on_tools` limits a guardrail to the named tools, and a tool it does not name is not checked
+//! at all, so name every tool that takes a path.
 
 pub mod content;
 pub mod error;

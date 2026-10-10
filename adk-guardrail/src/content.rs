@@ -1,4 +1,4 @@
-use crate::{Guardrail, GuardrailResult, Severity};
+use crate::{Guardrail, GuardrailResult, Result, Severity};
 use adk_core::Content;
 use async_trait::async_trait;
 use regex::RegexSet;
@@ -38,8 +38,30 @@ pub struct ContentFilter {
 }
 
 impl ContentFilter {
-    /// Create a new content filter with custom config
-    pub fn new(name: impl Into<String>, config: ContentFilterConfig) -> Self {
+    /// Create a new content filter with custom config.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuardrailError::Regex`](crate::GuardrailError::Regex) when the blocked keywords
+    /// cannot be compiled into one matcher — a list too large for the regex size limit, for
+    /// example. A filter that silently stopped blocking would be worse than no filter, so the
+    /// failure is reported rather than ignored; split a very large list across several filters.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_guardrail::{ContentFilter, ContentFilterConfig};
+    ///
+    /// let filter = ContentFilter::new(
+    ///     "no-secrets",
+    ///     ContentFilterConfig {
+    ///         blocked_keywords: vec!["password".into(), "api key".into()],
+    ///         ..Default::default()
+    ///     },
+    /// )?;
+    /// # Ok::<(), adk_guardrail::GuardrailError>(())
+    /// ```
+    pub fn new(name: impl Into<String>, config: ContentFilterConfig) -> Result<Self> {
         let blocked_regex = if config.blocked_keywords.is_empty() {
             None
         } else {
@@ -48,10 +70,15 @@ impl ContentFilter {
                 .iter()
                 .map(|k| format!(r"(?i)\b{}\b", regex::escape(k)))
                 .collect();
-            RegexSet::new(&patterns).ok()
+            Some(RegexSet::new(&patterns)?)
         };
 
-        Self { name: name.into(), config, blocked_regex }
+        Ok(Self { name: name.into(), config, blocked_regex })
+    }
+
+    /// Builds one of the filters below, whose fixed configuration always compiles.
+    fn preset(name: &str, config: ContentFilterConfig) -> Self {
+        Self::new(name, config).expect("a built-in content filter compiles")
     }
 
     /// Create a filter that blocks common harmful content patterns.
@@ -60,7 +87,7 @@ impl ContentFilter {
     /// to avoid false positives in developer contexts. Use [`harmful_content_strict`](Self::harmful_content_strict)
     /// for the full keyword list.
     pub fn harmful_content() -> Self {
-        Self::new(
+        Self::preset(
             "harmful_content",
             ContentFilterConfig {
                 blocked_keywords: vec![
@@ -81,7 +108,7 @@ impl ContentFilter {
     /// including terms like "hack" and "exploit" that may produce false
     /// positives in developer contexts.
     pub fn harmful_content_strict() -> Self {
-        Self::new(
+        Self::preset(
             "harmful_content_strict",
             ContentFilterConfig {
                 blocked_keywords: vec![
@@ -102,8 +129,8 @@ impl ContentFilter {
 
     /// Create a filter that ensures content is on-topic
     pub fn on_topic(topic: impl Into<String>, keywords: Vec<String>) -> Self {
-        Self::new(
-            format!("on_topic_{}", topic.into()),
+        Self::preset(
+            &format!("on_topic_{}", topic.into()),
             ContentFilterConfig {
                 required_topics: keywords,
                 severity: Severity::Medium,
@@ -114,7 +141,7 @@ impl ContentFilter {
 
     /// Create a filter with maximum length
     pub fn max_length(max: usize) -> Self {
-        Self::new(
+        Self::preset(
             "max_length",
             ContentFilterConfig {
                 max_length: Some(max),
@@ -124,8 +151,13 @@ impl ContentFilter {
         )
     }
 
-    /// Create a filter with blocked keywords
-    pub fn blocked_keywords(keywords: Vec<String>) -> Self {
+    /// Create a filter with blocked keywords.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuardrailError::Regex`](crate::GuardrailError::Regex) when the keywords cannot be
+    /// compiled into one matcher; see [`new`](Self::new).
+    pub fn blocked_keywords(keywords: Vec<String>) -> Result<Self> {
         Self::new(
             "blocked_keywords",
             ContentFilterConfig {
@@ -275,9 +307,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_blocked_keywords() {
-        let filter = ContentFilter::blocked_keywords(vec!["forbidden".into(), "banned".into()]);
+        let filter = ContentFilter::blocked_keywords(vec!["forbidden".into(), "banned".into()])
+            .expect("keywords compile");
         let content = Content::new("user").with_text("This is forbidden content");
         let result = filter.validate(&content).await;
         assert!(result.is_fail());
+    }
+
+    #[test]
+    fn a_keyword_list_that_cannot_compile_is_an_error_not_an_open_filter() {
+        // A keyword past the regex size limit cannot be compiled; the filter used to drop the
+        // matcher and pass every message.
+        let keywords = vec!["a".repeat(1_000_000)];
+
+        let result = ContentFilter::blocked_keywords(keywords);
+
+        assert!(matches!(result, Err(crate::GuardrailError::Regex(_))));
     }
 }

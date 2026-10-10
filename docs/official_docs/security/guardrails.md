@@ -91,11 +91,12 @@ let filter = ContentFilter::harmful_content();
 // Strict variant that also blocks "hack" and "exploit"
 let filter = ContentFilter::harmful_content_strict();
 
-// Block specific keywords
+// Block specific keywords. Returns an error when the list cannot be compiled
+// (for example, past the regex size limit) rather than a filter that blocks nothing.
 let filter = ContentFilter::blocked_keywords(vec![
     "forbidden".into(),
     "banned".into(),
-]);
+])?;
 
 // Enforce topic relevance
 let filter = ContentFilter::on_topic("cooking", vec![
@@ -121,7 +122,7 @@ let config = ContentFilterConfig {
     severity: Severity::High,
 };
 
-let filter = ContentFilter::new("custom_filter", config);
+let filter = ContentFilter::new("custom_filter", config)?;
 ```
 
 ## Schema Validation
