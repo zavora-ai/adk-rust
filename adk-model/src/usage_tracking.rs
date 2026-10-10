@@ -3,7 +3,7 @@
 //! Every provider in this crate passes its response stream through
 //! [`with_priced_usage_tracking`] once in `generate_content`, so each response
 //! carries [`LlmResponse::provider`] and [`LlmResponse::model`], usage carries
-//! a [`UsageMetadata::cost`] whenever the model is priced, and the active
+//! a [`UsageMetadata::cost`](adk_core::UsageMetadata::cost) whenever the model is priced, and the active
 //! tracing span records standardized `gen_ai.usage.*` fields through
 //! [`adk_telemetry::record_llm_usage`].
 

@@ -314,8 +314,8 @@ where
 /// Shutdown telemetry and flush any pending spans.
 ///
 /// Should be called before application exit to ensure all telemetry data is sent.
-/// Flushes and shuts down every tracer and meter provider that [`init_with_otlp`],
-/// [`build_otlp_layer`], or `init_with_gcp` built, including those held by tracing
+/// Flushes and shuts down every tracer and meter provider that `init_with_otlp`,
+/// `build_otlp_layer`, or `init_with_gcp` built, including those held by tracing
 /// layers, then installs a no-op global tracer provider. Spans recorded afterwards are
 /// dropped. Calling it again does nothing.
 ///
