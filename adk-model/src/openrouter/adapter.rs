@@ -270,7 +270,12 @@ impl Llm for OpenRouterClient {
             }
         };
 
-        Ok(crate::usage_tracking::with_usage_tracking(response_stream, usage_span))
+        Ok(crate::usage_tracking::with_priced_usage_tracking(
+            response_stream,
+            usage_span,
+            "openrouter",
+            model_name,
+        ))
     }
 }
 
@@ -773,6 +778,8 @@ fn chat_response_to_llm_response(response: &OpenRouterChatResponse) -> LlmRespon
         provider_metadata: (!provider_metadata.is_empty())
             .then_some(Value::Object(provider_metadata)),
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 
@@ -856,6 +863,8 @@ fn responses_response_to_llm_response(
         provider_metadata: (!provider_metadata.is_empty())
             .then_some(Value::Object(provider_metadata)),
         interaction_id: None,
+        model: None,
+        provider: None,
     })
 }
 
@@ -989,6 +998,8 @@ fn llm_stream_response(
         error_message: None,
         provider_metadata,
         interaction_id: None,
+        model: None,
+        provider: None,
     })
 }
 
