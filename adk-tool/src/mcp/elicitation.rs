@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use futures::FutureExt;
 use rmcp::model::{
-    ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability,
-    ElicitationSchema, FormElicitationCapability, InputRequest, InputRequests, InputResponses,
-    UrlElicitationCapability,
+    ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability, ElicitationSchema,
+    FormElicitationCapability, InitializeRequestParams, InputRequest, InputRequests,
+    InputResponses, UrlElicitationCapability,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleClient};
 use serde_json::Value;
@@ -255,8 +255,8 @@ impl AdkClientHandler {
 }
 
 impl rmcp::handler::client::ClientHandler for AdkClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> InitializeRequestParams {
+        let mut info = InitializeRequestParams::default();
         let elicitation = ElicitationCapability::new()
             .with_form(FormElicitationCapability::new())
             .with_url(UrlElicitationCapability::new());

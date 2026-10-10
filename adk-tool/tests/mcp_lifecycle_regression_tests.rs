@@ -8,7 +8,10 @@ use adk_tool::mcp::{
 use rmcp::model::*;
 use rmcp::service::{RequestContext, RunningService};
 use rmcp::transport::{IntoTransport, Transport};
-use rmcp::{ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceExt};
+use rmcp::{
+    ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient, RoleServer, ServerHandler,
+    ServiceExt,
+};
 use serde_json::json;
 use std::collections::VecDeque;
 use std::sync::{
@@ -18,12 +21,18 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
+/// Since rmcp 3.2 `initialize` negotiates only versions that still have it, so
+/// `2026-07-28`, which MRTR requires, is reached through `server/discover`.
+fn discover_2026() -> ClientLifecycleMode {
+    ClientLifecycleMode::Discover { preferred_versions: vec![ProtocolVersion::V_2026_07_28] }
+}
+
 #[derive(Clone, Default)]
 struct InputClient(Arc<AtomicUsize>);
 
 impl ClientHandler for InputClient {
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::new(
+    fn get_info(&self) -> InitializeRequestParams {
+        InitializeRequestParams::new(
             ClientCapabilities::builder().enable_elicitation().enable_tasks().build(),
             Implementation::new("input-client", "1.0.0"),
         )
@@ -60,8 +69,8 @@ fn prompt(message: &str) -> InputRequest {
 }
 
 impl ServerHandler for InputServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
             .with_protocol_version(ProtocolVersion::V_2026_07_28)
     }
 
@@ -121,7 +130,7 @@ async fn direct_calls_reuse_the_custom_handler_for_inline_and_task_input() {
     });
     let handler = InputClient::default();
     let handled = handler.0.clone();
-    let client = handler.serve(client_io).await.unwrap();
+    let client = handler.serve_with_lifecycle(client_io, discover_2026()).await.unwrap();
     let toolset = McpToolset::new(client).with_task_support(
         McpTaskConfig::enabled().poll_interval(std::time::Duration::from_millis(1)),
     );
@@ -135,7 +144,7 @@ async fn direct_calls_reuse_the_custom_handler_for_inline_and_task_input() {
 struct BatchClient(tokio::sync::Barrier);
 
 impl ClientHandler for BatchClient {
-    fn get_info(&self) -> ClientInfo {
+    fn get_info(&self) -> InitializeRequestParams {
         InputClient::default().get_info()
     }
 
@@ -156,7 +165,10 @@ async fn input_batches_dispatch_custom_handlers_concurrently() {
     tokio::spawn(async move {
         InputServer::default().serve(server_io).await.unwrap().waiting().await.unwrap();
     });
-    let client = BatchClient(tokio::sync::Barrier::new(2)).serve(client_io).await.unwrap();
+    let client = BatchClient(tokio::sync::Barrier::new(2))
+        .serve_with_lifecycle(client_io, discover_2026())
+        .await
+        .unwrap();
     let toolset = McpToolset::new(client);
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -176,8 +188,10 @@ struct SubscriptionServer {
 }
 
 impl ServerHandler for SubscriptionServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
+            ServerCapabilities::builder().enable_tools().enable_resources().build(),
+        )
     }
 
     #[allow(deprecated)]
@@ -278,8 +292,8 @@ impl ScriptedTaskServer {
 }
 
 impl ServerHandler for ScriptedTaskServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
             .with_protocol_version(ProtocolVersion::V_2026_07_28)
     }
 
@@ -496,8 +510,8 @@ fn spawn_hostile_server(key: &'static str, input: InputRequest) -> tokio::io::Du
 struct MrtrServer;
 
 impl ServerHandler for MrtrServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::V_2026_07_28)
     }
 
@@ -533,7 +547,7 @@ struct ElicitationOnlyClient(Arc<AtomicUsize>);
 
 #[allow(deprecated)]
 impl ClientHandler for ElicitationOnlyClient {
-    fn get_info(&self) -> ClientInfo {
+    fn get_info(&self) -> InitializeRequestParams {
         InputClient::default().get_info()
     }
 
@@ -559,7 +573,8 @@ impl ClientHandler for ElicitationOnlyClient {
 async fn mrtr_sampling_and_roots_need_a_declared_capability() {
     let handler = ElicitationOnlyClient::default();
     let reached = handler.0.clone();
-    let client = handler.serve(spawn_server(MrtrServer)).await.unwrap();
+    let client =
+        handler.serve_with_lifecycle(spawn_server(MrtrServer), discover_2026()).await.unwrap();
     let toolset = McpToolset::new(client);
     for (tool, capability) in [("sample", "sampling"), ("roots", "roots")] {
         let error =
@@ -576,8 +591,8 @@ struct RootsClient;
 
 #[allow(deprecated)]
 impl ClientHandler for RootsClient {
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::new(
+    fn get_info(&self) -> InitializeRequestParams {
+        InitializeRequestParams::new(
             ClientCapabilities::builder().enable_elicitation().enable_roots().build(),
             Implementation::new("roots-client", "1.0.0"),
         )
@@ -594,7 +609,8 @@ impl ClientHandler for RootsClient {
 
 #[tokio::test]
 async fn mrtr_roots_reach_a_client_that_declared_them() {
-    let client = RootsClient.serve(spawn_server(MrtrServer)).await.unwrap();
+    let client =
+        RootsClient.serve_with_lifecycle(spawn_server(MrtrServer), discover_2026()).await.unwrap();
     let toolset = McpToolset::new(client);
     let value = toolset.call_tool_value("roots", Default::default()).await.unwrap();
     assert_eq!(value["output"]["roots"]["roots"][0]["uri"], "file:///workspace", "{value}");
@@ -675,7 +691,8 @@ async fn caller_built_adk_handler_toolsets_apply_the_adk_input_policy() {
 async fn inline_input_batches_are_capped() {
     let handler = InputClient::default();
     let handled = handler.0.clone();
-    let client = handler.serve(spawn_server(MrtrServer)).await.unwrap();
+    let client =
+        handler.serve_with_lifecycle(spawn_server(MrtrServer), discover_2026()).await.unwrap();
     let toolset = McpToolset::new(client);
     let error = toolset.call_tool_value("flood", Default::default()).await.unwrap_err().to_string();
     assert!(error.contains("sent 65 input requests in one round; at most 64"), "{error}");
@@ -684,7 +701,10 @@ async fn inline_input_batches_are_capped() {
 
 #[tokio::test]
 async fn input_required_without_requests_or_state_is_rejected() {
-    let client = InputClient::default().serve(spawn_server(MrtrServer)).await.unwrap();
+    let client = InputClient::default()
+        .serve_with_lifecycle(spawn_server(MrtrServer), discover_2026())
+        .await
+        .unwrap();
     let toolset = McpToolset::new(client);
     let error = toolset.call_tool_value("empty", Default::default()).await.unwrap_err().to_string();
     assert!(error.contains("neither input requests nor request state"), "{error}");
@@ -692,7 +712,10 @@ async fn input_required_without_requests_or_state_is_rejected() {
 
 #[tokio::test]
 async fn state_only_input_rounds_back_off_before_retrying() {
-    let client = InputClient::default().serve(spawn_server(MrtrServer)).await.unwrap();
+    let client = InputClient::default()
+        .serve_with_lifecycle(spawn_server(MrtrServer), discover_2026())
+        .await
+        .unwrap();
     let toolset = McpToolset::new(client);
     let started = Instant::now();
     toolset.call_tool_value("wait", Default::default()).await.unwrap();
@@ -701,7 +724,10 @@ async fn state_only_input_rounds_back_off_before_retrying() {
 
 #[tokio::test]
 async fn structured_only_tool_errors_keep_their_detail() {
-    let client = InputClient::default().serve(spawn_server(MrtrServer)).await.unwrap();
+    let client = InputClient::default()
+        .serve_with_lifecycle(spawn_server(MrtrServer), discover_2026())
+        .await
+        .unwrap();
     let toolset = McpToolset::new(client);
     let error = toolset.call_tool_value("fail", Default::default()).await.unwrap_err().to_string();
     assert!(error.contains("E_QUOTA"), "{error}");
@@ -714,7 +740,7 @@ struct GatedClient {
 }
 
 impl ClientHandler for GatedClient {
-    fn get_info(&self) -> ClientInfo {
+    fn get_info(&self) -> InitializeRequestParams {
         InputClient::default().get_info()
     }
 
@@ -734,7 +760,8 @@ async fn a_pending_elicitation_does_not_hold_the_connection_lock() {
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let handler = GatedClient { entered: entered.clone(), release: release.clone() };
-    let client = handler.serve(spawn_server(MrtrServer)).await.unwrap();
+    let client =
+        handler.serve_with_lifecycle(spawn_server(MrtrServer), discover_2026()).await.unwrap();
     let toolset = McpToolset::new(client);
     let probe = async {
         entered.notified().await;
