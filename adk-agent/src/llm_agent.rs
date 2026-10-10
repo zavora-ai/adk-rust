@@ -3484,27 +3484,27 @@ impl Agent for LlmAgent {
                     // The whole batch is reserved before any call starts. A batch that does
                     // not fit is answered with "not run" responses, so the history keeps one
                     // response per call, and the run ends with the budget error.
-                    if let Some(tracker) = budget_tracker.as_ref() {
-                        if let Err(exceeded) = tracker.begin_tool_calls(fc_parts.len() as u64) {
-                            let parts = fc_parts
-                                .iter()
-                                .map(|call| Part::FunctionResponse {
-                                    function_response: FunctionResponseData::new(
-                                        call.name.clone(),
-                                        serde_json::json!({ "error": format!("not run: {exceeded}") }),
-                                    ),
-                                    id: call.id.clone(),
-                                    annotations: None,
-                                })
-                                .collect();
-                            let mut budget_event = Event::new(&invocation_id);
-                            budget_event.author = agent_name.clone();
-                            budget_event.llm_response.content =
-                                Some(Content { role: "function".to_string(), parts });
-                            yield Ok(budget_event);
-                            yield Err(exceeded.into());
-                            return;
-                        }
+                    if let Some(tracker) = budget_tracker.as_ref()
+                        && let Err(exceeded) = tracker.begin_tool_calls(fc_parts.len() as u64)
+                    {
+                        let parts = fc_parts
+                            .iter()
+                            .map(|call| Part::FunctionResponse {
+                                function_response: FunctionResponseData::new(
+                                    call.name.clone(),
+                                    serde_json::json!({ "error": format!("not run: {exceeded}") }),
+                                ),
+                                id: call.id.clone(),
+                                annotations: None,
+                            })
+                            .collect();
+                        let mut budget_event = Event::new(&invocation_id);
+                        budget_event.author = agent_name.clone();
+                        budget_event.llm_response.content =
+                            Some(Content { role: "function".to_string(), parts });
+                        yield Ok(budget_event);
+                        yield Err(exceeded.into());
+                        return;
                     }
 
                     // Wrap circuit breaker in Mutex for shared access across parallel futures.
