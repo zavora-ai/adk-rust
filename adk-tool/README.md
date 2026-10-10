@@ -365,8 +365,14 @@ is easier to operate.
 The refresher handles these error conditions automatically:
 - Connection closed / EOF
 - Broken pipe / transport errors
+- `Transport closed`, reported when a stdio server process exits
 - Session not found (server restart)
 - Connection reset
+
+Requests through `ConnectionRefresher`, `SimpleClient`, and `McpToolset` share
+one connection and run concurrently. A connection whose transport has already
+closed is replaced before the next request is sent, so that request is never a
+replay.
 
 Discovery calls reconnect and retry automatically. Discovered tool wrappers
 also replay when the server publishes `readOnlyHint: true` or

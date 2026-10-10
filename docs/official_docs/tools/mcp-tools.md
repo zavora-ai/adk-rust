@@ -286,10 +286,11 @@ input. Design that interaction explicitly in the owning workflow.
 ### Dropped calls and cleanup
 
 A remote task outlives the future that started it. When a tool-call future is
-dropped — an agent turn is cancelled, a timeout fires, or the caller stops
-polling — nothing sends `tasks/cancel`, and the task keeps running on the server.
-The toolset tracks every task it has not seen finish, including tasks returned
-while task support is disabled; those are cancelled at once.
+dropped while it polls a task — an agent turn is cancelled, a timeout fires, or
+the caller stops polling — the toolset sends `tasks/cancel` for that task, bounded
+by a 2-second acknowledgement timeout. Cancellation is cooperative, so the
+toolset keeps tracking every task it has not seen finish, including tasks
+returned while task support is disabled; those are cancelled at once.
 
 `McpToolset::cancel_pending_tasks` cleans up the tracked set:
 
