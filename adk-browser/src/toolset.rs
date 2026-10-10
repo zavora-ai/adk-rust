@@ -5,6 +5,7 @@ use crate::session::BrowserSession;
 use crate::tools::*;
 use adk_core::{ReadonlyContext, Result, Tool, Toolset};
 use async_trait::async_trait;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Internal abstraction for session acquisition.
@@ -29,8 +30,8 @@ impl SessionResolver {
 ///
 /// Instead of using every tool (which overwhelms LLM context windows),
 /// select a profile that matches your agent's task. No profile includes
-/// `browser_evaluate_js`; enable it with
-/// [`BrowserToolset::with_evaluate_js`].
+/// `browser_evaluate_js` or `browser_file_upload`; enable them with
+/// [`BrowserToolset::with_evaluate_js`] and [`BrowserToolset::with_file_upload`].
 ///
 /// # Example
 ///
@@ -53,8 +54,8 @@ pub enum BrowserProfile {
     /// 13 tools: navigation + extraction + screenshot + scroll, hover, and alert handling.
     /// Best for data extraction / scraping agents (no interaction tools).
     Scraping,
-    /// 45 tools: every tool except `browser_evaluate_js`. Use only when the agent
-    /// needs full browser control.
+    /// 44 tools: every tool except `browser_evaluate_js` and `browser_file_upload`. Use
+    /// only when the agent needs full browser control.
     Full,
 }
 
@@ -63,14 +64,19 @@ pub enum BrowserProfile {
 /// Use this to add all browser tools to an agent at once, or use
 /// individual tools for more control.
 ///
-/// Two defaults limit what a model can reach through the browser:
+/// Four defaults limit what a model can reach through the browser:
 ///
 /// - `browser_evaluate_js`, which runs model-written JavaScript in the page, is
 ///   off until [`with_evaluate_js`](Self::with_evaluate_js) or
 ///   [`with_js`](Self::with_js) enables it.
+/// - `browser_file_upload` is off until [`with_file_upload`](Self::with_file_upload)
+///   names the directories files may be uploaded from.
 /// - Navigation accepts only `http` and `https` URLs until
 ///   [`with_allowed_schemes`](Self::with_allowed_schemes) says otherwise, so
 ///   `file:`, `javascript:`, `data:`, and browser-internal URLs are refused.
+/// - Navigation refuses loopback, private, link-local, and cloud metadata
+///   addresses until [`with_private_network_access`](Self::with_private_network_access)
+///   permits them.
 pub struct BrowserToolset {
     resolver: SessionResolver,
     /// Include navigation tools (navigate, back, forward, refresh)
@@ -93,21 +99,27 @@ pub struct BrowserToolset {
     include_windows: bool,
     /// Include frame/iframe management tools
     include_frames: bool,
-    /// Include advanced action tools (drag-drop, focus, file upload, etc.)
+    /// Include advanced action tools (drag-drop, focus, key presses, etc.)
     include_actions: bool,
+    /// Directories `browser_file_upload` may read from; the tool is offered only when set
+    upload_roots: Option<Vec<PathBuf>>,
     /// URL schemes the navigation and new-tab/window tools accept
     allowed_schemes: Vec<String>,
+    /// Whether the navigation and new-tab/window tools may open private network addresses
+    allow_private_network: bool,
 }
 
 impl BrowserToolset {
-    /// Create a new toolset with every tool enabled except `browser_evaluate_js`.
+    /// Create a new toolset with every tool enabled except `browser_evaluate_js` and
+    /// `browser_file_upload`.
     ///
     /// Equivalent to [`with_profile`](Self::with_profile) with [`BrowserProfile::Full`].
     pub fn new(browser: Arc<BrowserSession>) -> Self {
         Self::from_profile(SessionResolver::Fixed(browser), BrowserProfile::Full)
     }
 
-    /// Create a pool-backed toolset with every tool enabled except `browser_evaluate_js`.
+    /// Create a pool-backed toolset with every tool enabled except `browser_evaluate_js`
+    /// and `browser_file_upload`.
     ///
     /// Sessions are resolved per-user at runtime via `Toolset::tools(ctx)`.
     /// The pool calls `get_or_create(ctx.user_id())` to obtain an isolated
@@ -171,7 +183,9 @@ impl BrowserToolset {
             include_windows: extended,
             include_frames: extended,
             include_actions: extended,
+            upload_roots: None,
             allowed_schemes: default_allowed_schemes(),
+            allow_private_network: false,
         }
     }
 
@@ -265,6 +279,55 @@ impl BrowserToolset {
         self
     }
 
+    /// Permit or refuse navigation to loopback, private, link-local, and cloud
+    /// metadata addresses.
+    ///
+    /// Refused by default, in `browser_navigate`, `browser_new_tab`, and
+    /// `browser_new_window`. Enable this only for an agent meant to browse an
+    /// internal network; see
+    /// [`NavigateTool::with_private_network_access`](crate::tools::NavigateTool::with_private_network_access).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_browser::{BrowserConfig, BrowserSession, BrowserToolset};
+    /// use std::sync::Arc;
+    ///
+    /// let browser = Arc::new(BrowserSession::new(BrowserConfig::default()));
+    /// let intranet = BrowserToolset::new(browser).with_private_network_access(true);
+    /// ```
+    #[must_use]
+    pub fn with_private_network_access(mut self, enabled: bool) -> Self {
+        self.allow_private_network = enabled;
+        self
+    }
+
+    /// Offer `browser_file_upload`, limited to files inside `roots`.
+    ///
+    /// Off by default in every profile. The tool resolves each model-chosen path,
+    /// symlinks included, and refuses anything that is not an existing file under a
+    /// resolved root, so point `roots` at directories that hold only what the agent
+    /// may hand to a web page.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_browser::{BrowserConfig, BrowserSession, BrowserToolset};
+    /// use std::sync::Arc;
+    ///
+    /// let browser = Arc::new(BrowserSession::new(BrowserConfig::default()));
+    /// let toolset = BrowserToolset::new(browser).with_file_upload(["/srv/agent/uploads"]);
+    /// ```
+    #[must_use]
+    pub fn with_file_upload<I, P>(mut self, roots: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        self.upload_roots = Some(roots.into_iter().map(Into::into).collect());
+        self
+    }
+
     /// Enable or disable cookie management tools.
     pub fn with_cookies(mut self, enabled: bool) -> Self {
         self.include_cookies = enabled;
@@ -327,7 +390,8 @@ impl BrowserToolset {
         if self.include_navigation {
             tools.push(Arc::new(
                 NavigateTool::new(browser.clone())
-                    .with_allowed_schemes(self.allowed_schemes.clone()),
+                    .with_allowed_schemes(self.allowed_schemes.clone())
+                    .with_private_network_access(self.allow_private_network),
             ));
             tools.push(Arc::new(BackTool::new(browser.clone())));
             tools.push(Arc::new(ForwardTool::new(browser.clone())));
@@ -382,11 +446,14 @@ impl BrowserToolset {
         if self.include_windows {
             tools.push(Arc::new(ListWindowsTool::new(browser.clone())));
             tools.push(Arc::new(
-                NewTabTool::new(browser.clone()).with_allowed_schemes(self.allowed_schemes.clone()),
+                NewTabTool::new(browser.clone())
+                    .with_allowed_schemes(self.allowed_schemes.clone())
+                    .with_private_network_access(self.allow_private_network),
             ));
             tools.push(Arc::new(
                 NewWindowTool::new(browser.clone())
-                    .with_allowed_schemes(self.allowed_schemes.clone()),
+                    .with_allowed_schemes(self.allowed_schemes.clone())
+                    .with_private_network_access(self.allow_private_network),
             ));
             tools.push(Arc::new(SwitchWindowTool::new(browser.clone())));
             tools.push(Arc::new(CloseWindowTool::new(browser.clone())));
@@ -407,8 +474,11 @@ impl BrowserToolset {
             tools.push(Arc::new(FocusTool::new(browser.clone())));
             tools.push(Arc::new(ElementStateTool::new(browser.clone())));
             tools.push(Arc::new(PressKeyTool::new(browser.clone())));
-            tools.push(Arc::new(FileUploadTool::new(browser.clone())));
-            tools.push(Arc::new(PrintToPdfTool::new(browser)));
+            tools.push(Arc::new(PrintToPdfTool::new(browser.clone())));
+        }
+
+        if let Some(roots) = &self.upload_roots {
+            tools.push(Arc::new(FileUploadTool::new(browser).with_allowed_roots(roots.clone())));
         }
 
         tools
@@ -463,8 +533,8 @@ mod tests {
         let toolset = BrowserToolset::new(browser);
         let tools = toolset.all_tools();
 
-        // Every tool except browser_evaluate_js (45)
-        assert!(tools.len() > 40);
+        // Every tool except browser_evaluate_js and browser_file_upload (44)
+        assert_eq!(tools.len(), 44);
 
         // Check some tool names exist
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name()).collect();

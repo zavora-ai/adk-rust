@@ -15,7 +15,7 @@ categories = ["web-programming", "development-tools"]
 [dependencies]
 adk-core.workspace = true
 thirtyfour = "0.35"
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["net", "sync", "time"] }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -24,4 +24,5 @@ base64 = "0.22"
 url = "2.5"
 
 [dev-dependencies]
+tempfile = "3"
 tokio-test = "0.4"

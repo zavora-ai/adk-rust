@@ -28,6 +28,8 @@ This crate provides 46 browser automation tools (45 enabled by default) as ADK `
 |---------|---------|
 | `browser_evaluate_js`, which runs model-written JavaScript in the page, is not included in any toolset or profile | `.with_evaluate_js(true)` (or `.with_js(true)`) |
 | `browser_navigate`, `browser_new_tab`, and `browser_new_window` accept only `http` and `https` URLs, so `file:`, `javascript:`, `data:`, and `chrome:` URLs are refused | `.with_allowed_schemes(["https", "file"])` |
+| The same tools refuse loopback, private, link-local, and cloud metadata addresses (`localhost`, `10.0.0.0/8`, `169.254.169.254`, and host names that resolve to them) | `.with_private_network_access(true)` |
+| `browser_file_upload` is not included in any toolset or profile; once enabled, it uploads only existing files inside the configured directories, after resolving symlinks | `.with_file_upload(["/srv/agent/uploads"])` |
 | Chrome runs with its sandbox on; `--no-sandbox` is never added, and `chrome_options` cannot replace the argument list | `BrowserConfig::new().add_arg("--no-sandbox")` for containers that run Chrome as root |
 
 ```rust,ignore
@@ -85,7 +87,7 @@ Instead of using all 45 default tools (which can overwhelm LLM context windows),
 | `Minimal` | 19 | Navigation + interaction + extraction + wait + screenshot |
 | `FormFilling` | 19 | Same as Minimal — optimized for form-filling agents |
 | `Scraping` | 13 | Navigation + extraction + screenshot + scroll/hover/alert (no interaction) |
-| `Full` | 45 | Every tool except `browser_evaluate_js` — use only when full browser control is needed |
+| `Full` | 44 | Every tool except `browser_evaluate_js` and `browser_file_upload` — use only when full browser control is needed |
 
 ```rust,ignore
 let toolset = BrowserToolset::with_profile(browser, BrowserProfile::FormFilling);
@@ -314,7 +316,7 @@ let tools = toolset.all_tools();
 | `browser_focus` | Focus an element |
 | `browser_element_state` | Check displayed/enabled/selected/clickable state |
 | `browser_press_key` | Press keyboard key with optional modifiers (Ctrl, Alt, Shift, Meta) |
-| `browser_file_upload` | Upload file to input element |
+| `browser_file_upload` | Upload a file from an allowed directory to an input element; opt-in via `with_file_upload(roots)` |
 | `browser_print_to_pdf` | Print page to PDF (base64) |
 
 ## Configuration

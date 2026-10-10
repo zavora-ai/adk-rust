@@ -4,6 +4,7 @@ use crate::session::BrowserSession;
 use adk_core::{AdkError, Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Tool for drag and drop operations.
@@ -284,13 +285,70 @@ impl Tool for PressKeyTool {
 }
 
 /// Tool for uploading files.
+///
+/// Uploads only files inside the roots set with
+/// [`with_allowed_roots`](Self::with_allowed_roots); with none set, every upload is refused. A
+/// model-chosen path is resolved — symlinks and `..` included — and must name an existing file
+/// under a resolved root, so the model cannot hand a page `~/.ssh/id_rsa` or a symlink to it.
 pub struct FileUploadTool {
     browser: Arc<BrowserSession>,
+    allowed_roots: Vec<PathBuf>,
 }
 
 impl FileUploadTool {
+    /// Create an upload tool that refuses every upload until roots are allowed.
     pub fn new(browser: Arc<BrowserSession>) -> Self {
-        Self { browser }
+        Self { browser, allowed_roots: Vec::new() }
+    }
+
+    /// Replace the directories files may be uploaded from.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_browser::{BrowserSession, FileUploadTool};
+    /// use std::sync::Arc;
+    ///
+    /// let browser = Arc::new(BrowserSession::with_defaults());
+    /// let tool = FileUploadTool::new(browser).with_allowed_roots(["/srv/agent/uploads"]);
+    /// ```
+    #[must_use]
+    pub fn with_allowed_roots<I, P>(mut self, roots: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        self.allowed_roots = roots.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Resolves `requested` and returns it when it is an existing file inside an allowed root.
+    fn resolve_upload(&self, requested: &str) -> Result<String> {
+        if self.allowed_roots.is_empty() {
+            return Err(AdkError::tool(
+                "File upload is disabled: no upload roots are configured. Enable it with \
+                 BrowserToolset::with_file_upload or FileUploadTool::with_allowed_roots.",
+            ));
+        }
+        let refused = || {
+            AdkError::tool(format!(
+                "File '{requested}' is not an existing file inside an allowed upload root"
+            ))
+        };
+        // WebDriver reads a newline as a separator between several files.
+        if requested.contains(['\n', '\r']) {
+            return Err(refused());
+        }
+        let resolved = std::fs::canonicalize(Path::new(requested)).map_err(|_| refused())?;
+        let inside = self
+            .allowed_roots
+            .iter()
+            .filter_map(|root| std::fs::canonicalize(root).ok())
+            .any(|root| resolved.starts_with(root));
+        if !inside || !resolved.is_file() {
+            return Err(refused());
+        }
+        resolved.into_os_string().into_string().map_err(|_| refused())
     }
 }
 
@@ -314,7 +372,7 @@ impl Tool for FileUploadTool {
                 },
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file to upload"
+                    "description": "Path to the file to upload, inside an allowed upload directory"
                 }
             },
             "required": ["selector", "file_path"]
@@ -331,8 +389,9 @@ impl Tool for FileUploadTool {
             .get("file_path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| AdkError::tool("Missing 'file_path' parameter"))?;
+        let resolved = self.resolve_upload(file_path)?;
 
-        self.browser.upload_file(selector, file_path).await?;
+        self.browser.upload_file(selector, &resolved).await?;
 
         Ok(json!({
             "success": true,
