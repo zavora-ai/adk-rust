@@ -95,6 +95,6 @@ proptest! {
         // Existing fields should be preserved
         prop_assert_eq!(&config.api_key, "test-key");
         prop_assert_eq!(&config.model, &model);
-        prop_assert_eq!(config.max_tokens, max_tokens);
+        prop_assert_eq!(config.max_tokens, Some(max_tokens));
     }
 }

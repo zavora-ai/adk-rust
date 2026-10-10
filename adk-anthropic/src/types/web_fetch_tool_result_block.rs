@@ -64,6 +64,78 @@ mod tests {
         DocumentBlock::new(DocumentSource::PlainText(PlainTextSource::new(text.to_string())))
     }
 
+    /// The response blocks shown in the web fetch tool documentation: a text page with a
+    /// title and citations, a PDF, and an error.
+    fn documented_blocks() -> Vec<Value> {
+        vec![
+            serde_json::json!({
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srvtoolu_01234567890abcdef",
+                "content": {
+                    "type": "web_fetch_result",
+                    "url": "https://example.com/article",
+                    "content": {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "Full text content of the article..."
+                        },
+                        "title": "Article Title",
+                        "citations": {"enabled": true}
+                    },
+                    "retrieved_at": "2025-08-25T10:30:00Z"
+                }
+            }),
+            serde_json::json!({
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srvtoolu_02",
+                "content": {
+                    "type": "web_fetch_result",
+                    "url": "https://example.com/paper.pdf",
+                    "content": {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": "JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmo..."
+                        },
+                        "citations": {"enabled": true}
+                    },
+                    "retrieved_at": "2025-08-25T10:30:02Z"
+                }
+            }),
+            serde_json::json!({
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srvtoolu_a93jad",
+                "content": {
+                    "type": "web_fetch_tool_result_error",
+                    "error_code": "url_not_accessible"
+                }
+            }),
+        ]
+    }
+
+    #[test]
+    fn documented_response_blocks_round_trip_losslessly() {
+        for wire in documented_blocks() {
+            let block: crate::types::ContentBlock = serde_json::from_value(wire.clone()).unwrap();
+            assert!(block.is_web_fetch_tool_result(), "{wire}");
+            assert_eq!(serde_json::to_value(&block).unwrap(), wire);
+            let text = serde_json::to_string(&block).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn documented_error_keeps_its_code() {
+        let block: WebFetchToolResultBlock =
+            serde_json::from_value(documented_blocks().remove(2)).unwrap();
+        let error = block.content.as_error().unwrap();
+        assert!(error.is_url_not_accessible());
+        assert!(!error.is_unknown());
+    }
+
     #[test]
     fn caller_round_trips() {
         let caller =

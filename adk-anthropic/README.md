@@ -152,7 +152,8 @@ let client = Anthropic::new(None)?
 
 | Behaviour | Rule |
 |-----------|------|
-| Non-streaming request | `with_timeout` bounds the whole request (default 60 seconds) |
+| Non-streaming request | `with_timeout` bounds the whole request (default 10 minutes) |
+| Connecting | `with_timeout`, capped at 60 seconds |
 | Streaming request | `with_timeout` bounds the wait for response headers; the body has no total bound |
 | Stalled stream | The stream yields `Error::Timeout` and ends after 30 seconds without data |
 | Total stream bound | Opt in with `with_stream_timeout(Some(duration))` |

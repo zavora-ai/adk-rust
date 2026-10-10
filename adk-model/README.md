@@ -110,6 +110,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Chat Completions rejects function tools on GPT-5.6 and later while reasoning is on, so
+`OpenAIClient` sends requests that declare tools for those models through the Responses
+API, with `store: false`. Other requests stay on Chat Completions.
+
 ### OpenCode
 
 Enable the `opencode` feature. The client picks Chat Completions, Responses, Anthropic Messages, or

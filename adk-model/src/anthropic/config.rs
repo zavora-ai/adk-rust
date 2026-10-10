@@ -72,9 +72,16 @@ pub struct AnthropicConfig {
     pub api_key: String,
     /// Model name (e.g., `"claude-opus-5"`, `"claude-sonnet-5"`).
     pub model: String,
-    /// Maximum tokens to generate.
-    #[serde(default = "default_max_tokens")]
-    pub max_tokens: u32,
+    /// Maximum tokens to generate. `None` uses
+    /// [`anthropic_default_max_tokens`](crate::catalog::anthropic_default_max_tokens)
+    /// for the model: 32,000 for Claude 4 and later, whose thinking counts toward
+    /// this cap, and 4,096 for older or unrecognized models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// Bound on a whole non-streaming request, and on the wait for the response
+    /// headers of a streaming one, in seconds. `None` uses 600 (10 minutes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_timeout_secs: Option<u64>,
     /// Optional custom base URL (for proxies, Ollama, Vercel Gateway, etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
@@ -153,6 +160,7 @@ impl std::fmt::Debug for AnthropicConfig {
             .field("api_key", &"[REDACTED]")
             .field("model", &self.model)
             .field("max_tokens", &self.max_tokens)
+            .field("request_timeout_secs", &self.request_timeout_secs)
             .field("base_url", &self.base_url)
             .field("allow_insecure_http", &self.allow_insecure_http)
             .field("prompt_caching", &self.prompt_caching)
@@ -171,10 +179,6 @@ impl std::fmt::Debug for AnthropicConfig {
     }
 }
 
-fn default_max_tokens() -> u32 {
-    4096
-}
-
 fn default_prompt_caching() -> bool {
     true
 }
@@ -184,7 +188,8 @@ impl Default for AnthropicConfig {
         Self {
             api_key: String::new(),
             model: crate::catalog::ANTHROPIC_DEFAULT.to_string(),
-            max_tokens: default_max_tokens(),
+            max_tokens: None,
+            request_timeout_secs: None,
             base_url: None,
             allow_insecure_http: false,
             prompt_caching: true,
@@ -209,9 +214,30 @@ impl AnthropicConfig {
         Self { api_key: api_key.into(), model: model.into(), ..Default::default() }
     }
 
-    /// Set the maximum tokens to generate.
+    /// Set the maximum tokens to generate, replacing the model-aware default.
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
-        self.max_tokens = max_tokens;
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    /// Bound each request, replacing the 10-minute default.
+    ///
+    /// The bound covers a whole non-streaming request, such as an agent called
+    /// through `AgentTool`, and the wait for the response headers of a streaming
+    /// request. Sub-second precision is rounded up to the next second.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    /// use adk_model::anthropic::AnthropicConfig;
+    ///
+    /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-opus-5-5")
+    ///     .with_request_timeout(Duration::from_secs(1_800));
+    /// assert_eq!(config.request_timeout_secs, Some(1_800));
+    /// ```
+    pub fn with_request_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.request_timeout_secs = Some(timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0));
         self
     }
 
