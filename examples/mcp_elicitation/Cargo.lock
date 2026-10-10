@@ -18,6 +18,8 @@ version = "2.3.0"
 dependencies = [
  "adk-core",
  "adk-devtools",
+ "adk-guardrail",
+ "adk-plugin",
  "adk-skill",
  "adk-telemetry",
  "adk-tool",
