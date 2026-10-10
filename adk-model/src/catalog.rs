@@ -245,6 +245,10 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ModelCatalogEntry::active("openai", "gpt-5.6-luna", ModelRole::Economy),
     ModelCatalogEntry::active("openai", "gpt-5.6", ModelRole::Flagship),
     ModelCatalogEntry::default("anthropic", ANTHROPIC_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::active("anthropic", "claude-fable-5-1", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-opus-5-5", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-sonnet-5-5", ModelRole::Balanced),
+    ModelCatalogEntry::active("anthropic", "claude-haiku-5-5", ModelRole::Economy),
     ModelCatalogEntry::active("anthropic", "claude-opus-5", ModelRole::Flagship),
     ModelCatalogEntry::active("anthropic", "claude-fable-5", ModelRole::Flagship),
     ModelCatalogEntry::active("anthropic", "claude-haiku-4-5", ModelRole::Economy),
@@ -580,6 +584,23 @@ mod tests {
                 "obsolete default: {entry:?}"
             );
             assert!(entry.recommended_default, "default entry is not marked as default: {entry:?}");
+        }
+    }
+
+    #[test]
+    fn current_claude_models_are_active() {
+        for (model, role) in [
+            ("claude-fable-5-1", ModelRole::Flagship),
+            ("claude-opus-5-5", ModelRole::Flagship),
+            ("claude-sonnet-5-5", ModelRole::Balanced),
+            ("claude-haiku-5-5", ModelRole::Economy),
+        ] {
+            assert_eq!(
+                lookup_model("anthropic", model),
+                Some(&ModelCatalogEntry::active("anthropic", model, role)),
+                "{model}"
+            );
+            assert!(validate_model_selection("anthropic", model).is_ok());
         }
     }
 
