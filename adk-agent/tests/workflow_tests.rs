@@ -161,6 +161,8 @@ impl adk_core::Llm for MockRouterLlm {
                 error_message: None,
                 provider_metadata: None,
                 interaction_id: None,
+                model: None,
+                provider: None,
             });
         };
         Ok(Box::pin(s))

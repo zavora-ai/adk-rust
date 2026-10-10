@@ -39,6 +39,7 @@ use std::sync::Arc;
 pub struct OpenCodeClient {
     inner: Arc<dyn Llm>,
     api: OpenCodeApi,
+    provider: &'static str,
 }
 
 impl OpenCodeClient {
@@ -182,7 +183,7 @@ impl OpenCodeClient {
                 Arc::new(model)
             }
         };
-        Ok(Self { inner, api })
+        Ok(Self { inner, api, provider: service.provider() })
     }
 
     /// Returns the selected wire API.
@@ -204,6 +205,19 @@ impl Llm for OpenCodeClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
-        self.inner.generate_content(request, stream).await
+        use futures::StreamExt;
+        // The protocol clients price by the upstream vendor; OpenCode bills on its own terms,
+        // so its responses are attributed to OpenCode and left unpriced.
+        let provider = self.provider;
+        let responses = self.inner.generate_content(request, stream).await?;
+        Ok(Box::pin(responses.map(move |result| {
+            result.map(|mut response| {
+                response.provider = Some(provider.to_string());
+                if let Some(usage) = response.usage_metadata.as_mut() {
+                    usage.cost = None;
+                }
+                response
+            })
+        })))
     }
 }

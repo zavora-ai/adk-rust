@@ -47,6 +47,8 @@ impl adk_core::Llm for MockLlm {
                 error_message: None,
                 provider_metadata: None,
                 interaction_id: None,
+                model: None,
+                provider: None,
             });
         };
         Ok(Box::pin(s))
@@ -94,6 +96,8 @@ impl adk_core::Llm for SpyLlm {
                 error_message: None,
                 provider_metadata: None,
                 interaction_id: None,
+                model: None,
+                provider: None,
             });
         };
         Ok(Box::pin(s))
@@ -525,6 +529,8 @@ impl adk_core::Llm for FunctionCallLlm {
                 error_message: None,
                 provider_metadata: None,
                 interaction_id: None,
+                model: None,
+                provider: None,
             });
         };
         Ok(Box::pin(s))
@@ -708,6 +714,8 @@ impl adk_core::Llm for ScriptedLlm {
                 error_message: None,
                 provider_metadata: None,
                 interaction_id: None,
+                model: None,
+                provider: None,
             });
         };
         Ok(Box::pin(s))

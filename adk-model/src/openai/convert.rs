@@ -395,6 +395,8 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         error_message: argument_error,
         provider_metadata: None,
         interaction_id: None,
+        model: Some(resp.model.clone()).filter(|model| !model.is_empty()),
+        provider: None,
     }
 }
 
@@ -528,6 +530,12 @@ pub(crate) fn from_raw_openai_response(
         error_message: None,
         provider_metadata: None,
         interaction_id: None,
+        model: json
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .filter(|model| !model.is_empty())
+            .map(str::to_string),
+        provider: None,
     })
 }
 

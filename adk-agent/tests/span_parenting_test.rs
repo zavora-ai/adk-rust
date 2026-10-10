@@ -98,6 +98,8 @@ fn chunk(text: &str, final_chunk: bool) -> LlmResponse {
         error_message: None,
         provider_metadata: None,
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 

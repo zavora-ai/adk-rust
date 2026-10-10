@@ -281,6 +281,8 @@ pub mod opencode;
 pub mod openrouter;
 /// Conversion outcomes for content parts sent to a provider.
 pub mod part_conversion;
+/// Token prices for every provider and cost calculation from usage.
+pub mod pricing;
 
 /// Canonical provider identifiers and metadata.
 pub mod provider;
@@ -332,6 +334,7 @@ pub use openai_compatible::{OpenAICompatible, OpenAICompatibleConfig, ReasoningR
 pub use opencode::{OpenCodeApi, OpenCodeClient, OpenCodeConfig, OpenCodeService};
 #[cfg(feature = "openrouter")]
 pub use openrouter::{OpenRouterApiMode, OpenRouterClient, OpenRouterConfig};
+pub use pricing::PricingCatalog;
 pub use provider::ModelProvider;
 pub use retry::RetryConfig;
 pub use retry::ServerRetryHint;

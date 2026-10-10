@@ -657,6 +657,8 @@ pub fn from_response(response: &Response) -> LlmResponse {
         error_message: argument_error,
         provider_metadata,
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 

@@ -375,6 +375,8 @@ impl MistralRsModel {
             citation_metadata: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         }
     }
 }
@@ -434,6 +436,8 @@ impl Llm for MistralRsModel {
                                             error_message: None,
                                             provider_metadata: None,
                                             interaction_id: None,
+                                            model: None,
+                                            provider: None,
                                         };
                                         yield Ok(response);
                                     }
@@ -458,6 +462,8 @@ impl Llm for MistralRsModel {
                                         citation_metadata: None,
                                         provider_metadata: None,
                                         interaction_id: None,
+                                        model: None,
+                                        provider: None,
                                     };
                                     yield Ok(response);
                                 }

@@ -170,10 +170,20 @@ impl Llm for BedrockClient {
 
         if stream && request.tools.is_empty() {
             let result = self.generate_streaming(bedrock_input).await?;
-            Ok(crate::usage_tracking::with_usage_tracking(result, usage_span))
+            Ok(crate::usage_tracking::with_priced_usage_tracking(
+                result,
+                usage_span,
+                "bedrock",
+                &self.model_id,
+            ))
         } else {
             let result = self.generate_non_streaming(bedrock_input).await?;
-            Ok(crate::usage_tracking::with_usage_tracking(result, usage_span))
+            Ok(crate::usage_tracking::with_priced_usage_tracking(
+                result,
+                usage_span,
+                "bedrock",
+                &self.model_id,
+            ))
         }
     }
 }
@@ -335,6 +345,8 @@ impl BedrockClient {
                                 error_message: None,
                                 provider_metadata: None,
                                 interaction_id: None,
+                                model: None,
+                                provider: None,
                             };
                         }
 
@@ -360,6 +372,8 @@ impl BedrockClient {
                                 error_message: None,
                                 provider_metadata: None,
                                 interaction_id: None,
+                                model: None,
+                                provider: None,
                             };
                         }
                     }
@@ -378,7 +392,11 @@ impl BedrockClient {
                                     "totalTokens":usage.total_tokens, "cacheReadInputTokens":usage.cache_read_input_tokens,
                                     "cacheWriteInputTokens":usage.cache_write_input_tokens,
                                 })),
-                                prompt_token_count: usage.input_tokens,
+                                // Converse reports uncached input separately from cache reads and writes.
+                                prompt_token_count: usage
+                                    .input_tokens
+                                    .saturating_add(usage.cache_read_input_tokens.unwrap_or(0))
+                                    .saturating_add(usage.cache_write_input_tokens.unwrap_or(0)),
                                 candidates_token_count: usage.output_tokens,
                                 total_token_count: usage.total_tokens,
                                 cache_read_input_token_count: usage.cache_read_input_tokens,
