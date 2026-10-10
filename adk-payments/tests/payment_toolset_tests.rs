@@ -133,8 +133,12 @@ impl MerchantCheckoutService for RecordingKernel {
     async fn update_checkout(&self, _command: UpdateCheckoutCommand) -> Result<TransactionRecord> {
         unused()
     }
-    async fn get_checkout(&self, _lookup: TransactionLookup) -> Result<Option<TransactionRecord>> {
-        unused()
+    // Completion is judged on the stored checkout, so the kernel returns the ones it created.
+    async fn get_checkout(&self, lookup: TransactionLookup) -> Result<Option<TransactionRecord>> {
+        let creates = self.creates.lock().unwrap();
+        let created =
+            creates.iter().rev().find(|context| context.transaction_id == lookup.transaction_id);
+        Ok(created.cloned().map(record_for))
     }
     async fn complete_checkout(
         &self,
@@ -289,10 +293,11 @@ async fn checkout_create_and_complete_are_non_idempotent_and_carry_the_idempoten
             .await
             .expect("a caller holding the scope may create a checkout");
     }
+    let created = kernel.creates.lock().unwrap()[0].transaction_id.clone();
     complete
         .execute(
             Caller::with_scopes(&["payments:checkout:complete"]),
-            json!({"transactionId": "tx-1"}),
+            json!({"transactionId": created.as_str()}),
         )
         .await
         .expect("a caller holding the scope may complete a checkout");

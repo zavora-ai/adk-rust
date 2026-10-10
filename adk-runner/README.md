@@ -218,6 +218,14 @@ Re-exported for convenience: `adk_runner::{BaseEventsSummarizer, EventsCompactio
 
 See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/context-compaction.md) for full documentation.
 
+## Spend Ledger
+
+When `RunConfig::spend_ledger` is set, the runner reserves an estimate before each model
+call (`Runner::with_llm_spend_estimate`, 0.05 USD per call by default) and commits the
+call's reported `UsageMetadata::cost`, keyed by app, agent, and vendor. A reservation the
+ledger refuses fails the call, so a capped run stops before it spends. See
+[Spend Ledger](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/spend-ledger.md).
+
 ## Related Crates
 
 - [adk-rust](https://crates.io/crates/adk-rust) - Meta-crate with all components
