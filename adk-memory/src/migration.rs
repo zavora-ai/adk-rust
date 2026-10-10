@@ -6,7 +6,8 @@
 //!
 //! The types ([`MigrationStep`], [`AppliedMigration`], [`MigrationError`]) are
 //! always compiled. The SQL runner functions (`run_sql_migrations`,
-//! `sql_schema_version`) require the `sqlite-memory` or `database-memory` feature.
+//! `run_sql_migrations_on_connection`, `sql_schema_version`) require the
+//! `sqlite-memory` or `database-memory` feature.
 
 use chrono::{DateTime, Utc};
 
@@ -57,17 +58,163 @@ impl std::error::Error for MigrationError {}
 // SQL runner — macro generates concrete implementations per database backend
 // ---------------------------------------------------------------------------
 
-/// Generates `run_sql_migrations` and `sql_schema_version` for a concrete
-/// sqlx pool type. Each SQL backend (`sqlite-memory`, `database-memory`) gets
-/// its own monomorphised copy, avoiding complex generic trait bounds.
+/// Expands to the body of a migration run, shared by the pool-based and the
+/// connection-based entry points.
+///
+/// `$exec` is expanded at every statement, so `&mut *conn` reborrows a
+/// connection afresh for each one.
+#[cfg(any(feature = "sqlite-memory", feature = "database-memory"))]
+macro_rules! sql_migration_body {
+    (
+        exec: $exec:expr,
+        begin: $begin:expr,
+        detect: $detect:expr,
+        registry_table: $registry_table:expr,
+        steps: $steps:expr,
+        int_type: $int_type:expr $(,)?
+    ) => {{
+        let registry_table: &str = $registry_table;
+        let steps: &[(i64, &str, &str)] = $steps;
+
+        // Step 1: Create registry table if missing
+        let create_sql = format!(
+            "CREATE TABLE IF NOT EXISTS {registry_table} (\
+                version {} PRIMARY KEY, \
+                description TEXT NOT NULL, \
+                applied_at TEXT NOT NULL\
+            )",
+            $int_type
+        );
+        sqlx::query(&create_sql).execute($exec).await.map_err(|e| {
+            adk_core::AdkError::memory(format!("migration registry creation failed: {e}"))
+        })?;
+
+        // Step 2: Read current max applied version
+        let max_sql = format!("SELECT COALESCE(MAX(version), 0) AS max_v FROM {registry_table}");
+        let row = sqlx::query(&max_sql).fetch_one($exec).await.map_err(|e| {
+            adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
+        })?;
+        let mut max_applied: i64 = row.try_get("max_v").map_err(|e| {
+            adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
+        })?;
+
+        // Step 3: Baseline detection — if registry is empty but
+        // tables already exist, record v1 as applied.
+        if max_applied == 0 {
+            let existing = $detect.await?;
+            if existing {
+                if let Some(&(v, desc, _)) = steps.first() {
+                    let now = Utc::now().to_rfc3339();
+                    let ins = format!(
+                        "INSERT INTO {registry_table} \
+                         (version, description, applied_at) \
+                         VALUES ({v}, '{desc}', '{now}')"
+                    );
+                    sqlx::query(&ins).execute($exec).await.map_err(|e| {
+                        adk_core::AdkError::memory(format!(
+                            "{}",
+                            MigrationError {
+                                version: v,
+                                description: desc.to_string(),
+                                cause: e.to_string(),
+                            }
+                        ))
+                    })?;
+                    max_applied = v;
+                }
+            }
+        }
+
+        // Step 4: Compiled-in max version
+        let max_compiled = steps.last().map(|s| s.0).unwrap_or(0);
+
+        // Step 5: Version mismatch check
+        if max_applied > max_compiled {
+            return Err(adk_core::AdkError::memory(format!(
+                "schema version mismatch: database is at v{max_applied} \
+                 but code only knows up to v{max_compiled}. \
+                 Upgrade your ADK version."
+            )));
+        }
+
+        // Step 6: Execute unapplied steps in transactions
+        for &(version, description, sql) in steps {
+            if version <= max_applied {
+                continue;
+            }
+
+            let mut tx = $begin.await.map_err(|e| {
+                adk_core::AdkError::memory(format!(
+                    "{}",
+                    MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: format!("transaction begin failed: {e}"),
+                    }
+                ))
+            })?;
+
+            // Execute the migration SQL (raw_sql supports multiple
+            // semicolon-separated statements in a single call).
+            sqlx::raw_sql(sql).execute(&mut *tx).await.map_err(|e| {
+                adk_core::AdkError::memory(format!(
+                    "{}",
+                    MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: e.to_string(),
+                    }
+                ))
+            })?;
+
+            // Record the step in the registry
+            let now = Utc::now().to_rfc3339();
+            let rec = format!(
+                "INSERT INTO {registry_table} \
+                 (version, description, applied_at) \
+                 VALUES ({version}, '{description}', '{now}')"
+            );
+            sqlx::query(&rec).execute(&mut *tx).await.map_err(|e| {
+                adk_core::AdkError::memory(format!(
+                    "{}",
+                    MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: format!("registry record failed: {e}"),
+                    }
+                ))
+            })?;
+
+            tx.commit().await.map_err(|e| {
+                adk_core::AdkError::memory(format!(
+                    "{}",
+                    MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: format!("transaction commit failed: {e}"),
+                    }
+                ))
+            })?;
+        }
+
+        Ok(())
+    }};
+}
+
+/// Generates `run_sql_migrations`, `run_sql_migrations_on_connection`, and
+/// `sql_schema_version` for a concrete sqlx pool and connection type. Each SQL
+/// backend (`sqlite-memory`, `database-memory`) gets its own monomorphised copy, avoiding complex
+/// generic trait bounds.
 #[cfg(any(feature = "sqlite-memory", feature = "database-memory"))]
 macro_rules! impl_sql_migration_runner {
-    ($mod_name:ident, $pool_ty:ty, $int_type:expr) => {
+    ($mod_name:ident, $pool_ty:ty, $conn_ty:ty, $int_type:expr) => {
+        /// SQL migration runner for this database backend.
         pub mod $mod_name {
             use super::MigrationError;
             use chrono::Utc;
-            use sqlx::Row;
+            use sqlx::{Connection, Row};
             use std::future::Future;
+            use std::pin::Pin;
 
             /// Run all pending migrations for a SQL backend.
             ///
@@ -80,6 +227,10 @@ macro_rules! impl_sql_migration_runner {
             ///    returns a version-mismatch error.
             /// 5. Executes each unapplied step inside a transaction and
             ///    records it in the registry.
+            ///
+            /// Each statement takes a connection from `pool`. Use
+            /// [`run_sql_migrations_on_connection`] when every statement must
+            /// run on the connection that holds a session-level lock.
             pub async fn run_sql_migrations<F, Fut>(
                 pool: &$pool_ty,
                 registry_table: &str,
@@ -90,129 +241,50 @@ macro_rules! impl_sql_migration_runner {
                 F: FnOnce() -> Fut,
                 Fut: Future<Output = Result<bool, adk_core::AdkError>>,
             {
-                // Step 1: Create registry table if missing
-                let create_sql = format!(
-                    "CREATE TABLE IF NOT EXISTS {registry_table} (\
-                        version {} PRIMARY KEY, \
-                        description TEXT NOT NULL, \
-                        applied_at TEXT NOT NULL\
-                    )",
-                    $int_type
-                );
-                sqlx::query(&create_sql).execute(pool).await.map_err(|e| {
-                    adk_core::AdkError::memory(format!("migration registry creation failed: {e}"))
-                })?;
+                sql_migration_body!(
+                    exec: pool,
+                    begin: pool.begin(),
+                    detect: detect_existing(),
+                    registry_table: registry_table,
+                    steps: steps,
+                    int_type: $int_type,
+                )
+            }
 
-                // Step 2: Read current max applied version
-                let max_sql =
-                    format!("SELECT COALESCE(MAX(version), 0) AS max_v FROM {registry_table}");
-                let row = sqlx::query(&max_sql).fetch_one(pool).await.map_err(|e| {
-                    adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
-                })?;
-                let mut max_applied: i64 = row.try_get("max_v").map_err(|e| {
-                    adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
-                })?;
-
-                // Step 3: Baseline detection — if registry is empty but
-                // tables already exist, record v1 as applied.
-                if max_applied == 0 {
-                    let existing = detect_existing().await?;
-                    if existing {
-                        if let Some(&(v, desc, _)) = steps.first() {
-                            let now = Utc::now().to_rfc3339();
-                            let ins = format!(
-                                "INSERT INTO {registry_table} \
-                                 (version, description, applied_at) \
-                                 VALUES ({v}, '{desc}', '{now}')"
-                            );
-                            sqlx::query(&ins).execute(pool).await.map_err(|e| {
-                                adk_core::AdkError::memory(format!(
-                                    "{}",
-                                    MigrationError {
-                                        version: v,
-                                        description: desc.to_string(),
-                                        cause: e.to_string(),
-                                    }
-                                ))
-                            })?;
-                            max_applied = v;
-                        }
-                    }
-                }
-
-                // Step 4: Compiled-in max version
-                let max_compiled = steps.last().map(|s| s.0).unwrap_or(0);
-
-                // Step 5: Version mismatch check
-                if max_applied > max_compiled {
-                    return Err(adk_core::AdkError::memory(format!(
-                        "schema version mismatch: database is at v{max_applied} \
-                         but code only knows up to v{max_compiled}. \
-                         Upgrade your ADK version."
-                    )));
-                }
-
-                // Step 6: Execute unapplied steps in transactions
-                for &(version, description, sql) in steps {
-                    if version <= max_applied {
-                        continue;
-                    }
-
-                    let mut tx = pool.begin().await.map_err(|e| {
-                        adk_core::AdkError::memory(format!(
-                            "{}",
-                            MigrationError {
-                                version,
-                                description: description.to_string(),
-                                cause: format!("transaction begin failed: {e}"),
-                            }
-                        ))
-                    })?;
-
-                    // Execute the migration SQL (raw_sql supports multiple
-                    // semicolon-separated statements in a single call).
-                    sqlx::raw_sql(sql).execute(&mut *tx).await.map_err(|e| {
-                        adk_core::AdkError::memory(format!(
-                            "{}",
-                            MigrationError {
-                                version,
-                                description: description.to_string(),
-                                cause: e.to_string(),
-                            }
-                        ))
-                    })?;
-
-                    // Record the step in the registry
-                    let now = Utc::now().to_rfc3339();
-                    let rec = format!(
-                        "INSERT INTO {registry_table} \
-                         (version, description, applied_at) \
-                         VALUES ({version}, '{description}', '{now}')"
-                    );
-                    sqlx::query(&rec).execute(&mut *tx).await.map_err(|e| {
-                        adk_core::AdkError::memory(format!(
-                            "{}",
-                            MigrationError {
-                                version,
-                                description: description.to_string(),
-                                cause: format!("registry record failed: {e}"),
-                            }
-                        ))
-                    })?;
-
-                    tx.commit().await.map_err(|e| {
-                        adk_core::AdkError::memory(format!(
-                            "{}",
-                            MigrationError {
-                                version,
-                                description: description.to_string(),
-                                cause: format!("transaction commit failed: {e}"),
-                            }
-                        ))
-                    })?;
-                }
-
-                Ok(())
+            /// Run all pending migrations on one connection.
+            ///
+            /// Performs the same steps as [`run_sql_migrations`], but every
+            /// statement, including `detect_existing`, runs on `conn`. A
+            /// session-level lock taken on `conn`, such as a PostgreSQL advisory
+            /// lock, therefore covers the whole run, and the run needs no second
+            /// connection.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error when a statement or `detect_existing` fails, or
+            /// when the registry records a version newer than the last entry in
+            /// `steps`.
+            pub async fn run_sql_migrations_on_connection<F>(
+                conn: &mut $conn_ty,
+                registry_table: &str,
+                steps: &[(i64, &str, &str)],
+                detect_existing: F,
+            ) -> Result<(), adk_core::AdkError>
+            where
+                F: FnOnce(
+                    &mut $conn_ty,
+                ) -> Pin<
+                    Box<dyn Future<Output = Result<bool, adk_core::AdkError>> + Send + '_>,
+                >,
+            {
+                sql_migration_body!(
+                    exec: &mut *conn,
+                    begin: conn.begin(),
+                    detect: detect_existing(&mut *conn),
+                    registry_table: registry_table,
+                    steps: steps,
+                    int_type: $int_type,
+                )
             }
 
             /// Returns the highest applied migration version, or 0 if no
@@ -236,7 +308,7 @@ macro_rules! impl_sql_migration_runner {
 }
 
 #[cfg(feature = "sqlite-memory")]
-impl_sql_migration_runner!(sqlite_runner, sqlx::SqlitePool, "INTEGER");
+impl_sql_migration_runner!(sqlite_runner, sqlx::SqlitePool, sqlx::SqliteConnection, "INTEGER");
 
 #[cfg(feature = "database-memory")]
-impl_sql_migration_runner!(pg_runner, sqlx::PgPool, "BIGINT");
+impl_sql_migration_runner!(pg_runner, sqlx::PgPool, sqlx::PgConnection, "BIGINT");

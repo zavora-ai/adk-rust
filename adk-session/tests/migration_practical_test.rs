@@ -6,8 +6,9 @@
 #![cfg(feature = "sqlite")]
 
 use adk_session::SqliteSessionService;
+use adk_session::migration::sqlite_runner;
 use adk_session::service::{CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Connection, Row, SqliteConnection, SqlitePool};
 
 /// Fresh database: migrate() creates all tables and registry, schema_version returns 1.
 #[tokio::test]
@@ -170,4 +171,62 @@ async fn registry_records_are_complete() {
     assert_eq!(version, 1);
     assert!(!description.is_empty(), "description should not be empty");
     assert!(!applied_at.is_empty(), "applied_at should not be empty");
+}
+
+const CONNECTION_STEPS: &[(i64, &str, &str)] = &[
+    (1, "create widgets", "CREATE TABLE widgets (id INTEGER PRIMARY KEY)"),
+    (2, "add widget name", "ALTER TABLE widgets ADD COLUMN name TEXT"),
+];
+
+async fn migrate_on_connection(conn: &mut SqliteConnection) -> adk_core::Result<()> {
+    sqlite_runner::run_sql_migrations_on_connection(
+        conn,
+        "_widget_migrations",
+        CONNECTION_STEPS,
+        |conn| {
+            Box::pin(async move {
+                let row = sqlx::query(
+                    "SELECT COUNT(*) AS cnt FROM sqlite_master \
+                     WHERE type='table' AND name='widgets'",
+                )
+                .fetch_one(conn)
+                .await
+                .map_err(|e| adk_core::AdkError::session(e.to_string()))?;
+                Ok(row.try_get::<i64, _>("cnt").unwrap_or(0) > 0)
+            })
+        },
+    )
+    .await
+}
+
+async fn applied_versions(conn: &mut SqliteConnection) -> Vec<i64> {
+    sqlx::query_scalar("SELECT version FROM _widget_migrations ORDER BY version")
+        .fetch_all(conn)
+        .await
+        .unwrap()
+}
+
+/// The connection-based runner applies every step on the given connection, and an
+/// in-memory database is per connection, so the steps cannot have run anywhere else.
+#[tokio::test]
+async fn run_on_connection_applies_steps_on_that_connection() {
+    let mut conn = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+
+    migrate_on_connection(&mut conn).await.unwrap();
+    assert_eq!(applied_versions(&mut conn).await, vec![1, 2]);
+    sqlx::query("INSERT INTO widgets (id, name) VALUES (1, 'a')").execute(&mut conn).await.unwrap();
+
+    migrate_on_connection(&mut conn).await.unwrap();
+    assert_eq!(applied_versions(&mut conn).await, vec![1, 2], "second run is a no-op");
+}
+
+/// Baseline detection runs on the same connection and records v1 for an existing table.
+#[tokio::test]
+async fn run_on_connection_records_baseline_for_existing_tables() {
+    let mut conn = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+    sqlx::query("CREATE TABLE widgets (id INTEGER PRIMARY KEY)").execute(&mut conn).await.unwrap();
+
+    migrate_on_connection(&mut conn).await.unwrap();
+    assert_eq!(applied_versions(&mut conn).await, vec![1, 2]);
+    sqlx::query("INSERT INTO widgets (id, name) VALUES (1, 'a')").execute(&mut conn).await.unwrap();
 }

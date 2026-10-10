@@ -335,10 +335,10 @@ impl PostgresMemoryService {
     /// up to 4000 dimensions.
     ///
     /// Migrations are protected by a PostgreSQL advisory lock to prevent
-    /// concurrent migration races from multiple application instances.
+    /// concurrent migration races from multiple application instances. The
+    /// lock, every migration statement, and the unlock run on one connection,
+    /// which is closed afterwards instead of returning to the pool.
     pub async fn migrate(&self) -> Result<()> {
-        let pool = &self.pool;
-
         // Build the v1 SQL dynamically (parameterized by dims + index type)
         let v1_sql = self.build_v1_migration_sql()?;
         let v2_sql = Self::V2_MIGRATION_SQL;
@@ -348,32 +348,52 @@ impl PostgresMemoryService {
             (2, "add project_id column and composite index", v2_sql),
         ];
 
-        // Acquire advisory lock to prevent concurrent migration races
-        sqlx::query(&format!("SELECT pg_advisory_lock({})", Self::ADVISORY_LOCK_KEY))
-            .execute(pool)
+        let mut conn =
+            self.pool.acquire().await.map_err(|e| {
+                adk_core::AdkError::memory(format!("database connection failed: {e}"))
+            })?;
+        // A session-level advisory lock belongs to this connection. Closing it on
+        // drop releases the lock even when this future is cancelled, rather than
+        // leaving it held by an idle pooled connection.
+        conn.close_on_drop();
+
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(Self::ADVISORY_LOCK_KEY)
+            .execute(&mut *conn)
             .await
             .map_err(|e| {
                 adk_core::AdkError::memory(format!("advisory lock acquisition failed: {e}"))
             })?;
 
-        let result = pg_runner::run_sql_migrations(pool, Self::REGISTRY_TABLE, steps, || async {
-            let row = sqlx::query(
-                "SELECT EXISTS(\
-                     SELECT 1 FROM information_schema.tables \
-                     WHERE table_name = 'memory_entries'\
-                 ) AS exists_flag",
-            )
-            .fetch_one(pool)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("baseline detection failed: {e}")))?;
-            let exists: bool = row.try_get("exists_flag").unwrap_or(false);
-            Ok(exists)
-        })
+        let result = pg_runner::run_sql_migrations_on_connection(
+            &mut conn,
+            Self::REGISTRY_TABLE,
+            steps,
+            |conn| {
+                Box::pin(async move {
+                    let row = sqlx::query(
+                        "SELECT EXISTS(\
+                             SELECT 1 FROM information_schema.tables \
+                             WHERE table_name = 'memory_entries'\
+                         ) AS exists_flag",
+                    )
+                    .fetch_one(conn)
+                    .await
+                    .map_err(|e| {
+                        adk_core::AdkError::memory(format!("baseline detection failed: {e}"))
+                    })?;
+                    let exists: bool = row.try_get("exists_flag").unwrap_or(false);
+                    Ok(exists)
+                })
+            },
+        )
         .await;
 
-        // Release advisory lock regardless of migration outcome
-        let _ = sqlx::query(&format!("SELECT pg_advisory_unlock({})", Self::ADVISORY_LOCK_KEY))
-            .execute(pool)
+        // Released explicitly so the next instance proceeds without waiting for
+        // the connection to close; closing the connection releases it regardless.
+        let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(Self::ADVISORY_LOCK_KEY)
+            .execute(&mut *conn)
             .await;
 
         result
