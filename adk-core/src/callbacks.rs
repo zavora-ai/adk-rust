@@ -54,6 +54,9 @@ pub type AfterModelCallback = Box<
 
 // Tool callbacks
 /// Callback invoked before a tool executes. Return `Ok(Some(content))` to skip execution.
+///
+/// `LlmAgent` answers the skipped call with the content: a function response part is sent with
+/// the call's id and tool name, and text-only content as the call's `{"error": <text>}` result.
 pub type BeforeToolCallback = Box<
     dyn Fn(
             Arc<dyn CallbackContext>,
@@ -62,6 +65,9 @@ pub type BeforeToolCallback = Box<
         + Sync,
 >;
 /// Callback invoked after a tool executes. Return `Ok(Some(content))` to override the result.
+///
+/// `LlmAgent` sends a function response part with the call's id and tool name, and text-only
+/// content as the call's `{"result": <text>}` result.
 pub type AfterToolCallback = Box<
     dyn Fn(
             Arc<dyn CallbackContext>,

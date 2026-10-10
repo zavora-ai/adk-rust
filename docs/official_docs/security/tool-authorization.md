@@ -495,7 +495,9 @@ let agent = LlmAgentBuilder::new("assistant")
 
 Return values:
 - `Ok(None)` — allow the tool to execute
-- `Ok(Some(content))` — skip the tool, send this content to the LLM instead
+- `Ok(Some(content))` — skip the tool and answer the call with this content instead. A
+  function response part in it is sent with the call's id and tool name; text-only content
+  is sent as the tool's error result, `{"error": "<text>"}`
 - `Err(e)` — skip the tool and report the error to the LLM as the tool's result; the run
   continues and after-tool callbacks do not run for that call
 

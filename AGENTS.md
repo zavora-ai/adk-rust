@@ -601,7 +601,7 @@ let agent = LlmAgentBuilder::new("assistant")
 
 The agent emits `event.actions.tool_confirmation = Some(ToolConfirmationRequest { tool_name, args, function_call_id })`. Pass the decision back via `RunConfig::tool_confirmation_decisions`.
 
-2. **`BeforeToolCallback`** — programmatic gate. Return `Ok(Some(content))` to skip, `Ok(None)` to allow.
+2. **`BeforeToolCallback`** — programmatic gate. Return `Ok(Some(content))` to skip, `Ok(None)` to allow. `LlmAgent` answers the skipped call with that content: text becomes the call's `{"error": "<text>"}` function response.
 
 ```rust
 .before_tool_callback(Box::new(|ctx| {

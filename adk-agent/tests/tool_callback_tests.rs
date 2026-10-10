@@ -260,8 +260,9 @@ async fn test_before_tool_callback_short_circuits_tool_execution() {
         let event = result.unwrap();
         if let Some(content) = event.llm_response.content {
             for part in content.parts {
-                if let Part::Text { text } = part
-                    && text == "blocked"
+                if let Part::FunctionResponse { function_response, id, .. } = part
+                    && function_response.response == json!({ "error": "blocked" })
+                    && id.as_deref() == Some("call-1")
                 {
                     saw_blocked = true;
                 }
@@ -269,7 +270,7 @@ async fn test_before_tool_callback_short_circuits_tool_execution() {
         }
     }
 
-    assert!(saw_blocked, "before_tool callback output should be emitted");
+    assert!(saw_blocked, "before_tool callback output should answer the call");
     assert_eq!(tool_calls.load(Ordering::SeqCst), 0, "tool should be skipped");
 }
 
@@ -316,8 +317,9 @@ async fn test_after_tool_callback_overrides_result_and_order() {
         let event = result.unwrap();
         if let Some(content) = event.llm_response.content {
             for part in content.parts {
-                if let Part::Text { text } = part
-                    && text == "after-override"
+                if let Part::FunctionResponse { function_response, id, .. } = part
+                    && function_response.response == json!({ "result": "after-override" })
+                    && id.as_deref() == Some("call-2")
                 {
                     saw_override = true;
                 }

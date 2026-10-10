@@ -3,11 +3,14 @@
 //! `Runner` called only the run, user-message, and event callbacks of its `PluginManager`; the
 //! model, tool, and agent callbacks had no caller, so a plugin that denied a tool or replaced a
 //! model call silently did nothing.
+//!
+//! Content a tool callback substitutes for a result answers the call it replaces, so providers
+//! that pair every function call with a response by id accept the next request.
 
 use adk_agent::{LlmAgent, LlmAgentBuilder};
 use adk_core::{
-    BeforeModelResult, CallbackContext, Content, Event, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result, SessionId, Tool, ToolContext, UserId,
+    BeforeModelResult, CallbackContext, Content, Event, FunctionResponseData, Llm, LlmRequest,
+    LlmResponse, LlmResponseStream, Part, Result, SessionId, Tool, ToolContext, UserId,
 };
 use adk_plugin::{Plugin, PluginConfig, PluginManager};
 use adk_runner::Runner;
@@ -19,15 +22,20 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Replays scripted responses and counts how often it is called.
+/// Replays scripted responses, counts how often it is called, and records each request.
 struct ScriptedModel {
     responses: Mutex<VecDeque<LlmResponse>>,
     calls: AtomicUsize,
+    requests: Mutex<Vec<LlmRequest>>,
 }
 
 impl ScriptedModel {
     fn new(responses: Vec<LlmResponse>) -> Arc<Self> {
-        Arc::new(Self { responses: Mutex::new(responses.into()), calls: AtomicUsize::new(0) })
+        Arc::new(Self {
+            responses: Mutex::new(responses.into()),
+            calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+        })
     }
 }
 
@@ -37,8 +45,9 @@ impl Llm for ScriptedModel {
         "scripted"
     }
 
-    async fn generate_content(&self, _req: LlmRequest, _stream: bool) -> Result<LlmResponseStream> {
+    async fn generate_content(&self, req: LlmRequest, _stream: bool) -> Result<LlmResponseStream> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.requests.lock().unwrap().push(req);
         let response =
             self.responses.lock().unwrap().pop_front().unwrap_or_else(|| text_response("done"));
         Ok(Box::pin(futures::stream::iter([Ok(response)])))
@@ -149,6 +158,48 @@ fn function_responses(events: &[Event]) -> Vec<Value> {
         .collect()
 }
 
+/// The function call ids of `request`, and the ids its function responses answer, both sorted.
+///
+/// OpenAI and Anthropic reject a request whose function call has no response with its id.
+fn call_and_response_ids(request: &LlmRequest) -> (Vec<Option<String>>, Vec<Option<String>>) {
+    let mut calls = Vec::new();
+    let mut responses = Vec::new();
+    for part in request.contents.iter().flat_map(|content| content.parts.iter()) {
+        match part {
+            Part::FunctionCall { id, .. } => calls.push(id.clone()),
+            Part::FunctionResponse { id, .. } => responses.push(id.clone()),
+            _ => {}
+        }
+    }
+    calls.sort();
+    responses.sort();
+    (calls, responses)
+}
+
+/// Asserts the model's second request answers its one function call exactly once.
+fn assert_call_answered(model: &ScriptedModel) {
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2, "the model is called again after the tool call");
+    let one_call = vec![Some("call-1".to_string())];
+    assert_eq!(call_and_response_ids(&requests[1]), (one_call.clone(), one_call));
+}
+
+/// A plugin that runs `before_tool`, or `after_tool` when `after` is set, returning `content`.
+fn substituting_plugin(content: Content, after: bool) -> Plugin {
+    let callback: adk_core::BeforeToolCallback = Box::new(move |_ctx| {
+        let content = content.clone();
+        Box::pin(async move { Ok(Some(content)) })
+    });
+    let (before_tool, after_tool) =
+        if after { (None, Some(callback)) } else { (Some(callback), None) };
+    Plugin::new(PluginConfig {
+        name: "substitute".to_string(),
+        before_tool,
+        after_tool,
+        ..Default::default()
+    })
+}
+
 fn texts(events: &[Event]) -> String {
     events
         .iter()
@@ -186,7 +237,8 @@ async fn a_runner_plugin_before_tool_callback_blocks_the_tool() {
             .await;
 
     assert_eq!(calls.load(Ordering::SeqCst), 0, "the plugin's denial must stop the tool");
-    assert!(texts(&events).contains("blocked by policy"), "events: {events:?}");
+    assert_eq!(function_responses(&events), vec![json!({ "error": "blocked by policy" })]);
+    assert_call_answered(&model);
     assert_eq!(
         *seen.lock().unwrap(),
         vec![("delete_file".to_string(), Some(json!({ "path": "/srv/data" })))]
@@ -296,4 +348,84 @@ async fn runner_plugin_callbacks_reach_an_agent_behind_an_agent_tool() {
     run_agent(parent, plugin).await;
 
     assert_eq!(*models.lock().unwrap(), vec!["lead", "researcher", "lead"]);
+}
+
+#[tokio::test]
+async fn an_agent_before_tool_denial_answers_the_call() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = ScriptedModel::new(vec![call_response("delete_file"), text_response("ok")]);
+    let agent = LlmAgentBuilder::new("ops")
+        .model(Arc::clone(&model) as Arc<dyn Llm>)
+        .tool(Arc::new(DeleteTool { calls: Arc::clone(&calls), fail: false }))
+        .before_tool_callback(Box::new(|_ctx| {
+            Box::pin(async { Ok(Some(Content::new("tool").with_text("denied by policy"))) })
+        }))
+        .build()
+        .unwrap();
+
+    let events = run_agent(
+        agent,
+        Plugin::new(PluginConfig { name: "none".to_string(), ..Default::default() }),
+    )
+    .await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "the denial must stop the tool");
+    assert_eq!(function_responses(&events), vec![json!({ "error": "denied by policy" })]);
+    assert_call_answered(&model);
+}
+
+#[tokio::test]
+async fn an_after_tool_text_override_answers_the_call() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = ScriptedModel::new(vec![call_response("delete_file"), text_response("ok")]);
+
+    let events = run(
+        Arc::clone(&model),
+        DeleteTool { calls: Arc::clone(&calls), fail: false },
+        substituting_plugin(Content::new("function").with_text("result redacted"), true),
+    )
+    .await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(function_responses(&events), vec![json!({ "result": "result redacted" })]);
+    assert_call_answered(&model);
+}
+
+#[tokio::test]
+async fn a_substituted_function_response_is_readdressed_to_the_call() {
+    let model = ScriptedModel::new(vec![call_response("delete_file"), text_response("ok")]);
+    let substitute = Content {
+        role: "function".to_string(),
+        parts: vec![
+            Part::Text { text: "served from cache".to_string() },
+            Part::FunctionResponse {
+                function_response: FunctionResponseData::new("cache", json!({ "cached": true })),
+                id: Some("stale-id".to_string()),
+                annotations: None,
+            },
+        ],
+    };
+
+    let events = run(
+        Arc::clone(&model),
+        DeleteTool { calls: Arc::new(AtomicUsize::new(0)), fail: false },
+        substituting_plugin(substitute, false),
+    )
+    .await;
+
+    let parts: Vec<Part> = events
+        .iter()
+        .filter_map(|event| event.llm_response.content.as_ref())
+        .filter(|content| content.role == "function")
+        .flat_map(|content| content.parts.clone())
+        .collect();
+    assert_eq!(
+        parts,
+        vec![Part::FunctionResponse {
+            function_response: FunctionResponseData::new("delete_file", json!({ "cached": true })),
+            id: Some("call-1".to_string()),
+            annotations: None,
+        }]
+    );
+    assert_call_answered(&model);
 }

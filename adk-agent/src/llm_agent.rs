@@ -1847,6 +1847,47 @@ struct ToolExecutionResult {
     escalate_or_skip: bool,
 }
 
+/// Turns a tool callback's substitute content into the response to the call it replaces.
+///
+/// Providers reject a request whose function call has no function response with the same id,
+/// so a function response part is re-addressed to this call and text-only content is wrapped
+/// as one by `wrap_text`. Only the function response is kept, as OpenAI Chat reads the first
+/// part of a tool message and nothing else.
+fn callback_tool_response(
+    content: Content,
+    name: &str,
+    id: Option<&String>,
+    wrap_text: impl FnOnce(String) -> serde_json::Value,
+) -> Content {
+    let mut text = String::new();
+    let mut response = None;
+    for part in content.parts {
+        match part {
+            Part::FunctionResponse { mut function_response, annotations, .. }
+                if response.is_none() =>
+            {
+                function_response.name = name.to_string();
+                response = Some(Part::FunctionResponse {
+                    function_response,
+                    id: id.cloned(),
+                    annotations,
+                });
+            }
+            other => {
+                if let Some(chunk) = other.text() {
+                    text.push_str(chunk);
+                }
+            }
+        }
+    }
+    let response = response.unwrap_or_else(|| Part::FunctionResponse {
+        function_response: FunctionResponseData::new(name, wrap_text(text)),
+        id: id.cloned(),
+        annotations: None,
+    });
+    Content { role: "function".to_string(), parts: vec![response] }
+}
+
 #[derive(Clone, Copy)]
 enum ToolDispatchMode {
     Sequential,
@@ -2120,7 +2161,13 @@ impl ToolExecutor<'_> {
             {
                 match callback(tool_ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(c)) => {
-                        response_content = Some(c);
+                        // The tool did not run, so text is reported as the call's error.
+                        response_content = Some(callback_tool_response(
+                            c,
+                            &name,
+                            id.as_ref(),
+                            |text| serde_json::json!({ "error": text }),
+                        ));
                         break;
                     }
                     Ok(None) => continue,
@@ -2384,7 +2431,12 @@ impl ToolExecutor<'_> {
             {
                 match callback(cb_ctx.clone()).await {
                     Ok(Some(modified)) => {
-                        response_content = modified;
+                        response_content = callback_tool_response(
+                            modified,
+                            &name,
+                            id.as_ref(),
+                            |text| serde_json::json!({ "result": text }),
+                        );
                         break;
                     }
                     Ok(None) => continue,
