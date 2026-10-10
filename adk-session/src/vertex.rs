@@ -338,6 +338,11 @@ impl Write for BoundedJsonCounter {
 }
 
 /// Vertex AI Session API service implementation.
+///
+/// State is not split into tiers: `app:` and `user:` keys travel in the session's
+/// `sessionState` and each event's `stateDelta` like any other key, and `get` returns the
+/// values the Session API stores for that session. Unlike the database backends, this
+/// client does not merge app or user state written through other sessions.
 pub struct VertexAiSessionService {
     client: GcpHttpClient,
     project_id: String,

@@ -446,8 +446,8 @@ impl SessionService for Neo4jSessionService {
             .execute(
                 neo4rs::query(
                     "MATCH (s:Session {app_name: $app_name, user_id: $user_id, session_id: $session_id}) \
-                     OPTIONAL MATCH (s)-[:HAS_APP_STATE]->(a:AppState) \
-                     OPTIONAL MATCH (s)-[:HAS_USER_STATE]->(u:UserState) \
+                     OPTIONAL MATCH (a:AppState {app_name: $app_name}) \
+                     OPTIONAL MATCH (u:UserState {app_name: $app_name, user_id: $user_id}) \
                      RETURN s.state AS state, s.updated_at AS updated_at, \
                             a.state AS app_state, u.state AS user_state",
                 )
@@ -470,7 +470,11 @@ impl SessionService for Neo4jSessionService {
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
 
-        let state = json_string_to_state(&state_str)?;
+        let state = state_utils::merge_current_tiers(
+            &json_string_to_state(&row.get::<String>("app_state").unwrap_or_default())?,
+            &json_string_to_state(&row.get::<String>("user_state").unwrap_or_default())?,
+            &json_string_to_state(&state_str)?,
+        );
 
         // Fetch events ordered by timestamp
         let mut event_stream = self
@@ -527,6 +531,29 @@ impl SessionService for Neo4jSessionService {
         let limit = req.limit.unwrap_or(i64::MAX as usize) as i64;
         let offset = req.offset.unwrap_or(0) as i64;
 
+        let mut tier_stream = self
+            .graph
+            .execute(
+                neo4rs::query(
+                    "OPTIONAL MATCH (a:AppState {app_name: $app_name}) \
+                     OPTIONAL MATCH (u:UserState {app_name: $app_name, user_id: $user_id}) \
+                     RETURN a.state AS app_state, u.state AS user_state",
+                )
+                .param("app_name", req.app_name.clone())
+                .param("user_id", req.user_id.clone()),
+            )
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
+        let tiers = tier_stream
+            .next()
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
+        let tier = |column: &str| match &tiers {
+            Some(row) => json_string_to_state(&row.get::<String>(column).unwrap_or_default()),
+            None => Ok(HashMap::new()),
+        };
+        let (app_state, user_state) = (tier("app_state")?, tier("user_state")?);
+
         let mut row_stream = self
             .graph
             .execute(
@@ -554,7 +581,11 @@ impl SessionService for Neo4jSessionService {
             let session_id = row.get::<String>("session_id").unwrap_or_default();
             let state_str = row.get::<String>("state").unwrap_or_default();
             let updated_at_str = row.get::<String>("updated_at").unwrap_or_default();
-            let state = json_string_to_state(&state_str)?;
+            let state = state_utils::merge_current_tiers(
+                &app_state,
+                &user_state,
+                &json_string_to_state(&state_str)?,
+            );
             let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now());
