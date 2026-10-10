@@ -301,7 +301,8 @@ fn build_runner_config(
     let mut builder = Runner::builder()
         .app_name(root_agent.name())
         .agent(root_agent)
-        .session_service(controller.config.session_service.clone());
+        .session_service(controller.config.session_service.clone())
+        .governance(controller.config.governance.clone());
     if let Some(ref artifact_service) = controller.config.artifact_service {
         builder = builder.artifact_service(artifact_service.clone());
     }

@@ -164,6 +164,8 @@ pub const DEFAULT_MAX_QUEUE_DEPTH: usize = 100;
 pub struct CronJobStore {
     jobs: Arc<RwLock<HashMap<String, CronJob>>>,
     max_queue_depth: usize,
+    /// Shared by every clone, so pausing the store the router holds pauses the scheduler.
+    scheduling_paused: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for CronJobStore {
@@ -178,7 +180,24 @@ impl CronJobStore {
         Self {
             jobs: Arc::new(RwLock::new(HashMap::new())),
             max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
+            scheduling_paused: Arc::default(),
         }
+    }
+
+    /// Stops the scheduler from starting runs for every job. Occurrences that fall due
+    /// while paused are skipped, as they are for a paused job.
+    pub fn pause_scheduling(&self) {
+        self.scheduling_paused.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Lets the scheduler start runs again after [`pause_scheduling`](Self::pause_scheduling).
+    pub fn resume_scheduling(&self) {
+        self.scheduling_paused.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether the scheduler is paused for every job.
+    pub fn is_scheduling_paused(&self) -> bool {
+        self.scheduling_paused.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Set how many runs a `Queue`-policy job may have waiting.
@@ -517,6 +536,11 @@ pub fn start_cron_scheduler(state: CronState) -> tokio::task::JoinHandle<()> {
                 // occurrence waiting behind an active run was enqueued again on every
                 // one-second poll and one schedule point became many runs.
                 if !state.cron_store.claim_occurrence(&job.job_id, occurrence).await {
+                    continue;
+                }
+                // Claimed rather than left due, so lifting the pause does not replay a backlog.
+                if state.cron_store.is_scheduling_paused() {
+                    tracing::debug!(cron.job_id = %job.job_id, "scheduling paused, skipping occurrence");
                     continue;
                 }
 

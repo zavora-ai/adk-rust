@@ -551,6 +551,7 @@ pub struct ServerBuilder {
     api_routes: Vec<Router>,
     root_routes: Vec<Router>,
     shutdown_endpoint: bool,
+    governance_endpoints: bool,
     skill_index: Option<Arc<adk_skill::SkillIndex>>,
     a2a_task_retention: Option<A2aTaskRetention>,
     #[cfg(feature = "agent-engine")]
@@ -570,6 +571,7 @@ impl ServerBuilder {
             api_routes: Vec::new(),
             root_routes: Vec::new(),
             shutdown_endpoint: false,
+            governance_endpoints: false,
             skill_index: None,
             a2a_task_retention: None,
             #[cfg(feature = "agent-engine")]
@@ -747,6 +749,28 @@ impl ServerBuilder {
         self
     }
 
+    /// Mount the governance admin endpoints under `/api/admin`, behind the auth middleware.
+    ///
+    /// | Route | Effect |
+    /// |-------|--------|
+    /// | `POST /api/admin/freeze` | Freezes [`ServerConfig::governance`], failing new runs and stopping running ones before their next model or tool call; pauses background-run and cron scheduling mounted on this builder. Body: `{"reason": "..."}` |
+    /// | `POST /api/admin/unfreeze` | Lifts the freeze and resumes scheduling |
+    /// | `GET /api/admin/governance` | Reports `{"frozen": bool, "reason": ...}` |
+    ///
+    /// The endpoints carry the same authentication as every other mutation surface. Without
+    /// a `RequestContextExtractor` they are open to anyone who reaches the server, so enable
+    /// them only behind an authenticating layer.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let app = ServerBuilder::new(config).enable_governance_endpoints().build();
+    /// ```
+    pub fn enable_governance_endpoints(mut self) -> Self {
+        self.governance_endpoints = true;
+        self
+    }
+
     /// Build the final Axum router with all routes and middleware applied.
     pub fn build(self) -> Router {
         self.build_inner().0
@@ -907,6 +931,33 @@ impl ServerBuilder {
             api_router = api_router.merge(custom_routes.layer(auth_layer.clone()));
         }
 
+        // The kill switch pauses the scheduling mounted here, so its controller is built
+        // before the background and cron states move into their routers.
+        if self.governance_endpoints {
+            let controller = controllers::GovernanceController::new(config.governance.clone());
+            #[cfg(feature = "background")]
+            let controller = {
+                let mut controller = controller;
+                if let Some(state) = &self.background_state {
+                    controller = controller.with_background_runner(state.runner.clone());
+                }
+                if let Some(state) = &self.cron_state {
+                    controller = controller
+                        .with_background_runner(state.background_state.runner.clone())
+                        .with_cron_store(state.cron_store.clone());
+                }
+                controller
+            };
+            api_router = api_router.merge(
+                Router::new()
+                    .route("/admin/freeze", post(controllers::governance::freeze))
+                    .route("/admin/unfreeze", post(controllers::governance::unfreeze))
+                    .route("/admin/governance", get(controllers::governance::status))
+                    .with_state(controller)
+                    .layer(auth_layer.clone()),
+            );
+        }
+
         // Background runs and cron jobs submit and schedule work, so they carry the
         // same authentication as every other mutation surface.
         #[cfg(feature = "background")]
@@ -960,7 +1011,8 @@ impl ServerBuilder {
             let mut runner_builder = adk_runner::Runner::builder()
                 .app_name(root_agent.name())
                 .agent(root_agent.clone())
-                .session_service(config.session_service.clone());
+                .session_service(config.session_service.clone())
+                .governance(config.governance.clone());
             if let Some(artifact_service) = &config.artifact_service {
                 runner_builder = runner_builder.artifact_service(artifact_service.clone());
             }

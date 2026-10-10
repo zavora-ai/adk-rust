@@ -64,6 +64,10 @@ pub struct IntegratedRealtimeRunnerBuilder {
     pub(crate) identity: Option<SessionIdentity>,
     /// Integration-layer configuration (transcript persistence, memory injection, etc.).
     pub(crate) integration_config: IntegrationConfig,
+    /// Policy, kill switch, and confirmation applied to every dispatched tool call.
+    pub(crate) tool_governance: Option<adk_core::RunConfig>,
+    /// How long one tool call may run.
+    pub(crate) tool_timeout: std::time::Duration,
 }
 
 impl Default for IntegratedRealtimeRunnerBuilder {
@@ -89,6 +93,8 @@ impl IntegratedRealtimeRunnerBuilder {
             event_handler: None,
             identity: None,
             integration_config: IntegrationConfig::default(),
+            tool_governance: None,
+            tool_timeout: crate::runner::DEFAULT_REALTIME_TOOL_TIMEOUT,
         }
     }
 
@@ -244,6 +250,36 @@ impl IntegratedRealtimeRunnerBuilder {
         self
     }
 
+    /// Governs every tool call with `config`'s tool policy, kill switches, confirmation
+    /// handler, approvals, and approval store, scoped to this runner's identity. ADK tools
+    /// are authorized after the plugin pipeline rewrites their arguments.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::{DeclarativePolicy, RunConfig};
+    ///
+    /// let runner = IntegratedRealtimeRunner::builder()
+    ///     .model(model)
+    ///     .identity("voice", "user-1", "session-1")
+    ///     .tool_governance(
+    ///         RunConfig::builder()
+    ///             .tool_policy(Arc::new(DeclarativePolicy::builder().allow_read_only().build()))
+    ///             .build(),
+    ///     )
+    ///     .build()?;
+    /// ```
+    pub fn tool_governance(mut self, config: adk_core::RunConfig) -> Self {
+        self.tool_governance = Some(config);
+        self
+    }
+
+    /// Sets how long a tool may run before its call is answered with a timeout error.
+    pub fn tool_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.tool_timeout = timeout;
+        self
+    }
+
     /// Builds the [`IntegratedRealtimeRunner`](super::IntegratedRealtimeRunner).
     ///
     /// Validates required fields, bridges ADK tools via
@@ -291,7 +327,16 @@ impl IntegratedRealtimeRunnerBuilder {
         let mut runner_builder = RealtimeRunner::builder()
             .model(model)
             .config(self.config)
-            .runner_config(self.runner_config);
+            .runner_config(self.runner_config)
+            .tool_timeout(self.tool_timeout);
+        if let Some(config) = self.tool_governance {
+            let scope = adk_core::ApprovalScope::new(
+                &identity.app_name,
+                &identity.user_id,
+                &identity.session_id,
+            );
+            runner_builder = runner_builder.tool_governance(config, scope);
+        }
 
         for (_, (def, handler)) in all_tools {
             runner_builder = runner_builder.tool_arc(def, handler);

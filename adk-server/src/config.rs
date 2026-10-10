@@ -80,6 +80,12 @@ pub struct ServerConfig {
     /// Only used when the `yaml-agent` feature is enabled.
     #[cfg(feature = "yaml-agent")]
     pub yaml_agent_dirs: Vec<PathBuf>,
+    /// Kill switch shared by every runner the server builds.
+    ///
+    /// Freezing it — directly or through `POST /api/admin/freeze` when
+    /// [`ServerBuilder::enable_governance_endpoints`](crate::ServerBuilder::enable_governance_endpoints)
+    /// is set — fails new runs and stops running ones before their next model or tool call.
+    pub governance: adk_core::GovernanceControl,
 }
 
 impl ServerConfig {
@@ -103,7 +109,22 @@ impl ServerConfig {
             interceptor_chain: None,
             #[cfg(feature = "yaml-agent")]
             yaml_agent_dirs: Vec::new(),
+            governance: adk_core::GovernanceControl::new(),
         }
+    }
+
+    /// Shares `control` with every runner the server builds.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let control = adk_core::GovernanceControl::new();
+    /// let config = ServerConfig::new(loader, sessions).with_governance(control.clone());
+    /// control.freeze("incident 4012");
+    /// ```
+    pub fn with_governance(mut self, control: adk_core::GovernanceControl) -> Self {
+        self.governance = control;
+        self
     }
 
     pub fn with_artifact_service(

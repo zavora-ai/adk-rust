@@ -172,3 +172,31 @@ async fn a_failing_plugin_pipeline_refuses_the_tool_rather_than_running_it() {
         "the underlying failure must be reported so it can be fixed: {message}"
     );
 }
+
+#[tokio::test]
+async fn the_run_policy_governs_integrated_tool_calls() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let deny_all = adk_core::RunConfig::builder()
+        .tool_policy(Arc::new(adk_core::DeclarativePolicy::builder().allow("other").build()))
+        .build();
+    let runner = IntegratedRealtimeRunnerBuilder::new()
+        .model(Arc::new(MockModel))
+        .identity("test-app", "user-1", "session-1")
+        .adk_tool(Arc::new(CountingTool { executions: Arc::clone(&executions) }) as Arc<dyn Tool>)
+        .tool_governance(deny_all)
+        .build()
+        .expect("builder should succeed");
+
+    let call = adk_realtime::events::ToolCall {
+        call_id: "call-1".to_string(),
+        name: "guarded".to_string(),
+        arguments: serde_json::json!({}),
+    };
+    let tool: Arc<dyn Tool> = Arc::new(CountingTool { executions: Arc::clone(&executions) });
+
+    let result = runner.execute_tool_with_plugins_for_test(&tool, &call).await.expect("dispatch");
+
+    assert_eq!(executions.load(Ordering::SeqCst), 0, "an unlisted tool must not run: {result}");
+    let message = result["error"].as_str().unwrap_or_default();
+    assert!(message.contains("denied by policy"), "{message}");
+}
