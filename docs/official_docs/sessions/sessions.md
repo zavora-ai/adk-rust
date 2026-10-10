@@ -161,7 +161,7 @@ ADK-Rust provides multiple session service implementations:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.3.0", features = ["vertex-session"] }
+adk-rust = { version = "3.0.0", features = ["vertex-session"] }
 ```
 
 ### VertexAiSessionService
@@ -425,7 +425,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: The `SqliteSessionService` requires the `sqlite` feature flag:
 > ```toml
-> adk-session = { version = "2.3.0", features = ["sqlite"] }
+> adk-session = { version = "3.0.0", features = ["sqlite"] }
 > ```
 
 ### PostgresSessionService
@@ -458,7 +458,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: Requires the `postgres` feature flag:
 > ```toml
-> adk-session = { version = "2.3.0", features = ["postgres"] }
+> adk-session = { version = "3.0.0", features = ["postgres"] }
 > ```
 
 ### MongoSessionService
@@ -503,7 +503,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: Requires the `mongodb` feature flag:
 > ```toml
-> adk-session = { version = "2.3.0", features = ["mongodb"] }
+> adk-session = { version = "3.0.0", features = ["mongodb"] }
 > ```
 
 #### MongoDB deployment modes
@@ -557,7 +557,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: Requires the `neo4j` feature flag:
 > ```toml
-> adk-session = { version = "2.3.0", features = ["neo4j"] }
+> adk-session = { version = "3.0.0", features = ["neo4j"] }
 > ```
 
 ### RedisSessionService
@@ -573,7 +573,7 @@ let session_service = RedisSessionService::new(config).await?;
 
 > **Note**: Requires the `redis` feature flag:
 > ```toml
-> adk-session = { version = "2.3.0", features = ["redis"] }
+> adk-session = { version = "3.0.0", features = ["redis"] }
 > ```
 
 ### FirestoreSessionService
@@ -610,7 +610,7 @@ A new session never inherits events left under its path. App names, user IDs, an
 
 > **Note**: Requires the `firestore` feature flag:
 > ```toml
-> adk-session = { version = "2.3.0", features = ["firestore"] }
+> adk-session = { version = "3.0.0", features = ["firestore"] }
 > ```
 
 ## Schema Migrations
@@ -622,7 +622,7 @@ All database-backed session services (SQLite, PostgreSQL, MongoDB, Neo4j) includ
 Wrap any `SessionService` with `EncryptedSession` to encrypt session state and event payloads at rest using AES-256-GCM. Requires the `encrypted-session` feature flag.
 
 ```toml
-adk-session = { version = "2.3.0", features = ["encrypted-session"] }
+adk-session = { version = "3.0.0", features = ["encrypted-session"] }
 ```
 
 #### Basic Usage

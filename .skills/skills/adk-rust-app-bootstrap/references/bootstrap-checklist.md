@@ -1,7 +1,7 @@
 # Bootstrap Checklist
 
 ## Cargo setup
-- Add `adk-rust = "2.3.0"` for broad usage.
+- Add `adk-rust = "3.0.0"` for broad usage.
 - Or add targeted crates (`adk-agent`, `adk-model`, `adk-runner`, etc.).
 
 ## Provider selection

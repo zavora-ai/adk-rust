@@ -10,7 +10,7 @@ computation-based trajectory metrics. Every call is a single POST to
 
 ```toml
 [dependencies]
-adk-eval = { version = "2.3.0", features = ["vertex-eval"] }
+adk-eval = { version = "3.0.0", features = ["vertex-eval"] }
 ```
 
 Authentication uses Application Default Credentials

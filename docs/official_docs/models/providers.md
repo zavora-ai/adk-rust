@@ -41,14 +41,14 @@ Add the providers you need to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Pick one or more providers:
-adk-model = { version = "2.3.0", features = ["gemini"] }        # Google Gemini (default)
-adk-model = { version = "2.3.0", features = ["openai"] }        # OpenAI GPT-5
-adk-model = { version = "2.3.0", features = ["anthropic"] }     # Anthropic Claude
-adk-model = { version = "2.3.0", features = ["deepseek"] }      # DeepSeek
-adk-model = { version = "2.3.0", features = ["groq"] }          # Groq (ultra-fast)
+adk-model = { version = "3.0.0", features = ["gemini"] }        # Google Gemini (default)
+adk-model = { version = "3.0.0", features = ["openai"] }        # OpenAI GPT-5
+adk-model = { version = "3.0.0", features = ["anthropic"] }     # Anthropic Claude
+adk-model = { version = "3.0.0", features = ["deepseek"] }      # DeepSeek
+adk-model = { version = "3.0.0", features = ["groq"] }          # Groq (ultra-fast)
 
 # Or all cloud providers at once:
-adk-model = { version = "2.3.0", features = ["all-providers"] }
+adk-model = { version = "3.0.0", features = ["all-providers"] }
 ```
 
 ## Step 2: Set Your API Key
@@ -372,7 +372,7 @@ with an `ORCAROUTER_API_KEY`:
 
 ```toml
 [dependencies]
-adk-model = { version = "2.3.0", features = ["openai"] }
+adk-model = { version = "3.0.0", features = ["openai"] }
 ```
 
 ```rust

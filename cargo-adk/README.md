@@ -247,7 +247,7 @@ Current version: **1.0.0**
 
 ```toml
 [dependencies]
-cargo-adk = "2.3.0"
+cargo-adk = "3.0.0"
 ```
 
 ## Part of ADK-Rust

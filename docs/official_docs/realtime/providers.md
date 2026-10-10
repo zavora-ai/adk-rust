@@ -143,7 +143,7 @@ To diagnose drift with the frame in hand, compile `adk-realtime` with the
 
 ```toml
 [dependencies]
-adk-realtime = { version = "2.3.0", features = ["openai", "record-payloads"] }
+adk-realtime = { version = "3.0.0", features = ["openai", "record-payloads"] }
 ```
 
 The feature is off by default and is a deliberate choice per build, because schema drift is

@@ -33,20 +33,20 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 
 ```toml
 [dependencies]
-adk-tool = "2.3.0"
+adk-tool = "3.0.0"
 
 # For local MCP servers via stdio:
-adk-tool = { version = "2.3.0", features = ["mcp"] }
+adk-tool = { version = "3.0.0", features = ["mcp"] }
 
 # For remote MCP servers via HTTP:
-adk-tool = { version = "2.3.0", features = ["mcp", "http-transport"] }
+adk-tool = { version = "3.0.0", features = ["mcp", "http-transport"] }
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "2.3.0", features = ["tools"] }
+adk-rust = { version = "3.0.0", features = ["tools"] }
 ```
 
 ## Quick Start

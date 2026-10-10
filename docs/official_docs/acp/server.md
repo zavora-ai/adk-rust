@@ -10,7 +10,7 @@ ACP.
 
 ```toml
 [dependencies]
-adk-acp = { version = "2.3.0", features = ["server"] }
+adk-acp = { version = "3.0.0", features = ["server"] }
 ```
 
 ## Build and serve an agent

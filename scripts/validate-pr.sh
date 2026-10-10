@@ -125,9 +125,11 @@ for crate in $DIRECT; do
 done
 
 STABLE="adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-server adk-graph adk-memory adk-anthropic"
+# Same release type as the CI semver job.
+RELEASE_TYPE=$(sed -n 's/^  SEMVER_RELEASE_TYPE: *//p' .github/workflows/semver.yml)
 if command -v cargo-semver-checks >/dev/null 2>&1; then
     for crate in $DIRECT; do
-        case " $STABLE " in *" $crate "*) step "semver $crate" cargo semver-checks check-release -p "$crate" --default-features --release-type minor ;; esac
+        case " $STABLE " in *" $crate "*) step "semver $crate" cargo semver-checks check-release -p "$crate" --default-features --release-type "${RELEASE_TYPE:-minor}" ;; esac
     done
 elif [ -n "$DIRECT" ]; then
     printf '\nnote: cargo-semver-checks is not installed; the semver gate runs in CI only\n'
