@@ -19,17 +19,28 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct PricedModel {
     name: &'static str,
     cost: Option<f64>,
+    provider: Option<&'static str>,
     fail: bool,
     calls: AtomicUsize,
 }
 
 impl PricedModel {
     fn new(name: &'static str, cost: Option<f64>) -> Arc<Self> {
-        Arc::new(Self { name, cost, fail: false, calls: AtomicUsize::new(0) })
+        Arc::new(Self { name, cost, provider: None, fail: false, calls: AtomicUsize::new(0) })
+    }
+
+    fn served_by(name: &'static str, cost: Option<f64>, provider: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            name,
+            cost,
+            provider: Some(provider),
+            fail: false,
+            calls: AtomicUsize::new(0),
+        })
     }
 
     fn failing(name: &'static str) -> Arc<Self> {
-        Arc::new(Self { name, cost: None, fail: true, calls: AtomicUsize::new(0) })
+        Arc::new(Self { name, cost: None, provider: None, fail: true, calls: AtomicUsize::new(0) })
     }
 }
 
@@ -54,6 +65,7 @@ impl Llm for PricedModel {
                 ..Default::default()
             }),
             turn_complete: true,
+            provider: self.provider.map(str::to_string),
             ..Default::default()
         };
         Ok(Box::pin(futures::stream::iter([Ok(response)])))
@@ -113,6 +125,24 @@ async fn model_spend_is_recorded_per_vendor_and_agent() {
     assert_eq!(spent(&ledger, SpendKey::org("acme").with_vendor("anthropic")).await, 20_000);
     assert_eq!(spent(&ledger, SpendKey::org("acme").with_agent("writer")).await, 20_000);
     assert_eq!(spent(&ledger, SpendKey::org("acme")).await, 32_500);
+}
+
+#[tokio::test]
+async fn spend_is_committed_under_the_provider_the_response_names() {
+    let ledger = Arc::new(InMemorySpendLedger::default());
+
+    // The model id reads as Anthropic; the response reports the provider that billed it.
+    run_once(
+        "writer",
+        PricedModel::served_by("claude-sonnet-4-6", Some(0.02), "bedrock"),
+        ledger.clone(),
+    )
+    .await;
+
+    assert_eq!(spent(&ledger, SpendKey::org("acme").with_vendor("bedrock")).await, 20_000);
+    assert_eq!(spent(&ledger, SpendKey::org("acme").with_vendor("anthropic")).await, 0);
+    assert_eq!(spent(&ledger, SpendKey::org("acme").with_agent("writer")).await, 20_000);
+    assert_eq!(spent(&ledger, SpendKey::org("acme")).await, 20_000);
 }
 
 #[tokio::test]

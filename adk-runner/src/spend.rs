@@ -2,7 +2,8 @@
 //!
 //! When a run's config carries a ledger, the runner installs an [`LlmSpendRecorder`] as the
 //! first [`InvocationHooks`] entry. Before each model call it reserves an estimate; once the
-//! call's final chunk arrives it commits the reported `UsageMetadata::cost`.
+//! call's final chunk arrives it commits the reported `UsageMetadata::cost`, attributed to the
+//! provider the response names (`LlmResponse::provider`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -114,15 +115,23 @@ struct PendingCall {
     reservation: ReservationId,
     estimate: u64,
     key: SpendKey,
+    model: String,
     saw_chunk: bool,
     cost: Option<f64>,
+    provider: Option<String>,
 }
 
 /// [`InvocationHooks`] that reserves budget before each model call and commits its cost.
 ///
 /// Spend is attributed to `org` (the runner passes its app name), the calling agent, and
-/// the vendor read from the request's model id. A reservation that the ledger refuses
-/// fails the model call with the ledger's error, so a capped run stops before it spends.
+/// the vendor. The reservation names the vendor read from the request's model id, since it
+/// precedes the response. When the response names a different provider
+/// (`LlmResponse::provider`, for example `bedrock` serving a Claude model), the cost is
+/// committed under that provider and the recorder reserves under it for the model's later
+/// calls. If a limit refuses even a zero-amount reservation under the reported provider, the
+/// cost is committed under the reserved vendor instead and a warning is logged; org and agent
+/// attribution are unaffected. A reservation that the ledger refuses fails the model call
+/// with the ledger's error, so a capped run stops before it spends.
 ///
 /// A call is settled when its final chunk arrives, when the same agent starts its next
 /// call, when the agent finishes, or when the run's event stream ends:
@@ -151,6 +160,8 @@ pub struct LlmSpendRecorder {
     org: String,
     estimate: LlmSpendEstimate,
     pending: Mutex<HashMap<CallKey, PendingCall>>,
+    /// Provider each model's responses reported, used for its later reservations.
+    providers: Mutex<HashMap<String, String>>,
 }
 
 impl LlmSpendRecorder {
@@ -160,7 +171,22 @@ impl LlmSpendRecorder {
         org: impl Into<String>,
         estimate: LlmSpendEstimate,
     ) -> Self {
-        Self { ledger, org: org.into(), estimate, pending: Mutex::new(HashMap::new()) }
+        Self {
+            ledger,
+            org: org.into(),
+            estimate,
+            pending: Mutex::new(HashMap::new()),
+            providers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn vendor_for(&self, model: &str) -> String {
+        self.providers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(model)
+            .cloned()
+            .unwrap_or_else(|| vendor_for_model(model).to_string())
     }
 
     fn take(&self, key: &CallKey) -> Option<PendingCall> {
@@ -186,7 +212,7 @@ impl LlmSpendRecorder {
     }
 
     async fn settle(&self, call: PendingCall) {
-        let PendingCall { reservation, estimate, key, saw_chunk, cost } = call;
+        let PendingCall { reservation, estimate, key, model, saw_chunk, cost, provider } = call;
         if !saw_chunk {
             if let Err(error) = self.ledger.release(reservation).await {
                 tracing::warn!(error = %error, spend.key = %key, "failed to release model spend reservation");
@@ -204,6 +230,38 @@ impl LlmSpendRecorder {
                 estimate
             }
         };
+        let reported = provider.filter(|provider| key.vendor.as_deref() != Some(provider));
+        if let Some(provider) = reported {
+            self.providers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(model, provider.clone());
+            let corrected = key.clone().with_vendor(provider);
+            // A zero hold places the committed cost under the reported provider; the
+            // estimate's hold is released only once the cost is recorded there.
+            match self.ledger.reserve(&corrected, 0).await {
+                Ok(corrected_reservation) => {
+                    match self.ledger.commit(corrected_reservation, amount).await {
+                        Ok(()) => {
+                            if let Err(error) = self.ledger.release(reservation).await {
+                                tracing::warn!(error = %error, spend.key = %key, "failed to release model spend reservation");
+                            }
+                            return;
+                        }
+                        Err(error) => tracing::warn!(
+                            error = %error,
+                            spend.key = %corrected,
+                            "failed to commit model spend under the reported provider; committing under the reserved vendor"
+                        ),
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    error = %error,
+                    spend.key = %corrected,
+                    "spend ledger refused the reported provider; committing under the reserved vendor"
+                ),
+            }
+        }
         if let Err(error) = self.ledger.commit(reservation, amount).await {
             tracing::error!(
                 error = %error,
@@ -228,15 +286,23 @@ impl InvocationHooks for LlmSpendRecorder {
         }
         let key = SpendKey::org(&self.org)
             .with_agent(ctx.agent_name())
-            .with_vendor(vendor_for_model(&request.model));
+            .with_vendor(self.vendor_for(&request.model));
         let estimate = self.estimate.estimate(&request);
         let reservation = self.ledger.reserve(&key, estimate).await.inspect_err(|error| {
             tracing::warn!(error = %error, spend.key = %key, "model call refused by spend ledger");
         })?;
-        self.pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(call, PendingCall { reservation, estimate, key, saw_chunk: false, cost: None });
+        self.pending.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(
+            call,
+            PendingCall {
+                reservation,
+                estimate,
+                key,
+                model: request.model.clone(),
+                saw_chunk: false,
+                cost: None,
+                provider: None,
+            },
+        );
         Ok(BeforeModelResult::Continue(request))
     }
 
@@ -252,6 +318,9 @@ impl InvocationHooks for LlmSpendRecorder {
                 open.saw_chunk = true;
                 if let Some(cost) = response.usage_metadata.as_ref().and_then(|usage| usage.cost) {
                     open.cost = Some(cost);
+                }
+                if let Some(provider) = &response.provider {
+                    open.provider = Some(provider.clone());
                 }
             }
             if response.turn_complete { pending.remove(&call) } else { None }

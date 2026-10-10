@@ -7,4 +7,5 @@
   never overshot. With `RunConfig::spend_ledger` set, the runner reserves an estimate
   before each model call (`Runner::with_llm_spend_estimate`) and commits the reported
   `UsageMetadata::cost`, keyed by app, agent, and vendor; a refused reservation fails the
-  call with `spend.limit_exceeded`.
+  call with `spend.limit_exceeded`. The cost is committed under the provider the response
+  reports (`LlmResponse::provider`) when it differs from the vendor read from the model id.

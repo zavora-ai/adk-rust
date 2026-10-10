@@ -75,9 +75,17 @@ ledger.migrate().await?;
 ## Model spend
 
 With a ledger on the run config, the runner installs an `LlmSpendRecorder` ahead of every
-other invocation hook. The key is the runner's app name, the calling agent, and the vendor
-read from the model id (`gemini-*` is `gemini`, `claude-*` is `anthropic`, `gpt-*`, `o1`,
-`o3`, and `o4` are `openai`; unrecognized ids are `unknown`).
+other invocation hook. The key is the runner's app name, the calling agent, and the vendor.
+The reservation precedes the response, so it names the vendor read from the model id
+(`gemini-*` is `gemini`, `claude-*` is `anthropic`, `gpt-*`, `o1`, `o3`, and `o4` are
+`openai`; unrecognized ids are `unknown`). The cost is committed under the provider the
+response reports in `LlmResponse::provider` — `bedrock` for a Claude model served by
+Amazon Bedrock, for example — and the model's later calls in the run reserve under that
+provider.
+
+> **Note:** when a limit already refuses a zero-amount reservation under the reported
+> provider, the cost is committed under the vendor read from the model id and a warning is
+> logged. Organization and agent totals are correct either way.
 
 ```rust
 use adk_core::{RunConfig, SpendKey, SpendLimits, SpendPeriod};
