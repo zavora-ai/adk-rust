@@ -103,4 +103,5 @@ pub use schema_adapter::AnthropicSchemaAdapter;
 pub use token_count::TokenCount;
 
 // Re-export ToolSearchConfig from adk-anthropic for convenience.
+pub use adk_anthropic::CacheTtl;
 pub use adk_anthropic::ToolSearchConfig;

@@ -318,34 +318,36 @@ impl PromptConfig {
         ctx: &Arc<dyn InvocationContext>,
         agent_name: &str,
     ) -> Result<Vec<Content>> {
+        // Instructions travel as `system` contents so providers place them in their
+        // native system prompt instead of guessing from leading user turns.
         let mut preamble = Vec::new();
 
         if let Some(provider) = &self.global_instruction_provider {
             let instruction = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
             if !instruction.is_empty() {
-                preamble.push(Content::new("user").with_text(instruction));
+                preamble.push(Content::new("system").with_text(instruction));
             }
         } else if let Some(template) = &self.global_instruction {
             let instruction = adk_core::inject_session_state(ctx.as_ref(), template).await?;
             if !instruction.is_empty() {
-                preamble.push(Content::new("user").with_text(instruction));
+                preamble.push(Content::new("system").with_text(instruction));
             }
         }
 
         if let Some(provider) = &self.instruction_provider {
             let instruction = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
             if !instruction.is_empty() {
-                preamble.push(Content::new("user").with_text(instruction));
+                preamble.push(Content::new("system").with_text(instruction));
             }
         } else if let Some(template) = &self.instruction {
             let instruction = adk_core::inject_session_state(ctx.as_ref(), template).await?;
             if !instruction.is_empty() {
-                preamble.push(Content::new("user").with_text(instruction));
+                preamble.push(Content::new("system").with_text(instruction));
             }
         }
 
         if let Some(schema) = &self.output_schema {
-            preamble.push(Content::new("user").with_text(format!(
+            preamble.push(Content::new("system").with_text(format!(
                 "You MUST respond with valid JSON conforming to this schema: {schema}. Do not include any text outside the JSON object."
             )));
         }

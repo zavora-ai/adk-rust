@@ -95,6 +95,12 @@ pub struct AnthropicConfig {
     #[serde(default = "default_prompt_caching")]
     pub prompt_caching: bool,
 
+    /// Lifetime of the prompt cache entries this client writes. `None` uses the
+    /// API default of 5 minutes. Set with
+    /// [`with_prompt_cache_ttl`](AnthropicConfig::with_prompt_cache_ttl).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_ttl: Option<adk_anthropic::CacheTtl>,
+
     /// Thinking mode configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingMode>,
@@ -150,6 +156,7 @@ impl std::fmt::Debug for AnthropicConfig {
             .field("base_url", &self.base_url)
             .field("allow_insecure_http", &self.allow_insecure_http)
             .field("prompt_caching", &self.prompt_caching)
+            .field("prompt_cache_ttl", &self.prompt_cache_ttl)
             .field("thinking", &self.thinking)
             .field("effort", &self.effort)
             .field("fast_mode", &self.fast_mode)
@@ -181,6 +188,7 @@ impl Default for AnthropicConfig {
             base_url: None,
             allow_insecure_http: false,
             prompt_caching: true,
+            prompt_cache_ttl: None,
             thinking: None,
             effort: None,
             fast_mode: false,
@@ -250,6 +258,27 @@ impl AnthropicConfig {
     /// Enable or disable prompt caching.
     pub fn with_prompt_caching(mut self, enabled: bool) -> Self {
         self.prompt_caching = enabled;
+        self
+    }
+
+    /// Set the lifetime of the prompt cache entries this client writes.
+    ///
+    /// Applies to both the system-prompt breakpoint and the automatic breakpoint
+    /// on the conversation tail. A 1-hour entry costs more to write than a
+    /// 5-minute one and pays off when requests sharing a prefix are more than five
+    /// minutes apart, such as a conversation waiting on a person.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_model::anthropic::{AnthropicConfig, CacheTtl};
+    ///
+    /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-5-5")
+    ///     .with_prompt_cache_ttl(CacheTtl::one_hour());
+    /// assert_eq!(config.prompt_cache_ttl, Some(CacheTtl::one_hour()));
+    /// ```
+    pub fn with_prompt_cache_ttl(mut self, ttl: adk_anthropic::CacheTtl) -> Self {
+        self.prompt_cache_ttl = Some(ttl);
         self
     }
 

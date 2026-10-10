@@ -9,6 +9,7 @@ use crate::types::ServerToolUsage;
 /// Anthropic's API bills and rate-limits by token counts, as tokens represent the
 /// underlying cost to their systems.
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(from = "UsageWire")]
 pub struct Usage {
     /// The number of input tokens used to create the cache entry.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,9 +29,50 @@ pub struct Usage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_tool_use: Option<ServerToolUsage>,
 
-    /// Tokens written to the 1-hour cache tier.
+    /// Tokens written to 1-hour cache entries; part of `cache_creation_input_tokens`.
+    ///
+    /// Read from the API's `cache_creation.ephemeral_1h_input_tokens`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_tokens_1h: Option<i32>,
+}
+
+/// Wire shape of `usage`, which reports 1-hour writes in a nested breakdown.
+#[derive(Deserialize)]
+struct UsageWire {
+    #[serde(default)]
+    cache_creation_input_tokens: Option<i32>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<i32>,
+    input_tokens: i32,
+    output_tokens: i32,
+    #[serde(default)]
+    server_tool_use: Option<ServerToolUsage>,
+    #[serde(default)]
+    cache_creation_input_tokens_1h: Option<i32>,
+    #[serde(default)]
+    cache_creation: Option<CacheCreationWire>,
+}
+
+#[derive(Deserialize)]
+struct CacheCreationWire {
+    #[serde(default)]
+    ephemeral_1h_input_tokens: Option<i32>,
+}
+
+impl From<UsageWire> for Usage {
+    fn from(wire: UsageWire) -> Self {
+        Self {
+            cache_creation_input_tokens: wire.cache_creation_input_tokens,
+            cache_read_input_tokens: wire.cache_read_input_tokens,
+            input_tokens: wire.input_tokens,
+            output_tokens: wire.output_tokens,
+            server_tool_use: wire.server_tool_use,
+            cache_creation_input_tokens_1h: wire
+                .cache_creation
+                .and_then(|breakdown| breakdown.ephemeral_1h_input_tokens)
+                .or(wire.cache_creation_input_tokens_1h),
+        }
+    }
 }
 
 impl Usage {
@@ -237,5 +279,24 @@ mod tests {
         assert_eq!(result.cache_creation_input_tokens, Some(30));
         assert_eq!(result.cache_read_input_tokens, Some(45));
         assert_eq!(result.server_tool_use, Some(ServerToolUsage::new(8)));
+    }
+
+    #[test]
+    fn one_hour_writes_are_read_from_cache_creation_breakdown() {
+        let usage: Usage = serde_json::from_value(json!({
+            "input_tokens": 12,
+            "output_tokens": 4,
+            "cache_creation_input_tokens": 1900,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1900}
+        }))
+        .unwrap();
+        assert_eq!(
+            usage,
+            Usage::new(12, 4)
+                .with_cache_creation_input_tokens(1900)
+                .with_cache_read_input_tokens(0)
+                .with_cache_creation_input_tokens_1h(1900)
+        );
     }
 }
