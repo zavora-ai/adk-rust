@@ -114,6 +114,11 @@ fn clear_cache_control_on_block(block: &mut ContentBlock) {
         ContentBlock::WebFetchToolResult(web_fetch_result) => {
             web_fetch_result.cache_control = None;
         }
+        ContentBlock::CodeExecutionToolResult(result)
+        | ContentBlock::BashCodeExecutionToolResult(result)
+        | ContentBlock::TextEditorCodeExecutionToolResult(result) => {
+            result.cache_control = None;
+        }
         // Thinking blocks don't support cache_control.
         ContentBlock::Thinking(_)
         | ContentBlock::RedactedThinking(_)
@@ -162,7 +167,10 @@ fn set_cache_control_on_block(block: &mut ContentBlock) {
         | ContentBlock::Thinking(_)
         | ContentBlock::RedactedThinking(_)
         | ContentBlock::CodeExecutionResult(_)
-        | ContentBlock::ProgrammaticToolUse(_) => {}
+        | ContentBlock::ProgrammaticToolUse(_)
+        | ContentBlock::CodeExecutionToolResult(_)
+        | ContentBlock::BashCodeExecutionToolResult(_)
+        | ContentBlock::TextEditorCodeExecutionToolResult(_) => {}
     }
 }
 
@@ -182,5 +190,8 @@ fn block_has_cache_control(block: &ContentBlock) -> bool {
         }
         ContentBlock::Thinking(_) | ContentBlock::RedactedThinking(_) => false,
         ContentBlock::CodeExecutionResult(_) | ContentBlock::ProgrammaticToolUse(_) => false,
+        ContentBlock::CodeExecutionToolResult(result)
+        | ContentBlock::BashCodeExecutionToolResult(result)
+        | ContentBlock::TextEditorCodeExecutionToolResult(result) => result.cache_control.is_some(),
     }
 }
