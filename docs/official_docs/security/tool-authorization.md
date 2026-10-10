@@ -25,8 +25,9 @@ callback rewrites. It returns one of:
 | `PolicyDecision::RequireApproval { reason }` | The call goes through confirmation, as if the agent required it |
 
 `DeclarativePolicy` matches rules in order. A rule names a tool glob (`*` and `?`), may require
-the tool to be read-only, and may add argument predicates addressed by JSON pointer. The first
-matching rule decides; a call no rule matches is **denied by default**.
+the effect the tool declares (`read_only_tools()`, or `with_effect(ToolEffect::Idempotent)` — see
+[Tool Effects](../tools/tool-effects.md)), and may add argument predicates addressed by JSON
+pointer. The first matching rule decides; a call no rule matches is **denied by default**.
 
 | Predicate | Holds when |
 |-----------|------------|
@@ -62,7 +63,8 @@ let runner = Runner::builder()
 
 The runner installs its policy on every run that does not carry one in its `RunConfig`. Implement
 `ToolPolicy` directly for decisions that need outside data; `ToolPolicyRequest` carries the tool
-name, final arguments, read-only flag, agent name, app, user, session, and invocation ID.
+name, final arguments, declared `ToolEffect` (`Tool::effect()`), agent name, app, user, session,
+and invocation ID.
 
 ## Tool Confirmation Policy
 
@@ -748,22 +750,31 @@ let agent = LlmAgentBuilder::new("secure-assistant")
 
 Order of evaluation in `LlmAgent` and `CodeActAgent`:
 
-1. Enhanced plugins (`before_tool_call`) — may rewrite the arguments
-2. The runner's plugin `before_tool` callbacks, then the agent's `BeforeToolCallback`s — the
+1. Run budget (`RunConfig::budget`) — `LlmAgent` reserves the model turn's whole batch of tool
+   calls before any of them starts (`CodeActAgent` reserves each call); a batch that does not fit
+   is answered with `not run` responses and the run ends with a `ResourceExhausted` error
+2. Enhanced plugins (`before_tool_call`) — may rewrite the arguments
+3. The runner's plugin `before_tool` callbacks, then the agent's `BeforeToolCallback`s — the
    first to return content skips the tool
-3. Circuit breaker
-4. The governed path (`adk_core::authorize_tool_call`) on the final arguments:
+4. Circuit breaker
+5. The governed path (`adk_core::authorize_tool_call`) on the final arguments:
    1. Kill switch — a frozen run ends with a `governance.frozen` error
    2. `ToolPolicy` — a denial becomes the call's result
    3. Tool guardrails (`ToolGuardrailSet`) — a denial becomes the call's result; a revision is
       checked against the policy again
    4. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
       approval, the `ApprovalStore`, the `ToolConfirmationHandler`, or a hold
-5. Tool executes — the RBAC (`ProtectedTool`) and scope (`ScopeGuard`) wrappers check here,
-   inside `execute()`, so a denial is a tool error
-6. `on_tool_error` callbacks (plugins first) — when the tool failed, including an RBAC denial
-7. The runner's plugin `after_tool` callbacks, then `AfterToolCallback`,
-   `AfterToolCallbackFull`, and enhanced plugins (`after_tool_call`)
+6. Action ledger (`LlmAgent`, `ToolEffect::NonIdempotent` tools, `RunConfig::action_ledger`) — a
+   recorded call is answered from its record without executing; otherwise the call is begun
+   under its `ToolContext::idempotency_key()`
+7. Tool executes under its timeout — the RBAC (`ProtectedTool`) and scope (`ScopeGuard`) wrappers
+   check here, inside `execute()`, so a denial is a tool error. Only `ReadOnly` and `Idempotent`
+   tools are retried, after a retryable error or a timeout, with backoff
+8. Action ledger completion — the outcome is recorded; a non-idempotent call that timed out or
+   panicked keeps its begun record and is answered with an `outcome_unknown` response
+9. `on_tool_error` callbacks (plugins first) — when the tool failed, including an RBAC denial
+10. The runner's plugin `after_tool` callbacks, then `AfterToolCallback`,
+    `AfterToolCallbackFull`, and enhanced plugins (`after_tool_call`)
 
 > **Note:** An `on_tool_error` callback that returns a fallback value replaces the error,
 > including an access denial. Keep fallbacks to tools whose failures are safe to paper over.

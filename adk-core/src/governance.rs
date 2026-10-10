@@ -30,7 +30,7 @@ use serde_json::Value;
 
 use crate::{
     AdkError, ErrorCategory, ErrorComponent, InvocationContext, PolicyDecision, Result, RunConfig,
-    Tool, ToolConfirmationDecision, ToolConfirmationRequest, ToolPolicyRequest,
+    Tool, ToolConfirmationDecision, ToolConfirmationRequest, ToolEffect, ToolPolicyRequest,
 };
 
 /// How long a [`ToolConfirmationHandler`](crate::ToolConfirmationHandler) may take to
@@ -434,8 +434,8 @@ pub struct GovernedCall {
     pub function_call_id: String,
     /// Final arguments, after plugin and callback rewrites.
     pub args: Value,
-    /// Whether the tool is read-only.
-    pub read_only: bool,
+    /// What the tool declares about repeating a call ([`Tool::effect`]).
+    pub effect: ToolEffect,
     /// Whether the agent itself requires confirmation for this call, independent of
     /// the policy.
     pub requires_confirmation: bool,
@@ -452,21 +452,27 @@ impl GovernedCall {
             tool_name: tool_name.into(),
             function_call_id: function_call_id.into(),
             args,
-            read_only: false,
+            effect: ToolEffect::NonIdempotent,
             requires_confirmation: false,
         }
     }
 
-    /// A call to `tool`, taking its name and read-only flag from the tool.
+    /// A call to `tool`, taking its name and declared [`Tool::effect`] from the tool.
     pub fn for_tool(tool: &dyn Tool, function_call_id: impl Into<String>, args: Value) -> Self {
-        Self::new(tool.name(), function_call_id, args).with_read_only(tool.is_read_only())
+        Self::new(tool.name(), function_call_id, args).with_effect(tool.effect())
     }
 
-    /// Sets the read-only flag.
+    /// Sets the effect the tool declares.
     #[must_use]
-    pub fn with_read_only(mut self, read_only: bool) -> Self {
-        self.read_only = read_only;
+    pub fn with_effect(mut self, effect: ToolEffect) -> Self {
+        self.effect = effect;
         self
+    }
+
+    /// Marks the tool as read-only, or as having side effects ([`ToolEffect::NonIdempotent`]).
+    #[must_use]
+    pub fn with_read_only(self, read_only: bool) -> Self {
+        self.with_effect(if read_only { ToolEffect::ReadOnly } else { ToolEffect::NonIdempotent })
     }
 
     /// Sets whether the agent requires confirmation for this call.
@@ -606,10 +612,10 @@ pub async fn authorize_tool_call(
 ) -> Result<ToolAuthorization> {
     let config = gate.run_config;
     config.check_governance()?;
-    let GovernedCall { tool_name, function_call_id, mut args, read_only, requires_confirmation } =
+    let GovernedCall { tool_name, function_call_id, mut args, effect, requires_confirmation } =
         call;
 
-    let mut decision = evaluate_policy(gate, &tool_name, &args, read_only).await;
+    let mut decision = evaluate_policy(gate, &tool_name, &args, effect).await;
     if !matches!(decision, PolicyDecision::Deny { .. })
         && let Some(screen) = gate.screen
     {
@@ -617,7 +623,7 @@ pub async fn authorize_tool_call(
             Ok(screened) => {
                 if screened != args {
                     // The policy approved the arguments it saw, not the rewrite.
-                    let again = evaluate_policy(gate, &tool_name, &screened, read_only).await;
+                    let again = evaluate_policy(gate, &tool_name, &screened, effect).await;
                     decision = decision.stricter(again);
                     args = screened;
                 }
@@ -677,7 +683,7 @@ async fn evaluate_policy(
     gate: &ToolGate<'_>,
     tool_name: &str,
     args: &Value,
-    read_only: bool,
+    effect: ToolEffect,
 ) -> PolicyDecision {
     let Some(policy) = gate.run_config.tool_policy.as_ref() else {
         return PolicyDecision::Allow;
@@ -685,7 +691,7 @@ async fn evaluate_policy(
     let request = ToolPolicyRequest {
         tool_name: tool_name.to_string(),
         args: args.clone(),
-        read_only,
+        effect,
         agent_name: gate.agent_name.to_string(),
         app_name: gate.scope.app_name.clone(),
         user_id: gate.scope.user_id.clone(),
@@ -933,6 +939,48 @@ mod tests {
         assert!(matches!(
             authorize_tool_call(&gate(&config), call()).await.unwrap(),
             ToolAuthorization::Pending { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_policy_sees_the_effect_the_tool_declares() {
+        struct Upsert;
+        #[async_trait]
+        impl Tool for Upsert {
+            fn name(&self) -> &str {
+                "upsert"
+            }
+            fn description(&self) -> &str {
+                "writes a record by key"
+            }
+            fn effect(&self) -> ToolEffect {
+                ToolEffect::Idempotent
+            }
+            async fn execute(
+                &self,
+                _ctx: Arc<dyn crate::ToolContext>,
+                _args: Value,
+            ) -> Result<Value> {
+                Ok(json!({}))
+            }
+        }
+
+        let call = GovernedCall::for_tool(&Upsert, "c", json!({}));
+        assert_eq!(call.effect, ToolEffect::Idempotent);
+
+        let policy = DeclarativePolicy::builder()
+            .rule(PolicyRule::allow("*").with_effect(ToolEffect::Idempotent))
+            .build();
+        let config = RunConfig::builder().tool_policy(Arc::new(policy)).build();
+        assert!(matches!(
+            authorize_tool_call(&gate(&config), call).await.unwrap(),
+            ToolAuthorization::Execute { .. }
+        ));
+        assert!(matches!(
+            authorize_tool_call(&gate(&config), GovernedCall::new("upsert", "c", json!({})))
+                .await
+                .unwrap(),
+            ToolAuthorization::Refuse { .. }
         ));
     }
 
