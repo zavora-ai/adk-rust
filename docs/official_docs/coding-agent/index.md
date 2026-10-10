@@ -59,7 +59,7 @@ use std::sync::Arc;
 // One call builds a coding agent over a confined workspace.
 let coding = CodingAgent::builder()
     .model(model)
-    .workspace(Workspace::new("./my-repo"))
+    .workspace(Workspace::new("./my-repo").allow_bash(true)) // bash is opt-in
     .build()?;
 
 let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());

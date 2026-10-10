@@ -56,7 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let browser = Arc::new(BrowserSession::new(config));
     browser.start().await?;
 
-    // Create toolset with the 45 default tools (browser_evaluate_js is opt-in)
+    // Create toolset with the 44 default tools (browser_evaluate_js and
+    // browser_file_upload are opt-in)
     let toolset = BrowserToolset::new(browser.clone());
     let tools = toolset.all_tools();
 
@@ -103,12 +104,14 @@ let tools = toolset.all_tools();
 
 ## Security Defaults
 
-Two defaults limit what a model can reach through the browser:
+Four defaults limit what a model can reach through the browser:
 
 | Default | Why | Opt out |
 |---------|-----|---------|
 | `browser_evaluate_js` is excluded from every toolset and profile | It runs model-written JavaScript in the page, with the page's cookies and session | `.with_evaluate_js(true)` or `.with_js(true)` |
+| `browser_file_upload` is excluded from every toolset and profile | It hands a local file to the page, and the model chooses the path | `.with_file_upload([roots])` — uploads only existing files inside `roots`, after resolving symlinks |
 | `browser_navigate`, `browser_new_tab`, and `browser_new_window` accept only `http` and `https` | `file:` reads the host filesystem, `javascript:` and `data:` run script, and `chrome:` reaches browser settings | `.with_allowed_schemes([...])` |
+| The same tools refuse loopback, private, link-local, and cloud metadata addresses | A page on `localhost` or `169.254.169.254` reaches services the operator never exposed, such as a metadata endpoint holding credentials | `.with_private_network_access(true)` |
 
 ```rust
 use adk_browser::{BrowserConfig, BrowserSession, BrowserToolset};
@@ -120,7 +123,11 @@ let toolset = BrowserToolset::new(browser)
     .with_allowed_schemes(["https"]); // HTTPS only
 ```
 
-A refused URL fails with `URL scheme '<scheme>' is not allowed` before the browser is touched.
+A refused URL fails with `URL scheme '<scheme>' is not allowed` or `points at a private
+network address` before the browser is touched. Host names are resolved, and one that
+resolves to a private address is refused; the check covers the URL the model asks for,
+not redirects or subresources the page loads afterwards, so isolate the browser's network
+when it must not reach internal services at all.
 
 ## Multi-Tenant Usage with Pool-Backed Toolsets
 
@@ -243,7 +250,7 @@ Browser sessions auto-start and auto-recover from stale WebDriver connections, s
 | `browser_focus` | Focus on element |
 | `browser_element_state` | Get element state (visible, enabled, selected) |
 | `browser_press_key` | Press keyboard key |
-| `browser_file_upload` | Upload file to input |
+| `browser_file_upload` | Upload a file from an allowed directory (opt-in) |
 | `browser_print_to_pdf` | Generate PDF from page |
 
 ## Element Selectors

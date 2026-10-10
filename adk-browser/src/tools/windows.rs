@@ -1,7 +1,7 @@
 //! Window and tab management tools.
 
 use crate::session::BrowserSession;
-use crate::tools::navigate::{default_allowed_schemes, validate_url};
+use crate::tools::navigate::UrlPolicy;
 use adk_core::{AdkError, Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -50,15 +50,26 @@ impl Tool for ListWindowsTool {
 /// Tool for opening a new tab.
 ///
 /// A `url` argument must use a scheme in the allowlist, which defaults to
-/// [`DEFAULT_ALLOWED_SCHEMES`](crate::tools::DEFAULT_ALLOWED_SCHEMES).
+/// [`DEFAULT_ALLOWED_SCHEMES`](crate::tools::DEFAULT_ALLOWED_SCHEMES), and must not point at a
+/// private network address unless
+/// [`with_private_network_access`](Self::with_private_network_access) permits it.
 pub struct NewTabTool {
     browser: Arc<BrowserSession>,
-    allowed_schemes: Vec<String>,
+    policy: UrlPolicy,
 }
 
 impl NewTabTool {
     pub fn new(browser: Arc<BrowserSession>) -> Self {
-        Self { browser, allowed_schemes: default_allowed_schemes() }
+        Self { browser, policy: UrlPolicy::default() }
+    }
+
+    /// Permit or refuse a `url` that points at a private network address. Refused by default.
+    ///
+    /// See [`NavigateTool::with_private_network_access`](crate::tools::NavigateTool::with_private_network_access).
+    #[must_use]
+    pub fn with_private_network_access(mut self, enabled: bool) -> Self {
+        self.policy.allow_private_network = enabled;
+        self
     }
 
     /// Replace the URL schemes accepted for the optional `url` argument.
@@ -71,7 +82,7 @@ impl NewTabTool {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.allowed_schemes = schemes.into_iter().map(Into::into).collect();
+        self.policy.allowed_schemes = schemes.into_iter().map(Into::into).collect();
         self
     }
 }
@@ -101,7 +112,7 @@ impl Tool for NewTabTool {
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let url = args.get("url").and_then(|v| v.as_str());
         if let Some(url) = url {
-            validate_url(url, &self.allowed_schemes)?;
+            self.policy.check(url).await?;
         }
 
         let handle = self.browser.new_tab().await?;
@@ -123,15 +134,26 @@ impl Tool for NewTabTool {
 /// Tool for opening a new window.
 ///
 /// A `url` argument must use a scheme in the allowlist, which defaults to
-/// [`DEFAULT_ALLOWED_SCHEMES`](crate::tools::DEFAULT_ALLOWED_SCHEMES).
+/// [`DEFAULT_ALLOWED_SCHEMES`](crate::tools::DEFAULT_ALLOWED_SCHEMES), and must not point at a
+/// private network address unless
+/// [`with_private_network_access`](Self::with_private_network_access) permits it.
 pub struct NewWindowTool {
     browser: Arc<BrowserSession>,
-    allowed_schemes: Vec<String>,
+    policy: UrlPolicy,
 }
 
 impl NewWindowTool {
     pub fn new(browser: Arc<BrowserSession>) -> Self {
-        Self { browser, allowed_schemes: default_allowed_schemes() }
+        Self { browser, policy: UrlPolicy::default() }
+    }
+
+    /// Permit or refuse a `url` that points at a private network address. Refused by default.
+    ///
+    /// See [`NavigateTool::with_private_network_access`](crate::tools::NavigateTool::with_private_network_access).
+    #[must_use]
+    pub fn with_private_network_access(mut self, enabled: bool) -> Self {
+        self.policy.allow_private_network = enabled;
+        self
     }
 
     /// Replace the URL schemes accepted for the optional `url` argument.
@@ -144,7 +166,7 @@ impl NewWindowTool {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.allowed_schemes = schemes.into_iter().map(Into::into).collect();
+        self.policy.allowed_schemes = schemes.into_iter().map(Into::into).collect();
         self
     }
 }
@@ -174,7 +196,7 @@ impl Tool for NewWindowTool {
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let url = args.get("url").and_then(|v| v.as_str());
         if let Some(url) = url {
-            validate_url(url, &self.allowed_schemes)?;
+            self.policy.check(url).await?;
         }
 
         let handle = self.browser.new_window().await?;

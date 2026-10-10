@@ -137,7 +137,10 @@ async fn run_goal_loop(
         fresh(goal, until)
     };
 
-    let coding = CodingAgent::builder().model(model).workspace(Workspace::new(root)).build()?;
+    let coding = CodingAgent::builder()
+        .model(model)
+        .workspace(Workspace::new(root).allow_bash(true))
+        .build()?;
     let runner = make_runner(coding.agent()).await?;
 
     let start = gs.iteration + 1;

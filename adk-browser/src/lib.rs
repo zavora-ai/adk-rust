@@ -45,7 +45,8 @@
 //!
 //! ### Navigation
 //! - `browser_navigate` - Navigate to a URL (`http`/`https` unless
-//!   `BrowserToolset::with_allowed_schemes` says otherwise)
+//!   `BrowserToolset::with_allowed_schemes` says otherwise; private network
+//!   addresses refused unless `BrowserToolset::with_private_network_access` permits them)
 //! - `browser_back` - Go back in history
 //! - `browser_forward` - Go forward in history
 //! - `browser_refresh` - Refresh the page
@@ -108,7 +109,8 @@
 //! - `browser_focus` - Focus on an element
 //! - `browser_element_state` - Check element state
 //! - `browser_press_key` - Press keyboard keys
-//! - `browser_file_upload` - Upload files
+//! - `browser_file_upload` - Upload files from allowed directories (opt-in via
+//!   `BrowserToolset::with_file_upload(roots)`)
 //! - `browser_print_to_pdf` - Print page to PDF
 //!
 //! ## Requirements

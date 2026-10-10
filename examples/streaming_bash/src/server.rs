@@ -71,7 +71,7 @@ pub async fn run_server(port: u16) -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("GOOGLE_API_KEY is not set"))?;
 
     let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
-    let workspace = Workspace::new(std::env::current_dir()?);
+    let workspace = Workspace::new(std::env::current_dir()?).allow_bash(true);
     // A deliberate mix of streaming and one-shot tools. `bash` streams via
     // emit_progress; the others return a single result. The UI renders all of
     // them from first-class events — proving tool output is no longer

@@ -54,8 +54,8 @@ let filter = ContentFilter::on_topic("cooking", vec!["recipe".into(), "bake".int
 // Limit response length
 let filter = ContentFilter::max_length(1000);
 
-// Block specific keywords
-let filter = ContentFilter::blocked_keywords(vec!["forbidden".into()]);
+// Block specific keywords (an error, not an open filter, if the list cannot compile)
+let filter = ContentFilter::blocked_keywords(vec!["forbidden".into()])?;
 ```
 
 ### Agent Integration

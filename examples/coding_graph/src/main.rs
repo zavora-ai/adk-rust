@@ -292,7 +292,7 @@ fn build_graph(model: Arc<dyn Llm>, root: PathBuf) -> anyhow::Result<adk_graph::
 fn coding_agent(model: Arc<dyn Llm>, root: &std::path::Path) -> Arc<dyn Agent> {
     CodingAgent::builder()
         .model(model)
-        .workspace(Workspace::new(root))
+        .workspace(Workspace::new(root).allow_bash(true))
         .build()
         .expect("coding agent")
         .into_agent()
