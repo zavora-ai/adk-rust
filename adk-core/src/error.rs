@@ -82,6 +82,8 @@ impl fmt::Display for ErrorComponent {
 /// - [`Cancelled`](Self::Cancelled) — operation was cancelled by caller or system
 /// - [`Internal`](Self::Internal) — unexpected internal error (bugs, invariant violations)
 /// - [`Unsupported`](Self::Unsupported) — requested feature or operation is not supported
+/// - [`ResourceExhausted`](Self::ResourceExhausted) — a configured budget (model calls, tokens,
+///   cost, wall time, tool calls) is used up; not retryable within the same run
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCategory {
@@ -105,6 +107,11 @@ pub enum ErrorCategory {
     Internal,
     /// Requested feature or operation is not supported.
     Unsupported,
+    /// A configured resource budget is used up.
+    ///
+    /// Not retryable within the same run: retrying spends against the same
+    /// exhausted budget. See [`RunBudget`](crate::RunBudget).
+    ResourceExhausted,
 }
 
 impl fmt::Display for ErrorCategory {
@@ -120,6 +127,7 @@ impl fmt::Display for ErrorCategory {
             Self::Cancelled => "cancelled",
             Self::Internal => "internal",
             Self::Unsupported => "unsupported",
+            Self::ResourceExhausted => "resource_exhausted",
         };
         f.write_str(s)
     }
@@ -478,6 +486,7 @@ impl AdkError {
             ErrorCategory::Cancelled => 499,
             ErrorCategory::Internal => 500,
             ErrorCategory::Unsupported => 501,
+            ErrorCategory::ResourceExhausted => 429,
             _ => 500,
         }
     }
@@ -674,6 +683,7 @@ mod tests {
             ErrorCategory::Cancelled,
             ErrorCategory::Internal,
             ErrorCategory::Unsupported,
+            ErrorCategory::ResourceExhausted,
         ] {
             let err = AdkError::new(ErrorComponent::Model, cat, "test", "msg");
             assert!(!err.is_retryable(), "expected is_retryable() == false for {cat}");
@@ -693,6 +703,7 @@ mod tests {
             (ErrorCategory::Cancelled, 499),
             (ErrorCategory::Internal, 500),
             (ErrorCategory::Unsupported, 501),
+            (ErrorCategory::ResourceExhausted, 429),
         ];
         for (cat, expected) in &cases {
             let err = AdkError::new(ErrorComponent::Server, *cat, "test", "msg");

@@ -135,25 +135,25 @@ fn collect_long_running_tool_ids(
         .collect()
 }
 
+/// Builds one streamed model event.
+///
+/// `request_debug` is the bounded request copy from [`trace_json_payload`]: the
+/// full request carries the whole conversation, so embedding it in every
+/// terminal event would make stored history grow quadratically.
 fn build_partial_llm_event(
     event_id: &str,
     invocation_id: &str,
     agent_name: &str,
-    request_json: &str,
+    request_debug: &str,
     chunk: &LlmResponse,
     long_running_tool_ids: Vec<String>,
 ) -> Event {
     let mut event = Event::with_id(event_id, invocation_id);
     event.author = agent_name.to_string();
-    // Keep payload snapshots on the terminal chunk for backwards-compatible
-    // debug tooling, but never repeat the full request and response on every
-    // incremental chunk. Large histories otherwise turn streaming into
-    // O(request_size * chunk_count) serialization and transport work.
+    // Payload snapshots go on the terminal chunk only; repeating them on every
+    // incremental chunk turns streaming into O(request_size * chunk_count) work.
     if !chunk.partial {
-        event.llm_request = Some(request_json.to_string());
-        event
-            .provider_metadata
-            .insert("gcp.vertex.agent.llm_request".to_string(), request_json.to_string());
+        event.llm_request = Some(request_debug.to_string());
         event.provider_metadata.insert(
             "gcp.vertex.agent.llm_response".to_string(),
             serde_json::to_string(chunk).unwrap_or_default(),
@@ -172,25 +172,26 @@ fn build_partial_llm_event(
     event.llm_response.interrupted = chunk.interrupted;
     event.llm_response.error_code = chunk.error_code.clone();
     event.llm_response.error_message = chunk.error_message.clone();
+    event.llm_response.model = chunk.model.clone();
+    event.llm_response.provider = chunk.provider.clone();
     event.long_running_tool_ids = long_running_tool_ids;
     event
 }
 
+/// Builds the single model event of a non-streaming turn; see
+/// [`build_partial_llm_event`] for `request_debug`.
 fn build_final_llm_event(
     event_id: &str,
     invocation_id: &str,
     agent_name: &str,
-    request_json: &str,
+    request_debug: &str,
     content: Option<&Content>,
     last_chunk: Option<&LlmResponse>,
     long_running_tool_ids: Vec<String>,
 ) -> Event {
     let mut event = Event::with_id(event_id, invocation_id);
     event.author = agent_name.to_string();
-    event.llm_request = Some(request_json.to_string());
-    event
-        .provider_metadata
-        .insert("gcp.vertex.agent.llm_request".to_string(), request_json.to_string());
+    event.llm_request = Some(request_debug.to_string());
     event.llm_response.content = content.cloned();
     event.llm_response.partial = false;
     event.llm_response.turn_complete = true;
@@ -205,6 +206,8 @@ fn build_final_llm_event(
         event.llm_response.interrupted = last_chunk.interrupted;
         event.llm_response.error_code = last_chunk.error_code.clone();
         event.llm_response.error_message = last_chunk.error_message.clone();
+        event.llm_response.model = last_chunk.model.clone();
+        event.llm_response.provider = last_chunk.provider.clone();
         event.provider_metadata.insert(
             "gcp.vertex.agent.llm_response".to_string(),
             serde_json::to_string(last_chunk).unwrap_or_default(),
@@ -2777,6 +2780,9 @@ impl Agent for LlmAgent {
             // (a no-op for generateContent and all other providers).
             let mut last_interaction_id: Option<String> = None;
 
+            // Shared with sub-agents, transfer targets and agent tools through the run config.
+            let budget_tracker = ctx.run_config().budget_tracker.clone();
+
             // Multi-turn loop with max iterations
             let mut iteration = 0;
             let mut schema_retry_count: usize = 0;
@@ -2909,8 +2915,11 @@ impl Agent for LlmAgent {
                     if cached_response.interaction_id.is_some() {
                         last_interaction_id = cached_response.interaction_id.clone();
                     }
-                    cached_event.llm_request = Some(serde_json::to_string(&request).unwrap_or_default());
-                    cached_event.provider_metadata.insert("gcp.vertex.agent.llm_request".to_string(), serde_json::to_string(&request).unwrap_or_default());
+                    cached_event.llm_request = Some(trace_json_payload(
+                        &request,
+                        ctx.run_config().record_payloads,
+                        ctx.run_config().trace_payload_max_bytes,
+                    ));
                     cached_event.provider_metadata.insert("gcp.vertex.agent.llm_response".to_string(), serde_json::to_string(&cached_response).unwrap_or_default());
 
                     // Populate long_running_tool_ids for function calls from long-running tools
@@ -2921,8 +2930,7 @@ impl Agent for LlmAgent {
 
                     yield Ok(cached_event);
                 } else {
-                    // Record LLM request for tracing
-                    let request_json = serde_json::to_string(&request).unwrap_or_default();
+                    // One bounded copy of the request serves the span and the event.
                     let trace_request_json = trace_json_payload(
                         &request,
                         ctx.run_config().record_payloads,
@@ -2961,6 +2969,20 @@ impl Agent for LlmAgent {
                     let should_stream_to_client = matches!(streaming_mode, StreamingMode::SSE | StreamingMode::Bidi)
                         && output_guardrails.is_empty();
 
+                    // Reserve the call against the run budget before it starts. The meter
+                    // records the call's usage once, from its first non-partial response
+                    // carrying usage, so partial chunks never inflate the totals.
+                    let mut call_meter = match budget_tracker.as_ref() {
+                        Some(tracker) => match tracker.begin_model_call(model.name()) {
+                            Ok(meter) => Some(meter),
+                            Err(exceeded) => {
+                                yield Err(exceeded.into());
+                                return;
+                            }
+                        },
+                        None => None,
+                    };
+
                     // Always use streaming internally for LLM calls
                     let mut response_stream = model
                         .generate_content(request, true)
@@ -2992,6 +3014,10 @@ impl Agent for LlmAgent {
                                 return;
                             }
                         };
+                        // Budgets count what the provider reported, before callbacks edit it.
+                        if let Some(meter) = call_meter.as_mut() {
+                            meter.observe(&chunk);
+                        }
 
                         // ===== AFTER MODEL CALLBACKS (per chunk) =====
                         // Callbacks can modify each streaming chunk
@@ -3046,10 +3072,16 @@ impl Agent for LlmAgent {
                                 &llm_event_id,
                                 &invocation_id,
                                 &agent_name,
-                                &request_json,
+                                &trace_request_json,
                                 &chunk,
                                 long_running_tool_ids,
                             );
+                            if call_meter.is_some() {
+                                event.provider_metadata.insert(
+                                    adk_core::BUDGET_RECORDED_KEY.to_string(),
+                                    "true".to_string(),
+                                );
+                            }
                             // Runner persists terminal events as complete content.
                             // Providers can finish with tools/metadata after text
                             // deltas, so the last chunk alone is insufficient.
@@ -3084,6 +3116,11 @@ impl Agent for LlmAgent {
                     if let Some(last) = &last_chunk {
                         final_provider_metadata = last.provider_metadata.clone();
                     }
+                    // A stream that ended without a non-partial usage report is settled
+                    // here, before any tool runs, from the best usage it carried.
+                    drop(response_stream);
+                    let metered = call_meter.is_some();
+                    drop(call_meter);
 
                     // For None mode: yield single final event with accumulated content
                     if !should_stream_to_client {
@@ -3106,15 +3143,22 @@ impl Agent for LlmAgent {
                             .as_ref()
                             .map(|content| collect_long_running_tool_ids(&tool_map, content))
                             .unwrap_or_default();
-                        yield Ok(build_final_llm_event(
+                        let mut final_event = build_final_llm_event(
                             &llm_event_id,
                             &invocation_id,
                             &agent_name,
-                            &request_json,
+                            &trace_request_json,
                             accumulated_content.as_ref(),
                             last_chunk.as_ref(),
                             long_running_tool_ids,
-                        ));
+                        );
+                        if metered {
+                            final_event.provider_metadata.insert(
+                                adk_core::BUDGET_RECORDED_KEY.to_string(),
+                                "true".to_string(),
+                            );
+                        }
+                        yield Ok(final_event);
                     }
 
                     // A provider that reports a terminal error inside an `Ok`
@@ -3488,6 +3532,35 @@ impl Agent for LlmAgent {
                     }
                     if confirmation_interrupted {
                         return;
+                    }
+
+                    // ===== RUN BUDGET: TOOL CALLS =====
+                    // The whole batch is reserved before any call starts. A batch that does
+                    // not fit is answered with "not run" responses, so the history keeps one
+                    // response per call, and the run ends with the budget error.
+                    if let Some(tracker) = budget_tracker.as_ref() {
+                        let dispatched =
+                            fc_parts.iter().filter(|call| call.guardrail_denial.is_none()).count();
+                        if let Err(exceeded) = tracker.begin_tool_calls(dispatched as u64) {
+                            let parts = fc_parts
+                                .iter()
+                                .map(|call| Part::FunctionResponse {
+                                    function_response: FunctionResponseData::new(
+                                        call.name.clone(),
+                                        serde_json::json!({ "error": format!("not run: {exceeded}") }),
+                                    ),
+                                    id: call.id.clone(),
+                                    annotations: None,
+                                })
+                                .collect();
+                            let mut budget_event = Event::new(&invocation_id);
+                            budget_event.author = agent_name.clone();
+                            budget_event.llm_response.content =
+                                Some(Content { role: "function".to_string(), parts });
+                            yield Ok(budget_event);
+                            yield Err(exceeded.into());
+                            return;
+                        }
                     }
 
                     // Wrap circuit breaker in Mutex for shared access across parallel futures.

@@ -665,6 +665,9 @@ fn main() {
 }
 ```
 
+Run budgets read this cost to enforce a spend cap; see
+[Run Budgets](../core/runner.md#run-budgets).
+
 ---
 
 ## Retries, Tool Calls, and Credentials
