@@ -516,7 +516,7 @@ match provider.validate(token).await {
 
 | Route | Authentication |
 |-------|----------------|
-| `GET /.well-known/agent.json` | **public** — peers fetch the card before they hold a credential |
+| `GET /.well-known/agent-card.json`, `GET /.well-known/agent.json` | **public** — peers fetch the card before they hold a credential |
 | `POST /a2a` | required, when a `RequestContextExtractor` is configured |
 | `POST /a2a/stream` | required, when a `RequestContextExtractor` is configured |
 

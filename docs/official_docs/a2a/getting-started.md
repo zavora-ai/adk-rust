@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
 
 `quick_start` configures:
 - In-memory session service
-- Agent card at `GET /.well-known/agent.json`
+- Agent card at `GET /.well-known/agent-card.json` and `GET /.well-known/agent.json`
 - JSON-RPC endpoint at `POST /a2a`
 - Streaming enabled
 
@@ -149,7 +149,7 @@ Once your agent is running, verify it with these commands.
 ### Fetch the Agent Card
 
 ```bash
-curl http://localhost:8080/.well-known/agent.json | jq .
+curl http://localhost:8080/.well-known/agent-card.json | jq .
 ```
 
 Expected response:
@@ -262,7 +262,8 @@ This creates an agent that forwards requests to your A2A server over the network
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/.well-known/agent.json` | Agent card (capabilities, skills, metadata) |
+| GET | `/.well-known/agent-card.json` | Agent card (capabilities, skills, metadata) |
+| GET | `/.well-known/agent.json` | The same agent card at the pre-0.3 path |
 | POST | `/a2a` | JSON-RPC endpoint (`message/send`, `message/get`, etc.) |
 | POST | `/a2a/stream` | Streaming JSON-RPC (`message/stream`) |
 

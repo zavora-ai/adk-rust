@@ -389,7 +389,8 @@ For embedded-host mappings, the additive HTTP bridge corresponds to MCP Apps hos
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/.well-known/agent.json` | GET | A2A agent card |
+| `/.well-known/agent-card.json` | GET | A2A agent card |
+| `/.well-known/agent.json` | GET | A2A agent card (pre-0.3 path) |
 | `/a2a` | POST | A2A JSON-RPC |
 | `/a2a/stream` | POST | A2A streaming |
 

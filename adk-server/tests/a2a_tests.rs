@@ -1,5 +1,5 @@
 use adk_core::{Agent, EventStream, InvocationContext, Result as AdkResult};
-use adk_server::{ServerConfig, create_app_with_a2a};
+use adk_server::{ServerBuilder, ServerConfig, create_app_with_a2a};
 use adk_session::InMemorySessionService;
 use async_trait::async_trait;
 use axum::body::Body;
@@ -107,6 +107,58 @@ async fn test_agent_card_endpoint() {
     assert_eq!(json["name"], "test_agent");
     assert!(json["url"].as_str().unwrap().contains("localhost:8080"));
     assert!(json["skills"].is_array());
+}
+
+/// Discovery paths: the A2A 0.3+ well-known path and the earlier one.
+const AGENT_CARD_PATHS: [&str; 2] = ["/.well-known/agent-card.json", "/.well-known/agent.json"];
+
+async fn get_json(app: axum::Router, path: &str) -> serde_json::Value {
+    let request = Request::builder().method("GET").uri(path).body(Body::empty()).unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "GET {path}");
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test]
+async fn agent_card_is_served_at_both_well_known_paths() {
+    let routers = [
+        (
+            "create_app_with_a2a",
+            create_app_with_a2a(create_test_config(), Some("http://localhost:8080")),
+        ),
+        (
+            "ServerBuilder",
+            ServerBuilder::new(create_test_config()).with_a2a("http://localhost:8080").build(),
+        ),
+    ];
+
+    for (label, app) in routers {
+        let [card, legacy] = AGENT_CARD_PATHS;
+        let card_json = get_json(app.clone(), card).await;
+        assert_eq!(card_json["name"], "test_agent", "{label}");
+        assert_eq!(card_json, get_json(app, legacy).await, "{label}: both paths serve one card");
+    }
+}
+
+/// The bundled v1 client discovers the card at `/.well-known/agent-card.json`.
+#[cfg(feature = "a2a-v1")]
+#[tokio::test]
+async fn bundled_v1_client_resolves_the_served_card() {
+    use adk_server::a2a::client::v1_client::A2aV1Client;
+
+    let app = ServerBuilder::new(create_test_config()).with_a2a("http://localhost:8080").build();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+
+    let card = A2aV1Client::resolve_agent_card(&format!("http://{address}"))
+        .await
+        .expect("resolve agent card");
+    assert_eq!(card.name, "test_agent");
+    assert_eq!(card.description, "A test agent for A2A");
 }
 
 #[tokio::test]

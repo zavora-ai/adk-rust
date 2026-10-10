@@ -232,7 +232,7 @@ impl A2aServerBuilder {
 
     /// Expose the skills in `skill_index` on the served agent card.
     ///
-    /// The card at `/.well-known/agent.json` appends one `skills[]` entry per
+    /// The served agent card appends one `skills[]` entry per
     /// indexed skill, mapped by
     /// [`agent_skills_from_index`](crate::a2a::agent_skills_from_index).
     ///
