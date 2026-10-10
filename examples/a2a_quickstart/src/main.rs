@@ -30,11 +30,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!("🚀 ADK-Rust A2A agent running on http://localhost:8003");
     println!();
     println!("  Endpoints:");
-    println!("    GET  http://localhost:8003/.well-known/agent.json  — Agent card");
-    println!("    POST http://localhost:8003/a2a                     — JSON-RPC (message/send)");
+    println!("    GET  http://localhost:8003/.well-known/agent-card.json  — Agent card");
+    println!("    POST http://localhost:8003/a2a                          — JSON-RPC (message/send)");
     println!();
     println!("  Test with curl:");
-    println!("    curl http://localhost:8003/.well-known/agent.json | jq .");
+    println!("    curl http://localhost:8003/.well-known/agent-card.json | jq .");
     println!();
     println!("    curl -X POST http://localhost:8003/a2a \\");
     println!("      -H 'Content-Type: application/json' \\");

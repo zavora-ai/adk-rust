@@ -12,8 +12,10 @@ pub struct RemoteA2aConfig {
     pub name: String,
     /// Description of the agent
     pub description: String,
-    /// Base URL of the remote agent (e.g., "http://localhost:8080")
-    /// The agent card will be fetched from {base_url}/.well-known/agent.json
+    /// Base URL of the remote agent, such as `http://localhost:8080`.
+    ///
+    /// The agent card is fetched from `{agent_url}/.well-known/agent-card.json`,
+    /// falling back to `{agent_url}/.well-known/agent.json` when that returns 404.
     pub agent_url: String,
     /// Whether to use streaming for communication.
     /// If `None`, the agent uses streaming if the remote agent supports it.
