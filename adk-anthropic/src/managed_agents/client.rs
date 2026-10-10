@@ -11,7 +11,7 @@ use futures::stream::Stream;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
 use super::dreams::{CreateDreamParams, Dream, DreamListResponse};
-use super::events::{SessionEvent, UserEvent};
+use super::events::{OutcomeRubric, SessionEvent, UserEvent};
 use super::memory::{
     CreateMemoryParams, CreateMemoryStoreParams, Memory, MemoryListResponse, MemoryStore,
     MemoryVersion, UpdateMemoryParams,
@@ -828,14 +828,37 @@ impl ManagedAgentsClient {
         self.send_event(session_id, event).await
     }
 
-    /// Define an outcome (success criteria) for the session.
+    /// Start an outcome: the agent works toward `description`, and a grader scores
+    /// each iteration against `rubric`.
+    ///
+    /// Uses the API's default iteration limit. To set `max_iterations`, send a
+    /// [`UserEvent::DefineOutcome`] through [`send_event`](Self::send_event).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails or the API rejects the event, for
+    /// example while another outcome is still active.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_anthropic::managed_agents::OutcomeRubric;
+    ///
+    /// client
+    ///     .define_outcome(
+    ///         &session.id,
+    ///         "Build a DCF model for Costco in .xlsx",
+    ///         OutcomeRubric::text("- The workbook has a sheet named `DCF`"),
+    ///     )
+    ///     .await?;
+    /// ```
     pub async fn define_outcome(
         &self,
         session_id: &str,
-        criteria: impl Into<String>,
+        description: impl Into<String>,
+        rubric: OutcomeRubric,
     ) -> Result<()> {
-        let event = UserEvent::DefineOutcome { criteria: criteria.into() };
-        self.send_event(session_id, event).await
+        self.send_event(session_id, UserEvent::define_outcome(description, rubric)).await
     }
 
     /// Archive an agent (makes it read-only).
