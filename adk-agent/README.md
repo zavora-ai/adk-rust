@@ -357,7 +357,7 @@ let agent = LlmAgentBuilder::new("resilient_agent")
     .build()?;
 ```
 
-Per-tool budgets take precedence over the default. When no budget is configured, tools execute once. A budget retries only tools whose `effect()` is `ReadOnly` or `Idempotent`, only after a retryable error, with exponential backoff and jitter; each attempt gets a fresh tool context. A `NonIdempotent` tool runs once.
+Per-tool budgets take precedence over the default. When no budget is configured, tools execute once. A budget retries only tools whose `effect()` is `ReadOnly` or `Idempotent`, only after a retryable error, with exponential backoff and jitter; each attempt gets a fresh tool context. A `NonIdempotent` tool runs once, and one that times out is answered with an `outcome_unknown` response. With `RunConfig::action_ledger` set, a replayed `NonIdempotent` call is answered from the ledger instead of executing again.
 
 ### Circuit Breaker
 

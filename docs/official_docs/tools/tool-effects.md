@@ -1,17 +1,18 @@
-# Tool Effects
+# Tool Effects and the Action Ledger
 
 Every tool declares what calling it does to the outside world. The runtime uses that
-declaration to decide whether a failed call may be retried.
+declaration to decide whether a failed call may be retried, whether the call is recorded
+in an action ledger, and what the model is told when a call ends without a result.
 
 ## Tool effects
 
 `Tool::effect()` returns a `ToolEffect`:
 
-| Effect | Meaning | Retried after a retryable error |
-|--------|---------|---------------------------------|
-| `ReadOnly` | Reads without changing anything | Yes |
-| `Idempotent` | Changes state; repeating a call leaves the same state as making it once | Yes |
-| `NonIdempotent` | Repeating a call repeats the change — a payment, an email, an order | No |
+| Effect | Meaning | Retried after a retryable error | Recorded in the action ledger |
+|--------|---------|---------------------------------|-------------------------------|
+| `ReadOnly` | Reads without changing anything | Yes | No |
+| `Idempotent` | Changes state; repeating a call leaves the same state as making it once | Yes | No |
+| `NonIdempotent` | Repeating a call repeats the change — a payment, an email, an order | No | Yes, when a ledger is configured |
 
 The default derives the effect from `is_read_only()`: a read-only tool is `ReadOnly`, and
 every other tool is `NonIdempotent`. A tool that declares nothing is therefore never
@@ -100,9 +101,81 @@ let agent = LlmAgentBuilder::new("support")
 
 ## Idempotency keys
 
-`ToolContext::idempotency_key()` identifies one tool call across every attempt. The
-default is `"{app}/{user}/{session}/{invocation}/{function_call_id}"`. Pass it to any
-downstream API that deduplicates requests on a key.
+`ToolContext::idempotency_key()` identifies one tool call across every attempt and
+replay. The default is `"{app}/{user}/{session}/{invocation}/{function_call_id}"`. When a
+provider assigns no call ID, `LlmAgent` assigns one unique to the model turn, so two calls
+in one invocation never share a key.
+
+## The action ledger
+
+An `ActionLedger` records every `NonIdempotent` call before it executes and its outcome
+after. Set one on `RunConfig`:
+
+```rust
+use adk_core::{InMemoryActionLedger, RunConfig};
+use std::sync::Arc;
+
+let config = RunConfig::builder()
+    .action_ledger(Arc::new(InMemoryActionLedger::new()))
+    .build();
+```
+
+`LlmAgent` consults the ledger under the call's idempotency key before executing:
+
+| Ledger state | Behaviour | Function response |
+|--------------|-----------|-------------------|
+| No record | `begin`, execute, `complete` | The tool's result |
+| Completed with a result | Not executed | `{"status": "already_succeeded", "result_digest": "fnv1a128:…"}` |
+| Completed with an error | Not executed | `{"status": "already_failed", "error": "…"}` |
+| Begun, never completed | Not executed | `{"status": "outcome_unknown", "detail": "…"}` |
+| Read or `begin` fails | Not executed | `{"error": "tool '…' was not executed: …"}` |
+
+A call that times out or panics keeps its begun record, so a replay of it after a crash,
+a timeout, or a cancelled run is answered as `outcome_unknown` rather than executed a
+second time. The ledger stores `json_digest` digests of the arguments and result — a
+stable identifier, not a cryptographic hash — never the payloads themselves.
+
+| Implementation | Crate | Survives a restart |
+|----------------|-------|--------------------|
+| `InMemoryActionLedger` | `adk-core` | No |
+| `SqliteActionLedger` | `adk-session` (`sqlite` feature) | Yes |
+
+```toml
+[dependencies]
+adk-session = { version = "3.0.0", features = ["sqlite"] }
+```
+
+```rust
+use adk_core::RunConfig;
+use adk_session::SqliteActionLedger;
+use std::sync::Arc;
+
+let ledger = SqliteActionLedger::new("sqlite:actions.db?mode=rwc").await?;
+ledger.migrate().await?;
+let config = RunConfig::builder().action_ledger(Arc::new(ledger)).build();
+```
+
+## Unknown outcomes
+
+A `NonIdempotent` call whose side effect may or may not have happened is answered with
+an outcome-unknown function response instead of an error the model would read as an
+invitation to try again:
+
+```json
+{ "status": "outcome_unknown", "detail": "Tool 'charge_card' timed out after 300 seconds. The call may have taken effect; check its result before calling it again." }
+```
+
+| Cause | Source |
+|-------|--------|
+| The call hit the agent's tool timeout | `LlmAgent` |
+| The tool panicked | `LlmAgent` |
+| The ledger holds a begun record for the key | `LlmAgent` |
+| The run was cancelled while the call was in flight | `Runner` |
+
+When a run is cancelled — `Runner::interrupt()` or a cancellation token — the runner
+persists one function response for every call still in flight, so each call keeps exactly
+one response and the next turn's model request shows the call and its unknown outcome.
+`adk_core::is_outcome_unknown()` recognizes these responses.
 
 ## Delegation timeouts
 

@@ -907,7 +907,7 @@ pub fn tool_call_fingerprint(tool_name: &str, args: &Value) -> String {
 }
 
 /// Writes `value` as canonical JSON, with object keys sorted at every level.
-fn write_canonical(value: &Value, out: &mut String) {
+pub(crate) fn write_canonical(value: &Value, out: &mut String) {
     match value {
         Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();
@@ -1137,6 +1137,10 @@ pub struct RunConfig {
     /// when it is `None`; a tracker that is already set is kept, so callers can
     /// share one tracker across runs. See [`crate::budget`].
     pub budget_tracker: Option<Arc<crate::BudgetTracker>>,
+    /// Ledger that records non-idempotent tool calls so a replayed call never
+    /// executes twice. `None` disables ledgering. See
+    /// [`ActionLedger`](crate::ActionLedger).
+    pub action_ledger: Option<Arc<dyn crate::ActionLedger>>,
 }
 
 impl Default for RunConfig {
@@ -1159,6 +1163,7 @@ impl Default for RunConfig {
             invocation_hooks: Vec::new(),
             budget: None,
             budget_tracker: None,
+            action_ledger: None,
         }
     }
 }
@@ -1328,6 +1333,14 @@ impl RunConfigBuilder {
         self
     }
 
+    /// Sets the ledger that records non-idempotent tool calls.
+    ///
+    /// See [`RunConfig::action_ledger`].
+    pub fn action_ledger(mut self, ledger: Arc<dyn crate::ActionLedger>) -> Self {
+        self.config.action_ledger = Some(ledger);
+        self
+    }
+
     /// Consumes the builder and returns the configured [`RunConfig`].
     pub fn build(self) -> RunConfig {
         self.config
@@ -1351,6 +1364,7 @@ mod tests {
         assert!(config.tool_confirmation_decisions.is_empty());
         assert_eq!(config.max_transfer_depth, None);
         assert!(config.invocation_hooks.is_empty());
+        assert!(config.action_ledger.is_none());
     }
 
     #[test]

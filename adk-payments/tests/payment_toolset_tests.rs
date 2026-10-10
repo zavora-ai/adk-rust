@@ -283,10 +283,12 @@ async fn checkout_create_and_complete_are_non_idempotent_and_carry_the_idempoten
         "merchantName": "Merchant",
         "cart": serde_json::to_value(empty_cart()).unwrap(),
     });
-    create
-        .execute(Caller::with_scopes(&["payments:checkout:create"]), create_args)
-        .await
-        .expect("a caller holding the scope may create a checkout");
+    for _ in 0..2 {
+        create
+            .execute(Caller::with_scopes(&["payments:checkout:create"]), create_args.clone())
+            .await
+            .expect("a caller holding the scope may create a checkout");
+    }
     complete
         .execute(
             Caller::with_scopes(&["payments:checkout:complete"]),
@@ -296,8 +298,11 @@ async fn checkout_create_and_complete_are_non_idempotent_and_carry_the_idempoten
         .expect("a caller holding the scope may complete a checkout");
 
     let expected_key = Some("store/alice/session-1/inv-1/call-1".to_string());
-    let created = kernel.creates.lock().unwrap().pop().expect("the kernel was called");
-    assert_eq!(idempotency_key_of(&created), expected_key);
+    let creates = kernel.creates.lock().unwrap().clone();
+    assert_eq!(creates.len(), 2);
+    assert_eq!(idempotency_key_of(&creates[0]), expected_key);
+    // A replay of the same call names the same transaction rather than a new one.
+    assert_eq!(creates[0].transaction_id, creates[1].transaction_id);
     let completed = kernel.completes.lock().unwrap().pop().expect("the kernel was called");
     assert_eq!(idempotency_key_of(&completed), expected_key);
 }

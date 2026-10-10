@@ -116,9 +116,10 @@ pub trait Tool: Send + Sync {
     ///
     /// The runtime retries a failed call only when the effect is
     /// [`ToolEffect::ReadOnly`] or [`ToolEffect::Idempotent`] and the error is
-    /// retryable. The default derives the effect from [`Tool::is_read_only`], so
-    /// a tool that declares nothing is treated as non-idempotent and never
-    /// retried.
+    /// retryable, and records [`ToolEffect::NonIdempotent`] calls in the
+    /// [`ActionLedger`](crate::ActionLedger) when one is configured. The default
+    /// derives the effect from [`Tool::is_read_only`], so a tool that declares
+    /// nothing is treated as non-idempotent and never retried.
     ///
     /// # Example
     ///
@@ -228,7 +229,9 @@ pub trait ToolContext: CallbackContext {
     ///
     /// The default is `"{app}/{user}/{session}/{invocation}/{function_call_id}"`.
     /// Every attempt of one call shares the key and no other call has it, so a
-    /// tool can pass it to a downstream API that accepts an idempotency key.
+    /// tool can pass it to a downstream API that accepts an idempotency key, and
+    /// the [`ActionLedger`](crate::ActionLedger) records non-idempotent calls
+    /// under it.
     ///
     /// # Example
     ///
@@ -382,11 +385,11 @@ pub trait ToolContext: CallbackContext {
 
 /// The side-effect class of a tool, reported by [`Tool::effect`].
 ///
-/// | Effect | Retried after a retryable error |
-/// |--------|---------------------------------|
-/// | `ReadOnly` | Yes |
-/// | `Idempotent` | Yes |
-/// | `NonIdempotent` | No |
+/// | Effect | Retried after a retryable error | Recorded in the action ledger |
+/// |--------|---------------------------------|-------------------------------|
+/// | `ReadOnly` | Yes | No |
+/// | `Idempotent` | Yes | No |
+/// | `NonIdempotent` | No | Yes, when a ledger is configured |
 ///
 /// # Example
 ///

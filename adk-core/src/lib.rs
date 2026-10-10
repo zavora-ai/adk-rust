@@ -72,6 +72,8 @@
 //! - `app:` - Application state (application-wide)
 //! - `temp:` - Temporary data (cleared each turn)
 
+/// Durable record of non-idempotent tool calls.
+pub mod action_ledger;
 /// Core agent trait and event stream type.
 pub mod agent;
 /// Starting an agent turn without owning the runner's construction.
@@ -114,6 +116,10 @@ pub mod tool_concurrency;
 /// Content, Part, and multimodal data types.
 pub mod types;
 
+pub use action_ledger::{
+    ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, OUTCOME_UNKNOWN_STATUS,
+    is_outcome_unknown, json_digest, outcome_unknown_response,
+};
 pub use agent::{
     Agent, AgentCapabilities, AgentInteractionMode, AgentRelationshipKind, AgentTopology,
     AgentTopologyMember, AgentTopologyRelationship, AgentTransferDecision, AgentTransferRequest,
