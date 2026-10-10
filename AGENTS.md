@@ -618,7 +618,20 @@ The agent emits `event.actions.tool_confirmation = Some(ToolConfirmationRequest 
 
 4. **Graph interrupts** (`adk-graph`) — checkpoint-based pauses with durable state for complex approval workflows.
 
-Evaluation order: RBAC → BeforeToolCallback → ToolConfirmationPolicy → execute → AfterToolCallback.
+Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`):
+
+1. `ToolGuardrailSet` screens every call in the model's batch.
+2. `ToolConfirmationPolicy` — a static decision, the `ToolConfirmationHandler`, or a pause.
+3. Enhanced plugins (`before_tool_call`).
+4. Run-wide `InvocationHooks` (the runner's `PluginManager`), then `BeforeToolCallback`.
+5. Circuit breaker.
+6. `execute()` — `adk-auth` wrappers (`ProtectedTool`, `ScopeGuard`) check RBAC and scopes here,
+   so a denial is a tool error that retry budgets and `on_tool_error` callbacks see.
+7. `on_tool_error` (hooks, then callbacks) when the tool failed.
+8. `AfterToolCallback` (hooks, then callbacks), `AfterToolCallbackFull`, then enhanced plugins
+   (`after_tool_call`).
+
+A hook or callback that returns a value short-circuits the remaining callbacks of its kind.
 
 See `docs/official_docs/security/tool-authorization.md` for full documentation with CLI and web server examples.
 
