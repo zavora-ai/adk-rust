@@ -63,15 +63,16 @@ pub struct ScalePoint {
 pub struct StructuredJudgeConfig {
     /// Whether to attempt function calling (response_schema) first.
     pub prefer_function_calling: bool,
-    /// Temperature for the judge LLM.
-    pub temperature: f64,
+    /// Sampling temperature for the judge LLM; `None` omits it from the request, as models
+    /// that reject sampling parameters (Claude 5 models, OpenAI reasoning models) require.
+    pub temperature: Option<f64>,
     /// Custom rubrics (optional).
     pub rubrics: Vec<JudgeRubric>,
 }
 
 impl Default for StructuredJudgeConfig {
     fn default() -> Self {
-        Self { prefer_function_calling: true, temperature: 0.0, rubrics: Vec::new() }
+        Self { prefer_function_calling: true, temperature: None, rubrics: Vec::new() }
     }
 }
 
@@ -207,7 +208,7 @@ Example response:
         let full_prompt = format!("{system_prompt}\n\n{user_prompt}");
 
         let config = GenerateContentConfig {
-            temperature: Some(self.config.temperature as f32),
+            temperature: self.config.temperature.map(|temperature| temperature as f32),
             response_schema: Some(schema),
             ..Default::default()
         };
@@ -229,7 +230,7 @@ Example response:
         let full_prompt = format!("{system_prompt}\n\n{user_prompt}");
 
         let config = GenerateContentConfig {
-            temperature: Some(self.config.temperature as f32),
+            temperature: self.config.temperature.map(|temperature| temperature as f32),
             ..Default::default()
         };
 
@@ -537,7 +538,7 @@ That is my final answer."#;
     fn test_structured_judge_config_defaults() {
         let config = StructuredJudgeConfig::default();
         assert!(config.prefer_function_calling);
-        assert_eq!(config.temperature, 0.0);
+        assert_eq!(config.temperature, None);
         assert!(config.rubrics.is_empty());
     }
 }

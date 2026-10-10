@@ -164,7 +164,7 @@ The LLM judge assesses:
 - Factual accuracy
 - Completeness of response
 
-Judge requests use temperature 0.0 and the provider's default output limit. `LlmJudge::with_config` takes an `LlmJudgeConfig { temperature, max_tokens }` that overrides both on every judge request.
+Judge requests carry no temperature and use the provider's default output limit, so models that reject sampling parameters (Claude 5 models, OpenAI reasoning models) can judge. `LlmJudge::with_config` takes an `LlmJudgeConfig { temperature, max_tokens }`; `Some` values are sent on every judge request. `StructuredJudgeConfig::temperature` behaves the same way.
 
 ### Rubric-Based Evaluation
 

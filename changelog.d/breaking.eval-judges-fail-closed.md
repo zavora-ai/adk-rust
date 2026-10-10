@@ -10,7 +10,10 @@
   `collect_turn_details` is off. An error from the agent's event stream fails the case
   instead of being dropped, and cost and trace analysis use the evaluated turns' events
   instead of a second agent run.
-- **`LlmJudgeConfig` is applied, and `max_tokens` is `Option<usize>`** (`adk-eval`):
-  judge requests carry the configured temperature and output limit. `max_tokens`
-  defaults to `None`, the provider default, so thinking models are not truncated; wrap
-  an explicit limit in `Some`.
+- **`LlmJudgeConfig` is applied, and `max_tokens` and `temperature` are options**
+  (`adk-eval`): judge requests carry the configured temperature and output limit.
+  `max_tokens` defaults to `None`, the provider default, so thinking models are not
+  truncated. `temperature` is `Option<f64>` on `LlmJudgeConfig` and
+  `StructuredJudgeConfig` and defaults to `None`, which omits it from the request:
+  Claude 5 models and OpenAI reasoning models reject sampling parameters, so a fixed
+  0.0 failed every judged criterion. Wrap an explicit value in `Some`.

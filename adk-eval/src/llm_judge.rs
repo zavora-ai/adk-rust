@@ -19,22 +19,14 @@ pub struct LlmJudge {
 }
 
 /// Configuration for the LLM judge, sent with every judge request
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LlmJudgeConfig {
     /// Maximum output tokens for the judge response; `None` keeps the provider default,
     /// which avoids truncating models that count thinking tokens against the limit
     pub max_tokens: Option<usize>,
-    /// Temperature for judge (low for consistency)
-    pub temperature: f64,
-}
-
-impl Default for LlmJudgeConfig {
-    fn default() -> Self {
-        Self {
-            max_tokens: None,
-            temperature: 0.0, // Deterministic for evaluation
-        }
-    }
+    /// Sampling temperature for the judge; `None` omits it from the request, as models that
+    /// reject sampling parameters (Claude 5 models, OpenAI reasoning models) require
+    pub temperature: Option<f64>,
 }
 
 impl LlmJudge {
@@ -244,7 +236,7 @@ REASONING: [Brief explanation of the score]"#,
         );
 
         let config = GenerateContentConfig {
-            temperature: Some(self.config.temperature as f32),
+            temperature: self.config.temperature.map(|temperature| temperature as f32),
             max_output_tokens: self
                 .config
                 .max_tokens
@@ -599,7 +591,7 @@ ISSUES: Invented a statistic about 90% success rate, Made up researcher name"#;
         });
         let judge = LlmJudge::with_config(
             model.clone(),
-            LlmJudgeConfig { max_tokens: Some(512), temperature: 0.5 },
+            LlmJudgeConfig { max_tokens: Some(512), temperature: Some(0.5) },
         );
 
         let rubric = Rubric::new("Clarity", "Response is clear");
@@ -608,12 +600,22 @@ ISSUES: Invented a statistic about 90% success rate, Made up researcher name"#;
         let config = model.last_config.lock().unwrap().clone().expect("config sent");
         assert_eq!(config.max_output_tokens, Some(512));
         assert_eq!(config.temperature, Some(0.5));
+    }
 
-        let default_judge = LlmJudge::new(model.clone());
-        default_judge.evaluate_single_rubric("answer", "question", &rubric).await.unwrap();
+    #[tokio::test]
+    async fn default_judge_request_carries_no_sampling_parameters() {
+        let model = Arc::new(RecordingLlm {
+            reply: "SCORE: 0.9\nREASONING: ok",
+            last_config: std::sync::Mutex::new(None),
+        });
+        let judge = LlmJudge::new(model.clone());
+
+        let rubric = Rubric::new("Clarity", "Response is clear");
+        judge.evaluate_single_rubric("answer", "question", &rubric).await.unwrap();
+
         let config = model.last_config.lock().unwrap().clone().expect("config sent");
+        assert_eq!(config.temperature, None);
         assert_eq!(config.max_output_tokens, None);
-        assert_eq!(config.temperature, Some(0.0));
     }
 
     #[test]
