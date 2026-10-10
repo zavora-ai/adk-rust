@@ -226,6 +226,14 @@ fails unless the caller holds the scope the tool declares (`payments:checkout:cr
 the calling agent as the acting `CommerceActor` and binds the transaction to the
 caller's session identity.
 
+Checkout creation and completion run through a `GovernedCheckoutService`, which
+evaluates the policies passed to `with_payment_policies` on every call. A denial
+refuses the checkout, an escalation goes through the run's tool confirmation flow, and
+`SpendLimitGuardrail` reserves each completed checkout against the spend ledger
+(`with_spend_ledger` or `RunConfig::spend_ledger`), failing closed when the ledger is
+unreachable. Wrap the backend handed to the ACP and AP2 adapters in a
+`GovernedCheckoutService` to govern protocol traffic too.
+
 ## Primary Journeys
 
 The crate is currently shaped around five first-class journeys:
@@ -241,7 +249,7 @@ The crate is currently shaped around five first-class journeys:
 - Raw payment credentials, merchant signatures, user authorizations, and receipt artifacts are stored as evidence.
 - Session state and semantic memory retain only masked transaction summaries.
 - `adk-auth` binds requests to session identity and audit metadata.
-- `adk-guardrail` enforces amount, merchant, intervention, and protocol-policy checks before persistence.
+- `GovernedCheckoutService` enforces amount, merchant, currency, intervention, protocol-version, and spend policies before every checkout creation and completion.
 - `AmountThresholdGuardrail` compares totals by value across scales; `with_currency` binds its thresholds to one currency and denies the others.
 - The AP2 adapter rejects authorizations until cryptographic verifiers are configured, and executes each payment mandate at most once.
 - Delegated-payment method selections keep display fields only (type, brand, last four digits); the raw card reaches the tokenization backend and evidence store, not the selection.
