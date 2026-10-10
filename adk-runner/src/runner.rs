@@ -181,6 +181,8 @@ pub struct Runner {
     /// Optional context compaction configuration for token-budget overflow handling.
     #[cfg(feature = "context-compaction")]
     context_compaction: Option<Arc<crate::compaction::CompactionConfig>>,
+    /// Hold taken before each model call when the run config carries a spend ledger.
+    llm_spend_estimate: crate::spend::LlmSpendEstimate,
     /// Per-session cancellation tokens for the interrupt API.
     /// Each `run()` call registers a token here; `interrupt()` cancels it.
     active_runs: ActiveRuns,
@@ -264,6 +266,7 @@ impl Runner {
             intra_compactor,
             #[cfg(feature = "context-compaction")]
             context_compaction: config.context_compaction.map(Arc::new),
+            llm_spend_estimate: crate::spend::LlmSpendEstimate::default(),
             active_runs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             external_session_locks: Arc::new(std::sync::Mutex::new(
@@ -275,6 +278,15 @@ impl Runner {
     /// The executable root owned by this runner.
     pub(crate) fn root_agent(&self) -> Arc<dyn Agent> {
         Arc::clone(&self.root_agent)
+    }
+
+    /// Sets the hold the runner reserves before each model call when the run config carries
+    /// a [`spend_ledger`](RunConfig::spend_ledger).
+    ///
+    /// Defaults to [`LlmSpendEstimate::default`](crate::LlmSpendEstimate::default).
+    pub fn with_llm_spend_estimate(mut self, estimate: crate::LlmSpendEstimate) -> Self {
+        self.llm_spend_estimate = estimate;
+        self
     }
 
     /// Enable skill injection using a pre-built injector.
@@ -407,6 +419,16 @@ impl Runner {
                 run_config.invocation_hooks.insert(0, hooks);
             }
         }
+        // First in line, so it sees every chunk before a later hook can replace it.
+        let spend_recorder = run_config.spend_ledger.clone().map(|ledger| {
+            let recorder = Arc::new(crate::spend::LlmSpendRecorder::new(
+                ledger,
+                app_name.clone(),
+                self.llm_spend_estimate,
+            ));
+            run_config.invocation_hooks.insert(0, recorder.clone());
+            recorder
+        });
         let compaction_config = self.compaction_config.clone();
         let context_cache_config = self.context_cache_config.clone();
         let cache_capable = self.cache_capable.clone();
@@ -1386,7 +1408,11 @@ impl Runner {
             }
         };
 
-        Ok(RunnerInvocation { invocation_id, events: Box::pin(s) })
+        let events: EventStream = match spend_recorder {
+            Some(recorder) => Box::pin(crate::spend::settle_when_done(s, recorder)),
+            None => Box::pin(s),
+        };
+        Ok(RunnerInvocation { invocation_id, events })
     }
 
     /// Convenience method that accepts string arguments.

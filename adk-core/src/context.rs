@@ -1126,6 +1126,11 @@ pub struct RunConfig {
     /// `RunConfig` travels with the invocation, transfer targets and agents behind an agent tool
     /// run these hooks too. See [`InvocationHooks`](crate::InvocationHooks).
     pub invocation_hooks: Vec<Arc<dyn crate::InvocationHooks>>,
+    /// Ledger that model calls and payment tools reserve budget against.
+    ///
+    /// When set, the runner reserves an estimate before each model call and commits its
+    /// reported cost, and payment tools reserve checkout totals. See [`crate::SpendLedger`].
+    pub spend_ledger: Option<Arc<dyn crate::SpendLedger>>,
 }
 
 impl Default for RunConfig {
@@ -1146,6 +1151,7 @@ impl Default for RunConfig {
             trace_payload_max_bytes: 2048,
             max_transfer_depth: None,
             invocation_hooks: Vec::new(),
+            spend_ledger: None,
         }
     }
 }
@@ -1304,6 +1310,14 @@ impl RunConfigBuilder {
     /// See [`RunConfig::invocation_hooks`].
     pub fn invocation_hook(mut self, hook: Arc<dyn crate::InvocationHooks>) -> Self {
         self.config.invocation_hooks.push(hook);
+        self
+    }
+
+    /// Sets the ledger that model calls and payment tools reserve budget against.
+    ///
+    /// See [`RunConfig::spend_ledger`].
+    pub fn spend_ledger(mut self, ledger: Arc<dyn crate::SpendLedger>) -> Self {
+        self.config.spend_ledger = Some(ledger);
         self
     }
 

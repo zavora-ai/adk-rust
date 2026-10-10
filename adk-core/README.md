@@ -305,6 +305,23 @@ assert!(validate_state_key("user_name").is_ok());
 assert!(validate_state_key("../etc/passwd").is_err());
 ```
 
+### Spend Ledger
+
+`SpendLedger` holds one budget for model calls and payments: `reserve` holds an amount
+against every `SpendLimits` cap that covers a `SpendKey` (org, agent, vendor; day, month,
+or lifetime in UTC), `commit` records the actual amount, and `release` drops the hold.
+Unsettled holds expire after a TTL. `InMemorySpendLedger` is the process-local
+implementation; `adk-session` provides SQLite and PostgreSQL ledgers. Set
+`RunConfig::spend_ledger` to cap a run.
+
+```rust
+use adk_core::{InMemorySpendLedger, SpendKey, SpendLimits, SpendPeriod};
+
+let ledger = InMemorySpendLedger::new(
+    SpendLimits::new().limit(SpendKey::org("my-app").per(SpendPeriod::Day), 50_000_000),
+);
+```
+
 ### Provider Metadata
 
 The `Event` struct uses a generic `provider_metadata: HashMap<String, String>` field for provider-specific data (e.g., GCP Vertex, Azure OpenAI), keeping the core type provider-agnostic.
