@@ -13,8 +13,8 @@ use crate::types::citations_config::CitationsConfig;
 ///
 /// Responses can contain `server_tool_use` blocks named `code_execution` and
 /// `code_execution_tool_result` blocks alongside the `web_fetch_tool_result` blocks.
-/// **Important:** [`crate::ContentBlock`] has no `code_execution_tool_result`
-/// variant, so [`crate::Message`] deserialization fails on those responses.
+/// Set [`allowed_callers`](Self::allowed_callers) to `["direct"]` to call the tool
+/// directly, without dynamic filtering.
 ///
 /// # Example
 ///
@@ -63,6 +63,15 @@ pub struct WebFetchTool20260209 {
     /// Maximum number of tokens to return from the fetched content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_content_tokens: Option<i32>,
+
+    /// Who may call the tool: `"direct"` for Claude itself, or a code execution tool
+    /// version such as `"code_execution_20260120"`.
+    ///
+    /// The API defaults this version to `["code_execution_20260120"]`, which runs
+    /// fetches through dynamic filtering. `["direct"]` turns dynamic filtering off,
+    /// which Zero Data Retention and models without programmatic tool calling require.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_callers: Option<Vec<String>>,
 }
 
 fn default_name() -> String {
@@ -80,6 +89,7 @@ impl WebFetchTool20260209 {
             citations: None,
             max_uses: None,
             max_content_tokens: None,
+            allowed_callers: None,
         }
     }
 
@@ -120,6 +130,25 @@ impl WebFetchTool20260209 {
         self.max_content_tokens = Some(max_content_tokens);
         self
     }
+
+    /// Sets who may call the tool. `["direct"]` turns dynamic filtering off.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::WebFetchTool20260209;
+    ///
+    /// let tool = WebFetchTool20260209::new().with_allowed_callers(["direct"]);
+    /// let json = serde_json::to_value(&tool).unwrap();
+    /// assert_eq!(json["allowed_callers"], serde_json::json!(["direct"]));
+    /// ```
+    pub fn with_allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.allowed_callers = Some(callers.into_iter().map(Into::into).collect());
+        self
+    }
 }
 
 impl Default for WebFetchTool20260209 {
@@ -153,6 +182,14 @@ mod tests {
                 "max_content_tokens": 4000
             })
         );
+    }
+
+    #[test]
+    fn direct_callers_round_trip() {
+        let tool = WebFetchTool20260209::new().with_allowed_callers(["direct"]);
+        let wire = json!({"name": "web_fetch", "allowed_callers": ["direct"]});
+        assert_eq!(serde_json::to_value(&tool).unwrap(), wire);
+        assert_eq!(serde_json::from_value::<WebFetchTool20260209>(wire).unwrap(), tool);
     }
 
     #[test]

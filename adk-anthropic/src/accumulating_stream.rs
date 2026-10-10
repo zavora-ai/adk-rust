@@ -184,6 +184,7 @@ enum ContentBlockBuilder {
         name: String,
         input: ToolInput,
         cache_control: Option<CacheControlEphemeral>,
+        caller: Option<Value>,
     },
     Thinking {
         thinking: String,
@@ -241,6 +242,7 @@ impl ContentBlockBuilder {
                 name: server_tool_use.name,
                 input: ToolInput::new(server_tool_use.input),
                 cache_control: server_tool_use.cache_control,
+                caller: server_tool_use.caller,
             },
             ContentBlock::Thinking(thinking) => ContentBlockBuilder::Thinking {
                 thinking: thinking.thinking,
@@ -304,13 +306,14 @@ impl ContentBlockBuilder {
                     ContentBlock::ToolUse(ToolUseBlock { id, name, input, cache_control })
                 }))
             }
-            ContentBlockBuilder::ServerToolUse { id, name, input, cache_control } => {
+            ContentBlockBuilder::ServerToolUse { id, name, input, cache_control, caller } => {
                 Ok(input.resolve(stop_reason).map(|input| {
                     ContentBlock::ServerToolUse(ServerToolUseBlock {
                         id,
                         name,
                         input,
                         cache_control,
+                        caller,
                     })
                 }))
             }
@@ -374,6 +377,41 @@ mod tests {
             assert!(matches!(&message.content[1], ContentBlock::ToolUse(tool)
                 if tool.id == "read" && tool.input == json!({"path":"file.txt"})));
         }
+    }
+
+    /// A streamed `server_tool_use` keeps the `caller` from `content_block_start`.
+    #[tokio::test]
+    async fn streamed_server_tool_use_keeps_caller() {
+        use futures::StreamExt;
+        use serde_json::json;
+        let caller = json!({"type": "code_execution_20260120", "tool_id": "srvtoolu_exec"});
+        let events: Vec<_> = [
+            json!({"type":"message_start","message":{"id":"fixture","type":"message",
+                "role":"assistant","model":"fixture","content":[],"stop_reason":null,
+                "stop_sequence":null,"usage":{"input_tokens":8,"output_tokens":0}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{
+                "type":"server_tool_use","id":"srvtoolu_search","name":"web_search",
+                "input":{},"caller":caller}}),
+            json!({"type":"content_block_delta","index":0,
+                "delta":{"type":"input_json_delta","partial_json":"{\"query\":\"rust\"}"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},
+                "usage":{"output_tokens":4}}),
+            json!({"type":"message_stop"}),
+        ]
+        .into_iter()
+        .map(|value| Ok(serde_json::from_value(value).unwrap()))
+        .collect();
+        let (mut stream, result) = AccumulatingStream::new(stream::iter(events));
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        let message = result.await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&message.content).unwrap(),
+            json!([{"type":"server_tool_use","id":"srvtoolu_search","name":"web_search",
+                "input":{"query":"rust"},"caller":caller}])
+        );
     }
 
     /// Verifies that cache tokens from message_start are preserved through streaming.

@@ -130,6 +130,43 @@ fn test_anthropic_web_search_dynamic_filtering_declaration() {
             "blocked_domains": null,
             "max_uses": 2,
             "user_location": null,
+            "allowed_callers": null,
+        })
+    );
+}
+
+#[test]
+fn test_anthropic_web_search_direct_callers_disable_dynamic_filtering() {
+    let tool = WebSearchTool::new().with_dynamic_filtering().with_allowed_callers(["direct"]);
+
+    assert_eq!(
+        tool.declaration()["x-adk-anthropic-tool"],
+        json!({
+            "type": "web_search_20260209",
+            "name": "web_search",
+            "allowed_domains": null,
+            "blocked_domains": null,
+            "max_uses": null,
+            "user_location": null,
+            "allowed_callers": ["direct"],
+        })
+    );
+}
+
+#[test]
+fn test_anthropic_web_search_basic_version_omits_allowed_callers() {
+    let tool = WebSearchTool::new().with_allowed_callers(["direct"]);
+
+    assert_eq!(
+        tool.declaration()["x-adk-anthropic-tool"],
+        json!({
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "allowed_domains": null,
+            "blocked_domains": null,
+            "max_uses": null,
+            "user_location": null,
+            "allowed_callers": null,
         })
     );
 }

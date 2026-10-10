@@ -841,6 +841,37 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_tools_sends_direct_allowed_callers() {
+        use super::super::schema_adapter::AnthropicSchemaAdapter;
+        let mut tools = HashMap::new();
+        tools.insert(
+            "web_search".to_string(),
+            serde_json::json!({
+                "name": "web_search",
+                "x-adk-anthropic-tool": {
+                    "type": "web_search_20260209",
+                    "name": "web_search",
+                    "allowed_callers": ["direct"]
+                }
+            }),
+        );
+
+        let adapter = AnthropicSchemaAdapter;
+        let cache = SchemaCache::for_adapter(std::sync::Arc::new(AnthropicSchemaAdapter));
+        let claude_tools =
+            convert_tools(&tools, &adapter, &cache).expect("tool conversion should succeed");
+
+        assert_eq!(
+            serde_json::to_value(&claude_tools).unwrap(),
+            serde_json::json!([{
+                "type": "web_search_20260209",
+                "name": "web_search",
+                "allowed_callers": ["direct"]
+            }])
+        );
+    }
+
+    #[test]
     fn test_function_response_string_is_not_double_encoded() {
         let content = Content {
             role: "function".to_string(),

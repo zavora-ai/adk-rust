@@ -22,6 +22,13 @@ pub struct ServerToolUseBlock {
     /// Create a cache control breakpoint at this content block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<CacheControlEphemeral>,
+
+    /// Who made the call, as sent by the API: `{"type": "direct"}`, or
+    /// `{"type": "code_execution_20260120", "tool_id": "srvtoolu_..."}` for a call
+    /// made from code execution during dynamic filtering. Kept verbatim so replayed
+    /// history matches the response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<Value>,
 }
 
 fn default_name() -> String {
@@ -32,7 +39,7 @@ impl ServerToolUseBlock {
     /// Creates a new ServerToolUseBlock with the specified id and input.
     /// The name is set to "web_search" as that's the only supported server tool.
     pub fn new<S: Into<String>>(id: S, input: Value) -> Self {
-        Self { id: id.into(), input, name: default_name(), cache_control: None }
+        Self { id: id.into(), input, name: default_name(), cache_control: None, caller: None }
     }
 
     /// Add a cache control to this server tool use block.

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::types::{CacheControlEphemeral, WebFetchToolResultBlockContent};
 
@@ -18,12 +19,19 @@ pub struct WebFetchToolResultBlock {
     /// Create a cache control breakpoint at this content block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<CacheControlEphemeral>,
+
+    /// Who made the call, as sent by the API: `{"type": "direct"}`, or
+    /// `{"type": "code_execution_20260120", "tool_id": "srvtoolu_..."}` for a call
+    /// made from code execution during dynamic filtering. Kept verbatim so replayed
+    /// history matches the response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<Value>,
 }
 
 impl WebFetchToolResultBlock {
     /// Creates a new WebFetchToolResultBlock.
     pub fn new<S: Into<String>>(content: WebFetchToolResultBlockContent, tool_use_id: S) -> Self {
-        Self { content, tool_use_id: tool_use_id.into(), cache_control: None }
+        Self { content, tool_use_id: tool_use_id.into(), cache_control: None, caller: None }
     }
 
     /// Add a cache control to this web fetch tool result block.
@@ -54,6 +62,30 @@ mod tests {
 
     fn make_text_doc(text: &str) -> DocumentBlock {
         DocumentBlock::new(DocumentSource::PlainText(PlainTextSource::new(text.to_string())))
+    }
+
+    #[test]
+    fn caller_round_trips() {
+        let caller =
+            serde_json::json!({"type": "code_execution_20260120", "tool_id": "srvtoolu_exec"});
+        let block: WebFetchToolResultBlock = serde_json::from_value(serde_json::json!({
+            "type": "web_fetch_tool_result",
+            "tool_use_id": "srvtoolu_fetch",
+            "content": {"type": "web_fetch_tool_result_error", "error_code": "unavailable"},
+            "caller": caller
+        }))
+        .unwrap();
+        let mut expected = WebFetchToolResultBlock::new(
+            WebFetchToolResultBlockContent::with_error(WebFetchToolResultError::new(
+                WebFetchErrorCode::Unavailable,
+            )),
+            "srvtoolu_fetch",
+        );
+        expected.caller = Some(caller);
+        assert_eq!(block, expected);
+        let replayed: WebFetchToolResultBlock =
+            serde_json::from_value(serde_json::to_value(&block).unwrap()).unwrap();
+        assert_eq!(replayed, block);
     }
 
     #[test]

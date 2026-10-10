@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::types::{CacheControlEphemeral, WebSearchToolResultBlockContent};
 
@@ -18,12 +19,19 @@ pub struct WebSearchToolResultBlock {
     /// Create a cache control breakpoint at this content block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<CacheControlEphemeral>,
+
+    /// Who made the call, as sent by the API: `{"type": "direct"}`, or
+    /// `{"type": "code_execution_20260120", "tool_id": "srvtoolu_..."}` for a call
+    /// made from code execution during dynamic filtering. Kept verbatim so replayed
+    /// history matches the response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<Value>,
 }
 
 impl WebSearchToolResultBlock {
     /// Creates a new WebSearchToolResultBlock.
     pub fn new<S: Into<String>>(content: WebSearchToolResultBlockContent, tool_use_id: S) -> Self {
-        Self { content, tool_use_id: tool_use_id.into(), cache_control: None }
+        Self { content, tool_use_id: tool_use_id.into(), cache_control: None, caller: None }
     }
 
     /// Creates a new WebSearchToolResultBlock with results.
