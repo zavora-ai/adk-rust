@@ -75,6 +75,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "hex",
+ "hmac",
  "serde",
  "serde_json",
  "sha2",

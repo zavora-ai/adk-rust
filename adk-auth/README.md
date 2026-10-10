@@ -225,6 +225,12 @@ Output:
 
 Implement the `AuditSink` trait for custom destinations (database, external service, etc.).
 
+A protected or scoped tool refuses a call whose decision the sink fails to record
+(`AuditFailureMode::Block`, the default); `with_audit_failure_mode(AuditFailureMode::Warn)`
+logs the failure and continues instead. `FileAuditSink::with_chaining` and
+`with_hmac_chaining` write a hash chain that resumes after a restart, and
+`FileAuditSink::verify` reports the first line that was edited, inserted, or removed.
+
 ## Error Types
 
 | Type | When |
