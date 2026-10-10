@@ -136,6 +136,10 @@ pub struct AgentToolConfig {
     pub forward_artifacts: bool,
 
     /// Optional timeout for sub-agent execution.
+    ///
+    /// The parent agent applies this instead of its own tool timeout, so a
+    /// delegation is not cut short by a limit sized for ordinary tool calls.
+    /// `None` imposes no limit beyond the run's own budget and cancellation.
     pub timeout: Option<Duration>,
 
     /// Custom input schema for the tool.
@@ -197,6 +201,9 @@ impl AgentTool {
     }
 
     /// Set timeout for sub-agent execution.
+    ///
+    /// The parent agent applies this instead of its own tool timeout. Without
+    /// one, the delegation runs until it finishes or the run is cancelled.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.config.timeout = Some(timeout);
         self
@@ -535,6 +542,11 @@ impl Tool for AgentTool {
 
     fn is_agent_delegation(&self) -> bool {
         true
+    }
+
+    // The delegation's own timeout replaces the parent's generic tool timeout.
+    fn timeout_override(&self) -> Option<Option<Duration>> {
+        Some(self.config.timeout)
     }
 
     #[adk_telemetry::instrument(
