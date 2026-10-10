@@ -365,10 +365,30 @@ async fn cancel_pending_tasks_releases_a_task_the_server_no_longer_knows() {
 
 #[tokio::test]
 async fn cancel_pending_tasks_releases_a_task_whose_cancel_is_rejected_as_finished() {
+    let asks = Some(TaskPayload::InputRequired {
+        input_requests: [("answer".into(), input_request())].into(),
+    });
+    let server = ScriptedTaskServer::new([asks, Some(TaskPayload::Working)]);
+    let client = InputClient::default().serve(spawn_server(server.clone())).await.unwrap();
+    let toolset = McpToolset::new(client).with_task_support(fast_tasks().max_input_rounds(0));
+    // A call that fails while polling leaves its task tracked and running.
+    let error = toolset.call_tool_value("job", Default::default()).await.unwrap_err();
+    assert!(error.to_string().contains("exceeded 0 input rounds"), "{error}");
+    assert_eq!(server.cancels.load(Ordering::SeqCst), 0);
+
+    toolset.cancel_pending_tasks().await.unwrap();
+    assert_eq!(server.cancels.load(Ordering::SeqCst), 1);
+    let gets = server.gets.load(Ordering::SeqCst);
+    toolset.cancel_pending_tasks().await.unwrap();
+    assert_eq!(server.gets.load(Ordering::SeqCst), gets, "a released task is not checked again");
+}
+
+#[tokio::test]
+async fn a_dropped_call_cancels_the_task_the_server_created_for_it() {
     let server = ScriptedTaskServer::new([Some(TaskPayload::Working)]);
     let client = InputClient::default().serve(spawn_server(server.clone())).await.unwrap();
     let toolset = McpToolset::new(client).with_task_support(fast_tasks());
-    // Dropping the call once it polls leaves its task tracked, as an abandoned turn does.
+    // An agent-level tool timeout drops the call while it polls the task.
     tokio::select! {
         result = toolset.call_tool_value("job", Default::default()) => {
             panic!("a working task must not finish: {result:?}");
@@ -380,11 +400,16 @@ async fn cancel_pending_tasks_releases_a_task_whose_cancel_is_rejected_as_finish
         } => {}
     }
 
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while server.cancels.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the server never received tasks/cancel for the dropped call");
+    // The cancel finished the task, so cleanup releases it without a second cancel.
     toolset.cancel_pending_tasks().await.unwrap();
     assert_eq!(server.cancels.load(Ordering::SeqCst), 1);
-    let gets = server.gets.load(Ordering::SeqCst);
-    toolset.cancel_pending_tasks().await.unwrap();
-    assert_eq!(server.gets.load(Ordering::SeqCst), gets, "a released task is not checked again");
 }
 
 #[tokio::test]
