@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use adk_core::identity::AdkIdentity;
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -11,9 +10,8 @@ use crate::auth::{
     CHECKOUT_UPDATE_SCOPES,
 };
 use crate::domain::{
-    Cart, CommerceActor, CommerceActorRole, CommerceMode, FulfillmentSelection, MerchantRef,
-    PaymentMethodSelection, ProtocolDescriptor, ProtocolExtensions, SafeTransactionSummary,
-    TransactionId,
+    Cart, CommerceMode, FulfillmentSelection, MerchantRef, PaymentMethodSelection,
+    ProtocolDescriptor, ProtocolExtensions, SafeTransactionSummary, TransactionId,
 };
 use crate::guardrail::redact_tool_output;
 use crate::kernel::commands::{
@@ -21,6 +19,8 @@ use crate::kernel::commands::{
     UpdateCheckoutCommand,
 };
 use crate::kernel::service::MerchantCheckoutService;
+
+use super::{caller_identity, calling_agent};
 
 /// JSON parameters accepted by `payments_checkout_create`.
 #[derive(Debug, Deserialize)]
@@ -84,22 +84,16 @@ fn parse_args<T: serde::de::DeserializeOwned>(tool_name: &str, args: Value) -> R
 }
 
 fn tool_context(
+    ctx: &dyn ToolContext,
     transaction_id: &str,
     merchant_id: &str,
     merchant_name: &str,
     mode: Option<CommerceMode>,
-    session_identity: Option<AdkIdentity>,
 ) -> CommerceContext {
     CommerceContext {
         transaction_id: TransactionId::from(transaction_id),
-        session_identity,
-        actor: CommerceActor {
-            actor_id: "agent-tool".to_string(),
-            role: CommerceActorRole::AgentSurface,
-            display_name: Some("payment tool".to_string()),
-            tenant_id: None,
-            extensions: ProtocolExtensions::default(),
-        },
+        session_identity: caller_identity(ctx),
+        actor: calling_agent(ctx),
         merchant_of_record: MerchantRef {
             merchant_id: merchant_id.to_string(),
             legal_name: merchant_name.to_string(),
@@ -151,7 +145,7 @@ impl Tool for CreateCheckoutTool {
         CHECKOUT_CREATE_SCOPES
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let params: CreateParams = parse_args("checkout_create", args)?;
         let tx_id = format!(
             "tool_tx_{:016x}",
@@ -160,8 +154,13 @@ impl Tool for CreateCheckoutTool {
                 .unwrap_or_default()
                 .as_nanos()
         );
-        let context =
-            tool_context(&tx_id, &params.merchant_id, &params.merchant_name, params.mode, None);
+        let context = tool_context(
+            ctx.as_ref(),
+            &tx_id,
+            &params.merchant_id,
+            &params.merchant_name,
+            params.mode,
+        );
         let command =
             CreateCheckoutCommand { context, cart: params.cart, fulfillment: params.fulfillment };
         let record = self.checkout_service.create_checkout(command).await?;
@@ -196,9 +195,9 @@ impl Tool for UpdateCheckoutTool {
         CHECKOUT_UPDATE_SCOPES
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let params: UpdateParams = parse_args("checkout_update", args)?;
-        let context = tool_context(&params.transaction_id, "", "unknown", None, None);
+        let context = tool_context(ctx.as_ref(), &params.transaction_id, "", "unknown", None);
         let command =
             UpdateCheckoutCommand { context, cart: params.cart, fulfillment: params.fulfillment };
         let record = self.checkout_service.update_checkout(command).await?;
@@ -233,9 +232,9 @@ impl Tool for CompleteCheckoutTool {
         CHECKOUT_COMPLETE_SCOPES
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let params: CompleteParams = parse_args("checkout_complete", args)?;
-        let context = tool_context(&params.transaction_id, "", "unknown", None, None);
+        let context = tool_context(ctx.as_ref(), &params.transaction_id, "", "unknown", None);
         let command = CompleteCheckoutCommand {
             context,
             selected_payment_method: params.selected_payment_method,
@@ -273,9 +272,9 @@ impl Tool for CancelCheckoutTool {
         CHECKOUT_CANCEL_SCOPES
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let params: CancelParams = parse_args("checkout_cancel", args)?;
-        let context = tool_context(&params.transaction_id, "", "unknown", None, None);
+        let context = tool_context(ctx.as_ref(), &params.transaction_id, "", "unknown", None);
         let command = CancelCheckoutCommand {
             context,
             reason: params.reason,
