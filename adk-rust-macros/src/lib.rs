@@ -468,12 +468,26 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
             /// Invoke the workflow with an initial state and execution configuration.
             ///
             /// This method:
-            /// 1. Creates or restores a `TaskContext` from the last checkpoint
-            /// 2. Validates initial state against the configured schema
-            /// 3. Creates a checkpoint before execution
-            /// 4. Calls the annotated workflow function
-            /// 5. Persists the final checkpoint
-            /// 6. Returns the final workflow state
+            /// 1. Restores state and the execution log from the checkpoint
+            ///    `execution_config.resume_from` names, or starts from
+            ///    `initial_state` when it is unset
+            /// 2. Hands `execution_config.resume_values` to the `TaskContext`,
+            ///    so an interrupt whose key is present returns its value
+            /// 3. Validates state against the configured schema
+            /// 4. Creates a checkpoint before execution, carrying the execution log
+            /// 5. Calls the annotated workflow function
+            /// 6. Persists the final checkpoint
+            /// 7. Returns the final workflow state
+            ///
+            /// Every checkpoint the run writes carries the execution log, so a
+            /// run resumed from any of them replays the tasks that completed
+            /// before it, however many times the workflow is resumed.
+            ///
+            /// # Errors
+            ///
+            /// Returns `GraphError::CheckpointError` when `resume_from` names a
+            /// checkpoint this thread does not have, and the workflow's own error
+            /// when it fails or suspends at an interrupt.
             pub async fn invoke(
                 &self,
                 initial_state: adk_graph::state::State,
@@ -486,26 +500,18 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
                 let thread_id = execution_config.thread_id.clone();
 
-                // Try to restore from checkpoint if resuming
-                let (state, execution_log) = if execution_config.resume_from.is_some() {
-                    match self.checkpointer.load(&thread_id).await? {
-                        Some(checkpoint) => {
-                            let log: ExecutionLog = checkpoint
-                                .metadata
-                                .get("execution_log")
-                                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                                .unwrap_or_default();
-                            (checkpoint.state, log)
-                        }
-                        None => (initial_state, ExecutionLog::new()),
-                    }
-                } else {
-                    (initial_state, ExecutionLog::new())
-                };
+                let (state, execution_log) = adk_graph::functional::__private::load_resume_point(
+                    self.checkpointer.as_ref(),
+                    &execution_config,
+                )
+                .await?
+                .unwrap_or_else(|| (initial_state, ExecutionLog::new()));
 
                 // Create broadcast channel for stream events
                 let (event_tx, _) = tokio::sync::broadcast::channel::<StreamEvent>(256);
                 let cancel_token = tokio_util::sync::CancellationToken::new();
+                let pre_step = execution_log.current_step();
+                let pre_log = serde_json::to_value(&execution_log)?;
                 let execution_log = std::sync::Arc::new(tokio::sync::RwLock::new(execution_log));
 
                 // Create TaskContext
@@ -517,19 +523,23 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     execution_log.clone(),
                     cancel_token,
                     None,
-                );
+                )
+                .with_resume_values(execution_config.resume_values);
 
                 // Validate initial state against schema (if configured)
                 ctx.validate_state().map_err(|e| adk_graph::error::GraphError::Other(e.to_string()))?;
 
-                // Create pre-execution checkpoint
+                // The pre-execution checkpoint becomes the thread's latest. Without
+                // the log, a crash before the next task completes would resume
+                // with an empty log and run every completed task again.
                 let pre_checkpoint = Checkpoint::new(
                     &thread_id,
                     ctx.state().clone(),
-                    0,
+                    pre_step,
                     vec![],
                 )
-                .with_metadata("phase", serde_json::Value::String("pre_execution".to_string()));
+                .with_metadata("phase", serde_json::Value::String("pre_execution".to_string()))
+                .with_metadata("execution_log", pre_log);
                 self.checkpointer.save(&pre_checkpoint).await?;
 
                 // Emit workflow start event

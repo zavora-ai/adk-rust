@@ -170,7 +170,9 @@ impl Tool for NodeTool {
             }
         }
 
-        let config = ExecutionConfig::new(ctx.session_id());
+        let thread_id =
+            crate::agent::session_thread_id(ctx.app_name(), ctx.user_id(), ctx.session_id());
+        let config = ExecutionConfig::new(&thread_id);
 
         match &self.target {
             Target::Node(node) => {
@@ -184,7 +186,7 @@ impl Tool for NodeTool {
                     .await
                     .map_err(|error| AdkError::tool(error.to_string()))?;
                 if let Some(interrupt) = output.interrupt {
-                    return Ok(interrupt_value(&interrupt, ctx.session_id(), ""));
+                    return Ok(interrupt_value(&interrupt, &thread_id, ""));
                 }
                 Ok(Value::Object(output.updates.into_iter().collect()))
             }

@@ -215,15 +215,20 @@ impl TaskContext {
         // Emit the interrupt event for stream listeners.
         self.emit(StreamEvent::interrupted("functional_task", message));
 
-        // Persist the interrupt checkpoint.
-        let checkpoint = crate::state::Checkpoint::new(
-            &self.thread_id,
-            self.state.clone(),
-            self.current_step().await,
-            vec![],
-        )
-        .with_metadata("interrupt_message", Value::String(message.to_string()))
-        .with_metadata("continuation_key", Value::String(continuation_key.clone()));
+        // Persist the interrupt checkpoint. It carries the execution log so a run
+        // resumed from it replays the tasks that completed before the interrupt.
+        let checkpoint = {
+            let log = self.execution_log.read().await;
+            crate::state::Checkpoint::new(
+                &self.thread_id,
+                self.state.clone(),
+                log.current_step(),
+                vec![],
+            )
+            .with_metadata("interrupt_message", Value::String(message.to_string()))
+            .with_metadata("continuation_key", Value::String(continuation_key.clone()))
+            .with_metadata("execution_log", serde_json::to_value(&*log)?)
+        };
 
         self.checkpointer.save(&checkpoint).await.map_err(|e| {
             FunctionalError::CheckpointFailed {

@@ -601,7 +601,9 @@ key derived from the thread id and step.
 
 ### GraphAgent Turns
 
-`GraphAgent::run` uses the session id as the thread id, and each call is a turn. A
+`GraphAgent::run` keys its thread by `session_thread_id(app_name, user_id,
+session_id)`, so two users who choose the same session id never share checkpoints, and
+each call is a turn. A
 paused thread resumes; a finished thread runs again from its entry nodes, starting
 from the previous turn's final state with the new input merged on top. The recursion
 limit applies per turn. `invoke` keeps the direct-graph behaviour, where a finished

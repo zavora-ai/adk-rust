@@ -797,7 +797,10 @@ To bridge manually — for instance when driving a graph from your own executor 
 the invocation explicitly:
 
 ```rust
-let config = ExecutionConfig::new(ctx.session_id()).with_parent_context(ctx.clone());
+use adk_graph::agent::session_thread_id;
+
+let thread_id = session_thread_id(ctx.app_name(), ctx.user_id(), ctx.session_id());
+let config = ExecutionConfig::new(&thread_id).with_parent_context(ctx.clone());
 ```
 
 > **Note:** the node still runs on its own in-memory graph session, so agent
@@ -1669,8 +1672,11 @@ let graph_agent = GraphAgent::builder("workflow")
 
 ### Turns on a Checkpointed Thread
 
-Each `Agent::run` call is one turn on a thread whose id is the session id. With a
-checkpointer configured:
+Each `Agent::run` call is one turn on the session's thread. The thread id is
+`adk_graph::agent::session_thread_id(app_name, user_id, session_id)`: the three parts
+joined with `:`, with `%` and `:` percent-encoded inside each, so two users who choose
+the same session id never share checkpoints. `NodeTool` keys a graph tool call's thread
+the same way. With a checkpointer configured:
 
 | Thread's latest checkpoint | What the turn does |
 |----------------------------|--------------------|

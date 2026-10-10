@@ -30,8 +30,8 @@ pub enum FunctionalError {
     /// The workflow suspended at an interrupt and needs a resume value.
     ///
     /// `continuation_key` identifies the interrupt site. Supply the value under that key via
-    /// `TaskContext::with_resume_values` and re-invoke the entrypoint; the interrupt call then
-    /// returns the value instead of this error.
+    /// `ExecutionConfig::with_resume_value` (or `TaskContext::with_resume_values`) and re-invoke
+    /// the entrypoint; the interrupt call then returns the value instead of this error.
     ///
     /// Previously an interrupt always produced `InterruptTypeMismatch`, so a caller could not
     /// tell "needs input" from "the value you gave me was the wrong type" — and there was no
