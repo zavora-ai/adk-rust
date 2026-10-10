@@ -49,6 +49,16 @@ macro_rules! impl_protected_tool {
                 ($inner).required_scopes()
             }
 
+            fn effect(&self) -> adk_core::ToolEffect {
+                let $self_ident = self;
+                ($inner).effect()
+            }
+
+            fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+                let $self_ident = self;
+                ($inner).timeout_override()
+            }
+
             async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
                 let $self_ident = self;
                 execute_protected_tool(
@@ -98,6 +108,16 @@ macro_rules! impl_protected_tool {
             fn required_scopes(&self) -> &[&str] {
                 let $self_ident = self;
                 ($inner).required_scopes()
+            }
+
+            fn effect(&self) -> adk_core::ToolEffect {
+                let $self_ident = self;
+                ($inner).effect()
+            }
+
+            fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+                let $self_ident = self;
+                ($inner).timeout_override()
             }
 
             async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
