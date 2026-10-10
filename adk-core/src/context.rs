@@ -1119,6 +1119,13 @@ pub struct RunConfig {
     /// Prevents infinite transfer loops when agents transfer back and forth.
     /// Defaults to 10 when `None`.
     pub max_transfer_depth: Option<u32>,
+    /// Hooks applied to every model and tool call in the invocation, ahead of each agent's own
+    /// callbacks.
+    ///
+    /// The runner prepends its plugin manager here at the start of each run. Because the
+    /// `RunConfig` travels with the invocation, transfer targets and agents behind an agent tool
+    /// run these hooks too. See [`InvocationHooks`](crate::InvocationHooks).
+    pub invocation_hooks: Vec<Arc<dyn crate::InvocationHooks>>,
 }
 
 impl Default for RunConfig {
@@ -1138,6 +1145,7 @@ impl Default for RunConfig {
             record_payloads: false,
             trace_payload_max_bytes: 2048,
             max_transfer_depth: None,
+            invocation_hooks: Vec::new(),
         }
     }
 }
@@ -1291,6 +1299,14 @@ impl RunConfigBuilder {
         self
     }
 
+    /// Appends a hook applied to every model and tool call in the invocation.
+    ///
+    /// See [`RunConfig::invocation_hooks`].
+    pub fn invocation_hook(mut self, hook: Arc<dyn crate::InvocationHooks>) -> Self {
+        self.config.invocation_hooks.push(hook);
+        self
+    }
+
     /// Consumes the builder and returns the configured [`RunConfig`].
     pub fn build(self) -> RunConfig {
         self.config
@@ -1313,6 +1329,7 @@ mod tests {
         assert_eq!(config.trace_payload_max_bytes, 2048);
         assert!(config.tool_confirmation_decisions.is_empty());
         assert_eq!(config.max_transfer_depth, None);
+        assert!(config.invocation_hooks.is_empty());
     }
 
     #[test]

@@ -67,6 +67,7 @@ reqwest = { workspace = true }
 # Internal dev-deps are path-only (no version) so cargo strips them from the
 # published manifest — they can never block or reorder a crates.io publish.
 adk-model = { path = "../adk-model", features = ["gemini", "gemini-interactions", "openai"] }
+adk-plugin = { path = "../adk-plugin" }
 adk-runner = { path = "../adk-runner" }
 adk-session = { path = "../adk-session" }
 adk-tool = { path = "../adk-tool" }

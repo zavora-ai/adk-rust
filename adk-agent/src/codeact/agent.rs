@@ -49,6 +49,7 @@ use crate::codeact::error_map::{
 use crate::codeact::output::ScriptOutput;
 use crate::codeact::runtime::{CodeRuntime, ResumeWith, RunStep, RuntimeError, bind_call_args};
 use crate::guardrails::{GuardrailSet, enforce_guardrails};
+use crate::invocation_hooks::HookCallbacks;
 use crate::skill_shim::{SelectionPolicy, SkillIndex, select_skill_prompt_block};
 #[cfg(feature = "enhanced-plugins")]
 use adk_plugin::{
@@ -192,6 +193,8 @@ struct ToolPolicy<'a> {
     before_tool: &'a [BeforeToolCallback],
     after_tool: &'a [AfterToolCallback],
     after_tool_full: &'a [AfterToolCallbackFull],
+    /// The run's invocation hooks, iterated ahead of the agent's own tool callbacks.
+    hooks: &'a HookCallbacks,
     #[cfg(feature = "enhanced-plugins")]
     plugins: Option<&'a EnhancedPluginManager>,
 }
@@ -223,6 +226,8 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
         } = input;
 
         let tool_map = build_tool_map(&tools);
+        // Runner plugins and other run-wide hooks reach this agent through the run config.
+        let hook_callbacks = HookCallbacks::new(&invocation_ctx.run_config().invocation_hooks);
         let mut live_confirmation_decisions =
             HashMap::<String, ToolConfirmationDecision>::new();
         let roster = roster(&tool_map);
@@ -236,6 +241,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
             before_tool: before_tool_callbacks.as_slice(),
             after_tool: after_tool_callbacks.as_slice(),
             after_tool_full: after_tool_callbacks_full.as_slice(),
+            hooks: &hook_callbacks,
             #[cfg(feature = "enhanced-plugins")]
             plugins: enhanced_plugin_manager.as_deref(),
         };
@@ -247,6 +253,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
         let model_hooks = ModelHooks {
             before: before_model_callbacks.as_slice(),
             after: after_model_callbacks.as_slice(),
+            hooks: &hook_callbacks,
             ctx: &model_ctx,
             #[cfg(feature = "enhanced-plugins")]
             plugins: enhanced_plugin_manager.as_deref(),
@@ -888,13 +895,13 @@ async fn run_tool(
 
     // before-tool callbacks: the first to return content short-circuits the call
     // (its value is fed back into the script as if the tool had returned it).
-    if !policy.before_tool.is_empty() {
+    if !policy.hooks.before_tool.is_empty() || !policy.before_tool.is_empty() {
         let cb_ctx: Arc<dyn CallbackContext> = Arc::new(ToolCallbackContext::new(
             tool_ctx.clone() as Arc<dyn CallbackContext>,
             name.clone(),
             args.clone(),
         ));
-        for callback in policy.before_tool {
+        for callback in policy.hooks.before_tool.iter().chain(policy.before_tool) {
             match callback(cb_ctx.clone()).await {
                 Ok(Some(content)) => return Ok(content_to_tool_value(&content)),
                 Ok(None) => continue,
@@ -958,7 +965,7 @@ async fn run_tool(
             // after-tool callbacks still see the original failed outcome even
             // when an on-tool-error fallback supplies the response value.
             let mut fallback = None;
-            for callback in policy.on_tool_error {
+            for callback in policy.hooks.on_tool_error.iter().chain(policy.on_tool_error) {
                 match callback(
                     tool_ctx.clone() as Arc<dyn CallbackContext>,
                     tool.clone(),
@@ -987,14 +994,17 @@ async fn run_tool(
     // Some replaces the tool result fed back into the script. They run for both
     // success and failure, with `ToolOutcome` carrying success/error metadata,
     // matching LlmAgent.
-    if !policy.after_tool.is_empty() || !policy.after_tool_full.is_empty() {
+    if !policy.hooks.after_tool.is_empty()
+        || !policy.after_tool.is_empty()
+        || !policy.after_tool_full.is_empty()
+    {
         let outcome_ctx: Arc<dyn CallbackContext> = Arc::new(ToolOutcomeContext::new(
             tool_ctx.clone() as Arc<dyn CallbackContext>,
             outcome,
         ));
         let cb_ctx: Arc<dyn CallbackContext> =
             Arc::new(ToolCallbackContext::new(outcome_ctx, name.clone(), args.clone()));
-        for callback in policy.after_tool {
+        for callback in policy.hooks.after_tool.iter().chain(policy.after_tool) {
             match callback(cb_ctx.clone()).await {
                 Ok(Some(content)) => {
                     result = Ok(content_to_tool_value(&content));
@@ -1250,6 +1260,8 @@ fn roster_list(targets: &[String]) -> String {
 struct ModelHooks<'a> {
     before: &'a [BeforeModelCallback],
     after: &'a [AfterModelCallback],
+    /// The run's invocation hooks, iterated ahead of `before` and `after`.
+    hooks: &'a HookCallbacks,
     ctx: &'a Arc<dyn CallbackContext>,
     #[cfg(feature = "enhanced-plugins")]
     plugins: Option<&'a EnhancedPluginManager>,
@@ -1285,7 +1297,7 @@ async fn next_script(
 
     // before-model callbacks: rewrite the request or skip the call with a response.
     if content.is_none() {
-        for callback in hooks.before {
+        for callback in hooks.hooks.before_model.iter().chain(hooks.before) {
             match callback(hooks.ctx.clone(), request.clone()).await? {
                 BeforeModelResult::Continue(modified) => request = modified,
                 BeforeModelResult::Skip(response) => {
@@ -1312,7 +1324,7 @@ async fn next_script(
     }
 
     // after-model callbacks: rewrite the accumulated response.
-    for callback in hooks.after {
+    for callback in hooks.hooks.after_model.iter().chain(hooks.after) {
         let response = LlmResponse { content: content.clone(), ..Default::default() };
         if let Some(modified) = callback(hooks.ctx.clone(), response).await? {
             content = modified.content;
@@ -1812,14 +1824,14 @@ impl Agent for CodeActAgent {
 
         let before = self.before_callbacks.clone();
         let after = self.after_callbacks.clone();
+        let hooks = HookCallbacks::new(&ctx.run_config().invocation_hooks);
         // Agent-level callbacks receive the invocation context as a callback
         // context (upcast), exactly like LlmAgent.
         let cb_ctx = ctx as Arc<dyn CallbackContext>;
 
         Ok(Box::pin(run_with_agent_callbacks(
             input,
-            before,
-            after,
+            AgentCallbacks { hooks, before, after },
             cb_ctx,
             invocation_id,
             agent_name,
@@ -1838,20 +1850,20 @@ impl Agent for CodeActAgent {
 ///   wins.
 fn run_with_agent_callbacks(
     input: LoopInputs,
-    before: Arc<Vec<BeforeAgentCallback>>,
-    after: Arc<Vec<AfterAgentCallback>>,
+    callbacks: AgentCallbacks,
     cb_ctx: Arc<dyn CallbackContext>,
     invocation_id: String,
     agent_name: String,
 ) -> impl Stream<Item = adk_core::Result<Event>> {
     stream! {
+        let AgentCallbacks { hooks, before, after } = callbacks;
         // ----- before-agent callbacks -----
-        for callback in before.iter() {
+        for callback in hooks.before_agent.iter().chain(before.iter()) {
             match callback(cb_ctx.clone()).await {
                 Ok(Some(content)) => {
                     yield Ok(callback_event(&invocation_id, &agent_name, content));
                     // Short-circuit: run after-agent callbacks, then stop.
-                    for after_cb in after.iter() {
+                    for after_cb in hooks.after_agent.iter().chain(after.iter()) {
                         match after_cb(cb_ctx.clone()).await {
                             Ok(Some(c)) => {
                                 yield Ok(callback_event(&invocation_id, &agent_name, c));
@@ -1904,7 +1916,7 @@ fn run_with_agent_callbacks(
 
         // ----- after-agent callbacks -----
         if !errored && completed && !handed_off {
-            for after_cb in after.iter() {
+            for after_cb in hooks.after_agent.iter().chain(after.iter()) {
                 match after_cb(cb_ctx.clone()).await {
                     Ok(Some(c)) => {
                         yield Ok(callback_event(&invocation_id, &agent_name, c));
@@ -1919,6 +1931,13 @@ fn run_with_agent_callbacks(
             }
         }
     }
+}
+
+/// Agent-level callbacks: the run's invocation hooks first, then the agent's own.
+struct AgentCallbacks {
+    hooks: HookCallbacks,
+    before: Arc<Vec<BeforeAgentCallback>>,
+    after: Arc<Vec<AfterAgentCallback>>,
 }
 
 /// An event carrying content produced by an agent-level callback.
@@ -4134,6 +4153,76 @@ mod tests {
         assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("done"));
         // The failing tool never ran; the callback's text was fed back.
         assert_eq!(rt.last_value(), Some(json!("intercepted")));
+        assert!(rt.last_raise().is_none());
+    }
+
+    /// Skips the model with a final-result script and short-circuits every tool call.
+    #[derive(Debug)]
+    struct PolicyHooks;
+
+    #[async_trait]
+    impl adk_core::InvocationHooks for PolicyHooks {
+        async fn before_model(
+            &self,
+            _ctx: Arc<dyn CallbackContext>,
+            _request: LlmRequest,
+        ) -> adk_core::Result<BeforeModelResult> {
+            Ok(BeforeModelResult::Skip(LlmResponse::new(
+                Content::new("model").with_text("```\nreturn final_result\n```"),
+            )))
+        }
+
+        async fn before_tool(
+            &self,
+            _ctx: Arc<dyn CallbackContext>,
+        ) -> adk_core::Result<Option<Content>> {
+            Ok(Some(Content::new("function").with_text("blocked by policy")))
+        }
+    }
+
+    #[tokio::test]
+    async fn invocation_hooks_skip_the_model_ahead_of_agent_callbacks() {
+        let model = FakeLlm::new("noop");
+        let agent_callback_ran = Arc::new(StdMutex::new(false));
+        let ran = agent_callback_ran.clone();
+        let before: BeforeModelCallback = Box::new(move |_ctx, request| {
+            *ran.lock().unwrap() = true;
+            Box::pin(async move { Ok(BeforeModelResult::Continue(request)) })
+        });
+        let agent = CodeActAgent::builder()
+            .model(model.clone())
+            .runtime(Arc::new(ScriptedRuntime::with_suspension(vec![vec![Planned::Complete(
+                json!({"type": "final_result", "value": "done"}),
+            )]])))
+            .before_model_callback(before)
+            .build()
+            .unwrap();
+        let ctx =
+            MockInvocationContext::new(user("go")).with_invocation_hook(Arc::new(PolicyHooks));
+
+        let events = run_collect(&agent, Arc::new(ctx)).await;
+
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("done"));
+        assert_eq!(model.calls(), 0, "the hook's response replaces the model call");
+        assert!(!*agent_callback_ran.lock().unwrap(), "a hook's value short-circuits callbacks");
+    }
+
+    #[tokio::test]
+    async fn invocation_hooks_short_circuit_a_tool_call() {
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("boom", json!({}), 1),
+            Planned::Complete(json!({"type": "final_result", "value": "done"})),
+        ]]));
+        let mut input = base_inputs(FakeLlm::new("noop"), rt.clone(), user("go"));
+        input.tools = vec![failing_tool()];
+        input.invocation_ctx = Arc::new(
+            MockInvocationContext::new(user("go")).with_invocation_hook(Arc::new(PolicyHooks)),
+        );
+
+        let events = collect(input).await;
+
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("done"));
+        assert_eq!(rt.last_value(), Some(json!("blocked by policy")));
         assert!(rt.last_raise().is_none());
     }
 

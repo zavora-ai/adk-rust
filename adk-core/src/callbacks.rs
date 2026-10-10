@@ -1,4 +1,5 @@
 use crate::{CallbackContext, Content, LlmRequest, LlmResponse, ReadonlyContext, Result, Tool};
+use async_trait::async_trait;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -124,10 +125,102 @@ pub type OnToolErrorCallback = Box<
         + Sync,
 >;
 
+// ===== Invocation Hooks =====
+
+/// Hooks applied to every model and tool call in a runner invocation.
+///
+/// An agent's own callbacks cover only that agent. Hooks installed on
+/// [`RunConfig::invocation_hooks`](crate::RunConfig::invocation_hooks) reach every agent the
+/// invocation runs — transfer targets and agents behind an agent tool included — because the
+/// `RunConfig` travels with the invocation. The runner installs its plugin manager here.
+///
+/// An agent runs these hooks ahead of its own callbacks of the same kind, with the same
+/// semantics: a hook that returns a value short-circuits the agent's callbacks of that kind, and
+/// a hook that returns an error is handled exactly as a failing agent callback.
+///
+/// Every method defaults to a pass-through, so an implementation overrides only the hooks it
+/// needs.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{CallbackContext, Content, InvocationHooks, Result, RunConfig, async_trait};
+/// use std::sync::Arc;
+///
+/// /// Refuses every call to `delete_file`, whichever agent makes it.
+/// #[derive(Debug)]
+/// struct NoDeletes;
+///
+/// #[async_trait]
+/// impl InvocationHooks for NoDeletes {
+///     async fn before_tool(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
+///         if ctx.tool_name() == Some("delete_file") {
+///             return Ok(Some(Content::new("function").with_text("delete_file is disabled")));
+///         }
+///         Ok(None)
+///     }
+/// }
+///
+/// let config = RunConfig::builder().invocation_hook(Arc::new(NoDeletes)).build();
+/// assert_eq!(config.invocation_hooks.len(), 1);
+/// ```
+#[async_trait]
+pub trait InvocationHooks: std::fmt::Debug + Send + Sync {
+    /// Runs before an agent starts. `Some(content)` skips the agent and emits `content`.
+    async fn before_agent(&self, _ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
+        Ok(None)
+    }
+
+    /// Runs after an agent finishes. `Some(content)` is emitted as a final event.
+    async fn after_agent(&self, _ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
+        Ok(None)
+    }
+
+    /// Runs before each model call. May rewrite the request or skip the call.
+    async fn before_model(
+        &self,
+        _ctx: Arc<dyn CallbackContext>,
+        request: LlmRequest,
+    ) -> Result<BeforeModelResult> {
+        Ok(BeforeModelResult::Continue(request))
+    }
+
+    /// Runs on each model response chunk. `Some(response)` replaces the chunk.
+    async fn after_model(
+        &self,
+        _ctx: Arc<dyn CallbackContext>,
+        _response: LlmResponse,
+    ) -> Result<Option<LlmResponse>> {
+        Ok(None)
+    }
+
+    /// Runs before each tool call. `ctx.tool_name()` and `ctx.tool_input()` describe the call.
+    ///
+    /// `Some(content)` skips the tool and reports `content` as its result.
+    async fn before_tool(&self, _ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
+        Ok(None)
+    }
+
+    /// Runs after each tool call. `Some(content)` replaces the tool's response.
+    async fn after_tool(&self, _ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
+        Ok(None)
+    }
+
+    /// Runs when a tool fails after its retries. `Some(value)` replaces the error result.
+    async fn on_tool_error(
+        &self,
+        _ctx: Arc<dyn CallbackContext>,
+        _tool: Arc<dyn Tool>,
+        _args: serde_json::Value,
+        _error: String,
+    ) -> Result<Option<serde_json::Value>> {
+        Ok(None)
+    }
+}
+
 // ===== Context Compaction =====
 
 use crate::Event;
-use async_trait::async_trait;
 
 /// Trait for summarizing events during context compaction.
 ///

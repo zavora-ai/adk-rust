@@ -82,6 +82,7 @@ pub mod codeact;
 pub mod compaction;
 mod custom_agent;
 pub mod guardrails;
+mod invocation_hooks;
 mod llm_agent;
 mod skill_shim;
 pub mod team;

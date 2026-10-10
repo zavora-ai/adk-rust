@@ -11,7 +11,6 @@
 //! - [`Runner`] - Manages agent execution with full context
 //! - [`RunnerConfig`] - Configuration for the runner
 //! - [`InvocationContext`] - Execution context implementation
-//! - [`Callbacks`] - Hook points during execution
 //!
 //! ## What's New in 0.6.0
 //!
@@ -40,12 +39,11 @@
 //! - Automatic session management
 //! - Memory injection
 //! - Artifact handling
-//! - Callback hooks at every stage
+//! - Plugin hooks for every model and tool call (with the `plugins` feature)
 
 mod agent_invoker;
 pub mod builder;
 mod cache;
-mod callbacks;
 #[cfg(feature = "context-compaction")]
 pub mod compaction;
 mod context;
@@ -57,9 +55,6 @@ pub mod sandbox_runner;
 pub mod tool_concurrency;
 
 pub use builder::RunnerConfigBuilder;
-pub use callbacks::{
-    AfterModelCallback, AfterToolCallback, BeforeModelCallback, BeforeToolCallback, Callbacks,
-};
 pub use context::{InvocationContext, MutableSession};
 pub use launcher::Launcher;
 pub use runner::{Runner, RunnerConfig, RunnerInvocation};

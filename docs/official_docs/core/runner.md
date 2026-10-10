@@ -113,6 +113,46 @@ The builder requires three fields: `app_name`, `agent`, and `session_service`. E
 | `request_context` | `Option<RequestContext>` | No | Auth middleware context |
 | `cancellation_token` | `Option<CancellationToken>` | No | Cooperative cancellation |
 
+### Plugin hooks
+
+The runner runs a `PluginManager`'s callbacks at two levels:
+
+| Callbacks | Run by | When |
+|-----------|--------|------|
+| `before_run`, `after_run`, `on_user_message`, `on_event` | Runner | Once per run, and once per event |
+| `before_agent`, `after_agent`, `before_model`, `after_model`, `before_tool`, `after_tool`, `on_tool_error` | Each `LlmAgent` and `CodeActAgent` in the run | Around every agent, model call, and tool call |
+
+The runner adds the manager to `RunConfig::invocation_hooks` at the start of each run, so
+transfer targets and agents behind an `AgentTool` run the same callbacks. An agent runs
+them ahead of its own callbacks of the same kind; a plugin callback that returns a value
+short-circuits the agent's callbacks of that kind. `on_model_error` is not called by any
+agent, and the manager logs a warning when a plugin sets it.
+
+```rust
+use adk_core::{CallbackContext, Content};
+use adk_plugin::{PluginBuilder, PluginManager};
+use adk_runner::Runner;
+use std::sync::Arc;
+
+let deny_deletes = PluginBuilder::new("deny-deletes")
+    .before_tool(Box::new(|ctx: Arc<dyn CallbackContext>| {
+        Box::pin(async move {
+            if ctx.tool_name() == Some("delete_file") {
+                return Ok(Some(Content::new("function").with_text("delete_file is disabled")));
+            }
+            Ok(None)
+        })
+    }))
+    .build();
+
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(Arc::new(my_agent))
+    .session_service(Arc::new(InMemorySessionService::new()))
+    .plugin_manager(Arc::new(PluginManager::new(vec![deny_deletes])))
+    .build()?;
+```
+
 ### Prompt caching
 
 **Caching is a provider-level concern and needs no Runner configuration.** Each
