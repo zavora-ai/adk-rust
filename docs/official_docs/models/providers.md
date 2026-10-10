@@ -206,6 +206,23 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### Tool Calls on GPT-5.6 and Later
+
+OpenAI's Chat Completions endpoint rejects function tools on GPT-5.6 and later models
+(`gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-6-*`) unless reasoning is disabled,
+with HTTP 400 `Function tools with reasoning_effort are not supported`. `OpenAIClient`
+handles this per request:
+
+| Request | Endpoint |
+|---------|----------|
+| Declares tools, model GPT-5.6 or later, reasoning not `none` | Responses API (`/responses`), same key, base URL, reasoning effort, and retries; `store: false` |
+| No tools | Chat Completions |
+| Model before GPT-5.6, or reasoning effort `None` | Chat Completions |
+| Client built with `OpenAIClient::compatible` | Chat Completions |
+
+Use [`OpenAIResponsesClient`](./openai-responses.md) directly for reasoning summaries,
+built-in tools, or server-side conversation state.
+
 ### Structured Output (JSON Schema)
 
 OpenAI supports guaranteed JSON output via `output_schema`. ADK-Rust automatically wires this to OpenAI's `response_format` API:
@@ -475,6 +492,33 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+### Request Defaults
+
+| Setting | Default | Override |
+|---------|---------|----------|
+| `max_tokens` | 32,000 for Claude 4 and later, 4,096 for older or unrecognized models (`adk_model::catalog::anthropic_default_max_tokens`) | `AnthropicConfig::with_max_tokens`, or `max_output_tokens` per request |
+| Request timeout | 10 minutes for a whole non-streaming request, such as an agent called through `AgentTool`, and for the response headers of a stream | `AnthropicConfig::with_request_timeout` |
+
+Thinking counts toward `max_tokens`, and Claude 5 models think on every turn, so a
+small cap ends turns with `max_tokens` before the answer.
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+use std::time::Duration;
+
+fn build() -> Result<AnthropicClient, adk_core::AdkError> {
+    let config = AnthropicConfig::new("sk-ant-xxx", "claude-opus-5-5")
+        .with_max_tokens(64_000)
+        .with_request_timeout(Duration::from_secs(1_800));
+    AnthropicClient::new(config)
+}
+```
+
+Thinking blocks, including `redacted_thinking` and the empty blocks returned under
+`display: "omitted"`, are replayed with their signatures in later requests, as the API
+requires for tool-use turns. Server tool results such as `web_fetch_tool_result` are
+replayed in the shape the API returned them.
 
 ### Available Models
 

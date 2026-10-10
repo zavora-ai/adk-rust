@@ -77,7 +77,7 @@ fn validate_anthropic_config_integration() {
         .with_max_tokens(8192)
         .with_prompt_caching(true)
         .with_tool_search(ToolSearchConfig::new("^safe_.*"));
-    assert_eq!(config.max_tokens, 8192);
+    assert_eq!(config.max_tokens, Some(8192));
     assert!(config.prompt_caching);
     assert!(config.tool_search.is_some());
     println!("  ✓ with_tool_search() chains with other builder methods");

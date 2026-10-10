@@ -6,9 +6,9 @@ use adk_anthropic::ImageMediaType;
 use adk_anthropic::{
     Base64ImageSource, Base64PdfSource, CacheControlEphemeral, CacheTtl, ContentBlock,
     ContextManagement, DocumentBlock, ImageBlock, Message, MessageCreateParams, MessageParam,
-    MessageRole, Model, PlainTextSource, StopReason, SystemPrompt, TextBlock, ToolParam,
-    ToolResultBlock, ToolResultBlockContent, ToolUnionParam, ToolUseBlock, UrlImageSource,
-    UrlPdfSource,
+    MessageRole, Model, PlainTextSource, StopReason, SystemPrompt, TextBlock, ThinkingBlock,
+    ToolParam, ToolResultBlock, ToolResultBlockContent, ToolUnionParam, ToolUseBlock,
+    UrlImageSource, UrlPdfSource,
 };
 use adk_core::{
     Content, FinishReason, LlmResponse, Part, SchemaAdapter, SchemaCache, UsageMetadata,
@@ -130,25 +130,39 @@ pub fn content_to_message(
                     ))))
                 }
             }
-            Part::Thinking { thinking, .. } => {
-                if thinking.is_empty() {
-                    None
-                } else {
-                    Some(ContentBlock::Text(TextBlock::new(thinking.clone())))
-                }
+            // A signed thinking block is replayed unchanged: the API requires the
+            // blocks of a tool-use turn back exactly, and text in their place is a
+            // different turn. Unsigned thinking (another provider's reasoning, or a
+            // streamed fragment) cannot be verified, so it is not sent.
+            Part::Thinking { thinking, signature: Some(signature) }
+                if role == MessageRole::Assistant && !signature.is_empty() =>
+            {
+                Some(ContentBlock::Thinking(ThinkingBlock::new(
+                    thinking.clone(),
+                    signature.clone(),
+                )))
             }
+            Part::Thinking { .. } => None,
             // Server-side tool parts: convert back to Anthropic types when possible
             Part::ServerToolCall { server_tool_call } => serde_json::from_value::<
                 adk_anthropic::ServerToolUseBlock,
             >(server_tool_call.clone())
             .ok()
             .map(ContentBlock::ServerToolUse),
+            // Results keep their `type`, so every server tool result kind converts back.
             Part::ServerToolResponse { server_tool_response } => {
-                serde_json::from_value::<adk_anthropic::WebSearchToolResultBlock>(
-                    server_tool_response.clone(),
+                serde_json::from_value::<ContentBlock>(server_tool_response.clone()).ok().filter(
+                    |block| {
+                        matches!(
+                            block,
+                            ContentBlock::WebSearchToolResult(_)
+                                | ContentBlock::WebFetchToolResult(_)
+                                | ContentBlock::CodeExecutionToolResult(_)
+                                | ContentBlock::BashCodeExecutionToolResult(_)
+                                | ContentBlock::TextEditorCodeExecutionToolResult(_)
+                        )
+                    },
                 )
-                .ok()
-                .map(ContentBlock::WebSearchToolResult)
             }
             // Embedded resources: text → text block; blob → inline bytes handling.
             Part::EmbeddedResource { resource } => match resource {
@@ -268,7 +282,11 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
                     thought_signature: None,
                 });
             }
-            ContentBlock::Thinking(thinking_block) if !thinking_block.thinking.is_empty() => {
+            // Models with `display: "omitted"` return an empty `thinking` field and the
+            // reasoning only in `signature`; the block must still be replayed.
+            ContentBlock::Thinking(thinking_block)
+                if !thinking_block.thinking.is_empty() || !thinking_block.signature.is_empty() =>
+            {
                 parts.push(Part::Thinking {
                     thinking: thinking_block.thinking.clone(),
                     signature: if thinking_block.signature.is_empty() {
@@ -944,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_anthropic_message_empty_thinking_block_skipped() {
+    fn test_from_anthropic_message_unsigned_empty_thinking_block_skipped() {
         use adk_anthropic::{ThinkingBlock, Usage};
 
         let message = Message {
@@ -953,7 +971,7 @@ mod tests {
             role: MessageRole::Assistant,
             container: None,
             content: vec![
-                ContentBlock::Thinking(ThinkingBlock::new("", "sig_empty")),
+                ContentBlock::Thinking(ThinkingBlock::new("", "")),
                 ContentBlock::Text(TextBlock::new("Just text.")),
             ],
             stop_reason: Some(StopReason::EndTurn),

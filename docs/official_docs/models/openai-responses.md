@@ -2,6 +2,8 @@
 
 ADK-Rust provides a dedicated client for OpenAI's [Responses API](https://platform.openai.com/docs/api-reference/responses) (`/v1/responses` endpoint) — the successor to the Chat Completions API. The Responses API is the recommended way to use current GPT-5.6 models, including their full reasoning-effort range.
 
+> **Note:** Chat Completions rejects function tools on GPT-5.6 and later while reasoning is on, so `OpenAIClient` sends those tool-carrying requests through the Responses API automatically. See [Tool Calls on GPT-5.6 and Later](./providers.md#tool-calls-on-gpt-56-and-later).
+
 ## Overview
 
 ```
