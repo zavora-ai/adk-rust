@@ -221,6 +221,7 @@ dependencies = [
  "google-cloud-gax 1.13.0",
  "google-cloud-secretmanager-v1",
  "hex",
+ "hmac 0.12.1",
  "jsonwebtoken 11.0.0",
  "opentelemetry",
  "opentelemetry-otlp",

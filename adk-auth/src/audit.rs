@@ -16,12 +16,14 @@
 //! - **Multiple sinks**: File (JSONL), PostgreSQL, OpenTelemetry export
 
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use zeroize::Zeroizing;
 
 /// Type of audit event.
 ///
@@ -409,79 +411,249 @@ pub trait AuditSink: Send + Sync {
     }
 }
 
+/// What a guarded tool does when its audit sink fails to record an access decision.
+///
+/// [`ProtectedTool`](crate::ProtectedTool), [`ScopedTool`](crate::ScopedTool), and the
+/// guards that build them default to [`Block`](Self::Block).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AuditFailureMode {
+    /// Refuse the call: an action whose decision cannot be recorded does not run.
+    #[default]
+    Block,
+    /// Log the failure and apply the access decision without a record.
+    Warn,
+}
+
+/// Records one access decision, refusing the call when the sink fails in `Block` mode.
+pub(crate) async fn record_decision(
+    sink: &dyn AuditSink,
+    event: AuditEvent,
+    mode: AuditFailureMode,
+    tool_name: &str,
+) -> adk_core::Result<()> {
+    let Err(error) = sink.log(event).await else {
+        return Ok(());
+    };
+    match mode {
+        AuditFailureMode::Block => {
+            tracing::error!(tool.name = %tool_name, error = %error, "audit sink failed; refusing the call");
+            Err(adk_core::AdkError::new(
+                adk_core::ErrorComponent::Auth,
+                adk_core::ErrorCategory::Unavailable,
+                "auth.audit_failed",
+                format!(
+                    "tool '{tool_name}' refused: the access decision could not be audited ({error}). \
+                     Restore the audit sink, or set AuditFailureMode::Warn to run without a record"
+                ),
+            ))
+        }
+        AuditFailureMode::Warn => {
+            tracing::warn!(tool.name = %tool_name, error = %error, "audit sink failed; continuing without a record");
+            Ok(())
+        }
+    }
+}
+
+/// Link from one chained line to the next: SHA-256, or HMAC-SHA256 under `key`, of the
+/// previous line's exact text, hex-encoded.
+fn chain_link(key: Option<&[u8]>, previous_line: &str) -> String {
+    match key {
+        Some(key) => {
+            let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key)
+                .expect("HMAC-SHA256 accepts keys of any length");
+            mac.update(previous_line.as_bytes());
+            hex::encode(mac.finalize().into_bytes())
+        }
+        None => hex::encode(Sha256::digest(previous_line.as_bytes())),
+    }
+}
+
+/// Reads the last non-empty line of `path` without reading the whole file.
+fn read_last_line(path: &Path) -> std::io::Result<Option<String>> {
+    const BLOCK: u64 = 8 * 1024;
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut end = file.metadata()?.len();
+    let mut tail: Vec<u8> = Vec::new();
+    while end > 0 {
+        let start = end.saturating_sub(BLOCK);
+        let mut block = vec![0u8; usize::try_from(end - start).unwrap_or(0)];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut block)?;
+        block.extend_from_slice(&tail);
+        tail = block;
+        end = start;
+        let content_end =
+            tail.iter().rposition(|byte| !matches!(byte, b'\n' | b'\r')).map_or(0, |at| at + 1);
+        tail.truncate(content_end);
+        if let Some(newline) = tail.iter().rposition(|byte| *byte == b'\n') {
+            tail.drain(..=newline);
+            break;
+        }
+    }
+    if tail.is_empty() {
+        return Ok(None);
+    }
+    String::from_utf8(tail)
+        .map(Some)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
 /// File-based audit sink that writes JSONL (one JSON line per event).
 ///
-/// Supports optional cryptographic chaining — when enabled, each event includes
-/// the SHA-256 hash of the previous event's JSON representation, creating an
-/// append-only tamper-evident log.
+/// With chaining, each event carries in `prev_hash` the SHA-256 (or, with
+/// [`with_hmac_chaining`](Self::with_hmac_chaining), the HMAC-SHA256) of the previous
+/// line's exact text. Opening a chained file resumes from its last line, so the chain
+/// survives restarts, and [`verify`](Self::verify) detects a line that was edited,
+/// inserted, reordered, or removed before the newest line. Without a key anyone who can
+/// write the file can recompute the chain; the HMAC chain cannot be forged without the
+/// key. Neither detects an edit to the newest line or lines cut from the end; anchor the
+/// newest line elsewhere for that.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use adk_auth::{AuditEvent, AuditOutcome, AuditSink, FileAuditSink};
+///
+/// # async fn demo() -> Result<(), adk_auth::AuthError> {
+/// let sink = FileAuditSink::with_hmac_chaining("/var/log/adk/audit.jsonl", b"audit-key".to_vec())?;
+/// sink.log(AuditEvent::tool_access("alice", "search", AuditOutcome::Allowed)).await?;
+/// let events = sink.verify()?;
+/// # let _ = events;
+/// # Ok(())
+/// # }
+/// ```
 pub struct FileAuditSink {
     writer: Mutex<BufWriter<File>>,
     path: PathBuf,
-    /// Last event JSON for hash chaining (None = chaining disabled).
+    /// Exact text of the last line written, which the next event links to.
     last_event_json: Mutex<Option<String>>,
     /// Whether to enable cryptographic hash chaining.
     chain_enabled: bool,
+    /// Key for the HMAC chain; `None` chains with plain SHA-256.
+    chain_key: Option<Zeroizing<Vec<u8>>>,
 }
 
 impl FileAuditSink {
     /// Create a new file audit sink.
     pub fn new(path: impl Into<PathBuf>) -> Result<Self, std::io::Error> {
-        let path = path.into();
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        let writer = Mutex::new(BufWriter::new(file));
-        Ok(Self { writer, path, last_event_json: Mutex::new(None), chain_enabled: false })
+        Self::open(path.into(), false, None)
     }
 
-    /// Create a new file audit sink with cryptographic hash chaining enabled.
+    /// Create a new file audit sink with SHA-256 hash chaining enabled.
     ///
-    /// Each event will include a `prev_hash` field containing the SHA-256 hash
-    /// of the previous event's JSON, creating a tamper-evident append-only log.
+    /// Each event carries in `prev_hash` the SHA-256 of the previous line, resuming
+    /// from the file's last line when it already exists.
     pub fn with_chaining(path: impl Into<PathBuf>) -> Result<Self, std::io::Error> {
-        let path = path.into();
+        Self::open(path.into(), true, None)
+    }
+
+    /// Create a new file audit sink whose chain links are HMAC-SHA256 under `key`.
+    ///
+    /// The chain cannot be recomputed without `key`, so an edit by someone who can write
+    /// the file but does not hold the key fails [`verify`](Self::verify).
+    pub fn with_hmac_chaining(
+        path: impl Into<PathBuf>,
+        key: impl Into<Vec<u8>>,
+    ) -> Result<Self, std::io::Error> {
+        Self::open(path.into(), true, Some(Zeroizing::new(key.into())))
+    }
+
+    fn open(
+        path: PathBuf,
+        chain_enabled: bool,
+        chain_key: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<Self, std::io::Error> {
+        let last_event_json = if chain_enabled { read_last_line(&path)? } else { None };
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        let writer = Mutex::new(BufWriter::new(file));
-        Ok(Self { writer, path, last_event_json: Mutex::new(None), chain_enabled: true })
+        Ok(Self {
+            writer: Mutex::new(BufWriter::new(file)),
+            path,
+            last_event_json: Mutex::new(last_event_json),
+            chain_enabled,
+            chain_key,
+        })
     }
 
     /// Get the path to the audit log file.
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
+
+    /// Verifies this sink's chain and returns the number of events in the file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthError::AuditError`](crate::AuthError::AuditError) naming the first
+    /// line whose link does not match, or an I/O error when the file cannot be read.
+    pub fn verify(&self) -> Result<u64, crate::AuthError> {
+        self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).flush()?;
+        Self::verify_file(&self.path, self.chain_key.as_deref().map(Vec::as_slice))
+    }
+
+    /// Verifies a chained audit file without opening it for writing.
+    ///
+    /// Pass the key the file was written with, or `None` for a SHA-256 chain. The first
+    /// event must carry no `prev_hash`; every later event must link to the line before it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthError::AuditError`](crate::AuthError::AuditError) naming the first
+    /// line that is not an audit event or whose link does not match, or an I/O error.
+    pub fn verify_file(
+        path: impl AsRef<Path>,
+        hmac_key: Option<&[u8]>,
+    ) -> Result<u64, crate::AuthError> {
+        let reader = BufReader::new(File::open(path)?);
+        let mut previous: Option<String> = None;
+        let mut events = 0u64;
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            let number = index + 1;
+            let event: AuditEvent = serde_json::from_str(&line).map_err(|error| {
+                crate::AuthError::AuditError(format!(
+                    "audit chain broken at line {number}: not an audit event ({error})"
+                ))
+            })?;
+            let expected = previous.as_deref().map(|previous| chain_link(hmac_key, previous));
+            if event.prev_hash != expected {
+                return Err(crate::AuthError::AuditError(format!(
+                    "audit chain broken at line {number}: prev_hash does not match the line before it"
+                )));
+            }
+            previous = Some(line);
+            events += 1;
+        }
+        Ok(events)
+    }
 }
 
 #[async_trait::async_trait]
 impl AuditSink for FileAuditSink {
     async fn log(&self, mut event: AuditEvent) -> Result<(), crate::AuthError> {
-        // Apply hash chaining if enabled
+        // Held across the write so concurrent events link in the order they are written.
+        let mut last = self.last_event_json.lock().unwrap_or_else(|p| p.into_inner());
         if self.chain_enabled {
-            let mut last = self.last_event_json.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(ref prev_json) = *last {
-                let mut hasher = Sha256::new();
-                hasher.update(prev_json.as_bytes());
-                event.prev_hash = Some(hex::encode(hasher.finalize()));
-            }
-            let line = serde_json::to_string(&event)
-                .map_err(|e| crate::AuthError::AuditError(e.to_string()))?;
-            *last = Some(line.clone());
-
-            let mut writer = self.writer.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!(path = %self.path.display(), "audit writer lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            writeln!(writer, "{line}")?;
-            writer.flush()?;
-        } else {
-            let line = serde_json::to_string(&event)
-                .map_err(|e| crate::AuthError::AuditError(e.to_string()))?;
-
-            let mut writer = self.writer.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!(path = %self.path.display(), "audit writer lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            writeln!(writer, "{line}")?;
-            writer.flush()?;
+            event.prev_hash = last
+                .as_deref()
+                .map(|previous| chain_link(self.chain_key.as_deref().map(Vec::as_slice), previous));
         }
+        let line = serde_json::to_string(&event)
+            .map_err(|e| crate::AuthError::AuditError(e.to_string()))?;
 
+        let mut writer = self.writer.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(path = %self.path.display(), "audit writer lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        writeln!(writer, "{line}")?;
+        writer.flush()?;
+        if self.chain_enabled {
+            // Advanced only after the write, so a failed write does not break the chain.
+            *last = Some(line);
+        }
         Ok(())
     }
 }
@@ -656,6 +828,27 @@ mod tests {
             let deserialized: AuditEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized.event_type, event_type);
         }
+    }
+
+    #[test]
+    fn last_line_is_read_across_block_boundaries() {
+        let path = std::env::temp_dir().join(format!(
+            "adk-audit-last-line-{}-{}.jsonl",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        assert_eq!(read_last_line(&path).unwrap(), None);
+
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(read_last_line(&path).unwrap(), None);
+
+        let long = "x".repeat(20_000);
+        std::fs::write(&path, format!("first\n{long}\n\n")).unwrap();
+        assert_eq!(read_last_line(&path).unwrap(), Some(long.clone()));
+
+        std::fs::write(&path, &long).unwrap();
+        assert_eq!(read_last_line(&path).unwrap(), Some(long));
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

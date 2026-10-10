@@ -286,6 +286,47 @@ let audit = FileAuditSink::new("/var/log/adk/audit.jsonl")?;
 let middleware = AuthMiddleware::with_audit(ac, audit);
 ```
 
+### When the Sink Fails
+
+`ProtectedTool`, `ScopedTool`, and the guards that build them refuse a call whose
+access decision the audit sink fails to record. The call fails with `auth.audit_failed`
+and the tool does not run.
+
+| Mode | Effect when `AuditSink::log` fails |
+|------|------------------------------------|
+| `AuditFailureMode::Block` (default) | The call is refused |
+| `AuditFailureMode::Warn` | A warning is logged and the access decision applies without a record |
+
+```rust
+use adk_auth::{AuditFailureMode, AuthMiddleware, ContextScopeResolver, ScopeGuard};
+
+let middleware = AuthMiddleware::with_audit(ac, audit).with_audit_failure_mode(AuditFailureMode::Warn);
+let guard = ScopeGuard::with_audit(ContextScopeResolver, audit_sink)
+    .with_audit_failure_mode(AuditFailureMode::Warn);
+```
+
+### Tamper-Evident Chain
+
+`FileAuditSink::with_chaining` writes each event with `prev_hash`, the SHA-256 of the
+previous line; `with_hmac_chaining` uses HMAC-SHA256 under a key instead, so the chain
+cannot be recomputed by someone who can write the file but does not hold the key. Opening
+a chained file resumes from its last line, so the chain survives restarts.
+
+```rust
+use adk_auth::FileAuditSink;
+
+let audit = FileAuditSink::with_hmac_chaining("/var/log/adk/audit.jsonl", key)?;
+// ... log events ...
+let events = audit.verify()?;
+
+// Verify an archived file without opening it for writing.
+let events = FileAuditSink::verify_file("/archive/audit.jsonl", Some(key.as_slice()))?;
+```
+
+`verify` fails with `AuthError::AuditError` naming the first line that was edited,
+inserted, reordered, or removed. A change to the newest line and lines cut from the end
+leave no broken link; record the newest line elsewhere to detect them.
+
 ### Output Format (JSONL)
 
 ```json
