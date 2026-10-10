@@ -41,6 +41,7 @@ impl AnthropicClient {
             "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-sonnet-5",
+            "claude-haiku-5",
         ]
         .iter()
         .any(|prefix| model.starts_with(prefix))
@@ -195,7 +196,7 @@ impl AnthropicClient {
                 ErrorCategory::InvalidInput,
                 "model.anthropic.fast_mode_unsupported",
                 format!(
-                    "model '{model}' does not support Anthropic fast mode; use claude-opus-5 or claude-opus-4-8, or disable fast_mode"
+                    "model '{model}' does not support Anthropic fast mode; use claude-opus-5-5, claude-opus-5, or claude-opus-4-8, or disable fast_mode"
                 ),
             )
             .with_provider("anthropic"));
@@ -790,12 +791,16 @@ mod tests {
         request.config = Some(GenerateContentConfig { top_p: Some(0.9), ..Default::default() });
 
         for model in [
+            "claude-fable-5-1",
             "claude-fable-5",
             "claude-mythos-5",
+            "claude-opus-5-5",
             "claude-opus-5",
             "claude-opus-4-8",
             "claude-opus-4-7",
+            "claude-sonnet-5-5",
             "claude-sonnet-5",
+            "claude-haiku-5-5",
         ] {
             let error = AnthropicClient::build_message_params(
                 model,
@@ -806,20 +811,50 @@ mod tests {
             .expect_err("restricted sampling should be rejected locally");
             assert_eq!(error.code, "model.anthropic.claude5_sampling_unsupported");
         }
+
+        let params = AnthropicClient::build_message_params(
+            "claude-haiku-4-5",
+            4096,
+            &request,
+            &AnthropicConfig::default(),
+        )
+        .expect("Claude Haiku 4.5 accepts sampling parameters");
+        assert_eq!(params.top_p, Some(0.9));
+    }
+
+    #[test]
+    fn claude_haiku_5_5_rejects_budget_thinking_before_network_io() {
+        let request = make_request(vec![Content::new("user").with_text("hello")]);
+        let config = AnthropicConfig::new("test", "claude-haiku-5-5").with_thinking_mode(
+            super::super::config::ThinkingMode::Enabled { budget_tokens: 2048 },
+        );
+
+        let error =
+            AnthropicClient::build_message_params("claude-haiku-5-5", 4096, &request, &config)
+                .expect_err("Claude Haiku 5.5 budget thinking should be rejected locally");
+
+        assert_eq!(error.code, "model.anthropic.claude5_manual_thinking_unsupported");
     }
 
     #[test]
     fn fast_mode_is_limited_to_supported_opus_models() {
         let request = make_request(vec![Content::new("user").with_text("hello")]);
 
-        for model in ["claude-sonnet-5", "claude-fable-5", "claude-mythos-5"] {
+        for model in [
+            "claude-sonnet-5-5",
+            "claude-sonnet-5",
+            "claude-haiku-5-5",
+            "claude-fable-5-1",
+            "claude-fable-5",
+            "claude-mythos-5",
+        ] {
             let config = AnthropicConfig::new("test", model).with_fast_mode(true);
             let error = AnthropicClient::build_message_params(model, 4096, &request, &config)
                 .expect_err("unsupported fast mode should be rejected locally");
             assert_eq!(error.code, "model.anthropic.fast_mode_unsupported");
         }
 
-        for model in ["claude-opus-5", "claude-opus-4-8"] {
+        for model in ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"] {
             let config = AnthropicConfig::new("test", model).with_fast_mode(true);
             let params = AnthropicClient::build_message_params(model, 4096, &request, &config)
                 .expect("supported Opus fast mode should be accepted");

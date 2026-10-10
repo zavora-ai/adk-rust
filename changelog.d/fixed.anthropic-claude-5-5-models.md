@@ -7,3 +7,8 @@
   `HAIKU_55`, `HAIKU_55_LONG_PROMPT`, `FABLE_51`, `MYTHOS_51`, and `OPUS_55_FAST`
   ($8 / $40 per MTok) carry the published rates, and `ModelPricing` implements
   `PartialEq`.
+
+- **Claude Haiku 5.5 sampling and budget thinking** (`adk-model`): `AnthropicClient` rejects
+  `temperature`, `top_p`, `top_k`, and `ThinkingMode::Enabled` for `claude-haiku-5-5` before
+  sending the request, with the same error codes as the other Claude 5 models, instead of
+  forwarding a request the API answers with a 400.
