@@ -13,6 +13,8 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::ToolEffect;
+
 /// The outcome of evaluating a [`ToolPolicy`] for one tool call.
 ///
 /// # Example
@@ -76,7 +78,7 @@ impl PolicyDecision {
 /// # Example
 ///
 /// ```rust
-/// use adk_core::ToolPolicyRequest;
+/// use adk_core::{ToolEffect, ToolPolicyRequest};
 /// use serde_json::json;
 ///
 /// let request = ToolPolicyRequest::new("transfer", json!({ "amount": 25 }))
@@ -84,7 +86,8 @@ impl PolicyDecision {
 ///     .with_identity("payments", "user-1", "session-1")
 ///     .with_invocation_id("inv-1");
 /// assert_eq!(request.tool_name, "transfer");
-/// assert!(!request.read_only);
+/// assert_eq!(request.effect, ToolEffect::NonIdempotent);
+/// assert!(!request.is_read_only());
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolPolicyRequest {
@@ -92,8 +95,8 @@ pub struct ToolPolicyRequest {
     pub tool_name: String,
     /// Final arguments the tool would execute with.
     pub args: Value,
-    /// Whether the tool declares itself read-only ([`Tool::is_read_only`](crate::Tool::is_read_only)).
-    pub read_only: bool,
+    /// What the tool declares about repeating a call ([`Tool::effect`](crate::Tool::effect)).
+    pub effect: ToolEffect,
     /// The agent making the call.
     pub agent_name: String,
     /// Application the run belongs to.
@@ -112,7 +115,7 @@ impl ToolPolicyRequest {
         Self {
             tool_name: tool_name.into(),
             args,
-            read_only: false,
+            effect: ToolEffect::NonIdempotent,
             agent_name: String::new(),
             app_name: String::new(),
             user_id: String::new(),
@@ -121,11 +124,23 @@ impl ToolPolicyRequest {
         }
     }
 
-    /// Marks the called tool as read-only.
+    /// Whether the called tool declares [`ToolEffect::ReadOnly`].
+    pub fn is_read_only(&self) -> bool {
+        self.effect == ToolEffect::ReadOnly
+    }
+
+    /// Sets the effect the called tool declares.
     #[must_use]
-    pub fn with_read_only(mut self, read_only: bool) -> Self {
-        self.read_only = read_only;
+    pub fn with_effect(mut self, effect: ToolEffect) -> Self {
+        self.effect = effect;
         self
+    }
+
+    /// Marks the called tool as read-only, or as having side effects
+    /// ([`ToolEffect::NonIdempotent`]).
+    #[must_use]
+    pub fn with_read_only(self, read_only: bool) -> Self {
+        self.with_effect(if read_only { ToolEffect::ReadOnly } else { ToolEffect::NonIdempotent })
     }
 
     /// Attaches the calling agent's name.
@@ -389,7 +404,7 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolicyRule {
     tool_pattern: String,
-    read_only: Option<bool>,
+    effect: Option<ToolEffect>,
     predicates: Vec<ArgPredicate>,
     decision: PolicyDecision,
 }
@@ -397,12 +412,7 @@ pub struct PolicyRule {
 impl PolicyRule {
     /// A rule that decides `decision` for calls to tools matching `tool_pattern`.
     pub fn new(tool_pattern: impl Into<String>, decision: PolicyDecision) -> Self {
-        Self {
-            tool_pattern: tool_pattern.into(),
-            read_only: None,
-            predicates: Vec::new(),
-            decision,
-        }
+        Self { tool_pattern: tool_pattern.into(), effect: None, predicates: Vec::new(), decision }
     }
 
     /// A rule allowing calls to tools matching `tool_pattern`.
@@ -429,8 +439,28 @@ impl PolicyRule {
 
     /// Restricts the rule to read-only tools.
     #[must_use]
-    pub fn read_only_tools(mut self) -> Self {
-        self.read_only = Some(true);
+    pub fn read_only_tools(self) -> Self {
+        self.with_effect(ToolEffect::ReadOnly)
+    }
+
+    /// Restricts the rule to tools that declare `effect`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{PolicyDecision, PolicyRule, ToolEffect, ToolPolicyRequest};
+    /// use serde_json::json;
+    ///
+    /// let rule = PolicyRule::require_approval("*", "side effects")
+    ///     .with_effect(ToolEffect::NonIdempotent);
+    /// let charge = ToolPolicyRequest::new("charge_card", json!({}));
+    /// let lookup = ToolPolicyRequest::new("get_order", json!({})).with_effect(ToolEffect::Idempotent);
+    /// assert!(rule.matches(&charge));
+    /// assert!(!rule.matches(&lookup));
+    /// ```
+    #[must_use]
+    pub fn with_effect(mut self, effect: ToolEffect) -> Self {
+        self.effect = Some(effect);
         self
     }
 
@@ -442,7 +472,7 @@ impl PolicyRule {
     /// Whether the rule matches `request`.
     pub fn matches(&self, request: &ToolPolicyRequest) -> bool {
         glob_matches(&self.tool_pattern, &request.tool_name)
-            && self.read_only.is_none_or(|read_only| read_only == request.read_only)
+            && self.effect.is_none_or(|effect| effect == request.effect)
             && self.predicates.iter().all(|predicate| predicate.holds(&request.args))
     }
 }
@@ -661,6 +691,24 @@ mod tests {
             policy.decide(&ToolPolicyRequest::new("delete", json!({}))),
             PolicyDecision::Deny { .. }
         ));
+    }
+
+    #[test]
+    fn rules_can_match_on_the_declared_effect() {
+        let policy = DeclarativePolicy::builder()
+            .rule(PolicyRule::allow("*").with_effect(ToolEffect::Idempotent))
+            .require_approval("*", "may repeat a side effect")
+            .build();
+
+        let idempotent =
+            ToolPolicyRequest::new("put_record", json!({})).with_effect(ToolEffect::Idempotent);
+        assert_eq!(policy.decide(&idempotent), PolicyDecision::Allow);
+        assert_eq!(
+            policy.decide(&ToolPolicyRequest::new("charge_card", json!({}))),
+            PolicyDecision::require_approval("may repeat a side effect")
+        );
+        assert!(!idempotent.is_read_only());
+        assert!(ToolPolicyRequest::new("search", json!({})).with_read_only(true).is_read_only());
     }
 
     #[test]

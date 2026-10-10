@@ -590,8 +590,9 @@ Five mechanisms for controlling tool execution, composable in any combination:
 
 1. **`ToolPolicy`** — run-wide allow / deny / require-approval decision per call, set with
    `Runner::builder().tool_policy(...)` or `RunConfig::tool_policy`. `DeclarativePolicy` matches
-   rules in order on a tool-name glob and JSON-pointer argument predicates (`equals`, `in_set`,
-   `at_most`, `starts_with`, `domain_in`); a tool no rule permits is **denied by default**.
+   rules in order on a tool-name glob, the tool's declared `ToolEffect`, and JSON-pointer argument
+   predicates (`equals`, `in_set`, `at_most`, `starts_with`, `domain_in`); a tool no rule permits
+   is **denied by default**.
 
 ```rust
 let policy = DeclarativePolicy::builder()
@@ -648,17 +649,25 @@ their start and stops running ones before their next model call or tool call.
 
 Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`:
 
-1. Enhanced plugins (`before_tool_call`) — may rewrite the arguments.
-2. Run-wide `InvocationHooks` (the runner's `PluginManager`), then `BeforeToolCallback`.
-3. Circuit breaker.
-4. The governed path, `adk_core::authorize_tool_call`, on the final arguments: kill switch →
+1. Run budget (`RunConfig::budget`) — the model turn's whole tool batch is reserved before any
+   call starts (`CodeActAgent`: each call); a refused batch is answered `not run` and the run
+   ends with `ResourceExhausted`.
+2. Enhanced plugins (`before_tool_call`) — may rewrite the arguments.
+3. Run-wide `InvocationHooks` (the runner's `PluginManager`), then `BeforeToolCallback`.
+4. Circuit breaker.
+5. The governed path, `adk_core::authorize_tool_call`, on the final arguments: kill switch →
    `ToolPolicy` → `ToolGuardrailSet` (a rewrite is checked against the policy again) →
    confirmation (call-ID decision, fingerprint approval, `ApprovalStore`, handler, or hold).
-5. `execute()` — `adk-auth` wrappers (`ProtectedTool`, `ScopeGuard`) check RBAC and scopes here,
-   so a denial is a tool error that retry budgets and `on_tool_error` callbacks see.
-6. `on_tool_error` (hooks, then callbacks) when the tool failed.
-7. `AfterToolCallback` (hooks, then callbacks), `AfterToolCallbackFull`, then enhanced plugins
-   (`after_tool_call`).
+6. Action ledger begin (`LlmAgent`, `NonIdempotent` tools, `RunConfig::action_ledger`) — a
+   recorded call is answered from its record without executing.
+7. `execute()` under the tool's timeout — `adk-auth` wrappers (`ProtectedTool`, `ScopeGuard`)
+   check RBAC and scopes here, so a denial is a tool error. Only `ReadOnly` and `Idempotent`
+   tools are retried (retryable error or timeout, with backoff).
+8. Action ledger complete — a `NonIdempotent` call that timed out or panicked stays begun and is
+   answered `outcome_unknown`.
+9. `on_tool_error` (hooks, then callbacks) when the tool failed.
+10. `AfterToolCallback` (hooks, then callbacks), `AfterToolCallbackFull`, then enhanced plugins
+    (`after_tool_call`).
 
 A hook or callback that returns a value short-circuits the remaining callbacks of its kind.
 
