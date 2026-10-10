@@ -30,7 +30,8 @@ use adk_devtools::{DevToolset, Workspace};
 use adk_agent::LlmAgentBuilder;
 use std::sync::Arc;
 
-let workspace = Workspace::new("./my-repo");           // read-write, bash on
+let workspace = Workspace::new("./my-repo")            // read-write, bash off
+    .allow_bash(true);                                 // opt in to the shell
 // let workspace = Workspace::read_only("./my-repo");  // explore / plan mode
 
 let agent = LlmAgentBuilder::new("coding-agent")

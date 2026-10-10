@@ -58,7 +58,7 @@ impl Tool for BashTool {
             "type": "object",
             "properties": {
                 "command": { "type": "string", "description": "The shell command to run." },
-                "timeout_secs": { "type": "integer", "description": "Optional timeout in seconds (default: workspace setting)." }
+                "timeout_secs": { "type": "integer", "description": "Optional timeout in seconds. Defaults to, and cannot exceed, the workspace limit." }
             },
             "required": ["command"]
         }))
@@ -69,11 +69,12 @@ impl Tool for BashTool {
             return Err(DevToolError::BashDisabled.into());
         }
         let command = require_str(&args, "command")?;
+        // The operator's timeout is a ceiling: a model may ask for less time, never more.
+        let limit = self.workspace.bash_timeout_value();
         let timeout = args
             .get("timeout_secs")
             .and_then(Value::as_u64)
-            .map(Duration::from_secs)
-            .unwrap_or_else(|| self.workspace.bash_timeout_value());
+            .map_or(limit, |requested| Duration::from_secs(requested).min(limit));
 
         let mut cmd = tokio::process::Command::new("sh");
         cmd.arg("-c")

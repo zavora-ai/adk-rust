@@ -12,7 +12,7 @@
 #![cfg(unix)]
 
 use adk_core::{ReadonlyContext, Tool, ToolContext};
-use adk_devtools::{DevToolset, Workspace};
+use adk_devtools::{BashTool, DevToolset, Workspace};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,7 +42,7 @@ async fn run_bash(
 
 fn temp_workspace() -> (tempfile::TempDir, Workspace) {
     let dir = tempfile::tempdir().unwrap();
-    let workspace = Workspace::new(dir.path());
+    let workspace = Workspace::new(dir.path()).allow_bash(true);
     (dir, workspace)
 }
 
@@ -92,7 +92,7 @@ async fn inheriting_the_environment_is_available_but_opt_in() {
     }
 
     let dir = tempfile::tempdir().unwrap();
-    let workspace = Workspace::new(dir.path()).inherit_env(true);
+    let workspace = Workspace::new(dir.path()).allow_bash(true).inherit_env(true);
     let result = run_bash(workspace, "echo \"v=$ADK_TEST_OPT_IN\"", None).await.expect("must run");
 
     assert!(
@@ -105,13 +105,48 @@ async fn inheriting_the_environment_is_available_but_opt_in() {
     }
 }
 
+// ── bash is opt-in, and the operator's timeout is a ceiling ───────────
+
+#[tokio::test]
+async fn a_new_workspace_does_not_run_bash() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Workspace::new(dir.path());
+    assert!(!workspace.bash_allowed());
+
+    let toolset = DevToolset::new(workspace.clone());
+    let readonly_ctx: Arc<dyn ReadonlyContext> = Arc::new(TestCtx);
+    let tools = adk_core::Toolset::tools(&toolset, readonly_ctx).await.unwrap();
+    assert!(!tools.iter().any(|tool| tool.name() == "bash"), "bash must not be offered");
+
+    let ctx: Arc<dyn ToolContext> = Arc::new(TestCtx);
+    let refused = BashTool::new(workspace).execute(ctx, json!({ "command": "echo ran" })).await;
+    assert!(refused.is_err(), "a workspace that never enabled bash must refuse it");
+}
+
+#[tokio::test]
+async fn a_model_cannot_raise_the_workspace_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace =
+        Workspace::new(dir.path()).allow_bash(true).bash_timeout(Duration::from_secs(1));
+
+    let started = std::time::Instant::now();
+    let result = run_bash(workspace, "sleep 10", Some(3600)).await;
+
+    assert!(result.is_err(), "the command must hit the workspace limit");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the requested hour replaced the one-second limit: {:?}",
+        started.elapsed()
+    );
+}
+
 // ── A timeout takes descendants with it ───────────────────────────────
 
 #[tokio::test]
 async fn a_timeout_kills_processes_the_command_started() {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("grandchild.pid");
-    let workspace = Workspace::new(dir.path());
+    let workspace = Workspace::new(dir.path()).allow_bash(true);
 
     // `sh` starts a background sleep that records its own pid, then blocks. Killing only
     // the direct child would leave that sleep running.
@@ -155,7 +190,7 @@ const TRUNCATION_MARKER: &str = "\n…[truncated]";
 async fn a_cap_inside_a_multi_byte_character_does_not_panic() {
     let dir = tempfile::tempdir().unwrap();
     // `€` is three bytes, so a 4-byte cap falls inside the second one.
-    let workspace = Workspace::new(dir.path()).max_output_bytes(4);
+    let workspace = Workspace::new(dir.path()).allow_bash(true).max_output_bytes(4);
 
     let result = run_bash(workspace, "printf '€€€'", None).await.expect("must run");
 
@@ -202,7 +237,7 @@ async fn dropping_the_call_kills_the_shell_and_its_children() {
     let dir = tempfile::tempdir().unwrap();
     let shell_marker = dir.path().join("shell.pid");
     let child_marker = dir.path().join("child.pid");
-    let workspace = Workspace::new(dir.path());
+    let workspace = Workspace::new(dir.path()).allow_bash(true);
 
     let command = format!(
         "echo $$ > {}; sleep 30 & echo $! > {}; wait",

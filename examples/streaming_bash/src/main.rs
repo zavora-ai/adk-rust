@@ -73,7 +73,7 @@ async fn run_cli() -> anyhow::Result<()> {
     println!("╚══════════════════════════════════════════════════════════════╝\n");
 
     let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
-    let workspace = Workspace::new(std::env::current_dir()?);
+    let workspace = Workspace::new(std::env::current_dir()?).allow_bash(true);
     // Bash-only: `bash` is the one DevTool that streams via emit_progress, so the
     // agent gets only it — every tool call then produces live terminal output.
     let bash = Arc::new(BashTool::new(workspace));

@@ -103,7 +103,7 @@ async fn run_scenario(model: Arc<dyn Llm>, sc: &scenarios::Scenario) -> anyhow::
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("  {} — {}", sc.name, sc.blurb);
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    run_task(model, Workspace::new(dir.path()), sc.name, sc.task).await?;
+    run_task(model, Workspace::new(dir.path()).allow_bash(true), sc.name, sc.task).await?;
 
     let (passed, detail) = (sc.verify)(dir.path());
     println!("  {} verify: {detail}", if passed { "✅" } else { "❌" });
@@ -225,7 +225,7 @@ async fn run_task(
 async fn demo() -> anyhow::Result<()> {
     let model = build_model()?;
     let dir = tempfile::tempdir()?;
-    let workspace = Workspace::new(dir.path());
+    let workspace = Workspace::new(dir.path()).allow_bash(true);
 
     println!("ADK-Rust CodingAgent — multi-language demo");
     println!("workspace: {}\n", dir.path().display());
@@ -274,8 +274,10 @@ async fn multiturn() -> anyhow::Result<()> {
     let session_id = "build";
 
     // ONE agent, ONE runner, ONE session — history persists across turns.
-    let coding =
-        CodingAgent::builder().model(model).workspace(Workspace::new(dir.path())).build()?;
+    let coding = CodingAgent::builder()
+        .model(model)
+        .workspace(Workspace::new(dir.path()).allow_bash(true))
+        .build()?;
     let runner = make_runner(coding.agent(), session_id).await?;
 
     println!("ADK-Rust CodingAgent — multi-turn build (a Python todo CLI)");
@@ -350,7 +352,7 @@ async fn multiturn() -> anyhow::Result<()> {
 /// Run a single task in a user-supplied directory.
 async fn single(dir: &str, task: &str) -> anyhow::Result<()> {
     let model = build_model()?;
-    let workspace = Workspace::new(dir);
+    let workspace = Workspace::new(dir).allow_bash(true);
     println!("CodingAgent on {dir}\ntask: {task}\n");
     run_task(model, workspace, "single", task).await
 }

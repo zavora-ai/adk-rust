@@ -14,7 +14,7 @@ use adk_devtools::Workspace;
 
 let coding = CodingAgent::builder()
     .model(model)                              // any adk-model provider (required)
-    .workspace(Workspace::new("./my-repo"))    // sandboxed (required)
+    .workspace(Workspace::new("./my-repo").allow_bash(true)) // sandboxed (required); bash is opt-in
     .instruction("Follow the project's existing style; prefer small diffs.") // optional, appended
     .build()?;
 

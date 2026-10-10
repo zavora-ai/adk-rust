@@ -42,11 +42,11 @@ A `Workspace` roots every operation at a directory and enforces a small policy:
 use adk_devtools::Workspace;
 use std::time::Duration;
 
-let ws = Workspace::new("./my-repo");              // read-write, bash enabled
+let ws = Workspace::new("./my-repo");              // read-write, no shell
 let ws = Workspace::read_only("./my-repo");        // explore/plan: no writes, no bash
 let ws = Workspace::new("./my-repo")
-    .allow_bash(false)                              // file edits, but no shell
-    .bash_timeout(Duration::from_secs(60))
+    .allow_bash(true)                               // opt in to the shell
+    .bash_timeout(Duration::from_secs(60))          // a call may ask for less, not more
     .max_output_bytes(512 * 1024);
 ```
 
@@ -100,7 +100,7 @@ use std::sync::Arc;
 
 let agent = LlmAgentBuilder::new("coder")
     .model(model)
-    .toolset(Arc::new(DevToolset::new(Workspace::new("./my-repo"))))
+    .toolset(Arc::new(DevToolset::new(Workspace::new("./my-repo").allow_bash(true))))
     .build()?;
 ```
 

@@ -10,7 +10,7 @@
 //!
 //! let agent = CodingAgent::builder()
 //!     .model(model)
-//!     .workspace(Workspace::new("./my-repo"))
+//!     .workspace(Workspace::new("./my-repo").allow_bash(true))
 //!     .build()?;
 //! // agent.agent() -> Arc<dyn Agent> for a Runner
 //! ```

@@ -44,16 +44,30 @@ pub const DEFAULT_ENV_ALLOWLIST: &[&str] =
     &["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TERM", "USER", "SHELL"];
 
 impl Workspace {
-    /// Create a read-write workspace rooted at `root` (bash enabled).
+    /// Create a read-write workspace rooted at `root`, with `bash` disabled.
     ///
-    /// If `root` exists it is canonicalized so containment checks are robust.
+    /// `bash` runs model-written commands on the host, outside the path containment the file
+    /// tools enforce, so it is off until [`allow_bash`](Self::allow_bash) enables it. If `root`
+    /// exists it is canonicalized so containment checks are robust.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_devtools::Workspace;
+    ///
+    /// let files_only = Workspace::new("./my-repo");
+    /// assert!(!files_only.bash_allowed());
+    ///
+    /// let with_shell = Workspace::new("./my-repo").allow_bash(true);
+    /// assert!(with_shell.bash_allowed());
+    /// ```
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         let root = std::fs::canonicalize(&root).unwrap_or(root);
         Self {
             root,
             writable: true,
-            allow_bash: true,
+            allow_bash: false,
             bash_timeout: Duration::from_secs(120),
             max_output_bytes: 1_048_576,
             read_tracker: Arc::new(Mutex::new(HashSet::new())),
@@ -77,13 +91,16 @@ impl Workspace {
         self
     }
 
-    /// Set whether the `bash` tool is permitted.
+    /// Set whether the `bash` tool is permitted. Off by default.
+    ///
+    /// Commands run with the workspace root as their working directory, which is not a sandbox:
+    /// they can reach absolute paths and the network.
     pub fn allow_bash(mut self, yes: bool) -> Self {
         self.allow_bash = yes;
         self
     }
 
-    /// Set the default timeout applied to `bash` commands.
+    /// Set the timeout applied to `bash` commands, and the most a call may request.
     pub fn bash_timeout(mut self, timeout: Duration) -> Self {
         self.bash_timeout = timeout;
         self

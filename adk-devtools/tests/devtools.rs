@@ -102,7 +102,7 @@ async fn glob_and_grep() {
 #[tokio::test]
 async fn bash_runs_in_workspace() {
     let dir = tempfile::tempdir().unwrap();
-    let ws = Workspace::new(dir.path());
+    let ws = Workspace::new(dir.path()).allow_bash(true);
     let tools = tools(&ws).await;
 
     let b = run(find(&tools, "bash"), json!({"command": "echo hello && exit 3"})).await.unwrap();
