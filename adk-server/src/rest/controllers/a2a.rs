@@ -243,7 +243,7 @@ impl A2aController {
     ///
     /// The indexed skills are appended to the agent-derived `skills[]` entries
     /// via [`agent_skills_from_index`](crate::a2a::agent_skills_from_index) and
-    /// served at `/.well-known/agent.json`.
+    /// served at `/.well-known/agent-card.json` and `/.well-known/agent.json`.
     pub fn with_skill_index(
         config: ServerConfig,
         base_url: &str,
@@ -504,7 +504,7 @@ async fn start_task(
     Ok(StartedTask { result: task_rx, updates: stream_rx })
 }
 
-/// GET /.well-known/agent.json - Serve the agent card
+/// GET /.well-known/agent-card.json and /.well-known/agent.json - Serve the agent card
 pub async fn get_agent_card(State(controller): State<A2aController>) -> impl IntoResponse {
     Json(controller.agent_card.clone())
 }

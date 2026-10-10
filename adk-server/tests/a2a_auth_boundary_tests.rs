@@ -138,19 +138,17 @@ async fn the_agent_card_stays_public() {
     // Discovery must not require a credential: peers fetch it before they have one.
     let app = create_app_with_a2a(authenticated_config(), Some("http://localhost:8080"));
 
-    let request = Request::builder()
-        .method("GET")
-        .uri("/.well-known/agent.json")
-        .body(Body::empty())
-        .unwrap();
+    for path in ["/.well-known/agent-card.json", "/.well-known/agent.json"] {
+        let request = Request::builder().method("GET").uri(path).body(Body::empty()).unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
 
-    assert_eq!(
-        response.status(),
-        StatusCode::OK,
-        "gating discovery would break A2A peer discovery"
-    );
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "gating discovery at {path} would break A2A peer discovery"
+        );
+    }
 }
 
 #[tokio::test]

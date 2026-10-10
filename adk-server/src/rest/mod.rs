@@ -307,6 +307,18 @@ impl crate::yaml_agent::ModelFactory for NoOpModelFactory {
     }
 }
 
+/// Public A2A discovery routes.
+///
+/// The card is served at `/.well-known/agent-card.json`, the well-known path since
+/// A2A 0.3.0 and the one the bundled v1 client fetches, and at the earlier
+/// `/.well-known/agent.json` that existing peers use.
+fn a2a_discovery_router(controller: A2aController) -> Router {
+    Router::new()
+        .route("/.well-known/agent-card.json", get(controllers::a2a::get_agent_card))
+        .route("/.well-known/agent.json", get(controllers::a2a::get_agent_card))
+        .with_state(controller)
+}
+
 /// Create the server application with A2A support at the specified base URL
 pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> Router {
     let session_controller = SessionController::new(config.session_service.clone());
@@ -452,9 +464,7 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
         // authentication as every other mutation surface. They were previously merged at the
         // root, outside the layer applied to `/api`, so anyone who could reach the port could
         // drive the agent and incur its costs.
-        let a2a_discovery = Router::new()
-            .route("/.well-known/agent.json", get(controllers::a2a::get_agent_card))
-            .with_state(a2a_controller.clone());
+        let a2a_discovery = a2a_discovery_router(a2a_controller.clone());
         let a2a_rpc = Router::new()
             .route("/a2a", post(controllers::a2a::handle_jsonrpc_for_caller))
             .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream_for_caller))
@@ -612,8 +622,8 @@ impl ServerBuilder {
 
     /// Expose the skills in `skill_index` on the A2A agent card.
     ///
-    /// When A2A is enabled via [`with_a2a`](Self::with_a2a), the card served at
-    /// `/.well-known/agent.json` appends one `skills[]` entry per indexed
+    /// When A2A is enabled via [`with_a2a`](Self::with_a2a), the served agent
+    /// card appends one `skills[]` entry per indexed
     /// skill, mapped by [`agent_skills_from_index`](crate::a2a::agent_skills_from_index).
     /// Has no effect without `with_a2a`.
     ///
@@ -976,9 +986,7 @@ impl ServerBuilder {
                 None => a2a_controller,
             };
             // Same split as `create_app_with_a2a`: discovery is public, RPC is authenticated.
-            let a2a_discovery = Router::new()
-                .route("/.well-known/agent.json", get(controllers::a2a::get_agent_card))
-                .with_state(a2a_controller.clone());
+            let a2a_discovery = a2a_discovery_router(a2a_controller.clone());
             let a2a_rpc = Router::new()
                 .route("/a2a", post(controllers::a2a::handle_jsonrpc_for_caller))
                 .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream_for_caller))
