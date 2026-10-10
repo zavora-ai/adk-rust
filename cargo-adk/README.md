@@ -142,6 +142,24 @@ The convention maps `UPPER_SNAKE_CASE` env var names to `lower-kebab-case` secre
 6. Compute SHA-256 checksum
 7. Push to the platform server
 
+### `cargo adk eval` — Run eval sets against an agent binary
+
+```bash
+cargo adk eval tests/ --agent-cmd "target/release/eval_agent"
+cargo adk eval tests/weather.test.json --agent-cmd "python3 agent.py" --save-baseline
+cargo adk eval tests/ --agent-cmd "target/release/eval_agent" --check-regression --format junit --output results.xml
+```
+
+The agent runs as its own process: it reads one JSON request per line on stdin and writes one JSON response per line on stdout.
+
+| Line | Shape |
+|------|-------|
+| Request | `{"case_id", "turn", "user_text", "session_id"}` — every turn of a case shares `session_id` |
+| Response | `{"text", "tool_calls": [{"name", "args"}]}` |
+| Error response | `{"error"}` — fails the case |
+
+Responses are scored with `adk_eval::Evaluator` against `--criteria` (an `EvaluationCriteria` JSON file; default an exact tool trajectory and a response similarity of 0.8). LLM-judged criteria need `--judge-model` and the provider's API key. The command exits non-zero when a case fails, the agent misbehaves, the baseline is missing for `--check-regression`, or a score regresses. See the [evaluation guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/evaluation/evaluation.md) for every flag and an example agent binary.
+
 ## Templates
 
 | Template | What you get |

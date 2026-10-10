@@ -3831,12 +3831,15 @@ name = "cargo-adk"
 version = "3.0.0"
 dependencies = [
  "adk-bench",
+ "adk-core",
  "adk-deploy",
  "adk-eval",
  "adk-model",
+ "async-trait",
  "chrono",
  "clap",
  "flate2",
+ "futures",
  "hex",
  "proptest",
  "serde",
@@ -3845,6 +3848,7 @@ dependencies = [
  "sha2 0.10.9",
  "syn 2.0.119",
  "tar",
+ "tempfile",
  "tokio",
  "toml 0.8.23",
  "tracing-subscriber",
