@@ -1,4 +1,5 @@
 use adk_core::{Agent, EventStream, InvocationContext, Result as AdkResult};
+use adk_server::a2a::A2aClient;
 use adk_server::{ServerBuilder, ServerConfig, create_app_with_a2a};
 use adk_session::InMemorySessionService;
 use async_trait::async_trait;
@@ -141,24 +142,93 @@ async fn agent_card_is_served_at_both_well_known_paths() {
     }
 }
 
-/// The bundled v1 client discovers the card at `/.well-known/agent-card.json`.
-#[cfg(feature = "a2a-v1")]
-#[tokio::test]
-async fn bundled_v1_client_resolves_the_served_card() {
-    use adk_server::a2a::client::v1_client::A2aV1Client;
-
-    let app = ServerBuilder::new(create_test_config()).with_a2a("http://localhost:8080").build();
+/// Serves `app` on an ephemeral local port and returns its base URL.
+async fn serve(app: axum::Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let address = listener.local_addr().expect("address");
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });
+    format!("http://{address}")
+}
 
-    let card = A2aV1Client::resolve_agent_card(&format!("http://{address}"))
-        .await
-        .expect("resolve agent card");
+/// A router that serves one agent card, named `name`, at `path` only.
+fn card_router(path: &str, name: &str) -> axum::Router {
+    let card = serde_json::json!({
+        "name": name,
+        "description": "card fixture",
+        "url": "http://127.0.0.1/a2a",
+        "version": "1.0.0"
+    });
+    axum::Router::new().route(path, axum::routing::get(move || async move { axum::Json(card) }))
+}
+
+#[tokio::test]
+async fn client_resolves_the_card_this_server_serves() {
+    let base_url =
+        serve(ServerBuilder::new(create_test_config()).with_a2a("http://localhost:8080").build())
+            .await;
+
+    let card = A2aClient::resolve_agent_card(&base_url).await.expect("resolve agent card");
     assert_eq!(card.name, "test_agent");
-    assert_eq!(card.description, "A test agent for A2A");
+}
+
+#[tokio::test]
+async fn client_prefers_the_agent_card_json_path() {
+    let base_url = serve(
+        card_router("/.well-known/agent-card.json", "current")
+            .merge(card_router("/.well-known/agent.json", "legacy")),
+    )
+    .await;
+
+    let card = A2aClient::resolve_agent_card(&base_url).await.expect("resolve agent card");
+    assert_eq!(card.name, "current");
+}
+
+#[tokio::test]
+async fn client_falls_back_to_agent_json_on_404() {
+    let base_url = serve(card_router("/.well-known/agent.json", "legacy")).await;
+
+    let card = A2aClient::resolve_agent_card(&base_url).await.expect("resolve agent card");
+    assert_eq!(card.name, "legacy");
+}
+
+#[tokio::test]
+async fn client_does_not_fall_back_on_other_errors() {
+    let app = card_router("/.well-known/agent.json", "legacy").route(
+        "/.well-known/agent-card.json",
+        axum::routing::get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+    );
+    let base_url = serve(app).await;
+
+    let error = A2aClient::resolve_agent_card(&base_url).await.expect_err("500 is not a 404");
+    assert!(error.to_string().contains("HTTP 500"), "{error}");
+}
+
+/// The bundled v1 client fetches and parses the served card, but the card
+/// advertises no `supportedInterfaces`, so the client has no endpoint to call.
+#[cfg(feature = "a2a-v1")]
+#[tokio::test]
+async fn bundled_v1_client_finds_no_v1_interface_on_the_served_card() {
+    use adk_server::a2a::client::v1_client::{A2aV1Client, V1ClientError};
+
+    let base_url =
+        serve(ServerBuilder::new(create_test_config()).with_a2a("http://localhost:8080").build())
+            .await;
+
+    let card = A2aV1Client::resolve_agent_card(&base_url).await.expect("resolve agent card");
+    assert_eq!(card.name, "test_agent");
+    assert!(card.supported_interfaces.is_empty());
+
+    let error = A2aV1Client::new(card).cancel_task("task-1").await.expect_err("no endpoint");
+    assert!(
+        matches!(
+            &error,
+            V1ClientError::UnexpectedStatus { status: 0, body }
+                if body == "no JSONRPC interface in agent card"
+        ),
+        "{error}"
+    );
 }
 
 #[tokio::test]

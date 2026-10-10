@@ -188,12 +188,36 @@ params.output_config = Some(OutputConfig::with_effort(EffortLevel::High));
 ### Prompt Caching
 
 ```rust
-use adk_anthropic::{CacheControlEphemeral, MessageCreateParams, Model};
+use adk_anthropic::{CacheControlEphemeral, CacheTtl, MessageCreateParams, Model};
 
 let mut params = MessageCreateParams::simple("Question", Model::claude_sonnet_5())
     .with_system("Large system prompt...");
+// 5-minute entry (the API default)
 params.cache_control = Some(CacheControlEphemeral::new());
+// 1-hour entry
+params.cache_control = Some(CacheControlEphemeral::new().with_ttl(CacheTtl::one_hour()));
 ```
+
+Through `adk-model`, `AnthropicClient` caches automatically: it places one breakpoint on the
+system prompt and one on the conversation tail. `with_prompt_cache_ttl` sets the lifetime of
+both breakpoints, and `with_prompt_caching(false)` turns them off.
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig, CacheTtl};
+
+let config = AnthropicConfig::new(api_key, "claude-sonnet-5-5")
+    .with_prompt_cache_ttl(CacheTtl::one_hour());
+let client = AnthropicClient::new(config)?;
+```
+
+| TTL | Write price | Use when |
+|-----|-------------|----------|
+| `CacheTtl::five_minutes()` (default) | 1.25× base input | Requests sharing a prefix arrive within five minutes |
+| `CacheTtl::one_hour()` | 2× base input | Requests sharing a prefix are more than five minutes apart, such as a conversation waiting on a person |
+
+`pricing::estimate_cost` bills the 1-hour share of `usage.cache_creation_input_tokens`,
+reported as `usage.cache_creation_input_tokens_1h`, at the 1-hour rate and the remainder at
+the 5-minute rate.
 
 ### Structured Output
 

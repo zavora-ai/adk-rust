@@ -321,6 +321,71 @@ impl From<ProgrammaticToolUseBlock> for ContentBlock {
 mod tests {
     use super::*;
 
+    /// Blocks from a dynamic-filtering response carry `caller`, and replaying the
+    /// assistant turn has to send them back exactly as received.
+    #[test]
+    fn dynamic_filtering_response_round_trips_caller() {
+        let caller =
+            serde_json::json!({"type": "code_execution_20260120", "tool_id": "srvtoolu_exec"});
+        let wire = serde_json::json!({
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_exec",
+                    "name": "code_execution",
+                    "input": {"code": "print(search('rust 2024 edition'))"}
+                },
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_search",
+                    "name": "web_search",
+                    "input": {"query": "rust 2024 edition"},
+                    "caller": caller
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_search",
+                    "content": [{
+                        "type": "web_search_result",
+                        "url": "https://blog.rust-lang.org/",
+                        "title": "Rust Blog",
+                        "encrypted_content": "EqgfCioIARgBIiQ3YTAw",
+                        "page_age": "February 20, 2025"
+                    }],
+                    "caller": caller
+                },
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_fetch",
+                    "name": "web_fetch",
+                    "input": {"url": "https://blog.rust-lang.org/"},
+                    "caller": caller
+                },
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_direct",
+                    "name": "web_search",
+                    "input": {"query": "rust release date"},
+                    "caller": {"type": "direct"}
+                },
+                {"type": "text", "text": "Rust 2024 shipped with Rust 1.85."}
+            ],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 120, "output_tokens": 40}
+        });
+
+        let message: crate::types::Message = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            message.content[1].as_server_tool_use().and_then(|block| block.caller.clone()),
+            Some(caller)
+        );
+        assert_eq!(serde_json::to_value(&message.content).unwrap(), wire["content"]);
+    }
+
     #[test]
     fn text_block_serialization() {
         let text_block = TextBlock::new("This is some text content.");

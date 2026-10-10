@@ -10,7 +10,7 @@ use adk_core::{
 use async_stream::stream;
 use async_trait::async_trait;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 use tracing::Instrument;
@@ -3338,6 +3338,9 @@ impl Agent for LlmAgent {
                     // Transfer calls cause an immediate return from the stream,
                     // so they must be handled inline regardless of strategy.
                     let mut transfer_handled = false;
+                    // Calls already answered by an invalid-target error, so a later valid
+                    // transfer does not answer them a second time.
+                    let mut answered_calls = HashSet::new();
                     for call in &fc_parts {
                         if call.name == "transfer_to_agent" {
                             let target_agent = call
@@ -3370,13 +3373,15 @@ impl Agent for LlmAgent {
                                 error_event.author = agent_name.clone();
                                 error_event.llm_response.content = Some(error_content);
                                 yield Ok(error_event);
+                                answered_calls.insert(call.index);
                                 continue;
                             }
 
-                            // Every call in this model turn gets a response, so providers that
-                            // require one per call accept any later history containing it.
+                            // Every call in this model turn gets exactly one response, so providers
+                            // that require one per call accept any later history containing it.
                             let responses = fc_parts
                                 .iter()
+                                .filter(|other| !answered_calls.contains(&other.index))
                                 .map(|other| {
                                     let response = if other.index == call.index {
                                         serde_json::json!({ "transferred_to": target_agent })

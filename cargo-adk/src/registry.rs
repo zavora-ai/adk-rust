@@ -893,7 +893,7 @@ passthrough, the second to the container route).
 
 There is no separate create-time A2A mode — the passthrough exposes every
 container route, so an agent that also serves adk-server's A2A surface
-(`/.well-known/agent.json`, `/a2a`, `/a2a/stream`) is reachable through it.
+(`/.well-known/agent-card.json`, `/a2a`, `/a2a/stream`) is reachable through it.
 To opt in, replace `serve_agent_engine` with a `ServerBuilder` that mounts
 both surfaces:
 

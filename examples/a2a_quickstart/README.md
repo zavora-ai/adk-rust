@@ -21,7 +21,7 @@ The server starts on **http://localhost:8003**.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/.well-known/agent.json` | Agent card (capabilities, skills) |
+| GET | `/.well-known/agent-card.json` | Agent card (capabilities, skills) |
 | POST | `/a2a` | JSON-RPC endpoint (message/send) |
 
 ## Test with curl
@@ -29,7 +29,7 @@ The server starts on **http://localhost:8003**.
 ### Fetch agent card
 
 ```bash
-curl http://localhost:8003/.well-known/agent.json | jq .
+curl http://localhost:8003/.well-known/agent-card.json | jq .
 ```
 
 Expected response:

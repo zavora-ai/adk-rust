@@ -19,15 +19,29 @@ impl A2aClient {
         Self { http_client: reqwest::Client::new(), agent_card }
     }
 
-    /// Resolve an agent card from a URL (fetch from /.well-known/agent.json)
+    /// Resolves an agent card from a base URL.
+    ///
+    /// Fetches `/.well-known/agent-card.json`, the path A2A 0.3.0 and later define,
+    /// and falls back to `/.well-known/agent.json` when that path returns 404, so
+    /// servers that predate A2A 0.3.0 still resolve.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails, when the card path answers with a
+    /// non-success status other than the 404 that triggers the fallback, or when the
+    /// body is not an agent card.
     pub async fn resolve_agent_card(base_url: &str) -> Result<AgentCard> {
-        let url = format!("{}/.well-known/agent.json", base_url.trim_end_matches('/'));
-
+        let base_url = base_url.trim_end_matches('/');
         let client = reqwest::Client::new();
-        let response =
-            client.get(&url).send().await.map_err(|e| {
-                adk_core::AdkError::agent(format!("Failed to fetch agent card: {e}"))
-            })?;
+        let fetch = |path: &'static str| client.get(format!("{base_url}{path}")).send();
+        let fetch_error = |e: reqwest::Error| {
+            adk_core::AdkError::agent(format!("Failed to fetch agent card: {e}"))
+        };
+
+        let mut response = fetch("/.well-known/agent-card.json").await.map_err(fetch_error)?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            response = fetch("/.well-known/agent.json").await.map_err(fetch_error)?;
+        }
 
         if !response.status().is_success() {
             return Err(adk_core::AdkError::agent(format!(

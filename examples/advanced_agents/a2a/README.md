@@ -3,7 +3,7 @@
 `a2a_gateway` is the server root and is exposed through both the normal runtime
 API and ADK-Rust's A2A endpoints:
 
-- `GET /.well-known/agent.json`
+- `GET /.well-known/agent-card.json`
 - `POST /a2a`
 - `POST /a2a/stream`
 
@@ -14,5 +14,5 @@ session service, callbacks, and telemetry configuration.
 Example request:
 
 ```bash
-curl http://127.0.0.1:8088/.well-known/agent.json | jq .
+curl http://127.0.0.1:8088/.well-known/agent-card.json | jq .
 ```

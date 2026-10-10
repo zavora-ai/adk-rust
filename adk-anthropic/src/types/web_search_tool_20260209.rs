@@ -12,8 +12,8 @@ use crate::types::web_search_tool_20250305::UserLocation;
 ///
 /// Responses can contain `server_tool_use` blocks named `code_execution` and
 /// `code_execution_tool_result` blocks alongside the `web_search_tool_result` blocks.
-/// **Important:** [`crate::ContentBlock`] has no `code_execution_tool_result`
-/// variant, so [`crate::Message`] deserialization fails on those responses.
+/// Set [`allowed_callers`](Self::allowed_callers) to `["direct"]` to call the tool
+/// directly, without dynamic filtering.
 ///
 /// # Example
 ///
@@ -54,6 +54,15 @@ pub struct WebSearchTool20260209 {
     /// Parameters for the user's location. Used to provide more relevant search results.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_location: Option<UserLocation>,
+
+    /// Who may call the tool: `"direct"` for Claude itself, or a code execution tool
+    /// version such as `"code_execution_20260120"`.
+    ///
+    /// The API defaults this version to `["code_execution_20260120"]`, which runs
+    /// searches through dynamic filtering. `["direct"]` turns dynamic filtering off,
+    /// which Zero Data Retention and models without programmatic tool calling require.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_callers: Option<Vec<String>>,
 }
 
 fn default_name() -> String {
@@ -70,6 +79,7 @@ impl WebSearchTool20260209 {
             cache_control: None,
             max_uses: None,
             user_location: None,
+            allowed_callers: None,
         }
     }
 
@@ -104,6 +114,25 @@ impl WebSearchTool20260209 {
         self.user_location = Some(user_location);
         self
     }
+
+    /// Sets who may call the tool. `["direct"]` turns dynamic filtering off.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::WebSearchTool20260209;
+    ///
+    /// let tool = WebSearchTool20260209::new().with_allowed_callers(["direct"]);
+    /// let json = serde_json::to_value(&tool).unwrap();
+    /// assert_eq!(json["allowed_callers"], serde_json::json!(["direct"]));
+    /// ```
+    pub fn with_allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.allowed_callers = Some(callers.into_iter().map(Into::into).collect());
+        self
+    }
 }
 
 impl Default for WebSearchTool20260209 {
@@ -135,6 +164,14 @@ mod tests {
                 "user_location": {"type": "approximate", "city": "Nairobi", "country": "KE"}
             })
         );
+    }
+
+    #[test]
+    fn direct_callers_round_trip() {
+        let tool = WebSearchTool20260209::new().with_allowed_callers(["direct"]);
+        let wire = json!({"name": "web_search", "allowed_callers": ["direct"]});
+        assert_eq!(serde_json::to_value(&tool).unwrap(), wire);
+        assert_eq!(serde_json::from_value::<WebSearchTool20260209>(wire).unwrap(), tool);
     }
 
     #[test]

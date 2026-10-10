@@ -604,6 +604,190 @@ async fn test_transfer_event_answers_every_call_in_the_turn() {
     );
 }
 
+/// Collects `(id, response)` for every function response across `events`.
+fn function_responses(events: &[adk_core::Event]) -> Vec<(Option<String>, Value)> {
+    events
+        .iter()
+        .filter_map(|event| event.llm_response.content.as_ref())
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse { function_response, id, .. } => {
+                Some((id.clone(), function_response.response.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn test_invalid_then_valid_transfer_answers_each_call_once() {
+    let child = LlmAgentBuilder::new("child")
+        .description("Child agent")
+        .model(Arc::new(MockLlm::new("child answer")))
+        .build()
+        .unwrap();
+    let parent = LlmAgentBuilder::new("parent")
+        .description("Parent agent")
+        .model(Arc::new(FunctionCallLlm {
+            calls: vec![
+                function_call(
+                    "transfer_to_agent",
+                    "call_a",
+                    serde_json::json!({"agent_name": "nobody"}),
+                ),
+                function_call(
+                    "transfer_to_agent",
+                    "call_b",
+                    serde_json::json!({"agent_name": "child"}),
+                ),
+            ],
+        }))
+        .sub_agent(Arc::new(child))
+        .build()
+        .unwrap();
+
+    let mut stream = parent.run(Arc::new(TestContext::new("hand this off"))).await.unwrap();
+    use futures::StreamExt;
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event.unwrap());
+    }
+
+    assert_eq!(
+        function_responses(&events),
+        vec![
+            (
+                Some("call_a".to_string()),
+                serde_json::json!({"error": "Agent 'nobody' not found. Available agents: [\"child\"]"})
+            ),
+            (Some("call_b".to_string()), serde_json::json!({"transferred_to": "child"})),
+        ]
+    );
+}
+
+/// Replies with each scripted turn in order, then with text, recording every request.
+struct ScriptedLlm {
+    turns: Mutex<std::collections::VecDeque<Vec<Part>>>,
+    requests: Arc<Mutex<Vec<LlmRequest>>>,
+}
+
+impl ScriptedLlm {
+    fn new(turns: Vec<Vec<Part>>) -> Self {
+        Self { turns: Mutex::new(turns.into()), requests: Arc::new(Mutex::new(Vec::new())) }
+    }
+}
+
+#[async_trait]
+impl adk_core::Llm for ScriptedLlm {
+    fn name(&self) -> &str {
+        "scripted-llm"
+    }
+
+    async fn generate_content(
+        &self,
+        request: adk_core::LlmRequest,
+        _stream: bool,
+    ) -> adk_core::Result<adk_core::LlmResponseStream> {
+        self.requests.lock().unwrap().push(request);
+        let parts = self
+            .turns
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| vec![Part::Text { text: "done".to_string() }]);
+        let s = async_stream::stream! {
+            yield Ok(adk_core::LlmResponse {
+                content: Some(adk_core::Content { role: "model".to_string(), parts }),
+                usage_metadata: None,
+                finish_reason: None,
+                citation_metadata: None,
+                partial: false,
+                turn_complete: true,
+                interrupted: false,
+                error_code: None,
+                error_message: None,
+                provider_metadata: None,
+                interaction_id: None,
+            });
+        };
+        Ok(Box::pin(s))
+    }
+}
+
+#[tokio::test]
+async fn test_request_after_hand_back_pairs_every_call_with_one_response() {
+    use adk_core::{SessionId, UserId};
+    use adk_runner::Runner;
+    use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+    use futures::StreamExt;
+
+    let child = LlmAgentBuilder::new("child")
+        .description("Child agent")
+        .model(Arc::new(ScriptedLlm::new(vec![vec![function_call(
+            "transfer_to_agent",
+            "call_c",
+            serde_json::json!({"agent_name": "coordinator"}),
+        )]])))
+        .build()
+        .unwrap();
+    let coordinator_model = ScriptedLlm::new(vec![vec![
+        function_call("transfer_to_agent", "call_a", serde_json::json!({"agent_name": "nobody"})),
+        function_call("transfer_to_agent", "call_b", serde_json::json!({"agent_name": "child"})),
+    ]]);
+    let coordinator_requests = coordinator_model.requests.clone();
+    let coordinator = LlmAgentBuilder::new("coordinator")
+        .description("Coordinator agent")
+        .model(Arc::new(coordinator_model))
+        .sub_agent(Arc::new(child))
+        .build()
+        .unwrap();
+
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "hand-back".into(),
+            user_id: "user".into(),
+            session_id: Some("session".into()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = Runner::builder()
+        .app_name("hand-back")
+        .agent(Arc::new(coordinator) as Arc<dyn Agent>)
+        .session_service(sessions)
+        .build()
+        .unwrap();
+
+    let mut stream = runner
+        .run(
+            UserId::new("user").unwrap(),
+            SessionId::new("session").unwrap(),
+            Content::new("user").with_text("hand this off"),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+
+    let requests = coordinator_requests.lock().unwrap();
+    assert_eq!(requests.len(), 2, "the coordinator runs again after the hand-back");
+    let mut call_ids = Vec::new();
+    let mut response_ids = Vec::new();
+    for part in requests[1].contents.iter().flat_map(|content| &content.parts) {
+        match part {
+            Part::FunctionCall { id, .. } => call_ids.push(id.clone()),
+            Part::FunctionResponse { id, .. } => response_ids.push(id.clone()),
+            _ => {}
+        }
+    }
+    call_ids.sort();
+    response_ids.sort();
+    assert!(call_ids.contains(&Some("call_a".to_string())));
+    assert_eq!(response_ids, call_ids);
+}
+
 #[tokio::test]
 async fn test_llm_agent_sends_instructions_as_system_contents() {
     let model = SpyLlm::new("{}");

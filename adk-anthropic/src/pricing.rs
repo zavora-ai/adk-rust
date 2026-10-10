@@ -335,7 +335,7 @@ impl ModelPricing {
 pub struct CostBreakdown {
     /// Cost of uncached input tokens.
     pub input_cost: f64,
-    /// Cost of tokens written to the 5-minute cache.
+    /// Cost of tokens written to the cache, each at the rate of its TTL.
     pub cache_write_cost: f64,
     /// Cost of tokens read from cache.
     pub cache_read_cost: f64,
@@ -366,21 +366,45 @@ impl std::fmt::Display for CostBreakdown {
 
 /// Estimate the cost of a single API call from its [`Usage`] and [`ModelPricing`].
 ///
-/// Uses `cache_creation_input_tokens` as 5-minute cache writes. For 1-hour
-/// cache writes, use [`estimate_cost_1h`] instead.
+/// Cache writes are billed by TTL. `cache_creation_input_tokens` is the total of
+/// both tiers, so its `cache_creation_input_tokens_1h` share is billed at
+/// [`ModelPricing::cache_write_1h`] and the remainder at
+/// [`ModelPricing::cache_write_5m`].
+///
+/// # Example
+///
+/// ```
+/// use adk_anthropic::Usage;
+/// use adk_anthropic::pricing::{ModelPricing, estimate_cost};
+///
+/// // 1,000,000 cache-write tokens, 400,000 of them to 1-hour entries.
+/// let usage = Usage::new(0, 0)
+///     .with_cache_creation_input_tokens(1_000_000)
+///     .with_cache_creation_input_tokens_1h(400_000);
+/// let cost = estimate_cost(ModelPricing::SONNET_46, &usage);
+/// // 600,000 at $3.75/MTok plus 400,000 at $6.00/MTok.
+/// assert!((cost.cache_write_cost - 4.65).abs() < 1e-9);
+/// ```
 pub fn estimate_cost(pricing: ModelPricing, usage: &Usage) -> CostBreakdown {
     let mtok = 1_000_000.0;
+    let cache_writes = usage.cache_creation_input_tokens.unwrap_or(0).max(0);
+    let cache_writes_1h = usage.cache_creation_input_tokens_1h.unwrap_or(0).clamp(0, cache_writes);
+    let cache_writes_5m = cache_writes - cache_writes_1h;
     CostBreakdown {
         input_cost: usage.input_tokens as f64 / mtok * pricing.input,
-        cache_write_cost: usage.cache_creation_input_tokens.unwrap_or(0) as f64 / mtok
-            * pricing.cache_write_5m,
+        cache_write_cost: cache_writes_5m as f64 / mtok * pricing.cache_write_5m
+            + cache_writes_1h as f64 / mtok * pricing.cache_write_1h,
         cache_read_cost: usage.cache_read_input_tokens.unwrap_or(0) as f64 / mtok
             * pricing.cache_read,
         output_cost: usage.output_tokens as f64 / mtok * pricing.output,
     }
 }
 
-/// Same as [`estimate_cost`] but treats cache writes as 1-hour tier.
+/// Same as [`estimate_cost`] but bills every cache write at the 1-hour rate.
+///
+/// For usage that reports no TTL breakdown but is known to come from 1-hour cache
+/// entries. [`estimate_cost`] already applies the breakdown when the response
+/// carries one.
 pub fn estimate_cost_1h(pricing: ModelPricing, usage: &Usage) -> CostBreakdown {
     let mtok = 1_000_000.0;
     CostBreakdown {
@@ -445,6 +469,41 @@ mod tests {
         assert!(cost.cache_read_cost > 0.0);
         assert!(cost.cache_write_cost > 0.0);
         assert!(cost.total() > 0.0);
+    }
+
+    /// `cache_creation_input_tokens` includes the 1-hour writes, so each write is
+    /// billed once, at its own TTL's rate.
+    #[test]
+    fn mixed_ttl_cache_writes_bill_each_tier_at_its_rate() {
+        let usage = Usage::new(1000, 500)
+            .with_cache_creation_input_tokens(248)
+            .with_cache_creation_input_tokens_1h(100)
+            .with_cache_read_input_tokens(1800);
+        let cost = estimate_cost(ModelPricing::SONNET_46, &usage);
+        // 148 tokens at $3.75/MTok plus 100 tokens at $6.00/MTok.
+        let expected_writes = 148.0 / 1_000_000.0 * 3.75 + 100.0 / 1_000_000.0 * 6.0;
+        assert!(
+            (cost.cache_write_cost - expected_writes).abs() < 1e-12,
+            "cache_write_cost {} != {expected_writes}",
+            cost.cache_write_cost
+        );
+        let expected_total = 1000.0 / 1_000_000.0 * 3.0
+            + expected_writes
+            + 1800.0 / 1_000_000.0 * 0.30
+            + 500.0 / 1_000_000.0 * 15.0;
+        assert!((cost.total() - expected_total).abs() < 1e-12);
+    }
+
+    /// A response that reports only 1-hour writes costs the same as `estimate_cost_1h`.
+    #[test]
+    fn all_one_hour_cache_writes_match_estimate_cost_1h() {
+        let usage = Usage::new(0, 0)
+            .with_cache_creation_input_tokens(2048)
+            .with_cache_creation_input_tokens_1h(2048);
+        let cost = estimate_cost(ModelPricing::OPUS_55, &usage);
+        let one_hour = estimate_cost_1h(ModelPricing::OPUS_55, &usage);
+        assert!((cost.cache_write_cost - one_hour.cache_write_cost).abs() < 1e-12);
+        assert!((cost.cache_write_cost - 2048.0 / 1_000_000.0 * 8.0).abs() < 1e-12);
     }
 
     /// Anchor values from <https://platform.claude.com/docs/en/about-claude/pricing>

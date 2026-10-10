@@ -67,6 +67,7 @@ pub struct WebSearchTool {
     max_uses: Option<i32>,
     user_location: Option<WebSearchUserLocation>,
     dynamic_filtering: bool,
+    allowed_callers: Option<Vec<String>>,
 }
 
 impl WebSearchTool {
@@ -128,6 +129,36 @@ impl WebSearchTool {
         self.dynamic_filtering = true;
         self
     }
+
+    /// Set who may call the `web_search_20260209` tool selected by
+    /// [`with_dynamic_filtering`](Self::with_dynamic_filtering).
+    ///
+    /// The API defaults that version to `["code_execution_20260120"]`, which filters
+    /// results with code. `["direct"]` keeps the newer tool version but turns dynamic
+    /// filtering off, which Zero Data Retention and models without programmatic tool
+    /// calling require. `web_search_20250305` already defaults to direct calls, so the
+    /// setting is sent only with dynamic filtering.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::Tool;
+    /// use adk_tool::WebSearchTool;
+    ///
+    /// let tool = WebSearchTool::new().with_dynamic_filtering().with_allowed_callers(["direct"]);
+    /// let declaration = tool.declaration();
+    /// assert_eq!(
+    ///     declaration["x-adk-anthropic-tool"]["allowed_callers"],
+    ///     serde_json::json!(["direct"])
+    /// );
+    /// ```
+    pub fn with_allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.allowed_callers = Some(callers.into_iter().map(Into::into).collect());
+        self
+    }
 }
 
 #[async_trait]
@@ -145,6 +176,7 @@ impl Tool for WebSearchTool {
     }
 
     fn declaration(&self) -> Value {
+        let allowed_callers = self.allowed_callers.as_ref().filter(|_| self.dynamic_filtering);
         json!({
             "name": self.name(),
             "description": self.description(),
@@ -155,6 +187,7 @@ impl Tool for WebSearchTool {
                 "blocked_domains": self.blocked_domains,
                 "max_uses": self.max_uses,
                 "user_location": self.user_location.as_ref().map(WebSearchUserLocation::to_json),
+                "allowed_callers": allowed_callers,
             }
         })
     }

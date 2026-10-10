@@ -324,12 +324,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #### Anthropic Advanced Features
 
 ```rust
-use adk_model::anthropic::{AnthropicClient, AnthropicConfig, ThinkingMode};
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig, CacheTtl, ThinkingMode};
 
 // Current Claude models use adaptive thinking rather than token budgets.
 let config = AnthropicConfig::new(api_key, "claude-sonnet-5")
     .with_thinking_mode(ThinkingMode::Adaptive)
     .with_prompt_caching(true)
+    // 1-hour cache entries for prefixes reused more than five minutes apart
+    .with_prompt_cache_ttl(CacheTtl::one_hour())
     .with_beta_feature("prompt-caching-2024-07-31");
 let client = AnthropicClient::new(config)?;
 

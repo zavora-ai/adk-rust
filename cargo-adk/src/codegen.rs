@@ -833,7 +833,7 @@ mod tests {
         assert!(readme.contains("gcloud builds submit"));
         assert!(readme.contains("terraform -chdir=deploy/terraform apply"));
         assert!(readme.contains("GOOGLE_CLOUD_AGENT_ENGINE_ID"));
-        assert!(readme.contains("/.well-known/agent.json"), "README documents the A2A option");
+        assert!(readme.contains("/.well-known/agent-card.json"), "README documents the A2A option");
     }
 
     #[test]
