@@ -20,7 +20,10 @@ use std::sync::Arc;
 
 #[cfg(feature = "artifacts")]
 use adk_artifact::ArtifactService;
-use adk_core::{Agent, CacheCapable, ContextCacheConfig, Memory, Result, RunConfig};
+use adk_core::{
+    Agent, CacheCapable, ContextCacheConfig, GovernanceControl, Memory, Result, RunConfig,
+    ToolPolicy,
+};
 #[cfg(feature = "plugins")]
 use adk_plugin::PluginManager;
 use adk_session::SessionService;
@@ -72,6 +75,8 @@ pub struct RunnerConfigBuilder<A, G, S> {
     intra_compaction_summarizer: Option<Arc<dyn adk_core::BaseEventsSummarizer>>,
     #[cfg(feature = "context-compaction")]
     context_compaction: Option<crate::compaction::CompactionConfig>,
+    tool_policy: Option<Arc<dyn ToolPolicy>>,
+    governance: Option<GovernanceControl>,
     _marker: PhantomData<(A, G, S)>,
 }
 
@@ -97,6 +102,8 @@ impl RunnerConfigBuilder<NoAppName, NoAgent, NoSessionService> {
             intra_compaction_summarizer: None,
             #[cfg(feature = "context-compaction")]
             context_compaction: None,
+            tool_policy: None,
+            governance: None,
             _marker: PhantomData,
         }
     }
@@ -134,6 +141,8 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             intra_compaction_summarizer: self.intra_compaction_summarizer,
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
+            tool_policy: self.tool_policy,
+            governance: self.governance,
             _marker: PhantomData,
         }
     }
@@ -159,6 +168,8 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             intra_compaction_summarizer: self.intra_compaction_summarizer,
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
+            tool_policy: self.tool_policy,
+            governance: self.governance,
             _marker: PhantomData,
         }
     }
@@ -187,6 +198,8 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             intra_compaction_summarizer: self.intra_compaction_summarizer,
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
+            tool_policy: self.tool_policy,
+            governance: self.governance,
             _marker: PhantomData,
         }
     }
@@ -271,6 +284,40 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self
     }
 
+    /// Set the policy evaluated for every tool call (optional).
+    ///
+    /// The runner installs it on each run's [`RunConfig::tool_policy`] when the run
+    /// does not carry one, so it governs transfer targets and agents behind an agent
+    /// tool as well. A [`DeclarativePolicy`](adk_core::DeclarativePolicy) denies every
+    /// tool no rule permits.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::DeclarativePolicy;
+    ///
+    /// let runner = Runner::builder()
+    ///     .app_name("ops")
+    ///     .agent(agent)
+    ///     .session_service(sessions)
+    ///     .tool_policy(Arc::new(DeclarativePolicy::builder().allow_read_only().build()))
+    ///     .build()?;
+    /// ```
+    pub fn tool_policy(mut self, policy: Arc<dyn ToolPolicy>) -> Self {
+        self.tool_policy = Some(policy);
+        self
+    }
+
+    /// Share a kill switch with this runner (optional).
+    ///
+    /// Without one the runner creates its own, reachable through
+    /// [`Runner::governance`]. Freezing it fails new runs at their start and stops
+    /// running ones before their next model or tool call.
+    pub fn governance(mut self, control: GovernanceControl) -> Self {
+        self.governance = Some(control);
+        self
+    }
+
     /// Set the context compaction configuration for token-budget overflow handling (optional).
     ///
     /// When configured, the runner applies the given [`CompactionStrategy`](crate::compaction::CompactionStrategy)
@@ -312,6 +359,8 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             intra_compaction_summarizer: self.intra_compaction_summarizer,
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
+            tool_policy: self.tool_policy,
+            governance: self.governance,
         }
     }
 
@@ -345,6 +394,8 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             intra_compaction_summarizer: self.intra_compaction_summarizer,
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
+            tool_policy: self.tool_policy,
+            governance: self.governance,
         };
         Runner::new(config)
     }

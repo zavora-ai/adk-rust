@@ -15,6 +15,8 @@
 //! - [`AdkError`] / [`Result`] - Unified error handling
 //! - [`SharedState`] / [`SharedStateError`] - Thread-safe key-value store for parallel agent coordination
 //! - [`ToolConfirmationPolicy`] / [`ToolConfirmationRequest`] - Human-in-the-loop tool authorization
+//! - [`ToolPolicy`] / [`DeclarativePolicy`] / [`authorize_tool_call`] - The governed tool execution path
+//! - [`GovernanceControl`] - Organisation-wide kill switch
 //!
 //! ## What's New in 0.6.0
 //!
@@ -87,6 +89,8 @@ pub mod error;
 /// Event types representing agent interactions in a conversation.
 pub mod event;
 mod event_stream;
+/// Governed tool execution: kill switch, durable approvals, and the authorization path.
+pub mod governance;
 /// Typed identity primitives for app, user, session, and invocation.
 pub mod identity;
 /// Template-based instruction injection with session state interpolation.
@@ -95,6 +99,8 @@ pub mod instruction_template;
 pub mod intra_compaction;
 /// LLM trait, request/response types, and caching configuration.
 pub mod model;
+/// Tool execution policy: allow, deny, or require approval per call.
+pub mod policy;
 /// HTTP request context extracted by auth middleware.
 pub mod request_context;
 /// Provider-aware JSON Schema normalization for tool declarations.
@@ -140,6 +146,11 @@ pub use event::{
     event_belongs_to_branch,
 };
 pub use event_stream::EventTextDeltas;
+pub use governance::{
+    ApprovalScope, ApprovalStore, DEFAULT_TOOL_CONFIRMATION_TIMEOUT, GovernanceControl,
+    GovernedCall, InMemoryApprovalStore, PendingApproval, ToolApproval, ToolAuthorization,
+    ToolCallScreen, ToolGate, authorize_tool_call,
+};
 pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,
 };
@@ -148,6 +159,10 @@ pub use intra_compaction::IntraCompactionConfig;
 pub use model::{
     CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig, FinishReason,
     GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,
+};
+pub use policy::{
+    ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyDecision, PolicyRule,
+    ToolPolicy, ToolPolicyRequest,
 };
 pub use request_context::RequestContext;
 pub use schema_adapter::{GenericSchemaAdapter, SchemaAdapter};

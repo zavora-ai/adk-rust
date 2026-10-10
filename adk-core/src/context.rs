@@ -991,6 +991,17 @@ pub struct ToolConfirmationRequest {
     pub args: Value,
 }
 
+impl ToolConfirmationRequest {
+    /// The call's fingerprint: its tool name and canonical arguments.
+    ///
+    /// This is the key a decision is recorded under in
+    /// [`RunConfig::tool_approvals`] and in an [`ApprovalStore`](crate::ApprovalStore),
+    /// so the decision applies to the same call re-issued under a new call ID.
+    pub fn fingerprint(&self) -> String {
+        tool_call_fingerprint(&self.tool_name, &self.args)
+    }
+}
+
 /// Asynchronous decision source for tool calls that require confirmation.
 ///
 /// Front ends and protocol adapters can implement this trait to pause an
@@ -998,10 +1009,13 @@ pub struct ToolConfirmationRequest {
 /// tool call. When no handler is configured, agents preserve the existing
 /// behavior and emit an interrupted confirmation event for a later run.
 ///
-/// `LlmAgent` asks for each call as it is dispatched, one `decide` at a time,
-/// while calls that need no approval keep running. An error from `decide` ends the
-/// turn after running tools finish; `decide` calls still waiting in the same batch
-/// are dropped.
+/// Agents ask for each call as it is dispatched, with the call's final arguments,
+/// while calls that need no approval keep running. Calls in one batch are decided
+/// concurrently, so a handler that prompts on a shared device such as a terminal
+/// serializes its own prompts. A `decide` that takes longer than
+/// [`RunConfig::tool_confirmation_timeout`] denies the call. An error from `decide`
+/// ends the turn after running tools finish; `decide` calls still waiting in the same
+/// batch are dropped.
 #[async_trait]
 pub trait ToolConfirmationHandler: std::fmt::Debug + Send + Sync {
     /// Approve or deny one pending tool call.
@@ -1126,6 +1140,28 @@ pub struct RunConfig {
     /// `RunConfig` travels with the invocation, transfer targets and agents behind an agent tool
     /// run these hooks too. See [`InvocationHooks`](crate::InvocationHooks).
     pub invocation_hooks: Vec<Arc<dyn crate::InvocationHooks>>,
+    /// Policy evaluated for every tool call on its final arguments.
+    ///
+    /// `None` allows every call the agent's own confirmation settings allow. See
+    /// [`ToolPolicy`](crate::ToolPolicy) and [`authorize_tool_call`](crate::authorize_tool_call).
+    pub tool_policy: Option<Arc<dyn crate::ToolPolicy>>,
+    /// Kill switches checked at run start, before each model call, and before each tool
+    /// call. The run stops when any of them is frozen.
+    pub governance: Vec<crate::GovernanceControl>,
+    /// Confirmation decisions keyed by tool-call fingerprint
+    /// ([`ToolConfirmationRequest::fingerprint`]).
+    ///
+    /// A decision applies to every call with that tool name and those canonical
+    /// arguments in the run, whatever its call ID, until it expires. Record a decision
+    /// in an [`approval_store`](Self::approval_store) instead for one that is consumed by
+    /// the call it authorizes.
+    pub tool_approvals: HashMap<String, crate::ToolApproval>,
+    /// Where calls held for approval are recorded, and decisions taken from, between runs.
+    pub approval_store: Option<Arc<dyn crate::ApprovalStore>>,
+    /// How long the [`tool_confirmation_handler`](Self::tool_confirmation_handler) may take
+    /// to decide one call before it is denied. Defaults to
+    /// [`DEFAULT_TOOL_CONFIRMATION_TIMEOUT`](crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT).
+    pub tool_confirmation_timeout: std::time::Duration,
 }
 
 impl Default for RunConfig {
@@ -1146,6 +1182,11 @@ impl Default for RunConfig {
             trace_payload_max_bytes: 2048,
             max_transfer_depth: None,
             invocation_hooks: Vec::new(),
+            tool_policy: None,
+            governance: Vec::new(),
+            tool_approvals: HashMap::new(),
+            approval_store: None,
+            tool_confirmation_timeout: crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
         }
     }
 }
@@ -1170,6 +1211,16 @@ impl RunConfig {
     /// ```
     pub fn builder() -> RunConfigBuilder {
         RunConfigBuilder::default()
+    }
+
+    /// Returns an error when any of the run's [`governance`](Self::governance) controls
+    /// is frozen.
+    ///
+    /// # Errors
+    ///
+    /// Returns the frozen control's `governance.frozen` error.
+    pub fn check_governance(&self) -> Result<()> {
+        self.governance.iter().try_for_each(crate::GovernanceControl::check)
     }
 }
 
@@ -1304,6 +1355,42 @@ impl RunConfigBuilder {
     /// See [`RunConfig::invocation_hooks`].
     pub fn invocation_hook(mut self, hook: Arc<dyn crate::InvocationHooks>) -> Self {
         self.config.invocation_hooks.push(hook);
+        self
+    }
+
+    /// Sets the policy evaluated for every tool call. See [`RunConfig::tool_policy`].
+    pub fn tool_policy(mut self, policy: Arc<dyn crate::ToolPolicy>) -> Self {
+        self.config.tool_policy = Some(policy);
+        self
+    }
+
+    /// Adds a kill switch the run checks. See [`RunConfig::governance`].
+    pub fn governance(mut self, control: crate::GovernanceControl) -> Self {
+        if !self.config.governance.iter().any(|existing| existing.same_as(&control)) {
+            self.config.governance.push(control);
+        }
+        self
+    }
+
+    /// Records a decision for the call with `fingerprint`. See [`RunConfig::tool_approvals`].
+    pub fn tool_approval(
+        mut self,
+        fingerprint: impl Into<String>,
+        approval: crate::ToolApproval,
+    ) -> Self {
+        self.config.tool_approvals.insert(fingerprint.into(), approval);
+        self
+    }
+
+    /// Sets where held calls and their decisions are kept between runs.
+    pub fn approval_store(mut self, store: Arc<dyn crate::ApprovalStore>) -> Self {
+        self.config.approval_store = Some(store);
+        self
+    }
+
+    /// Sets how long the confirmation handler may take to decide one call.
+    pub fn tool_confirmation_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.config.tool_confirmation_timeout = timeout;
         self
     }
 

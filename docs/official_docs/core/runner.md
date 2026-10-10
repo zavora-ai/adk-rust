@@ -112,6 +112,8 @@ The builder requires three fields: `app_name`, `agent`, and `session_service`. E
 | `cache_capable` | `Option<Arc<dyn CacheCapable>>` | No | Cache-capable model reference (experimental — see below) |
 | `request_context` | `Option<RequestContext>` | No | Auth middleware context |
 | `cancellation_token` | `Option<CancellationToken>` | No | Cooperative cancellation |
+| `tool_policy` | `Option<Arc<dyn ToolPolicy>>` | No | Allow, deny, or require approval for every tool call; see [Tool Authorization](../security/tool-authorization.md#tool-policy) |
+| `governance` | `Option<GovernanceControl>` | No | Shared kill switch; the runner creates its own when unset, reachable through `Runner::governance()` |
 
 ### Plugin hooks
 
@@ -349,7 +351,8 @@ Execution options:
 pub struct RunConfig {
     /// Streaming mode for responses
     pub streaming_mode: StreamingMode,
-    // ... other fields (tool_confirmation_decisions, cached_content, etc.)
+    // ... other fields (tool_confirmation_decisions, tool_policy, tool_approvals,
+    // approval_store, governance, cached_content, etc.)
 }
 ```
 

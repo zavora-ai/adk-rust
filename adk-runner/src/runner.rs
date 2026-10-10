@@ -152,6 +152,13 @@ pub struct RunnerConfig {
     /// This field is only available when the `context-compaction` feature is enabled.
     #[cfg(feature = "context-compaction")]
     pub context_compaction: Option<crate::compaction::CompactionConfig>,
+    /// Optional policy evaluated for every tool call.
+    ///
+    /// Installed on each run's [`RunConfig::tool_policy`] when the run carries none.
+    pub tool_policy: Option<Arc<dyn adk_core::ToolPolicy>>,
+    /// Optional kill switch shared with other runners. Without one the runner creates
+    /// its own; see [`Runner::governance`].
+    pub governance: Option<adk_core::GovernanceControl>,
 }
 
 /// Agent execution runtime.
@@ -185,6 +192,10 @@ pub struct Runner {
     /// Each `run()` call registers a token here; `interrupt()` cancels it.
     active_runs: ActiveRuns,
     next_run_id: Arc<std::sync::atomic::AtomicU64>,
+    /// Policy installed on runs that carry none.
+    tool_policy: Option<Arc<dyn adk_core::ToolPolicy>>,
+    /// Kill switch checked at the start of every run and carried into it.
+    governance: adk_core::GovernanceControl,
     /// Serializes externally triggered invocations per session. The weak values prevent the
     /// per-trigger session policy from retaining one lock forever for every completed event.
     pub(crate) external_session_locks: Arc<
@@ -266,6 +277,8 @@ impl Runner {
             context_compaction: config.context_compaction.map(Arc::new),
             active_runs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            tool_policy: config.tool_policy,
+            governance: config.governance.unwrap_or_default(),
             external_session_locks: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -337,6 +350,22 @@ impl Runner {
         &self.session_service
     }
 
+    /// Returns the runner's kill switch.
+    ///
+    /// Freezing it fails new runs at their start and stops running ones before their
+    /// next model or tool call, with an error carrying the freeze reason.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// runner.governance().freeze("incident 4012");
+    /// // ... investigate ...
+    /// runner.governance().unfreeze();
+    /// ```
+    pub fn governance(&self) -> &adk_core::GovernanceControl {
+        &self.governance
+    }
+
     /// Returns the runner's configured [`RunConfig`].
     ///
     /// Useful as a base to clone and adjust for [`Self::run_with_config`].
@@ -398,6 +427,14 @@ impl Runner {
         #[cfg(feature = "skills")]
         let skill_injector = self.skill_injector.clone();
         let mut run_config = run_config.unwrap_or_else(|| self.run_config.clone());
+        // The runner's policy and kill switch govern every run, including one started with
+        // its own config; the config travels into transfers and agent tools with them.
+        if run_config.tool_policy.is_none() {
+            run_config.tool_policy = self.tool_policy.clone();
+        }
+        if !run_config.governance.iter().any(|control| control.same_as(&self.governance)) {
+            run_config.governance.push(self.governance.clone());
+        }
         // Plugin model and tool callbacks run inside the agent, which reaches them through the
         // run config; transfer targets and agent tools inherit the config, and with it the hooks.
         #[cfg(feature = "plugins")]
@@ -452,6 +489,12 @@ impl Runner {
 
         let s = stream! {
             let _cleanup = cleanup;
+
+            // A frozen runner refuses new work before touching the session.
+            if let Err(error) = run_config.check_governance() {
+                yield Err(error);
+                return;
+            }
 
             // Use the effective token (combines global + per-session)
             let cancellation_token = effective_token;

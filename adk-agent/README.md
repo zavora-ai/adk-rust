@@ -95,6 +95,7 @@ let agent = LlmAgentBuilder::new("assistant")
 | `require_tool_confirmation(name)` | Require user confirmation for a specific tool |
 | `require_tool_confirmation_for_all()` | Require user confirmation for all tools |
 | `tool_confirmation_policy(policy)` | Set custom tool confirmation policy |
+| `tool_guardrails(set)` | Screen each call's final arguments (`guardrails` feature) |
 | `tool_execution_strategy(strategy)` | Tool dispatch mode: `Sequential`, `Parallel`, or `Auto` |
 | `parallelize_agent_delegations(bool)` | Overlap consecutive agent-delegation calls without parallelizing ordinary tools |
 | `disallow_transfer_to_parent(bool)` | Prevent agent from transferring back to parent |
@@ -113,6 +114,16 @@ let agent = LlmAgentBuilder::new("assistant")
 | `after_tool_callback(fn)` | Add after-tool callback |
 | `after_tool_callback_full(fn)` | Rich after-tool callback with tool, args, and response |
 | `build()` | Build the LlmAgent |
+
+### Governed Tool Execution
+
+`LlmAgent` and `CodeActAgent` authorize each tool call with `adk_core::authorize_tool_call`
+after before-tool plugins and callbacks have run, so the run's `ToolPolicy`, the agent's tool
+guardrails, and confirmation all see the arguments that will execute. A call held for
+confirmation is answered with an error result and surfaced as a `ToolConfirmationRequest` event;
+a decision recorded against `request.fingerprint()` authorizes the same call when the next run's
+model issues it again. A frozen `GovernanceControl` ends the run before the next model or tool
+call. See [Tool Authorization](../docs/official_docs/security/tool-authorization.md).
 
 ### Generation Config
 
