@@ -493,6 +493,33 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### Request Defaults
+
+| Setting | Default | Override |
+|---------|---------|----------|
+| `max_tokens` | 32,000 for Claude 4 and later, 4,096 for older or unrecognized models (`adk_model::catalog::anthropic_default_max_tokens`) | `AnthropicConfig::with_max_tokens`, or `max_output_tokens` per request |
+| Request timeout | 10 minutes for a whole non-streaming request, such as an agent called through `AgentTool`, and for the response headers of a stream | `AnthropicConfig::with_request_timeout` |
+
+Thinking counts toward `max_tokens`, and Claude 5 models think on every turn, so a
+small cap ends turns with `max_tokens` before the answer.
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+use std::time::Duration;
+
+fn build() -> Result<AnthropicClient, adk_core::AdkError> {
+    let config = AnthropicConfig::new("sk-ant-xxx", "claude-opus-5-5")
+        .with_max_tokens(64_000)
+        .with_request_timeout(Duration::from_secs(1_800));
+    AnthropicClient::new(config)
+}
+```
+
+Thinking blocks, including `redacted_thinking` and the empty blocks returned under
+`display: "omitted"`, are replayed with their signatures in later requests, as the API
+requires for tool-use turns. Server tool results such as `web_fetch_tool_result` are
+replayed in the shape the API returned them.
+
 ### Available Models
 
 | Model | Description | Context |
