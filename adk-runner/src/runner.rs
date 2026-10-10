@@ -3,8 +3,9 @@ use crate::cache::CacheManager;
 #[cfg(feature = "artifacts")]
 use adk_artifact::ArtifactService;
 use adk_core::{
-    Agent, AppName, CacheCapable, Content, ContextCacheConfig, Event, EventStream, InvocationId,
-    Memory, ReadonlyContext, Result, RunConfig, SessionId, UserId,
+    Agent, AppName, CacheCapable, Content, ContextCacheConfig, Event, EventStream,
+    FunctionResponseData, InvocationId, Memory, Part, ReadonlyContext, Result, RunConfig,
+    SessionId, UserId,
 };
 #[cfg(feature = "plugins")]
 use adk_plugin::PluginManager;
@@ -40,6 +41,95 @@ fn preserve_streamed_content(accumulated: &mut HashMap<String, Content>, event: 
         event.llm_response.content = accumulated.remove(&event.id);
     } else {
         accumulated.remove(&event.id);
+    }
+}
+
+/// A tool call the run has seen requested but not yet answered.
+struct InFlightCall {
+    id: Option<String>,
+    name: String,
+    author: String,
+    branch: String,
+    invocation_id: String,
+}
+
+/// Tracks tool calls from request to response, so a cancelled run can answer
+/// the calls still in flight instead of leaving them unpaired.
+#[derive(Default)]
+struct InFlightCalls(Vec<InFlightCall>);
+
+impl InFlightCalls {
+    fn observe(&mut self, event: &Event) {
+        if event.llm_response.partial {
+            return;
+        }
+        let Some(content) = &event.llm_response.content else {
+            return;
+        };
+        for part in &content.parts {
+            match part {
+                Part::FunctionCall { name, id, .. } => self.0.push(InFlightCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    author: event.author.clone(),
+                    branch: event.branch.clone(),
+                    invocation_id: event.invocation_id.clone(),
+                }),
+                Part::FunctionResponse { function_response, id, .. } => {
+                    let answered = match id {
+                        Some(id) => self.0.iter().position(|call| call.id.as_ref() == Some(id)),
+                        None => self.0.iter().position(|call| {
+                            call.id.is_none() && call.name == function_response.name
+                        }),
+                    };
+                    if let Some(index) = answered {
+                        self.0.remove(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Answers every call still in flight with an outcome-unknown response, one
+    /// event per author, branch, and invocation, so each call keeps exactly one
+    /// response.
+    fn answer_interrupted(&mut self) -> Vec<Event> {
+        let mut events: Vec<Event> = Vec::new();
+        for call in self.0.drain(..) {
+            let response = Part::FunctionResponse {
+                function_response: FunctionResponseData::new(
+                    call.name.clone(),
+                    adk_core::outcome_unknown_response(format!(
+                        "the run was cancelled while '{}' was in flight, so the call may have taken effect; check its result before calling it again",
+                        call.name
+                    )),
+                ),
+                id: call.id,
+                annotations: None,
+            };
+            let existing = events.iter_mut().find(|event| {
+                event.author == call.author
+                    && event.branch == call.branch
+                    && event.invocation_id == call.invocation_id
+            });
+            match existing {
+                Some(event) => {
+                    if let Some(content) = event.llm_response.content.as_mut() {
+                        content.parts.push(response);
+                    }
+                }
+                None => {
+                    let mut event = Event::new(&call.invocation_id);
+                    event.author = call.author;
+                    event.branch = call.branch;
+                    event.llm_response.content =
+                        Some(Content { role: "function".to_string(), parts: vec![response] });
+                    events.push(event);
+                }
+            }
+        }
+        events
     }
 }
 
@@ -924,6 +1014,8 @@ impl Runner {
             use futures::StreamExt;
             let mut transfer_target: Option<(String, String)> = None;
             let mut streamed_content = HashMap::new();
+            let mut in_flight = InFlightCalls::default();
+            let mut cancelled = false;
 
             while let Some(result) = {
                 // Race the next event against cancellation so an in-flight
@@ -936,11 +1028,8 @@ impl Runner {
                             biased;
                             _ = token.cancelled() => {
                                 tracing::info!("cancellation fired during agent stream await");
-                                #[cfg(feature = "plugins")]
-                                if let Some(manager) = plugin_manager.as_ref() {
-                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                                }
-                                return;
+                                cancelled = true;
+                                None
                             }
                             // Instrument the poll, not just the construction of the
                             // stream: `agent_to_run.run(..)` merely builds the
@@ -982,6 +1071,7 @@ impl Runner {
                         let budget_check = budget_tracker
                             .as_ref()
                             .map_or(Ok(()), |tracker| tracker.record_event(&mut event));
+                        in_flight.observe(&event);
 
                         // Check for transfer action
                         if let Some(target) = &event.actions.transfer_to_agent {
@@ -1075,7 +1165,9 @@ impl Runner {
             let mut transfer_depth: u32 = 0;
             let mut current_transfer_target = transfer_target;
 
-            while let Some((transfer_source, target_name)) = current_transfer_target.take() {
+            while !cancelled
+                && let Some((transfer_source, target_name)) = current_transfer_target.take()
+            {
                 transfer_depth += 1;
                 if transfer_depth > max_depth {
                     tracing::warn!(
@@ -1233,11 +1325,8 @@ impl Runner {
                                 biased;
                                 _ = token.cancelled() => {
                                     tracing::info!("cancellation fired during transferred agent stream await");
-                                    #[cfg(feature = "plugins")]
-                                    if let Some(manager) = plugin_manager.as_ref() {
-                                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                                    }
-                                    return;
+                                    cancelled = true;
+                                    None
                                 }
                                 result = transfer_stream.next() => result,
                             }
@@ -1272,6 +1361,7 @@ impl Runner {
                             let budget_check = budget_tracker
                                 .as_ref()
                                 .map_or(Ok(()), |tracker| tracker.record_event(&mut event));
+                            in_flight.observe(&event);
 
                             // Capture further transfer requests
                             if let Some(target) = &event.actions.transfer_to_agent {
@@ -1344,6 +1434,29 @@ impl Runner {
                         }
                     }
                 }
+            }
+
+            if cancelled {
+                // Stops the interrupted tool before its calls are answered.
+                drop(agent_stream);
+                for event in in_flight.answer_interrupted() {
+                    ctx.mutable_session().append_event(event.clone());
+                    if let Err(error) = session_service
+                        .append_event_for_identity(adk_session::AppendEventRequest {
+                            identity: identity.clone(),
+                            event: event.clone(),
+                        })
+                        .await
+                    {
+                        tracing::error!(error = %error, "failed to persist the outcome of an interrupted tool call");
+                    }
+                    yield Ok(event);
+                }
+                #[cfg(feature = "plugins")]
+                if let Some(manager) = plugin_manager.as_ref() {
+                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                }
+                return;
             }
 
             // ===== CONTEXT COMPACTION =====
@@ -1749,5 +1862,69 @@ mod streamed_content_tests {
 
         assert_eq!(text(&final_event), "Verify the invoice.");
         assert!(accumulated.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod in_flight_tests {
+    use super::InFlightCalls;
+    use adk_core::{Content, Event, FunctionResponseData, Part};
+    use serde_json::json;
+
+    fn call(name: &str, id: Option<&str>) -> Part {
+        Part::FunctionCall {
+            name: name.to_string(),
+            args: json!({}),
+            id: id.map(str::to_string),
+            thought_signature: None,
+        }
+    }
+
+    fn response(name: &str, id: Option<&str>) -> Part {
+        Part::FunctionResponse {
+            function_response: FunctionResponseData::new(name, json!({"ok": true})),
+            id: id.map(str::to_string),
+            annotations: None,
+        }
+    }
+
+    fn event(author: &str, role: &str, parts: Vec<Part>) -> Event {
+        let mut event = Event::new("inv-1");
+        event.author = author.to_string();
+        event.llm_response.content = Some(Content { role: role.to_string(), parts });
+        event
+    }
+
+    #[test]
+    fn only_unanswered_calls_are_answered_once_each() {
+        let mut in_flight = InFlightCalls::default();
+        in_flight.observe(&event(
+            "agent",
+            "model",
+            vec![call("pay", Some("c1")), call("ship", Some("c2")), call("notify", None)],
+        ));
+        in_flight.observe(&event("agent", "function", vec![response("ship", Some("c2"))]));
+        // A partial chunk never opens a call.
+        let mut partial = event("agent", "model", vec![call("refund", Some("c3"))]);
+        partial.llm_response.partial = true;
+        in_flight.observe(&partial);
+
+        let answered = in_flight.answer_interrupted();
+
+        assert_eq!(answered.len(), 1, "one event per author, branch, and invocation");
+        assert_eq!(answered[0].author, "agent");
+        let parts = &answered[0].llm_response.content.as_ref().unwrap().parts;
+        let answered_calls: Vec<_> = parts
+            .iter()
+            .map(|part| match part {
+                Part::FunctionResponse { function_response, id, .. } => {
+                    assert!(adk_core::is_outcome_unknown(&function_response.response));
+                    (function_response.name.as_str(), id.as_deref())
+                }
+                other => panic!("unexpected part {other:?}"),
+            })
+            .collect();
+        assert_eq!(answered_calls, [("pay", Some("c1")), ("notify", None)]);
+        assert!(in_flight.answer_interrupted().is_empty(), "calls are answered once");
     }
 }

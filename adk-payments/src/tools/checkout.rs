@@ -161,12 +161,12 @@ impl Tool for CreateCheckoutTool {
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let params: CreateParams = parse_args("checkout_create", args)?;
+        // Derived from the idempotency key, so a replayed call names the same transaction
+        // instead of opening a second one.
+        let key_digest = adk_core::json_digest(&Value::String(ctx.idempotency_key()));
         let tx_id = format!(
-            "tool_tx_{:016x}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
+            "tool_tx_{}",
+            key_digest.split_once(':').map_or(key_digest.as_str(), |(_, hex)| hex)
         );
         let context = tool_context(
             ctx.as_ref(),

@@ -59,7 +59,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 ## Tools
 
 - [Function Tools](tools/function-tools.md) - Create custom tools with async Rust functions
-- [Tool Effects](tools/tool-effects.md) - Retry safety, idempotency keys, and delegation timeouts
+- [Tool Effects and the Action Ledger](tools/tool-effects.md) - Retry safety, idempotency keys, delegation timeouts, and calls that must not repeat
 - [Built-in Tools](tools/built-in-tools.md) - Pre-built tools like GoogleSearchTool
 - [MCP overview and architecture](mcp/index.md) - Where MCP fits and which ADK-Rust surface to use
 - [MCP client](mcp/client.md) - Tools, resources, prompts, completion, subscriptions, elicitation, tasks, and HTTP

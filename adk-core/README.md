@@ -68,7 +68,7 @@ pub trait Tool: Send + Sync {
 }
 ```
 
-`effect()` governs retries: only `ReadOnly` and `Idempotent` tools are retried, and only after a retryable error. `ToolContext::idempotency_key()` identifies one call across every attempt, for downstream APIs that deduplicate on a key.
+`effect()` governs retries and the action ledger: only `ReadOnly` and `Idempotent` tools are retried, and only after a retryable error. With an `ActionLedger` on `RunConfig::action_ledger` (`InMemoryActionLedger` here, `SqliteActionLedger` in `adk-session`), a `NonIdempotent` call executes at most once per `ToolContext::idempotency_key()`; a replay of a call that never recorded an outcome is answered with `outcome_unknown_response()` instead of executing again.
 
 `ToolExecutionStrategy::Auto` includes a call in its concurrent subset only when the selected tool returns `true` from both `is_read_only()` and `is_concurrency_safe()`. It runs that safe subset first, then executes the remaining calls sequentially. Both methods default to `false`, so existing implementations remain sequential.
 
