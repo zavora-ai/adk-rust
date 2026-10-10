@@ -18,7 +18,7 @@
 //! metrics.insert("accuracy".to_string(), accuracy);
 //! store.save("my_eval_set", &metrics).unwrap();
 //!
-//! // Check for regressions on a later run
+//! // Check for regressions on a later run; a missing baseline file is an error
 //! let regressions = store.check_regressions(&metrics, 0.05).unwrap();
 //! assert!(regressions.is_empty());
 //! ```
@@ -119,25 +119,23 @@ impl BaselineStore {
     /// metric and case. Metrics and cases that appear only in `current` are ignored.
     /// Regressions are sorted by metric name, then case id.
     ///
-    /// If no baseline file exists, returns an empty vector (no regressions).
-    ///
     /// # Errors
     ///
-    /// Returns [`EvalError::BaselineError`] when the baseline file cannot be read or parsed.
+    /// Returns [`EvalError::BaselineError`] when the baseline file does not exist, or
+    /// cannot be read or parsed. A missing baseline is an error rather than an empty
+    /// result, so a mistyped path or a baseline that was never committed cannot pass
+    /// a regression gate.
     pub fn check_regressions(
         &self,
         current: &HashMap<String, HashMap<String, f64>>,
         tolerance: f64,
     ) -> Result<Vec<Regression>> {
-        let baseline = match self.load()? {
-            Some(b) => b,
-            None => {
-                tracing::info!(
-                    "no baseline file found at {:?}, skipping regression check",
-                    self.path
-                );
-                return Ok(Vec::new());
-            }
+        let Some(baseline) = self.load()? else {
+            return Err(EvalError::BaselineError(format!(
+                "no baseline file at {}, so there is nothing to check for regressions; \
+                 save one first with BaselineStore::save (or `cargo adk eval --save-baseline`)",
+                self.path.display()
+            )));
         };
 
         let mut regressions = Vec::new();
@@ -218,13 +216,16 @@ mod tests {
     }
 
     #[test]
-    fn test_check_regressions_no_baseline() {
+    fn missing_baseline_is_an_error_not_a_pass() {
         let dir = TempDir::new().unwrap();
         let store = make_store(&dir);
         let current = sample_metrics();
 
-        let regressions = store.check_regressions(&current, 0.05).unwrap();
-        assert!(regressions.is_empty());
+        let err = store.check_regressions(&current, 0.05).unwrap_err();
+        assert!(
+            matches!(&err, EvalError::BaselineError(message) if message.contains("no baseline file")),
+            "{err}"
+        );
     }
 
     #[test]
