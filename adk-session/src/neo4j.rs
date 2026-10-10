@@ -38,8 +38,9 @@ use uuid::Uuid;
 /// Neo4j-backed session service implementing [`SessionService`](crate::SessionService).
 ///
 /// Stores sessions as graph nodes with relationships to event, app-state,
-/// and user-state nodes. JSON state is serialized as string properties
-/// since Neo4j does not have a native JSON type.
+/// and user-state nodes. Each state key is a node property holding the value
+/// as a JSON string, since Neo4j has no native JSON type, so an append writes
+/// only its own keys and concurrent appends keep each other's writes.
 pub struct Neo4jSessionService {
     graph: Graph,
 }
@@ -260,6 +261,171 @@ fn json_string_to_state(
         .map_err(|e| adk_core::AdkError::session(format!("deserialize state failed: {e}")))
 }
 
+/// Prefix of the node property that holds one state key.
+///
+/// Each key is its own property holding the value as JSON, so an append writes its delta
+/// with `SET n += $delta`: Neo4j locks the node for the statement and writes only the
+/// delta's keys, and concurrent appends that touch different keys keep each other's
+/// writes. The `state` property holds the JSON object written by `create` and by earlier
+/// releases; a per-key property overrides the same key in it.
+const STATE_KEY_PREFIX: &str = "state.";
+
+/// Cypher list of `[property, json]` pairs for the per-key state properties of `node`.
+fn state_entries(node: &str) -> String {
+    format!("[key IN keys({node}) WHERE key STARTS WITH '{STATE_KEY_PREFIX}' | [key, {node}[key]]]")
+}
+
+/// Encodes a state delta as per-key node properties for `SET n += $delta`.
+fn state_properties(
+    delta: &HashMap<String, Value>,
+) -> std::result::Result<HashMap<String, String>, adk_core::AdkError> {
+    delta
+        .iter()
+        .map(|(key, value)| Ok((format!("{STATE_KEY_PREFIX}{key}"), serde_json::to_string(value)?)))
+        .collect::<std::result::Result<_, serde_json::Error>>()
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))
+}
+
+/// Builds one node's state from its `state` JSON object and its per-key properties.
+fn node_state(
+    object: &str,
+    entries: Vec<(String, String)>,
+) -> std::result::Result<HashMap<String, Value>, adk_core::AdkError> {
+    let mut state = json_string_to_state(object)?;
+    for (property, json) in entries {
+        if let Some(key) = property.strip_prefix(STATE_KEY_PREFIX) {
+            let value = serde_json::from_str(&json).map_err(|e| {
+                adk_core::AdkError::session(format!("deserialize state key '{key}' failed: {e}"))
+            })?;
+            state.insert(key.to_string(), value);
+        }
+    }
+    Ok(state)
+}
+
+/// Reads the state of the node returned as `<column>` (its `state` object) and
+/// `<column>_entries` (its per-key properties). A node that `OPTIONAL MATCH` did not find
+/// has an empty state.
+fn row_state(
+    row: &neo4rs::Row,
+    column: &str,
+) -> std::result::Result<HashMap<String, Value>, adk_core::AdkError> {
+    node_state(
+        &row.get::<String>(column).unwrap_or_default(),
+        row.get::<Vec<(String, String)>>(&format!("{column}_entries")).unwrap_or_default(),
+    )
+}
+
+/// Writes `event` and its state delta to one session inside `txn`.
+///
+/// The session, app, and user nodes are locked in that order, the order `create` also
+/// follows for the app and user nodes, so concurrent appends cannot deadlock.
+async fn write_event(
+    txn: &mut neo4rs::Txn,
+    app_name: &str,
+    user_id: &str,
+    session_id: &str,
+    event: &Event,
+) -> Result<()> {
+    let (app_delta, user_delta, session_delta) =
+        state_utils::extract_state_deltas(&event.actions.state_delta);
+    let now_str = event.timestamp.to_rfc3339();
+
+    let mut updated = txn
+        .execute(
+            neo4rs::query(
+                "MATCH (s:Session {session_id: $session_id, app_name: $app_name, \
+                        user_id: $user_id}) \
+                 SET s += $delta, s.updated_at = $now \
+                 RETURN s.session_id AS session_id",
+            )
+            .param("session_id", session_id.to_string())
+            .param("app_name", app_name.to_string())
+            .param("user_id", user_id.to_string())
+            .param("delta", state_properties(&session_delta)?)
+            .param("now", now_str.clone()),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
+    if updated
+        .next(&mut *txn)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?
+        .is_none()
+    {
+        return Err(adk_core::AdkError::session("session not found"));
+    }
+
+    if !app_delta.is_empty() {
+        txn.run(
+            neo4rs::query(
+                "MERGE (a:AppState {app_name: $app_name}) \
+                 SET a += $delta, a.updated_at = $now",
+            )
+            .param("app_name", app_name.to_string())
+            .param("delta", state_properties(&app_delta)?)
+            .param("now", now_str.clone()),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
+    }
+
+    if !user_delta.is_empty() {
+        txn.run(
+            neo4rs::query(
+                "MERGE (u:UserState {app_name: $app_name, user_id: $user_id}) \
+                 SET u += $delta, u.updated_at = $now",
+            )
+            .param("app_name", app_name.to_string())
+            .param("user_id", user_id.to_string())
+            .param("delta", state_properties(&user_delta)?)
+            .param("now", now_str.clone()),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
+    }
+
+    let llm_response_json = serde_json::to_string(&event.llm_response)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+    let actions_json = serde_json::to_string(&event.actions)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+    let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+
+    txn.run(
+        neo4rs::query(
+            "MATCH (s:Session {session_id: $session_id, app_name: $app_name, \
+                    user_id: $user_id}) \
+             CREATE (s)-[:HAS_EVENT]->(e:Event { \
+                 id: $id, \
+                 session_id: $session_id, \
+                 invocation_id: $invocation_id, \
+                 branch: $branch, \
+                 author: $author, \
+                 timestamp: $timestamp, \
+                 llm_response: $llm_response, \
+                 actions: $actions, \
+                 long_running_tool_ids: $long_running_tool_ids \
+             })",
+        )
+        .param("session_id", session_id.to_string())
+        .param("app_name", app_name.to_string())
+        .param("user_id", user_id.to_string())
+        .param("id", event.id.clone())
+        .param("invocation_id", event.invocation_id.clone())
+        .param("branch", event.branch.clone())
+        .param("author", event.author.clone())
+        .param("timestamp", event.timestamp.to_rfc3339())
+        .param("llm_response", llm_response_json)
+        .param("actions", actions_json)
+        .param("long_running_tool_ids", tool_ids_json),
+    )
+    .await
+    .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
+
+    Ok(())
+}
+
 /// Convert a Neo4j row to an `Event`.
 fn row_to_event(row: &neo4rs::Row) -> Option<Event> {
     let id = row.get::<String>("id").ok()?;
@@ -309,86 +475,32 @@ impl SessionService for Neo4jSessionService {
             .await
             .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
-        // Load existing app state and merge with delta
-        let mut row_stream = txn
-            .execute(
-                neo4rs::query(
-                    "OPTIONAL MATCH (a:AppState {app_name: $app_name}) RETURN a.state AS state",
-                )
-                .param("app_name", req.app_name.clone()),
-            )
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
-
-        let mut app_state: HashMap<String, Value> = HashMap::new();
-        if let Some(row) = row_stream
-            .next(&mut txn)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            && let Ok(state_str) = row.get::<String>("state")
-        {
-            app_state = json_string_to_state(&state_str)?;
-        }
-        app_state.extend(app_delta);
-        let app_state_json = state_to_json_string(&app_state)?;
-
-        // MERGE AppState node
         txn.run(
             neo4rs::query(
                 "MERGE (a:AppState {app_name: $app_name}) \
-                 SET a.state = $state, a.updated_at = $now",
+                 SET a += $delta, a.updated_at = $now",
             )
             .param("app_name", req.app_name.clone())
-            .param("state", app_state_json)
+            .param("delta", state_properties(&app_delta)?)
             .param("now", now_str.clone()),
         )
         .await
         .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
 
-        // Load existing user state and merge with delta
-        let mut row_stream = txn
-            .execute(
-                neo4rs::query(
-                    "OPTIONAL MATCH (u:UserState {app_name: $app_name, user_id: $user_id}) \
-                     RETURN u.state AS state",
-                )
-                .param("app_name", req.app_name.clone())
-                .param("user_id", req.user_id.clone()),
-            )
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
-
-        let mut user_state: HashMap<String, Value> = HashMap::new();
-        if let Some(row) = row_stream
-            .next(&mut txn)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            && let Ok(state_str) = row.get::<String>("state")
-        {
-            user_state = json_string_to_state(&state_str)?;
-        }
-        user_state.extend(user_delta);
-        let user_state_json = state_to_json_string(&user_state)?;
-
-        // MERGE UserState node
         txn.run(
             neo4rs::query(
                 "MERGE (u:UserState {app_name: $app_name, user_id: $user_id}) \
-                 SET u.state = $state, u.updated_at = $now",
+                 SET u += $delta, u.updated_at = $now",
             )
             .param("app_name", req.app_name.clone())
             .param("user_id", req.user_id.clone())
-            .param("state", user_state_json)
+            .param("delta", state_properties(&user_delta)?)
             .param("now", now_str.clone()),
         )
         .await
         .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
 
-        // Create merged state for the session
-        let merged_state = state_utils::merge_states(&app_state, &user_state, &session_state);
-        let merged_state_json = state_to_json_string(&merged_state)?;
-
-        // CREATE Session node
+        // The session record holds session-scoped keys only; `get` reads the tiers.
         txn.run(
             neo4rs::query(
                 "CREATE (s:Session { \
@@ -403,7 +515,7 @@ impl SessionService for Neo4jSessionService {
             .param("app_name", req.app_name.clone())
             .param("user_id", req.user_id.clone())
             .param("session_id", session_id.clone())
-            .param("state", merged_state_json)
+            .param("state", state_to_json_string(&session_state)?)
             .param("now", now_str.clone()),
         )
         .await
@@ -424,6 +536,31 @@ impl SessionService for Neo4jSessionService {
         .await
         .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
 
+        // This transaction holds both tier locks, so the tiers read here are current.
+        let mut tiers = txn
+            .execute(
+                neo4rs::query(&format!(
+                    "MATCH (a:AppState {{app_name: $app_name}}), \
+                           (u:UserState {{app_name: $app_name, user_id: $user_id}}) \
+                     RETURN a.state AS app_state, {} AS app_state_entries, \
+                            u.state AS user_state, {} AS user_state_entries",
+                    state_entries("a"),
+                    state_entries("u"),
+                ))
+                .param("app_name", req.app_name.clone())
+                .param("user_id", req.user_id.clone()),
+            )
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
+        let (app_state, user_state) = match tiers
+            .next(&mut txn)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+        {
+            Some(row) => (row_state(&row, "app_state")?, row_state(&row, "user_state")?),
+            None => (HashMap::new(), HashMap::new()),
+        };
+
         txn.commit()
             .await
             .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
@@ -432,7 +569,7 @@ impl SessionService for Neo4jSessionService {
             app_name: req.app_name,
             user_id: req.user_id,
             session_id,
-            state: merged_state,
+            state: state_utils::merge_states(&app_state, &user_state, &session_state),
             events: Vec::new(),
             updated_at: now,
         }))
@@ -444,13 +581,17 @@ impl SessionService for Neo4jSessionService {
         let mut row_stream = self
             .graph
             .execute(
-                neo4rs::query(
-                    "MATCH (s:Session {app_name: $app_name, user_id: $user_id, session_id: $session_id}) \
-                     OPTIONAL MATCH (a:AppState {app_name: $app_name}) \
-                     OPTIONAL MATCH (u:UserState {app_name: $app_name, user_id: $user_id}) \
-                     RETURN s.state AS state, s.updated_at AS updated_at, \
-                            a.state AS app_state, u.state AS user_state",
-                )
+                neo4rs::query(&format!(
+                    "MATCH (s:Session {{app_name: $app_name, user_id: $user_id, session_id: $session_id}}) \
+                     OPTIONAL MATCH (a:AppState {{app_name: $app_name}}) \
+                     OPTIONAL MATCH (u:UserState {{app_name: $app_name, user_id: $user_id}}) \
+                     RETURN s.state AS state, {} AS state_entries, s.updated_at AS updated_at, \
+                            a.state AS app_state, {} AS app_state_entries, \
+                            u.state AS user_state, {} AS user_state_entries",
+                    state_entries("s"),
+                    state_entries("a"),
+                    state_entries("u"),
+                ))
                 .param("app_name", req.app_name.clone())
                 .param("user_id", req.user_id.clone())
                 .param("session_id", req.session_id.clone()),
@@ -464,16 +605,15 @@ impl SessionService for Neo4jSessionService {
             .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
             .ok_or_else(|| crate::service::session_not_found(&req))?;
 
-        let state_str = row.get::<String>("state").unwrap_or_default();
         let updated_at_str = row.get::<String>("updated_at").unwrap_or_default();
         let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
 
         let state = state_utils::merge_current_tiers(
-            &json_string_to_state(&row.get::<String>("app_state").unwrap_or_default())?,
-            &json_string_to_state(&row.get::<String>("user_state").unwrap_or_default())?,
-            &json_string_to_state(&state_str)?,
+            &row_state(&row, "app_state")?,
+            &row_state(&row, "user_state")?,
+            &row_state(&row, "state")?,
         );
 
         // Fetch events ordered by timestamp
@@ -534,11 +674,14 @@ impl SessionService for Neo4jSessionService {
         let mut tier_stream = self
             .graph
             .execute(
-                neo4rs::query(
-                    "OPTIONAL MATCH (a:AppState {app_name: $app_name}) \
-                     OPTIONAL MATCH (u:UserState {app_name: $app_name, user_id: $user_id}) \
-                     RETURN a.state AS app_state, u.state AS user_state",
-                )
+                neo4rs::query(&format!(
+                    "OPTIONAL MATCH (a:AppState {{app_name: $app_name}}) \
+                     OPTIONAL MATCH (u:UserState {{app_name: $app_name, user_id: $user_id}}) \
+                     RETURN a.state AS app_state, {} AS app_state_entries, \
+                            u.state AS user_state, {} AS user_state_entries",
+                    state_entries("a"),
+                    state_entries("u"),
+                ))
                 .param("app_name", req.app_name.clone())
                 .param("user_id", req.user_id.clone()),
             )
@@ -549,7 +692,7 @@ impl SessionService for Neo4jSessionService {
             .await
             .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
         let tier = |column: &str| match &tiers {
-            Some(row) => json_string_to_state(&row.get::<String>(column).unwrap_or_default()),
+            Some(row) => row_state(row, column),
             None => Ok(HashMap::new()),
         };
         let (app_state, user_state) = (tier("app_state")?, tier("user_state")?);
@@ -557,13 +700,14 @@ impl SessionService for Neo4jSessionService {
         let mut row_stream = self
             .graph
             .execute(
-                neo4rs::query(
-                    "MATCH (s:Session {app_name: $app_name, user_id: $user_id}) \
+                neo4rs::query(&format!(
+                    "MATCH (s:Session {{app_name: $app_name, user_id: $user_id}}) \
                      RETURN s.session_id AS session_id, s.state AS state, \
-                            s.updated_at AS updated_at \
+                            {} AS state_entries, s.updated_at AS updated_at \
                      ORDER BY s.updated_at DESC \
                      SKIP $offset LIMIT $limit",
-                )
+                    state_entries("s"),
+                ))
                 .param("app_name", req.app_name.clone())
                 .param("user_id", req.user_id.clone())
                 .param("offset", offset)
@@ -579,12 +723,11 @@ impl SessionService for Neo4jSessionService {
             .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             let session_id = row.get::<String>("session_id").unwrap_or_default();
-            let state_str = row.get::<String>("state").unwrap_or_default();
             let updated_at_str = row.get::<String>("updated_at").unwrap_or_default();
             let state = state_utils::merge_current_tiers(
                 &app_state,
                 &user_state,
-                &json_string_to_state(&state_str)?,
+                &row_state(&row, "state")?,
             );
             let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -648,7 +791,7 @@ impl SessionService for Neo4jSessionService {
             .execute(
                 neo4rs::query(
                     "MATCH (s:Session {session_id: $session_id}) \
-                     RETURN s.app_name AS app_name, s.user_id AS user_id, s.state AS state",
+                     RETURN s.app_name AS app_name, s.user_id AS user_id",
                 )
                 .param("session_id", session_id.to_string()),
             )
@@ -663,151 +806,8 @@ impl SessionService for Neo4jSessionService {
 
         let app_name = row.get::<String>("app_name").unwrap_or_default();
         let user_id = row.get::<String>("user_id").unwrap_or_default();
-        let existing_state_str = row.get::<String>("state").unwrap_or_default();
-        let existing_state = json_string_to_state(&existing_state_str)?;
-        let (_, _, mut session_state) = state_utils::extract_state_deltas(&existing_state);
 
-        // Load current app state
-        let mut app_stream = txn
-            .execute(
-                neo4rs::query(
-                    "OPTIONAL MATCH (a:AppState {app_name: $app_name}) RETURN a.state AS state",
-                )
-                .param("app_name", app_name.clone()),
-            )
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
-
-        let mut app_state: HashMap<String, Value> = HashMap::new();
-        if let Some(row) = app_stream
-            .next(&mut txn)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            && let Ok(state_str) = row.get::<String>("state")
-        {
-            app_state = json_string_to_state(&state_str)?;
-        }
-
-        // Load current user state
-        let mut user_stream = txn
-            .execute(
-                neo4rs::query(
-                    "OPTIONAL MATCH (u:UserState {app_name: $app_name, user_id: $user_id}) \
-                     RETURN u.state AS state",
-                )
-                .param("app_name", app_name.clone())
-                .param("user_id", user_id.clone()),
-            )
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
-
-        let mut user_state: HashMap<String, Value> = HashMap::new();
-        if let Some(row) = user_stream
-            .next(&mut txn)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            && let Ok(state_str) = row.get::<String>("state")
-        {
-            user_state = json_string_to_state(&state_str)?;
-        }
-
-        let (app_delta, user_delta, session_delta) =
-            state_utils::extract_state_deltas(&event.actions.state_delta);
-
-        let now_str = event.timestamp.to_rfc3339();
-
-        // Update app state
-        app_state.extend(app_delta);
-        let app_state_json = state_to_json_string(&app_state)?;
-
-        txn.run(
-            neo4rs::query(
-                "MERGE (a:AppState {app_name: $app_name}) \
-                 SET a.state = $state, a.updated_at = $now",
-            )
-            .param("app_name", app_name.clone())
-            .param("state", app_state_json)
-            .param("now", now_str.clone()),
-        )
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
-
-        // Update user state
-        user_state.extend(user_delta);
-        let user_state_json = state_to_json_string(&user_state)?;
-
-        txn.run(
-            neo4rs::query(
-                "MERGE (u:UserState {app_name: $app_name, user_id: $user_id}) \
-                 SET u.state = $state, u.updated_at = $now",
-            )
-            .param("app_name", app_name.clone())
-            .param("user_id", user_id.clone())
-            .param("state", user_state_json)
-            .param("now", now_str.clone()),
-        )
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
-
-        // Update session merged state
-        session_state.extend(session_delta);
-        let merged_state = state_utils::merge_states(&app_state, &user_state, &session_state);
-        let merged_state_json = state_to_json_string(&merged_state)?;
-
-        txn.run(
-            neo4rs::query(
-                "MATCH (s:Session {session_id: $session_id, app_name: $app_name, \
-                        user_id: $user_id}) \
-                 SET s.state = $state, s.updated_at = $now",
-            )
-            .param("session_id", session_id.to_string())
-            .param("app_name", app_name.clone())
-            .param("user_id", user_id.clone())
-            .param("state", merged_state_json)
-            .param("now", now_str.clone()),
-        )
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
-
-        // Serialize event fields to JSON strings
-        let llm_response_json = serde_json::to_string(&event.llm_response)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-        let actions_json = serde_json::to_string(&event.actions)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-        let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-
-        // Create Event node linked to Session via HAS_EVENT
-        txn.run(
-            neo4rs::query(
-                "MATCH (s:Session {session_id: $session_id, app_name: $app_name, \
-                        user_id: $user_id}) \
-                 CREATE (s)-[:HAS_EVENT]->(e:Event { \
-                     id: $id, \
-                     session_id: $session_id, \
-                     invocation_id: $invocation_id, \
-                     branch: $branch, \
-                     author: $author, \
-                     timestamp: $timestamp, \
-                     llm_response: $llm_response, \
-                     actions: $actions, \
-                     long_running_tool_ids: $long_running_tool_ids \
-                 })",
-            )
-            .param("session_id", session_id.to_string())
-            .param("app_name", app_name)
-            .param("user_id", user_id)
-            .param("id", event.id.clone())
-            .param("invocation_id", event.invocation_id.clone())
-            .param("branch", event.branch.clone())
-            .param("author", event.author.clone())
-            .param("timestamp", event.timestamp.to_rfc3339())
-            .param("llm_response", llm_response_json)
-            .param("actions", actions_json)
-            .param("long_running_tool_ids", tool_ids_json),
-        )
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
+        write_event(&mut txn, &app_name, &user_id, session_id, &event).await?;
 
         txn.commit()
             .await
@@ -825,182 +825,20 @@ impl SessionService for Neo4jSessionService {
         let mut event = req.event;
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
 
-        let app_name = req.identity.app_name.as_ref().to_string();
-        let user_id = req.identity.user_id.as_ref().to_string();
-        let session_id = req.identity.session_id.as_ref().to_string();
-
         let mut txn = self
             .graph
             .start_txn()
             .await
             .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
-        // Use the full composite key — no ambiguity possible.
-        let mut row_stream = txn
-            .execute(
-                neo4rs::query(
-                    "MATCH (s:Session {app_name: $app_name, user_id: $user_id, \
-                            session_id: $session_id}) \
-                     RETURN s.state AS state",
-                )
-                .param("app_name", app_name.clone())
-                .param("user_id", user_id.clone())
-                .param("session_id", session_id.clone()),
-            )
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
-
-        let row = row_stream
-            .next(&mut txn)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
-
-        let existing_state_str = row.get::<String>("state").unwrap_or_default();
-        let existing_state = json_string_to_state(&existing_state_str)?;
-        let (_, _, mut session_state) = state_utils::extract_state_deltas(&existing_state);
-
-        // Load current app state
-        let mut app_stream = txn
-            .execute(
-                neo4rs::query(
-                    "OPTIONAL MATCH (a:AppState {app_name: $app_name}) RETURN a.state AS state",
-                )
-                .param("app_name", app_name.clone()),
-            )
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
-
-        let mut app_state: HashMap<String, Value> = HashMap::new();
-        if let Some(row) = app_stream
-            .next(&mut txn)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            && let Ok(state_str) = row.get::<String>("state")
-        {
-            app_state = json_string_to_state(&state_str)?;
-        }
-
-        // Load current user state
-        let mut user_stream = txn
-            .execute(
-                neo4rs::query(
-                    "OPTIONAL MATCH (u:UserState {app_name: $app_name, user_id: $user_id}) \
-                     RETURN u.state AS state",
-                )
-                .param("app_name", app_name.clone())
-                .param("user_id", user_id.clone()),
-            )
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
-
-        let mut user_state: HashMap<String, Value> = HashMap::new();
-        if let Some(row) = user_stream
-            .next(&mut txn)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            && let Ok(state_str) = row.get::<String>("state")
-        {
-            user_state = json_string_to_state(&state_str)?;
-        }
-
-        let (app_delta, user_delta, session_delta) =
-            state_utils::extract_state_deltas(&event.actions.state_delta);
-
-        let now_str = event.timestamp.to_rfc3339();
-
-        // Update app state
-        app_state.extend(app_delta);
-        let app_state_json = state_to_json_string(&app_state)?;
-
-        txn.run(
-            neo4rs::query(
-                "MERGE (a:AppState {app_name: $app_name}) \
-                 SET a.state = $state, a.updated_at = $now",
-            )
-            .param("app_name", app_name.clone())
-            .param("state", app_state_json)
-            .param("now", now_str.clone()),
+        write_event(
+            &mut txn,
+            req.identity.app_name.as_ref(),
+            req.identity.user_id.as_ref(),
+            req.identity.session_id.as_ref(),
+            &event,
         )
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
-
-        // Update user state
-        user_state.extend(user_delta);
-        let user_state_json = state_to_json_string(&user_state)?;
-
-        txn.run(
-            neo4rs::query(
-                "MERGE (u:UserState {app_name: $app_name, user_id: $user_id}) \
-                 SET u.state = $state, u.updated_at = $now",
-            )
-            .param("app_name", app_name.clone())
-            .param("user_id", user_id.clone())
-            .param("state", user_state_json)
-            .param("now", now_str.clone()),
-        )
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
-
-        // Update session merged state
-        session_state.extend(session_delta);
-        let merged_state = state_utils::merge_states(&app_state, &user_state, &session_state);
-        let merged_state_json = state_to_json_string(&merged_state)?;
-
-        txn.run(
-            neo4rs::query(
-                "MATCH (s:Session {session_id: $session_id, app_name: $app_name, \
-                        user_id: $user_id}) \
-                 SET s.state = $state, s.updated_at = $now",
-            )
-            .param("session_id", session_id.clone())
-            .param("app_name", app_name.clone())
-            .param("user_id", user_id.clone())
-            .param("state", merged_state_json)
-            .param("now", now_str.clone()),
-        )
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
-
-        // Serialize event fields to JSON strings
-        let llm_response_json = serde_json::to_string(&event.llm_response)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-        let actions_json = serde_json::to_string(&event.actions)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-        let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-
-        // Create Event node linked to Session via HAS_EVENT
-        txn.run(
-            neo4rs::query(
-                "MATCH (s:Session {session_id: $session_id, app_name: $app_name, \
-                        user_id: $user_id}) \
-                 CREATE (s)-[:HAS_EVENT]->(e:Event { \
-                     id: $id, \
-                     session_id: $session_id, \
-                     invocation_id: $invocation_id, \
-                     branch: $branch, \
-                     author: $author, \
-                     timestamp: $timestamp, \
-                     llm_response: $llm_response, \
-                     actions: $actions, \
-                     long_running_tool_ids: $long_running_tool_ids \
-                 })",
-            )
-            .param("session_id", session_id)
-            .param("app_name", app_name)
-            .param("user_id", user_id)
-            .param("id", event.id.clone())
-            .param("invocation_id", event.invocation_id.clone())
-            .param("branch", event.branch.clone())
-            .param("author", event.author.clone())
-            .param("timestamp", event.timestamp.to_rfc3339())
-            .param("llm_response", llm_response_json)
-            .param("actions", actions_json)
-            .param("long_running_tool_ids", tool_ids_json),
-        )
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
+        .await?;
 
         txn.commit()
             .await
@@ -1008,7 +846,6 @@ impl SessionService for Neo4jSessionService {
 
         Ok(())
     }
-
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
         let mut txn = self
@@ -1111,5 +948,76 @@ impl Events for Neo4jSession {
 
     fn at(&self, index: usize) -> Option<&Event> {
         self.events.get(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn state(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
+        pairs.iter().map(|(key, value)| (key.to_string(), value.clone())).collect()
+    }
+
+    #[test]
+    fn a_delta_becomes_one_json_property_per_key() {
+        let delta = state(&[
+            ("theme", json!("dark")),
+            ("limits", json!({"daily": 5})),
+            ("gone", Value::Null),
+        ]);
+
+        let properties = state_properties(&delta).unwrap();
+
+        let expected: HashMap<String, String> = [
+            ("state.theme", r#""dark""#),
+            ("state.limits", r#"{"daily":5}"#),
+            ("state.gone", "null"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+        assert_eq!(properties, expected);
+    }
+
+    #[test]
+    fn per_key_properties_override_the_state_object() {
+        let object = r#"{"theme":"light","language":"en"}"#;
+        let entries = vec![
+            ("state.theme".to_string(), r#""dark""#.to_string()),
+            ("state.flag".to_string(), "true".to_string()),
+            // Not a state property; `state_entries` filters these out, and so does the reader.
+            ("app_name".to_string(), "app".to_string()),
+        ];
+
+        let merged = node_state(object, entries).unwrap();
+
+        assert_eq!(
+            merged,
+            state(&[("theme", json!("dark")), ("language", json!("en")), ("flag", json!(true))])
+        );
+    }
+
+    #[test]
+    fn written_properties_read_back_as_the_same_state() {
+        let delta = state(&[("app:nested", json!({"a": [1, 2]})), ("plain", json!(3))]);
+        let entries = state_properties(&delta).unwrap().into_iter().collect();
+
+        assert_eq!(node_state("", entries).unwrap(), delta);
+    }
+
+    #[test]
+    fn a_property_that_is_not_json_is_an_error() {
+        let error = node_state("", vec![("state.theme".to_string(), "{".to_string())]).unwrap_err();
+        assert!(error.to_string().contains("state key 'theme'"), "{error}");
+    }
+
+    #[test]
+    fn the_entries_expression_selects_only_state_properties() {
+        assert_eq!(
+            state_entries("a"),
+            "[key IN keys(a) WHERE key STARTS WITH 'state.' | [key, a[key]]]"
+        );
     }
 }
