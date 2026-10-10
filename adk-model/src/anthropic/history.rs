@@ -12,7 +12,11 @@ mod tests;
 pub(super) fn preserve(message: &Message) -> Option<Part> {
     let needed = message.stop_reason == Some(adk_anthropic::StopReason::PauseTurn)
         || message.content.iter().any(|block| match block {
-            ContentBlock::ServerToolUse(_) | ContentBlock::WebSearchToolResult(_) => true,
+            // ADK parts have no `redacted_thinking`, and the API rejects a tool-use
+            // turn replayed without it.
+            ContentBlock::ServerToolUse(_)
+            | ContentBlock::WebSearchToolResult(_)
+            | ContentBlock::RedactedThinking(_) => true,
             ContentBlock::Text(text) => {
                 text.citations.as_ref().is_some_and(|items| !items.is_empty())
             }

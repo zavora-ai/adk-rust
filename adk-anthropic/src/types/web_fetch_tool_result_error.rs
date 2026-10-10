@@ -1,12 +1,19 @@
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
 /// Error codes that can be returned when a web fetch tool operation fails.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+///
+/// Codes this crate does not know are kept verbatim in [`WebFetchErrorCode::Unknown`],
+/// so a result replayed to the API carries the code the API sent.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum WebFetchErrorCode {
-    /// The input provided to the web fetch tool is invalid.
+    /// The input provided to the web fetch tool is invalid, such as a malformed URL.
     InvalidToolInput,
+
+    /// The URL exceeds the maximum length (250 characters).
+    UrlTooLong,
 
     /// The web fetch service is currently unavailable.
     Unavailable,
@@ -17,42 +24,106 @@ pub enum WebFetchErrorCode {
     /// Too many requests have been made to the web fetch service.
     TooManyRequests,
 
-    /// The requested URL is not in the allowed domains list.
+    /// The requested URL is blocked by domain filtering or Anthropic-side restrictions.
     UrlNotAllowed,
+
+    /// Fetching the URL failed with an HTTP error.
+    UrlNotAccessible,
+
+    /// The content type is not supported (only text, HTML, and PDF are).
+    UnsupportedContentType,
 
     /// The fetch operation failed.
     FetchFailed,
 
-    /// The requested URL was not mentioned in the prior context (Anthropic only permits fetching
-    /// URLs that appeared in earlier web search results within the same context window).
+    /// The requested URL did not appear earlier in the conversation.
     UrlNotInPriorContext,
 
-    /// An unrecognised error code from a future API version. Stored as a string for
-    /// forward-compatibility.
-    #[serde(other)]
-    Unknown,
+    /// An error code from a newer API version, kept verbatim.
+    Unknown(String),
 }
 
-impl fmt::Display for WebFetchErrorCode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl WebFetchErrorCode {
+    /// Returns the wire value of the code, for example `"url_not_accessible"`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::WebFetchErrorCode;
+    ///
+    /// assert_eq!(WebFetchErrorCode::UrlNotAccessible.as_str(), "url_not_accessible");
+    /// assert_eq!(WebFetchErrorCode::from("future_code").as_str(), "future_code");
+    /// ```
+    pub fn as_str(&self) -> &str {
         match self {
-            WebFetchErrorCode::InvalidToolInput => write!(f, "invalid_tool_input"),
-            WebFetchErrorCode::Unavailable => write!(f, "unavailable"),
-            WebFetchErrorCode::MaxUsesExceeded => write!(f, "max_uses_exceeded"),
-            WebFetchErrorCode::TooManyRequests => write!(f, "too_many_requests"),
-            WebFetchErrorCode::UrlNotAllowed => write!(f, "url_not_allowed"),
-            WebFetchErrorCode::FetchFailed => write!(f, "fetch_failed"),
-            WebFetchErrorCode::UrlNotInPriorContext => write!(f, "url_not_in_prior_context"),
-            WebFetchErrorCode::Unknown => write!(f, "unknown"),
+            WebFetchErrorCode::InvalidToolInput => "invalid_tool_input",
+            WebFetchErrorCode::UrlTooLong => "url_too_long",
+            WebFetchErrorCode::Unavailable => "unavailable",
+            WebFetchErrorCode::MaxUsesExceeded => "max_uses_exceeded",
+            WebFetchErrorCode::TooManyRequests => "too_many_requests",
+            WebFetchErrorCode::UrlNotAllowed => "url_not_allowed",
+            WebFetchErrorCode::UrlNotAccessible => "url_not_accessible",
+            WebFetchErrorCode::UnsupportedContentType => "unsupported_content_type",
+            WebFetchErrorCode::FetchFailed => "fetch_failed",
+            WebFetchErrorCode::UrlNotInPriorContext => "url_not_in_prior_context",
+            WebFetchErrorCode::Unknown(code) => code,
         }
     }
 }
 
+impl From<&str> for WebFetchErrorCode {
+    fn from(code: &str) -> Self {
+        match code {
+            "invalid_tool_input" => WebFetchErrorCode::InvalidToolInput,
+            "url_too_long" => WebFetchErrorCode::UrlTooLong,
+            "unavailable" => WebFetchErrorCode::Unavailable,
+            "max_uses_exceeded" => WebFetchErrorCode::MaxUsesExceeded,
+            "too_many_requests" => WebFetchErrorCode::TooManyRequests,
+            "url_not_allowed" => WebFetchErrorCode::UrlNotAllowed,
+            "url_not_accessible" => WebFetchErrorCode::UrlNotAccessible,
+            "unsupported_content_type" => WebFetchErrorCode::UnsupportedContentType,
+            "fetch_failed" => WebFetchErrorCode::FetchFailed,
+            "url_not_in_prior_context" => WebFetchErrorCode::UrlNotInPriorContext,
+            other => WebFetchErrorCode::Unknown(other.to_string()),
+        }
+    }
+}
+
+impl Serialize for WebFetchErrorCode {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for WebFetchErrorCode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::from(String::deserialize(deserializer)?.as_str()))
+    }
+}
+
+impl fmt::Display for WebFetchErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// An error that occurred when using the web fetch tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+///
+/// Serializes with `"type": "web_fetch_tool_result_error"`, which the API requires
+/// when the block is sent back in conversation history.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct WebFetchToolResultError {
     /// The specific error code indicating the type of failure.
     pub error_code: WebFetchErrorCode,
+}
+
+impl Serialize for WebFetchToolResultError {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("WebFetchToolResultError", 2)?;
+        state.serialize_field("type", "web_fetch_tool_result_error")?;
+        state.serialize_field("error_code", &self.error_code)?;
+        state.end()
+    }
 }
 
 impl WebFetchToolResultError {
@@ -97,9 +168,14 @@ impl WebFetchToolResultError {
         matches!(self.error_code, WebFetchErrorCode::UrlNotInPriorContext)
     }
 
+    /// Returns true if the URL could not be fetched because of an HTTP error.
+    pub fn is_url_not_accessible(&self) -> bool {
+        matches!(self.error_code, WebFetchErrorCode::UrlNotAccessible)
+    }
+
     /// Returns true if the error code was not recognised (forward-compatibility catch-all).
     pub fn is_unknown(&self) -> bool {
-        matches!(self.error_code, WebFetchErrorCode::Unknown)
+        matches!(self.error_code, WebFetchErrorCode::Unknown(_))
     }
 }
 
@@ -111,7 +187,32 @@ mod tests {
     fn serialization() {
         let error = WebFetchToolResultError { error_code: WebFetchErrorCode::InvalidToolInput };
         let json = serde_json::to_string(&error).unwrap();
-        assert_eq!(json, r#"{"error_code":"invalid_tool_input"}"#);
+        assert_eq!(
+            json,
+            r#"{"type":"web_fetch_tool_result_error","error_code":"invalid_tool_input"}"#
+        );
+    }
+
+    #[test]
+    fn documented_error_codes_round_trip() {
+        // Every code listed in the web fetch tool documentation.
+        for code in [
+            "invalid_tool_input",
+            "url_too_long",
+            "url_not_allowed",
+            "url_not_in_prior_context",
+            "url_not_accessible",
+            "too_many_requests",
+            "unsupported_content_type",
+            "max_uses_exceeded",
+            "unavailable",
+        ] {
+            let wire =
+                serde_json::json!({"type": "web_fetch_tool_result_error", "error_code": code});
+            let error: WebFetchToolResultError = serde_json::from_value(wire.clone()).unwrap();
+            assert!(!error.is_unknown(), "{code} should be a known code");
+            assert_eq!(serde_json::to_value(&error).unwrap(), wire);
+        }
     }
 
     #[test]
@@ -141,16 +242,24 @@ mod tests {
         // This is the error code the live API returns when a model tries to fetch a URL that
         // wasn't mentioned in prior web_search results.
         let json = serde_json::to_string(&error).unwrap();
-        assert_eq!(json, r#"{"error_code":"url_not_in_prior_context"}"#);
+        assert_eq!(
+            json,
+            r#"{"type":"web_fetch_tool_result_error","error_code":"url_not_in_prior_context"}"#
+        );
         let deserialized: WebFetchToolResultError = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.error_code, WebFetchErrorCode::UrlNotInPriorContext);
     }
 
     #[test]
-    fn unknown_error_code_deserializes_to_unknown_variant() {
+    fn unknown_error_code_round_trips_verbatim() {
         let json = r#"{"error_code":"some_future_code"}"#;
         let error: WebFetchToolResultError = serde_json::from_str(json).unwrap();
         assert!(error.is_unknown());
+        assert_eq!(error.error_code.to_string(), "some_future_code");
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            serde_json::json!({"type": "web_fetch_tool_result_error", "error_code": "some_future_code"})
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::types::{DocumentBlock, WebFetchToolResultError};
 
@@ -17,8 +17,10 @@ pub struct WebFetchResultContent {
     /// The URL that was fetched.
     pub url: String,
 
-    /// The fetched document content. Named `content` in the API response.
-    #[serde(rename = "content")]
+    /// The fetched document content. Named `content` in the API response, where it is a
+    /// `document` content block; it serializes with `"type": "document"`, which the API
+    /// requires when the block is sent back in conversation history.
+    #[serde(rename = "content", serialize_with = "serialize_document_block")]
     pub document: DocumentBlock,
 
     /// ISO 8601 timestamp of when the URL was fetched.
@@ -28,6 +30,20 @@ pub struct WebFetchResultContent {
 
 fn web_fetch_result_type() -> String {
     "web_fetch_result".to_string()
+}
+
+fn serialize_document_block<S: Serializer>(
+    document: &DocumentBlock,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Tagged<'a> {
+        #[serde(rename = "type")]
+        block_type: &'static str,
+        #[serde(flatten)]
+        document: &'a DocumentBlock,
+    }
+    Tagged { block_type: "document", document }.serialize(serializer)
 }
 
 impl WebFetchResultContent {
@@ -136,7 +152,7 @@ mod tests {
         assert_eq!(value["url"], "https://example.com");
         assert_eq!(value["retrieved_at"], "2025-09-10T00:00:00Z");
         // API field name is "content", not "document"
-        assert!(value["content"].is_object());
+        assert_eq!(value["content"]["type"], "document");
         assert!(value["document"].is_null());
     }
 
@@ -146,7 +162,10 @@ mod tests {
         let content = WebFetchToolResultBlockContent::with_error(error);
         let json = serde_json::to_string(&content).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value["error_code"], "unavailable");
+        assert_eq!(
+            value,
+            serde_json::json!({"type": "web_fetch_tool_result_error", "error_code": "unavailable"})
+        );
     }
 
     #[test]
@@ -173,14 +192,24 @@ mod tests {
 
     #[test]
     fn live_api_success_shape_round_trips() {
-        // Round-trip must preserve the "type" tag so the block can be echoed back verbatim on a
-        // pause_turn continuation.
+        // Round-trip must preserve both "type" tags so the block can be echoed back verbatim.
         let json = r#"{"type":"web_fetch_result","url":"https://example.com","retrieved_at":"2026-06-12T00:00:00Z","content":{"type":"document","source":{"type":"text","media_type":"text/plain","data":"hello"}}}"#;
         let content: WebFetchToolResultBlockContent = serde_json::from_str(json).unwrap();
-        let serialized = serde_json::to_string(&content).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(value["type"], "web_fetch_result");
-        assert_eq!(value["url"], "https://example.com");
+        assert!(content.is_result());
+        assert_eq!(
+            serde_json::to_value(&content).unwrap(),
+            serde_json::from_str::<serde_json::Value>(json).unwrap()
+        );
+    }
+
+    #[test]
+    fn stored_result_without_document_type_gains_it_on_replay() {
+        // History persisted before the document tag was serialized still deserializes and
+        // is replayed in the shape the API requires.
+        let json = r#"{"type":"web_fetch_result","url":"https://example.com","content":{"source":{"type":"text","media_type":"text/plain","data":"hello"}}}"#;
+        let content: WebFetchToolResultBlockContent = serde_json::from_str(json).unwrap();
+        assert!(content.is_result());
+        assert_eq!(serde_json::to_value(&content).unwrap()["content"]["type"], "document");
     }
 
     #[test]
