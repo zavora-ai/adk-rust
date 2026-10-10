@@ -396,6 +396,69 @@ pub enum StreamingMode {
 }
 ```
 
+## Run Budgets
+
+A `RunBudget` limits model calls, total tokens, cost, wall time and tool calls
+for one run. The runner creates a fresh `BudgetTracker` for every run and stores
+it in `RunConfig::budget_tracker`; transfer targets, workflow sub-agents and
+agents behind an `AgentTool` inherit the run config, so they all count against
+the same `Arc`.
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_core::RunBudget;
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
+
+# fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(agent)
+    .session_service(Arc::new(InMemorySessionService::new()))
+    .budget(
+        RunBudget::new()
+            .max_cost_usd(50.0)
+            .max_model_calls(200)
+            .max_tool_calls(100)
+            .max_wall_time(Duration::from_secs(600)),
+    )
+    .build()?;
+# Ok(runner)
+# }
+```
+
+| Checkpoint | Limits checked |
+|------------|----------------|
+| Before every model call | model calls, total tokens, cost, wall time |
+| Before every tool dispatch | tool calls, total tokens, cost, wall time |
+| After every event | usage from agents that call models directly |
+
+- **Reached, not exceeded**: a limit blocks new work once usage equals it. A
+  single model call can take usage past a limit; no further call starts after it.
+- **Tool batches**: the calls of one model turn are reserved together. A batch
+  that does not fit is answered with `not run` function responses, so the
+  session history keeps one response per call.
+- **Partial chunks never count**: each model call is metered once, from its
+  first non-partial response carrying usage.
+- **Cost comes from the provider response**: `adk-model` fills
+  `UsageMetadata::cost` from `adk_model::pricing::PricingCatalog`. With a cost
+  cap set, a response whose cost is unknown stops the run with
+  `cost unknown for model '…'`; `RunBudget::allow_unpriced_models()` counts such
+  responses as zero cost instead.
+
+A run that reaches a limit yields a final event explaining why — persisted with
+the session, with `llm_response.error_code` set to the `budget.*` code and the
+limit named under the `adk.budget.limit` event metadata key — followed by an
+`AdkError` with category `ResourceExhausted`.
+
+Agents that call models outside `LlmAgent`, `CodeActAgent` and
+`LlmConditionalAgent` count against the budget through
+`adk_core::generate_with_budget`. Pass a `BudgetTracker` in
+`RunConfig::budget_tracker` to `run_with_config` to share one budget across
+several runs.
+
 ## Agent Transfers
 
 The Runner handles multi-agent transfers automatically:

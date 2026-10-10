@@ -210,6 +210,14 @@ impl Tool for PrefixedTool {
         self.inner.required_scopes()
     }
 
+    fn effect(&self) -> adk_core::ToolEffect {
+        self.inner.effect()
+    }
+
+    fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+        self.inner.timeout_override()
+    }
+
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         self.inner.execute(ctx, args).await
     }

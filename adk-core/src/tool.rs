@@ -112,6 +112,89 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// Returns the side-effect class of this tool.
+    ///
+    /// The runtime retries a failed call only when the effect is
+    /// [`ToolEffect::ReadOnly`] or [`ToolEffect::Idempotent`] and the error is
+    /// retryable, and records [`ToolEffect::NonIdempotent`] calls in the
+    /// [`ActionLedger`](crate::ActionLedger) when one is configured. The default
+    /// derives the effect from [`Tool::is_read_only`], so a tool that declares
+    /// nothing is treated as non-idempotent and never retried.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Result, Tool, ToolContext, ToolEffect};
+    /// use serde_json::{Value, json};
+    /// use std::sync::Arc;
+    ///
+    /// struct SetThermostat;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Tool for SetThermostat {
+    ///     fn name(&self) -> &str {
+    ///         "set_thermostat"
+    ///     }
+    ///     fn description(&self) -> &str {
+    ///         "Sets the target temperature"
+    ///     }
+    ///     // Setting the same target twice leaves the same state as setting it once.
+    ///     fn effect(&self) -> ToolEffect {
+    ///         ToolEffect::Idempotent
+    ///     }
+    ///     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    ///         Ok(json!({ "target": args["celsius"] }))
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(SetThermostat.effect(), ToolEffect::Idempotent);
+    /// ```
+    fn effect(&self) -> ToolEffect {
+        if self.is_read_only() { ToolEffect::ReadOnly } else { ToolEffect::NonIdempotent }
+    }
+
+    /// Overrides the per-call timeout the agent applies to this tool.
+    ///
+    /// | Value | Timeout applied to each call |
+    /// |-------|------------------------------|
+    /// | `None` (default) | The agent's own tool timeout |
+    /// | `Some(None)` | None; the call runs until it finishes or the run is cancelled |
+    /// | `Some(Some(duration))` | `duration` instead of the agent's tool timeout |
+    ///
+    /// Agent-as-tool delegations use this so a long sub-agent run is bounded by
+    /// its own configuration rather than by a timeout sized for ordinary calls.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Result, Tool, ToolContext};
+    /// use serde_json::Value;
+    /// use std::{sync::Arc, time::Duration};
+    ///
+    /// struct BuildReport;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Tool for BuildReport {
+    ///     fn name(&self) -> &str {
+    ///         "build_report"
+    ///     }
+    ///     fn description(&self) -> &str {
+    ///         "Builds the quarterly report"
+    ///     }
+    ///     fn timeout_override(&self) -> Option<Option<Duration>> {
+    ///         Some(Some(Duration::from_secs(30 * 60)))
+    ///     }
+    ///     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    ///         Ok(Value::Null)
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(BuildReport.timeout_override(), Some(Some(Duration::from_secs(1800))));
+    /// ```
+    fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+        None
+    }
+
     /// Indicates whether this tool is safe for concurrent execution.
     ///
     /// [`ToolExecutionStrategy::Auto`] requires this signal in addition to
@@ -142,6 +225,32 @@ pub trait Tool: Send + Sync {
 pub trait ToolContext: CallbackContext {
     /// Returns the function call ID for this tool invocation.
     fn function_call_id(&self) -> &str;
+    /// Returns the key that identifies this tool call across retries and replays.
+    ///
+    /// The default is `"{app}/{user}/{session}/{invocation}/{function_call_id}"`.
+    /// Every attempt of one call shares the key and no other call has it, so a
+    /// tool can pass it to a downstream API that accepts an idempotency key, and
+    /// the [`ActionLedger`](crate::ActionLedger) records non-idempotent calls
+    /// under it.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    ///     let key = ctx.idempotency_key();
+    ///     self.payments.charge(&args, &key).await
+    /// }
+    /// ```
+    fn idempotency_key(&self) -> String {
+        format!(
+            "{}/{}/{}/{}/{}",
+            self.app_name(),
+            self.user_id(),
+            self.session_id(),
+            self.invocation_id(),
+            self.function_call_id()
+        )
+    }
     /// Get the current event actions. Returns an owned copy for thread safety.
     fn actions(&self) -> EventActions;
     /// Set the event actions (e.g., to trigger escalation or skip summarization).
@@ -274,11 +383,54 @@ pub trait ToolContext: CallbackContext {
     }
 }
 
+/// The side-effect class of a tool, reported by [`Tool::effect`].
+///
+/// | Effect | Retried after a retryable error | Recorded in the action ledger |
+/// |--------|---------------------------------|-------------------------------|
+/// | `ReadOnly` | Yes | No |
+/// | `Idempotent` | Yes | No |
+/// | `NonIdempotent` | No | Yes, when a ledger is configured |
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::ToolEffect;
+///
+/// assert!(ToolEffect::Idempotent.is_retry_safe());
+/// assert!(!ToolEffect::NonIdempotent.is_retry_safe());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ToolEffect {
+    /// Reads without changing anything.
+    ReadOnly,
+    /// Changes state, but repeating a call with the same arguments leaves the
+    /// same state as making it once.
+    Idempotent,
+    /// Changes state, and repeating a call repeats the change — a payment, an
+    /// email, an order.
+    NonIdempotent,
+}
+
+impl ToolEffect {
+    /// Returns `true` when repeating a call cannot repeat a side effect.
+    pub fn is_retry_safe(self) -> bool {
+        match self {
+            Self::ReadOnly | Self::Idempotent => true,
+            Self::NonIdempotent => false,
+        }
+    }
+}
+
 /// Configuration for automatic tool retry on failure.
 ///
-/// Controls how many times a failed tool execution is retried before
-/// propagating the error. Applied as a flat delay between attempts
-/// (no exponential backoff in V1).
+/// A failed call is retried only when its tool's [`Tool::effect`] is
+/// [`ToolEffect::ReadOnly`] or [`ToolEffect::Idempotent`] and the error is
+/// [retryable](crate::AdkError::is_retryable) — a rate limit, an unavailable
+/// dependency, or a timeout. The delay before retry `n` is
+/// `delay * 2^(n - 1)`, capped at `max_delay`, with jitter; see
+/// [`RetryBudget::backoff_delay`].
 ///
 /// # Example
 ///
@@ -286,28 +438,62 @@ pub trait ToolContext: CallbackContext {
 /// use std::time::Duration;
 /// use adk_core::RetryBudget;
 ///
-/// // Retry up to 2 times with 500ms between attempts (3 total attempts)
-/// let budget = RetryBudget::new(2, Duration::from_millis(500));
+/// // Retry up to 2 times, starting at 500ms (3 total attempts)
+/// let budget = RetryBudget::new(2, Duration::from_millis(500))
+///     .with_max_delay(Duration::from_secs(5));
 /// assert_eq!(budget.max_retries, 2);
+/// assert!(budget.backoff_delay(1) <= Duration::from_millis(500));
 /// ```
 #[derive(Debug, Clone)]
 pub struct RetryBudget {
     /// Maximum number of retry attempts (not counting the initial attempt).
     /// E.g., `max_retries: 2` means up to 3 total attempts.
     pub max_retries: u32,
-    /// Delay between retries. Applied as a flat delay (no backoff in V1).
+    /// Base delay before the first retry. Each later retry doubles it.
     pub delay: std::time::Duration,
+    /// Upper bound on the delay before any one retry.
+    pub max_delay: std::time::Duration,
 }
 
 impl RetryBudget {
+    /// The `max_delay` that [`RetryBudget::new`] applies.
+    pub const DEFAULT_MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
+
     /// Create a new retry budget.
+    ///
+    /// `max_delay` is [`RetryBudget::DEFAULT_MAX_DELAY`], or `delay` when that is
+    /// larger.
     ///
     /// # Arguments
     ///
     /// * `max_retries` - Maximum retry attempts (not counting the initial attempt)
-    /// * `delay` - Flat delay between retry attempts
+    /// * `delay` - Base delay before the first retry
     pub fn new(max_retries: u32, delay: std::time::Duration) -> Self {
-        Self { max_retries, delay }
+        Self { max_retries, delay, max_delay: delay.max(Self::DEFAULT_MAX_DELAY) }
+    }
+
+    /// Sets the upper bound on the delay before any one retry.
+    pub fn with_max_delay(mut self, max_delay: std::time::Duration) -> Self {
+        self.max_delay = max_delay;
+        self
+    }
+
+    /// Returns the delay before retry number `retry`, where `1` is the first retry.
+    ///
+    /// The ceiling is `delay * 2^(retry - 1)`, capped at `max_delay`. The
+    /// returned delay is drawn uniformly from the upper half of that ceiling, so
+    /// callers that failed together do not retry in lockstep.
+    pub fn backoff_delay(&self, retry: u32) -> std::time::Duration {
+        let exponent = retry.saturating_sub(1).min(31);
+        let ceiling = self.delay.saturating_mul(1u32 << exponent).min(self.max_delay);
+        let ceiling_nanos = ceiling.as_nanos();
+        if ceiling_nanos == 0 {
+            return std::time::Duration::ZERO;
+        }
+        let half = ceiling_nanos / 2;
+        let jitter = uuid::Uuid::new_v4().as_u128() % (ceiling_nanos - half + 1);
+        let nanos = u64::try_from(half + jitter).unwrap_or(u64::MAX);
+        std::time::Duration::from_nanos(nanos)
     }
 }
 
@@ -487,6 +673,58 @@ mod tests {
         assert_eq!(tool.name(), "test");
         assert_eq!(tool.description(), "test tool");
         assert!(!tool.is_long_running());
+    }
+
+    struct ReadOnlyTool;
+
+    #[async_trait]
+    impl Tool for ReadOnlyTool {
+        fn name(&self) -> &str {
+            "lookup"
+        }
+        fn description(&self) -> &str {
+            "reads"
+        }
+        fn is_read_only(&self) -> bool {
+            true
+        }
+        async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+            Ok(Value::Null)
+        }
+    }
+
+    #[test]
+    fn effect_defaults_follow_is_read_only() {
+        let tool = TestTool { name: "test".to_string() };
+        assert_eq!(tool.effect(), ToolEffect::NonIdempotent);
+        assert_eq!(ReadOnlyTool.effect(), ToolEffect::ReadOnly);
+        assert_eq!(tool.timeout_override(), None);
+    }
+
+    #[test]
+    fn idempotency_key_joins_identity_and_call_id() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.idempotency_key(), "app/user/session/test/call-123");
+    }
+
+    #[test]
+    fn backoff_grows_exponentially_with_jitter_and_respects_the_cap() {
+        let budget = RetryBudget::new(5, std::time::Duration::from_millis(100))
+            .with_max_delay(std::time::Duration::from_millis(350));
+        for _ in 0..50 {
+            let first = budget.backoff_delay(1);
+            assert!(first >= std::time::Duration::from_millis(50));
+            assert!(first <= std::time::Duration::from_millis(100));
+            let second = budget.backoff_delay(2);
+            assert!(second >= std::time::Duration::from_millis(100));
+            assert!(second <= std::time::Duration::from_millis(200));
+            let capped = budget.backoff_delay(10);
+            assert!(capped >= std::time::Duration::from_millis(175));
+            assert!(capped <= std::time::Duration::from_millis(350));
+        }
+        let zero = RetryBudget::new(1, std::time::Duration::ZERO);
+        assert_eq!(zero.backoff_delay(1), std::time::Duration::ZERO);
+        assert_eq!(zero.max_delay, RetryBudget::DEFAULT_MAX_DELAY);
     }
 
     #[tokio::test]

@@ -323,6 +323,8 @@ impl Llm for GroqClient {
                                                 error_message: None,
                                                 provider_metadata: None,
                                                 interaction_id: None,
+                                                model: None,
+                                                provider: None,
                                             };
                                         } else {
                                             // Emit partial text content
@@ -346,6 +348,8 @@ impl Llm for GroqClient {
                                                             error_message: None,
                                                             provider_metadata: None,
                                                             interaction_id: None,
+                                                            model: None,
+                                                            provider: None,
                                                         };
                                                     }
                                         }
@@ -372,6 +376,11 @@ impl Llm for GroqClient {
             }
         };
 
-        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
+        Ok(crate::usage_tracking::with_priced_usage_tracking(
+            Box::pin(response_stream),
+            usage_span,
+            "groq",
+            &self.config.model,
+        ))
     }
 }

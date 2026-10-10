@@ -24,6 +24,7 @@ playground versions are being finalized:
 - `examples/acp_server` — expose a tool-using ADK-Rust agent to an editor through stable ACP v1
 - `examples/acp_openai_e2e` — live OpenAI end-to-end check: a coordinator agent delegates over ACP stdio to an ADK agent served by `AcpServer`, asserting environment passing, one-shot and persistent sessions, and the permission bridge
 - `examples/acp_full_protocol` — no-API-key, Runner-backed ACP v1 server-direction reference with an end-to-end validating test (embedded-resource + multimodal prompts, permission bridge, `session/load` replay, usage/tool-call updates)
+- `examples/autonomy_validation` — live OpenAI and Anthropic check of the autonomy-readiness Phase 0 fixes (agent transfer history, runner plugin denial, path guardrails, failing toolsets, shared session state, functional resume, eval judges, Anthropic web search replay and 1-hour cache pricing), asserting on history, counters, and usage
 
 ## Validated Feature Examples
 

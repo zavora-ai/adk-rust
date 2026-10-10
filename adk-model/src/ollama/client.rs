@@ -262,6 +262,8 @@ impl Llm for OllamaModel {
                                     error_message: None,
                                     provider_metadata: None,
                                     interaction_id: None,
+                                    model: None,
+                                    provider: None,
                                 };
                             }
 
@@ -294,6 +296,11 @@ impl Llm for OllamaModel {
             }
         };
 
-        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
+        Ok(crate::usage_tracking::with_priced_usage_tracking(
+            Box::pin(response_stream),
+            usage_span,
+            "ollama",
+            &self.model_name,
+        ))
     }
 }

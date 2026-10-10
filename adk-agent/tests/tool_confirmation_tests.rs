@@ -41,6 +41,8 @@ impl SequencedModel {
             error_message: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         }
     }
 
@@ -60,6 +62,8 @@ impl SequencedModel {
             error_message: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         }
     }
 }
@@ -437,6 +441,8 @@ fn two_calls_to_same_tool() -> LlmResponse {
         error_message: None,
         provider_metadata: None,
         interaction_id: None,
+        model: None,
+        provider: None,
     }
 }
 

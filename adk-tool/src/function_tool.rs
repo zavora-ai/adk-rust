@@ -1,4 +1,4 @@
-use adk_core::{Result, Tool, ToolContext};
+use adk_core::{Result, Tool, ToolContext, ToolEffect};
 use async_trait::async_trait;
 use schemars::{
     JsonSchema,
@@ -28,6 +28,7 @@ pub struct FunctionTool {
     long_running: bool,
     read_only: bool,
     concurrency_safe: bool,
+    effect: Option<ToolEffect>,
     parameters_schema: Option<Value>,
     response_schema: Option<Value>,
     scopes: Vec<&'static str>,
@@ -47,6 +48,7 @@ impl FunctionTool {
             long_running: false,
             read_only: false,
             concurrency_safe: false,
+            effect: None,
             parameters_schema: None,
             response_schema: None,
             scopes: Vec::new(),
@@ -68,6 +70,30 @@ impl FunctionTool {
     /// Mark this tool as concurrency-safe (can run in parallel with other tools).
     pub fn with_concurrency_safe(mut self, concurrency_safe: bool) -> Self {
         self.concurrency_safe = concurrency_safe;
+        self
+    }
+
+    /// Declare the tool's side-effect class.
+    ///
+    /// Without this, the effect follows [`with_read_only`](Self::with_read_only):
+    /// [`ToolEffect::ReadOnly`] for a read-only tool, otherwise
+    /// [`ToolEffect::NonIdempotent`]. Only `ReadOnly` and `Idempotent` tools are
+    /// retried under a [`RetryBudget`](adk_core::RetryBudget).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Tool, ToolEffect};
+    /// use adk_tool::FunctionTool;
+    ///
+    /// let tool = FunctionTool::new("set_status", "Sets the ticket status", |_ctx, args| async move {
+    ///     Ok(args)
+    /// })
+    /// .with_effect(ToolEffect::Idempotent);
+    /// assert_eq!(tool.effect(), ToolEffect::Idempotent);
+    /// ```
+    pub fn with_effect(mut self, effect: ToolEffect) -> Self {
+        self.effect = Some(effect);
         self
     }
 
@@ -153,6 +179,14 @@ impl Tool for FunctionTool {
 
     fn is_concurrency_safe(&self) -> bool {
         self.concurrency_safe
+    }
+
+    fn effect(&self) -> ToolEffect {
+        match self.effect {
+            Some(effect) => effect,
+            None if self.read_only => ToolEffect::ReadOnly,
+            None => ToolEffect::NonIdempotent,
+        }
     }
 
     fn parameters_schema(&self) -> Option<Value> {

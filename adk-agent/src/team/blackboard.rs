@@ -273,8 +273,13 @@ impl Agent for CompiledBlackboardTeam {
         let members = self.members.clone();
         let runtime = self.runtime.clone();
         let root_invocation_id = ctx.orchestration_root_invocation_id().to_string();
+        // Attached before any other ledger access so the team budget chains to the run budget.
+        let team_tracker =
+            runtime.budget_tracker(&root_invocation_id, ctx.run_config().budget_tracker.clone());
         runtime.check_budget(&root_invocation_id)?;
+        let active = runtime.enter(&root_invocation_id);
         let stream = async_stream::stream! {
+            let _active = active;
             for _round in 0..spec.policy.max_rounds {
                 let scheduled: Vec<Arc<dyn Agent>> = match &spec.schedule {
                     BlackboardSchedule::RoundRobin => members.clone(),
@@ -292,11 +297,12 @@ impl Agent for CompiledBlackboardTeam {
                         ctx.clone(),
                         speaker.clone(),
                         spec.policy.history,
+                        team_tracker.clone(),
                     ));
                     let mut events = match speaker.run(projected).await {
                         Ok(events) => events,
                         Err(error) => {
-                            runtime.fail(&root_invocation_id, error.to_string());
+                            runtime.fail(&root_invocation_id, &error);
                             yield Err(error);
                             return;
                         }
@@ -305,7 +311,7 @@ impl Agent for CompiledBlackboardTeam {
                         let mut event = match result {
                             Ok(event) => event,
                             Err(error) => {
-                                runtime.fail(&root_invocation_id, error.to_string());
+                                runtime.fail(&root_invocation_id, &error);
                                 yield Err(error);
                                 return;
                             }
@@ -322,7 +328,7 @@ impl Agent for CompiledBlackboardTeam {
                                     "blackboard speaker '{}' cannot select '{}'; transition is not declared",
                                     speaker.name(), target
                                 ));
-                                runtime.fail(&root_invocation_id, error.to_string());
+                                runtime.fail(&root_invocation_id, &error);
                                 yield Err(error);
                                 return;
                             }
@@ -357,6 +363,13 @@ impl Agent for CompiledBlackboardTeam {
                                 yield Ok(event);
                                 return;
                             }
+                            // The event's model call already happened, so it is kept
+                            // before the run stops on the shared budget.
+                            Err(error) if error.code.starts_with("budget.") => {
+                                yield Ok(event);
+                                yield Err(error);
+                                return;
+                            }
                             Err(error) => {
                                 yield Err(error);
                                 return;
@@ -370,7 +383,7 @@ impl Agent for CompiledBlackboardTeam {
                         let error = adk_core::AdkError::agent(format!(
                             "blackboard selector '{selector}' did not select a permitted speaker"
                         ));
-                        runtime.fail(&root_invocation_id, error.to_string());
+                        runtime.fail(&root_invocation_id, &error);
                         yield Err(error);
                         return;
                     };
@@ -382,11 +395,12 @@ impl Agent for CompiledBlackboardTeam {
                         ctx.clone(),
                         speaker.clone(),
                         spec.policy.history,
+                        team_tracker.clone(),
                     ));
                     let mut events = match speaker.run(projected).await {
                         Ok(events) => events,
                         Err(error) => {
-                            runtime.fail(&root_invocation_id, error.to_string());
+                            runtime.fail(&root_invocation_id, &error);
                             yield Err(error);
                             return;
                         }
@@ -395,7 +409,7 @@ impl Agent for CompiledBlackboardTeam {
                         let mut event = match result {
                             Ok(event) => event,
                             Err(error) => {
-                                runtime.fail(&root_invocation_id, error.to_string());
+                                runtime.fail(&root_invocation_id, &error);
                                 yield Err(error);
                                 return;
                             }
@@ -408,7 +422,7 @@ impl Agent for CompiledBlackboardTeam {
                                 "selected blackboard speaker '{}' cannot transfer during a selector-managed turn",
                                 speaker.name()
                             ));
-                            runtime.fail(&root_invocation_id, error.to_string());
+                            runtime.fail(&root_invocation_id, &error);
                             yield Err(error);
                             return;
                         }
@@ -417,6 +431,13 @@ impl Agent for CompiledBlackboardTeam {
                             Ok(EventDisposition::Terminate) => {
                                 ctx.end_invocation();
                                 yield Ok(event);
+                                return;
+                            }
+                            // The event's model call already happened, so it is kept
+                            // before the run stops on the shared budget.
+                            Err(error) if error.code.starts_with("budget.") => {
+                                yield Ok(event);
+                                yield Err(error);
                                 return;
                             }
                             Err(error) => {
@@ -436,6 +457,8 @@ struct BlackboardContext {
     inner: Arc<dyn InvocationContext>,
     agent: Arc<dyn Agent>,
     session: ProjectedSession,
+    /// The inner run config with the team budget tracker.
+    config: RunConfig,
 }
 
 impl BlackboardContext {
@@ -443,7 +466,10 @@ impl BlackboardContext {
         inner: Arc<dyn InvocationContext>,
         agent: Arc<dyn Agent>,
         history_policy: BlackboardHistoryPolicy,
+        budget_tracker: Arc<adk_core::BudgetTracker>,
     ) -> Self {
+        let mut config = inner.run_config().clone();
+        config.budget_tracker = Some(budget_tracker);
         let mut history = inner.session().conversation_history();
         if let BlackboardHistoryPolicy::Last { max_messages } = history_policy
             && history.len() > max_messages
@@ -460,6 +486,7 @@ impl BlackboardContext {
             },
             inner,
             agent,
+            config,
         }
     }
 }
@@ -520,7 +547,7 @@ impl InvocationContext for BlackboardContext {
         &self.session
     }
     fn run_config(&self) -> &RunConfig {
-        self.inner.run_config()
+        &self.config
     }
     fn end_invocation(&self) {
         self.inner.end_invocation();

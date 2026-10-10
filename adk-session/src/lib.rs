@@ -74,6 +74,9 @@ pub mod redis;
 #[cfg(feature = "sqlite")]
 /// SQLite session backend.
 pub mod sqlite;
+#[cfg(feature = "sqlite")]
+/// SQLite-backed action ledger for non-idempotent tool calls.
+pub mod sqlite_action_ledger;
 #[cfg(feature = "vertex-session")]
 /// Vertex AI Session API backend.
 pub mod vertex;
@@ -89,6 +92,8 @@ pub use state_utils::{extract_state_deltas, merge_states};
 
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteSessionService;
+#[cfg(feature = "sqlite")]
+pub use sqlite_action_ledger::SqliteActionLedger;
 
 #[cfg(feature = "encrypted-session")]
 pub use encrypted::EncryptedSession;

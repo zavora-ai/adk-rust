@@ -91,7 +91,7 @@ async fn search_docs(
 
 ### Tool Metadata Attributes
 
-Mark tools as read-only, concurrency-safe, or long-running directly in the macro:
+Mark tools as read-only, idempotent, concurrency-safe, or long-running directly in the macro:
 
 ```rust
 /// Look up cached data — no side effects, safe for parallel dispatch.
@@ -111,11 +111,12 @@ Available attributes (all optional, combine freely):
 
 | Attribute | Effect |
 |-----------|--------|
-| `read_only` | `is_read_only() → true` — one of two signals required for concurrent `Auto` dispatch |
+| `read_only` | `is_read_only() → true` and `effect() → ToolEffect::ReadOnly` — one of two signals required for concurrent `Auto` dispatch |
+| `idempotent` | `effect() → ToolEffect::Idempotent` — a retry budget may retry the tool after a retryable error; ignored alongside `read_only` |
 | `concurrency_safe` | `is_concurrency_safe() → true` — one of two signals required for concurrent `Auto` dispatch |
 | `long_running` | `is_long_running() → true` — prevents LLM from re-calling a pending tool |
 
-Plain `#[tool]` without attributes keeps the defaults (all `false`), so existing code is unaffected.
+Plain `#[tool]` without attributes keeps the defaults (all `false`, effect `NonIdempotent`). See [Tool Effects](tool-effects.md) for how the effect governs retries.
 
 ---
 
@@ -577,6 +578,8 @@ let update = FunctionTool::new("update", "Update record", |_ctx, args| async mov
 ```
 
 When `ToolExecutionStrategy::Auto` is active, the dispatch loop first runs calls concurrently when their selected tools return `true` from both `is_read_only()` and `is_concurrency_safe()`. It then executes all remaining calls sequentially. `ToolExecutionStrategy::Parallel` is an explicit override that bypasses these signals, so its caller owns concurrency safety.
+
+`.with_effect(ToolEffect::Idempotent)` declares a mutation tool safe to repeat, so a retry budget may retry it. Without it, a read-only tool is `ReadOnly` and every other tool is `NonIdempotent` and never retried. See [Tool Effects](tool-effects.md).
 
 ---
 

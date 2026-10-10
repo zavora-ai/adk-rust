@@ -252,11 +252,14 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
         // Callback context for model-level hooks (the invocation context is also a
         // callback context). Tool-level callbacks get a fresh per-call context.
         let model_ctx: Arc<dyn CallbackContext> = invocation_ctx.clone();
+        // Shared with every agent in the invocation through the run config.
+        let budget_tracker = invocation_ctx.run_config().budget_tracker.clone();
         let model_hooks = ModelHooks {
             before: before_model_callbacks.as_slice(),
             after: after_model_callbacks.as_slice(),
             hooks: &hook_callbacks,
             ctx: &model_ctx,
+            budget: budget_tracker.as_ref(),
             #[cfg(feature = "enhanced-plugins")]
             plugins: enhanced_plugin_manager.as_deref(),
         };
@@ -485,6 +488,14 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                             tool: name.clone(),
                             args: args.clone(),
                         };
+
+                        // The call counts against the run budget before it starts.
+                        if let Some(tracker) = budget_tracker.as_ref()
+                            && let Err(exceeded) = tracker.begin_tool_calls(1)
+                        {
+                            yield Err(exceeded.into());
+                            return;
+                        }
 
                         // Long-running deferral (needs suspension).
                         if supports_suspension && tool.is_long_running() {
@@ -943,9 +954,14 @@ async fn run_authorized_tool(
             Err(error) => return Ok(ToolRun::Abort(error)),
         };
 
-    let budget = policy.budget_for(&name);
+    // Only a call that cannot repeat a side effect is retried, and only after a
+    // retryable error.
+    let budget = policy.budget_for(&name).filter(|_| tool.effect().is_retry_safe());
     let max_attempts = budget.map(|b| b.max_retries + 1).unwrap_or(1);
-    let delay = budget.map(|b| b.delay).unwrap_or_default();
+    let timeout = tool.timeout_override().unwrap_or(Some(policy.tool_timeout));
+    // Actions are reset before each retry, so a failed attempt's state delta and
+    // escalation are never committed.
+    let initial_actions = tool_ctx.actions();
 
     let started = std::time::Instant::now();
     let mut last_error = String::new();
@@ -956,24 +972,41 @@ async fn run_authorized_tool(
     for attempt in 0..max_attempts {
         final_attempt = attempt;
         if attempt > 0 {
-            tokio::time::sleep(delay).await;
+            if let Some(budget) = budget {
+                tokio::time::sleep(budget.backoff_delay(attempt)).await;
+            }
+            tool_ctx.set_actions(initial_actions.clone());
         }
+        let execution = tool.execute(tool_ctx.clone(), args.clone());
+        let bounded = async {
+            match timeout {
+                Some(limit) => tokio::time::timeout(limit, execution).await.map_err(|_| limit),
+                None => Ok(execution.await),
+            }
+        };
         // Catch panics so a misbehaving tool surfaces as a script-level error
         // rather than aborting the whole loop (matches LlmAgent).
-        let exec = std::panic::AssertUnwindSafe(tokio::time::timeout(
-            policy.tool_timeout,
-            tool.execute(tool_ctx.clone(), args.clone()),
-        ));
-        match futures::FutureExt::catch_unwind(exec).await {
-            Ok(Ok(Ok(v))) => {
-                value = Some(v);
-                break;
-            }
-            Ok(Ok(Err(err))) => last_error = tool_error_message(&err),
-            Ok(Err(_)) => {
-                last_error = format!("tool timed out after {}s", policy.tool_timeout.as_secs())
-            }
-            Err(_) => last_error = format!("tool '{name}' panicked during execution"),
+        let retryable =
+            match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(bounded)).await {
+                Ok(Ok(Ok(v))) => {
+                    value = Some(v);
+                    break;
+                }
+                Ok(Ok(Err(err))) => {
+                    last_error = tool_error_message(&err);
+                    err.is_retryable()
+                }
+                Ok(Err(limit)) => {
+                    last_error = format!("tool timed out after {}s", limit.as_secs());
+                    true
+                }
+                Err(_) => {
+                    last_error = format!("tool '{name}' panicked during execution");
+                    false
+                }
+            };
+        if !retryable {
+            break;
         }
     }
 
@@ -1309,6 +1342,8 @@ struct ModelHooks<'a> {
     /// The run's invocation hooks, iterated ahead of `before` and `after`.
     hooks: &'a HookCallbacks,
     ctx: &'a Arc<dyn CallbackContext>,
+    /// The run budget model calls count against.
+    budget: Option<&'a Arc<adk_core::BudgetTracker>>,
     #[cfg(feature = "enhanced-plugins")]
     plugins: Option<&'a EnhancedPluginManager>,
 }
@@ -1355,7 +1390,8 @@ async fn next_script(
     }
 
     if content.is_none() {
-        let mut stream = model.generate_content(request, false).await?;
+        let mut stream =
+            adk_core::generate_with_budget(model, request, false, hooks.budget).await?;
         let mut text = String::new();
         while let Some(chunk) = stream.next().await {
             if let Some(c) = chunk?.content {
@@ -2783,8 +2819,8 @@ mod tests {
     use crate::codeact::test_support::{
         MockInvocationContext, Planned, ScriptedRuntime, call_id_tool, echo_tool,
         escalating_long_running_tool, escalating_tool, failing_tool, fake_agent, fake_toolset,
-        flaky_tool, long_running_tool, route_tool, skip_summarization_tool, sleeping_tool,
-        state_tool, text_agent,
+        flaky_tool, flaky_tool_with_effect, long_running_tool, route_tool, skip_summarization_tool,
+        sleeping_tool, state_tool, text_agent,
     };
     use adk_core::FunctionResponseData;
     use serde_json::json;
@@ -3475,12 +3511,27 @@ mod tests {
         ]]));
         let mut input = base_inputs(FakeLlm::new("noop"), rt.clone(), user("go"));
         input.tools = vec![flaky_tool(1)];
-        input.default_retry_budget = Some(RetryBudget { max_retries: 1, delay: Duration::ZERO });
+        input.default_retry_budget = Some(RetryBudget::new(1, Duration::ZERO));
         let events = collect(input).await;
         assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("done"));
         // The retried call ultimately returned a value (not a raised error).
         assert_eq!(rt.last_value(), Some(json!({"ok": true})));
         assert!(rt.last_raise().is_none());
+    }
+
+    #[tokio::test]
+    async fn retry_budget_never_repeats_a_non_idempotent_tool() {
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("flaky", json!({}), 1),
+            Planned::Complete(json!({"type": "final_result", "value": "done"})),
+        ]]));
+        let mut input = base_inputs(FakeLlm::new("noop"), rt.clone(), user("go"));
+        input.tools = vec![flaky_tool_with_effect(1, adk_core::ToolEffect::NonIdempotent)];
+        input.default_retry_budget = Some(RetryBudget::new(3, Duration::ZERO));
+        collect(input).await;
+        // The single failure is raised into the script instead of being retried.
+        assert!(rt.last_raise().is_some_and(|message| message.contains("transient failure")));
+        assert_eq!(rt.last_value(), None);
     }
 
     #[tokio::test]

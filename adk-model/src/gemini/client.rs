@@ -940,6 +940,8 @@ impl GeminiModel {
             error_message: None,
             provider_metadata,
             interaction_id: None,
+            model: resp.model_version.clone().filter(|version| !version.is_empty()),
+            provider: None,
         })
     }
 
@@ -1087,6 +1089,8 @@ impl GeminiModel {
             error_message: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         };
 
         (vec![synthetic_partial, response], true)
@@ -1776,7 +1780,12 @@ impl Llm for GeminiModel {
                         self.generate_interactions_stream(req.clone())
                     })
                     .await?;
-                return Ok(crate::usage_tracking::with_usage_tracking(mapped, usage_span));
+                return Ok(crate::usage_tracking::with_priced_usage_tracking(
+                    mapped,
+                    usage_span,
+                    "gemini",
+                    &self.model_name,
+                ));
             }
             let response = execute_with_retry(&self.retry_config, is_retryable_model_error, || {
                 self.generate_interactions_once(req.clone())
@@ -1785,14 +1794,24 @@ impl Llm for GeminiModel {
             let single = async_stream::stream! {
                 yield Ok(response);
             };
-            return Ok(crate::usage_tracking::with_usage_tracking(Box::pin(single), usage_span));
+            return Ok(crate::usage_tracking::with_priced_usage_tracking(
+                Box::pin(single),
+                usage_span,
+                "gemini",
+                &self.model_name,
+            ));
         }
 
         let result = execute_with_retry(&self.retry_config, is_retryable_model_error, || {
             self.generate_content_internal(req.clone(), stream)
         })
         .await?;
-        Ok(crate::usage_tracking::with_usage_tracking(result, usage_span))
+        Ok(crate::usage_tracking::with_priced_usage_tracking(
+            result,
+            usage_span,
+            "gemini",
+            &self.model_name,
+        ))
     }
 }
 
@@ -2072,6 +2091,8 @@ mod tests {
             error_message: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         };
 
         let (chunks, saw_partial) = GeminiModel::stream_chunks_from_response(response, false);
@@ -2098,6 +2119,8 @@ mod tests {
             error_message: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         };
 
         let (chunks, saw_partial) = GeminiModel::stream_chunks_from_response(response, true);
