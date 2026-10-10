@@ -114,11 +114,63 @@ impl ModelConfig {
 /// the correct JSON values.
 pub struct ToolConfig;
 
+/// Per-tool overrides that turn off `web_fetch` and `web_search`.
+///
+/// Both run on Anthropic's servers, so an environment's networking policy does not
+/// restrict them; a session reaches the web through them only when asked to.
+fn web_tools_disabled() -> serde_json::Value {
+    serde_json::json!([
+        {"name": "web_fetch", "enabled": false},
+        {"name": "web_search", "enabled": false}
+    ])
+}
+
 impl ToolConfig {
-    /// Create the standard agent toolset that enables all built-in tools.
+    /// Create the agent toolset with the file and shell tools enabled and the web
+    /// tools (`web_fetch`, `web_search`) disabled.
     ///
-    /// Equivalent to `{"type": "agent_toolset_20260401"}`.
+    /// The web tools run on Anthropic's servers, outside the environment's
+    /// networking policy, so they are an explicit opt-in through
+    /// [`ToolConfig::agent_toolset_with_web`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::managed_agents::ToolConfig;
+    ///
+    /// assert_eq!(
+    ///     ToolConfig::agent_toolset(),
+    ///     serde_json::json!({
+    ///         "type": "agent_toolset_20260401",
+    ///         "configs": [
+    ///             {"name": "web_fetch", "enabled": false},
+    ///             {"name": "web_search", "enabled": false}
+    ///         ]
+    ///     })
+    /// );
+    /// ```
     pub fn agent_toolset() -> serde_json::Value {
+        serde_json::json!({"type": "agent_toolset_20260401", "configs": web_tools_disabled()})
+    }
+
+    /// Create the agent toolset with all eight built-in tools enabled, including
+    /// `web_fetch` and `web_search`.
+    ///
+    /// Equivalent to `{"type": "agent_toolset_20260401"}`. Use it only when the
+    /// agent needs the web: content the agent fetches can carry prompt injection,
+    /// and the web tools can send session data to any host.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::managed_agents::ToolConfig;
+    ///
+    /// assert_eq!(
+    ///     ToolConfig::agent_toolset_with_web(),
+    ///     serde_json::json!({"type": "agent_toolset_20260401"})
+    /// );
+    /// ```
+    pub fn agent_toolset_with_web() -> serde_json::Value {
         serde_json::json!({"type": "agent_toolset_20260401"})
     }
 
@@ -179,15 +231,17 @@ impl ToolConfig {
         })
     }
 
-    /// Create an agent toolset with a permission policy.
+    /// Create an agent toolset with a permission policy and the web tools disabled.
     ///
-    /// Use `"always_allow"` or `"always_ask"`.
+    /// Use `"always_allow"`, `"always_ask"`, or `"auto"`. As with
+    /// [`ToolConfig::agent_toolset`], `web_fetch` and `web_search` stay off.
     pub fn agent_toolset_with_policy(policy: impl Into<String>) -> serde_json::Value {
         serde_json::json!({
             "type": "agent_toolset_20260401",
             "default_config": {
                 "permission_policy": {"type": policy.into()}
             },
+            "configs": web_tools_disabled(),
         })
     }
 }
@@ -306,8 +360,72 @@ pub struct CreateEnvironmentParams {
 }
 
 impl CreateEnvironmentParams {
-    /// Create params for a cloud environment with unrestricted networking.
+    /// Create params for a cloud environment whose container reaches no network host.
+    ///
+    /// Networking is `limited` with no allowed hosts, package registries, or MCP
+    /// servers. Use [`CreateEnvironmentParams::cloud_limited`] to allow specific
+    /// hosts, or [`CreateEnvironmentParams::cloud_unrestricted`] to opt in to full
+    /// egress.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::managed_agents::CreateEnvironmentParams;
+    ///
+    /// let params = CreateEnvironmentParams::cloud("sandbox");
+    /// assert_eq!(params.config["networking"]["type"], "limited");
+    /// ```
     pub fn cloud(name: impl Into<String>) -> Self {
+        Self::cloud_limited(name, std::iter::empty::<String>())
+    }
+
+    /// Create params for a cloud environment whose container reaches only `allowed_hosts`.
+    ///
+    /// Package registries and the agent's MCP servers stay blocked unless listed;
+    /// set `allow_package_managers` or `allow_mcp_servers` in the returned
+    /// `config["networking"]` to open them.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::managed_agents::CreateEnvironmentParams;
+    ///
+    /// let params = CreateEnvironmentParams::cloud_limited("api-client", ["api.example.com"]);
+    /// assert_eq!(params.config["networking"]["allowed_hosts"][0], "api.example.com");
+    /// ```
+    pub fn cloud_limited(
+        name: impl Into<String>,
+        allowed_hosts: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        let allowed_hosts: Vec<String> = allowed_hosts.into_iter().map(Into::into).collect();
+        Self {
+            name: name.into(),
+            config: serde_json::json!({
+                "type": "cloud",
+                "networking": {
+                    "type": "limited",
+                    "allowed_hosts": allowed_hosts,
+                    "allow_package_managers": false,
+                    "allow_mcp_servers": false
+                }
+            }),
+        }
+    }
+
+    /// Create params for a cloud environment with unrestricted network egress.
+    ///
+    /// The container can reach any host, so a prompt-injected agent can send
+    /// workspace data anywhere. Prefer [`CreateEnvironmentParams::cloud_limited`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::managed_agents::CreateEnvironmentParams;
+    ///
+    /// let params = CreateEnvironmentParams::cloud_unrestricted("open-env");
+    /// assert_eq!(params.config["networking"]["type"], "unrestricted");
+    /// ```
+    pub fn cloud_unrestricted(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             config: serde_json::json!({
