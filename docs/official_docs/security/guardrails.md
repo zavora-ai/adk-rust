@@ -255,6 +255,8 @@ Guardrails integrate with `LlmAgentBuilder`:
 
 Configured input guardrails run before model execution, and configured output guardrails run on generated responses before they are returned to the caller.
 
+> **Note:** `LlmAgentBuilder` accepts these sets only when `adk-agent` is built with its `guardrails` feature. The `adk-rust` `guardrail` feature enables it.
+
 ```rust
 use adk_agent::LlmAgentBuilder;
 use adk_guardrail::{GuardrailSet, ContentFilter, PiiRedactor};

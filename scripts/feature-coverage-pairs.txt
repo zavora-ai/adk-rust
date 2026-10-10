@@ -27,6 +27,9 @@
 # fails this build once the constituent is referenced. The `-full` variant (realtime
 # stack) is nightly-only.
 1 adk-rust gemini-agent-platform
+# `guardrail`, `plugin`, and `skills` once linked their crates without turning on the
+# matching adk-agent features, so `LlmAgentBuilder` guardrails were no-op placeholders.
+1 adk-rust guardrail,plugin,skills
 
 # Shard 2 — adk-server and adk-cli (adk-cli links libdbus through keyring).
 # The background run store and its persistence are behind `background`; nothing compiled
