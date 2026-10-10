@@ -1,15 +1,70 @@
 # Tool Authorization
 
-Control which tools an agent can execute and when human approval is required. ADK-Rust provides four mechanisms — from simple per-tool confirmation to full RBAC — that work across the CLI, web server, and A2A protocol.
+Control which tools an agent can execute and when human approval is required. ADK-Rust provides five mechanisms — from a run-wide default-deny policy to full RBAC — that work across the CLI, web server, and A2A protocol, plus an organisation-wide kill switch.
 
 ## Quick Comparison
 
 | Mechanism | Use Case | Granularity | Runtime |
 |-----------|----------|-------------|---------|
+| [Tool Policy](#tool-policy) | Run-wide allow, deny, or require approval | Per tool name and argument | Decides before execution |
 | [Tool Confirmation Policy](#tool-confirmation-policy) | Interactive approval in CLI/web | Per-tool or all tools | Pauses execution, emits event |
 | [BeforeToolCallback](#beforetoolcallback) | Programmatic gate / audit | Custom logic per call | Sync decision, no pause |
 | [Access Control (RBAC)](#access-control) | Role-based enterprise security | Per-user, per-tool | Deny before execution |
 | [Graph Interrupts](#graph-interrupts) | Complex approval workflows | Per-node checkpoint | Persists state, resumes later |
+
+## Tool Policy
+
+A `ToolPolicy` decides every tool call the run makes — in every agent, including transfer
+targets and agents behind an `AgentTool` — on the call's final arguments, after plugin and
+callback rewrites. It returns one of:
+
+| Decision | Effect |
+|----------|--------|
+| `PolicyDecision::Allow` | The call proceeds to guardrails and execution |
+| `PolicyDecision::Deny { reason }` | The tool does not run; the model receives `{"error": "Tool '<name>' denied by policy: <reason>"}` |
+| `PolicyDecision::RequireApproval { reason }` | The call goes through confirmation, as if the agent required it |
+
+`DeclarativePolicy` matches rules in order. A rule names a tool glob (`*` and `?`), may require
+the effect the tool declares (`read_only_tools()`, or `with_effect(ToolEffect::Idempotent)` — see
+[Tool Effects](../tools/tool-effects.md)), and may add argument predicates addressed by JSON
+pointer. The first matching rule decides; a call no rule matches is **denied by default**.
+
+| Predicate | Holds when |
+|-----------|------------|
+| `ArgPredicate::equals(pointer, value)` | The argument equals `value` |
+| `ArgPredicate::in_set(pointer, values)` | The argument equals one of `values` |
+| `ArgPredicate::at_most(pointer, max)` | The argument is a JSON number no greater than `max` |
+| `ArgPredicate::starts_with(pointer, prefix)` | The argument is a string with that prefix (lexical — screen paths with a guardrail) |
+| `ArgPredicate::domain_in(pointer, domains)` | The argument is an `http(s)` URL whose host is listed; `*.example.com` matches subdomains. URLs with user information, backslashes, or percent-encoded hosts never match |
+
+A predicate whose pointer is missing or whose value has the wrong type does not hold.
+
+```rust
+use adk_core::{ArgPredicate, DeclarativePolicy, PolicyRule};
+use adk_runner::Runner;
+use std::sync::Arc;
+
+let policy = DeclarativePolicy::builder()
+    // Rules added earlier win, so this deny applies even though the tool is read-only.
+    .deny("read_secret", "secrets are never exposed to the model")
+    .allow_read_only()
+    .rule(PolicyRule::allow("transfer").when(ArgPredicate::at_most("/amount", 100.0)))
+    .require_approval("transfer", "transfers over 100 need a person")
+    .rule(PolicyRule::allow("fetch_url").when(ArgPredicate::domain_in("/url", ["docs.rs"])))
+    .build();
+
+let runner = Runner::builder()
+    .app_name("treasury")
+    .agent(agent)
+    .session_service(session_service)
+    .tool_policy(Arc::new(policy))
+    .build()?;
+```
+
+The runner installs its policy on every run that does not carry one in its `RunConfig`. Implement
+`ToolPolicy` directly for decisions that need outside data; `ToolPolicyRequest` carries the tool
+name, final arguments, declared `ToolEffect` (`Tool::effect()`), agent name, app, user, session,
+and invocation ID.
 
 ## Tool Confirmation Policy
 
@@ -51,22 +106,24 @@ let agent = LlmAgentBuilder::new("assistant")
      }
    }
    ```
-3. The agent stream ends — execution is paused
+3. The held call is answered with `{"error": "Tool 'delete_file' requires confirmation"}`,
+   calls in the same turn that need no approval still run, and the agent stream ends
 4. Your UI shows the user: "The agent wants to delete `/data/report.csv`. Allow?"
-5. On the next `Runner::run()`, pass the decision **keyed by the function call ID**
-   from the request:
+5. On the next run, pass the decision **keyed by the request's fingerprint** — its tool
+   name and canonical arguments. The model re-issues the call under a new function call
+   ID, and the fingerprint still matches:
 
 ```rust
-use adk_core::{Content, RunConfig, ToolConfirmationDecision};
-use std::collections::HashMap;
+use adk_core::{Content, RunConfig, ToolApproval};
+use std::time::Duration;
 
-let mut decisions = HashMap::new();
-decisions.insert(
-    "call_abc123".to_string(), // functionCallId from the request, not the tool name
-    ToolConfirmationDecision::Approve, // or Deny
-);
-
-let config = RunConfig::builder().tool_confirmation_decisions(decisions).build();
+// `request` is the ToolConfirmationRequest from the paused run's event.
+let config = RunConfig::builder()
+    .tool_approval(
+        request.fingerprint(),
+        ToolApproval::approve().expires_in(Duration::from_secs(600)), // or ToolApproval::deny()
+    )
+    .build();
 let stream = runner
     .run_with_config(user_id, session_id, Content::new("user").with_text("approved"), Some(config))
     .await?;
@@ -75,23 +132,62 @@ let stream = runner
 If denied, the tool is skipped and the LLM receives an error result —
 "Tool 'delete_file' execution denied by confirmation policy" — so it can adjust its approach.
 
-> **Note:** A static decision applies only to the call ID it names. A run that asks the
-> model again receives a new function call with a new ID, so a decision carried into
-> the next run applies only when that run dispatches the same call. For interactive
-> approval, configure a [`ToolConfirmationHandler`](#cli-example) instead: the agent
-> asks it about each call while the run that made the call waits, so no second run is
-> needed.
+The request's arguments are the final ones: plugin rewrites and guardrail revisions have
+already been applied, so the approver sees exactly what will execute. A rewrite that changes
+the arguments after an approval changes the fingerprint, and the call is held again.
+
+> **Note:** A fingerprint approval in `RunConfig::tool_approvals` applies to every matching
+> call in the run it is passed to. For an approval that authorizes exactly one execution,
+> record it in an [`ApprovalStore`](#approval-store) instead.
 
 ### Decisions Authorize One Exact Call
 
-A decision applies to the single call it was requested for. Keying by tool name
-would make one approval authorize every call of that tool, so an approval for
-`delete_file` on a scratch path would also authorize a call targeting something
-else. Two calls to the same tool in one turn therefore need two decisions.
+A decision applies to one exact call: the same tool with the same canonical
+arguments. Keying by tool name would make one approval authorize every call of
+that tool, so an approval for `delete_file` on a scratch path would also authorize
+a call targeting something else. Two calls to the same tool with different
+arguments therefore need two decisions.
 
-An unknown call ID means "no decision", which leaves the call awaiting
-confirmation. The failure direction is always toward asking again rather than
-executing.
+An unknown fingerprint or call ID means "no decision", which leaves the call
+awaiting confirmation. An expired approval is ignored. The failure direction is
+always toward asking again rather than executing.
+
+### Approval Store
+
+An `ApprovalStore` keeps held requests and decisions between runs, scoped to the app,
+user, and session. When a run holds a call, the agent records the request; an approver
+lists them, decides, and the next run that makes the same call takes the decision.
+Taking it consumes it, so one approval authorizes one execution.
+
+```rust
+use adk_core::{ApprovalScope, ApprovalStore, InMemoryApprovalStore, RunConfig, ToolApproval};
+use std::sync::Arc;
+
+let store = Arc::new(InMemoryApprovalStore::new());
+let runner = Runner::builder()
+    .app_name("ops")
+    .agent(agent)
+    .session_service(session_service)
+    .run_config(RunConfig::builder().approval_store(store.clone()).build())
+    .build()?;
+
+// ... a run holds a call ...
+
+let scope = ApprovalScope::new("ops", "user-1", "session-1");
+for pending in store.pending(&scope).await? {
+    // Show pending.request to the approver, then:
+    store.decide(&scope, &pending.fingerprint, ToolApproval::approve()).await?;
+}
+```
+
+`InMemoryApprovalStore` lives for the process. Implement `ApprovalStore` over a database to
+keep requests across restarts.
+
+### Decisions Keyed by Call ID
+
+`RunConfig::tool_confirmation_decisions` keys a decision by function call ID. It applies only
+when a run dispatches that exact call ID again — a graph resuming its checkpointed frontier, for
+example — and not to a call the model re-issues, which receives a new ID.
 
 ### Binding a Decision to Its Arguments
 
@@ -125,8 +221,27 @@ If the call that arrives does not match the fingerprint, the decision is ignored
 and the call is treated as unconfirmed. `tool_call_fingerprint` is canonical over
 key order, so a re-serialized argument object still matches.
 
-For decisions that should apply by policy rather than per call, implement a
-`ToolConfirmationHandler` instead of widening the static map.
+For decisions that should apply by policy rather than per call, use a
+[`ToolPolicy`](#tool-policy) or implement a `ToolConfirmationHandler` instead of widening the
+static map.
+
+### Handler Timeout
+
+A `ToolConfirmationHandler` is asked about each call with its final arguments while the run
+waits. Calls in one batch are decided concurrently, so a handler that prompts on a shared
+device serializes its own prompts. A `decide` that takes longer than
+`RunConfig::tool_confirmation_timeout` (default five minutes) denies the call:
+
+```rust
+use adk_core::RunConfig;
+use std::sync::Arc;
+use std::time::Duration;
+
+let config = RunConfig::builder()
+    .tool_confirmation_handler(Arc::new(approver))
+    .tool_confirmation_timeout(Duration::from_secs(120))
+    .build();
+```
 
 ### CLI Example
 
@@ -165,8 +280,11 @@ async fn delete_file(args: DeleteArgs) -> Result<serde_json::Value, adk_core::Ad
 }
 
 /// Asks on the terminal before each call that requires confirmation.
-#[derive(Debug)]
-struct TerminalApprover;
+#[derive(Debug, Default)]
+struct TerminalApprover {
+    /// Calls in one batch are decided concurrently; one prompt at a time on the terminal.
+    terminal: tokio::sync::Mutex<()>,
+}
 
 #[async_trait]
 impl ToolConfirmationHandler for TerminalApprover {
@@ -174,6 +292,7 @@ impl ToolConfirmationHandler for TerminalApprover {
         &self,
         request: &ToolConfirmationRequest,
     ) -> adk_core::Result<ToolConfirmationDecision> {
+        let _terminal = self.terminal.lock().await;
         let prompt = format!(
             "\nThe agent wants to run '{}' with args: {}\nAllow? [y/n]: ",
             request.tool_name, request.args
@@ -229,7 +348,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Every run consults the approver for calls to `delete_file`.
     let config = RunConfig::builder()
-        .tool_confirmation_handler(Arc::new(TerminalApprover))
+        .tool_confirmation_handler(Arc::new(TerminalApprover::default()))
         .build();
 
     println!("File Manager (type 'quit' to exit)");
@@ -629,23 +748,67 @@ let agent = LlmAgentBuilder::new("secure-assistant")
     .build()?;
 ```
 
-Order of evaluation in `LlmAgent`:
+Order of evaluation in `LlmAgent` and `CodeActAgent`:
 
-1. Tool guardrails (`ToolGuardrailSet`) — screen every call in the model's batch; a denial
-   becomes the call's result
-2. `ToolConfirmationPolicy` — a static decision, the `ToolConfirmationHandler`, or a pause
-3. Enhanced plugins (`before_tool_call`)
-4. The runner's plugin `before_tool` callbacks, then the agent's `BeforeToolCallback`s — the
+1. Run budget (`RunConfig::budget`) — `LlmAgent` reserves the model turn's whole batch of tool
+   calls before any of them starts (`CodeActAgent` reserves each call); a batch that does not fit
+   is answered with `not run` responses and the run ends with a `ResourceExhausted` error
+2. Enhanced plugins (`before_tool_call`) — may rewrite the arguments
+3. The runner's plugin `before_tool` callbacks, then the agent's `BeforeToolCallback`s — the
    first to return content skips the tool
-5. Circuit breaker
-6. Tool executes — the RBAC (`ProtectedTool`) and scope (`ScopeGuard`) wrappers check here,
-   inside `execute()`, so a denial is a tool error
-7. `on_tool_error` callbacks (plugins first) — when the tool failed, including an RBAC denial
-8. The runner's plugin `after_tool` callbacks, then `AfterToolCallback`,
-   `AfterToolCallbackFull`, and enhanced plugins (`after_tool_call`)
+4. Circuit breaker
+5. The governed path (`adk_core::authorize_tool_call`) on the final arguments:
+   1. Kill switch — a frozen run ends with a `governance.frozen` error
+   2. `ToolPolicy` — a denial becomes the call's result
+   3. Tool guardrails (`ToolGuardrailSet`) — a denial becomes the call's result; a revision is
+      checked against the policy again
+   4. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
+      approval, the `ApprovalStore`, the `ToolConfirmationHandler`, or a hold
+6. Action ledger (`LlmAgent`, `ToolEffect::NonIdempotent` tools, `RunConfig::action_ledger`) — a
+   recorded call is answered from its record without executing; otherwise the call is begun
+   under its `ToolContext::idempotency_key()`
+7. Tool executes under its timeout — the RBAC (`ProtectedTool`) and scope (`ScopeGuard`) wrappers
+   check here, inside `execute()`, so a denial is a tool error. Only `ReadOnly` and `Idempotent`
+   tools are retried, after a retryable error or a timeout, with backoff
+8. Action ledger completion — the outcome is recorded; a non-idempotent call that timed out or
+   panicked keeps its begun record and is answered with an `outcome_unknown` response
+9. `on_tool_error` callbacks (plugins first) — when the tool failed, including an RBAC denial
+10. The runner's plugin `after_tool` callbacks, then `AfterToolCallback`,
+    `AfterToolCallbackFull`, and enhanced plugins (`after_tool_call`)
 
 > **Note:** An `on_tool_error` callback that returns a fallback value replaces the error,
 > including an access denial. Keep fallbacks to tools whose failures are safe to paper over.
+
+## Kill Switch
+
+`GovernanceControl` stops agent execution everywhere it is attached. Every runner has one,
+reachable through `Runner::governance()`; share one control across runners with
+`Runner::builder().governance(control)`. While it is frozen:
+
+| Point | Effect |
+|-------|--------|
+| Run start | The run's stream yields a `governance.frozen` error before the session is read |
+| Before each model call | The agent ends the run with the error |
+| Before each tool call | The tool does not execute and the run ends with the error |
+
+```rust
+use adk_core::GovernanceControl;
+
+let control = GovernanceControl::new();
+let runner = Runner::builder()
+    .app_name("ops")
+    .agent(agent)
+    .session_service(session_service)
+    .governance(control.clone())
+    .build()?;
+
+control.freeze("incident 4012: unexpected payouts");
+// ... investigate ...
+control.unfreeze();
+```
+
+The error is `ErrorCategory::Forbidden` and not retryable, so a caller's retry loop does not
+spin against a frozen runner.
 
 ## Related
 

@@ -29,11 +29,11 @@ use adk_core::{
     AdkError, AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull,
     Agent, Artifacts, BeforeAgentCallback, BeforeModelCallback, BeforeModelResult,
     BeforeToolCallback, CallbackContext, Content, ErrorCategory, ErrorComponent, Event,
-    EventActions, EventStream, GenerateContentConfig, GlobalInstructionProvider, IncludeContents,
-    InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse, MemoryEntry,
-    OnToolErrorCallback, Part, ReadonlyContext, RetryBudget, SharedState, Tool,
-    ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationHandler, ToolConfirmationPolicy,
-    ToolConfirmationRequest, ToolContext, ToolOutcome, Toolset,
+    EventActions, EventStream, GenerateContentConfig, GlobalInstructionProvider, GovernedCall,
+    IncludeContents, InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse,
+    MemoryEntry, OnToolErrorCallback, Part, ReadonlyContext, RetryBudget, SharedState, Tool,
+    ToolAuthorization, ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationPolicy,
+    ToolConfirmationRequest, ToolContext, ToolGate, ToolOutcome, Toolset, authorize_tool_call,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -104,8 +104,6 @@ struct LoopInputs {
     runtime: Arc<dyn CodeRuntime>,
     tools: Vec<Arc<dyn Tool>>,
     policy: ToolConfirmationPolicy,
-    decisions: HashMap<String, ToolConfirmationDecision>,
-    confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
     /// The live invocation context; a fresh [`CodeToolContext`] is built from it
     /// per tool call so each call carries its own function-call id and actions.
     invocation_ctx: Arc<dyn InvocationContext>,
@@ -186,6 +184,10 @@ impl CircuitBreaker {
 
 /// The tool-execution policy shared across every call in one invocation.
 struct ToolPolicy<'a> {
+    /// The agent's own confirmation requirement.
+    confirmation: &'a ToolConfirmationPolicy,
+    /// The invocation the calls belong to; its run config drives the governed path.
+    invocation_ctx: &'a Arc<dyn InvocationContext>,
     tool_timeout: Duration,
     default_budget: Option<&'a RetryBudget>,
     tool_budgets: &'a HashMap<String, RetryBudget>,
@@ -214,7 +216,7 @@ impl ToolPolicy<'_> {
 fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>> {
     stream! {
         let LoopInputs {
-            model, runtime, tools, policy, decisions, confirmation_handler, invocation_ctx, incoming, system_prompt, conversation,
+            model, runtime, tools, policy, invocation_ctx, incoming, system_prompt, conversation,
             pending, invocation_id, agent_name, max_iterations, max_error_chars, supports_suspension,
             transfer_targets, generate_content_config, tool_timeout, output_key,
             default_retry_budget, tool_retry_budgets, circuit_breaker_threshold, on_tool_error,
@@ -228,12 +230,12 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
         let tool_map = build_tool_map(&tools);
         // Runner plugins and other run-wide hooks reach this agent through the run config.
         let hook_callbacks = HookCallbacks::new(&invocation_ctx.run_config().invocation_hooks);
-        let mut live_confirmation_decisions =
-            HashMap::<String, ToolConfirmationDecision>::new();
         let roster = roster(&tool_map);
 
         // Tool-robustness state for this invocation.
         let tool_policy = ToolPolicy {
+            confirmation: &policy,
+            invocation_ctx: &invocation_ctx,
             tool_timeout,
             default_budget: default_retry_budget.as_ref(),
             tool_budgets: &tool_retry_budgets,
@@ -304,60 +306,33 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                 // resume (escalate / skip-summarization / transfer). Checked
                 // before resuming the interpreter, mirroring the inline path.
                 let mut resume_control = ToolControl::default();
+                // A call still waiting for a decision, re-held with its final arguments.
+                let mut held: Option<ToolConfirmationRequest> = None;
                 let resolution: Option<ResolutionRecord> = match &cp.disposition {
-                    Disposition::PendingResult => {
-                        let (with, control) = execute_for_resume(
+                    // Recovery re-runs an unfinished call, and a confirmed call runs now.
+                    // Both pass through the governed path, which finds the decision.
+                    Disposition::PendingResult | Disposition::AwaitingConfirmation => {
+                        match execute_for_resume(
                             &tool_map, &invocation_ctx, &cp.call, &mut pending_actions,
                             &tool_policy, &mut circuit,
                         )
-                        .await;
-                        resume_control = control;
-                        Some(resume_to_record(with))
-                    }
-                    Disposition::Resolved(rec) => Some(rec.clone()),
-                    Disposition::AwaitingConfirmation => {
-                        let call_id = cp.call.call_id.to_string();
-                        // Static decisions are keyed by call ID, so a resumed
-                        // checkpoint is authorized only for its own call.
-                        let mut decision = live_confirmation_decisions
-                            .get(&call_id)
-                            .copied()
-                            .or_else(|| decisions.get(&call_id).copied());
-                        if decision.is_none()
-                            && let Some(handler) = confirmation_handler.as_ref()
+                        .await
                         {
-                            let request = ToolConfirmationRequest {
-                                tool_name: cp.call.tool.clone(),
-                                function_call_id: Some(cp.call.call_id.to_string()),
-                                args: cp.call.args.clone(),
-                            };
-                            match handler.decide(&request).await {
-                                Ok(value) => {
-                                    live_confirmation_decisions.insert(call_id, value);
-                                    decision = Some(value);
-                                }
-                                Err(error) => {
-                                    yield Err(error);
-                                    return;
-                                }
+                            Resumed::Ready(with, control) => {
+                                resume_control = control;
+                                Some(resume_to_record(with))
+                            }
+                            Resumed::Held(request) => {
+                                held = Some(request);
+                                None
+                            }
+                            Resumed::Abort(error) => {
+                                yield Err(error);
+                                return;
                             }
                         }
-                        match decision {
-                        Some(ToolConfirmationDecision::Approve) => {
-                            let (with, control) = execute_for_resume(
-                                &tool_map, &invocation_ctx, &cp.call, &mut pending_actions,
-                                &tool_policy, &mut circuit,
-                            )
-                            .await;
-                            resume_control = control;
-                            Some(resume_to_record(with))
-                        }
-                        Some(ToolConfirmationDecision::Deny) => {
-                            Some(ResolutionRecord::Raise(denied_message(&cp.call.tool)))
-                        }
-                        None => None,
-                        }
                     }
+                    Disposition::Resolved(rec) => Some(rec.clone()),
                     Disposition::AwaitingCompletion { .. } => {
                         completion_for(&incoming, &cp.call.tool, cp.call.call_id)
                             .map(ResolutionRecord::Value)
@@ -366,7 +341,16 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                 match resolution {
                     // No resolution available yet — keep waiting (re-persist).
                     None => {
-                        let mut event = suspend_event(&invocation_id, &agent_name, &cp);
+                        let mut event = match held {
+                            Some(request) => {
+                                let waiting = CodeActCheckpoint {
+                                    disposition: Disposition::AwaitingConfirmation,
+                                    ..cp.clone()
+                                };
+                                held_event(&invocation_id, &agent_name, &waiting, request)
+                            }
+                            None => suspend_event(&invocation_id, &agent_name, &cp),
+                        };
                         flush_actions(&mut event, &mut pending_actions);
                         yield Ok(event);
                         return;
@@ -428,6 +412,11 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                         yield Err(AdkError::agent(format!(
                             "max iterations ({max_iterations}) exceeded without a final result"
                         )));
+                        return;
+                    }
+                    // The kill switch is checked before every model call.
+                    if let Err(error) = invocation_ctx.run_config().check_governance() {
+                        yield Err(error);
                         return;
                     }
                     let script = match next_script(
@@ -500,86 +489,6 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                             args: args.clone(),
                         };
 
-                        // Confirmation gate.
-                        if policy.requires_confirmation(&name) {
-                            let call_id_key = call_id.to_string();
-                            let mut decision = live_confirmation_decisions
-                                .get(&call_id_key)
-                                .copied()
-                                .or_else(|| decisions.get(&call_id_key).copied());
-                            if decision.is_none()
-                                && let Some(handler) = confirmation_handler.as_ref()
-                            {
-                                let request = ToolConfirmationRequest {
-                                    tool_name: name.clone(),
-                                    function_call_id: Some(call_id.to_string()),
-                                    args: args.clone(),
-                                };
-                                match handler.decide(&request).await {
-                                    Ok(value) => {
-                                        live_confirmation_decisions
-                                            .insert(call_id_key, value);
-                                        decision = Some(value);
-                                    }
-                                    Err(error) => {
-                                        yield Err(error);
-                                        return;
-                                    }
-                                }
-                            }
-                            match decision {
-                                Some(ToolConfirmationDecision::Approve) => {}
-                                Some(ToolConfirmationDecision::Deny) => {
-                                    match call.resume(ResumeWith::Raise(denied_message(&name))) {
-                                        Ok(s) => step = s,
-                                        Err(e) => {
-                                            yield Err(runtime_err(e));
-                                            return;
-                                        }
-                                    }
-                                    continue 'script;
-                                }
-                                None if supports_suspension => {
-                                    let snapshot = match call.dump() {
-                                        Ok(s) => s,
-                                        Err(e) => {
-                                            yield Err(runtime_err(e));
-                                            return;
-                                        }
-                                    };
-                                    let cp = mk_checkpoint(
-                                        iteration,
-                                        transcript_with_stdout(
-                                            &transcript,
-                                            &script_output,
-                                            max_error_chars,
-                                        ),
-                                        snapshot,
-                                        pcall,
-                                        Disposition::AwaitingConfirmation,
-                                        &roster,
-                                    );
-                                    let mut event = suspend_event(&invocation_id, &agent_name, &cp);
-                                    flush_actions(&mut event, &mut pending_actions);
-                                    yield Ok(event);
-                                    return;
-                                }
-                                None => {
-                                    let msg = format!(
-                                        "tool '{name}' requires confirmation but this runtime cannot pause"
-                                    );
-                                    match call.resume(ResumeWith::Raise(msg)) {
-                                        Ok(s) => step = s,
-                                        Err(e) => {
-                                            yield Err(runtime_err(e));
-                                            return;
-                                        }
-                                    }
-                                    continue 'script;
-                                }
-                            }
-                        }
-
                         // The call counts against the run budget before it starts.
                         if let Some(tracker) = budget_tracker.as_ref()
                             && let Err(exceeded) = tracker.begin_tool_calls(1)
@@ -599,8 +508,32 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                             };
                             let tool_ctx: Arc<dyn ToolContext> =
                                 Arc::new(CodeToolContext::new(invocation_ctx.clone(), call_id));
-                            let exec =
-                                run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await;
+                            let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
+                                ToolRun::Finished(exec) => exec,
+                                ToolRun::Held(request) => {
+                                    let cp = mk_checkpoint(
+                                        iteration,
+                                        transcript_with_stdout(
+                                            &transcript,
+                                            &script_output,
+                                            max_error_chars,
+                                        ),
+                                        snapshot,
+                                        pcall,
+                                        Disposition::AwaitingConfirmation,
+                                        &roster,
+                                    );
+                                    let mut event =
+                                        held_event(&invocation_id, &agent_name, &cp, request);
+                                    flush_actions(&mut event, &mut pending_actions);
+                                    yield Ok(event);
+                                    return;
+                                }
+                                ToolRun::Abort(error) => {
+                                    yield Err(error);
+                                    return;
+                                }
+                            };
                             let control = capture_actions(&mut pending_actions, tool_ctx.actions());
                             // A terminal signal (escalate / skip-summarization /
                             // transfer) ends the run before suspending, matching
@@ -673,8 +606,33 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
 
                             let tool_ctx: Arc<dyn ToolContext> =
                                 Arc::new(CodeToolContext::new(invocation_ctx.clone(), call_id));
-                            let exec =
-                                run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await;
+                            let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
+                                ToolRun::Finished(exec) => exec,
+                                ToolRun::Held(request) => {
+                                    // Supersedes the SAVE-BEFORE checkpoint: the tool did not run.
+                                    let cp = mk_checkpoint(
+                                        iteration,
+                                        transcript_with_stdout(
+                                            &transcript,
+                                            &script_output,
+                                            max_error_chars,
+                                        ),
+                                        snapshot,
+                                        pcall,
+                                        Disposition::AwaitingConfirmation,
+                                        &roster,
+                                    );
+                                    let mut event =
+                                        held_event(&invocation_id, &agent_name, &cp, request);
+                                    flush_actions(&mut event, &mut pending_actions);
+                                    yield Ok(event);
+                                    return;
+                                }
+                                ToolRun::Abort(error) => {
+                                    yield Err(error);
+                                    return;
+                                }
+                            };
                             let control = capture_actions(&mut pending_actions, tool_ctx.actions());
                             let resolution = match exec {
                                 Ok(v) => ResolutionRecord::Value(v),
@@ -712,8 +670,16 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                         } else {
                             let tool_ctx: Arc<dyn ToolContext> =
                                 Arc::new(CodeToolContext::new(invocation_ctx.clone(), call_id));
-                            let exec =
-                                run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await;
+                            let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
+                                ToolRun::Finished(exec) => exec,
+                                ToolRun::Held(_) => Err(format!(
+                                    "tool '{name}' requires confirmation but this runtime cannot pause"
+                                )),
+                                ToolRun::Abort(error) => {
+                                    yield Err(error);
+                                    return;
+                                }
+                            };
                             let control = capture_actions(&mut pending_actions, tool_ctx.actions());
                             if control.is_terminal() {
                                 let mut event =
@@ -834,6 +800,16 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
     }
 }
 
+/// How a resumed or recovered call ended.
+enum Resumed {
+    /// The value or error to feed back, with any terminal signal the tool raised.
+    Ready(ResumeWith, ToolControl),
+    /// The call still needs a confirmation decision.
+    Held(ToolConfirmationRequest),
+    /// The run must end.
+    Abort(AdkError),
+}
+
 /// Execute a tool to produce the value/error fed back into a resumed
 /// continuation (used on recovery for `PendingResult`/confirmed calls).
 ///
@@ -849,46 +825,79 @@ async fn execute_for_resume(
     pending: &mut EventActions,
     policy: &ToolPolicy<'_>,
     circuit: &mut Option<CircuitBreaker>,
-) -> (ResumeWith, ToolControl) {
+) -> Resumed {
     match tools.get(&call.tool) {
         Some(tool) => {
             let tool_ctx: Arc<dyn ToolContext> =
                 Arc::new(CodeToolContext::new(invocation_ctx.clone(), call.call_id));
             let result = match run_tool(tool, &tool_ctx, call.args.clone(), policy, circuit).await {
-                Ok(v) => ResumeWith::Value(v),
-                Err(msg) => ResumeWith::Raise(msg),
+                ToolRun::Finished(Ok(v)) => ResumeWith::Value(v),
+                ToolRun::Finished(Err(msg)) => ResumeWith::Raise(msg),
+                ToolRun::Held(request) => return Resumed::Held(request),
+                ToolRun::Abort(error) => return Resumed::Abort(error),
             };
             let control = capture_actions(pending, tool_ctx.actions());
-            (result, control)
+            Resumed::Ready(result, control)
         }
-        None => (ResumeWith::Raise(unknown_tool_message(&call.tool)), ToolControl::default()),
+        None => Resumed::Ready(
+            ResumeWith::Raise(unknown_tool_message(&call.tool)),
+            ToolControl::default(),
+        ),
     }
+}
+
+/// How one tool call ended.
+enum ToolRun {
+    /// A value to feed back into the script, or a message to raise in it.
+    Finished(Result<Value, String>),
+    /// The call needs a confirmation decision that does not exist yet.
+    Held(ToolConfirmationRequest),
+    /// The run must end: the kill switch is set, or the approval service failed.
+    Abort(AdkError),
 }
 
 /// Execute a tool with the full robustness policy and report a single outcome.
 ///
-/// In order: a tripped circuit breaker short-circuits with an error; otherwise
-/// the tool runs under a timeout, retrying per its [`RetryBudget`]; the circuit
-/// breaker records success/failure; and on ultimate failure the `on_tool_error`
-/// callbacks are tried for a fallback value. `Ok` is a value to feed back into
-/// the script (a real result or a fallback); `Err` is a message to raise.
+/// In order: a tripped circuit breaker short-circuits with an error; before-tool
+/// plugins and callbacks may rewrite the arguments or answer the call; the governed
+/// path (policy, guardrails, confirmation) authorizes the final arguments; the tool
+/// runs under a timeout, retrying per its [`RetryBudget`]; the circuit breaker
+/// records success/failure; and on ultimate failure the `on_tool_error` callbacks
+/// are tried for a fallback value.
 async fn run_tool(
     tool: &Arc<dyn Tool>,
     tool_ctx: &Arc<dyn ToolContext>,
     args: Value,
     policy: &ToolPolicy<'_>,
     circuit: &mut Option<CircuitBreaker>,
-) -> Result<Value, String> {
+) -> ToolRun {
     let name = tool.name().to_string();
 
     if let Some(cb) = circuit.as_ref()
         && cb.is_open(&name)
     {
-        return Err(format!(
+        return ToolRun::Finished(Err(format!(
             "tool '{name}' is temporarily disabled after {} consecutive failures",
             cb.threshold
-        ));
+        )));
     }
+
+    match run_authorized_tool(tool, tool_ctx, args, policy, circuit).await {
+        Ok(outcome) => outcome,
+        Err(message) => ToolRun::Finished(Err(message)),
+    }
+}
+
+/// The body of [`run_tool`] after the circuit-breaker check, with `?` for raised
+/// messages.
+async fn run_authorized_tool(
+    tool: &Arc<dyn Tool>,
+    tool_ctx: &Arc<dyn ToolContext>,
+    args: Value,
+    policy: &ToolPolicy<'_>,
+    circuit: &mut Option<CircuitBreaker>,
+) -> Result<ToolRun, String> {
+    let name = tool.name().to_string();
 
     // before-tool plugins: rewrite args or short-circuit with a synthetic result.
     #[cfg(feature = "enhanced-plugins")]
@@ -898,7 +907,9 @@ async fn run_tool(
             .await
         {
             Ok(BeforeToolCallResult::Continue(modified)) => modified,
-            Ok(BeforeToolCallResult::ShortCircuit(result)) => return Ok(result),
+            Ok(BeforeToolCallResult::ShortCircuit(result)) => {
+                return Ok(ToolRun::Finished(Ok(result)));
+            }
             Err(e) => return Err(e.to_string()),
         },
         None => args,
@@ -914,12 +925,34 @@ async fn run_tool(
         ));
         for callback in policy.hooks.before_tool.iter().chain(policy.before_tool) {
             match callback(cb_ctx.clone()).await {
-                Ok(Some(content)) => return Ok(content_to_tool_value(&content)),
+                Ok(Some(content)) => {
+                    return Ok(ToolRun::Finished(Ok(content_to_tool_value(&content))));
+                }
                 Ok(None) => continue,
                 Err(e) => return Err(e.to_string()),
             }
         }
     }
+
+    // The governed path sees the final arguments, after every rewrite above.
+    let invocation_ctx = policy.invocation_ctx;
+    let call = GovernedCall::for_tool(tool.as_ref(), tool_ctx.function_call_id(), args)
+        .requiring_confirmation(
+            policy.confirmation.requires_confirmation(&name)
+                || invocation_ctx.requires_tool_confirmation(&name),
+        );
+    let args =
+        match authorize_tool_call(&ToolGate::for_context(invocation_ctx.as_ref()), call).await {
+            Ok(ToolAuthorization::Execute { args, .. }) => args,
+            Ok(ToolAuthorization::Refuse { reason, confirmation }) => {
+                return Err(match confirmation {
+                    Some(ToolConfirmationDecision::Deny) => denied_message(&name),
+                    _ => reason,
+                });
+            }
+            Ok(ToolAuthorization::Pending { request, .. }) => return Ok(ToolRun::Held(request)),
+            Err(error) => return Ok(ToolRun::Abort(error)),
+        };
 
     // Only a call that cannot repeat a side effect is retried, and only after a
     // retryable error.
@@ -1076,11 +1109,11 @@ async fn run_tool(
             )
             .await
         {
-            Ok(AfterToolCallResult::Continue(modified)) => Ok(modified),
+            Ok(AfterToolCallResult::Continue(modified)) => Ok(ToolRun::Finished(Ok(modified))),
             Err(e) => Err(e.to_string()),
         };
     }
-    Ok(result)
+    Ok(ToolRun::Finished(Ok(result)))
 }
 
 /// Run-control signals a tool may raise via its [`EventActions`].
@@ -1244,6 +1277,19 @@ fn suspend_event(invocation_id: &str, agent_name: &str, cp: &CodeActCheckpoint) 
         }
         Disposition::PendingResult | Disposition::Resolved(_) => {}
     }
+    event
+}
+
+/// A suspend event for a call held for confirmation, carrying the request with the
+/// call's final arguments — the ones a decision's fingerprint must match.
+fn held_event(
+    invocation_id: &str,
+    agent_name: &str,
+    cp: &CodeActCheckpoint,
+    request: ToolConfirmationRequest,
+) -> Event {
+    let mut event = suspend_event(invocation_id, agent_name, cp);
+    event.actions.tool_confirmation = Some(request);
     event
 }
 
@@ -1826,8 +1872,6 @@ impl Agent for CodeActAgent {
             runtime: self.runtime.clone(),
             tools: resolved_tools,
             policy: self.policy.clone(),
-            decisions: ctx.run_config().tool_confirmation_decisions.clone(),
-            confirmation_handler: ctx.run_config().tool_confirmation_handler.clone(),
             invocation_ctx: ctx.clone(),
             incoming: ctx.user_content().clone(),
             system_prompt,
@@ -2838,8 +2882,6 @@ mod tests {
             runtime,
             tools: vec![],
             policy: ToolConfirmationPolicy::Never,
-            decisions: HashMap::new(),
-            confirmation_handler: None,
             invocation_ctx: Arc::new(MockInvocationContext::new(incoming.clone())),
             conversation: vec![incoming.clone()],
             incoming,
@@ -2883,10 +2925,11 @@ mod tests {
         pending: Option<CodeActCheckpoint>,
         supports_suspension: bool,
     ) -> Vec<Event> {
-        let mut input = base_inputs(model, runtime, incoming);
+        let mut input = base_inputs(model, runtime, incoming.clone());
+        input.invocation_ctx =
+            Arc::new(MockInvocationContext::new(incoming).with_confirmation_decisions(decisions));
         input.tools = tools;
         input.policy = policy;
-        input.decisions = decisions;
         input.pending = pending;
         input.supports_suspension = supports_suspension;
         collect(input).await
@@ -4368,6 +4411,80 @@ mod tests {
         assert!(last.actions.tool_confirmation.is_some());
         assert!(last.llm_response.interrupted);
         assert!(last.llm_response.turn_complete);
+    }
+
+    #[tokio::test]
+    async fn the_run_policy_refuses_a_script_tool_call() {
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 1),
+            Planned::Complete(json!({"type": "final_result", "value": "after"})),
+        ]]));
+        let mut input = base_inputs(FakeLlm::new("noop"), rt.clone(), user("go"));
+        input.tools = vec![echo_tool()];
+        let deny_all = adk_core::DeclarativePolicy::builder().build();
+        input.invocation_ctx = Arc::new(MockInvocationContext::new(user("go")).with_run_config(
+            adk_core::RunConfig::builder().tool_policy(Arc::new(deny_all)).build(),
+        ));
+
+        let events = collect(input).await;
+
+        let raised = rt.last_raise().expect("the refusal is raised into the script");
+        assert!(raised.contains("denied by policy"), "{raised}");
+        assert_eq!(rt.last_value(), None, "the tool must not run");
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("after"));
+    }
+
+    #[tokio::test]
+    async fn an_approval_by_fingerprint_resumes_a_held_call() {
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 7),
+            Planned::Complete(json!({"type": "final_result", "value": "after"})),
+        ]]));
+        let mut input = base_inputs(FakeLlm::new("noop"), rt, user("go"));
+        input.tools = vec![echo_tool()];
+        input.policy = ToolConfirmationPolicy::Always;
+        let held = collect(input).await;
+        let last = held.last().unwrap();
+        let request = last.actions.tool_confirmation.clone().expect("held for confirmation");
+        let cp = pending_in(last).expect("checkpoint persisted");
+        assert!(matches!(cp.disposition, Disposition::AwaitingConfirmation));
+
+        let resumed_rt = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+        let mut input = base_inputs(FakeLlm::new("noop"), resumed_rt.clone(), user("approved"));
+        input.tools = vec![echo_tool()];
+        input.policy = ToolConfirmationPolicy::Always;
+        input.pending = Some(cp);
+        input.invocation_ctx = Arc::new(
+            MockInvocationContext::new(user("approved")).with_run_config(
+                adk_core::RunConfig::builder()
+                    .tool_approval(request.fingerprint(), adk_core::ToolApproval::approve())
+                    .build(),
+            ),
+        );
+        let events = collect(input).await;
+
+        assert_eq!(resumed_rt.last_value(), Some(json!({"msg": "x"})), "the approved call ran");
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("after"));
+    }
+
+    #[tokio::test]
+    async fn a_frozen_run_stops_before_the_model_call() {
+        let model = FakeLlm::new("noop");
+        let control = adk_core::GovernanceControl::new();
+        control.freeze("drill");
+        let mut input = base_inputs(
+            model.clone(),
+            Arc::new(ScriptedRuntime::with_suspension(vec![])),
+            user("go"),
+        );
+        input.invocation_ctx = Arc::new(
+            MockInvocationContext::new(user("go"))
+                .with_run_config(adk_core::RunConfig::builder().governance(control).build()),
+        );
+        let mut stream = Box::pin(run_codeact(input));
+        let error = stream.next().await.expect("an item").expect_err("the run must fail");
+        assert_eq!(error.code, "governance.frozen");
+        assert_eq!(*model.calls.lock().unwrap(), 0, "the model must not be called");
     }
 
     #[tokio::test]

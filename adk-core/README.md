@@ -294,6 +294,31 @@ InvocationContext (extends CallbackContext)
 
 ## Security
 
+### Governed Tool Execution
+
+Every agent runs each tool call through `authorize_tool_call` after plugin and callback
+rewrites and immediately before `Tool::execute`:
+
+| Step | Type | Effect |
+|------|------|--------|
+| Kill switch | `GovernanceControl` | A frozen run ends with a `governance.frozen` error |
+| Policy | `ToolPolicy`, `DeclarativePolicy` | Allow, deny, or require approval; `DeclarativePolicy` denies unlisted tools |
+| Screen | `ToolCallScreen` | The agent's guardrails; a rewrite is checked against the policy again |
+| Confirmation | `ToolApproval`, `ApprovalStore` | Decisions bind to the call's fingerprint, so they survive a re-issued call ID |
+
+```rust
+use adk_core::{ArgPredicate, DeclarativePolicy, PolicyDecision, PolicyRule, ToolPolicyRequest};
+use serde_json::json;
+
+let policy = DeclarativePolicy::builder()
+    .allow_read_only()
+    .rule(PolicyRule::allow("transfer").when(ArgPredicate::at_most("/amount", 100.0)))
+    .build();
+
+let request = ToolPolicyRequest::new("transfer", json!({ "amount": 500 }));
+assert!(matches!(policy.decide(&request), PolicyDecision::Deny { .. }));
+```
+
 ### Inline Data Size Limit
 
 `Content::with_inline_data()` and `Part::inline_data()` enforce a 10 MB limit (`MAX_INLINE_DATA_SIZE`) to prevent oversized payloads.

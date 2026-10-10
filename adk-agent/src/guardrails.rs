@@ -139,3 +139,20 @@ pub(crate) async fn screen_tool_call(
 ) -> ToolScreening {
     ToolScreening::Allow(args.clone())
 }
+
+/// Presents a tool guardrail set to the governed execution path as its screen.
+pub(crate) struct GuardrailScreen<'a>(pub(crate) &'a ToolGuardrailSet);
+
+#[async_trait::async_trait]
+impl adk_core::ToolCallScreen for GuardrailScreen<'_> {
+    async fn screen(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> std::result::Result<serde_json::Value, String> {
+        match screen_tool_call(self.0, tool_name, args).await {
+            ToolScreening::Allow(args) => Ok(args),
+            ToolScreening::Deny(reason) => Err(reason),
+        }
+    }
+}

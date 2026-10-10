@@ -133,6 +133,8 @@ impl Launcher {
                 intra_compaction_summarizer: None,
                 #[cfg(feature = "context-compaction")]
                 context_compaction: None,
+                tool_policy: None,
+                governance: None,
             })?;
 
             let mut stream = runner
