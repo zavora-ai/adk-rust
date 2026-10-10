@@ -1,38 +1,96 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// TTL configuration for cache control.
+/// Lifetime of a prompt cache entry.
 ///
-/// Specifies the cache tier: `"standard"` (5-minute) or `"long"` (1-hour).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Serializes to the Messages API values `"5m"` (the API default) and `"1h"`.
+///
+/// # Example
+///
+/// ```
+/// use adk_anthropic::{CacheControlEphemeral, CacheTtl};
+///
+/// let cache_control = CacheControlEphemeral::new().with_ttl(CacheTtl::one_hour());
+/// assert_eq!(
+///     serde_json::to_value(&cache_control).unwrap(),
+///     serde_json::json!({"type": "ephemeral", "ttl": "1h"})
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheTtl {
-    /// The TTL type: `"standard"` or `"long"`.
-    #[serde(rename = "type")]
+    /// The TTL value sent to the API: `"5m"` or `"1h"`.
     pub ttl_type: String,
 }
 
 impl CacheTtl {
-    /// Create a standard TTL (5-minute cache tier).
-    pub fn standard() -> Self {
-        Self { ttl_type: "standard".to_string() }
+    /// A 5-minute cache entry, refreshed on every read.
+    pub fn five_minutes() -> Self {
+        Self { ttl_type: "5m".to_string() }
     }
 
-    /// Create a long TTL (1-hour cache tier).
+    /// A 1-hour cache entry. Writes cost more than 5-minute writes, so it pays off
+    /// when requests sharing a prefix are more than five minutes apart.
+    pub fn one_hour() -> Self {
+        Self { ttl_type: "1h".to_string() }
+    }
+
+    /// Same as [`CacheTtl::five_minutes`].
+    pub fn standard() -> Self {
+        Self::five_minutes()
+    }
+
+    /// Same as [`CacheTtl::one_hour`].
     pub fn long() -> Self {
-        Self { ttl_type: "long".to_string() }
+        Self::one_hour()
+    }
+
+    /// The value sent to the API. Earlier `"standard"` and `"long"` values map
+    /// to `"5m"` and `"1h"`.
+    pub fn as_api_str(&self) -> &str {
+        match self.ttl_type.as_str() {
+            "standard" => "5m",
+            "long" => "1h",
+            other => other,
+        }
+    }
+}
+
+impl Serialize for CacheTtl {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_api_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for CacheTtl {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Accepts the API string and the `{"type": ...}` object earlier versions wrote.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Value(String),
+            Object {
+                #[serde(rename = "type")]
+                ttl_type: String,
+            },
+        }
+        let ttl_type = match Wire::deserialize(deserializer)? {
+            Wire::Value(value) | Wire::Object { ttl_type: value } => value,
+        };
+        let ttl = CacheTtl { ttl_type };
+        Ok(CacheTtl { ttl_type: ttl.as_api_str().to_string() })
     }
 }
 
 /// CacheControlEphemeral specifies that content should be cached ephemerally.
 ///
-/// The `type` field is always `"ephemeral"`. An optional `ttl` field distinguishes
-/// between standard (5-minute) and long (1-hour) cache tiers.
+/// The `type` field is always `"ephemeral"`. The optional `ttl` selects a 5-minute
+/// (default) or 1-hour cache entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CacheControlEphemeral {
     /// The type is always "ephemeral" for this struct.
     #[serde(default = "default_type")]
     pub r#type: String,
 
-    /// Optional TTL configuration for cache tier selection.
+    /// Cache entry lifetime; the API uses 5 minutes when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttl: Option<CacheTtl>,
 }
@@ -73,9 +131,24 @@ mod tests {
 
     #[test]
     fn serialization_with_ttl() {
-        let cache_control = CacheControlEphemeral::new().with_ttl(CacheTtl::long());
-        let json = serde_json::to_value(&cache_control).unwrap();
-        assert_eq!(json, serde_json::json!({"type": "ephemeral", "ttl": {"type": "long"}}));
+        let one_hour = CacheControlEphemeral::new().with_ttl(CacheTtl::one_hour());
+        assert_eq!(
+            serde_json::to_value(&one_hour).unwrap(),
+            serde_json::json!({"type": "ephemeral", "ttl": "1h"})
+        );
+        let five_minutes = CacheControlEphemeral::new().with_ttl(CacheTtl::five_minutes());
+        assert_eq!(
+            serde_json::to_value(&five_minutes).unwrap(),
+            serde_json::json!({"type": "ephemeral", "ttl": "5m"})
+        );
+    }
+
+    #[test]
+    fn legacy_constructors_serialize_to_api_values() {
+        assert_eq!(serde_json::to_value(CacheTtl::standard()).unwrap(), "5m");
+        assert_eq!(serde_json::to_value(CacheTtl::long()).unwrap(), "1h");
+        let legacy = CacheTtl { ttl_type: "long".to_string() };
+        assert_eq!(serde_json::to_value(&legacy).unwrap(), "1h");
     }
 
     #[test]
@@ -88,8 +161,15 @@ mod tests {
 
     #[test]
     fn deserialization_with_ttl() {
+        let json = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
+        let cache_control: CacheControlEphemeral = serde_json::from_value(json).unwrap();
+        assert_eq!(cache_control.ttl, Some(CacheTtl::one_hour()));
+    }
+
+    #[test]
+    fn deserialization_of_legacy_object_ttl() {
         let json = serde_json::json!({"type": "ephemeral", "ttl": {"type": "standard"}});
         let cache_control: CacheControlEphemeral = serde_json::from_value(json).unwrap();
-        assert_eq!(cache_control.ttl.as_ref().unwrap().ttl_type, "standard");
+        assert_eq!(cache_control.ttl, Some(CacheTtl::five_minutes()));
     }
 }

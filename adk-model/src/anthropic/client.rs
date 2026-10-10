@@ -346,6 +346,7 @@ impl AnthropicClient {
             top_p,
             top_k,
             anthropic_config.prompt_caching,
+            anthropic_config.prompt_cache_ttl.as_ref(),
             anthropic_config.thinking.as_ref(),
             anthropic_config.effort,
             anthropic_config.fast_mode,
@@ -661,8 +662,9 @@ impl Llm for AnthropicClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adk_anthropic::SystemPrompt;
+    use adk_anthropic::{CacheTtl, SystemPrompt};
     use adk_core::{Content, GenerateContentConfig, LlmRequest, Part};
+    use serde_json::{Value, json};
 
     fn make_request(contents: Vec<Content>) -> LlmRequest {
         LlmRequest {
@@ -910,6 +912,47 @@ mod tests {
         // Messages should start with the assistant message
         assert_eq!(params.messages.len(), 2);
         assert_eq!(params.messages[0].role, adk_anthropic::MessageRole::Assistant);
+    }
+
+    fn cache_ttls(params: &adk_anthropic::MessageCreateParams) -> (Option<Value>, Option<Value>) {
+        let json = serde_json::to_value(params).unwrap();
+        (
+            json["system"][0]["cache_control"].get("ttl").cloned(),
+            json["cache_control"].get("ttl").cloned(),
+        )
+    }
+
+    #[test]
+    fn test_prompt_cache_ttl_applies_to_both_breakpoints() {
+        let request = make_request(vec![
+            Content::new("system").with_text("You are a coding assistant."),
+            Content::new("user").with_text("Hello"),
+        ]);
+        let config = AnthropicConfig::default().with_prompt_cache_ttl(CacheTtl::one_hour());
+
+        let params =
+            AnthropicClient::build_message_params("claude-sonnet-5-5", 4096, &request, &config)
+                .unwrap();
+
+        assert_eq!(cache_ttls(&params), (Some(json!("1h")), Some(json!("1h"))));
+    }
+
+    #[test]
+    fn test_prompt_cache_ttl_defaults_to_api_default() {
+        let request = make_request(vec![
+            Content::new("system").with_text("You are a coding assistant."),
+            Content::new("user").with_text("Hello"),
+        ]);
+
+        let params = AnthropicClient::build_message_params(
+            "claude-sonnet-5-5",
+            4096,
+            &request,
+            &AnthropicConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(cache_ttls(&params), (None, None));
     }
 
     /// Requirement 1.3: Multiple system entries concatenated with newline.
