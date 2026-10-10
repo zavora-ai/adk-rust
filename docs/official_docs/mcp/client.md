@@ -134,11 +134,21 @@ another call.
   configured, the first failing request replaces it and concurrent failures
   retry on the replacement, so one failure reconnects once. The old connection
   closes when the last request still using it finishes.
+- **Exited servers** — when a stdio server process exits, its transport
+  closes, `is_closed()` returns `true`, and in-flight requests fail with
+  `Transport closed`. With a connection factory, discovery reconnects and
+  retries, and the next request replaces the closed connection before it is
+  sent. A `tools/call` that was in flight is not resent unless replay is
+  allowed.
 - **Dropped calls** — when a `tools/call` future is dropped before the response
   arrives, for example by the agent's tool timeout, the toolset sends
   `notifications/cancelled` for that request so the server can stop the work.
-  A call the server turned into a task stays tracked for
-  `cancel_pending_tasks`.
+  When the server already turned the call into a task, the toolset sends
+  `tasks/cancel` for it; the task stays tracked for `cancel_pending_tasks`
+  until the server reports it finished.
+
+`ConnectionRefresher` and `SimpleClient` share their connection the same way:
+neither holds a lock across a request.
 
 ## Resources, prompts, and completion
 

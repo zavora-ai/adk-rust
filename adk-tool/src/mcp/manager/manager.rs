@@ -1952,7 +1952,8 @@ mod tests {
         let toolset = McpToolset::new(client).with_task_support(
             crate::mcp::McpTaskConfig::enabled().poll_interval(Duration::from_millis(1)),
         );
-        // Dropping the call once it polls leaves its task tracked by the toolset.
+        // Dropping the call once it polls sends one `tasks/cancel`; the held task keeps
+        // running, so the toolset still tracks it.
         tokio::select! {
             result = toolset.call_tool_value("job", Default::default()) => {
                 panic!("a held task must not finish: {result:?}");
@@ -1963,6 +1964,13 @@ mod tests {
                 }
             } => {}
         }
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while cancels.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the dropped call never sent tasks/cancel");
 
         let manager = McpServerManager::new(HashMap::from([(
             "tasks".to_string(),
@@ -1977,7 +1985,7 @@ mod tests {
         }
         manager.stop_server("tasks").await.unwrap();
 
-        assert_eq!(cancels.load(Ordering::SeqCst), 1, "shutdown must cancel the pending task");
+        assert_eq!(cancels.load(Ordering::SeqCst), 2, "shutdown must cancel the pending task");
         assert_eq!(manager.server_status("tasks").await.unwrap(), ServerStatus::Stopped);
     }
 
