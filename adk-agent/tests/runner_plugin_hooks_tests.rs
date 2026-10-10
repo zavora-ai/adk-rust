@@ -7,7 +7,7 @@
 //! Content a tool callback substitutes for a result answers the call it replaces, so providers
 //! that pair every function call with a response by id accept the next request.
 
-use adk_agent::{LlmAgent, LlmAgentBuilder};
+use adk_agent::LlmAgentBuilder;
 use adk_core::{
     BeforeModelResult, CallbackContext, Content, Event, FunctionResponseData, Llm, LlmRequest,
     LlmResponse, LlmResponseStream, Part, Result, SessionId, Tool, ToolContext, UserId,
@@ -115,7 +115,7 @@ async fn run(model: Arc<ScriptedModel>, tool: DeleteTool, plugin: Plugin) -> Vec
     .await
 }
 
-async fn run_agent(agent: LlmAgent, plugin: Plugin) -> Vec<Event> {
+async fn run_agent(agent: impl adk_core::Agent + 'static, plugin: Plugin) -> Vec<Event> {
     let sessions = Arc::new(InMemorySessionService::new());
     sessions
         .create(CreateRequest {
@@ -428,4 +428,39 @@ async fn a_substituted_function_response_is_readdressed_to_the_call() {
         }]
     );
     assert_call_answered(&model);
+}
+
+#[tokio::test]
+async fn runner_agent_callbacks_reach_a_custom_agent() {
+    let handled = Arc::new(AtomicUsize::new(0));
+    let after = Arc::new(AtomicUsize::new(0));
+    let handler_calls = handled.clone();
+    let agent = adk_agent::CustomAgent::builder("custom")
+        .handler(move |_ctx| {
+            handler_calls.fetch_add(1, Ordering::SeqCst);
+            async { Ok(Box::pin(futures::stream::empty()) as adk_core::EventStream) }
+        })
+        .build()
+        .unwrap();
+    let after_calls = after.clone();
+    let plugin = Plugin::new(PluginConfig {
+        name: "gate".to_string(),
+        before_agent: Some(Box::new(|_ctx| {
+            Box::pin(async { Ok(Some(Content::new("model").with_text("closed for maintenance"))) })
+        })),
+        after_agent: Some(Box::new(move |_ctx| {
+            after_calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(None) })
+        })),
+        ..Default::default()
+    });
+
+    let events = run_agent(agent, plugin).await;
+
+    assert_eq!(handled.load(Ordering::SeqCst), 0, "the plugin's before_agent skips the handler");
+    assert_eq!(after.load(Ordering::SeqCst), 1, "after_agent still runs");
+    assert!(events.iter().any(|event| {
+        event.llm_response.content.as_ref().and_then(|c| c.parts.first()).and_then(Part::text)
+            == Some("closed for maintenance")
+    }));
 }

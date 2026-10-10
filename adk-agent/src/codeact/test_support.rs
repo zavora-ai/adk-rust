@@ -198,6 +198,21 @@ impl MockInvocationContext {
         self
     }
 
+    /// Set static confirmation decisions keyed by call ID.
+    pub(crate) fn with_confirmation_decisions(
+        mut self,
+        decisions: HashMap<String, adk_core::ToolConfirmationDecision>,
+    ) -> Self {
+        self.run_config.tool_confirmation_decisions = decisions;
+        self
+    }
+
+    /// Replace the run config wholesale.
+    pub(crate) fn with_run_config(mut self, run_config: RunConfig) -> Self {
+        self.run_config = run_config;
+        self
+    }
+
     /// Add a run-wide hook, as a runner installs its plugin manager.
     pub(crate) fn with_invocation_hook(mut self, hook: Arc<dyn adk_core::InvocationHooks>) -> Self {
         self.run_config.invocation_hooks.push(hook);
