@@ -74,6 +74,28 @@ let reviewed = McpToolset::new(client).with_filter(|name| {
 Filtering controls model visibility. It does not replace authorization at tool
 execution time.
 
+### Discovery cache
+
+An agent resolves its toolsets before every model turn. `McpToolset` reuses a
+`tools/list` result for 60 seconds, so a turn does not cost one round trip per
+MCP server. The cached list is dropped before the TTL elapses when:
+
+| Event | Applies to |
+|-------|------------|
+| The connection is refreshed | Every toolset with a connection factory |
+| The server sends `notifications/tools/list_changed` | Connections served by `AdkClientHandler`, such as those built with `with_elicitation_handler` |
+| `invalidate_tool_list_cache()` is called | Every toolset |
+
+```rust
+use std::time::Duration;
+
+// Send `tools/list` on every resolution.
+let toolset = McpToolset::new(client).with_tool_list_cache_ttl(Duration::ZERO);
+
+// Or drop the cached list from a custom handler's `on_tool_list_changed`.
+toolset.invalidate_tool_list_cache().await;
+```
+
 ### Schema size limits
 
 Discovery measures each tool's input and output schema before copying or
@@ -101,6 +123,22 @@ The defaults admit every schema a model can reasonably use: 256 KiB is about
 64 000 tokens for a single tool. `McpServerManager::with_schema_limits` applies
 one set of limits to every managed server. Raise the limits only for servers
 inside the application's trust boundary.
+
+## Concurrency and cancellation
+
+A toolset, its clones, and every tool it produced share one MCP connection.
+Requests on it run concurrently: a slow tool call does not delay discovery or
+another call.
+
+- **Reconnects** — when a connection fails and a connection factory is
+  configured, the first failing request replaces it and concurrent failures
+  retry on the replacement, so one failure reconnects once. The old connection
+  closes when the last request still using it finishes.
+- **Dropped calls** — when a `tools/call` future is dropped before the response
+  arrives, for example by the agent's tool timeout, the toolset sends
+  `notifications/cancelled` for that request so the server can stop the work.
+  A call the server turned into a task stays tracked for
+  `cancel_pending_tasks`.
 
 ## Resources, prompts, and completion
 
@@ -234,3 +272,16 @@ let toolset = McpHttpClientBuilder::new("https://mcp.example.com/mcp")
 The builder supports bearer tokens, a custom API-key header, and fixed OAuth
 2.0 client credentials. See [Security and authorization](security.md) before
 choosing an authentication flow.
+
+With OAuth 2.0, each request carries the current access token rather than the
+one fetched at connect time, so a long-lived connection outlives its first
+token:
+
+| Situation | Behavior |
+|-----------|----------|
+| The token is near the `expires_in` its token response declared | A new token is fetched before the request is sent |
+| The server answers a request with HTTP 401 | A new token is fetched and the request is sent once more |
+| The new token is also rejected | The 401 reaches the toolset, which reconnects through its connection factory |
+
+A request rejected with 401 never ran, so it is resent even for tools whose
+calls are not otherwise replayed after a connection failure.

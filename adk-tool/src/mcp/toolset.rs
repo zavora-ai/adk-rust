@@ -6,7 +6,7 @@
 // The McpToolset connects to an MCP server, discovers available tools,
 // and exposes them as ADK-compatible tools for use with LlmAgent.
 
-use super::reconnect::{DEFAULT_RETRY_TOOL_CALLS, should_retry_mcp_operation};
+use super::reconnect::{DEFAULT_RETRY_TOOL_CALLS, is_auth_rejection, should_retry_mcp_operation};
 use super::schema_limits::McpSchemaLimits;
 use super::task::{McpTaskConfig, TaskError};
 use super::{ConnectionFactory, RefreshConfig, should_refresh_connection};
@@ -15,16 +15,17 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt;
 use rmcp::{
-    RoleClient,
+    RoleClient, ServiceError,
     model::{
-        CallToolRequestParams, CallToolResponse, CancelTaskParams, ClientRequest,
-        CompletionContext, CompletionInfo, ContentBlock, ErrorCode, GetPromptRequestParams,
-        GetPromptResult, GetTaskParams, GetTaskRequest, InputRequest, InputRequests,
-        InputResponses, Prompt, ReadResourceRequestParams, Resource, ResourceContents,
-        ResourceTemplate, ServerResult, SubscribeRequestParams, TaskPayload, ToolAnnotations,
+        CallToolRequest, CallToolRequestParams, CallToolResponse, CancelTaskParams,
+        CancelledNotification, CancelledNotificationParam, ClientRequest, CompletionContext,
+        CompletionInfo, ContentBlock, ErrorCode, GetPromptRequestParams, GetPromptResult,
+        GetTaskParams, GetTaskRequest, InputRequest, InputRequests, InputResponses, Prompt,
+        ReadResourceRequestParams, RequestId, Resource, ResourceContents, ResourceTemplate,
+        ServerResult, SubscribeRequestParams, TaskPayload, ToolAnnotations,
         UnsubscribeRequestParams, UpdateTaskParams, UpdateTaskRequest,
     },
-    service::RunningService,
+    service::{Peer, PeerRequestOptions, RunningService},
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,9 +37,176 @@ use tracing::{debug, warn};
 /// Shared factory object used to recreate MCP connections for refresh/retry.
 type DynConnectionFactory<S> = Arc<dyn ConnectionFactory<S>>;
 
-/// The live connection, swapped wholesale on refresh. The inner `Arc` lets a
-/// caller keep using one connection after releasing the lock.
-type SharedClient<S> = Arc<Mutex<Arc<RunningService<RoleClient, S>>>>;
+/// One live MCP connection. Callers hold a clone for the length of a request,
+/// so a refresh never pulls a connection out from under an in-flight call.
+type Connection<S> = Arc<RunningService<RoleClient, S>>;
+
+/// How long a `tools/list` result is reused before discovery asks the server again.
+const DEFAULT_TOOL_LIST_CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// The connection shared by a toolset, its clones, and every tool it produced.
+///
+/// The lock guards only the swap: callers take a clone of the current
+/// [`Connection`] and release the lock before sending anything, so concurrent
+/// requests never wait on each other here.
+struct SharedClient<S>
+where
+    S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
+{
+    /// The current connection and the number of times it has been replaced.
+    current: RwLock<(Connection<S>, u64)>,
+    /// Held while a replacement connects, so concurrent failures replace a
+    /// dead connection once instead of once per caller.
+    refresh: Mutex<()>,
+}
+
+impl<S> SharedClient<S>
+where
+    S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
+{
+    fn new(client: RunningService<RoleClient, S>) -> Self {
+        Self { current: RwLock::new((Arc::new(client), 0)), refresh: Mutex::new(()) }
+    }
+
+    async fn connection(&self) -> Connection<S> {
+        Arc::clone(&self.current.read().await.0)
+    }
+
+    /// Returns the current connection with its generation, which changes on every refresh.
+    async fn connection_with_generation(&self) -> (Connection<S>, u64) {
+        let current = self.current.read().await;
+        (Arc::clone(&current.0), current.1)
+    }
+
+    /// Replaces `failed` with a connection from `factory`.
+    ///
+    /// Returns `Ok(false)` when no factory is configured. When another caller
+    /// already replaced `failed`, this returns `Ok(true)` without reconnecting,
+    /// and the caller retries on the connection that caller installed. The old
+    /// connection closes once the last in-flight request on it finishes.
+    async fn refresh(
+        &self,
+        failed: &Connection<S>,
+        factory: Option<&DynConnectionFactory<S>>,
+        subscriptions: &RwLock<BTreeSet<String>>,
+    ) -> Result<bool> {
+        let Some(factory) = factory else {
+            return Ok(false);
+        };
+        let _refreshing = self.refresh.lock().await;
+        if !Arc::ptr_eq(&self.current.read().await.0, failed) {
+            return Ok(true);
+        }
+
+        let new_client = factory
+            .create_connection()
+            .await
+            .map_err(|e| AdkError::tool(format!("Failed to refresh MCP connection: {e}")))?;
+        restore_subscriptions(&new_client, subscriptions).await?;
+
+        let mut current = self.current.write().await;
+        current.0 = Arc::new(new_client);
+        current.1 += 1;
+        Ok(true)
+    }
+}
+
+/// One `tools/list` result and the state it was fetched under.
+struct CachedToolList {
+    /// Connection generation the list came from; a reconnect invalidates it.
+    generation: u64,
+    /// `notifications/tools/list_changed` count observed before the fetch.
+    list_changes: u64,
+    fetched_at: Instant,
+    tools: Vec<rmcp::model::Tool>,
+}
+
+/// Counts `notifications/tools/list_changed` on connections served by
+/// [`AdkClientHandler`](super::AdkClientHandler). Other handlers report zero,
+/// so their cached list expires only by TTL or explicit invalidation.
+fn tool_list_changes<S>(connection: &RunningService<RoleClient, S>) -> u64
+where
+    S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
+{
+    (connection.service() as &dyn std::any::Any)
+        .downcast_ref::<super::elicitation::AdkClientHandler>()
+        .map_or(0, super::elicitation::AdkClientHandler::tool_list_changes)
+}
+
+/// Sends `notifications/cancelled` for a `tools/call` the caller stopped
+/// waiting for, such as one an agent-level tool timeout dropped, so the server
+/// can stop the work instead of finishing it for nobody.
+struct CancelOnDrop {
+    peer: Option<Peer<RoleClient>>,
+    request_id: RequestId,
+}
+
+impl CancelOnDrop {
+    fn disarm(mut self) {
+        self.peer = None;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        let Some(peer) = self.peer.take() else {
+            return;
+        };
+        // Without a runtime there is no transport left to carry the notification.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let request_id = self.request_id.clone();
+        runtime.spawn(async move {
+            let notification = CancelledNotification::new(CancelledNotificationParam::new(
+                Some(request_id.clone()),
+                Some("the client stopped waiting for this tools/call".to_string()),
+            ));
+            match tokio::time::timeout(
+                TASK_CANCEL_TIMEOUT,
+                peer.send_notification(notification.into()),
+            )
+            .await
+            {
+                Ok(Ok(())) => debug!(request.id = %request_id, "sent MCP tools/call cancellation"),
+                Ok(Err(error)) => debug!(
+                    request.id = %request_id,
+                    error = %error,
+                    "could not send MCP tools/call cancellation"
+                ),
+                Err(_) => debug!(
+                    request.id = %request_id,
+                    "MCP tools/call cancellation was not sent before the timeout"
+                ),
+            }
+        });
+    }
+}
+
+/// Sends one `tools/call` and returns the response envelope unchanged.
+///
+/// Mirrors rmcp's `call_tool_once`, but keeps the request id so that dropping
+/// the returned future cancels the request on the server.
+async fn send_tool_call(
+    peer: &Peer<RoleClient>,
+    params: CallToolRequestParams,
+) -> std::result::Result<CallToolResponse, ServiceError> {
+    let handle = peer
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(CallToolRequest::new(params)),
+            PeerRequestOptions::no_options(),
+        )
+        .await?;
+    let cancel = CancelOnDrop { peer: Some(handle.peer.clone()), request_id: handle.id.clone() };
+    let response = handle.await_response().await;
+    cancel.disarm();
+    match response? {
+        ServerResult::CallToolResult(result) => Ok(CallToolResponse::Complete(result)),
+        ServerResult::InputRequiredResult(result) => Ok(CallToolResponse::InputRequired(result)),
+        ServerResult::CreateTaskResult(result) => Ok(CallToolResponse::Task(result)),
+        _ => Err(ServiceError::UnexpectedResponse),
+    }
+}
 
 /// Longest server-issued task id retained in the pending-task set.
 const MAX_TASK_ID_BYTES: usize = 16 * 1024;
@@ -171,7 +339,11 @@ fn mcp_tool_call_error(
     has_connection_factory: bool,
     replay_allowed: bool,
 ) -> AdkError {
-    if has_connection_factory && !replay_allowed && should_refresh_connection(error) {
+    if has_connection_factory
+        && !replay_allowed
+        && should_refresh_connection(error)
+        && !is_auth_rejection(error)
+    {
         AdkError::tool(format!(
             "MCP tool '{tool_name}' result is uncertain and was not replayed: {error}. \
              Enable tool-call retries only for replay-safe operations"
@@ -229,7 +401,11 @@ where
     S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
 {
     /// The running MCP client service
-    client: SharedClient<S>,
+    client: Arc<SharedClient<S>>,
+    /// The last `tools/list` result, shared by clones of this toolset.
+    tool_list: Arc<Mutex<Option<CachedToolList>>>,
+    /// How long `tool_list` is reused; zero disables the cache.
+    tool_list_ttl: Duration,
     /// Optional filter to select which tools to expose
     tool_filter: Option<ToolFilter>,
     /// Name of this toolset
@@ -259,6 +435,8 @@ where
     fn clone(&self) -> Self {
         Self {
             client: Arc::clone(&self.client),
+            tool_list: Arc::clone(&self.tool_list),
+            tool_list_ttl: self.tool_list_ttl,
             tool_filter: self.tool_filter.clone(),
             name: self.name.clone(),
             task_config: self.task_config.clone(),
@@ -306,7 +484,9 @@ where
             .downcast_ref::<super::elicitation::AdkClientHandler>()
             .cloned();
         Self {
-            client: Arc::new(Mutex::new(Arc::new(client))),
+            client: Arc::new(SharedClient::new(client)),
+            tool_list: Arc::new(Mutex::new(None)),
+            tool_list_ttl: DEFAULT_TOOL_LIST_CACHE_TTL,
             tool_filter: None,
             name: "mcp_toolset".to_string(),
             task_config: McpTaskConfig::default(),
@@ -384,6 +564,55 @@ where
     pub fn with_schema_limits(mut self, limits: McpSchemaLimits) -> Self {
         self.schema_limits = limits;
         self
+    }
+
+    /// Set how long a `tools/list` result is reused before discovery asks the
+    /// server again. The default is 60 seconds; `Duration::ZERO` disables the
+    /// cache, so every [`Toolset::tools`] call sends `tools/list`.
+    ///
+    /// An agent resolves its toolsets before every model turn, so without the
+    /// cache each turn costs one `tools/list` round trip per MCP server. The
+    /// cached list is dropped before the TTL elapses when:
+    ///
+    /// | Event | Applies to |
+    /// |-------|------------|
+    /// | The connection is refreshed | Every toolset with a connection factory |
+    /// | The server sends `notifications/tools/list_changed` | Connections served by [`AdkClientHandler`](super::AdkClientHandler) |
+    /// | [`invalidate_tool_list_cache`](Self::invalidate_tool_list_cache) is called | Every toolset |
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_tool::mcp::McpToolset;
+    /// use std::time::Duration;
+    ///
+    /// fn rediscover_every_turn(toolset: McpToolset) -> McpToolset {
+    ///     toolset.with_tool_list_cache_ttl(Duration::ZERO)
+    /// }
+    /// ```
+    pub fn with_tool_list_cache_ttl(mut self, ttl: Duration) -> Self {
+        self.tool_list_ttl = ttl;
+        self
+    }
+
+    /// Drop the cached `tools/list` result, so the next [`Toolset::tools`] call
+    /// asks the server again.
+    ///
+    /// Call this from a custom `ClientHandler`'s `on_tool_list_changed` when the
+    /// connection does not run on [`AdkClientHandler`](super::AdkClientHandler),
+    /// which invalidates the cache on its own.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_tool::mcp::McpToolset;
+    ///
+    /// async fn on_catalog_changed(toolset: &McpToolset) {
+    ///     toolset.invalidate_tool_list_cache().await;
+    /// }
+    /// ```
+    pub async fn invalidate_tool_list_cache(&self) {
+        *self.tool_list.lock().await = None;
     }
 
     /// Reuse the connection's client policy for stateless MRTR and task input.
@@ -481,8 +710,7 @@ where
     /// cancel_token.cancel();
     /// ```
     pub async fn cancellation_token(&self) -> rmcp::service::RunningServiceCancellationToken {
-        let client = self.client.lock().await;
-        client.cancellation_token()
+        self.client.connection().await.cancellation_token()
     }
 
     /// Check whether the underlying MCP service connection has been closed or cancelled.
@@ -500,8 +728,7 @@ where
     /// }
     /// ```
     pub async fn is_closed(&self) -> bool {
-        let client = self.client.lock().await;
-        client.is_closed()
+        self.client.connection().await.is_closed()
     }
 
     /// Call one MCP tool and preserve structured, text, image, audio, and resource content
@@ -513,7 +740,7 @@ where
     ) -> Result<Value> {
         let server_supports_tasks = self
             .client
-            .lock()
+            .connection()
             .await
             .peer_info()
             .is_some_and(|info| info.capabilities.supports_tasks());
@@ -586,7 +813,7 @@ where
         if ids.is_empty() {
             return Ok(());
         }
-        let client = self.client.lock().await.peer().clone();
+        let client = self.client.connection().await.peer().clone();
         let settled = |id: String| {
             let client = client.clone();
             async move {
@@ -636,25 +863,6 @@ where
         Ok(())
     }
 
-    async fn try_refresh_connection(&self) -> Result<bool> {
-        let Some(factory) = self.connection_factory.clone() else {
-            return Ok(false);
-        };
-
-        let new_client = factory
-            .create_connection()
-            .await
-            .map_err(|e| AdkError::tool(format!("Failed to refresh MCP connection: {e}")))?;
-
-        restore_subscriptions(&new_client, &self.resource_subscriptions).await?;
-
-        let mut client = self.client.lock().await;
-        let old_token = client.cancellation_token();
-        old_token.cancel();
-        *client = Arc::new(new_client);
-        Ok(true)
-    }
-
     /// List static resources from the connected MCP server.
     ///
     /// Returns the list of resources advertised by the server via the
@@ -666,7 +874,7 @@ where
     ///
     /// Returns `AdkError::Tool` on transport or unexpected server errors.
     pub async fn list_resources(&self) -> Result<Vec<Resource>> {
-        let client = self.client.lock().await;
+        let client = self.client.connection().await;
         match client.list_all_resources().await {
             Ok(resources) => Ok(resources),
             Err(e) => {
@@ -690,7 +898,7 @@ where
     ///
     /// Returns `AdkError::Tool` on transport or unexpected server errors.
     pub async fn list_resource_templates(&self) -> Result<Vec<ResourceTemplate>> {
-        let client = self.client.lock().await;
+        let client = self.client.connection().await;
         match client.list_all_resource_templates().await {
             Ok(templates) => Ok(templates),
             Err(e) => {
@@ -714,7 +922,7 @@ where
     /// does not match any resource on the server. Returns a generic
     /// `AdkError::Tool` on transport or other server errors.
     pub async fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContents>> {
-        let client = self.client.lock().await;
+        let client = self.client.connection().await;
         let params = ReadResourceRequestParams::new(uri.to_string());
         match client.read_resource(params).await {
             Ok(result) => Ok(result.contents),
@@ -730,7 +938,7 @@ where
 
     /// Return the prompt templates published by the connected MCP server.
     pub async fn list_prompts(&self) -> Result<Vec<Prompt>> {
-        let client = self.client.lock().await;
+        let client = self.client.connection().await;
         match client.list_all_prompts().await {
             Ok(prompts) => Ok(prompts),
             Err(error) if is_method_not_found(&error) => Ok(Vec::new()),
@@ -748,7 +956,7 @@ where
         if let Some(arguments) = arguments {
             params = params.with_arguments(arguments);
         }
-        let client = self.client.lock().await;
+        let client = self.client.connection().await;
         client
             .get_prompt(params)
             .await
@@ -763,7 +971,7 @@ where
         current_value: &str,
         context: Option<CompletionContext>,
     ) -> Result<CompletionInfo> {
-        let client = self.client.lock().await;
+        let client = self.client.connection().await;
         client
             .complete_prompt_argument(prompt_name, argument_name, current_value, context)
             .await
@@ -782,7 +990,7 @@ where
         current_value: &str,
         context: Option<CompletionContext>,
     ) -> Result<CompletionInfo> {
-        let client = self.client.lock().await;
+        let client = self.client.connection().await;
         client
             .complete_resource_argument(uri_template, argument_name, current_value, context)
             .await
@@ -795,7 +1003,7 @@ where
 
     /// Subscribe to change notifications for a resource URI.
     pub async fn subscribe_resource(&self, uri: &str) -> Result<()> {
-        let client = self.client.lock().await;
+        let client = self.client.connection().await;
         // `subscriptions/listen` replaces this in 2026-07-28, but we negotiate
         // 2025-11-25, and `listen` also stops routing notifications through
         // `ClientHandler`, which this crate's resource callbacks rely on.
@@ -809,7 +1017,7 @@ where
 
     /// Remove a resource subscription created by [`subscribe_resource`](Self::subscribe_resource).
     pub async fn unsubscribe_resource(&self, uri: &str) -> Result<()> {
-        let client = self.client.lock().await;
+        let client = self.client.connection().await;
         // Paired with `subscribe_resource`; see the note there.
         #[allow(deprecated)]
         client.unsubscribe(UnsubscribeRequestParams::new(uri)).await.map_err(|error| {
@@ -830,17 +1038,34 @@ where
     }
 
     async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
-        let mut attempt = 0u32;
-        let has_connection_factory = self.connection_factory.is_some();
-        let mcp_tools = loop {
-            let list_result = {
-                let client = self.client.lock().await;
-                client.list_all_tools().await.map_err(|e| e.to_string())
-            };
+        let (mut connection, mut generation) = self.client.connection_with_generation().await;
+        // Read before fetching, so a change notified mid-fetch invalidates the result.
+        let mut list_changes = tool_list_changes(&connection);
+        let cached = if self.tool_list_ttl.is_zero() {
+            None
+        } else {
+            self.tool_list
+                .lock()
+                .await
+                .as_ref()
+                .filter(|cached| {
+                    cached.generation == generation
+                        && cached.list_changes == list_changes
+                        && cached.fetched_at.elapsed() < self.tool_list_ttl
+                })
+                .map(|cached| cached.tools.clone())
+        };
 
-            match list_result {
-                Ok(tools) => break tools,
-                Err(error) => {
+        let mcp_tools = match cached {
+            Some(tools) => tools,
+            None => {
+                let mut attempt = 0u32;
+                let has_connection_factory = self.connection_factory.is_some();
+                let fetched = loop {
+                    let error = match connection.list_all_tools().await {
+                        Ok(tools) => break tools,
+                        Err(error) => error.to_string(),
+                    };
                     if !should_retry_mcp_operation(
                         &error,
                         attempt,
@@ -868,20 +1093,37 @@ where
                         .await;
                     }
 
-                    if !self.try_refresh_connection().await? {
+                    if !self
+                        .client
+                        .refresh(
+                            &connection,
+                            self.connection_factory.as_ref(),
+                            &self.resource_subscriptions,
+                        )
+                        .await?
+                    {
                         return Err(AdkError::tool(format!("Failed to list MCP tools: {error}")));
                     }
+                    (connection, generation) = self.client.connection_with_generation().await;
+                    list_changes = tool_list_changes(&connection);
                     attempt += 1;
+                };
+                if !self.tool_list_ttl.is_zero() {
+                    *self.tool_list.lock().await = Some(CachedToolList {
+                        generation,
+                        list_changes,
+                        fetched_at: Instant::now(),
+                        tools: fetched.clone(),
+                    });
                 }
+                fetched
             }
         };
 
         // Convert MCP tools to ADK tools
         let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
-        let server_supports_tasks = {
-            let client = self.client.lock().await;
-            client.peer_info().is_some_and(|info| info.capabilities.supports_tasks())
-        };
+        let server_supports_tasks =
+            connection.peer_info().is_some_and(|info| info.capabilities.supports_tasks());
 
         for mcp_tool in mcp_tools {
             let tool_name = mcp_tool.name.to_string();
@@ -1136,7 +1378,7 @@ where
     description: String,
     input_schema: Option<Value>,
     output_schema: Option<Value>,
-    client: SharedClient<S>,
+    client: Arc<SharedClient<S>>,
     connection_factory: Option<DynConnectionFactory<S>>,
     refresh_config: RefreshConfig,
     retry_tool_calls: bool,
@@ -1234,29 +1476,12 @@ where
         })
     }
 
-    async fn try_refresh_connection(&self) -> Result<bool> {
-        let Some(factory) = self.connection_factory.clone() else {
-            return Ok(false);
-        };
-
-        let new_client = factory
-            .create_connection()
-            .await
-            .map_err(|e| AdkError::tool(format!("Failed to refresh MCP connection: {e}")))?;
-
-        restore_subscriptions(&new_client, &self.resource_subscriptions).await?;
-        let mut client = self.client.lock().await;
-        let old_token = client.cancellation_token();
-        old_token.cancel();
-        *client = Arc::new(new_client);
-        Ok(true)
-    }
-
     /// Sends `tools/call` and returns the response envelope unchanged.
     ///
-    /// Uses `call_tool_once` rather than `call_tool`: the latter fulfils SEP-2322
-    /// `input_required` rounds on its own and rejects a task response outright,
-    /// which would break every server that materializes a task.
+    /// Sends one request per round rather than using rmcp's `call_tool`: the
+    /// latter fulfils SEP-2322 `input_required` rounds on its own and rejects a
+    /// task response outright, which would break every server that
+    /// materializes a task.
     async fn call_tool_with_retry(
         &self,
         mut params: CallToolRequestParams,
@@ -1269,10 +1494,9 @@ where
         let mut input_rounds = 0usize;
         let mut state_only_rounds = 0u32;
         loop {
-            let call_result = {
-                let client = self.client.lock().await;
-                client.call_tool_once(params.clone()).await.map_err(|e| e.to_string())
-            };
+            let connection = self.client.connection().await;
+            let call_result =
+                send_tool_call(connection.peer(), params.clone()).await.map_err(|e| e.to_string());
 
             match call_result {
                 Ok(CallToolResponse::InputRequired(required)) => {
@@ -1349,7 +1573,15 @@ where
                         .await;
                     }
 
-                    if !self.try_refresh_connection().await? {
+                    if !self
+                        .client
+                        .refresh(
+                            &connection,
+                            self.connection_factory.as_ref(),
+                            &self.resource_subscriptions,
+                        )
+                        .await?
+                    {
                         return Err(mcp_tool_call_error(
                             &self.name,
                             &error,
@@ -1381,9 +1613,7 @@ where
         match &self.mrtr_handler {
             Some(handler) => handler.fulfill_input_requests(requests).await,
             None => {
-                // A person may take minutes to answer, and the handler may call back
-                // into this toolset, so the connection lock is released first.
-                let client = Arc::clone(&*self.client.lock().await);
+                let client = self.client.connection().await;
                 super::input::fulfill(&client, requests).await
             }
         }
@@ -1393,7 +1623,7 @@ where
         &self,
         request: ClientRequest,
     ) -> std::result::Result<ServerResult, TaskError> {
-        let client = self.client.lock().await;
+        let client = self.client.connection().await;
         client.send_request(request).await.map_err(|error| TaskError::PollFailed(error.to_string()))
     }
 
@@ -1401,7 +1631,7 @@ where
     /// status confirms it.
     async fn cancel_task(&self, task_id: &str) {
         let cancel = async {
-            let peer = self.client.lock().await.peer().clone();
+            let peer = self.client.connection().await.peer().clone();
             peer.cancel_task(CancelTaskParams::new(task_id)).await
         };
         match tokio::time::timeout(TASK_CANCEL_TIMEOUT, cancel).await {

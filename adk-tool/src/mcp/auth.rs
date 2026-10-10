@@ -127,28 +127,45 @@ impl OAuth2Config {
         self
     }
 
-    /// Get or refresh the access token
+    /// Return the cached access token, fetching a new one when none is cached
+    /// or the cached one is due for refresh.
+    ///
+    /// A token is refreshed one minute before the `expires_in` its token
+    /// response declared, or halfway through its lifetime when that is under
+    /// two minutes. A token response without `expires_in` is cached until
+    /// [`clear_cache`](Self::clear_cache) is called or a server rejects it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthError`] when the token endpoint cannot be reached or
+    /// rejects the client credentials.
     pub async fn get_or_refresh_token(&self) -> Result<String, AuthError> {
-        // Check cache first
+        if let Some(cached) =
+            self.token_cache.read().await.as_ref().filter(|cached| !cached.is_expired())
         {
-            let cache = self.token_cache.read().await;
-            if let Some(ref cached) = *cache
-                && !cached.is_expired()
-            {
-                return Ok(cached.access_token.clone());
-            }
+            return Ok(cached.access_token.clone());
         }
 
-        // Need to refresh
+        // One caller fetches while the rest wait for its token, rather than
+        // every concurrent request asking the token endpoint for its own.
+        let mut cache = self.token_cache.write().await;
+        if let Some(cached) = cache.as_ref().filter(|cached| !cached.is_expired()) {
+            return Ok(cached.access_token.clone());
+        }
         let token = self.fetch_token().await?;
+        let access_token = token.access_token.clone();
+        *cache = Some(token);
+        Ok(access_token)
+    }
 
-        // Update cache
-        {
-            let mut cache = self.token_cache.write().await;
-            *cache = Some(token.clone());
+    /// Drop the cached token if it is `rejected`, so the next request fetches
+    /// a new one. A token another request already replaced is kept.
+    #[cfg(feature = "http-transport")]
+    pub(crate) async fn discard_token(&self, rejected: &str) {
+        let mut cache = self.token_cache.write().await;
+        if cache.as_ref().is_some_and(|cached| cached.access_token == rejected) {
+            *cache = None;
         }
-
-        Ok(token.access_token)
     }
 
     /// Fetch a new token from the token endpoint
@@ -228,8 +245,10 @@ struct CachedToken {
 impl CachedToken {
     fn from_response(response: TokenResponse) -> Self {
         let expires_at = response.expires_in.map(|secs| {
-            // Refresh 60 seconds before actual expiry
-            std::time::Instant::now() + std::time::Duration::from_secs(secs.saturating_sub(60))
+            // A fixed one-minute margin would treat every token shorter than a
+            // minute as already expired and fetch a new one for each request.
+            let lifetime = secs.saturating_sub(60.min(secs / 2));
+            std::time::Instant::now() + std::time::Duration::from_secs(lifetime)
         });
 
         Self {
