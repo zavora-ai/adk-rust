@@ -13,7 +13,7 @@ Control which tools an agent can execute and when human approval is required. AD
 
 ## Tool Confirmation Policy
 
-The built-in human-in-the-loop mechanism. When a tool requiring confirmation is called, the agent pauses, emits a `ToolConfirmationRequest` event, and waits for an `Approve` or `Deny` decision on the next run.
+The built-in human-in-the-loop mechanism. When a tool requiring confirmation is called, the agent asks the run's `ToolConfirmationHandler` and waits for its `Approve` or `Deny`. Without a handler, it pauses, emits a `ToolConfirmationRequest` event, and ends the run.
 
 ### Setup
 
@@ -57,7 +57,7 @@ let agent = LlmAgentBuilder::new("assistant")
    from the request:
 
 ```rust
-use adk_core::{RunConfig, ToolConfirmationDecision};
+use adk_core::{Content, RunConfig, ToolConfirmationDecision};
 use std::collections::HashMap;
 
 let mut decisions = HashMap::new();
@@ -66,10 +66,21 @@ decisions.insert(
     ToolConfirmationDecision::Approve, // or Deny
 );
 
-// The runner picks up the decision and continues
+let config = RunConfig::builder().tool_confirmation_decisions(decisions).build();
+let stream = runner
+    .run_with_config(user_id, session_id, Content::new("user").with_text("approved"), Some(config))
+    .await?;
 ```
 
-If denied, the tool is skipped and the LLM receives a message like "Tool execution was denied by the user" so it can adjust its approach.
+If denied, the tool is skipped and the LLM receives an error result —
+"Tool 'delete_file' execution denied by confirmation policy" — so it can adjust its approach.
+
+> **Note:** A static decision applies only to the call ID it names. A run that asks the
+> model again receives a new function call with a new ID, so a decision carried into
+> the next run applies only when that run dispatches the same call. For interactive
+> approval, configure a [`ToolConfirmationHandler`](#cli-example) instead: the agent
+> asks it about each call while the run that made the call waits, so no second run is
+> needed.
 
 ### Decisions Authorize One Exact Call
 
@@ -119,17 +130,19 @@ For decisions that should apply by policy rather than per call, implement a
 
 ### CLI Example
 
-A terminal agent that asks for confirmation before running tools:
+A terminal agent that asks for confirmation before running a tool. A
+`ToolConfirmationHandler` decides each call inside the run, so the approval
+applies to the exact call the model made:
 
 ```rust
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
-    Content, Event, RunConfig, ToolConfirmationDecision,
-    SessionId, UserId,
+    Content, RunConfig, SessionId, ToolConfirmationDecision, ToolConfirmationHandler,
+    ToolConfirmationRequest, UserId, async_trait,
 };
-use adk_runner::Runner;
-use adk_session::InMemorySessionService;
 use adk_model::GeminiModel;
+use adk_runner::Runner;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_tool::tool;
 use futures::StreamExt;
 use schemars::JsonSchema;
@@ -151,6 +164,40 @@ async fn delete_file(args: DeleteArgs) -> Result<serde_json::Value, adk_core::Ad
     Ok(serde_json::json!({"deleted": args.path}))
 }
 
+/// Asks on the terminal before each call that requires confirmation.
+#[derive(Debug)]
+struct TerminalApprover;
+
+#[async_trait]
+impl ToolConfirmationHandler for TerminalApprover {
+    async fn decide(
+        &self,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<ToolConfirmationDecision> {
+        let prompt = format!(
+            "\nThe agent wants to run '{}' with args: {}\nAllow? [y/n]: ",
+            request.tool_name, request.args
+        );
+        // Reading stdin blocks, so it runs off the async executor.
+        let answer = tokio::task::spawn_blocking(move || {
+            print!("{prompt}");
+            io::stdout().flush()?;
+            let mut answer = String::new();
+            io::stdin().read_line(&mut answer)?;
+            Ok::<_, io::Error>(answer)
+        })
+        .await
+        .map_err(|e| adk_core::AdkError::tool(e.to_string()))?
+        .map_err(|e| adk_core::AdkError::tool(e.to_string()))?;
+
+        Ok(if answer.trim().eq_ignore_ascii_case("y") {
+            ToolConfirmationDecision::Approve
+        } else {
+            ToolConfirmationDecision::Deny
+        })
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
@@ -165,23 +212,25 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     let session_service = Arc::new(InMemorySessionService::new());
-    let runner = Runner::new(adk_runner::RunnerConfig {
-        app_name: "file-manager".to_string(),
-        agent: Arc::new(agent),
-        session_service: session_service.clone(),
-        ..Default::default()
-    })?;
+    session_service
+        .create(CreateRequest {
+            app_name: "file-manager".to_string(),
+            user_id: "user-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            state: HashMap::new(),
+        })
+        .await?;
 
-    let user_id = UserId::new("user-1")?;
-    let session_id = SessionId::new("session-1")?;
+    let runner = Runner::builder()
+        .app_name("file-manager")
+        .agent(Arc::new(agent))
+        .session_service(session_service as Arc<dyn SessionService>)
+        .build()?;
 
-    // Create session
-    session_service.create(adk_session::CreateRequest {
-        app_name: "file-manager".to_string(),
-        user_id: "user-1".to_string(),
-        session_id: Some("session-1".to_string()),
-        state: HashMap::new(),
-    }).await?;
+    // Every run consults the approver for calls to `delete_file`.
+    let config = RunConfig::builder()
+        .tool_confirmation_handler(Arc::new(TerminalApprover))
+        .build();
 
     println!("File Manager (type 'quit' to exit)");
     loop {
@@ -190,59 +239,21 @@ async fn main() -> anyhow::Result<()> {
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         let input = input.trim();
-        if input == "quit" { break; }
+        if input == "quit" {
+            break;
+        }
 
-        let content = Content::new("user").with_text(input);
-        let mut stream = runner.run(
-            user_id.clone(), session_id.clone(), content,
-        ).await?;
+        let mut stream = runner
+            .run_with_config(
+                UserId::new("user-1")?,
+                SessionId::new("session-1")?,
+                Content::new("user").with_text(input),
+                Some(config.clone()),
+            )
+            .await?;
 
-        while let Some(result) = stream.next().await {
-            let event = result?;
-
-            // Check if the agent is requesting tool confirmation
-            if let Some(ref confirmation) = event.actions.tool_confirmation {
-                println!(
-                    "\n⚠️  The agent wants to run '{}' with args: {}",
-                    confirmation.tool_name,
-                    serde_json::to_string_pretty(&confirmation.args)?
-                );
-                print!("Allow? [y/n]: ");
-                io::stdout().flush()?;
-
-                let mut answer = String::new();
-                io::stdin().read_line(&mut answer)?;
-
-                let decision = if answer.trim().eq_ignore_ascii_case("y") {
-                    ToolConfirmationDecision::Approve
-                } else {
-                    ToolConfirmationDecision::Deny
-                };
-
-                // Re-run with the decision
-                let mut decisions = HashMap::new();
-                // Keyed by the call ID, so the decision authorizes only this call.
-                if let Some(call_id) = confirmation.function_call_id.clone() {
-                    decisions.insert(call_id, decision);
-                }
-
-                let content = Content::new("user").with_text("");
-                let mut resume_stream = runner.run(
-                    user_id.clone(), session_id.clone(), content,
-                ).await?;
-
-                while let Some(result) = resume_stream.next().await {
-                    let event = result?;
-                    if let Some(ref content) = event.llm_response.content {
-                        for part in &content.parts {
-                            if let Some(text) = part.text() {
-                                print!("{text}");
-                            }
-                        }
-                    }
-                }
-                println!();
-            } else if let Some(ref content) = event.llm_response.content {
+        while let Some(event) = stream.next().await {
+            if let Some(content) = event?.llm_response.content {
                 for part in &content.parts {
                     if let Some(text) = part.text() {
                         print!("{text}");
@@ -258,112 +269,193 @@ async fn main() -> anyhow::Result<()> {
 
 ### Web Server Example
 
-An SSE endpoint that streams events to the frontend. When a `toolConfirmation` event arrives, the frontend renders an approval dialog and sends the decision back:
+An SSE endpoint streams events to the frontend. When the agent reaches a call that
+requires confirmation, a `ToolConfirmationHandler` sends the request down the same
+stream and waits; the frontend renders an approval dialog and posts the decision to a
+second endpoint, which completes the waiting call:
 
 ```rust
-use adk_agent::LlmAgentBuilder;
 use adk_core::{
-    Content, RunConfig, ToolConfirmationDecision, SessionId, UserId,
+    AdkError, Content, RunConfig, SessionId, ToolConfirmationDecision,
+    ToolConfirmationHandler, ToolConfirmationRequest, UserId, async_trait,
 };
 use adk_runner::Runner;
-use adk_session::InMemorySessionService;
-use axum::{Json, Router, extract::State, response::sse::{Event, Sse}};
-use axum::routing::post;
+use axum::response::sse::{Event, Sse};
+use axum::{Json, extract::State, http::StatusCode};
 use futures::StreamExt;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::{Mutex, mpsc, oneshot};
+
+/// Calls waiting for a decision, keyed by session ID and function call ID.
+type Pending = Arc<Mutex<HashMap<(String, String), oneshot::Sender<ToolConfirmationDecision>>>>;
 
 #[derive(Clone)]
 struct AppState {
     runner: Arc<Runner>,
+    pending: Pending,
+}
+
+/// Forwards each confirmation request to the browser and waits for its answer.
+#[derive(Debug)]
+struct BrowserApprover {
+    session_id: String,
+    pending: Pending,
+    requests: mpsc::UnboundedSender<ToolConfirmationRequest>,
+}
+
+#[async_trait]
+impl ToolConfirmationHandler for BrowserApprover {
+    async fn decide(
+        &self,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<ToolConfirmationDecision> {
+        let call_id = request
+            .function_call_id
+            .clone()
+            .ok_or_else(|| AdkError::tool("confirmation request has no call ID"))?;
+        let (answer, decision) = oneshot::channel();
+        self.pending.lock().await.insert((self.session_id.clone(), call_id), answer);
+        self.requests
+            .send(request.clone())
+            .map_err(|_| AdkError::tool("the client disconnected before approving"))?;
+        // An abandoned request — the stream closed without an answer — denies the call.
+        Ok(decision.await.unwrap_or(ToolConfirmationDecision::Deny))
+    }
+}
+
+/// What the chat stream does next.
+enum Step {
+    Confirm(ToolConfirmationRequest),
+    Agent(Option<adk_core::Result<adk_core::Event>>),
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ChatRequest {
     message: String,
     user_id: String,
     session_id: String,
-    /// Tool confirmation decisions from the previous turn
-    #[serde(default)]
-    tool_decisions: HashMap<String, String>, // "tool_name" -> "approve"|"deny"
 }
 
 async fn chat_handler(
     State(state): State<AppState>,
     Json(req): Json<ChatRequest>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let runner = state.runner.clone();
-    let user_id = UserId::new(&req.user_id).unwrap();
-    let session_id = SessionId::new(&req.session_id).unwrap();
-    let content = Content::new("user").with_text(&req.message);
+    let (requests, mut confirmations) = mpsc::unbounded_channel();
+    let config = RunConfig::builder()
+        .tool_confirmation_handler(Arc::new(BrowserApprover {
+            session_id: req.session_id.clone(),
+            pending: state.pending.clone(),
+            requests,
+        }))
+        .build();
 
     let stream = async_stream::stream! {
-        let mut event_stream = match runner.run(user_id, session_id, content).await {
-            Ok(s) => s,
+        let (Ok(user_id), Ok(session_id)) =
+            (UserId::new(&req.user_id), SessionId::new(&req.session_id))
+        else {
+            yield Ok(Event::default().event("error").data("invalid user or session ID"));
+            return;
+        };
+        let content = Content::new("user").with_text(&req.message);
+        let mut events = match state
+            .runner
+            .run_with_config(user_id, session_id, content, Some(config))
+            .await
+        {
+            Ok(events) => events,
             Err(e) => {
-                yield Ok(Event::default().data(
-                    serde_json::json!({"error": e.to_string()}).to_string()
-                ));
+                yield Ok(Event::default().event("error").data(e.to_string()));
                 return;
             }
         };
 
-        while let Some(result) = event_stream.next().await {
-            match result {
-                Ok(event) => {
-                    // Emit tool confirmation request to frontend
-                    if let Some(ref confirmation) = event.actions.tool_confirmation {
-                        yield Ok(Event::default()
-                            .event("tool_confirmation")
-                            .data(serde_json::json!({
-                                "toolName": confirmation.tool_name,
-                                "args": confirmation.args,
-                                "functionCallId": confirmation.function_call_id,
-                            }).to_string()));
-                    }
-
-                    // Emit text content
-                    if let Some(ref content) = event.llm_response.content {
-                        for part in &content.parts {
-                            if let Some(text) = part.text() {
-                                yield Ok(Event::default()
-                                    .event("text")
-                                    .data(serde_json::json!({"text": text}).to_string()));
-                            }
+        loop {
+            let step = tokio::select! {
+                Some(request) = confirmations.recv() => Step::Confirm(request),
+                next = events.next() => Step::Agent(next),
+            };
+            match step {
+                // A call is waiting for approval: show the dialog.
+                Step::Confirm(request) => {
+                    yield Ok(Event::default()
+                        .event("tool_confirmation")
+                        .data(serde_json::to_string(&request).unwrap_or_default()));
+                }
+                Step::Agent(Some(Ok(event))) => {
+                    for part in event.llm_response.content.iter().flat_map(|c| &c.parts) {
+                        if let Some(text) = part.text() {
+                            yield Ok(Event::default()
+                                .event("text")
+                                .data(serde_json::json!({ "text": text }).to_string()));
                         }
                     }
                 }
-                Err(e) => {
-                    yield Ok(Event::default().data(
-                        serde_json::json!({"error": e.to_string()}).to_string()
-                    ));
+                Step::Agent(Some(Err(e))) => {
+                    yield Ok(Event::default().event("error").data(e.to_string()));
                 }
+                Step::Agent(None) => break,
             }
         }
 
-        yield Ok(Event::default().event("done").data("{}".to_string()));
+        yield Ok(Event::default().event("done").data("{}"));
     };
 
     Sse::new(stream)
 }
 
-// Frontend JavaScript (conceptual):
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApprovalRequest {
+    session_id: String,
+    function_call_id: String,
+    approved: bool,
+}
+
+/// Completes the call the dialog was shown for.
+async fn approve_handler(
+    State(state): State<AppState>,
+    Json(req): Json<ApprovalRequest>,
+) -> StatusCode {
+    let key = (req.session_id, req.function_call_id);
+    let Some(answer) = state.pending.lock().await.remove(&key) else {
+        return StatusCode::NOT_FOUND;
+    };
+    let decision = if req.approved {
+        ToolConfirmationDecision::Approve
+    } else {
+        ToolConfirmationDecision::Deny
+    };
+    let _ = answer.send(decision);
+    StatusCode::NO_CONTENT
+}
+
+// Routes:
+//   POST /api/chat    -> chat_handler (SSE)
+//   POST /api/approve -> approve_handler
 //
-// const source = new EventSource('/api/chat');
+// Frontend (conceptual):
+//
 // source.addEventListener('tool_confirmation', (e) => {
-//   const data = JSON.parse(e.data);
-//   showConfirmDialog(data.toolName, data.args, (approved) => {
-//     fetch('/api/chat', {
+//   const request = JSON.parse(e.data);
+//   showConfirmDialog(request.toolName, request.args, (approved) => {
+//     fetch('/api/approve', {
 //       method: 'POST',
+//       headers: { 'Content-Type': 'application/json' },
 //       body: JSON.stringify({
-//         message: '',
-//         tool_decisions: { [data.toolName]: approved ? 'approve' : 'deny' }
-//       })
+//         sessionId,
+//         functionCallId: request.functionCallId,
+//         approved,
+//       }),
 //     });
 //   });
 // });
 ```
+
+Authenticate the approve endpoint as you do the chat endpoint, so only the session's
+user can answer for it.
 
 ## BeforeToolCallback
 
@@ -386,12 +478,12 @@ let agent = LlmAgentBuilder::new("assistant")
             tracing::info!(tool = tool_name, "tool execution requested");
 
             // Custom authorization logic
-            let user_scopes = ctx.user_scopes();
-            if tool_name == "admin_action" && !user_scopes.contains(&"admin".to_string()) {
+            let admins = ["alice@co.com"];
+            if tool_name == "admin_action" && !admins.contains(&ctx.user_id()) {
                 // Return Some(Content) to skip the tool
                 return Ok(Some(
                     Content::new("tool")
-                        .with_text("Permission denied: admin scope required")
+                        .with_text("Permission denied: admin_action is limited to admins")
                 ));
             }
 
@@ -403,8 +495,18 @@ let agent = LlmAgentBuilder::new("assistant")
 
 Return values:
 - `Ok(None)` — allow the tool to execute
-- `Ok(Some(content))` — skip the tool, send this content to the LLM instead
-- `Err(e)` — abort the entire agent execution
+- `Ok(Some(content))` — skip the tool and answer the call with this content instead. A
+  function response part in it is sent with the call's id and tool name; text-only content
+  is sent as the tool's error result, `{"error": "<text>"}`
+- `Err(e)` — skip the tool and report the error to the LLM as the tool's result; the run
+  continues and after-tool callbacks do not run for that call
+
+A callback sees the user ID but not the request's scopes. For scope checks, wrap the
+tool with `adk_auth::ScopeGuard`, which reads them from the tool context.
+
+To apply the same gate to every agent in an application, register it as a `before_tool`
+plugin on the runner's `PluginManager`. The runner's plugin callbacks run ahead of each
+agent's own callbacks, in every agent the run reaches.
 
 ## Access Control
 
@@ -527,12 +629,23 @@ let agent = LlmAgentBuilder::new("secure-assistant")
     .build()?;
 ```
 
-Order of evaluation:
-1. RBAC check (if `ProtectedTool` wrapper is used) — denies unauthorized users
-2. `BeforeToolCallback` — programmatic gate, can skip or abort
-3. `ToolConfirmationPolicy` — pauses for human approval if required
-4. Tool executes
-5. `AfterToolCallback` / `AfterToolCallbackFull` — post-execution inspection
+Order of evaluation in `LlmAgent`:
+
+1. Tool guardrails (`ToolGuardrailSet`) — screen every call in the model's batch; a denial
+   becomes the call's result
+2. `ToolConfirmationPolicy` — a static decision, the `ToolConfirmationHandler`, or a pause
+3. Enhanced plugins (`before_tool_call`)
+4. The runner's plugin `before_tool` callbacks, then the agent's `BeforeToolCallback`s — the
+   first to return content skips the tool
+5. Circuit breaker
+6. Tool executes — the RBAC (`ProtectedTool`) and scope (`ScopeGuard`) wrappers check here,
+   inside `execute()`, so a denial is a tool error
+7. `on_tool_error` callbacks (plugins first) — when the tool failed, including an RBAC denial
+8. The runner's plugin `after_tool` callbacks, then `AfterToolCallback`,
+   `AfterToolCallbackFull`, and enhanced plugins (`after_tool_call`)
+
+> **Note:** An `on_tool_error` callback that returns a fallback value replaces the error,
+> including an access denial. Keep fallbacks to tools whose failures are safe to paper over.
 
 ## Related
 

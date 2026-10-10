@@ -218,6 +218,14 @@ let tools = toolset.tools();
 These tools return masked transaction summaries only. Raw card data, signatures,
 and authorization blobs do not appear in tool outputs.
 
+Every tool the builder produces is wrapped in an `adk-auth` `ScopeGuard`, so a call
+fails unless the caller holds the scope the tool declares (`payments:checkout:create`,
+`payments:checkout:complete`, and so on). The default guard reads
+`ToolContext::user_scopes()`, which the server's auth bridge fills from the request;
+`with_scope_guard` supplies a different resolver or an audit sink. Each call records
+the calling agent as the acting `CommerceActor` and binds the transaction to the
+caller's session identity.
+
 ## Primary Journeys
 
 The crate is currently shaped around five first-class journeys:

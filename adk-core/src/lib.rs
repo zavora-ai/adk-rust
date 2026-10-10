@@ -123,7 +123,7 @@ pub use callbacks::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull,
     BaseEventsSummarizer, BeforeAgentCallback, BeforeModelCallback, BeforeModelResult,
     BeforeToolCallback, EventsCompactionConfig, GlobalInstructionProvider, InstructionProvider,
-    OnToolErrorCallback,
+    InvocationHooks, OnToolErrorCallback,
 };
 pub use context::{
     Artifacts, BackpressurePolicy, CallbackContext, IncludeContents, InvocationContext,

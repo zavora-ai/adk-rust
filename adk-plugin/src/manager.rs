@@ -4,8 +4,8 @@
 
 use crate::Plugin;
 use adk_core::{
-    BeforeModelResult, CallbackContext, Content, Event, InvocationContext, LlmRequest, LlmResponse,
-    Result, Tool,
+    BeforeModelResult, CallbackContext, Content, Event, InvocationContext, InvocationHooks,
+    LlmRequest, LlmResponse, Result, Tool, async_trait,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,6 +29,12 @@ impl Default for PluginManagerConfig {
 /// The PluginManager runs callbacks from all registered plugins in order.
 /// For callbacks that can modify data (like on_user_message), the first
 /// plugin to return a modification wins.
+///
+/// A `Runner` runs the run, user-message, and event callbacks itself, and installs the manager
+/// as an [`InvocationHooks`] on the run's `RunConfig`, so the agent, model, and tool callbacks run
+/// for every agent that honours [`RunConfig::invocation_hooks`](adk_core::RunConfig) — `LlmAgent`
+/// does, ahead of its own callbacks. `on_model_error` is not called by any agent, and a plugin
+/// that sets it is reported with a warning when the manager is built.
 ///
 /// # Example
 ///
@@ -59,11 +65,20 @@ pub struct PluginManager {
 impl PluginManager {
     /// Create a new plugin manager with the given plugins.
     pub fn new(plugins: Vec<Plugin>) -> Self {
-        Self { plugins, config: PluginManagerConfig::default() }
+        Self::with_config(plugins, PluginManagerConfig::default())
     }
 
     /// Create a new plugin manager with custom configuration.
     pub fn with_config(plugins: Vec<Plugin>, config: PluginManagerConfig) -> Self {
+        for plugin in &plugins {
+            if plugin.on_model_error().is_some() {
+                warn!(
+                    plugin = plugin.name(),
+                    "on_model_error is never called: no agent reports model errors to plugins, \
+                     so this callback will not run"
+                );
+            }
+        }
         Self { plugins, config }
     }
 
@@ -422,6 +437,51 @@ impl PluginManager {
                 }
             }
         }
+    }
+}
+
+#[async_trait]
+impl InvocationHooks for PluginManager {
+    async fn before_agent(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
+        self.run_before_agent(ctx).await
+    }
+
+    async fn after_agent(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
+        self.run_after_agent(ctx).await
+    }
+
+    async fn before_model(
+        &self,
+        ctx: Arc<dyn CallbackContext>,
+        request: LlmRequest,
+    ) -> Result<BeforeModelResult> {
+        self.run_before_model(ctx, request).await
+    }
+
+    async fn after_model(
+        &self,
+        ctx: Arc<dyn CallbackContext>,
+        response: LlmResponse,
+    ) -> Result<Option<LlmResponse>> {
+        self.run_after_model(ctx, response).await
+    }
+
+    async fn before_tool(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
+        self.run_before_tool(ctx).await
+    }
+
+    async fn after_tool(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
+        self.run_after_tool(ctx).await
+    }
+
+    async fn on_tool_error(
+        &self,
+        ctx: Arc<dyn CallbackContext>,
+        tool: Arc<dyn Tool>,
+        args: serde_json::Value,
+        error: String,
+    ) -> Result<Option<serde_json::Value>> {
+        self.run_on_tool_error(ctx, tool, args, error).await
     }
 }
 

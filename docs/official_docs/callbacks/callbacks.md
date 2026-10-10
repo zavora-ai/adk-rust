@@ -79,14 +79,16 @@ Tool callbacks intercept tool execution.
 use adk_rust::prelude::*;
 use std::sync::Arc;
 
-// BeforeToolCallback - can skip tool by returning Some(Content)
+// BeforeToolCallback - can skip tool by returning Some(Content); LlmAgent sends
+// text-only content as the call's {"error": "<text>"} function response
 type BeforeToolCallback = Box<
     dyn Fn(Arc<dyn CallbackContext>) 
         -> Pin<Box<dyn Future<Output = Result<Option<Content>>> + Send>> 
     + Send + Sync
 >;
 
-// AfterToolCallback - can modify tool result
+// AfterToolCallback - can modify tool result; LlmAgent sends text-only content
+// as the call's {"result": "<text>"} function response
 type AfterToolCallback = Box<
     dyn Fn(Arc<dyn CallbackContext>) 
         -> Pin<Box<dyn Future<Output = Result<Option<Content>>> + Send>> 

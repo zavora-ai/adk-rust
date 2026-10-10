@@ -56,7 +56,10 @@ pub struct PluginConfig {
     pub before_model: Option<BeforeModelCallback>,
     /// Called after LLM call (can modify response)
     pub after_model: Option<AfterModelCallback>,
-    /// Called when LLM returns an error
+    /// Called when LLM returns an error.
+    ///
+    /// No agent reports model errors to plugins yet, so this callback never runs;
+    /// [`PluginManager`](crate::PluginManager) logs a warning when a plugin sets it.
     pub on_model_error: Option<OnModelErrorCallback>,
 
     // Tool callbacks
@@ -443,6 +446,9 @@ impl PluginBuilder {
     }
 
     /// Set the callback invoked when an LLM call returns an error.
+    ///
+    /// No agent reports model errors to plugins yet, so this callback never runs;
+    /// [`PluginManager`](crate::PluginManager) logs a warning when a plugin sets it.
     ///
     /// The callback receives the original [`LlmRequest`](adk_core::LlmRequest) and the
     /// error message. Return `Ok(Some(response))` to provide a fallback response, or

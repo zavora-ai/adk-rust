@@ -198,6 +198,12 @@ impl MockInvocationContext {
         self
     }
 
+    /// Add a run-wide hook, as a runner installs its plugin manager.
+    pub(crate) fn with_invocation_hook(mut self, hook: Arc<dyn adk_core::InvocationHooks>) -> Self {
+        self.run_config.invocation_hooks.push(hook);
+        self
+    }
+
     /// Seed the session's conversation history.
     pub(crate) fn with_history(mut self, history: Vec<Content>) -> Self {
         self.session.history = history;

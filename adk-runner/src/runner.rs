@@ -398,6 +398,15 @@ impl Runner {
         #[cfg(feature = "skills")]
         let skill_injector = self.skill_injector.clone();
         let mut run_config = run_config.unwrap_or_else(|| self.run_config.clone());
+        // Plugin model and tool callbacks run inside the agent, which reaches them through the
+        // run config; transfer targets and agent tools inherit the config, and with it the hooks.
+        #[cfg(feature = "plugins")]
+        if let Some(manager) = plugin_manager.as_ref() {
+            let hooks: Arc<dyn adk_core::InvocationHooks> = manager.clone();
+            if !run_config.invocation_hooks.iter().any(|existing| Arc::ptr_eq(existing, &hooks)) {
+                run_config.invocation_hooks.insert(0, hooks);
+            }
+        }
         let compaction_config = self.compaction_config.clone();
         let context_cache_config = self.context_cache_config.clone();
         let cache_capable = self.cache_capable.clone();

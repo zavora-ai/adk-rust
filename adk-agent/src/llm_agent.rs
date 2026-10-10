@@ -26,6 +26,7 @@ use crate::{
     guardrails::{
         GuardrailSet, ToolGuardrailSet, ToolScreening, enforce_guardrails, screen_tool_call,
     },
+    invocation_hooks::HookCallbacks,
     skill_shim::{SelectionPolicy, SkillIndex, apply_skill_injection},
     tool_call_markup::normalize_option_content,
     workflow::with_user_content_override,
@@ -1846,6 +1847,47 @@ struct ToolExecutionResult {
     escalate_or_skip: bool,
 }
 
+/// Turns a tool callback's substitute content into the response to the call it replaces.
+///
+/// Providers reject a request whose function call has no function response with the same id,
+/// so a function response part is re-addressed to this call and text-only content is wrapped
+/// as one by `wrap_text`. Only the function response is kept, as OpenAI Chat reads the first
+/// part of a tool message and nothing else.
+fn callback_tool_response(
+    content: Content,
+    name: &str,
+    id: Option<&String>,
+    wrap_text: impl FnOnce(String) -> serde_json::Value,
+) -> Content {
+    let mut text = String::new();
+    let mut response = None;
+    for part in content.parts {
+        match part {
+            Part::FunctionResponse { mut function_response, annotations, .. }
+                if response.is_none() =>
+            {
+                function_response.name = name.to_string();
+                response = Some(Part::FunctionResponse {
+                    function_response,
+                    id: id.cloned(),
+                    annotations,
+                });
+            }
+            other => {
+                if let Some(chunk) = other.text() {
+                    text.push_str(chunk);
+                }
+            }
+        }
+    }
+    let response = response.unwrap_or_else(|| Part::FunctionResponse {
+        function_response: FunctionResponseData::new(name, wrap_text(text)),
+        id: id.cloned(),
+        annotations: None,
+    });
+    Content { role: "function".to_string(), parts: vec![response] }
+}
+
 #[derive(Clone, Copy)]
 enum ToolDispatchMode {
     Sequential,
@@ -1876,6 +1918,8 @@ struct ToolExecutor<'a> {
     after_tool_callbacks: &'a Arc<Vec<AfterToolCallback>>,
     after_tool_callbacks_full: &'a Arc<Vec<AfterToolCallbackFull>>,
     on_tool_error_callbacks: &'a Arc<Vec<OnToolErrorCallback>>,
+    /// The run's invocation hooks, iterated ahead of the agent's own tool callbacks.
+    hook_callbacks: &'a HookCallbacks,
     tool_confirmation_policy: &'a ToolConfirmationPolicy,
     cb_mutex: &'a std::sync::Mutex<Option<CircuitBreakerState>>,
     invocation_id: &'a str,
@@ -2112,10 +2156,18 @@ impl ToolExecutor<'_> {
                 name.clone(),
                 final_args.clone(),
             ));
-            for callback in self.before_tool_callbacks.as_ref() {
+            for callback in
+                self.hook_callbacks.before_tool.iter().chain(self.before_tool_callbacks.iter())
+            {
                 match callback(tool_ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(c)) => {
-                        response_content = Some(c);
+                        // The tool did not run, so text is reported as the call's error.
+                        response_content = Some(callback_tool_response(
+                            c,
+                            &name,
+                            id.as_ref(),
+                            |text| serde_json::json!({ "error": text }),
+                        ));
                         break;
                     }
                     Ok(None) => continue,
@@ -2297,7 +2349,12 @@ impl ToolExecutor<'_> {
                 let final_function_response = if !tool_success {
                     let mut fallback_result = None;
                     let error_msg = tool_error_message.clone().unwrap_or_default();
-                    for callback in self.on_tool_error_callbacks.as_ref() {
+                    for callback in self
+                        .hook_callbacks
+                        .on_tool_error
+                        .iter()
+                        .chain(self.on_tool_error_callbacks.iter())
+                    {
                         match callback(
                             self.ctx.clone() as Arc<dyn CallbackContext>,
                             tool.clone(),
@@ -2369,10 +2426,17 @@ impl ToolExecutor<'_> {
             };
             let cb_ctx: Arc<dyn CallbackContext> =
                 Arc::new(ToolCallbackContext::new(outcome_ctx, name.clone(), final_args.clone()));
-            for callback in self.after_tool_callbacks.as_ref() {
+            for callback in
+                self.hook_callbacks.after_tool.iter().chain(self.after_tool_callbacks.iter())
+            {
                 match callback(cb_ctx.clone()).await {
                     Ok(Some(modified)) => {
-                        response_content = modified;
+                        response_content = callback_tool_response(
+                            modified,
+                            &name,
+                            id.as_ref(),
+                            |text| serde_json::json!({ "result": text }),
+                        );
                         break;
                     }
                     Ok(None) => continue,
@@ -2571,6 +2635,8 @@ impl Agent for LlmAgent {
         let parallelize_agent_delegations = self.parallelize_agent_delegations;
         #[cfg(feature = "enhanced-plugins")]
         let enhanced_plugin_manager = self.enhanced_plugin_manager.clone();
+        // Runner plugins and other run-wide hooks reach this agent through the run config.
+        let hook_callbacks = HookCallbacks::new(&ctx.run_config().invocation_hooks);
 
         let s = stream! {
             let confirmation_decisions =
@@ -2582,7 +2648,7 @@ impl Agent for LlmAgent {
             // ===== BEFORE AGENT CALLBACKS =====
             // Execute before the agent starts running
             // If any returns content, skip agent execution
-            for callback in before_agent_callbacks.as_ref() {
+            for callback in hook_callbacks.before_agent.iter().chain(before_agent_callbacks.iter()) {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
                         // Callback returned content - yield it and skip agent execution
@@ -2592,7 +2658,9 @@ impl Agent for LlmAgent {
                         yield Ok(early_event);
 
                         // Skip rest of agent execution and go to after callbacks
-                        for after_callback in after_agent_callbacks.as_ref() {
+                        for after_callback in
+                            hook_callbacks.after_agent.iter().chain(after_agent_callbacks.iter())
+                        {
                             match after_callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                                 Ok(Some(after_content)) => {
                                     let mut after_event = Event::new(&invocation_id);
@@ -2734,7 +2802,9 @@ impl Agent for LlmAgent {
                 let mut current_request = request;
                 let mut model_response_override = model_response_override_from_plugin;
                 if model_response_override.is_none() {
-                    for callback in before_model_callbacks.as_ref() {
+                    for callback in
+                        hook_callbacks.before_model.iter().chain(before_model_callbacks.iter())
+                    {
                         match callback(ctx.clone() as Arc<dyn CallbackContext>, current_request.clone()).await {
                             Ok(BeforeModelResult::Continue(modified_request)) => {
                                 // Callback may have modified the request, continue with it
@@ -2875,7 +2945,9 @@ impl Agent for LlmAgent {
 
                         // ===== AFTER MODEL CALLBACKS (per chunk) =====
                         // Callbacks can modify each streaming chunk
-                        for callback in after_model_callbacks.as_ref() {
+                        for callback in
+                            hook_callbacks.after_model.iter().chain(after_model_callbacks.iter())
+                        {
                             match callback(ctx.clone() as Arc<dyn CallbackContext>, chunk.clone())
                                 .instrument(llm_span.clone())
                                 .await
@@ -3388,6 +3460,7 @@ impl Agent for LlmAgent {
                         after_tool_callbacks: &after_tool_callbacks,
                         after_tool_callbacks_full: &after_tool_callbacks_full,
                         on_tool_error_callbacks: &on_tool_error_callbacks,
+                        hook_callbacks: &hook_callbacks,
                         tool_confirmation_policy: &tool_confirmation_policy,
                         cb_mutex: &cb_mutex,
                         invocation_id: &invocation_id,
@@ -3594,7 +3667,7 @@ impl Agent for LlmAgent {
 
             // ===== AFTER AGENT CALLBACKS =====
             // Execute after the agent completes
-            for callback in after_agent_callbacks.as_ref() {
+            for callback in hook_callbacks.after_agent.iter().chain(after_agent_callbacks.iter()) {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
                         // Callback returned content - yield it

@@ -7,12 +7,14 @@ use serde_json::Value;
 
 use crate::auth::INTERVENTION_CONTINUE_SCOPES;
 use crate::domain::{
-    CommerceActor, CommerceActorRole, CommerceMode, MerchantRef, ProtocolDescriptor,
-    ProtocolExtensions, SafeTransactionSummary, TransactionId,
+    CommerceMode, MerchantRef, ProtocolDescriptor, ProtocolExtensions, SafeTransactionSummary,
+    TransactionId,
 };
 use crate::guardrail::redact_tool_output;
 use crate::kernel::commands::{CommerceContext, ContinueInterventionCommand};
 use crate::kernel::service::InterventionService;
+
+use super::{caller_identity, calling_agent};
 
 /// JSON parameters accepted by `payments_intervention_continue`.
 #[derive(Debug, Deserialize)]
@@ -56,7 +58,7 @@ impl Tool for ContinueInterventionTool {
         INTERVENTION_CONTINUE_SCOPES
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let params: ContinueParams = serde_json::from_value(args).map_err(|err| {
             AdkError::new(
                 ErrorComponent::Tool,
@@ -67,14 +69,8 @@ impl Tool for ContinueInterventionTool {
         })?;
         let context = CommerceContext {
             transaction_id: TransactionId::from(params.transaction_id),
-            session_identity: None,
-            actor: CommerceActor {
-                actor_id: "agent-tool".to_string(),
-                role: CommerceActorRole::AgentSurface,
-                display_name: Some("payment tool".to_string()),
-                tenant_id: None,
-                extensions: ProtocolExtensions::default(),
-            },
+            session_identity: caller_identity(ctx.as_ref()),
+            actor: calling_agent(ctx.as_ref()),
             merchant_of_record: MerchantRef {
                 merchant_id: String::new(),
                 legal_name: "unknown".to_string(),

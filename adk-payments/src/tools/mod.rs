@@ -15,6 +15,15 @@
 //! | `payments_status_lookup` | `payments:checkout:create` | Look up transaction status |
 //! | `payments_intervention_continue` | `payments:intervention:continue` | Resume an intervention |
 //!
+//! [`PaymentToolsetBuilder`] wraps every tool in an `adk-auth` `ScopeGuard`. The
+//! individual constructors such as [`create_checkout_tool`] return the bare tool,
+//! which declares its scopes but does not enforce them; wrap it with
+//! `adk_auth::ScopeGuard::protect` before giving it to an agent.
+//!
+//! Each call records the calling agent as the acting [`CommerceActor`] and binds
+//! the transaction to the caller's session identity, both taken from the tool
+//! context.
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -30,6 +39,27 @@ mod checkout;
 mod intervention;
 mod status;
 mod toolset;
+
+use adk_core::ToolContext;
+use adk_core::identity::AdkIdentity;
+
+use crate::domain::{CommerceActor, CommerceActorRole, ProtocolExtensions};
+
+/// The calling agent, as the actor a payment tool reports to the commerce kernel.
+fn calling_agent(ctx: &dyn ToolContext) -> CommerceActor {
+    CommerceActor {
+        actor_id: ctx.agent_name().to_string(),
+        role: CommerceActorRole::AgentSurface,
+        display_name: Some(ctx.agent_name().to_string()),
+        tenant_id: None,
+        extensions: ProtocolExtensions::default(),
+    }
+}
+
+/// The caller's session identity, when the context's identifiers are valid.
+fn caller_identity(ctx: &dyn ToolContext) -> Option<AdkIdentity> {
+    ctx.try_identity().ok()
+}
 
 pub use checkout::{
     cancel_checkout_tool, complete_checkout_tool, create_checkout_tool, update_checkout_tool,
