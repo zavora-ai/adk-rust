@@ -477,6 +477,112 @@ async fn runner_preserves_orchestration_root_across_handoffs() {
     assert!(observed.load(std::sync::atomic::Ordering::SeqCst));
 }
 
+/// Session service whose history ends with an event from `last_author`.
+struct HistorySessionService {
+    last_author: String,
+}
+
+#[async_trait]
+impl SessionService for HistorySessionService {
+    async fn create(&self, _req: adk_session::CreateRequest) -> Result<Box<dyn Session>> {
+        unimplemented!()
+    }
+
+    async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
+        let mut event = Event::new("earlier-invocation");
+        event.author = self.last_author.clone();
+        event.llm_response.content = Some(Content::new("model").with_text("earlier answer"));
+        Ok(Box::new(MockSession {
+            id: req.session_id,
+            app_name: req.app_name,
+            user_id: req.user_id,
+            events: MockEvents { events: vec![event] },
+            state: MockState,
+        }))
+    }
+
+    async fn list(&self, _req: adk_session::ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        Ok(vec![])
+    }
+
+    async fn delete(&self, _req: adk_session::DeleteRequest) -> Result<()> {
+        Ok(())
+    }
+
+    async fn append_event(&self, _session_id: &str, _event: Event) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Transfer targets and parent agent seen by a probe agent.
+type ObservedTargets = Arc<Mutex<Option<(Vec<String>, Option<String>)>>>;
+
+/// Records the transfer targets and parent it is run with.
+struct TransferTargetsProbe {
+    name: String,
+    observed: ObservedTargets,
+}
+
+#[async_trait]
+impl Agent for TransferTargetsProbe {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        "records its transfer targets"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let config = ctx.run_config();
+        *self.observed.lock().unwrap() =
+            Some((config.transfer_targets.clone(), config.parent_agent.clone()));
+        Ok(Box::pin(futures::stream::empty()))
+    }
+}
+
+#[tokio::test]
+async fn resumed_sub_agent_receives_parent_and_peer_transfer_targets() {
+    let observed = Arc::new(Mutex::new(None));
+    let resumed: Arc<dyn Agent> =
+        Arc::new(TransferTargetsProbe { name: "billing".to_string(), observed: observed.clone() });
+    let peer: Arc<dyn Agent> = Arc::new(MockAgent { name: "support".to_string() });
+    let root: Arc<dyn Agent> = Arc::new(MockAgentWithSubs {
+        name: "coordinator".to_string(),
+        sub_agents: vec![resumed, peer],
+    });
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(root)
+        .session_service(Arc::new(HistorySessionService { last_author: "billing".to_string() })
+            as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+
+    let stream = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("session456").unwrap(),
+            Content::new("user").with_text("now something else"),
+        )
+        .await
+        .unwrap();
+    let results = stream.collect::<Vec<_>>().await;
+    assert!(results.into_iter().all(|result| result.is_ok()));
+
+    assert_eq!(
+        observed.lock().unwrap().clone(),
+        Some((
+            vec!["coordinator".to_string(), "support".to_string()],
+            Some("coordinator".to_string())
+        ))
+    );
+}
+
 #[test]
 fn test_find_agent_in_tree() {
     let sub_agent: Arc<dyn Agent> = Arc::new(MockAgent { name: "sub_agent".to_string() });
