@@ -17,6 +17,7 @@
 //! cargo adk validate --yaml agent.yaml      # validate agent definition
 //! cargo adk deploy                          # deploy to platform
 //! cargo adk deploy --stream-output          # deploy with JSON event streaming
+//! cargo adk eval tests/ --agent-cmd "target/release/my-agent --eval"  # run eval sets
 //! ```
 
 use clap::{Parser, Subcommand};
@@ -27,6 +28,8 @@ use std::path::{Path, PathBuf};
 use cargo_adk::codegen::generate_project_with_registry;
 use cargo_adk::composition::{DryRunFile, DryRunOutput, resolve_composition};
 use cargo_adk::registry::TemplateRegistry;
+
+mod eval_cmd;
 
 const ADK_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -173,36 +176,59 @@ enum AdkCommand {
         stream_output: bool,
     },
 
-    /// Run agent evaluations (not supported yet: exits non-zero without running any case)
+    /// Run eval sets against an agent binary and exit non-zero on any failure or regression
     ///
-    /// The CLI cannot construct your agent, so it cannot execute eval cases. Run eval sets
-    /// from a Rust test with `adk_eval::Evaluator` instead.
+    /// `--agent-cmd` starts the agent under test, which reads one JSON request per line on
+    /// stdin and writes one JSON response per line on stdout:
+    /// request `{"case_id","turn","user_text","session_id"}`, response
+    /// `{"text","tool_calls":[{"name","args"}]}` or `{"error"}`. Every turn of a case shares
+    /// a session_id. Logs go to stderr.
     Eval {
-        /// Path to eval set file or directory
+        /// Path to a .test.json file, or a directory of them
         path: PathBuf,
 
-        // The flags below are accepted, and ignored, so existing invocations reach the
-        // not-supported error instead of a usage error.
-        #[arg(long = "model", hide = true)]
-        _model: Option<String>,
+        /// Shell command that starts the agent under test (run with `sh -c`, or `cmd /C` on
+        /// Windows)
+        #[arg(long)]
+        agent_cmd: String,
 
-        #[arg(long = "save-baseline", hide = true)]
-        _save_baseline: bool,
+        /// EvaluationCriteria JSON file (default: tool_trajectory_score 1.0 and
+        /// response_similarity 0.8)
+        #[arg(long)]
+        criteria: Option<PathBuf>,
 
-        #[arg(long = "check-regression", hide = true)]
-        _check_regression: bool,
+        /// Model for LLM-judged criteria: gemini-* (GOOGLE_API_KEY), claude-*
+        /// (ANTHROPIC_API_KEY), or gpt-*/o1/o3/o4 (OPENAI_API_KEY)
+        #[arg(long)]
+        judge_model: Option<String>,
 
-        #[arg(long = "tolerance", hide = true)]
-        _tolerance: Option<f64>,
+        /// Save the scores of this run as the regression baseline
+        #[arg(long)]
+        save_baseline: bool,
 
-        #[arg(long = "format", hide = true)]
-        _format: Option<String>,
+        /// Compare against the saved baseline; a missing baseline is an error
+        #[arg(long)]
+        check_regression: bool,
 
-        #[arg(long = "output", hide = true)]
-        _output: Option<PathBuf>,
+        /// Baseline file (default: .eval-baseline.json in the eval set's directory)
+        #[arg(long)]
+        baseline: Option<PathBuf>,
 
-        #[arg(long = "concurrency", hide = true)]
-        _concurrency: Option<usize>,
+        /// Largest score drop from the baseline that is not a regression
+        #[arg(long, default_value = "0.05")]
+        tolerance: f64,
+
+        /// Report format
+        #[arg(long, value_enum, default_value = "table")]
+        format: eval_cmd::EvalFormat,
+
+        /// Write the report to this file instead of stdout
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// Seconds to wait for each agent response before failing the case
+        #[arg(long, default_value = "300")]
+        turn_timeout: u64,
     },
 
     /// Run performance benchmarks against real LLM APIs
@@ -449,10 +475,43 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        AdkCommand::Eval { path, .. } => {
-            if let Err(e) = run_eval(&path) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+        AdkCommand::Eval {
+            path,
+            agent_cmd,
+            criteria,
+            judge_model,
+            save_baseline,
+            check_regression,
+            baseline,
+            tolerance,
+            format,
+            output,
+            turn_timeout,
+        } => {
+            let options = eval_cmd::EvalOptions {
+                path,
+                agent_cmd,
+                criteria,
+                judge_model,
+                save_baseline,
+                check_regression,
+                baseline,
+                tolerance,
+                format,
+                output,
+                turn_timeout: std::time::Duration::from_secs(turn_timeout),
+            };
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime");
+            match rt.block_on(eval_cmd::run_eval(&options)) {
+                Ok(true) => {}
+                Ok(false) => std::process::exit(1),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
             }
         }
         AdkCommand::Bench {
@@ -1313,54 +1372,6 @@ async fn run_bench(
     }
 
     0
-}
-
-// ── Eval command ────────────────────────────────────────────────
-
-/// Loads the eval set at `path`, then refuses to report results.
-///
-/// The CLI has no way to construct the user's agent, so it cannot execute any case.
-/// Reporting loaded cases as passed would turn every CI gate green, so this always
-/// returns an error that points at the library API instead.
-fn run_eval(path: &Path) -> Result<(), String> {
-    let files: Vec<PathBuf> = if path.is_dir() {
-        let entries = std::fs::read_dir(path)
-            .map_err(|e| format!("failed to read directory {}: {e}", path.display()))?;
-        let mut files: Vec<PathBuf> = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|file| {
-                file.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".test.json"))
-            })
-            .collect();
-        if files.is_empty() {
-            return Err(format!("no .test.json files found in {}", path.display()));
-        }
-        files.sort();
-        files
-    } else {
-        vec![path.to_path_buf()]
-    };
-
-    let mut cases = 0;
-    for file in &files {
-        let test_file = adk_eval::TestFile::load(file)
-            .map_err(|e| format!("failed to load {}: {e}", file.display()))?;
-        cases += test_file.eval_cases.len();
-    }
-
-    Err(format!(
-        "cargo adk eval cannot run agents yet, so none of the {cases} case(s) in {} were \
-         executed and no results, baseline, or report were written.\n\
-         Run the eval set from a Rust test, where your agent is constructed:\n\n\
-         \x20   let evaluator = adk_eval::Evaluator::new(adk_eval::EvaluationConfig::with_criteria(criteria));\n\
-         \x20   let report = evaluator.evaluate_file(agent, \"{}\").await?;\n\
-         \x20   assert!(report.all_passed(), \"{{}}\", report.format_summary());\n\n\
-         See \"Running Evaluations in CI\" in \
-         https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/evaluation/evaluation.md",
-        path.display(),
-        files[0].display()
-    ))
 }
 
 /// Create a .tar.gz bundle with paths that have NO `./` prefix.
@@ -2438,68 +2449,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn eval_refuses_to_report_cases_it_did_not_run() {
-        let dir = std::env::temp_dir().join(format!("cargo-adk-eval-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("weather.test.json");
-        fs::write(
-            &file,
-            r#"{
-                "eval_set_id": "weather",
-                "name": "Weather",
-                "eval_cases": [{
-                    "eval_id": "current_weather",
-                    "conversation": [{
-                        "invocation_id": "inv_1",
-                        "user_content": {"parts": [{"text": "Weather in Nairobi?"}]},
-                        "final_response": {"parts": [{"text": "Sunny."}], "role": "model"}
-                    }]
-                }]
-            }"#,
-        )
-        .unwrap();
-
-        for path in [&file, &dir] {
-            let err = run_eval(path).unwrap_err();
-            assert!(err.contains("cannot run agents yet"), "{err}");
-            assert!(err.contains("none of the 1 case(s)"), "{err}");
-            assert!(err.contains("Evaluator"), "{err}");
-        }
-
-        fs::write(&file, "not json").unwrap();
-        assert!(run_eval(&file).unwrap_err().contains("failed to load"));
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn eval_accepts_legacy_flags_so_users_reach_the_error() {
-        let cli = Cargo::try_parse_from([
-            "cargo",
-            "adk",
-            "eval",
-            "tests/",
-            "--model",
-            "gemini-3.7-flash",
-            "--save-baseline",
-            "--check-regression",
-            "--tolerance",
-            "0.05",
-            "--format",
-            "junit",
-            "--output",
-            "results.xml",
-            "--concurrency",
-            "4",
-        ])
-        .unwrap();
-        let CargoSubcommand::Adk(adk) = cli.command;
-        assert!(
-            matches!(adk.command, AdkCommand::Eval { ref path, .. } if path == Path::new("tests/"))
-        );
-    }
 
     fn assert_current_template(cargo_toml: &str) {
         assert!(

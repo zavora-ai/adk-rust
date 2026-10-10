@@ -1011,6 +1011,8 @@ impl ManagedAgentsClient {
     }
 
     /// Rotate/update a credential's secret payload.
+    ///
+    /// Sends `POST /v1/vaults/{vault_id}/credentials/{credential_id}`.
     pub async fn update_credential(
         &self,
         vault_id: &str,
@@ -1020,7 +1022,7 @@ impl ManagedAgentsClient {
         let url = self.build_url(&format!("vaults/{vault_id}/credentials/{credential_id}"));
         let response = self
             .client
-            .patch(&url)
+            .post(&url)
             .headers((*self.cached_headers).clone())
             .json(&params)
             .send()
@@ -1193,6 +1195,8 @@ impl ManagedAgentsClient {
     }
 
     /// Update a memory (content, path, or both).
+    ///
+    /// Sends `POST /v1/memory_stores/{store_id}/memories/{memory_id}`.
     pub async fn update_memory(
         &self,
         store_id: &str,

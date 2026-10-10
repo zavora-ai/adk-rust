@@ -15,6 +15,8 @@
 //! - [`AdkError`] / [`Result`] - Unified error handling
 //! - [`SharedState`] / [`SharedStateError`] - Thread-safe key-value store for parallel agent coordination
 //! - [`ToolConfirmationPolicy`] / [`ToolConfirmationRequest`] - Human-in-the-loop tool authorization
+//! - [`ToolPolicy`] / [`DeclarativePolicy`] / [`authorize_tool_call`] - The governed tool execution path
+//! - [`GovernanceControl`] - Organisation-wide kill switch
 //!
 //! ## What's New in 0.6.0
 //!
@@ -72,12 +74,16 @@
 //! - `app:` - Application state (application-wide)
 //! - `temp:` - Temporary data (cleared each turn)
 
+/// Durable record of non-idempotent tool calls.
+pub mod action_ledger;
 /// Core agent trait and event stream type.
 pub mod agent;
 /// Starting an agent turn without owning the runner's construction.
 pub mod agent_invoker;
 /// Dynamic agent loading by name.
 pub mod agent_loader;
+/// Run budgets: limits on model calls, tokens, cost, wall time, and tool calls.
+pub mod budget;
 /// Callback type aliases for agent, model, and tool lifecycle hooks.
 pub mod callbacks;
 /// Invocation context traits: state, session, artifacts, memory, and run configuration.
@@ -87,6 +93,8 @@ pub mod error;
 /// Event types representing agent interactions in a conversation.
 pub mod event;
 mod event_stream;
+/// Governed tool execution: kill switch, durable approvals, and the authorization path.
+pub mod governance;
 /// Typed identity primitives for app, user, session, and invocation.
 pub mod identity;
 /// Template-based instruction injection with session state interpolation.
@@ -95,6 +103,8 @@ pub mod instruction_template;
 pub mod intra_compaction;
 /// LLM trait, request/response types, and caching configuration.
 pub mod model;
+/// Tool execution policy: allow, deny, or require approval per call.
+pub mod policy;
 /// HTTP request context extracted by auth middleware.
 pub mod request_context;
 /// Provider-aware JSON Schema normalization for tool declarations.
@@ -105,6 +115,8 @@ pub mod schema_cache;
 pub mod schema_utils;
 /// Thread-safe shared state for parallel agent coordination.
 pub mod shared_state;
+/// One spend ledger for model calls and payments: reservations, limits, and committed spend.
+pub mod spend;
 /// Tool trait, toolset, execution strategy, and registry.
 pub mod tool;
 /// Semaphore-based tool concurrency management.
@@ -112,6 +124,10 @@ pub mod tool_concurrency;
 /// Content, Part, and multimodal data types.
 pub mod types;
 
+pub use action_ledger::{
+    ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, OUTCOME_UNKNOWN_STATUS,
+    is_outcome_unknown, json_digest, outcome_unknown_response,
+};
 pub use agent::{
     Agent, AgentCapabilities, AgentInteractionMode, AgentRelationshipKind, AgentTopology,
     AgentTopologyMember, AgentTopologyRelationship, AgentTransferDecision, AgentTransferRequest,
@@ -119,6 +135,10 @@ pub use agent::{
 };
 pub use agent_invoker::AgentInvoker;
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
+pub use budget::{
+    BUDGET_LIMIT_KEY, BUDGET_RECORDED_KEY, BudgetExceeded, BudgetLimit, BudgetTracker, BudgetUsage,
+    ModelCallMeter, RunBudget, budget_exceeded_event, generate_with_budget, meter_stream,
+};
 pub use callbacks::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull,
     BaseEventsSummarizer, BeforeAgentCallback, BeforeModelCallback, BeforeModelResult,
@@ -140,6 +160,11 @@ pub use event::{
     event_belongs_to_branch,
 };
 pub use event_stream::EventTextDeltas;
+pub use governance::{
+    ApprovalScope, ApprovalStore, DEFAULT_TOOL_CONFIRMATION_TIMEOUT, GovernanceControl,
+    GovernedCall, InMemoryApprovalStore, PendingApproval, ToolApproval, ToolAuthorization,
+    ToolCallScreen, ToolGate, authorize_tool_call,
+};
 pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,
 };
@@ -149,13 +174,21 @@ pub use model::{
     CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig, FinishReason,
     GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,
 };
+pub use policy::{
+    ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyDecision, PolicyRule,
+    ToolPolicy, ToolPolicyRequest,
+};
 pub use request_context::RequestContext;
 pub use schema_adapter::{GenericSchemaAdapter, SchemaAdapter};
 pub use schema_cache::SchemaCache;
 pub use shared_state::{SharedState, SharedStateError};
+pub use spend::{
+    DEFAULT_RESERVATION_TTL, InMemorySpendLedger, ReservationId, SPEND_LIMIT_EXCEEDED_CODE,
+    SpendError, SpendKey, SpendLedger, SpendLimit, SpendLimits, SpendPeriod, usd_to_micro_usd,
+};
 pub use tool::{
-    RetryBudget, Tool, ToolContext, ToolExecutionStrategy, ToolPredicate, ToolRegistry, Toolset,
-    ValidationMode,
+    RetryBudget, Tool, ToolContext, ToolEffect, ToolExecutionStrategy, ToolPredicate, ToolRegistry,
+    Toolset, ValidationMode,
 };
 pub use tool_concurrency::{ConcurrencyPermit, ToolConcurrencyManager};
 pub use types::{

@@ -152,7 +152,8 @@ let client = Anthropic::new(None)?
 
 | Behaviour | Rule |
 |-----------|------|
-| Non-streaming request | `with_timeout` bounds the whole request (default 60 seconds) |
+| Non-streaming request | `with_timeout` bounds the whole request (default 10 minutes) |
+| Connecting | `with_timeout`, capped at 60 seconds |
 | Streaming request | `with_timeout` bounds the wait for response headers; the body has no total bound |
 | Stalled stream | The stream yields `Error::Timeout` and ends after 30 seconds without data |
 | Total stream bound | Opt in with `with_stream_timeout(Some(duration))` |
@@ -210,6 +211,39 @@ Run with `cargo run -p adk-anthropic --example <name> --features managed-agents`
 | `managed_agents_files` | Upload CSV, mount in session, agent analyzes data |
 | `managed_agents_memory` | Persistent memory across sessions (agent remembers preferences) |
 | `managed_agents_multiagent` | Coordinator delegates to researcher + writer agents in parallel |
+
+### Managed Agents Defaults and Webhooks
+
+| Helper | Sends | Widen with |
+|--------|-------|------------|
+| `CreateEnvironmentParams::cloud(name)` | `limited` networking: no hosts, package registries, or MCP servers | `cloud_limited(name, hosts)`, `cloud_unrestricted(name)` |
+| `ToolConfig::agent_toolset()` | The agent toolset with `web_fetch` and `web_search` disabled | `ToolConfig::agent_toolset_with_web()` |
+| `ToolConfig::agent_toolset_with_policy(policy)` | The same, with a permission policy | Add web entries to `configs` |
+
+The web tools run on Anthropic's servers, so an environment's networking policy does
+not restrict them.
+
+Webhook deliveries are signed with [Standard Webhooks](https://www.standardwebhooks.com/).
+Pass the raw body and the `webhook-id`, `webhook-timestamp`, and `webhook-signature`
+headers to `WebhookVerifier`:
+
+```rust
+use adk_anthropic::managed_agents::{WebhookEvent, WebhookHeaders, WebhookVerifier};
+use reqwest::header::HeaderMap;
+
+fn handle(
+    body: &str,
+    headers: &HeaderMap,
+    secret: &str,
+) -> Result<WebhookEvent, Box<dyn std::error::Error>> {
+    let verifier = WebhookVerifier::new(secret)?; // the whsec_ secret from the Console
+    Ok(verifier.verify(body, &WebhookHeaders::from_header_map(headers)?)?)
+}
+```
+
+Verification accepts any of the space-separated `v1,<base64>` signatures and rejects
+timestamps more than five minutes from the local clock in either direction
+(`with_tolerance` changes the window).
 
 **Hello World output:**
 ```

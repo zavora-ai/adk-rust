@@ -174,6 +174,8 @@ impl RecordingModel {
             error_message: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         }
     }
 
@@ -190,6 +192,8 @@ impl RecordingModel {
             error_message: None,
             provider_metadata: None,
             interaction_id: None,
+            model: None,
+            provider: None,
         }
     }
 }

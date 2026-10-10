@@ -12,7 +12,7 @@
 #![cfg(feature = "managed-agents")]
 
 use adk_anthropic::managed_agents::{
-    WebhookVerifyError, session_events, vault_events, verify_webhook,
+    WebhookHeaders, WebhookVerifyError, session_events, vault_events, verify_webhook,
 };
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -28,12 +28,25 @@ fn make_secret() -> (String, Vec<u8>) {
     (format!("whsec_{encoded}"), key.to_vec())
 }
 
-fn sign(payload: &str, timestamp: u64, key: &[u8]) -> String {
-    let signed_content = format!("v1.{timestamp}.{payload}");
+/// A delivery signed as Standard Webhooks signs it.
+struct Signed {
+    id: String,
+    timestamp: String,
+    signature: String,
+}
+
+impl Signed {
+    fn headers(&self) -> WebhookHeaders<'_> {
+        WebhookHeaders { id: &self.id, timestamp: &self.timestamp, signature: &self.signature }
+    }
+}
+
+fn sign(payload: &str, timestamp: u64, key: &[u8]) -> Signed {
+    let id = "whe_01delivery".to_string();
     let mut mac = HmacSha256::new_from_slice(key).unwrap();
-    mac.update(signed_content.as_bytes());
-    let signature = hex::encode(mac.finalize().into_bytes());
-    format!("v1,{timestamp},{signature}")
+    mac.update(format!("{id}.{timestamp}.{payload}").as_bytes());
+    let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+    Signed { id, timestamp: timestamp.to_string(), signature: format!("v1,{signature}") }
 }
 
 fn current_timestamp() -> u64 {
@@ -59,7 +72,7 @@ fn test_session_status_idled_event() {
     let ts = current_timestamp();
     let sig = sign(payload, ts, &key);
 
-    let event = verify_webhook(payload, &sig, &secret).unwrap();
+    let event = verify_webhook(payload, sig.headers(), &secret).unwrap();
     assert_eq!(event.event_type, "event");
     assert_eq!(event.id, "event_01SessionIdled");
     assert_eq!(event.data.event_type, session_events::STATUS_IDLED);
@@ -83,7 +96,7 @@ fn test_session_status_run_started_event() {
     let ts = current_timestamp();
     let sig = sign(payload, ts, &key);
 
-    let event = verify_webhook(payload, &sig, &secret).unwrap();
+    let event = verify_webhook(payload, sig.headers(), &secret).unwrap();
     assert_eq!(event.data.event_type, session_events::STATUS_RUN_STARTED);
     assert_eq!(event.data.id, "sesn_02DEF456");
 }
@@ -103,7 +116,7 @@ fn test_session_status_terminated_event() {
     let ts = current_timestamp();
     let sig = sign(payload, ts, &key);
 
-    let event = verify_webhook(payload, &sig, &secret).unwrap();
+    let event = verify_webhook(payload, sig.headers(), &secret).unwrap();
     assert_eq!(event.data.event_type, session_events::STATUS_TERMINATED);
 }
 
@@ -122,7 +135,7 @@ fn test_session_thread_created_event() {
     let ts = current_timestamp();
     let sig = sign(payload, ts, &key);
 
-    let event = verify_webhook(payload, &sig, &secret).unwrap();
+    let event = verify_webhook(payload, sig.headers(), &secret).unwrap();
     assert_eq!(event.data.event_type, session_events::THREAD_CREATED);
 }
 
@@ -145,7 +158,7 @@ fn test_vault_created_event() {
     let ts = current_timestamp();
     let sig = sign(payload, ts, &key);
 
-    let event = verify_webhook(payload, &sig, &secret).unwrap();
+    let event = verify_webhook(payload, sig.headers(), &secret).unwrap();
     assert_eq!(event.data.event_type, vault_events::VAULT_CREATED);
     assert_eq!(event.data.id, "vlt_01ABC");
 }
@@ -165,7 +178,7 @@ fn test_vault_credential_archived_event() {
     let ts = current_timestamp();
     let sig = sign(payload, ts, &key);
 
-    let event = verify_webhook(payload, &sig, &secret).unwrap();
+    let event = verify_webhook(payload, sig.headers(), &secret).unwrap();
     assert_eq!(event.data.event_type, vault_events::CREDENTIAL_ARCHIVED);
 }
 
@@ -184,7 +197,7 @@ fn test_vault_credential_refresh_failed_event() {
     let ts = current_timestamp();
     let sig = sign(payload, ts, &key);
 
-    let event = verify_webhook(payload, &sig, &secret).unwrap();
+    let event = verify_webhook(payload, sig.headers(), &secret).unwrap();
     assert_eq!(event.data.event_type, vault_events::CREDENTIAL_REFRESH_FAILED);
 }
 
@@ -200,7 +213,7 @@ fn test_tampered_payload_fails_verification() {
     // Tamper with the payload
     let tampered = r#"{"type":"event","id":"event_01","created_at":"2026-06-01T00:00:00Z","data":{"type":"session.status_idled","id":"sesn_HACKED"}}"#;
 
-    let result = verify_webhook(tampered, &sig, &secret);
+    let result = verify_webhook(tampered, sig.headers(), &secret);
     assert!(matches!(result, Err(WebhookVerifyError::SignatureMismatch)));
 }
 
@@ -211,7 +224,7 @@ fn test_replay_attack_fails() {
     let old_ts = current_timestamp() - 600; // 10 minutes ago
     let sig = sign(payload, old_ts, &key);
 
-    let result = verify_webhook(payload, &sig, &secret);
+    let result = verify_webhook(payload, sig.headers(), &secret);
     assert!(matches!(result, Err(WebhookVerifyError::TimestampExpired { .. })));
 }
 
@@ -227,7 +240,7 @@ fn test_wrong_secret_fails() {
     let wrong_encoded = base64::engine::general_purpose::STANDARD.encode(wrong_key);
     let wrong_secret = format!("whsec_{wrong_encoded}");
 
-    let result = verify_webhook(payload, &sig, &wrong_secret);
+    let result = verify_webhook(payload, sig.headers(), &wrong_secret);
     assert!(matches!(result, Err(WebhookVerifyError::SignatureMismatch)));
 }
 
@@ -239,10 +252,25 @@ fn test_idempotent_event_id() {
     let sig = sign(payload, ts, &key);
 
     // Verify twice (simulating a retry with same event ID)
-    let event1 = verify_webhook(payload, &sig, &secret).unwrap();
-    let event2 = verify_webhook(payload, &sig, &secret).unwrap();
+    let event1 = verify_webhook(payload, sig.headers(), &secret).unwrap();
+    let event2 = verify_webhook(payload, sig.headers(), &secret).unwrap();
     assert_eq!(event1.id, event2.id);
     assert_eq!(event1.id, "event_SAME_ID");
+}
+
+#[test]
+fn test_headers_read_from_a_request_header_map() {
+    let (secret, key) = make_secret();
+    let payload = r#"{"type":"event","id":"event_01","created_at":"2026-06-01T00:00:00Z","data":{"type":"session.status_idled","id":"sesn_01"}}"#;
+    let sig = sign(payload, current_timestamp(), &key);
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("Webhook-Id", sig.id.parse().unwrap());
+    headers.insert("Webhook-Timestamp", sig.timestamp.parse().unwrap());
+    headers.insert("Webhook-Signature", sig.signature.parse().unwrap());
+
+    let headers = WebhookHeaders::from_header_map(&headers).unwrap();
+    let event = verify_webhook(payload, headers, &secret).unwrap();
+    assert_eq!(event.data.id, "sesn_01");
 }
 
 // ─── Event Type Constants ────────────────────────────────────────────────────

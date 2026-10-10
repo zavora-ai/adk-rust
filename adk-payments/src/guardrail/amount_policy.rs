@@ -4,7 +4,11 @@ use adk_guardrail::Severity;
 
 use crate::domain::{Money, ProtocolDescriptor, TransactionRecord};
 
-use super::{PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail};
+use async_trait::async_trait;
+
+use super::{
+    PaymentPolicyContext, PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail,
+};
 
 /// Enforces soft-review and hard-stop thresholds for transaction totals.
 ///
@@ -50,15 +54,17 @@ impl AmountThresholdGuardrail {
     }
 }
 
+#[async_trait]
 impl PaymentPolicyGuardrail for AmountThresholdGuardrail {
     fn name(&self) -> &str {
         "amount_threshold"
     }
 
-    fn evaluate(
+    async fn evaluate(
         &self,
         record: &TransactionRecord,
         _protocol: &ProtocolDescriptor,
+        _context: &PaymentPolicyContext,
     ) -> PaymentPolicyDecision {
         let total = &record.cart.total;
         let total_text = format!("{} {}", total.to_decimal_string(), total.currency);
@@ -187,7 +193,11 @@ mod tests {
     }
 
     fn evaluate(guardrail: &AmountThresholdGuardrail, total: Money) -> PaymentPolicyDecision {
-        guardrail.evaluate(&sample_record(total), &ProtocolDescriptor::acp("2026-01-30"))
+        crate::guardrail::evaluate_now(
+            guardrail,
+            &sample_record(total),
+            &ProtocolDescriptor::acp("2026-01-30"),
+        )
     }
 
     fn finding(reason: &str, severity: Severity) -> Vec<PaymentPolicyFinding> {

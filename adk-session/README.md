@@ -12,6 +12,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 
 - **InMemorySessionService** - Simple in-memory session storage
 - **SqliteSessionService** - SQLite-backed persistence (`sqlite` feature)
+- **SqliteActionLedger** - Durable `ActionLedger` that keeps non-idempotent tool calls from repeating across restarts (`sqlite` feature)
 - **PostgresSessionService** - PostgreSQL-backed persistence (`postgres` feature)
 - **RedisSessionService** - Redis-backed persistence (`redis` feature)
 - **MongoSessionService** - MongoDB-backed persistence (`mongodb` feature)
@@ -319,6 +320,23 @@ println!("Schema version: {version}");
 ```
 
 Each backend detects pre-existing tables (baseline detection) and registers them as already applied, so `migrate()` is safe to call on both fresh and existing databases.
+
+## Spend Ledgers
+
+`SqliteSpendLedger` (`sqlite` feature) and `PostgresSpendLedger` (`postgres` feature)
+implement `adk_core::SpendLedger` durably. Concurrent reservations never overshoot a cap:
+SQLite takes the write lock with `BEGIN IMMEDIATE` before the limit check, and PostgreSQL
+locks the organization's row with `SELECT ... FOR UPDATE`.
+
+```rust
+use adk_core::{SpendKey, SpendLimits, SpendPeriod};
+use adk_session::SqliteSpendLedger;
+
+let ledger = SqliteSpendLedger::new("sqlite://spend.db?mode=rwc")
+    .await?
+    .with_limits(SpendLimits::new().limit(SpendKey::org("my-app").per(SpendPeriod::Day), 50_000_000));
+ledger.migrate().await?;
+```
 
 ## Rename: DatabaseSessionService → SqliteSessionService
 

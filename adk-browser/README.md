@@ -28,7 +28,8 @@ This crate provides 46 browser automation tools (45 enabled by default) as ADK `
 |---------|---------|
 | `browser_evaluate_js`, which runs model-written JavaScript in the page, is not included in any toolset or profile | `.with_evaluate_js(true)` (or `.with_js(true)`) |
 | `browser_navigate`, `browser_new_tab`, and `browser_new_window` accept only `http` and `https` URLs, so `file:`, `javascript:`, `data:`, and `chrome:` URLs are refused | `.with_allowed_schemes(["https", "file"])` |
-| The same tools refuse loopback, private, link-local, and cloud metadata addresses (`localhost`, `10.0.0.0/8`, `169.254.169.254`, and host names that resolve to them) | `.with_private_network_access(true)` |
+| The same tools refuse loopback, private, link-local, and cloud metadata addresses (`localhost`, `10.0.0.0/8`, `169.254.169.254`, and host names that resolve to them), and check the page they and `browser_back`, `browser_forward`, and `browser_refresh` end on after redirects, replacing a refused page with `about:blank` | `.with_private_network_access(true)` |
+| The same tools refuse host names that do not resolve on the agent host | `.with_unresolved_hosts(true)` |
 | `browser_file_upload` is not included in any toolset or profile; once enabled, it uploads only existing files inside the configured directories, after resolving symlinks | `.with_file_upload(["/srv/agent/uploads"])` |
 | Chrome runs with its sandbox on; `--no-sandbox` is never added, and `chrome_options` cannot replace the argument list | `BrowserConfig::new().add_arg("--no-sandbox")` for containers that run Chrome as root |
 

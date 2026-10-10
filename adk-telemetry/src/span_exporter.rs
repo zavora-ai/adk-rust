@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{
     Arc, RwLock,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::{Duration, Instant};
 use tracing::{Id, Subscriber, debug};
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 
@@ -18,45 +19,166 @@ pub trait SpanSink: Send + Sync {
     fn export_span(&self, span_name: &str, attributes: HashMap<String, String>);
 }
 
+/// Spans an [`AdkSpanExporter`] retains by default before evicting the oldest.
+pub const DEFAULT_MAX_SPANS: usize = 10_000;
+
 /// ADK-Go style span exporter that retains runtime spans in memory.
 ///
 /// Spans are keyed by a stable span ID while preserving the originating ADK
 /// event ID as an attribute. This lets multiple runtime operations describe the
 /// same event without overwriting one another.
-#[derive(Debug, Clone, Default)]
+///
+/// Retention is bounded: once [`max_spans`](Self::with_max_spans) spans are held,
+/// storing another evicts the least recently stored one, and with a
+/// [`ttl`](Self::with_ttl) set, spans older than it are dropped. The defaults are
+/// [`DEFAULT_MAX_SPANS`] spans and no TTL.
+///
+/// # Example
+///
+/// ```
+/// use std::collections::HashMap;
+/// use std::time::Duration;
+///
+/// use adk_telemetry::{AdkSpanExporter, SpanSink};
+///
+/// let exporter = AdkSpanExporter::new().with_max_spans(2).with_ttl(Duration::from_secs(600));
+/// for id in ["a", "b", "c"] {
+///     let attributes = HashMap::from([
+///         ("span_id".to_string(), id.to_string()),
+///         ("gcp.vertex.agent.event_id".to_string(), id.to_string()),
+///     ]);
+///     exporter.export_span("call_llm", attributes);
+/// }
+///
+/// // The oldest span was evicted to stay within two.
+/// assert!(exporter.get_trace_by_event_id("a").is_none());
+/// assert!(exporter.get_trace_by_event_id("c").is_some());
+/// ```
+#[derive(Debug, Clone)]
 pub struct AdkSpanExporter {
-    /// Map of span ID to span attributes.
-    trace_dict: Arc<RwLock<HashMap<String, HashMap<String, String>>>>,
+    /// Retained spans with their eviction order.
+    store: Arc<RwLock<SpanStore>>,
     /// Whether this exporter has observed at least one retained runtime span.
     collecting: Arc<AtomicBool>,
+    max_spans: usize,
+    ttl: Option<Duration>,
+}
+
+/// Spans keyed by span ID, plus the order they were stored in.
+#[derive(Debug, Default)]
+struct SpanStore {
+    spans: HashMap<String, StoredSpan>,
+    /// Insertion sequence → span ID; the first entry is the next to evict.
+    order: BTreeMap<u64, String>,
+    next_seq: u64,
+}
+
+#[derive(Debug)]
+struct StoredSpan {
+    seq: u64,
+    stored_at: Instant,
+    attributes: HashMap<String, String>,
+}
+
+impl SpanStore {
+    fn insert(&mut self, key: String, attributes: HashMap<String, String>, max_spans: usize) {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        if let Some(previous) = self
+            .spans
+            .insert(key.clone(), StoredSpan { seq, stored_at: Instant::now(), attributes })
+        {
+            self.order.remove(&previous.seq);
+        }
+        self.order.insert(seq, key);
+        while self.spans.len() > max_spans {
+            let Some((_, oldest)) = self.order.pop_first() else { break };
+            self.spans.remove(&oldest);
+        }
+    }
+
+    /// Drops spans stored longer than `ttl` ago.
+    fn expire(&mut self, ttl: Option<Duration>) {
+        let Some(ttl) = ttl else { return };
+        while let Some((_, oldest)) = self.order.first_key_value() {
+            let expired = self.spans.get(oldest).is_none_or(|span| span.stored_at.elapsed() > ttl);
+            if !expired {
+                break;
+            }
+            if let Some((_, key)) = self.order.pop_first() {
+                self.spans.remove(&key);
+            }
+        }
+    }
+
+    fn live<'a>(
+        &'a self,
+        ttl: Option<Duration>,
+    ) -> impl Iterator<Item = (&'a String, &'a HashMap<String, String>)> + 'a {
+        self.spans
+            .iter()
+            .filter(move |(_, span)| ttl.is_none_or(|ttl| span.stored_at.elapsed() <= ttl))
+            .map(|(key, span)| (key, &span.attributes))
+    }
+}
+
+impl Default for AdkSpanExporter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AdkSpanExporter {
-    /// Creates an empty in-process span exporter.
+    /// Creates an empty in-process span exporter that retains up to
+    /// [`DEFAULT_MAX_SPANS`] spans, with no TTL.
     pub fn new() -> Self {
         Self {
-            trace_dict: Arc::new(RwLock::new(HashMap::new())),
+            store: Arc::new(RwLock::new(SpanStore::default())),
             collecting: Arc::new(AtomicBool::new(false)),
+            max_spans: DEFAULT_MAX_SPANS,
+            ttl: None,
         }
+    }
+
+    /// Sets how many spans are retained before the least recently stored is evicted.
+    ///
+    /// A value of 0 is treated as 1.
+    #[must_use]
+    pub fn with_max_spans(mut self, max_spans: usize) -> Self {
+        self.max_spans = max_spans.max(1);
+        self
+    }
+
+    /// Sets how long a span is retained after it is stored.
+    #[must_use]
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
     }
 
     /// Returns a snapshot of retained spans keyed by span ID.
     pub fn get_trace_dict(&self) -> HashMap<String, HashMap<String, String>> {
-        self.trace_dict.read().unwrap_or_else(|e| e.into_inner()).clone()
+        let store = self.store.read().unwrap_or_else(|e| e.into_inner());
+        store.live(self.ttl).map(|(key, attributes)| (key.clone(), attributes.clone())).collect()
     }
 
     /// Returns the first span associated with an ADK event ID.
     pub fn get_trace_by_event_id(&self, event_id: &str) -> Option<HashMap<String, String>> {
         debug!("AdkSpanExporter::get_trace_by_event_id called with event_id: {}", event_id);
-        let trace_dict = self.trace_dict.read().unwrap_or_else(|e| e.into_inner());
-        let result = trace_dict.get(event_id).cloned().or_else(|| {
-            trace_dict
-                .values()
-                .find(|attributes| {
-                    attributes.get("gcp.vertex.agent.event_id").is_some_and(|id| id == event_id)
-                })
-                .cloned()
-        });
+        let store = self.store.read().unwrap_or_else(|e| e.into_inner());
+        let result = store
+            .spans
+            .get(event_id)
+            .filter(|span| self.ttl.is_none_or(|ttl| span.stored_at.elapsed() <= ttl))
+            .map(|span| span.attributes.clone())
+            .or_else(|| {
+                store
+                    .live(self.ttl)
+                    .find(|(_, attributes)| {
+                        attributes.get("gcp.vertex.agent.event_id").is_some_and(|id| id == event_id)
+                    })
+                    .map(|(_, attributes)| attributes.clone())
+            });
         debug!("get_trace_by_event_id result for event_id '{}': {:?}", event_id, result.is_some());
         result
     }
@@ -73,17 +195,15 @@ impl AdkSpanExporter {
     /// Get all spans for a session (by filtering spans that have matching session_id)
     pub fn get_session_trace(&self, session_id: &str) -> Vec<HashMap<String, String>> {
         debug!("AdkSpanExporter::get_session_trace called with session_id: {}", session_id);
-        let trace_dict = self.trace_dict.read().unwrap_or_else(|e| e.into_inner());
+        let store = self.store.read().unwrap_or_else(|e| e.into_inner());
 
-        let mut spans = Vec::new();
-        for attributes in trace_dict.values() {
-            // Check if this span belongs to the session
-            if let Some(span_session_id) = attributes.get("gcp.vertex.agent.session_id")
-                && span_session_id == session_id
-            {
-                spans.push(attributes.clone());
-            }
-        }
+        let spans: Vec<HashMap<String, String>> = store
+            .live(self.ttl)
+            .filter(|(_, attributes)| {
+                attributes.get("gcp.vertex.agent.session_id").is_some_and(|id| id == session_id)
+            })
+            .map(|(_, attributes)| attributes.clone())
+            .collect();
 
         debug!("get_session_trace result for session_id '{}': {} spans", session_id, spans.len());
         spans
@@ -101,10 +221,11 @@ impl SpanSink for AdkSpanExporter {
                 );
                 let storage_key =
                     attributes.get("span_id").cloned().unwrap_or_else(|| event_id.clone());
-                let mut trace_dict = self.trace_dict.write().unwrap_or_else(|e| e.into_inner());
-                trace_dict.insert(storage_key, attributes);
+                let mut store = self.store.write().unwrap_or_else(|e| e.into_inner());
+                store.expire(self.ttl);
+                store.insert(storage_key, attributes, self.max_spans);
                 self.collecting.store(true, Ordering::Release);
-                debug!("AdkSpanExporter: Span stored, total spans: {}", trace_dict.len());
+                debug!("AdkSpanExporter: Span stored, total spans: {}", store.spans.len());
             } else {
                 debug!("AdkSpanExporter: Skipping span '{}' - no event_id found", span_name);
             }
@@ -166,11 +287,15 @@ where
         if let Some(parent) = span.parent()
             && let Some(parent_fields) = parent.extensions().get::<SpanFields>()
         {
+            // `adk.app_name` and `adk.user_id` are inherited so every span of a run
+            // carries the owner the debug routes check before returning it.
             let context_keys = [
                 "gcp.vertex.agent.session_id",
                 "gcp.vertex.agent.invocation_id",
                 "gcp.vertex.agent.event_id",
                 "gen_ai.conversation.id",
+                "adk.app_name",
+                "adk.user_id",
                 #[cfg(feature = "genai-semconv")]
                 "gen_ai.provider.name",
                 #[cfg(feature = "genai-semconv")]
@@ -307,6 +432,84 @@ mod tests {
             child_trace.get("gen_ai.conversation.id").map(String::as_str),
             Some("session-1")
         );
+    }
+
+    #[test]
+    fn child_spans_inherit_the_run_owner() {
+        let exporter = Arc::new(AdkSpanExporter::new());
+        let layer = AdkSpanLayer::new(exporter.clone()).with_filter(filter_fn(|metadata| {
+            metadata.is_span() && is_runtime_span(metadata.name())
+        }));
+        let subscriber = tracing_subscriber::registry().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let run = tracing::info_span!(
+                "agent.execute",
+                "gcp.vertex.agent.event_id" = "evt-run",
+                "gcp.vertex.agent.invocation_id" = "inv-owner",
+                "gcp.vertex.agent.session_id" = "session-owner",
+                "adk.app_name" = "app",
+                "adk.user_id" = "alice"
+            );
+            let _run = run.enter();
+            let call_llm = tracing::info_span!("call_llm", "gcp.vertex.agent.event_id" = "evt-llm");
+            let _call_llm = call_llm.enter();
+            // A span the layer filters out must not break the chain.
+            let inner = tracing::info_span!("provider.request");
+            let _inner = inner.enter();
+            let _tool = tracing::info_span!("execute_tool lookup").entered();
+        });
+
+        let spans = exporter.get_session_trace("session-owner");
+        assert_eq!(spans.len(), 3);
+        for span in &spans {
+            assert_eq!(
+                (
+                    span.get("adk.user_id").map(String::as_str),
+                    span.get("adk.app_name").map(String::as_str)
+                ),
+                (Some("alice"), Some("app")),
+                "{span:?}"
+            );
+        }
+    }
+
+    fn span(id: &str) -> HashMap<String, String> {
+        HashMap::from([
+            ("span_id".to_string(), id.to_string()),
+            ("gcp.vertex.agent.event_id".to_string(), id.to_string()),
+            ("gcp.vertex.agent.session_id".to_string(), "session".to_string()),
+        ])
+    }
+
+    #[test]
+    fn retention_is_bounded_by_span_count() {
+        let exporter = AdkSpanExporter::new().with_max_spans(2);
+        for id in ["a", "b"] {
+            exporter.export_span("call_llm", span(id));
+        }
+        // Storing "a" again makes "b" the least recently stored.
+        exporter.export_span("call_llm", span("a"));
+        exporter.export_span("call_llm", span("c"));
+
+        let mut retained: Vec<String> = exporter.get_trace_dict().into_keys().collect();
+        retained.sort();
+        assert_eq!(retained, vec!["a".to_string(), "c".to_string()]);
+        assert!(exporter.get_trace_by_event_id("b").is_none());
+        assert_eq!(exporter.get_session_trace("session").len(), 2);
+    }
+
+    #[test]
+    fn spans_expire_after_the_ttl() {
+        let exporter = AdkSpanExporter::new().with_ttl(Duration::from_millis(1));
+        exporter.export_span("call_llm", span("old"));
+        std::thread::sleep(Duration::from_millis(20));
+
+        assert!(exporter.get_trace_by_event_id("old").is_none());
+        assert!(exporter.get_session_trace("session").is_empty());
+
+        exporter.export_span("call_llm", span("new"));
+        assert_eq!(exporter.store.read().unwrap().spans.len(), 1, "storing expires old spans");
     }
 
     #[test]

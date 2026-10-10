@@ -235,7 +235,14 @@ The session service handles state scoping automatically:
 
 Each scope receives only the keys in the delta, applied atomically by the backend, so concurrent appends keep each other's keys. When two concurrent appends write the same key, the later write wins. A `null` value is stored as `null`; it does not remove the key.
 
-> **Note:** `Neo4jSessionService` still rewrites the whole app and user scope on each append, so concurrent appends through it can drop each other's keys.
+| Backend | How a delta is applied |
+|---------|------------------------|
+| PostgreSQL | `state \|\| delta` in SQL under the row lock |
+| SQLite | Read and write inside `BEGIN IMMEDIATE` |
+| Redis | `HSET` of the delta's fields; session scope replaced by a compare-and-set script |
+| MongoDB | `$mergeObjects` update pipeline |
+| Firestore | Merge inside the commit transaction |
+| Neo4j | One node property per key, written with `SET n += $delta` |
 
 ## Complete Example
 

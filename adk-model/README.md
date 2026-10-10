@@ -110,6 +110,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Chat Completions rejects function tools on GPT-5.6 and later while reasoning is on, so
+`OpenAIClient` sends requests that declare tools for those models through the Responses
+API, with `store: false`. Other requests stay on Chat Completions.
+
 ### OpenCode
 
 Enable the `opencode` feature. The client picks Chat Completions, Responses, Anthropic Messages, or
@@ -605,6 +609,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+```
+
+## Usage Attribution and Cost
+
+Every provider sets `LlmResponse::provider` and `LlmResponse::model` and fills
+`UsageMetadata::cost` (USD) from `pricing::PricingCatalog` when the provider did
+not report a cost. Cached prompt tokens are billed once, Anthropic cache writes
+by TTL, and long-context tiers apply where the vendor publishes them. Unpriced
+models keep `cost: None`.
+
+```rust
+use adk_core::UsageMetadata;
+use adk_model::PricingCatalog;
+
+let usage = UsageMetadata { prompt_token_count: 1_000_000, ..Default::default() };
+let cost = PricingCatalog::standard().cost_usd(Some("openai"), "gpt-4.1-2025-04-14", &usage);
+assert_eq!(cost, Some(2.0));
 ```
 
 ## Supported Models

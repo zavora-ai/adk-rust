@@ -95,6 +95,7 @@ let agent = LlmAgentBuilder::new("assistant")
 | `require_tool_confirmation(name)` | Require user confirmation for a specific tool |
 | `require_tool_confirmation_for_all()` | Require user confirmation for all tools |
 | `tool_confirmation_policy(policy)` | Set custom tool confirmation policy |
+| `tool_guardrails(set)` | Screen each call's final arguments (`guardrails` feature) |
 | `tool_execution_strategy(strategy)` | Tool dispatch mode: `Sequential`, `Parallel`, or `Auto` |
 | `parallelize_agent_delegations(bool)` | Overlap consecutive agent-delegation calls without parallelizing ordinary tools |
 | `disallow_transfer_to_parent(bool)` | Prevent agent from transferring back to parent |
@@ -113,6 +114,16 @@ let agent = LlmAgentBuilder::new("assistant")
 | `after_tool_callback(fn)` | Add after-tool callback |
 | `after_tool_callback_full(fn)` | Rich after-tool callback with tool, args, and response |
 | `build()` | Build the LlmAgent |
+
+### Governed Tool Execution
+
+`LlmAgent` and `CodeActAgent` authorize each tool call with `adk_core::authorize_tool_call`
+after before-tool plugins and callbacks have run, so the run's `ToolPolicy`, the agent's tool
+guardrails, and confirmation all see the arguments that will execute. A call held for
+confirmation is answered with an error result and surfaced as a `ToolConfirmationRequest` event;
+a decision recorded against `request.fingerprint()` authorizes the same call when the next run's
+model issues it again. A frozen `GovernanceControl` ends the run before the next model or tool
+call. See [Tool Authorization](../docs/official_docs/security/tool-authorization.md).
 
 ### Generation Config
 
@@ -252,6 +263,12 @@ approved edges must honor exact-call confirmation. Ordered async
 ordinary Runner plugins and existing agent callbacks continue to apply. Team
 execution emits native `team.*` telemetry spans and stable structured errors.
 
+`TeamBudget` caps model calls, tokens, cost, tool calls and wall time through
+a `BudgetTracker` that every member shares and that counts against the run's
+`RunBudget`; members stop before the call that would start past a limit.
+Partial streaming chunks never count. The runtime keeps the receipts of the 64
+most recently finished invocations.
+
 Relationship contracts separately allow state reads and writes, reject
 concurrent state conflicts, and restrict artifact-name prefixes. Dynamic
 registry resolution can require health, version, digest, and trust labels.
@@ -351,7 +368,7 @@ let agent = LlmAgentBuilder::new("resilient_agent")
     .build()?;
 ```
 
-Per-tool budgets take precedence over the default. When no budget is configured, tools execute once.
+Per-tool budgets take precedence over the default. When no budget is configured, tools execute once. A budget retries only tools whose `effect()` is `ReadOnly` or `Idempotent`, only after a retryable error, with exponential backoff and jitter; each attempt gets a fresh tool context. A `NonIdempotent` tool runs once, and one that times out is answered with an `outcome_unknown` response. With `RunConfig::action_ledger` set, a replayed `NonIdempotent` call is answered from the ledger instead of executing again.
 
 ### Circuit Breaker
 

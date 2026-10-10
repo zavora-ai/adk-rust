@@ -62,9 +62,13 @@ pub trait Tool: Send + Sync {
     fn is_read_only(&self) -> bool;           // default: false
     fn is_concurrency_safe(&self) -> bool;    // default: false
     fn is_agent_delegation(&self) -> bool;    // default: false
+    fn effect(&self) -> ToolEffect;           // default: ReadOnly if is_read_only(), else NonIdempotent
+    fn timeout_override(&self) -> Option<Option<Duration>>; // default: None (agent's tool_timeout)
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
 ```
+
+`effect()` governs retries and the action ledger: only `ReadOnly` and `Idempotent` tools are retried, and only after a retryable error. With an `ActionLedger` on `RunConfig::action_ledger` (`InMemoryActionLedger` here, `SqliteActionLedger` in `adk-session`), a `NonIdempotent` call executes at most once per `ToolContext::idempotency_key()`; a replay of a call that never recorded an outcome is answered with `outcome_unknown_response()` instead of executing again.
 
 `ToolExecutionStrategy::Auto` includes a call in its concurrent subset only when the selected tool returns `true` from both `is_read_only()` and `is_concurrency_safe()`. It runs that safe subset first, then executes the remaining calls sequentially. Both methods default to `false`, so existing implementations remain sequential.
 
@@ -290,6 +294,31 @@ InvocationContext (extends CallbackContext)
 
 ## Security
 
+### Governed Tool Execution
+
+Every agent runs each tool call through `authorize_tool_call` after plugin and callback
+rewrites and immediately before `Tool::execute`:
+
+| Step | Type | Effect |
+|------|------|--------|
+| Kill switch | `GovernanceControl` | A frozen run ends with a `governance.frozen` error |
+| Policy | `ToolPolicy`, `DeclarativePolicy` | Allow, deny, or require approval; `DeclarativePolicy` denies unlisted tools |
+| Screen | `ToolCallScreen` | The agent's guardrails; a rewrite is checked against the policy again |
+| Confirmation | `ToolApproval`, `ApprovalStore` | Decisions bind to the call's fingerprint, so they survive a re-issued call ID |
+
+```rust
+use adk_core::{ArgPredicate, DeclarativePolicy, PolicyDecision, PolicyRule, ToolPolicyRequest};
+use serde_json::json;
+
+let policy = DeclarativePolicy::builder()
+    .allow_read_only()
+    .rule(PolicyRule::allow("transfer").when(ArgPredicate::at_most("/amount", 100.0)))
+    .build();
+
+let request = ToolPolicyRequest::new("transfer", json!({ "amount": 500 }));
+assert!(matches!(policy.decide(&request), PolicyDecision::Deny { .. }));
+```
+
 ### Inline Data Size Limit
 
 `Content::with_inline_data()` and `Part::inline_data()` enforce a 10 MB limit (`MAX_INLINE_DATA_SIZE`) to prevent oversized payloads.
@@ -303,6 +332,23 @@ use adk_core::context::validate_state_key;
 
 assert!(validate_state_key("user_name").is_ok());
 assert!(validate_state_key("../etc/passwd").is_err());
+```
+
+### Spend Ledger
+
+`SpendLedger` holds one budget for model calls and payments: `reserve` holds an amount
+against every `SpendLimits` cap that covers a `SpendKey` (org, agent, vendor; day, month,
+or lifetime in UTC), `commit` records the actual amount, and `release` drops the hold.
+Unsettled holds expire after a TTL. `InMemorySpendLedger` is the process-local
+implementation; `adk-session` provides SQLite and PostgreSQL ledgers. Set
+`RunConfig::spend_ledger` to cap a run.
+
+```rust
+use adk_core::{InMemorySpendLedger, SpendKey, SpendLimits, SpendPeriod};
+
+let ledger = InMemorySpendLedger::new(
+    SpendLimits::new().limit(SpendKey::org("my-app").per(SpendPeriod::Day), 50_000_000),
+);
 ```
 
 ### Provider Metadata
@@ -370,6 +416,24 @@ pub enum StreamingMode {
     SSE,   // Server-Sent Events (default)
     Bidi,  // Bidirectional (realtime)
 }
+```
+
+## Run Budgets
+
+`RunBudget` states limits on model calls, total tokens, cost (micro-USD), wall
+time and tool calls; `RunConfig::budget` carries it and `RunConfig::budget_tracker`
+carries the shared `BudgetTracker`. Call sites reserve work with
+`BudgetTracker::begin_model_call` and `begin_tool_calls`; `generate_with_budget`
+wraps a model call. Violations convert to `AdkError` with category
+`ErrorCategory::ResourceExhausted` and a `budget.*` code. `LlmResponse` carries
+`model` and `provider` so usage and cost are attributable.
+
+```rust
+use adk_core::{BudgetTracker, RunBudget};
+
+let tracker = BudgetTracker::new(RunBudget::new().max_tool_calls(2));
+assert!(tracker.begin_tool_calls(2).is_ok());
+assert!(tracker.begin_tool_calls(1).is_err());
 ```
 
 ## ToolExecutionStrategy

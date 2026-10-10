@@ -3,7 +3,7 @@
 //! This module provides a `ProtectedTool` wrapper that enforces permissions
 //! before tool execution and optionally logs audit events.
 
-use crate::audit::{AuditEvent, AuditOutcome, AuditSink};
+use crate::audit::{AuditEvent, AuditFailureMode, AuditOutcome, AuditSink, record_decision};
 use crate::{AccessControl, Permission};
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
@@ -49,12 +49,23 @@ macro_rules! impl_protected_tool {
                 ($inner).required_scopes()
             }
 
+            fn effect(&self) -> adk_core::ToolEffect {
+                let $self_ident = self;
+                ($inner).effect()
+            }
+
+            fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+                let $self_ident = self;
+                ($inner).timeout_override()
+            }
+
             async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
                 let $self_ident = self;
                 execute_protected_tool(
                     ($inner),
                     self.access_control.as_ref(),
                     self.audit_sink.as_ref(),
+                    self.audit_failure_mode,
                     ctx,
                     args,
                 )
@@ -100,12 +111,23 @@ macro_rules! impl_protected_tool {
                 ($inner).required_scopes()
             }
 
+            fn effect(&self) -> adk_core::ToolEffect {
+                let $self_ident = self;
+                ($inner).effect()
+            }
+
+            fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+                let $self_ident = self;
+                ($inner).timeout_override()
+            }
+
             async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
                 let $self_ident = self;
                 execute_protected_tool(
                     ($inner),
                     self.access_control.as_ref(),
                     self.audit_sink.as_ref(),
+                    self.audit_failure_mode,
                     ctx,
                     args,
                 )
@@ -117,7 +139,10 @@ macro_rules! impl_protected_tool {
 
 /// A tool wrapper that enforces access control and optionally logs audit events.
 ///
-/// Wraps any tool and checks permissions before execution.
+/// Wraps any tool and checks permissions before execution. With an audit sink, a call
+/// whose decision the sink fails to record is refused
+/// ([`AuditFailureMode::Block`], the default); see
+/// [`with_audit_failure_mode`](Self::with_audit_failure_mode).
 ///
 /// # Example
 ///
@@ -135,52 +160,88 @@ pub struct ProtectedTool<T: Tool> {
     inner: T,
     access_control: Arc<AccessControl>,
     audit_sink: Option<Arc<dyn AuditSink>>,
+    audit_failure_mode: AuditFailureMode,
 }
 
 async fn authorize_tool_access(
     tool_name: &str,
     access_control: &AccessControl,
     audit_sink: Option<&Arc<dyn AuditSink>>,
+    audit_failure_mode: AuditFailureMode,
     ctx: &Arc<dyn ToolContext>,
 ) -> Result<()> {
     let permission = Permission::Tool(tool_name.to_string());
     let check_result = access_control.check(ctx.user_id(), &permission);
 
-    if let Some(sink) = audit_sink {
-        let outcome =
-            if check_result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
-        let event = AuditEvent::tool_access(ctx.user_id(), tool_name, outcome)
-            .with_session(ctx.session_id());
-        let _ = sink.log(event).await;
-    }
+    let recorded = match audit_sink {
+        Some(sink) => {
+            let outcome =
+                if check_result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
+            let event = AuditEvent::tool_access(ctx.user_id(), tool_name, outcome)
+                .with_session(ctx.session_id());
+            record_decision(sink.as_ref(), event, audit_failure_mode, tool_name).await
+        }
+        None => Ok(()),
+    };
 
-    check_result.map_err(|err| adk_core::AdkError::tool(err.to_string()))
+    check_result.map_err(|err| adk_core::AdkError::tool(err.to_string()))?;
+    recorded
 }
 
 async fn execute_protected_tool(
     inner: &dyn Tool,
     access_control: &AccessControl,
     audit_sink: Option<&Arc<dyn AuditSink>>,
+    audit_failure_mode: AuditFailureMode,
     ctx: Arc<dyn ToolContext>,
     args: Value,
 ) -> Result<Value> {
-    authorize_tool_access(inner.name(), access_control, audit_sink, &ctx).await?;
+    authorize_tool_access(inner.name(), access_control, audit_sink, audit_failure_mode, &ctx)
+        .await?;
     inner.execute(ctx, args).await
 }
 
 impl<T: Tool> ProtectedTool<T> {
     /// Create a new protected tool.
     pub fn new(tool: T, access_control: Arc<AccessControl>) -> Self {
-        Self { inner: tool, access_control, audit_sink: None }
+        Self {
+            inner: tool,
+            access_control,
+            audit_sink: None,
+            audit_failure_mode: AuditFailureMode::default(),
+        }
     }
 
     /// Create a new protected tool with audit logging.
+    ///
+    /// A call whose decision `audit_sink` fails to record is refused; use
+    /// [`with_audit_failure_mode`](Self::with_audit_failure_mode) to change that.
     pub fn with_audit(
         tool: T,
         access_control: Arc<AccessControl>,
         audit_sink: Arc<dyn AuditSink>,
     ) -> Self {
-        Self { inner: tool, access_control, audit_sink: Some(audit_sink) }
+        Self {
+            inner: tool,
+            access_control,
+            audit_sink: Some(audit_sink),
+            audit_failure_mode: AuditFailureMode::default(),
+        }
+    }
+
+    /// Sets what happens when the audit sink fails to record a decision.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_auth::{AuditFailureMode, ProtectedTool};
+    ///
+    /// let tool = ProtectedTool::with_audit(search, access_control, sink)
+    ///     .with_audit_failure_mode(AuditFailureMode::Warn);
+    /// ```
+    pub fn with_audit_failure_mode(mut self, mode: AuditFailureMode) -> Self {
+        self.audit_failure_mode = mode;
+        self
     }
 }
 
@@ -209,17 +270,35 @@ impl<T: Tool> ToolExt for T {}
 pub struct AuthMiddleware {
     access_control: Arc<AccessControl>,
     audit_sink: Option<Arc<dyn AuditSink>>,
+    audit_failure_mode: AuditFailureMode,
 }
 
 impl AuthMiddleware {
     /// Create a new auth middleware.
     pub fn new(access_control: AccessControl) -> Self {
-        Self { access_control: Arc::new(access_control), audit_sink: None }
+        Self {
+            access_control: Arc::new(access_control),
+            audit_sink: None,
+            audit_failure_mode: AuditFailureMode::default(),
+        }
     }
 
     /// Create a new auth middleware with audit logging.
+    ///
+    /// Tools it protects refuse a call whose decision the sink fails to record; use
+    /// [`with_audit_failure_mode`](Self::with_audit_failure_mode) to change that.
     pub fn with_audit(access_control: AccessControl, audit_sink: impl AuditSink + 'static) -> Self {
-        Self { access_control: Arc::new(access_control), audit_sink: Some(Arc::new(audit_sink)) }
+        Self {
+            access_control: Arc::new(access_control),
+            audit_sink: Some(Arc::new(audit_sink)),
+            audit_failure_mode: AuditFailureMode::default(),
+        }
+    }
+
+    /// Sets what tools protected from now on do when the audit sink fails.
+    pub fn with_audit_failure_mode(mut self, mode: AuditFailureMode) -> Self {
+        self.audit_failure_mode = mode;
+        self
     }
 
     /// Get a reference to the access control.
@@ -235,6 +314,7 @@ impl AuthMiddleware {
             }
             None => ProtectedTool::new(tool, self.access_control.clone()),
         }
+        .with_audit_failure_mode(self.audit_failure_mode)
     }
 
     /// Wrap multiple tools with access control.
@@ -247,7 +327,8 @@ impl AuthMiddleware {
                         ProtectedToolDyn::with_audit(t, self.access_control.clone(), sink.clone())
                     }
                     None => ProtectedToolDyn::new(t, self.access_control.clone()),
-                };
+                }
+                .with_audit_failure_mode(self.audit_failure_mode);
                 Arc::new(protected) as Arc<dyn Tool>
             })
             .collect()
@@ -259,21 +340,41 @@ pub struct ProtectedToolDyn {
     inner: Arc<dyn Tool>,
     access_control: Arc<AccessControl>,
     audit_sink: Option<Arc<dyn AuditSink>>,
+    audit_failure_mode: AuditFailureMode,
 }
 
 impl ProtectedToolDyn {
     /// Create a new protected dynamic tool.
     pub fn new(tool: Arc<dyn Tool>, access_control: Arc<AccessControl>) -> Self {
-        Self { inner: tool, access_control, audit_sink: None }
+        Self {
+            inner: tool,
+            access_control,
+            audit_sink: None,
+            audit_failure_mode: AuditFailureMode::default(),
+        }
     }
 
     /// Create a new protected dynamic tool with audit logging.
+    ///
+    /// A call whose decision `audit_sink` fails to record is refused; use
+    /// [`with_audit_failure_mode`](Self::with_audit_failure_mode) to change that.
     pub fn with_audit(
         tool: Arc<dyn Tool>,
         access_control: Arc<AccessControl>,
         audit_sink: Arc<dyn AuditSink>,
     ) -> Self {
-        Self { inner: tool, access_control, audit_sink: Some(audit_sink) }
+        Self {
+            inner: tool,
+            access_control,
+            audit_sink: Some(audit_sink),
+            audit_failure_mode: AuditFailureMode::default(),
+        }
+    }
+
+    /// Sets what happens when the audit sink fails to record a decision.
+    pub fn with_audit_failure_mode(mut self, mode: AuditFailureMode) -> Self {
+        self.audit_failure_mode = mode;
+        self
     }
 }
 

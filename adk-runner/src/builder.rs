@@ -20,7 +20,10 @@ use std::sync::Arc;
 
 #[cfg(feature = "artifacts")]
 use adk_artifact::ArtifactService;
-use adk_core::{Agent, CacheCapable, ContextCacheConfig, Memory, Result, RunConfig};
+use adk_core::{
+    Agent, CacheCapable, ContextCacheConfig, GovernanceControl, Memory, Result, RunBudget,
+    RunConfig, ToolPolicy,
+};
 #[cfg(feature = "plugins")]
 use adk_plugin::PluginManager;
 use adk_session::SessionService;
@@ -72,6 +75,9 @@ pub struct RunnerConfigBuilder<A, G, S> {
     intra_compaction_summarizer: Option<Arc<dyn adk_core::BaseEventsSummarizer>>,
     #[cfg(feature = "context-compaction")]
     context_compaction: Option<crate::compaction::CompactionConfig>,
+    budget: Option<RunBudget>,
+    tool_policy: Option<Arc<dyn ToolPolicy>>,
+    governance: Option<GovernanceControl>,
     _marker: PhantomData<(A, G, S)>,
 }
 
@@ -97,6 +103,9 @@ impl RunnerConfigBuilder<NoAppName, NoAgent, NoSessionService> {
             intra_compaction_summarizer: None,
             #[cfg(feature = "context-compaction")]
             context_compaction: None,
+            budget: None,
+            tool_policy: None,
+            governance: None,
             _marker: PhantomData,
         }
     }
@@ -134,6 +143,9 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             intra_compaction_summarizer: self.intra_compaction_summarizer,
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
+            budget: self.budget,
+            tool_policy: self.tool_policy,
+            governance: self.governance,
             _marker: PhantomData,
         }
     }
@@ -159,6 +171,9 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             intra_compaction_summarizer: self.intra_compaction_summarizer,
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
+            budget: self.budget,
+            tool_policy: self.tool_policy,
+            governance: self.governance,
             _marker: PhantomData,
         }
     }
@@ -187,6 +202,9 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             intra_compaction_summarizer: self.intra_compaction_summarizer,
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
+            budget: self.budget,
+            tool_policy: self.tool_policy,
+            governance: self.governance,
             _marker: PhantomData,
         }
     }
@@ -220,6 +238,30 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
     /// Set the run configuration (optional).
     pub fn run_config(mut self, config: RunConfig) -> Self {
         self.run_config = Some(config);
+        self
+    }
+
+    /// Set the resource limits for every run (optional).
+    ///
+    /// Each run gets fresh counters for these limits, checked before every model
+    /// call and tool dispatch. A run that reaches a limit ends with an event
+    /// explaining why and a `ResourceExhausted` error. Overrides any budget in
+    /// [`run_config`](Self::run_config). See [`adk_core::budget`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::RunBudget;
+    ///
+    /// let runner = Runner::builder()
+    ///     .app_name("my-app")
+    ///     .agent(agent)
+    ///     .session_service(session_service)
+    ///     .budget(RunBudget::new().max_cost_usd(50.0).max_model_calls(200))
+    ///     .build()?;
+    /// ```
+    pub fn budget(mut self, budget: RunBudget) -> Self {
+        self.budget = Some(budget);
         self
     }
 
@@ -271,6 +313,40 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self
     }
 
+    /// Set the policy evaluated for every tool call (optional).
+    ///
+    /// The runner installs it on each run's [`RunConfig::tool_policy`] when the run
+    /// does not carry one, so it governs transfer targets and agents behind an agent
+    /// tool as well. A [`DeclarativePolicy`](adk_core::DeclarativePolicy) denies every
+    /// tool no rule permits.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::DeclarativePolicy;
+    ///
+    /// let runner = Runner::builder()
+    ///     .app_name("ops")
+    ///     .agent(agent)
+    ///     .session_service(sessions)
+    ///     .tool_policy(Arc::new(DeclarativePolicy::builder().allow_read_only().build()))
+    ///     .build()?;
+    /// ```
+    pub fn tool_policy(mut self, policy: Arc<dyn ToolPolicy>) -> Self {
+        self.tool_policy = Some(policy);
+        self
+    }
+
+    /// Share a kill switch with this runner (optional).
+    ///
+    /// Without one the runner creates its own, reachable through
+    /// [`Runner::governance`]. Freezing it fails new runs at their start and stops
+    /// running ones before their next model or tool call.
+    pub fn governance(mut self, control: GovernanceControl) -> Self {
+        self.governance = Some(control);
+        self
+    }
+
     /// Set the context compaction configuration for token-budget overflow handling (optional).
     ///
     /// When configured, the runner applies the given [`CompactionStrategy`](crate::compaction::CompactionStrategy)
@@ -291,6 +367,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
     ///
     /// Use this when you need the raw config (e.g. to wrap in `Arc` for A2A handlers).
     pub fn build_config(self) -> RunnerConfig {
+        let run_config = merge_budget(self.run_config, self.budget);
         RunnerConfig {
             app_name: self.app_name.expect("typestate guarantees app_name is set"),
             agent: self.agent.expect("typestate guarantees agent is set"),
@@ -302,7 +379,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             memory_service: self.memory_service,
             #[cfg(feature = "plugins")]
             plugin_manager: self.plugin_manager,
-            run_config: self.run_config,
+            run_config,
             compaction_config: self.compaction_config,
             context_cache_config: self.context_cache_config,
             cache_capable: self.cache_capable,
@@ -312,6 +389,8 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             intra_compaction_summarizer: self.intra_compaction_summarizer,
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
+            tool_policy: self.tool_policy,
+            governance: self.governance,
         }
     }
 
@@ -323,6 +402,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
     ///
     /// Returns an error if `Runner::new()` fails (e.g. invalid `app_name`).
     pub fn build(self) -> Result<Runner> {
+        let run_config = merge_budget(self.run_config, self.budget);
         let config = RunnerConfig {
             // SAFETY: typestate guarantees these are `Some`.
             app_name: self.app_name.expect("typestate guarantees app_name is set"),
@@ -335,7 +415,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             memory_service: self.memory_service,
             #[cfg(feature = "plugins")]
             plugin_manager: self.plugin_manager,
-            run_config: self.run_config,
+            run_config,
             compaction_config: self.compaction_config,
             context_cache_config: self.context_cache_config,
             cache_capable: self.cache_capable,
@@ -345,7 +425,21 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             intra_compaction_summarizer: self.intra_compaction_summarizer,
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
+            tool_policy: self.tool_policy,
+            governance: self.governance,
         };
         Runner::new(config)
+    }
+}
+
+/// Applies a builder-level budget on top of the configured run config.
+fn merge_budget(run_config: Option<RunConfig>, budget: Option<RunBudget>) -> Option<RunConfig> {
+    match budget {
+        Some(budget) => {
+            let mut config = run_config.unwrap_or_default();
+            config.budget = Some(budget);
+            Some(config)
+        }
+        None => run_config,
     }
 }

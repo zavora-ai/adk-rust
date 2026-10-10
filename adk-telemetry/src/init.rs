@@ -17,6 +17,27 @@ pub(crate) static INIT: Once = Once::new();
 static ADK_EXPORTER: OnceLock<Arc<AdkSpanExporter>> = OnceLock::new();
 static ADK_EXPORTER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
+/// Providers built by this crate, flushed and shut down by [`shutdown_telemetry`].
+///
+/// The tracing layer keeps its own reference to the tracer provider, so replacing the
+/// global provider never dropped the last reference and buffered spans were lost.
+#[cfg(feature = "otlp")]
+static TRACER_PROVIDERS: std::sync::Mutex<Vec<opentelemetry_sdk::trace::SdkTracerProvider>> =
+    std::sync::Mutex::new(Vec::new());
+#[cfg(feature = "otlp")]
+static METER_PROVIDERS: std::sync::Mutex<Vec<opentelemetry_sdk::metrics::SdkMeterProvider>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(feature = "otlp")]
+pub(crate) fn retain_tracer_provider(provider: &opentelemetry_sdk::trace::SdkTracerProvider) {
+    TRACER_PROVIDERS.lock().unwrap_or_else(|e| e.into_inner()).push(provider.clone());
+}
+
+#[cfg(feature = "otlp")]
+fn retain_meter_provider(provider: &opentelemetry_sdk::metrics::SdkMeterProvider) {
+    METER_PROVIDERS.lock().unwrap_or_else(|e| e.into_inner()).push(provider.clone());
+}
+
 /// Error returned by telemetry initialization functions.
 #[derive(Debug, thiserror::Error)]
 pub enum TelemetryError {
@@ -108,6 +129,7 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
             .build();
 
         let tracer = tracer_provider.tracer("adk-telemetry");
+        retain_tracer_provider(&tracer_provider);
         opentelemetry::global::set_tracer_provider(tracer_provider);
 
         // Initialize metrics
@@ -129,6 +151,7 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
             .with_resource(resource)
             .build();
 
+        retain_meter_provider(&meter_provider);
         opentelemetry::global::set_meter_provider(meter_provider);
 
         let telemetry_layer = OpenTelemetryLayer::new(tracer);
@@ -210,6 +233,7 @@ pub(crate) mod otlp_pipeline {
             .build();
 
         let tracer = tracer_provider.tracer("adk-telemetry");
+        super::retain_tracer_provider(&tracer_provider);
         opentelemetry::global::set_tracer_provider(tracer_provider);
         Ok(tracer)
     }
@@ -281,6 +305,7 @@ where
         .with_resource(resource)
         .build();
 
+    retain_meter_provider(&meter_provider);
     opentelemetry::global::set_meter_provider(meter_provider);
 
     Ok(Box::new(OpenTelemetryLayer::new(tracer)))
@@ -289,14 +314,39 @@ where
 /// Shutdown telemetry and flush any pending spans.
 ///
 /// Should be called before application exit to ensure all telemetry data is sent.
-/// In OTel 0.28+, the tracer provider is shut down when the last reference is dropped.
-/// This function is kept for backward compatibility and explicitly drops the global provider.
+/// Flushes and shuts down every tracer and meter provider that [`init_with_otlp`],
+/// [`build_otlp_layer`], or `init_with_gcp` built, including those held by tracing
+/// layers, then installs a no-op global tracer provider. Spans recorded afterwards are
+/// dropped. Calling it again does nothing.
+///
+/// # Example
+///
+/// ```
+/// adk_telemetry::shutdown_telemetry();
+/// ```
 pub fn shutdown_telemetry() {
     #[cfg(feature = "otlp")]
     {
-        // In OTel 0.28, shutdown_tracer_provider() was removed.
-        // The SdkTracerProvider shuts down automatically when the last reference is dropped.
-        // We trigger this by replacing the global provider with a no-op, which drops the old one.
+        let tracers =
+            std::mem::take(&mut *TRACER_PROVIDERS.lock().unwrap_or_else(|e| e.into_inner()));
+        for provider in tracers {
+            if let Err(error) = provider.force_flush() {
+                tracing::warn!(error = %error, "failed to flush spans at shutdown");
+            }
+            if let Err(error) = provider.shutdown() {
+                tracing::warn!(error = %error, "failed to shut down the tracer provider");
+            }
+        }
+        let meters =
+            std::mem::take(&mut *METER_PROVIDERS.lock().unwrap_or_else(|e| e.into_inner()));
+        for provider in meters {
+            if let Err(error) = provider.force_flush() {
+                tracing::warn!(error = %error, "failed to flush metrics at shutdown");
+            }
+            if let Err(error) = provider.shutdown() {
+                tracing::warn!(error = %error, "failed to shut down the meter provider");
+            }
+        }
         opentelemetry::global::set_tracer_provider(
             opentelemetry::trace::noop::NoopTracerProvider::new(),
         );
@@ -441,6 +491,46 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(installations.load(Ordering::Relaxed), 1);
+    }
+
+    /// Counts exported spans.
+    #[cfg(feature = "otlp")]
+    #[derive(Debug, Clone, Default)]
+    struct CountingExporter(Arc<AtomicUsize>);
+
+    #[cfg(feature = "otlp")]
+    impl opentelemetry_sdk::trace::SpanExporter for CountingExporter {
+        async fn export(
+            &self,
+            batch: Vec<opentelemetry_sdk::trace::SpanData>,
+        ) -> opentelemetry_sdk::error::OTelSdkResult {
+            self.0.fetch_add(batch.len(), Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "otlp")]
+    #[test]
+    fn shutdown_flushes_a_provider_a_layer_still_holds() {
+        use opentelemetry::trace::{Tracer, TracerProvider};
+
+        let exporter = CountingExporter::default();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(exporter.clone())
+            .build();
+        retain_tracer_provider(&provider);
+        opentelemetry::global::set_tracer_provider(provider.clone());
+        // Stands in for the tracer an `OpenTelemetryLayer` keeps for the process lifetime.
+        let layer_tracer = provider.tracer("layer");
+        drop(provider);
+
+        layer_tracer.in_span("buffered", |_| {});
+        assert_eq!(exporter.0.load(Ordering::SeqCst), 0, "the batch is still buffered");
+
+        shutdown_telemetry();
+
+        assert_eq!(exporter.0.load(Ordering::SeqCst), 1, "shutdown must flush the batch");
+        drop(layer_tracer);
     }
 
     #[test]

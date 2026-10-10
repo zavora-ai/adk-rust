@@ -1,3 +1,4 @@
+use crate::invocation_hooks::HookCallbacks;
 use adk_core::{
     AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Event, EventStream,
     InvocationContext, Result,
@@ -20,6 +21,9 @@ type RunHandler = Box<
 /// `CustomAgent` allows you to implement arbitrary agent logic without
 /// conforming to the LLM request/response loop. Use the builder to configure
 /// the handler, sub-agents, and lifecycle callbacks.
+///
+/// The run's invocation hooks (a runner's plugin `before_agent` and `after_agent`
+/// callbacks) run ahead of the agent's own callbacks of the same kind.
 pub struct CustomAgent {
     name: String,
     description: String,
@@ -55,9 +59,12 @@ impl Agent for CustomAgent {
         let before_callbacks = self.before_callbacks.clone();
         let after_callbacks = self.after_callbacks.clone();
         let agent_name = self.name.clone();
+        // Runner plugins reach this agent through the run config, ahead of its own callbacks.
+        let HookCallbacks { before_agent: hook_before, after_agent: hook_after, .. } =
+            HookCallbacks::new(&ctx.run_config().invocation_hooks);
 
         // Execute before callbacks — if any returns content, short-circuit
-        for callback in before_callbacks.as_ref() {
+        for callback in hook_before.iter().chain(before_callbacks.iter()) {
             match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                 Ok(Some(content)) => {
                     let invocation_id = ctx.invocation_id().to_string();
@@ -67,7 +74,7 @@ impl Agent for CustomAgent {
                         early_event.llm_response.content = Some(content);
                         yield Ok(early_event);
 
-                        for after_cb in after_callbacks.as_ref() {
+                        for after_cb in hook_after.iter().chain(after_callbacks.iter()) {
                             match after_cb(ctx.clone() as Arc<dyn CallbackContext>).await {
                                 Ok(Some(after_content)) => {
                                     let mut after_event = Event::new(&invocation_id);
@@ -97,7 +104,7 @@ impl Agent for CustomAgent {
             }
 
             // Execute after callbacks
-            for callback in after_callbacks.as_ref() {
+            for callback in hook_after.iter().chain(after_callbacks.iter()) {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
                         let mut after_event = Event::new(ctx.invocation_id());

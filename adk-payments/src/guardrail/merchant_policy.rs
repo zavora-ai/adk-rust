@@ -4,7 +4,11 @@ use adk_guardrail::Severity;
 
 use crate::domain::{ProtocolDescriptor, TransactionRecord};
 
-use super::{PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail};
+use async_trait::async_trait;
+
+use super::{
+    PaymentPolicyContext, PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail,
+};
 
 /// Restricts payment execution to an explicit merchant allowlist.
 pub struct MerchantAllowlistGuardrail {
@@ -23,15 +27,17 @@ impl MerchantAllowlistGuardrail {
     }
 }
 
+#[async_trait]
 impl PaymentPolicyGuardrail for MerchantAllowlistGuardrail {
     fn name(&self) -> &str {
         "merchant_allowlist"
     }
 
-    fn evaluate(
+    async fn evaluate(
         &self,
         record: &TransactionRecord,
         _protocol: &ProtocolDescriptor,
+        _context: &PaymentPolicyContext,
     ) -> PaymentPolicyDecision {
         if self.allowed_merchant_ids.contains(&record.merchant_of_record.merchant_id) {
             PaymentPolicyDecision::allow()
@@ -103,7 +109,11 @@ mod tests {
     #[test]
     fn merchant_allowlist_denies_unlisted_merchant() {
         let guardrail = MerchantAllowlistGuardrail::new(["merchant-allowed"]);
-        let decision = guardrail.evaluate(&sample_record(), &ProtocolDescriptor::acp("2026-01-30"));
+        let decision = crate::guardrail::evaluate_now(
+            &guardrail,
+            &sample_record(),
+            &ProtocolDescriptor::acp("2026-01-30"),
+        );
 
         assert!(decision.is_deny());
         assert_eq!(decision.findings()[0].guardrail, "merchant_allowlist");

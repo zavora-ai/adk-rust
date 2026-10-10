@@ -201,6 +201,10 @@ pub struct SemanticMatchConfig {
     #[serde(default = "default_judge_model")]
     pub judge_model: String,
     /// Custom prompt for the judge (optional)
+    ///
+    /// `{expected}` and `{actual}` are replaced with the two responses. The prompt must
+    /// ask for an `EQUIVALENT: YES/NO/PARTIAL` line and a `SCORE:` line from 0.0 to 1.0;
+    /// a reply without either is a judge error.
     pub custom_prompt: Option<String>,
 }
 

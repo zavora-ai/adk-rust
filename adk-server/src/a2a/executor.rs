@@ -154,6 +154,12 @@ impl Executor {
             .app_name(self.config.runner_config.app_name.clone())
             .agent(self.config.runner_config.agent.clone())
             .session_service(self.config.runner_config.session_service.clone());
+        if let Some(control) = &self.config.runner_config.governance {
+            runner_builder = runner_builder.governance(control.clone());
+        }
+        if let Some(policy) = &self.config.runner_config.tool_policy {
+            runner_builder = runner_builder.tool_policy(policy.clone());
+        }
         if let Some(ref artifact_service) = self.config.runner_config.artifact_service {
             runner_builder = runner_builder.artifact_service(artifact_service.clone());
         }

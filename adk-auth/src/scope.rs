@@ -26,7 +26,7 @@
 //! let protected = guard.protect(transfer);
 //! ```
 
-use crate::audit::{AuditEvent, AuditOutcome, AuditSink};
+use crate::audit::{AuditEvent, AuditFailureMode, AuditOutcome, AuditSink, record_decision};
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -72,12 +72,23 @@ macro_rules! impl_scoped_tool {
                 ($inner).required_scopes()
             }
 
+            fn effect(&self) -> adk_core::ToolEffect {
+                let $self_ident = self;
+                ($inner).effect()
+            }
+
+            fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+                let $self_ident = self;
+                ($inner).timeout_override()
+            }
+
             async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
                 let $self_ident = self;
                 execute_scoped_tool(
                     ($inner),
                     self.resolver.as_ref(),
                     self.audit_sink.as_ref(),
+                    self.audit_failure_mode,
                     ctx,
                     args,
                 )
@@ -123,12 +134,23 @@ macro_rules! impl_scoped_tool {
                 ($inner).required_scopes()
             }
 
+            fn effect(&self) -> adk_core::ToolEffect {
+                let $self_ident = self;
+                ($inner).effect()
+            }
+
+            fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+                let $self_ident = self;
+                ($inner).timeout_override()
+            }
+
             async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
                 let $self_ident = self;
                 execute_scoped_tool(
                     ($inner),
                     self.resolver.as_ref(),
                     self.audit_sink.as_ref(),
+                    self.audit_failure_mode,
                     ctx,
                     args,
                 )
@@ -252,20 +274,48 @@ impl std::error::Error for ScopeDenied {}
 pub struct ScopeGuard {
     resolver: Arc<dyn ScopeResolver>,
     audit_sink: Option<Arc<dyn AuditSink>>,
+    audit_failure_mode: AuditFailureMode,
 }
 
 impl ScopeGuard {
     /// Create a scope guard with the given resolver.
     pub fn new(resolver: impl ScopeResolver + 'static) -> Self {
-        Self { resolver: Arc::new(resolver), audit_sink: None }
+        Self {
+            resolver: Arc::new(resolver),
+            audit_sink: None,
+            audit_failure_mode: AuditFailureMode::default(),
+        }
     }
 
     /// Create a scope guard with audit logging.
+    ///
+    /// Guarded tools refuse a call whose decision the sink fails to record; use
+    /// [`with_audit_failure_mode`](Self::with_audit_failure_mode) to change that.
     pub fn with_audit(
         resolver: impl ScopeResolver + 'static,
         audit_sink: impl AuditSink + 'static,
     ) -> Self {
-        Self { resolver: Arc::new(resolver), audit_sink: Some(Arc::new(audit_sink)) }
+        Self {
+            resolver: Arc::new(resolver),
+            audit_sink: Some(Arc::new(audit_sink)),
+            audit_failure_mode: AuditFailureMode::default(),
+        }
+    }
+
+    /// Sets what tools guarded from now on do when the audit sink fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_auth::{AuditFailureMode, ContextScopeResolver, InMemoryAuditSink, ScopeGuard};
+    ///
+    /// let guard = ScopeGuard::with_audit(ContextScopeResolver, InMemoryAuditSink::new())
+    ///     .with_audit_failure_mode(AuditFailureMode::Warn);
+    /// # let _ = guard;
+    /// ```
+    pub fn with_audit_failure_mode(mut self, mode: AuditFailureMode) -> Self {
+        self.audit_failure_mode = mode;
+        self
     }
 
     /// Wrap a tool with scope enforcement.
@@ -276,6 +326,7 @@ impl ScopeGuard {
             inner: tool,
             resolver: self.resolver.clone(),
             audit_sink: self.audit_sink.clone(),
+            audit_failure_mode: self.audit_failure_mode,
         }
     }
 
@@ -288,6 +339,7 @@ impl ScopeGuard {
                     inner: t,
                     resolver: self.resolver.clone(),
                     audit_sink: self.audit_sink.clone(),
+                    audit_failure_mode: self.audit_failure_mode,
                 };
                 Arc::new(wrapped) as Arc<dyn Tool>
             })
@@ -296,16 +348,21 @@ impl ScopeGuard {
 }
 
 /// A tool wrapper that enforces scope requirements before execution.
+///
+/// With an audit sink, a call whose decision the sink fails to record is refused unless
+/// the guard was built with [`AuditFailureMode::Warn`].
 pub struct ScopedTool<T: Tool> {
     inner: T,
     resolver: Arc<dyn ScopeResolver>,
     audit_sink: Option<Arc<dyn AuditSink>>,
+    audit_failure_mode: AuditFailureMode,
 }
 
 async fn authorize_tool_scopes(
     tool: &dyn Tool,
     resolver: &dyn ScopeResolver,
     audit_sink: Option<&Arc<dyn AuditSink>>,
+    audit_failure_mode: AuditFailureMode,
     ctx: &Arc<dyn ToolContext>,
 ) -> Result<()> {
     let required = tool.required_scopes();
@@ -316,12 +373,15 @@ async fn authorize_tool_scopes(
     let granted = resolver.resolve(ctx.as_ref()).await;
     let result = check_scopes(required, &granted);
 
-    if let Some(sink) = audit_sink {
-        let outcome = if result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
-        let event = AuditEvent::tool_access(ctx.user_id(), tool.name(), outcome)
-            .with_session(ctx.session_id());
-        let _ = sink.log(event).await;
-    }
+    let recorded = match audit_sink {
+        Some(sink) => {
+            let outcome = if result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
+            let event = AuditEvent::tool_access(ctx.user_id(), tool.name(), outcome)
+                .with_session(ctx.session_id());
+            record_decision(sink.as_ref(), event, audit_failure_mode, tool.name()).await
+        }
+        None => Ok(()),
+    };
 
     if let Err(denied) = result {
         tracing::warn!(
@@ -333,17 +393,18 @@ async fn authorize_tool_scopes(
         return Err(adk_core::AdkError::tool(denied.to_string()));
     }
 
-    Ok(())
+    recorded
 }
 
 async fn execute_scoped_tool(
     inner: &dyn Tool,
     resolver: &dyn ScopeResolver,
     audit_sink: Option<&Arc<dyn AuditSink>>,
+    audit_failure_mode: AuditFailureMode,
     ctx: Arc<dyn ToolContext>,
     args: Value,
 ) -> Result<Value> {
-    authorize_tool_scopes(inner, resolver, audit_sink, &ctx).await?;
+    authorize_tool_scopes(inner, resolver, audit_sink, audit_failure_mode, &ctx).await?;
     inner.execute(ctx, args).await
 }
 
@@ -354,6 +415,7 @@ pub struct ScopedToolDyn {
     inner: Arc<dyn Tool>,
     resolver: Arc<dyn ScopeResolver>,
     audit_sink: Option<Arc<dyn AuditSink>>,
+    audit_failure_mode: AuditFailureMode,
 }
 
 impl_scoped_tool!(ScopedToolDyn, wrapper => wrapper.inner.as_ref());
@@ -362,7 +424,12 @@ impl_scoped_tool!(ScopedToolDyn, wrapper => wrapper.inner.as_ref());
 pub trait ScopeToolExt: Tool + Sized {
     /// Wrap this tool with scope enforcement using the given resolver.
     fn with_scope_guard(self, resolver: impl ScopeResolver + 'static) -> ScopedTool<Self> {
-        ScopedTool { inner: self, resolver: Arc::new(resolver), audit_sink: None }
+        ScopedTool {
+            inner: self,
+            resolver: Arc::new(resolver),
+            audit_sink: None,
+            audit_failure_mode: AuditFailureMode::default(),
+        }
     }
 }
 

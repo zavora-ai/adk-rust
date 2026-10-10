@@ -206,6 +206,23 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### Tool Calls on GPT-5.6 and Later
+
+OpenAI's Chat Completions endpoint rejects function tools on GPT-5.6 and later models
+(`gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-6-*`) unless reasoning is disabled,
+with HTTP 400 `Function tools with reasoning_effort are not supported`. `OpenAIClient`
+handles this per request:
+
+| Request | Endpoint |
+|---------|----------|
+| Declares tools, model GPT-5.6 or later, reasoning not `none` | Responses API (`/responses`), same key, base URL, reasoning effort, and retries; `store: false` |
+| No tools | Chat Completions |
+| Model before GPT-5.6, or reasoning effort `None` | Chat Completions |
+| Client built with `OpenAIClient::compatible` | Chat Completions |
+
+Use [`OpenAIResponsesClient`](./openai-responses.md) directly for reasoning summaries,
+built-in tools, or server-side conversation state.
+
 ### Structured Output (JSON Schema)
 
 OpenAI supports guaranteed JSON output via `output_schema`. ADK-Rust automatically wires this to OpenAI's `response_format` API:
@@ -476,6 +493,33 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### Request Defaults
+
+| Setting | Default | Override |
+|---------|---------|----------|
+| `max_tokens` | 32,000 for Claude 4 and later, 4,096 for older or unrecognized models (`adk_model::catalog::anthropic_default_max_tokens`) | `AnthropicConfig::with_max_tokens`, or `max_output_tokens` per request |
+| Request timeout | 10 minutes for a whole non-streaming request, such as an agent called through `AgentTool`, and for the response headers of a stream | `AnthropicConfig::with_request_timeout` |
+
+Thinking counts toward `max_tokens`, and Claude 5 models think on every turn, so a
+small cap ends turns with `max_tokens` before the answer.
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+use std::time::Duration;
+
+fn build() -> Result<AnthropicClient, adk_core::AdkError> {
+    let config = AnthropicConfig::new("sk-ant-xxx", "claude-opus-5-5")
+        .with_max_tokens(64_000)
+        .with_request_timeout(Duration::from_secs(1_800));
+    AnthropicClient::new(config)
+}
+```
+
+Thinking blocks, including `redacted_thinking` and the empty blocks returned under
+`display: "omitted"`, are replayed with their signatures in later requests, as the API
+requires for tool-use turns. Server tool results such as `web_fetch_tool_result` are
+replayed in the shape the API returned them.
+
 ### Available Models
 
 | Model | Description | Context |
@@ -623,6 +667,50 @@ async fn main() -> anyhow::Result<()> {
 4. Go
 5. TypeScript
 ```
+
+---
+
+## Usage Attribution and Cost
+
+Every `adk-model` provider sets `LlmResponse::provider` and `LlmResponse::model`
+— the model version the provider reports when it reports one, otherwise the
+configured identifier — and fills `UsageMetadata::cost` in USD when the provider
+did not report a cost itself. Rates come from `adk_model::pricing::PricingCatalog`,
+which consolidates the Gemini, OpenAI and Anthropic pricing modules and adds
+DeepSeek list prices.
+
+| Rule | Behaviour |
+|------|-----------|
+| Cached tokens | `prompt_token_count` includes cache reads and writes; each prompt token is billed once, at the uncached, cache-read or cache-write rate |
+| Anthropic cache writes | The 1-hour share of `cache_creation_input_tokens` bills at the 1-hour rate, the rest at the 5-minute rate |
+| Long context | Gemini (over 200K), OpenAI GPT-5.4/5.5 (272K and above) and Claude Haiku 5.5 (over 100K) switch the whole request to the long-context rates |
+| Dated aliases | `gpt-4.1-2025-04-14`, `claude-sonnet-4-5-20250929`, `claude-sonnet-4-5@20250929` and `us.anthropic.claude-sonnet-4-5-20250929-v1:0` resolve to the listed model |
+| Billing provider | A vendor's list price applies only to providers that bill it at that price; an OpenAI model name served by another gateway stays unpriced |
+| Ollama | Local models cost zero; `*cloud*` models stay unpriced |
+| OpenCode | Responses are attributed to `opencode` / `opencode-go` and stay unpriced |
+| Unknown models | `cost` stays `None`, which means unknown, never free |
+
+```rust
+use adk_core::UsageMetadata;
+use adk_model::pricing::{PRICING_EFFECTIVE_DATE, PricingCatalog};
+
+fn main() {
+    let usage = UsageMetadata {
+        prompt_token_count: 1_000_000,
+        candidates_token_count: 200_000,
+        cache_read_input_token_count: Some(400_000),
+        ..Default::default()
+    };
+    let catalog = PricingCatalog::standard();
+    let cost = catalog.cost_usd(Some("gemini"), "gemini-2.5-flash", &usage);
+    // 600K × $0.30 + 400K × $0.03 + 200K × $2.50 per million tokens.
+    assert!((cost.unwrap() - 0.692).abs() < 1e-9);
+    assert_eq!(catalog.version(), PRICING_EFFECTIVE_DATE);
+}
+```
+
+Run budgets read this cost to enforce a spend cap; see
+[Run Budgets](../core/runner.md#run-budgets).
 
 ---
 

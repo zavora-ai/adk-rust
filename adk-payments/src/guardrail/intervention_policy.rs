@@ -4,7 +4,11 @@ use crate::domain::{
     CommerceMode, InterventionKind, ProtocolDescriptor, TransactionRecord, TransactionState,
 };
 
-use super::{PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail};
+use async_trait::async_trait;
+
+use super::{
+    PaymentPolicyContext, PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail,
+};
 
 /// Policy applied when a payment flow may continue autonomously or requires a user return.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,15 +53,17 @@ impl InterventionPolicyGuardrail {
     }
 }
 
+#[async_trait]
 impl PaymentPolicyGuardrail for InterventionPolicyGuardrail {
     fn name(&self) -> &str {
         "intervention_policy"
     }
 
-    fn evaluate(
+    async fn evaluate(
         &self,
         record: &TransactionRecord,
         _protocol: &ProtocolDescriptor,
+        _context: &PaymentPolicyContext,
     ) -> PaymentPolicyDecision {
         let policy = self.mode_policy(record.mode);
 
@@ -214,7 +220,11 @@ mod tests {
             InterventionActionPolicy::Allow,
             InterventionActionPolicy::RequireUserConfirmation,
         );
-        let decision = guardrail.evaluate(&sample_record(), &ProtocolDescriptor::ap2("v0.1-alpha"));
+        let decision = crate::guardrail::evaluate_now(
+            &guardrail,
+            &sample_record(),
+            &ProtocolDescriptor::ap2("v0.1-alpha"),
+        );
 
         assert!(decision.is_escalate());
         assert_eq!(decision.findings()[0].guardrail, "intervention_policy");

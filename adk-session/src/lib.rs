@@ -71,9 +71,15 @@ pub mod postgres;
 #[cfg(feature = "redis")]
 /// Redis session backend with TTL support.
 pub mod redis;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+/// SQL-backed spend ledgers shared by model calls and payments.
+pub mod spend;
 #[cfg(feature = "sqlite")]
 /// SQLite session backend.
 pub mod sqlite;
+#[cfg(feature = "sqlite")]
+/// SQLite-backed action ledger for non-idempotent tool calls.
+pub mod sqlite_action_ledger;
 #[cfg(feature = "vertex-session")]
 /// Vertex AI Session API backend.
 pub mod vertex;
@@ -87,8 +93,14 @@ pub use session::{KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER, Session};
 pub use state::{ReadonlyState, State};
 pub use state_utils::{extract_state_deltas, merge_states};
 
+#[cfg(feature = "postgres")]
+pub use spend::PostgresSpendLedger;
+#[cfg(feature = "sqlite")]
+pub use spend::SqliteSpendLedger;
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteSessionService;
+#[cfg(feature = "sqlite")]
+pub use sqlite_action_ledger::SqliteActionLedger;
 
 #[cfg(feature = "encrypted-session")]
 pub use encrypted::EncryptedSession;

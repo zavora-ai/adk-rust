@@ -3,8 +3,9 @@ use crate::cache::CacheManager;
 #[cfg(feature = "artifacts")]
 use adk_artifact::ArtifactService;
 use adk_core::{
-    Agent, AppName, CacheCapable, Content, ContextCacheConfig, Event, EventStream, InvocationId,
-    Memory, ReadonlyContext, Result, RunConfig, SessionId, UserId,
+    Agent, AppName, CacheCapable, Content, ContextCacheConfig, Event, EventStream,
+    FunctionResponseData, InvocationId, Memory, Part, ReadonlyContext, Result, RunConfig,
+    SessionId, UserId,
 };
 #[cfg(feature = "plugins")]
 use adk_plugin::PluginManager;
@@ -40,6 +41,95 @@ fn preserve_streamed_content(accumulated: &mut HashMap<String, Content>, event: 
         event.llm_response.content = accumulated.remove(&event.id);
     } else {
         accumulated.remove(&event.id);
+    }
+}
+
+/// A tool call the run has seen requested but not yet answered.
+struct InFlightCall {
+    id: Option<String>,
+    name: String,
+    author: String,
+    branch: String,
+    invocation_id: String,
+}
+
+/// Tracks tool calls from request to response, so a cancelled run can answer
+/// the calls still in flight instead of leaving them unpaired.
+#[derive(Default)]
+struct InFlightCalls(Vec<InFlightCall>);
+
+impl InFlightCalls {
+    fn observe(&mut self, event: &Event) {
+        if event.llm_response.partial {
+            return;
+        }
+        let Some(content) = &event.llm_response.content else {
+            return;
+        };
+        for part in &content.parts {
+            match part {
+                Part::FunctionCall { name, id, .. } => self.0.push(InFlightCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    author: event.author.clone(),
+                    branch: event.branch.clone(),
+                    invocation_id: event.invocation_id.clone(),
+                }),
+                Part::FunctionResponse { function_response, id, .. } => {
+                    let answered = match id {
+                        Some(id) => self.0.iter().position(|call| call.id.as_ref() == Some(id)),
+                        None => self.0.iter().position(|call| {
+                            call.id.is_none() && call.name == function_response.name
+                        }),
+                    };
+                    if let Some(index) = answered {
+                        self.0.remove(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Answers every call still in flight with an outcome-unknown response, one
+    /// event per author, branch, and invocation, so each call keeps exactly one
+    /// response.
+    fn answer_interrupted(&mut self) -> Vec<Event> {
+        let mut events: Vec<Event> = Vec::new();
+        for call in self.0.drain(..) {
+            let response = Part::FunctionResponse {
+                function_response: FunctionResponseData::new(
+                    call.name.clone(),
+                    adk_core::outcome_unknown_response(format!(
+                        "the run was cancelled while '{}' was in flight, so the call may have taken effect; check its result before calling it again",
+                        call.name
+                    )),
+                ),
+                id: call.id,
+                annotations: None,
+            };
+            let existing = events.iter_mut().find(|event| {
+                event.author == call.author
+                    && event.branch == call.branch
+                    && event.invocation_id == call.invocation_id
+            });
+            match existing {
+                Some(event) => {
+                    if let Some(content) = event.llm_response.content.as_mut() {
+                        content.parts.push(response);
+                    }
+                }
+                None => {
+                    let mut event = Event::new(&call.invocation_id);
+                    event.author = call.author;
+                    event.branch = call.branch;
+                    event.llm_response.content =
+                        Some(Content { role: "function".to_string(), parts: vec![response] });
+                    events.push(event);
+                }
+            }
+        }
+        events
     }
 }
 
@@ -152,6 +242,13 @@ pub struct RunnerConfig {
     /// This field is only available when the `context-compaction` feature is enabled.
     #[cfg(feature = "context-compaction")]
     pub context_compaction: Option<crate::compaction::CompactionConfig>,
+    /// Optional policy evaluated for every tool call.
+    ///
+    /// Installed on each run's [`RunConfig::tool_policy`] when the run carries none.
+    pub tool_policy: Option<Arc<dyn adk_core::ToolPolicy>>,
+    /// Optional kill switch shared with other runners. Without one the runner creates
+    /// its own; see [`Runner::governance`].
+    pub governance: Option<adk_core::GovernanceControl>,
 }
 
 /// Agent execution runtime.
@@ -181,10 +278,16 @@ pub struct Runner {
     /// Optional context compaction configuration for token-budget overflow handling.
     #[cfg(feature = "context-compaction")]
     context_compaction: Option<Arc<crate::compaction::CompactionConfig>>,
+    /// Hold taken before each model call when the run config carries a spend ledger.
+    llm_spend_estimate: crate::spend::LlmSpendEstimate,
     /// Per-session cancellation tokens for the interrupt API.
     /// Each `run()` call registers a token here; `interrupt()` cancels it.
     active_runs: ActiveRuns,
     next_run_id: Arc<std::sync::atomic::AtomicU64>,
+    /// Policy installed on runs that carry none.
+    tool_policy: Option<Arc<dyn adk_core::ToolPolicy>>,
+    /// Kill switch checked at the start of every run and carried into it.
+    governance: adk_core::GovernanceControl,
     /// Serializes externally triggered invocations per session. The weak values prevent the
     /// per-trigger session policy from retaining one lock forever for every completed event.
     pub(crate) external_session_locks: Arc<
@@ -264,8 +367,11 @@ impl Runner {
             intra_compactor,
             #[cfg(feature = "context-compaction")]
             context_compaction: config.context_compaction.map(Arc::new),
+            llm_spend_estimate: crate::spend::LlmSpendEstimate::default(),
             active_runs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            tool_policy: config.tool_policy,
+            governance: config.governance.unwrap_or_default(),
             external_session_locks: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -275,6 +381,15 @@ impl Runner {
     /// The executable root owned by this runner.
     pub(crate) fn root_agent(&self) -> Arc<dyn Agent> {
         Arc::clone(&self.root_agent)
+    }
+
+    /// Sets the hold the runner reserves before each model call when the run config carries
+    /// a [`spend_ledger`](RunConfig::spend_ledger).
+    ///
+    /// Defaults to [`LlmSpendEstimate::default`](crate::LlmSpendEstimate::default).
+    pub fn with_llm_spend_estimate(mut self, estimate: crate::LlmSpendEstimate) -> Self {
+        self.llm_spend_estimate = estimate;
+        self
     }
 
     /// Enable skill injection using a pre-built injector.
@@ -335,6 +450,22 @@ impl Runner {
     /// Returns the runner's session service.
     pub fn session_service(&self) -> &Arc<dyn adk_session::SessionService> {
         &self.session_service
+    }
+
+    /// Returns the runner's kill switch.
+    ///
+    /// Freezing it fails new runs at their start and stops running ones before their
+    /// next model or tool call, with an error carrying the freeze reason.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// runner.governance().freeze("incident 4012");
+    /// // ... investigate ...
+    /// runner.governance().unfreeze();
+    /// ```
+    pub fn governance(&self) -> &adk_core::GovernanceControl {
+        &self.governance
     }
 
     /// Returns the runner's configured [`RunConfig`].
@@ -398,6 +529,22 @@ impl Runner {
         #[cfg(feature = "skills")]
         let skill_injector = self.skill_injector.clone();
         let mut run_config = run_config.unwrap_or_else(|| self.run_config.clone());
+        // The runner's policy and kill switch govern every run, including one started with
+        // its own config; the config travels into transfers and agent tools with them.
+        if run_config.tool_policy.is_none() {
+            run_config.tool_policy = self.tool_policy.clone();
+        }
+        if !run_config.governance.iter().any(|control| control.same_as(&self.governance)) {
+            run_config.governance.push(self.governance.clone());
+        }
+        // Each run counts against fresh counters unless the caller supplied a tracker to share.
+        // Transfer targets, workflow sub-agents and agent tools inherit it through the config.
+        if run_config.budget_tracker.is_none()
+            && let Some(budget) = run_config.budget.clone()
+        {
+            run_config.budget_tracker = Some(Arc::new(adk_core::BudgetTracker::new(budget)));
+        }
+        let budget_tracker = run_config.budget_tracker.clone();
         // Plugin model and tool callbacks run inside the agent, which reaches them through the
         // run config; transfer targets and agent tools inherit the config, and with it the hooks.
         #[cfg(feature = "plugins")]
@@ -407,6 +554,16 @@ impl Runner {
                 run_config.invocation_hooks.insert(0, hooks);
             }
         }
+        // First in line, so it sees every chunk before a later hook can replace it.
+        let spend_recorder = run_config.spend_ledger.clone().map(|ledger| {
+            let recorder = Arc::new(crate::spend::LlmSpendRecorder::new(
+                ledger,
+                app_name.clone(),
+                self.llm_spend_estimate,
+            ));
+            run_config.invocation_hooks.insert(0, recorder.clone());
+            recorder
+        });
         let compaction_config = self.compaction_config.clone();
         let context_cache_config = self.context_cache_config.clone();
         let cache_capable = self.cache_capable.clone();
@@ -449,9 +606,19 @@ impl Runner {
         // dropped before it is ever polled. Moving the guard into the generator
         // keeps it alive exactly as long as the stream.
         let cleanup = ActiveRunCleanup { active_runs: active_runs.clone(), run_id };
+        let stop_session_service = self.session_service.clone();
+        let stop_identity = identity.clone();
+        let stop_invocation_id = invocation_id.to_string();
+        let stop_default_author = self.root_agent.name().to_string();
 
         let s = stream! {
             let _cleanup = cleanup;
+
+            // A frozen runner refuses new work before touching the session.
+            if let Err(error) = run_config.check_governance() {
+                yield Err(error);
+                return;
+            }
 
             // Use the effective token (combines global + per-session)
             let cancellation_token = effective_token;
@@ -912,6 +1079,8 @@ impl Runner {
             use futures::StreamExt;
             let mut transfer_target: Option<(String, String)> = None;
             let mut streamed_content = HashMap::new();
+            let mut in_flight = InFlightCalls::default();
+            let mut cancelled = false;
 
             while let Some(result) = {
                 // Race the next event against cancellation so an in-flight
@@ -924,11 +1093,8 @@ impl Runner {
                             biased;
                             _ = token.cancelled() => {
                                 tracing::info!("cancellation fired during agent stream await");
-                                #[cfg(feature = "plugins")]
-                                if let Some(manager) = plugin_manager.as_ref() {
-                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                                }
-                                return;
+                                cancelled = true;
+                                None
                             }
                             // Instrument the poll, not just the construction of the
                             // stream: `agent_to_run.run(..)` merely builds the
@@ -965,6 +1131,12 @@ impl Runner {
                         }
 
                         preserve_streamed_content(&mut streamed_content, &mut event);
+                        // Counts usage from agents that call models directly and
+                        // audits the budget after every event.
+                        let budget_check = budget_tracker
+                            .as_ref()
+                            .map_or(Ok(()), |tracker| tracker.record_event(&mut event));
+                        in_flight.observe(&event);
 
                         // Check for transfer action
                         if let Some(target) = &event.actions.transfer_to_agent {
@@ -1027,6 +1199,14 @@ impl Runner {
                                 return;
                             }
                         yield Ok(event);
+                        if let Err(exceeded) = budget_check {
+                            #[cfg(feature = "plugins")]
+                            if let Some(manager) = plugin_manager.as_ref() {
+                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                            }
+                            yield Err(exceeded.into());
+                            return;
+                        }
                     }
                     Err(e) => {
                         #[cfg(feature = "plugins")]
@@ -1050,7 +1230,9 @@ impl Runner {
             let mut transfer_depth: u32 = 0;
             let mut current_transfer_target = transfer_target;
 
-            while let Some((transfer_source, target_name)) = current_transfer_target.take() {
+            while !cancelled
+                && let Some((transfer_source, target_name)) = current_transfer_target.take()
+            {
                 transfer_depth += 1;
                 if transfer_depth > max_depth {
                     tracing::warn!(
@@ -1208,11 +1390,8 @@ impl Runner {
                                 biased;
                                 _ = token.cancelled() => {
                                     tracing::info!("cancellation fired during transferred agent stream await");
-                                    #[cfg(feature = "plugins")]
-                                    if let Some(manager) = plugin_manager.as_ref() {
-                                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                                    }
-                                    return;
+                                    cancelled = true;
+                                    None
                                 }
                                 result = transfer_stream.next() => result,
                             }
@@ -1244,6 +1423,10 @@ impl Runner {
                             }
 
                             preserve_streamed_content(&mut streamed_content, &mut event);
+                            let budget_check = budget_tracker
+                                .as_ref()
+                                .map_or(Ok(()), |tracker| tracker.record_event(&mut event));
+                            in_flight.observe(&event);
 
                             // Capture further transfer requests
                             if let Some(target) = &event.actions.transfer_to_agent {
@@ -1297,6 +1480,14 @@ impl Runner {
                                     return;
                                 }
                             yield Ok(event);
+                            if let Err(exceeded) = budget_check {
+                                #[cfg(feature = "plugins")]
+                                if let Some(manager) = plugin_manager.as_ref() {
+                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                }
+                                yield Err(exceeded.into());
+                                return;
+                            }
                         }
                         Err(e) => {
                             #[cfg(feature = "plugins")]
@@ -1308,6 +1499,29 @@ impl Runner {
                         }
                     }
                 }
+            }
+
+            if cancelled {
+                // Stops the interrupted tool before its calls are answered.
+                drop(agent_stream);
+                for event in in_flight.answer_interrupted() {
+                    ctx.mutable_session().append_event(event.clone());
+                    if let Err(error) = session_service
+                        .append_event_for_identity(adk_session::AppendEventRequest {
+                            identity: identity.clone(),
+                            event: event.clone(),
+                        })
+                        .await
+                    {
+                        tracing::error!(error = %error, "failed to persist the outcome of an interrupted tool call");
+                    }
+                    yield Ok(event);
+                }
+                #[cfg(feature = "plugins")]
+                if let Some(manager) = plugin_manager.as_ref() {
+                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                }
+                return;
             }
 
             // ===== CONTEXT COMPACTION =====
@@ -1386,7 +1600,47 @@ impl Runner {
             }
         };
 
-        Ok(RunnerInvocation { invocation_id, events: Box::pin(s) })
+        // A run stopped by its budget ends with an event that explains why, persisted like
+        // any other, followed by the structured `ResourceExhausted` error.
+        let events = stream! {
+            use futures::StreamExt;
+            let mut inner = Box::pin(s);
+            let mut author = stop_default_author;
+            while let Some(item) = inner.next().await {
+                match item {
+                    Ok(event) => {
+                        if !event.author.is_empty() && event.author != "user" {
+                            author.clone_from(&event.author);
+                        }
+                        yield Ok(event);
+                    }
+                    Err(error) => {
+                        if let Some(stop_event) =
+                            adk_core::budget_exceeded_event(&stop_invocation_id, &author, &error)
+                        {
+                            if let Err(persist_error) = stop_session_service
+                                .append_event_for_identity(adk_session::AppendEventRequest {
+                                    identity: stop_identity.clone(),
+                                    event: stop_event.clone(),
+                                })
+                                .await
+                            {
+                                tracing::warn!(error = %persist_error, "failed to persist the budget stop event");
+                            }
+                            yield Ok(stop_event);
+                        }
+                        yield Err(error);
+                        return;
+                    }
+                }
+            }
+        };
+
+        let events: EventStream = match spend_recorder {
+            Some(recorder) => Box::pin(crate::spend::settle_when_done(events, recorder)),
+            None => Box::pin(events),
+        };
+        Ok(RunnerInvocation { invocation_id, events })
     }
 
     /// Convenience method that accepts string arguments.
@@ -1677,5 +1931,69 @@ mod streamed_content_tests {
 
         assert_eq!(text(&final_event), "Verify the invoice.");
         assert!(accumulated.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod in_flight_tests {
+    use super::InFlightCalls;
+    use adk_core::{Content, Event, FunctionResponseData, Part};
+    use serde_json::json;
+
+    fn call(name: &str, id: Option<&str>) -> Part {
+        Part::FunctionCall {
+            name: name.to_string(),
+            args: json!({}),
+            id: id.map(str::to_string),
+            thought_signature: None,
+        }
+    }
+
+    fn response(name: &str, id: Option<&str>) -> Part {
+        Part::FunctionResponse {
+            function_response: FunctionResponseData::new(name, json!({"ok": true})),
+            id: id.map(str::to_string),
+            annotations: None,
+        }
+    }
+
+    fn event(author: &str, role: &str, parts: Vec<Part>) -> Event {
+        let mut event = Event::new("inv-1");
+        event.author = author.to_string();
+        event.llm_response.content = Some(Content { role: role.to_string(), parts });
+        event
+    }
+
+    #[test]
+    fn only_unanswered_calls_are_answered_once_each() {
+        let mut in_flight = InFlightCalls::default();
+        in_flight.observe(&event(
+            "agent",
+            "model",
+            vec![call("pay", Some("c1")), call("ship", Some("c2")), call("notify", None)],
+        ));
+        in_flight.observe(&event("agent", "function", vec![response("ship", Some("c2"))]));
+        // A partial chunk never opens a call.
+        let mut partial = event("agent", "model", vec![call("refund", Some("c3"))]);
+        partial.llm_response.partial = true;
+        in_flight.observe(&partial);
+
+        let answered = in_flight.answer_interrupted();
+
+        assert_eq!(answered.len(), 1, "one event per author, branch, and invocation");
+        assert_eq!(answered[0].author, "agent");
+        let parts = &answered[0].llm_response.content.as_ref().unwrap().parts;
+        let answered_calls: Vec<_> = parts
+            .iter()
+            .map(|part| match part {
+                Part::FunctionResponse { function_response, id, .. } => {
+                    assert!(adk_core::is_outcome_unknown(&function_response.response));
+                    (function_response.name.as_str(), id.as_deref())
+                }
+                other => panic!("unexpected part {other:?}"),
+            })
+            .collect();
+        assert_eq!(answered_calls, [("pay", Some("c1")), ("notify", None)]);
+        assert!(in_flight.answer_interrupted().is_empty(), "calls are answered once");
     }
 }

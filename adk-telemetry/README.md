@@ -171,7 +171,9 @@ for the collector-sidecar fallback.
 | `init_with_sqlite(service_name, db_path)` | Direct SQLite span export (`sqlite` feature) |
 | `init_with_gcp(service_name)` | OTLP trace export to Google Cloud with ADC auth (`gcp` feature) |
 | `init_json_logging()` | Cloud Logging structured JSON on stdout (`gcp` feature) |
-| `shutdown_telemetry()` | Flush and shutdown |
+| `shutdown_telemetry()` | Flush and shut down every tracer and meter provider this crate built, including the one held by the tracing layer |
+
+`AdkSpanExporter` retains at most `DEFAULT_MAX_SPANS` (10,000) spans, evicting the least recently stored; `with_max_spans` and `with_ttl` change the bound. Child spans inherit `adk.app_name` and `adk.user_id` from `agent.execute`, so the server's debug routes can check the owner of every span. Model and tool payloads are omitted from spans and logs unless `RunConfig::record_payloads` is set.
 
 ## Span Helpers
 

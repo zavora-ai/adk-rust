@@ -84,6 +84,28 @@ Test cases are defined in JSON files with the `.test.json` extension:
 }
 ```
 
+### Multi-Turn Cases and Session Input
+
+The turns of a case run in order through one session, using a `Runner` over a private in-memory session service, so each turn sees the conversation history and state that earlier turns left. Each case starts a new session, built from its `session_input`:
+
+| `session_input` field | Use | Default when empty |
+|-----------------------|-----|--------------------|
+| `app_name` | The session's app name | `eval_app` |
+| `user_id` | The session's user id | `eval_user` |
+| `state` | The session's initial state | No state |
+
+```json
+{
+  "eval_id": "remembers_the_city",
+  "session_input": {"app_name": "weather", "user_id": "ada", "state": {"user:units": "metric"}},
+  "conversation": [
+    {"invocation_id": "inv_1", "user_content": {"parts": [{"text": "I live in Nairobi."}]}},
+    {"invocation_id": "inv_2", "user_content": {"parts": [{"text": "Weather at home?"}]},
+     "intermediate_data": {"tool_uses": [{"name": "get_weather", "args": {"location": "Nairobi"}}]}}
+  ]
+}
+```
+
 ## Evaluation Criteria
 
 ### Tool Trajectory Matching
@@ -164,6 +186,8 @@ The LLM judge assesses:
 - Factual accuracy
 - Completeness of response
 
+The judge replies with an `EQUIVALENT: YES/NO/PARTIAL` verdict and a `SCORE:`. An `EQUIVALENT: NO` verdict fails the criterion whatever the score; `PARTIAL` is judged on the score. A `SemanticMatchConfig::custom_prompt` must ask for both lines.
+
 Judge requests carry no temperature and use the provider's default output limit, so models that reject sampling parameters (Claude 5 models, OpenAI reasoning models) can judge. `LlmJudge::with_config` takes an `LlmJudgeConfig { temperature, max_tokens }`; `Some` values are sent on every judge request. `StructuredJudgeConfig::temperature` behaves the same way.
 
 ### Rubric-Based Evaluation
@@ -210,7 +234,7 @@ A `SAFE: NO` or `HALLUCINATION_FREE: NO` verdict from the judge fails the criter
 | No LLM judge (`Evaluator::new` without `set_llm_judge`) | `this criterion needs an LLM judge; ...` |
 | The agent produced no text response | `the agent produced no text response to judge` |
 | `rubric_quality_score` set without rubrics | `rubric_quality_score is set but rubric_config has no rubrics; ...` |
-| The judge reply lacks a valid `SCORE:` line (a number from 0.0 to 1.0), or a `SAFE:` / `HALLUCINATION_FREE:` line for those criteria | `LLM judge error: judge response has no valid SCORE line ...` |
+| The judge reply lacks a valid `SCORE:` line (a number from 0.0 to 1.0), or an `EQUIVALENT:` / `SAFE:` / `HALLUCINATION_FREE:` line for those criteria | `LLM judge error: judge response has no valid SCORE line ...` |
 | The judge call fails | `LLM judge error: ...` |
 
 `semantic_match_score` skips turns that have no expected `final_response`, as `response_similarity` does.
@@ -398,6 +422,8 @@ for reg in &regressions {
 
 Every metric and case recorded in the baseline must have a score in the current run. A case that errored or did not run has no scores, so it is reported as a regression with `current_value: None`.
 
+A missing baseline file is an error (`EvalError::BaselineError`), not an empty list, so a mistyped path or an uncommitted baseline cannot pass the gate. Save one with `BaselineStore::save` first.
+
 ### CI Output (JUnit XML)
 
 Generate JUnit XML for native CI integration (GitHub Actions, Jenkins, GitLab CI):
@@ -548,7 +574,7 @@ async fn weather_agent_meets_its_eval_set() {
     if std::env::var_os("SAVE_EVAL_BASELINE").is_some() {
         store.save("weather_agent", &metrics).expect("baseline is saved");
     }
-    let regressions = store.check_regressions(&metrics, 0.05).expect("baseline is readable");
+    let regressions = store.check_regressions(&metrics, 0.05).expect("baseline exists and is readable");
 
     assert!(report.all_passed(), "{}", report.format_summary());
     assert!(regressions.is_empty(), "regressions: {regressions:#?}");
@@ -558,7 +584,145 @@ async fn weather_agent_meets_its_eval_set() {
 1. Run `SAVE_EVAL_BASELINE=1 cargo test --test eval` once and commit `tests/.eval-baseline.json`.
 2. Run `cargo test --test eval` in CI and publish `target/eval-results.xml` with the CI test reporter.
 
-> **Note:** `cargo adk eval` cannot run agents yet, because the CLI has no way to construct your agent. It loads the eval set, reports that no case was executed, and exits with status 1 whatever flags are passed, so use the integration test above as the CI gate.
+### Running an Agent Binary with `cargo adk eval`
+
+`cargo adk eval` cannot construct a Rust agent, so it runs your agent as a separate process and talks to it over a line protocol. `--agent-cmd` starts the process once per run; the CLI writes one JSON request per turn to its stdin and reads one JSON response from its stdout.
+
+| Direction | Line |
+|-----------|------|
+| Request (stdin) | `{"case_id": "current_weather", "turn": 0, "user_text": "Weather in Nairobi?", "session_id": "…"}` |
+| Response (stdout) | `{"text": "Sunny, 24°C.", "tool_calls": [{"name": "get_weather", "args": {"city": "Nairobi"}}]}` |
+| Error response (stdout) | `{"error": "model quota exhausted"}` |
+
+- **`turn`** is the zero-based index of the turn within the case.
+- **`session_id`** is the same for every turn of a case and different for each case, so key conversation state by it.
+- **stdout** carries protocol lines only; write logs to stderr, which the CLI passes through.
+- **Failures** — an `error` response, an invalid line, an exited process, or no answer within `--turn-timeout` — fail the case with an `execution` failure. After any failure other than an `error` response, the CLI starts a new process for the next request.
+
+```bash
+cargo adk eval tests/ --agent-cmd "target/release/eval_agent" --check-regression --format junit --output results.xml
+```
+
+| Flag | Meaning | Default |
+|------|---------|---------|
+| `--agent-cmd` | Command that starts the agent, run with `sh -c` (`cmd /C` on Windows) | Required |
+| `--criteria` | `EvaluationCriteria` JSON file | `tool_trajectory_score` 1.0 and `response_similarity` 0.8 |
+| `--judge-model` | Judge for LLM-judged criteria: `gemini-*` (`GOOGLE_API_KEY`), `claude-*` (`ANTHROPIC_API_KEY`), or `gpt-*`/`o1`/`o3`/`o4` (`OPENAI_API_KEY`) | None; LLM-judged criteria are refused without it |
+| `--save-baseline` | Save this run's scores; refused when a case did not run to completion | Off |
+| `--check-regression` | Compare against the baseline; a missing baseline is an error | Off |
+| `--baseline` | Baseline file | `.eval-baseline.json` in the eval set's directory |
+| `--tolerance` | Largest score drop that is not a regression | `0.05` |
+| `--format` | `table`, `json`, or `junit` | `table` |
+| `--output` | Write the report to a file instead of stdout | stdout |
+| `--turn-timeout` | Seconds to wait for each response | `300` |
+
+The command exits with status 0 only when every case passed and no score regressed. A criteria file that sets no threshold, or sets `custom` criteria, which `Evaluator` does not score, is refused before any case runs.
+
+A Rust agent binary that speaks the protocol, built from the same agent as the application:
+
+```toml
+[dependencies]
+adk-rust = "3.0.0"
+anyhow = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt-multi-thread"] }
+```
+
+```rust
+// src/bin/eval_agent.rs
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use adk_rust::futures::StreamExt;
+use adk_rust::prelude::*;
+use adk_rust::session::{CreateRequest, SessionService};
+use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let agent = LlmAgentBuilder::new("weather_agent")
+        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?))
+        .instruction("You answer weather questions.")
+        .build()?;
+    let sessions = Arc::new(InMemorySessionService::new());
+    let runner = Runner::builder()
+        .app_name("eval")
+        .agent(Arc::new(agent))
+        .session_service(sessions.clone())
+        .build()?;
+
+    // Each eval case has its own session_id; give each one its own runner session.
+    let mut runner_sessions: HashMap<String, String> = HashMap::new();
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut stdout = tokio::io::stdout();
+    while let Some(line) = lines.next_line().await? {
+        let request: Value = serde_json::from_str(&line)?;
+        let eval_session = request["session_id"].as_str().unwrap_or_default().to_string();
+        let session_id = match runner_sessions.get(&eval_session) {
+            Some(session_id) => session_id.clone(),
+            None => {
+                let session = sessions
+                    .create(CreateRequest {
+                        app_name: "eval".to_string(),
+                        user_id: "eval".to_string(),
+                        session_id: None,
+                        state: HashMap::new(),
+                    })
+                    .await?;
+                let session_id = session.id().to_string();
+                runner_sessions.insert(eval_session, session_id.clone());
+                session_id
+            }
+        };
+
+        let input = Content::new("user").with_text(request["user_text"].as_str().unwrap_or_default());
+        let response = match run_turn(&runner, &session_id, input).await {
+            Ok((text, tool_calls)) => json!({ "text": text, "tool_calls": tool_calls }),
+            Err(error) => json!({ "error": error.to_string() }),
+        };
+        stdout.write_all(format!("{response}\n").as_bytes()).await?;
+        stdout.flush().await?;
+    }
+    Ok(())
+}
+
+/// Runs one turn, returning the final text and the tool calls the model made.
+async fn run_turn(runner: &Runner, session_id: &str, input: Content) -> Result<(String, Vec<Value>)> {
+    let mut events = runner.run_str("eval", session_id, input).await?;
+    let mut text = String::new();
+    let mut tool_calls = Vec::new();
+    while let Some(event) = events.next().await {
+        let event = event?;
+        if event.llm_response.partial {
+            continue;
+        }
+        for part in event.content().map(|content| content.parts.iter()).into_iter().flatten() {
+            if let Some(chunk) = part.text() {
+                text.push_str(chunk);
+            }
+            if let Part::FunctionCall { name, args, .. } = part {
+                tool_calls.push(json!({ "name": name, "args": args }));
+            }
+        }
+    }
+    Ok((text, tool_calls))
+}
+```
+
+The protocol is language-neutral. A Python agent needs only a read loop:
+
+```python
+#!/usr/bin/env python3
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    reply = {"text": f"You said: {request['user_text']}", "tool_calls": []}
+    print(json.dumps(reply), flush=True)
+```
 
 ## Best Practices
 

@@ -124,6 +124,47 @@ exporter. If another global telemetry mode was initialized first, it returns an
 actionable error instead of a disconnected exporter that can never receive
 spans.
 
+The exporter's retention is bounded. It holds up to `DEFAULT_MAX_SPANS` (10,000)
+spans and evicts the least recently stored one beyond that. Build your own
+exporter to change the bound or add a TTL:
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_telemetry::AdkSpanExporter;
+
+let exporter = Arc::new(
+    AdkSpanExporter::new()
+        .with_max_spans(2_000)
+        .with_ttl(Duration::from_secs(15 * 60)),
+);
+```
+
+Every span of a run carries the run's `adk.app_name` and `adk.user_id`, inherited
+from `agent.execute`, so the debug routes refuse another user's model and tool
+spans as well as their agent spans.
+
+### Payloads in spans and logs
+
+Model requests, model responses, and tool arguments and results carry user text
+and tool data, so they stay out of telemetry by default:
+
+| `RunConfig::record_payloads` | `call_llm` span fields and DEBUG `tool_call`/`tool_result` logs |
+|------------------------------|------------------------------------------------------------------|
+| `false` (default) | `[omitted: set RunConfig::record_payloads to record payloads]` |
+| `true` | The JSON payload, truncated to `trace_payload_max_bytes` |
+| `true` with the `record-payloads` feature | The full JSON payload |
+
+Enable recording only where traces are as protected as the conversations
+themselves, such as local debugging:
+
+```rust
+use adk_core::RunConfig;
+
+let run_config = RunConfig { record_payloads: true, ..RunConfig::default() };
+```
+
 ## Logging Macros
 
 Use the standard `tracing` macros for logging:
@@ -555,7 +596,9 @@ export RUST_LOG=warn,my_app=info
 
 1. Verify OTLP endpoint is reachable
 2. Check collector is running and accepting connections
-3. Call `shutdown_telemetry()` before application exit to flush pending spans
+3. Call `shutdown_telemetry()` before application exit. It flushes and shuts down
+   every tracer and meter provider `init_with_otlp`, `build_otlp_layer`, and
+   `init_with_gcp` built, including the one the tracing layer holds
 4. Check for network/firewall issues
 
 For the embedded runtime UI, check `services.telemetryStatus`. `configured`

@@ -52,12 +52,14 @@ mod launcher;
 mod runner;
 #[cfg(feature = "sandbox-runner")]
 pub mod sandbox_runner;
+pub mod spend;
 pub mod tool_concurrency;
 
 pub use builder::RunnerConfigBuilder;
 pub use context::{InvocationContext, MutableSession};
 pub use launcher::Launcher;
 pub use runner::{Runner, RunnerConfig, RunnerInvocation};
+pub use spend::{LlmSpendEstimate, LlmSpendRecorder};
 
 // Re-export RequestContext for convenience
 pub use adk_core::RequestContext;

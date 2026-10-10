@@ -46,10 +46,16 @@
 //! ### Navigation
 //! - `browser_navigate` - Navigate to a URL (`http`/`https` unless
 //!   `BrowserToolset::with_allowed_schemes` says otherwise; private network
-//!   addresses refused unless `BrowserToolset::with_private_network_access` permits them)
+//!   addresses, including redirect targets, refused unless
+//!   `BrowserToolset::with_private_network_access` permits them; host names that
+//!   do not resolve on the agent host refused unless
+//!   `BrowserToolset::with_unresolved_hosts` permits them)
 //! - `browser_back` - Go back in history
 //! - `browser_forward` - Go forward in history
 //! - `browser_refresh` - Refresh the page
+//!
+//! The history tools check the page they land on against the same private
+//! network policy.
 //!
 //! ### Interaction
 //! - `browser_click` - Click on an element

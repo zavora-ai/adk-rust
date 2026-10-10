@@ -6,7 +6,9 @@
 // The McpToolset connects to an MCP server, discovers available tools,
 // and exposes them as ADK-compatible tools for use with LlmAgent.
 
-use super::reconnect::{DEFAULT_RETRY_TOOL_CALLS, is_auth_rejection, should_retry_mcp_operation};
+use super::reconnect::{
+    DEFAULT_RETRY_TOOL_CALLS, is_auth_rejection, is_connection_closed, should_retry_mcp_operation,
+};
 use super::schema_limits::McpSchemaLimits;
 use super::task::{McpTaskConfig, TaskError};
 use super::{ConnectionFactory, RefreshConfig, should_refresh_connection};
@@ -78,6 +80,25 @@ where
         (Arc::clone(&current.0), current.1)
     }
 
+    /// Returns the current connection with its generation, first replacing it when it
+    /// has already closed and a factory is configured.
+    ///
+    /// Nothing was sent on a closed connection, so replacing it here never turns the
+    /// caller's next request into a replay.
+    async fn live_connection(
+        &self,
+        factory: Option<&DynConnectionFactory<S>>,
+        subscriptions: &RwLock<BTreeSet<String>>,
+    ) -> Result<(Connection<S>, u64)> {
+        let (connection, generation) = self.connection_with_generation().await;
+        if factory.is_none() || !is_connection_closed(&connection) {
+            return Ok((connection, generation));
+        }
+        debug!("MCP connection closed; reconnecting before the next request");
+        self.refresh(&connection, factory, subscriptions).await?;
+        Ok(self.connection_with_generation().await)
+    }
+
     /// Replaces `failed` with a connection from `factory`.
     ///
     /// Returns `Ok(false)` when no factory is configured. When another caller
@@ -133,12 +154,19 @@ where
         .map_or(0, super::elicitation::AdkClientHandler::tool_list_changes)
 }
 
-/// Sends `notifications/cancelled` for a `tools/call` the caller stopped
-/// waiting for, such as one an agent-level tool timeout dropped, so the server
-/// can stop the work instead of finishing it for nobody.
+/// What a [`CancelOnDrop`] guard asks the server to stop.
+enum CancelTarget {
+    /// A `tools/call` still awaiting its response, stopped with `notifications/cancelled`.
+    Request(RequestId),
+    /// A task the server created for a `tools/call`, stopped with `tasks/cancel`.
+    Task(String),
+}
+
+/// Asks the server to stop work the caller stopped waiting for, such as a call an
+/// agent-level tool timeout dropped, instead of finishing it for nobody.
 struct CancelOnDrop {
     peer: Option<Peer<RoleClient>>,
-    request_id: RequestId,
+    target: CancelTarget,
 }
 
 impl CancelOnDrop {
@@ -152,34 +180,62 @@ impl Drop for CancelOnDrop {
         let Some(peer) = self.peer.take() else {
             return;
         };
-        // Without a runtime there is no transport left to carry the notification.
+        // Without a runtime there is no transport left to carry the cancellation.
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        let request_id = self.request_id.clone();
-        runtime.spawn(async move {
-            let notification = CancelledNotification::new(CancelledNotificationParam::new(
-                Some(request_id.clone()),
-                Some("the client stopped waiting for this tools/call".to_string()),
-            ));
-            match tokio::time::timeout(
-                TASK_CANCEL_TIMEOUT,
-                peer.send_notification(notification.into()),
-            )
-            .await
-            {
-                Ok(Ok(())) => debug!(request.id = %request_id, "sent MCP tools/call cancellation"),
-                Ok(Err(error)) => debug!(
-                    request.id = %request_id,
-                    error = %error,
-                    "could not send MCP tools/call cancellation"
-                ),
-                Err(_) => debug!(
-                    request.id = %request_id,
-                    "MCP tools/call cancellation was not sent before the timeout"
-                ),
+        match &self.target {
+            CancelTarget::Request(request_id) => {
+                let request_id = request_id.clone();
+                runtime.spawn(async move {
+                    let notification = CancelledNotification::new(CancelledNotificationParam::new(
+                        Some(request_id.clone()),
+                        Some("the client stopped waiting for this tools/call".to_string()),
+                    ));
+                    match tokio::time::timeout(
+                        TASK_CANCEL_TIMEOUT,
+                        peer.send_notification(notification.into()),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => {
+                            debug!(request.id = %request_id, "sent MCP tools/call cancellation")
+                        }
+                        Ok(Err(error)) => debug!(
+                            request.id = %request_id,
+                            error = %error,
+                            "could not send MCP tools/call cancellation"
+                        ),
+                        Err(_) => debug!(
+                            request.id = %request_id,
+                            "MCP tools/call cancellation was not sent before the timeout"
+                        ),
+                    }
+                });
             }
-        });
+            CancelTarget::Task(task_id) => {
+                let task_id = task_id.clone();
+                // The task stays in the pending set until a status confirms it, as with
+                // every other `tasks/cancel`, so `cancel_pending_tasks` still checks it.
+                runtime.spawn(async move {
+                    let cancel = peer.cancel_task(CancelTaskParams::new(&task_id));
+                    match tokio::time::timeout(TASK_CANCEL_TIMEOUT, cancel).await {
+                        Ok(Ok(())) => debug!(task_id, "cancelled MCP task of a dropped tools/call"),
+                        Ok(Err(error)) if is_unknown_or_finished_task(&error) => {}
+                        Ok(Err(error)) => warn!(
+                            task_id,
+                            error = %error,
+                            "failed to cancel MCP task of a dropped tools/call"
+                        ),
+                        Err(_) => warn!(
+                            task_id,
+                            timeout_ms = TASK_CANCEL_TIMEOUT.as_millis(),
+                            "MCP server did not acknowledge tasks/cancel for a dropped tools/call"
+                        ),
+                    }
+                });
+            }
+        }
     }
 }
 
@@ -197,7 +253,10 @@ async fn send_tool_call(
             PeerRequestOptions::no_options(),
         )
         .await?;
-    let cancel = CancelOnDrop { peer: Some(handle.peer.clone()), request_id: handle.id.clone() };
+    let cancel = CancelOnDrop {
+        peer: Some(handle.peer.clone()),
+        target: CancelTarget::Request(handle.id.clone()),
+    };
     let response = handle.await_response().await;
     cancel.disarm();
     match response? {
@@ -715,10 +774,11 @@ where
 
     /// Check whether the underlying MCP service connection has been closed or cancelled.
     ///
-    /// Returns `true` if the service loop has terminated (transport closed,
-    /// cancellation token fired, or the background task completed). This is
+    /// Returns `true` once the transport has closed, as it does when a stdio server
+    /// process exits, or the connection's cancellation token has fired. This is
     /// useful for health monitoring — a closed connection indicates the server
-    /// process has crashed or the transport has been lost.
+    /// process has crashed or the transport has been lost. With a connection
+    /// factory, the next request replaces a closed connection before sending.
     ///
     /// # Example
     ///
@@ -728,7 +788,7 @@ where
     /// }
     /// ```
     pub async fn is_closed(&self) -> bool {
-        self.client.connection().await.is_closed()
+        is_connection_closed(&*self.client.connection().await)
     }
 
     /// Call one MCP tool and preserve structured, text, image, audio, and resource content
@@ -1038,7 +1098,10 @@ where
     }
 
     async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
-        let (mut connection, mut generation) = self.client.connection_with_generation().await;
+        let (mut connection, mut generation) = self
+            .client
+            .live_connection(self.connection_factory.as_ref(), &self.resource_subscriptions)
+            .await?;
         // Read before fetching, so a change notified mid-fetch invalidates the result.
         let mut list_changes = tool_list_changes(&connection);
         let cached = if self.tool_list_ttl.is_zero() {
@@ -1409,7 +1472,8 @@ where
 
         // SEP-2663 moved the task decision to the server, so one request shape
         // covers both modes and the response says which one happened.
-        let result = match self.call_tool_with_retry(params).await? {
+        let (response, peer) = self.call_tool_with_retry(params).await?;
+        let result = match response {
             CallToolResponse::Complete(result) => result,
             CallToolResponse::Task(created) => {
                 let task_id = created.task.task_id.clone();
@@ -1421,10 +1485,15 @@ where
                         task_id.len()
                     )));
                 }
+                // Armed before the first await, so dropping the call from here on cancels a
+                // task that nothing would poll.
+                let cancel_on_drop =
+                    CancelOnDrop { peer: Some(peer), target: CancelTarget::Task(task_id.clone()) };
                 self.active_tasks.lock().await.insert(task_id.clone());
                 if !self.task_config.enable_tasks || !self.server_supports_tasks {
                     // Nothing polls this task, so stop it rather than leave it running remotely.
                     self.cancel_task(&task_id).await;
+                    cancel_on_drop.disarm();
                     let remedy = if self.task_config.enable_tasks {
                         "the server did not negotiate the tasks capability"
                     } else {
@@ -1438,9 +1507,9 @@ where
                     )));
                 }
                 debug!(tool = self.name, task_id, "MCP server materialized a task");
-                return self
-                    .poll_task(created.task)
-                    .await
+                let outcome = self.poll_task(created.task).await;
+                cancel_on_drop.disarm();
+                return outcome
                     .map_err(|error| AdkError::tool(format!("Task execution failed: {error}")));
             }
             CallToolResponse::InputRequired(_) => {
@@ -1482,10 +1551,12 @@ where
     /// latter fulfils SEP-2322 `input_required` rounds on its own and rejects a
     /// task response outright, which would break every server that
     /// materializes a task.
+    ///
+    /// Returns the response with the peer of the connection that answered it.
     async fn call_tool_with_retry(
         &self,
         mut params: CallToolRequestParams,
-    ) -> Result<CallToolResponse> {
+    ) -> Result<(CallToolResponse, Peer<RoleClient>)> {
         let has_connection_factory = self.connection_factory.is_some();
         let (_, metadata_allows_replay) = mcp_tool_safety(self.annotations.as_ref());
         let replay_allowed = self.retry_tool_calls || metadata_allows_replay;
@@ -1494,7 +1565,10 @@ where
         let mut input_rounds = 0usize;
         let mut state_only_rounds = 0u32;
         loop {
-            let connection = self.client.connection().await;
+            let (connection, _) = self
+                .client
+                .live_connection(self.connection_factory.as_ref(), &self.resource_subscriptions)
+                .await?;
             let call_result =
                 send_tool_call(connection.peer(), params.clone()).await.map_err(|e| e.to_string());
 
@@ -1538,7 +1612,7 @@ where
                     params.request_state = required.request_state;
                     attempt = 0;
                 }
-                Ok(result) => return Ok(result),
+                Ok(result) => return Ok((result, connection.peer().clone())),
                 Err(error) => {
                     if !should_retry_mcp_operation(
                         &error,

@@ -586,9 +586,31 @@ Use `adk_core::AdkError` (not `adk_core::Error`) when returning errors from agen
 
 ## Tool authorization
 
-Four mechanisms for controlling tool execution, composable in any combination:
+Five mechanisms for controlling tool execution, composable in any combination:
 
-1. **`ToolConfirmationPolicy`** — built-in HITL. Pauses execution, emits a `ToolConfirmationRequest` event, waits for `Approve`/`Deny` on the next run. Works in CLI and web server via SSE events.
+1. **`ToolPolicy`** — run-wide allow / deny / require-approval decision per call, set with
+   `Runner::builder().tool_policy(...)` or `RunConfig::tool_policy`. `DeclarativePolicy` matches
+   rules in order on a tool-name glob, the tool's declared `ToolEffect`, and JSON-pointer argument
+   predicates (`equals`, `in_set`, `at_most`, `starts_with`, `domain_in`); a tool no rule permits
+   is **denied by default**.
+
+```rust
+let policy = DeclarativePolicy::builder()
+    .allow_read_only()
+    .rule(PolicyRule::allow("transfer").when(ArgPredicate::at_most("/amount", 100.0)))
+    .require_approval("transfer", "transfers over 100 need approval")
+    .build();
+let runner = Runner::builder()
+    .app_name("ops")
+    .agent(agent)
+    .session_service(sessions)
+    .tool_policy(Arc::new(policy))
+    .build()?;
+```
+
+2. **`ToolConfirmationPolicy`** — built-in HITL. A `ToolConfirmationHandler` decides each call
+   inside the run (bounded by `RunConfig::tool_confirmation_timeout`, denied when it expires);
+   without one the agent holds the call, emits a `ToolConfirmationRequest` event, and ends the run.
 
 ```rust
 let agent = LlmAgentBuilder::new("assistant")
@@ -599,9 +621,13 @@ let agent = LlmAgentBuilder::new("assistant")
     .build()?;
 ```
 
-The agent emits `event.actions.tool_confirmation = Some(ToolConfirmationRequest { tool_name, args, function_call_id })`. Pass the decision back via `RunConfig::tool_confirmation_decisions`.
+A decision binds to the call's fingerprint (`ToolConfirmationRequest::fingerprint()`: tool name
+plus canonical arguments), not its call ID, so it authorizes the same call re-issued by the next
+run. Pass it as `RunConfig::tool_approvals` (valid for the run, optional expiry) or record it in an
+`ApprovalStore` (`RunConfig::approval_store`; consumed by the call it authorizes). Decisions keyed
+by call ID (`RunConfig::tool_confirmation_decisions`) still apply to the exact call they name.
 
-2. **`BeforeToolCallback`** — programmatic gate. Return `Ok(Some(content))` to skip, `Ok(None)` to allow. `LlmAgent` answers the skipped call with that content: text becomes the call's `{"error": "<text>"}` function response.
+3. **`BeforeToolCallback`** — programmatic gate. Return `Ok(Some(content))` to skip, `Ok(None)` to allow. `LlmAgent` answers the skipped call with that content: text becomes the call's `{"error": "<text>"}` function response.
 
 ```rust
 .before_tool_callback(Box::new(|ctx| {
@@ -614,22 +640,38 @@ The agent emits `event.actions.tool_confirmation = Some(ToolConfirmationRequest 
 }))
 ```
 
-3. **`adk-auth` RBAC** — role-based access control with `ProtectedTool` wrapper and audit logging.
+4. **`adk-auth` RBAC** — role-based access control with `ProtectedTool` wrapper and audit logging.
 
-4. **Graph interrupts** (`adk-graph`) — checkpoint-based pauses with durable state for complex approval workflows.
+5. **Graph interrupts** (`adk-graph`) — checkpoint-based pauses with durable state for complex approval workflows.
 
-Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`):
+`GovernanceControl` is the org kill switch: `runner.governance().freeze(reason)` fails new runs at
+their start and stops running ones before their next model call or tool call. `adk-server` shares
+one through `ServerConfig::governance` and exposes `POST /api/admin/freeze` / `unfreeze`
+(`ServerBuilder::enable_governance_endpoints`), which also pause background and cron scheduling.
+`RealtimeAgent`, `RealtimeRunner`, and `IntegratedRealtimeRunner` dispatch through the same
+governed path.
 
-1. `ToolGuardrailSet` screens every call in the model's batch.
-2. `ToolConfirmationPolicy` — a static decision, the `ToolConfirmationHandler`, or a pause.
-3. Enhanced plugins (`before_tool_call`).
-4. Run-wide `InvocationHooks` (the runner's `PluginManager`), then `BeforeToolCallback`.
-5. Circuit breaker.
-6. `execute()` — `adk-auth` wrappers (`ProtectedTool`, `ScopeGuard`) check RBAC and scopes here,
-   so a denial is a tool error that retry budgets and `on_tool_error` callbacks see.
-7. `on_tool_error` (hooks, then callbacks) when the tool failed.
-8. `AfterToolCallback` (hooks, then callbacks), `AfterToolCallbackFull`, then enhanced plugins
-   (`after_tool_call`).
+Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`:
+
+1. Run budget (`RunConfig::budget`) — the model turn's whole tool batch is reserved before any
+   call starts (`CodeActAgent`: each call); a refused batch is answered `not run` and the run
+   ends with `ResourceExhausted`.
+2. Enhanced plugins (`before_tool_call`) — may rewrite the arguments.
+3. Run-wide `InvocationHooks` (the runner's `PluginManager`), then `BeforeToolCallback`.
+4. Circuit breaker.
+5. The governed path, `adk_core::authorize_tool_call`, on the final arguments: kill switch →
+   `ToolPolicy` → `ToolGuardrailSet` (a rewrite is checked against the policy again) →
+   confirmation (call-ID decision, fingerprint approval, `ApprovalStore`, handler, or hold).
+6. Action ledger begin (`LlmAgent`, `NonIdempotent` tools, `RunConfig::action_ledger`) — a
+   recorded call is answered from its record without executing.
+7. `execute()` under the tool's timeout — `adk-auth` wrappers (`ProtectedTool`, `ScopeGuard`)
+   check RBAC and scopes here, so a denial is a tool error. Only `ReadOnly` and `Idempotent`
+   tools are retried (retryable error or timeout, with backoff).
+8. Action ledger complete — a `NonIdempotent` call that timed out or panicked stays begun and is
+   answered `outcome_unknown`.
+9. `on_tool_error` (hooks, then callbacks) when the tool failed.
+10. `AfterToolCallback` (hooks, then callbacks), `AfterToolCallbackFull`, then enhanced plugins
+    (`after_tool_call`).
 
 A hook or callback that returns a value short-circuits the remaining callbacks of its kind.
 

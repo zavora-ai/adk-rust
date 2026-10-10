@@ -20,6 +20,9 @@ use tokio::sync::RwLock;
 use tracing::Span;
 use tracing::field;
 
+/// Request timeout used when [`AnthropicConfig::request_timeout_secs`] is unset.
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 600;
+
 /// Anthropic client for Claude models.
 pub struct AnthropicClient {
     pub(super) client: Anthropic,
@@ -68,12 +71,19 @@ impl AnthropicClient {
         }
         .map_err(|e| AdkError::model(format!("Failed to create Anthropic client: {e}")))?;
         // This adapter owns retries; do not nest the SDK's independent retry loop.
-        client = client.with_max_retries(0);
+        client = client
+            .with_max_retries(0)
+            .with_timeout(std::time::Duration::from_secs(
+                config.request_timeout_secs.unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS),
+            ))
+            .map_err(|e| AdkError::model(format!("Failed to create Anthropic client: {e}")))?;
 
         Ok(Self {
             client,
             model: config.model.clone(),
-            max_tokens: config.max_tokens,
+            max_tokens: config
+                .max_tokens
+                .unwrap_or_else(|| crate::catalog::anthropic_default_max_tokens(&config.model)),
             config,
             retry_config: RetryConfig::default(),
             latest_rate_limit: Arc::new(RwLock::new(RateLimitInfo::default())),
@@ -592,7 +602,12 @@ impl Llm for AnthropicClient {
             }
         };
 
-        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
+        Ok(crate::usage_tracking::with_priced_usage_tracking(
+            Box::pin(response_stream),
+            usage_span,
+            "anthropic",
+            &self.model,
+        ))
     }
 }
 
@@ -676,6 +691,34 @@ mod tests {
         assert_eq!(value["allow_insecure_http"], true);
         let restored: AnthropicConfig = serde_json::from_value(value).unwrap();
         assert!(restored.allow_insecure_http);
+    }
+
+    #[test]
+    fn requests_default_to_a_ten_minute_timeout() {
+        let client = AnthropicClient::new(AnthropicConfig::new("test", "claude-sonnet-5")).unwrap();
+        assert_eq!(client.inner().timeout(), std::time::Duration::from_secs(600));
+
+        let config = AnthropicConfig::new("test", "claude-sonnet-5")
+            .with_request_timeout(std::time::Duration::from_millis(1_500));
+        let client = AnthropicClient::new(config).unwrap();
+        assert_eq!(client.inner().timeout(), std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn max_tokens_defaults_to_the_model_generation() {
+        let max_tokens = |config: AnthropicConfig| AnthropicClient::new(config).unwrap().max_tokens;
+        assert_eq!(max_tokens(AnthropicConfig::new("test", "claude-opus-5-5")), 32_000);
+        assert_eq!(max_tokens(AnthropicConfig::new("test", "claude-3-5-haiku-20241022")), 4_096);
+        assert_eq!(
+            max_tokens(AnthropicConfig::new("test", "claude-opus-5-5").with_max_tokens(1_024)),
+            1_024
+        );
+        assert_eq!(
+            serde_json::from_value::<AnthropicConfig>(json!({"model": "claude-sonnet-5"}))
+                .unwrap()
+                .max_tokens,
+            None
+        );
     }
 
     #[test]

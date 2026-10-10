@@ -70,6 +70,8 @@ A tool result is considered an error if:
 2. It is a JSON object with `"isError": true`
 3. It is a JSON string starting with `"Error:"` or `"error:"`
 
+Two errors pass through unchanged, with no retry suggested: an authorization or approval refusal, and a timeout of a tool whose `effect()` is `NonIdempotent`, which may already have taken effect.
+
 ## Tracing Events
 
 The plugin emits structured tracing events:
@@ -77,6 +79,8 @@ The plugin emits structured tracing events:
 - `retry_reflect.retry` (info) — When a retry is initiated
 - `retry_reflect.exhausted` (warn) — When retry limit is exceeded
 - `retry_reflect.circuit_broken` (warn) — When global threshold is exceeded
+- `retry_reflect.skipped_authorization_denial` (info) — When a refusal passes through
+- `retry_reflect.skipped_non_idempotent_timeout` (warn) — When a non-idempotent timeout passes through
 
 ## License
 

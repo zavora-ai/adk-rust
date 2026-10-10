@@ -332,8 +332,16 @@ impl Agent for LlmConditionalAgent {
                 previous_response_id: None,
             };
 
-            // Call LLM for classification
-            let mut response_stream = match model.generate_content(request, false).await {
+            // Call LLM for classification; the call counts against the run budget.
+            let budget_tracker = run_ctx.run_config().budget_tracker.clone();
+            let mut response_stream = match adk_core::generate_with_budget(
+                model.as_ref(),
+                request,
+                false,
+                budget_tracker.as_ref(),
+            )
+            .await
+            {
                 Ok(stream) => stream,
                 Err(e) => {
                     yield Err(e);

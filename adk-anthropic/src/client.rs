@@ -84,7 +84,11 @@ impl Stream for LoggingStream<'_> {
 
 const DEFAULT_API_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Matches the official SDKs: long thinking turns routinely exceed a minute.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
+/// Upper bound on establishing a connection, so a long request timeout does not
+/// also let an unreachable host hold a request for minutes.
+const MAX_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 const STRUCTURED_OUTPUTS_BETA: &str = "structured-outputs-2025-11-13";
 const SERVER_FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 /// Opt-in named when a base URL given in code is rejected for plain HTTP.
@@ -100,7 +104,8 @@ const ENV_INSECURE_HTTP_OPT_IN: &str =
 ///
 /// | Request kind | Bound |
 /// |--------------|-------|
-/// | Non-streaming | [`with_timeout`](Self::with_timeout) covers the whole request (default 60 seconds) |
+/// | Non-streaming | [`with_timeout`](Self::with_timeout) covers the whole request (default 10 minutes) |
+/// | Connecting | the request timeout, capped at 60 seconds |
 /// | Streaming, until response headers | the same timeout |
 /// | Streaming body | a 30-second inactivity timeout between chunks, plus the optional total bound from [`with_stream_timeout`](Self::with_stream_timeout) |
 ///
@@ -149,7 +154,7 @@ impl Anthropic {
         connect_timeout: Duration,
     ) -> Result<ReqwestClient> {
         let mut builder = ReqwestClient::builder()
-            .connect_timeout(connect_timeout)
+            .connect_timeout(connect_timeout.min(MAX_CONNECT_TIMEOUT))
             .redirect(reqwest::redirect::Policy::none())
             .pool_max_idle_per_host(10) // Connection pooling optimization
             .pool_idle_timeout(Duration::from_secs(90))
@@ -486,7 +491,8 @@ impl Anthropic {
     ///
     /// The timeout bounds a whole non-streaming request, and the wait for the
     /// response headers of a streaming request. A streamed body is not bounded
-    /// by it — see [`with_stream_timeout`](Self::with_stream_timeout).
+    /// by it — see [`with_stream_timeout`](Self::with_stream_timeout). The default
+    /// is 10 minutes; connecting is bounded by the same value, capped at 60 seconds.
     ///
     /// # Errors
     ///
@@ -496,6 +502,22 @@ impl Anthropic {
         self.client = Self::build_http_client(Some(timeout), timeout)?;
         self.stream_client = Self::build_http_client(None, timeout)?;
         Ok(self)
+    }
+
+    /// Returns the request timeout set by [`with_timeout`](Self::with_timeout).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use adk_anthropic::Anthropic;
+    ///
+    /// let client = Anthropic::new(Some("placeholder-api-key".to_string()))?;
+    /// assert_eq!(client.timeout(), Duration::from_secs(600));
+    /// # Ok::<(), adk_anthropic::Error>(())
+    /// ```
+    pub fn timeout(&self) -> Duration {
+        self.timeout
     }
 
     /// Bound the total duration of each streaming request, body included.
@@ -2325,6 +2347,12 @@ mod tests {
         // Note: These are unit tests for the mapping logic, not integration tests
         let _timeout = Duration::from_secs(30);
         assert_eq!(client.timeout, DEFAULT_TIMEOUT); // Should use default initially
+    }
+
+    #[test]
+    fn default_timeout_allows_long_non_streaming_turns() {
+        let client = Anthropic::new(Some("test_key".to_string())).unwrap();
+        assert_eq!(client.timeout, Duration::from_secs(600));
     }
 
     #[tokio::test]
