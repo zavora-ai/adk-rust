@@ -230,7 +230,8 @@ caller's session identity.
 `ToolEffect::NonIdempotent`, so an agent never retries them, and every checkout tool
 passes the call's `ToolContext::idempotency_key()` to the commerce backend in the
 `idempotency_key` extension field — where the ACP adapter places the `Idempotency-Key`
-header.
+header. A created checkout's transaction ID derives from that key, so a replayed call
+names the same transaction.
 
 ## Primary Journeys
 

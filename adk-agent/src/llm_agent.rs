@@ -5,7 +5,8 @@ use adk_core::{
     InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse, MemoryEntry,
     OnToolErrorCallback, Part, ReadonlyContext, Result, RetryBudget, Tool, ToolCallbackContext,
     ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolContext,
-    ToolExecutionStrategy, ToolOutcome, Toolset,
+    ToolEffect, ToolExecutionStrategy, ToolOutcome, Toolset,
+    action_ledger::{ActionOutcome, ActionRecord},
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -1044,9 +1045,10 @@ impl LlmAgentBuilder {
     /// Default is 5 minutes. Tools that exceed this timeout will return an error.
     ///
     /// A tool whose [`Tool::timeout_override`] returns `Some` uses that instead,
-    /// so an `AgentTool` delegation is bounded by its own timeout. A timed-out
-    /// [`NonIdempotent`](adk_core::ToolEffect::NonIdempotent) call is never
-    /// retried, because its side effect may already have happened.
+    /// so an `AgentTool` delegation is bounded by its own timeout. A
+    /// [`ToolEffect::NonIdempotent`] call that times out is answered with an
+    /// [`outcome_unknown_response`](adk_core::outcome_unknown_response), because
+    /// its side effect may already have happened.
     pub fn tool_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.tool_timeout = timeout;
         self
@@ -1176,8 +1178,7 @@ impl LlmAgentBuilder {
     /// When a tool execution fails and a retry budget applies, the agent
     /// retries up to `budget.max_retries` times, with the backoff described on
     /// [`RetryBudget::backoff_delay`]. Only a tool whose [`Tool::effect`] is
-    /// [`ReadOnly`](adk_core::ToolEffect::ReadOnly) or
-    /// [`Idempotent`](adk_core::ToolEffect::Idempotent) is retried, and
+    /// [`ToolEffect::ReadOnly`] or [`ToolEffect::Idempotent`] is retried, and
     /// only after a retryable error or a timeout. Each attempt gets a fresh tool
     /// context, so a retried attempt's state delta and escalation are discarded.
     pub fn default_retry_budget(mut self, budget: RetryBudget) -> Self {
@@ -2291,6 +2292,75 @@ impl ToolExecutor<'_> {
                 let mut tool_ctx = attempt_context();
                 let effect = tool.effect();
 
+                // A non-idempotent call executes at most once per idempotency key. A record
+                // that exists answers the call; a ledger that cannot be read or written
+                // fails the call closed.
+                let ledger = match effect {
+                    ToolEffect::NonIdempotent => self.ctx.run_config().action_ledger.clone(),
+                    _ => None,
+                };
+                let idempotency_key = tool_ctx.idempotency_key();
+                if let Some(ledger) = &ledger {
+                    let answer = match ledger.get(&idempotency_key).await {
+                        Ok(Some(record)) => Some(match record.outcome {
+                            Some(ActionOutcome::Succeeded { result_digest }) => serde_json::json!({
+                                "status": "already_succeeded",
+                                "result_digest": result_digest,
+                                "detail": format!("this call to '{name}' already completed; it was not executed again"),
+                            }),
+                            Some(ActionOutcome::Failed { error }) => serde_json::json!({
+                                "status": "already_failed",
+                                "error": error,
+                                "detail": format!("this call to '{name}' already failed; it was not executed again"),
+                            }),
+                            _ => adk_core::outcome_unknown_response(format!(
+                                "an earlier attempt of this call to '{name}' began but recorded no outcome, so it may have taken effect; it was not executed again"
+                            )),
+                        }),
+                        Ok(None) => ledger
+                            .begin(&ActionRecord::new(
+                                idempotency_key.clone(),
+                                name.clone(),
+                                &final_args,
+                                effect,
+                            ))
+                            .await
+                            .err()
+                            .map(|error| {
+                                serde_json::json!({
+                                    "error": format!("tool '{name}' was not executed: the action ledger could not record the call: {error}")
+                                })
+                            }),
+                        Err(error) => Some(serde_json::json!({
+                            "error": format!("tool '{name}' was not executed: the action ledger could not be read: {error}")
+                        })),
+                    };
+                    if let Some(answer) = answer {
+                        tracing::warn!(
+                            tool.name = %name,
+                            tool.idempotency_key = %idempotency_key,
+                            response = %answer,
+                            "non-idempotent call answered by the action ledger without executing"
+                        );
+                        return Ok(ToolExecutionResult {
+                            index,
+                            content: Content {
+                                role: "function".to_string(),
+                                parts: vec![Part::FunctionResponse {
+                                    function_response: FunctionResponseData::from_tool_result(
+                                        name.clone(),
+                                        answer,
+                                    ),
+                                    id: id.clone(),
+                                    annotations: None,
+                                }],
+                            },
+                            actions: tool_actions,
+                            escalate_or_skip: false,
+                        });
+                    }
+                }
+
                 let span_name = format!("execute_tool {name}");
                 let tool_span = tracing::info_span!(
                     "",
@@ -2324,6 +2394,9 @@ impl ToolExecutor<'_> {
                 let tool_clone = tool.clone();
                 let tool_start = std::time::Instant::now();
                 let mut last_error = String::new();
+                // Set when the last attempt ended mid-flight (timeout or panic), so its side
+                // effect may or may not have happened.
+                let mut interrupted = false;
                 let mut final_attempt: u32 = 0;
                 let mut retry_result: Option<serde_json::Value> = None;
 
@@ -2352,12 +2425,17 @@ impl ToolExecutor<'_> {
                             }
                         };
                         match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(bounded)).await {
-                            Ok(Ok(result)) => result.map_err(|error| (error.to_string(), error.is_retryable())),
+                            Ok(Ok(result)) => result.map_err(|error| (error.to_string(), error.is_retryable(), false)),
                             Ok(Err(limit)) => Err((
                                 format!("Tool '{name}' timed out after {} seconds", limit.as_secs()),
                                 true,
+                                true,
                             )),
-                            Err(_panic) => Err((format!("tool '{name}' panicked during execution"), false)),
+                            Err(_panic) => Err((
+                                format!("tool '{name}' panicked during execution"),
+                                false,
+                                true,
+                            )),
                         }
                     }
                     .instrument(tool_span.clone())
@@ -2373,8 +2451,9 @@ impl ToolExecutor<'_> {
                             retry_result = Some(value);
                             break;
                         }
-                        Err((message, retryable)) => {
+                        Err((message, retryable, mid_flight)) => {
                             last_error = message;
+                            interrupted = mid_flight;
                             if retryable && attempt + 1 < max_attempts {
                                 tracing::warn!(tool.name = %name, attempt = attempt, error = %last_error, "tool execution failed, retrying");
                             } else {
@@ -2385,9 +2464,38 @@ impl ToolExecutor<'_> {
                     }
                 }
 
+                let outcome_unknown = interrupted && effect == ToolEffect::NonIdempotent;
+                // A call that ended mid-flight keeps its begun record, so a replay is answered
+                // with an unknown outcome instead of executing again.
+                if let Some(ledger) = &ledger
+                    && !outcome_unknown
+                {
+                    let outcome = match &retry_result {
+                        Some(value) => {
+                            ActionOutcome::Succeeded { result_digest: adk_core::json_digest(value) }
+                        }
+                        None => ActionOutcome::Failed { error: last_error.clone() },
+                    };
+                    if let Err(error) = ledger.complete(&idempotency_key, outcome).await {
+                        tracing::error!(
+                            tool.name = %name,
+                            tool.idempotency_key = %idempotency_key,
+                            error = %error,
+                            "action ledger could not record the outcome; a replay will report it as unknown"
+                        );
+                    }
+                }
+
                 let tool_duration = tool_start.elapsed();
                 let (tool_success, tool_error_message, function_response) = match retry_result {
                     Some(value) => (true, None, value),
+                    None if outcome_unknown => (
+                        false,
+                        Some(last_error.clone()),
+                        adk_core::outcome_unknown_response(format!(
+                            "{last_error}. The call may have taken effect; check its result before calling it again."
+                        )),
+                    ),
                     None => (
                         false,
                         Some(last_error.clone()),
@@ -3350,7 +3458,12 @@ impl Agent for LlmAgent {
                         parallelize_agent_delegations,
                     );
 
-                    let fc_parts = collect_function_calls(content, &invocation_id);
+                    // Providers that omit call IDs get one unique to this model turn, so two
+                    // turns of one invocation never share an idempotency key.
+                    let fc_parts = collect_function_calls(
+                        content,
+                        &format!("{invocation_id}_{}", uuid::Uuid::new_v4().simple()),
+                    );
 
                     // ===== HANDLE transfer_to_agent BEFORE DISPATCH =====
                     // Transfer calls cause an immediate return from the stream,

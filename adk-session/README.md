@@ -12,6 +12,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 
 - **InMemorySessionService** - Simple in-memory session storage
 - **SqliteSessionService** - SQLite-backed persistence (`sqlite` feature)
+- **SqliteActionLedger** - Durable `ActionLedger` that keeps non-idempotent tool calls from repeating across restarts (`sqlite` feature)
 - **PostgresSessionService** - PostgreSQL-backed persistence (`postgres` feature)
 - **RedisSessionService** - Redis-backed persistence (`redis` feature)
 - **MongoSessionService** - MongoDB-backed persistence (`mongodb` feature)

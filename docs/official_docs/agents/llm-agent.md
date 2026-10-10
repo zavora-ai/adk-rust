@@ -693,7 +693,7 @@ let agent = LlmAgentBuilder::new("resilient_agent")
     .build()?;
 ```
 
-A retry budget applies only to tools whose `effect()` is `ReadOnly` or `Idempotent`, and only after a retryable error (rate limited, unavailable, timed out). A `NonIdempotent` tool — the default for any tool not marked read-only — runs once. The delay doubles on each retry up to `RetryBudget::max_delay`, with jitter. An `AgentTool` delegation is bounded by its own `timeout` rather than `tool_timeout`. See [Tool Effects](../tools/tool-effects.md).
+A retry budget applies only to tools whose `effect()` is `ReadOnly` or `Idempotent`, and only after a retryable error (rate limited, unavailable, timed out). A `NonIdempotent` tool — the default for any tool not marked read-only — runs once. The delay doubles on each retry up to `RetryBudget::max_delay`, with jitter. A `NonIdempotent` call that times out is answered with `{"status": "outcome_unknown"}` rather than an error, and an `AgentTool` delegation is bounded by its own `timeout` rather than `tool_timeout`. See [Tool Effects and the Action Ledger](../tools/tool-effects.md).
 
 After-tool callbacks can inspect structured `ToolOutcome` metadata via `CallbackContext::tool_outcome()`:
 
