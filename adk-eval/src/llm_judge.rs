@@ -42,7 +42,14 @@ impl LlmJudge {
 
     /// Judge semantic similarity between expected and actual responses
     ///
-    /// Returns a score from 0.0 to 1.0 indicating semantic equivalence.
+    /// Returns a score from 0.0 to 1.0 indicating semantic equivalence, and the judge's
+    /// `EQUIVALENT:` verdict. `YES` and `PARTIAL` count as equivalent, `NO` does not.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvalError::JudgeError`] when the judge call fails or its reply lacks a
+    /// valid `SCORE:` line or an `EQUIVALENT: YES/NO/PARTIAL` line. A
+    /// [`SemanticMatchConfig::custom_prompt`] must ask for both lines.
     pub async fn semantic_match(
         &self,
         expected: &str,
@@ -278,7 +285,7 @@ REASONING: [Brief explanation of the score]"#,
     /// Parse semantic match response
     fn parse_semantic_response(&self, response: &str) -> Result<SemanticMatchResult> {
         let mut score = None;
-        let mut equivalent = false;
+        let mut equivalent = None;
         let mut reasoning = String::new();
 
         for line in response.lines() {
@@ -286,14 +293,18 @@ REASONING: [Brief explanation of the score]"#,
             if let Some(s) = line.strip_prefix("SCORE:") {
                 score = parse_score(s);
             } else if let Some(e) = line.strip_prefix("EQUIVALENT:") {
-                let e = e.trim().to_uppercase();
-                equivalent = e == "YES" || e == "PARTIAL";
+                equivalent = match e.trim().trim_matches(['[', ']']).to_uppercase().as_str() {
+                    "YES" | "PARTIAL" => Some(true),
+                    "NO" => Some(false),
+                    _ => None,
+                };
             } else if let Some(r) = line.strip_prefix("REASONING:") {
                 reasoning = r.trim().to_string();
             }
         }
 
         let score = score.ok_or_else(|| malformed_response("SCORE", response))?;
+        let equivalent = equivalent.ok_or_else(|| malformed_response("EQUIVALENT", response))?;
         Ok(SemanticMatchResult { score, equivalent, reasoning })
     }
 
@@ -406,7 +417,8 @@ fn malformed_response(field: &str, response: &str) -> EvalError {
 pub struct SemanticMatchResult {
     /// Similarity score (0.0 - 1.0)
     pub score: f64,
-    /// Whether responses are considered equivalent
+    /// Whether the judge's `EQUIVALENT:` verdict was `YES` or `PARTIAL`; a `NO` verdict
+    /// fails the `semantic_match` criterion regardless of the score
     pub equivalent: bool,
     /// Reasoning for the score
     pub reasoning: String,
@@ -546,6 +558,24 @@ ISSUES: Invented a statistic about 90% success rate, Made up researcher name"#;
         assert!(err.to_string().contains("no valid SAFE line"), "{err}");
         let err = judge.parse_hallucination_response("SCORE: 1.0\nISSUES: None").unwrap_err();
         assert!(err.to_string().contains("no valid HALLUCINATION_FREE line"), "{err}");
+        for response in ["SCORE: 0.9\nREASONING: close", "EQUIVALENT: MAYBE\nSCORE: 0.9"] {
+            let err = judge.parse_semantic_response(response).unwrap_err();
+            assert!(err.to_string().contains("no valid EQUIVALENT line"), "{response}: {err}");
+        }
+    }
+
+    #[test]
+    fn semantic_verdict_is_parsed_from_every_form() {
+        let judge = LlmJudge::new(Arc::new(adk_model::MockLlm::new("test-judge")));
+
+        for (verdict, equivalent) in
+            [("YES", true), ("[PARTIAL]", true), ("no", false), ("[NO]", false)]
+        {
+            let result = judge
+                .parse_semantic_response(&format!("EQUIVALENT: {verdict}\nSCORE: 0.9"))
+                .unwrap();
+            assert_eq!(result.equivalent, equivalent, "{verdict}");
+        }
     }
 
     #[test]

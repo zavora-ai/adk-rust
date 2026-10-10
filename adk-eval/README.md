@@ -29,7 +29,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **Vertex AI Gen AI Evaluation Service**: Service-backed judge and trajectory metrics via `evaluateInstances` (feature: `vertex-eval`)
 - **Test Case Generation**: LLM-driven or event-based eval case creation
 - **Conversation Metrics**: Multi-turn scoring for context retention, goal completion, coherence, topic drift
-- **CI Integration**: Eval sets run from integration tests, with JUnit XML and baseline regression checks
+- **CI Integration**: Eval sets run from integration tests or `cargo adk eval --agent-cmd`, with JUnit XML and baseline regression checks
 
 ## Quick Start
 
@@ -103,6 +103,8 @@ Test files use JSON format with the following structure:
   ]
 }
 ```
+
+The turns of a case run in order through one session of an in-memory session service, so each turn sees the history and state of the turns before it. The case's `session_input` sets the session's `app_name`, `user_id` (default `eval_app` and `eval_user`), and initial `state`.
 
 ## Evaluation Criteria
 
@@ -196,7 +198,7 @@ let criteria = EvaluationCriteria {
 };
 ```
 
-A `SAFE: NO` or `HALLUCINATION_FREE: NO` verdict fails the criterion regardless of its score.
+An `EQUIVALENT: NO`, `SAFE: NO`, or `HALLUCINATION_FREE: NO` verdict fails the criterion regardless of its score, and a judge reply without the verdict line is a judge error.
 
 ### Criteria That Cannot Be Judged
 
@@ -320,7 +322,7 @@ store.save("my_eval", &metrics)?;
 let regressions = store.check_regressions(&new_metrics, 0.05)?;
 ```
 
-A baseline metric or case with no score in the new run, such as a case that errored, is a regression with `current_value: None`.
+A baseline metric or case with no score in the new run, such as a case that errored, is a regression with `current_value: None`. A missing baseline file is an error rather than an empty result.
 
 ### JUnit XML (CI Integration)
 
@@ -372,7 +374,13 @@ let metrics = scorer.score(&conversation, "goal").await?;
 
 Run eval sets from an integration test, where the agent is constructed, and fail on case failures or baseline regressions. See "Running Evaluations in CI" in the [evaluation guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/evaluation/evaluation.md) for a complete test with JUnit XML output.
 
-> **Note:** `cargo adk eval` cannot run agents yet. It loads the eval set and exits with status 1 without reporting results.
+`cargo adk eval` runs an eval set against an agent binary that reads one JSON request per line on stdin (`{"case_id","turn","user_text","session_id"}`) and writes one JSON response per line on stdout (`{"text","tool_calls":[{"name","args"}]}` or `{"error"}`). It exits non-zero when a case fails or a score regresses:
+
+```bash
+cargo adk eval tests/ --agent-cmd "target/release/eval_agent" --check-regression --format junit --output results.xml
+```
+
+See "Running an Agent Binary with `cargo adk eval`" in the [evaluation guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/evaluation/evaluation.md) for the protocol, flags, and an example agent binary.
 
 ## License
 
