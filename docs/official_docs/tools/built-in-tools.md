@@ -14,7 +14,7 @@ Provider-native tools are now declared through the normal `Tool` API instead of 
 | `UrlContextTool` | Gemini URL grounding | Summarize or reason over live URLs |
 | `GoogleMapsTool` | Gemini Google Maps grounding | Places, routes, and local context |
 | `GeminiCodeExecutionTool` | Gemini native code execution | Server-side Python execution |
-| `WebSearchTool` | Anthropic native web search | Claude server-side web search |
+| `WebSearchTool` | Anthropic native web search | Claude server-side web search; `with_dynamic_filtering()` declares `web_search_20260209` |
 | `OpenAIWebSearchTool` | OpenAI Responses web search | OpenAI-hosted retrieval |
 | `AgentTool` | Wrap agents as callable tools | Agent composition and delegation |
 | `ExitLoopTool` | Loop termination | Controlling LoopAgent iterations |

@@ -693,6 +693,9 @@ impl ContentSize {
             // Server-generated blocks replayed verbatim; the API produced them within its limits.
             ContentBlock::WebSearchToolResult(_)
             | ContentBlock::WebFetchToolResult(_)
+            | ContentBlock::CodeExecutionToolResult(_)
+            | ContentBlock::BashCodeExecutionToolResult(_)
+            | ContentBlock::TextEditorCodeExecutionToolResult(_)
             | ContentBlock::RedactedThinking(_) => {}
         }
         Ok(())

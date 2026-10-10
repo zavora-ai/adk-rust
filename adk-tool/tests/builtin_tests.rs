@@ -114,6 +114,26 @@ fn test_native_declarations_are_exposed() {
     assert_eq!(anthropic_decl["x-adk-anthropic-tool"]["type"], "web_search_20250305");
 }
 
+#[test]
+fn test_anthropic_web_search_dynamic_filtering_declaration() {
+    let tool = WebSearchTool::new()
+        .with_allowed_domains(["docs.rs"])
+        .with_max_uses(2)
+        .with_dynamic_filtering();
+
+    assert_eq!(
+        tool.declaration()["x-adk-anthropic-tool"],
+        json!({
+            "type": "web_search_20260209",
+            "name": "web_search",
+            "allowed_domains": ["docs.rs"],
+            "blocked_domains": null,
+            "max_uses": 2,
+            "user_location": null,
+        })
+    );
+}
+
 #[tokio::test]
 async fn test_anthropic_bash_tool_executes_shell_command() {
     let tool = AnthropicBashTool20250124::new();

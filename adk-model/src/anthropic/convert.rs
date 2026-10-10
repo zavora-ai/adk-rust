@@ -288,6 +288,15 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
                     parts.push(Part::ServerToolResponse { server_tool_response: val });
                 }
             }
+            // Serialized with their `type`, so consumers can tell the result kinds apart.
+            ContentBlock::WebFetchToolResult(_)
+            | ContentBlock::CodeExecutionToolResult(_)
+            | ContentBlock::BashCodeExecutionToolResult(_)
+            | ContentBlock::TextEditorCodeExecutionToolResult(_) => {
+                if let Ok(val) = serde_json::to_value(block) {
+                    parts.push(Part::ServerToolResponse { server_tool_response: val });
+                }
+            }
             _ => {}
         }
     }
@@ -515,6 +524,42 @@ pub fn build_message_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_execution_results_become_server_tool_responses() {
+        let message: Message = serde_json::from_value(serde_json::json!({
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "code_execution", "input": {"code": "print(2+2)"}},
+                {"type": "code_execution_tool_result", "tool_use_id": "srvtoolu_01",
+                 "content": {"type": "code_execution_result", "stdout": "4\n", "stderr": "", "return_code": 0, "content": []}},
+                {"type": "text", "text": "4"}
+            ],
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        }))
+        .unwrap();
+
+        let (response, _) = from_anthropic_message(&message);
+        let parts = response.content.unwrap().parts;
+        let result = parts
+            .iter()
+            .find_map(|part| match part {
+                Part::ServerToolResponse { server_tool_response }
+                    if server_tool_response["type"] == "code_execution_tool_result" =>
+                {
+                    Some(server_tool_response)
+                }
+                _ => None,
+            })
+            .expect("code execution result part");
+        assert_eq!(result["tool_use_id"], "srvtoolu_01");
+        assert_eq!(result["content"]["stdout"], "4\n");
+    }
 
     #[test]
     fn test_content_to_message_user() {
@@ -759,6 +804,40 @@ mod tests {
         let value = serde_json::to_value(&claude_tools[0]).expect("tool should serialize");
         assert_eq!(value["type"], "bash_20250124");
         assert_eq!(value["name"], "bash");
+    }
+
+    #[test]
+    fn test_convert_tools_supports_dynamic_filtering_web_search() {
+        use super::super::schema_adapter::AnthropicSchemaAdapter;
+        let mut tools = HashMap::new();
+        tools.insert(
+            "web_search".to_string(),
+            serde_json::json!({
+                "name": "web_search",
+                "x-adk-anthropic-tool": {
+                    "type": "web_search_20260209",
+                    "name": "web_search",
+                    "allowed_domains": null,
+                    "blocked_domains": ["spam.example"],
+                    "max_uses": 2,
+                    "user_location": null
+                }
+            }),
+        );
+
+        let adapter = AnthropicSchemaAdapter;
+        let cache = SchemaCache::for_adapter(std::sync::Arc::new(AnthropicSchemaAdapter));
+        let claude_tools =
+            convert_tools(&tools, &adapter, &cache).expect("tool conversion should succeed");
+
+        assert_eq!(
+            claude_tools,
+            vec![ToolUnionParam::WebSearch20260209(
+                adk_anthropic::WebSearchTool20260209::new()
+                    .with_blocked_domains(vec!["spam.example".to_string()])
+                    .with_max_uses(2)
+            )]
+        );
     }
 
     #[test]

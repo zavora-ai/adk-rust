@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    CodeExecutionResultBlock, DocumentBlock, ImageBlock, ProgrammaticToolUseBlock,
-    RedactedThinkingBlock, ServerToolUseBlock, TextBlock, ThinkingBlock, ToolResultBlock,
-    ToolUseBlock, WebFetchToolResultBlock, WebSearchToolResultBlock,
+    CodeExecutionResultBlock, CodeExecutionToolResultBlock, DocumentBlock, ImageBlock,
+    ProgrammaticToolUseBlock, RedactedThinkingBlock, ServerToolUseBlock, TextBlock, ThinkingBlock,
+    ToolResultBlock, ToolUseBlock, WebFetchToolResultBlock, WebSearchToolResultBlock,
 };
 
 /// A block of content in a message.
@@ -60,6 +60,18 @@ pub enum ContentBlock {
     /// A programmatic tool use block from code execution
     #[serde(rename = "programmatic_tool_use")]
     ProgrammaticToolUse(ProgrammaticToolUseBlock),
+
+    /// A server-side code execution result
+    #[serde(rename = "code_execution_tool_result")]
+    CodeExecutionToolResult(CodeExecutionToolResultBlock),
+
+    /// A server-side bash code execution result
+    #[serde(rename = "bash_code_execution_tool_result")]
+    BashCodeExecutionToolResult(CodeExecutionToolResultBlock),
+
+    /// A server-side text editor code execution result
+    #[serde(rename = "text_editor_code_execution_tool_result")]
+    TextEditorCodeExecutionToolResult(CodeExecutionToolResultBlock),
 }
 
 impl ContentBlock {
