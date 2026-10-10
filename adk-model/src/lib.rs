@@ -179,7 +179,11 @@
 //! | Model | Description |
 //! |-------|-------------|
 //! | `claude-sonnet-5` | Balanced default |
-//! | `claude-opus-5` | Flagship capability |
+//! | `claude-fable-5-1` | Most capable; demanding reasoning and long-horizon work |
+//! | `claude-opus-5-5` | Current Opus; long-running agentic coding |
+//! | `claude-sonnet-5-5` | Current Sonnet |
+//! | `claude-haiku-5-5` | Current Haiku; high-volume, latency-sensitive work |
+//! | `claude-opus-5` | Previous Opus |
 //! | `claude-fable-5` | Premium creative and long-form work |
 //!
 //! ### DeepSeek

@@ -18,7 +18,11 @@ The `adk-anthropic` crate is a dedicated Anthropic API client for ADK-Rust. It p
 | Model | API ID | Notes |
 |-------|--------|-------|
 | Claude Sonnet 5 | `claude-sonnet-5` | Default speed/intelligence balance, 1M context |
-| Claude Opus 5 | `claude-opus-5` | Flagship capability, 1M context |
+| Claude Fable 5.1 | `claude-fable-5-1` | Most capable; demanding reasoning and long-horizon work, 1M context |
+| Claude Opus 5.5 | `claude-opus-5-5` | Current Opus; long-running agentic coding, 1M context |
+| Claude Sonnet 5.5 | `claude-sonnet-5-5` | Current Sonnet, 1M context |
+| Claude Haiku 5.5 | `claude-haiku-5-5` | Current Haiku; high-volume, latency-sensitive work, 1M context |
+| Claude Opus 5 | `claude-opus-5` | Previous Opus, 1M context |
 | Claude Fable 5 | `claude-fable-5` | Premium creative and long-form work, 1M context |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | Cost-efficient previous generation, 200K context |
 

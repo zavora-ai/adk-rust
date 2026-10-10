@@ -481,7 +481,11 @@ async fn main() -> anyhow::Result<()> {
 | Model | Description | Context |
 |-------|-------------|---------|
 | `claude-sonnet-5` | Balanced intelligence and cost (default) | 1M tokens |
-| `claude-opus-5` | Flagship capability | 1M tokens |
+| `claude-fable-5-1` | Most capable; demanding reasoning and long-horizon work | 1M tokens |
+| `claude-opus-5-5` | Current Opus; long-running agentic coding | 1M tokens |
+| `claude-sonnet-5-5` | Current Sonnet | 1M tokens |
+| `claude-haiku-5-5` | Current Haiku; high-volume, latency-sensitive work | 1M tokens |
+| `claude-opus-5` | Previous Opus | 1M tokens |
 | `claude-fable-5` | Premium creative and long-form work | 1M tokens |
 | `claude-haiku-4-5` | Cost-efficient previous generation | 200K tokens |
 

@@ -206,7 +206,7 @@ environment, among those you compiled in.
 | Gemini | `gemini-3.7-flash` (default), `gemini-3.6-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview` | (default) |
 | OpenAI | `gpt-5.6-terra` (default), `gpt-5.6-sol`, `gpt-5.6-luna` | `openai` |
 | OpenAI Responses API | `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna` | `openai` |
-| Anthropic | `claude-sonnet-5` (default), `claude-opus-5`, `claude-fable-5` | `anthropic` |
+| Anthropic | `claude-sonnet-5` (default), `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-1` | `anthropic` |
 | DeepSeek | `deepseek-v4-flash`, `deepseek-v4-pro` | `deepseek` |
 | Groq | `openai/gpt-oss-120b`, `openai/gpt-oss-20b` | `groq` |
 | Ollama | `qwen3.6:35b-a3b`, `qwen3.5`, `llama3.2:3b` | `ollama` |
