@@ -20,6 +20,23 @@ pub struct RemoteA2aConfig {
     /// Whether to use streaming for communication.
     /// If `None`, the agent uses streaming if the remote agent supports it.
     pub streaming: Option<bool>,
+    /// Mints the bearer token sent to the remote agent, for the running agent's
+    /// [`ActingContext`](adk_core::ActingContext) and with `agent_url` as the resource.
+    /// `None` sends no credential.
+    pub credential_broker: Option<Arc<dyn adk_core::CredentialBroker>>,
+    /// Scopes requested from the [`credential_broker`](Self::credential_broker).
+    pub credential_scopes: Vec<String>,
+}
+
+/// Mints a token for `acting` at `resource` with `scopes`.
+async fn brokered_token(
+    broker: &dyn adk_core::CredentialBroker,
+    acting: &adk_core::ActingContext,
+    resource: &str,
+    scopes: &[String],
+) -> Result<adk_core::ScopedToken> {
+    let resource = adk_core::resource_indicator(resource)?;
+    broker.token_for(acting, &resource, scopes).await
 }
 
 /// An agent that communicates with a remote A2A agent
@@ -56,19 +73,33 @@ impl Agent for RemoteA2aAgent {
         let invocation_id = ctx.invocation_id().to_string();
         let agent_name = self.config.name.clone();
         let config_streaming = self.config.streaming;
+        let broker = self.config.credential_broker.clone();
+        let scopes = self.config.credential_scopes.clone();
+        let acting = ctx.acting_context();
 
         // Get user content from context
         let user_content = get_user_content_from_context(ctx.as_ref());
 
         let stream = async_stream::stream! {
             // Create A2A client
-            let client = match A2aClient::from_url(&url).await {
+            let mut client = match A2aClient::from_url(&url).await {
                 Ok(c) => c,
                 Err(e) => {
                     yield Ok(create_error_event(&invocation_id, &agent_name, &e.to_string()));
                     return;
                 }
             };
+            // The token's audience is the configured agent URL, so a card pointing the
+            // endpoint at another host cannot receive it.
+            if let Some(broker) = broker.as_deref() {
+                match brokered_token(broker, &acting, &url, &scopes).await {
+                    Ok(token) => client = client.with_credential(token),
+                    Err(e) => {
+                        yield Ok(create_error_event(&invocation_id, &agent_name, &e.to_string()));
+                        return;
+                    }
+                }
+            }
 
             // Determine if we should use streaming
             let use_streaming = config_streaming.unwrap_or(client.agent_card().capabilities.streaming);
@@ -135,11 +166,34 @@ pub struct RemoteA2aAgentBuilder {
     description: String,
     agent_url: Option<String>,
     streaming: Option<bool>,
+    credential_broker: Option<Arc<dyn adk_core::CredentialBroker>>,
+    credential_scopes: Vec<String>,
 }
 
 impl RemoteA2aAgentBuilder {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), description: String::new(), agent_url: None, streaming: None }
+        Self {
+            name: name.into(),
+            description: String::new(),
+            agent_url: None,
+            streaming: None,
+            credential_broker: None,
+            credential_scopes: Vec::new(),
+        }
+    }
+
+    /// Authenticates to the remote agent with a token from `broker`, minted for the
+    /// running agent's acting context with the agent URL as the resource.
+    ///
+    /// See [`RemoteA2aConfig::credential_broker`].
+    pub fn credential_broker(
+        mut self,
+        broker: Arc<dyn adk_core::CredentialBroker>,
+        scopes: Vec<String>,
+    ) -> Self {
+        self.credential_broker = Some(broker);
+        self.credential_scopes = scopes;
+        self
     }
 
     pub fn description(mut self, description: impl Into<String>) -> Self {
@@ -168,6 +222,8 @@ impl RemoteA2aAgentBuilder {
             description: self.description,
             agent_url,
             streaming: self.streaming,
+            credential_broker: self.credential_broker,
+            credential_scopes: self.credential_scopes,
         }))
     }
 }
@@ -468,6 +524,12 @@ pub mod v1_remote {
         /// Whether to use streaming for communication.
         /// If `None`, auto-detects from the agent card capabilities.
         pub streaming: Option<bool>,
+        /// Mints the bearer token sent to the remote agent, for the running agent's
+        /// [`ActingContext`](adk_core::ActingContext) and with the selected interface
+        /// URL as the resource. `None` sends no credential.
+        pub credential_broker: Option<Arc<dyn adk_core::CredentialBroker>>,
+        /// Scopes requested from the [`credential_broker`](Self::credential_broker).
+        pub credential_scopes: Vec<String>,
     }
 
     /// An agent that communicates with a remote A2A v1.0.0 agent.
@@ -514,6 +576,9 @@ pub mod v1_remote {
             let invocation_id = ctx.invocation_id().to_string();
             let agent_name = self.config.name.clone();
             let config_streaming = self.config.streaming;
+            let broker = self.config.credential_broker.clone();
+            let scopes = self.config.credential_scopes.clone();
+            let acting = ctx.acting_context();
 
             // Get user content from context
             let user_content = extract_user_text(ctx.as_ref());
@@ -533,7 +598,16 @@ pub mod v1_remote {
                 };
 
                 // Build a card with the selected interface for the client
-                let client = A2aV1Client::new(card.clone());
+                let mut client = A2aV1Client::new(card.clone());
+                if let Some(broker) = broker.as_deref() {
+                    match super::brokered_token(broker, &acting, &interface.url, &scopes).await {
+                        Ok(token) => client = client.with_credential(token),
+                        Err(e) => {
+                            yield Ok(create_v1_error_event(&invocation_id, &agent_name, &e.to_string()));
+                            return;
+                        }
+                    }
+                }
 
                 // Determine if we should use streaming
                 let use_streaming = config_streaming.unwrap_or(card.capabilities.streaming.unwrap_or(false));
@@ -921,6 +995,8 @@ pub mod v1_remote {
                 agent_card: card,
                 // The wire default: let the card decide rather than forcing a mode.
                 streaming: None,
+                credential_broker: None,
+                credential_scopes: Vec::new(),
             });
             assert_eq!(agent.name(), "my-agent");
             assert_eq!(agent.description(), "My remote agent");
@@ -935,6 +1011,8 @@ pub mod v1_remote {
                 agent_card: card,
                 // The wire default: let the card decide rather than forcing a mode.
                 streaming: None,
+                credential_broker: None,
+                credential_scopes: Vec::new(),
             });
             assert!(agent.sub_agents().is_empty());
         }

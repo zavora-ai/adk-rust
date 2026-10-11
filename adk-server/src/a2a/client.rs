@@ -11,12 +11,40 @@ use std::pin::Pin;
 pub struct A2aClient {
     http_client: reqwest::Client,
     agent_card: AgentCard,
+    credential: Option<adk_core::ScopedToken>,
+}
+
+/// Attaches `token` as a bearer credential to a request for `url`, after checking the
+/// URL is inside the token's audience.
+fn bearer(
+    request: reqwest::RequestBuilder,
+    token: Option<&adk_core::ScopedToken>,
+    url: &str,
+) -> Result<reqwest::RequestBuilder> {
+    let Some(token) = token else {
+        return Ok(request);
+    };
+    let target = adk_core::Url::parse(url).map_err(|error| {
+        adk_core::AdkError::agent(format!("invalid A2A endpoint URL '{url}': {error}"))
+    })?;
+    Ok(request.bearer_auth(token.authorize_for(&target)?.expose()))
 }
 
 impl A2aClient {
     /// Create a new A2A client from an agent card
     pub fn new(agent_card: AgentCard) -> Self {
-        Self { http_client: reqwest::Client::new(), agent_card }
+        Self { http_client: reqwest::Client::new(), agent_card, credential: None }
+    }
+
+    /// Sends `token` as a bearer credential on every message request.
+    ///
+    /// A request goes out only when its URL is inside the token's audience
+    /// ([`ScopedToken::authorize_for`](adk_core::ScopedToken::authorize_for)); a request
+    /// to any other URL fails with `credential.audience_mismatch` and is not sent.
+    /// Agent card discovery stays unauthenticated.
+    pub fn with_credential(mut self, token: adk_core::ScopedToken) -> Self {
+        self.credential = Some(token);
+        self
     }
 
     /// Resolves an agent card from a base URL.
@@ -81,9 +109,8 @@ impl A2aClient {
             id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
         };
 
-        let response = self
-            .http_client
-            .post(&self.agent_card.url)
+        let post = self.http_client.post(&self.agent_card.url);
+        let response = bearer(post, self.credential.as_ref(), &self.agent_card.url)?
             .json(&request)
             .send()
             .await
@@ -121,9 +148,8 @@ impl A2aClient {
             id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
         };
 
-        let response = self
-            .http_client
-            .post(&stream_url)
+        let post = self.http_client.post(&stream_url);
+        let response = bearer(post, self.credential.as_ref(), &stream_url)?
             .json(&request)
             .send()
             .await
@@ -284,6 +310,11 @@ pub mod v1_client {
         #[error("serialization error: {0}")]
         Serde(#[from] serde_json::Error),
 
+        /// The client's credential may not be sent to the request URL, or the URL is
+        /// invalid. The request was not sent.
+        #[error("credential refused: {0}")]
+        Credential(#[from] adk_core::AdkError),
+
         /// The server returned an unexpected HTTP status.
         #[error("unexpected HTTP status {status}: {body}")]
         UnexpectedStatus { status: u16, body: String },
@@ -308,6 +339,7 @@ pub mod v1_client {
         agent_card: AgentCard,
         retry_config: RetryConfig,
         cached_card: std::sync::Mutex<CachedCard>,
+        credential: Option<adk_core::ScopedToken>,
     }
 
     impl A2aV1Client {
@@ -318,6 +350,7 @@ pub mod v1_client {
                 agent_card,
                 retry_config: RetryConfig::default(),
                 cached_card: std::sync::Mutex::new(CachedCard::default()),
+                credential: None,
             }
         }
 
@@ -328,7 +361,38 @@ pub mod v1_client {
                 agent_card,
                 retry_config,
                 cached_card: std::sync::Mutex::new(CachedCard::default()),
+                credential: None,
             }
+        }
+
+        /// Sends `token` as a bearer credential on every operation request.
+        ///
+        /// A request goes out only when its URL is inside the token's audience
+        /// ([`ScopedToken::authorize_for`](adk_core::ScopedToken::authorize_for)); a
+        /// request to any other URL fails with [`V1ClientError::Credential`] and is not
+        /// sent. Agent card discovery stays unauthenticated.
+        pub fn with_credential(mut self, token: adk_core::ScopedToken) -> Self {
+            self.credential = Some(token);
+            self
+        }
+
+        /// The default headers plus, when a credential is set, its bearer value for a
+        /// request to `url`.
+        fn headers_for(&self, url: &str) -> Result<HeaderMap, V1ClientError> {
+            let mut headers = Self::default_headers();
+            if let Some(token) = &self.credential {
+                let target = adk_core::Url::parse(url).map_err(|error| {
+                    adk_core::AdkError::agent(format!("invalid A2A endpoint URL '{url}': {error}"))
+                })?;
+                let secret = token.authorize_for(&target)?;
+                let mut value = HeaderValue::from_str(&format!("Bearer {}", secret.expose()))
+                    .map_err(|_| {
+                        adk_core::AdkError::agent("the brokered token is not a valid header value")
+                    })?;
+                value.set_sensitive(true);
+                headers.insert(reqwest::header::AUTHORIZATION, value);
+            }
+            Ok(headers)
         }
 
         /// Returns a reference to the agent card.
@@ -503,7 +567,7 @@ pub mod v1_client {
                 match self
                     .http_client
                     .post(url)
-                    .headers(Self::default_headers())
+                    .headers(self.headers_for(url)?)
                     .json(request)
                     .send()
                     .await
@@ -561,7 +625,7 @@ pub mod v1_client {
             let response = self
                 .http_client
                 .post(&url)
-                .headers(Self::default_headers())
+                .headers(self.headers_for(&url)?)
                 .header("content-type", "application/a2a+json")
                 .json(body)
                 .send()
@@ -594,7 +658,7 @@ pub mod v1_client {
             let url = format!("{}{path}", base.trim_end_matches('/'));
 
             let response =
-                self.http_client.get(&url).headers(Self::default_headers()).send().await?;
+                self.http_client.get(&url).headers(self.headers_for(&url)?).send().await?;
 
             if !response.status().is_success() {
                 let status = response.status().as_u16();
@@ -620,7 +684,7 @@ pub mod v1_client {
             let url = format!("{}{path}", base.trim_end_matches('/'));
 
             let response =
-                self.http_client.delete(&url).headers(Self::default_headers()).send().await?;
+                self.http_client.delete(&url).headers(self.headers_for(&url)?).send().await?;
 
             if !response.status().is_success() {
                 let status = response.status().as_u16();
@@ -702,7 +766,7 @@ pub mod v1_client {
             let response = self
                 .http_client
                 .post(url)
-                .headers(Self::default_headers())
+                .headers(self.headers_for(url)?)
                 .json(&request)
                 .send()
                 .await?;
@@ -773,7 +837,7 @@ pub mod v1_client {
             let response = self
                 .http_client
                 .post(url)
-                .headers(Self::default_headers())
+                .headers(self.headers_for(url)?)
                 .json(&request)
                 .send()
                 .await?;
@@ -1114,6 +1178,33 @@ pub mod v1_client {
             assert!(cache.card.is_none());
             assert!(cache.etag.is_none());
             assert!(cache.last_modified.is_none());
+        }
+
+        #[test]
+        fn a_credential_is_attached_only_inside_its_audience() {
+            let token = |audience: &str| {
+                adk_core::ScopedToken::new(
+                    adk_core::AgentId::new("urn:adk:agent:caller").unwrap(),
+                    "secret",
+                    adk_core::resource_indicator(audience).unwrap(),
+                    vec![],
+                )
+            };
+            let client = A2aV1Client::new(make_test_card())
+                .with_credential(token("http://localhost:9999/a2a"));
+            let headers = client.headers_for("http://localhost:9999/a2a").unwrap();
+            assert_eq!(headers.get(reqwest::header::AUTHORIZATION).unwrap(), "Bearer secret");
+            assert_eq!(headers.get(A2A_VERSION_HEADER).unwrap(), A2A_VERSION);
+
+            match client.headers_for("http://localhost:9999/rest/tasks") {
+                Err(V1ClientError::Credential(error)) => {
+                    assert_eq!(error.code, "credential.audience_mismatch");
+                }
+                other => panic!("expected a refused credential, got {other:?}"),
+            }
+            let anonymous = A2aV1Client::new(make_test_card());
+            let headers = anonymous.headers_for("http://localhost:9999/rest").unwrap();
+            assert!(headers.get(reqwest::header::AUTHORIZATION).is_none());
         }
     }
 }
