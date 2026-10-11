@@ -129,3 +129,17 @@ mod schedules {
 mod governance {
     adk_core::governance_state_store_conformance_tests!(harness = super::InMemoryGovernance);
 }
+
+#[derive(Default)]
+struct InMemoryAuditLog(adk_core::audit_log::InMemoryAuditLogStore);
+
+#[async_trait]
+impl adk_core::conformance::AuditLogStoreHarness for InMemoryAuditLog {
+    async fn open(&self) -> Arc<dyn adk_core::audit_log::AuditLogStore> {
+        Arc::new(self.0.clone())
+    }
+}
+
+mod audit_log {
+    adk_core::audit_log_store_conformance_tests!(harness = super::InMemoryAuditLog::default());
+}

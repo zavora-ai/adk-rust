@@ -13,6 +13,7 @@
 //! | [`DurableRunStore`](crate::DurableRunStore) | [`RunStoreHarness`](crate::conformance::RunStoreHarness) | [`run_store_conformance_tests!`](crate::run_store_conformance_tests) | [`run_store`](crate::conformance::run_store) |
 //! | [`ScheduleStore`](crate::ScheduleStore) | [`ScheduleStoreHarness`](crate::conformance::ScheduleStoreHarness) | [`schedule_store_conformance_tests!`](crate::schedule_store_conformance_tests) | [`schedule_store`](crate::conformance::schedule_store) |
 //! | [`GovernanceStateStore`](crate::GovernanceStateStore) | [`GovernanceStateStoreHarness`](crate::conformance::GovernanceStateStoreHarness) | [`governance_state_store_conformance_tests!`](crate::governance_state_store_conformance_tests) | [`governance_state_store`](crate::conformance::governance_state_store) |
+//! | [`AuditLogStore`](crate::audit_log::AuditLogStore) | [`AuditLogStoreHarness`](crate::conformance::AuditLogStoreHarness) | [`audit_log_store_conformance_tests!`](crate::audit_log_store_conformance_tests) | [`audit_log_store`](crate::conformance::audit_log_store) |
 //!
 //! The harnesses of time-dependent stores receive the [`Clock`](crate::Clock) to read,
 //! and the suites drive it as a [`ManualClock`](crate::ManualClock), so lease expiry,
@@ -60,6 +61,7 @@
 
 pub mod action_ledger;
 pub mod approval_store;
+pub mod audit_log_store;
 pub mod governance_state_store;
 pub mod lease_store;
 pub mod run_store;
@@ -68,6 +70,7 @@ pub mod spend_ledger;
 
 pub use action_ledger::ActionLedgerHarness;
 pub use approval_store::ApprovalStoreHarness;
+pub use audit_log_store::AuditLogStoreHarness;
 pub use governance_state_store::GovernanceStateStoreHarness;
 pub use lease_store::LeaseStoreHarness;
 pub use run_store::RunStoreHarness;
@@ -396,6 +399,65 @@ macro_rules! governance_state_store_conformance_tests {
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn governance_states_survive_a_restart() {
             $crate::conformance::governance_state_store::states_survive_a_restart(&$harness).await;
+        }
+    };
+}
+
+/// Generates one test per [`audit_log_store`] case for an [`AuditLogStoreHarness`].
+///
+/// See the [module documentation](crate::conformance) for an example.
+#[macro_export]
+macro_rules! audit_log_store_conformance_tests {
+    ($(#[$attr:meta])* harness = $harness:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_append_assigns_contiguous_sequences() {
+            $crate::conformance::audit_log_store::append_assigns_contiguous_sequences(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_append_refuses_a_wrong_start() {
+            $crate::conformance::audit_log_store::append_refuses_a_wrong_start(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_append_refuses_invalid_batches() {
+            $crate::conformance::audit_log_store::append_refuses_invalid_batches(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_concurrent_appends_have_one_winner() {
+            $crate::conformance::audit_log_store::concurrent_appends_have_one_winner(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_logs_are_independent() {
+            $crate::conformance::audit_log_store::logs_are_independent(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_hash_at_returns_leaves_and_nodes() {
+            $crate::conformance::audit_log_store::hash_at_returns_leaves_and_nodes(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_reads_past_the_end_fail() {
+            $crate::conformance::audit_log_store::reads_past_the_end_fail(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_checkpoints_never_fork() {
+            $crate::conformance::audit_log_store::checkpoints_never_fork(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_prune_keeps_hashes() {
+            $crate::conformance::audit_log_store::prune_keeps_hashes(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_logs_survive_a_restart() {
+            $crate::conformance::audit_log_store::logs_survive_a_restart(&$harness).await;
         }
     };
 }

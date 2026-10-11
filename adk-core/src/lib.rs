@@ -85,6 +85,8 @@ pub mod agent;
 pub mod agent_invoker;
 /// Dynamic agent loading by name.
 pub mod agent_loader;
+/// Append-only audit log records and the store that holds them.
+pub mod audit_log;
 /// Run budgets: limits on model calls, tokens, cost, wall time, and tool calls.
 pub mod budget;
 /// Callback type aliases for agent, model, and tool lifecycle hooks.
