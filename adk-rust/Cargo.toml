@@ -298,6 +298,12 @@ graph-time-travel = ["graph", "adk-graph/time-travel"]
 # the other production backends.
 graph-sqlite = ["graph", "adk-graph/sqlite"]
 graph-redis-cache = ["graph", "adk-graph/redis-cache"]
+# Checkpointers for shared databases; production backends, so not in `full`.
+graph-postgres = ["graph", "adk-graph/postgres"]
+graph-redis = ["graph", "adk-graph/redis"]
+graph-mongodb = ["graph", "adk-graph/mongodb"]
+graph-neo4j = ["graph", "adk-graph/neo4j"]
+graph-firestore = ["graph", "adk-graph/firestore"]
 
 # Action node features (forwarded to adk-graph)
 action = ["graph", "dep:adk-action", "adk-graph/action"]

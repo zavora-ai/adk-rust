@@ -53,6 +53,9 @@
 3 adk-graph sqlite
 3 adk-graph node-cache
 3 adk-graph delta-checkpoint
+# Checkpointers for shared databases: compiles them and runs the in-process conformance
+# suites; the live-server suites run in the nightly `durable-stores` job.
+3 adk-graph postgres,redis,mongodb,neo4j,firestore
 # Two entries on purpose: `memory` alone left `sandbox` unbuilt, and a renamed
 # EnforcedLimits field kept its old name at a call site for two releases.
 3 adk-managed memory

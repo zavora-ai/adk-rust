@@ -71,6 +71,7 @@
 
 pub mod agent;
 pub mod checkpoint;
+pub mod checkpointers;
 pub mod child;
 #[cfg(feature = "conformance")]
 pub mod conformance;
@@ -132,6 +133,16 @@ pub use timeout::{OnTimeout, ProgressHandle, TimeoutPolicy, execute_with_timeout
 
 #[cfg(feature = "sqlite")]
 pub use checkpoint::SqliteCheckpointer;
+#[cfg(feature = "firestore")]
+pub use checkpointers::firestore::FirestoreCheckpointer;
+#[cfg(feature = "mongodb")]
+pub use checkpointers::mongodb::MongoCheckpointer;
+#[cfg(feature = "neo4j")]
+pub use checkpointers::neo4j::Neo4jCheckpointer;
+#[cfg(feature = "postgres")]
+pub use checkpointers::postgres::PostgresCheckpointer;
+#[cfg(feature = "redis")]
+pub use checkpointers::redis::RedisCheckpointer;
 
 #[cfg(feature = "node-cache")]
 pub use cache::{CacheBackend, NodeCache, NodeCachePolicy, compute_cache_key};

@@ -26,8 +26,17 @@ uuid.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
-# Optional SQLite checkpointer
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], optional = true }
+# Optional SQLite and PostgreSQL checkpointers
+sqlx = { version = "0.8", features = ["runtime-tokio"], optional = true }
+
+# Optional shared-database checkpointers. Versions match adk-session, so the lockfile
+# holds one copy of each driver.
+mongodb = { version = "3", optional = true }
+neo4rs = { version = "0.8", optional = true }
+firestore = { version = "0.48", optional = true }
+# Already a dependency of `firestore`; named directly for the emulator token source.
+gcloud-sdk = { version = "0.29", optional = true, default-features = false }
+sha2 = { workspace = true, optional = true }
 
 # Optional node caching dependencies
 blake3 = { version = "1", optional = true }
@@ -47,7 +56,13 @@ tokio-cron-scheduler = { version = "0.15", optional = true }
 
 [features]
 default = []
-sqlite = ["sqlx"]
+sqlite = ["dep:sqlx", "sqlx/sqlite"]
+# Checkpointers for shared databases; each passes the `conformance` suite.
+postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/chrono"]
+redis = ["dep:fred", "fred/i-scripts"]
+mongodb = ["dep:mongodb"]
+neo4j = ["dep:neo4rs"]
+firestore = ["dep:firestore", "dep:gcloud-sdk", "dep:sha2"]
 node-cache = ["dep:blake3"]
 redis-cache = ["node-cache", "dep:fred"]
 delta-checkpoint = ["dep:similar"]

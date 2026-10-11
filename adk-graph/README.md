@@ -18,7 +18,9 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **Conditional Routing**: Dynamic edge routing based on state
 - **Fan-out / fan-in**: parallel branches run concurrently in a super-step. A node with more than one incoming direct edge is deferred **automatically**, so it runs once after its branches arrive — branches of unequal length join correctly with no configuration. `mark_deferred` sets a `fan_in_timeout` or an *n*-of-*m* `min_predecessors` quorum
 - **State Management**: Typed state with reducers (overwrite, append, sum, custom)
-- **Checkpointing**: Persistent state after each step (memory, SQLite)
+- **Checkpointing**: Persistent state after each step — memory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j, Firestore — every backend proven by one conformance suite; per-thread versions refuse a second writer instead of interleaving
+- **Durability modes**: `Sync` (default), `Async`, or `Exit` per run; a step with a declared `NonIdempotent` node writes earlier checkpoints first
+- **Pending writes**: when one node of a parallel step fails, the finished nodes are not run again on resume
 - **Durable Resume**: Automatically resume from the last checkpoint after a crash — skips nodes of every checkpointed step. Execution is at-least-once: a crash mid-step re-runs that step's nodes; see [Execution Guarantees](#execution-guarantees)
 - **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts. A pause is resumable, including one raised inside a subgraph
 - **Subgraphs**: run a compiled graph as a node with mapped channels (`SubgraphNode`). A pause inside pauses the parent, and a channel mapping that names a channel neither side declares fails when the parent **compiles**
@@ -594,6 +596,7 @@ updates before it saves its checkpoint:
 | Event | Effect on resume |
 |-------|------------------|
 | Crash while a super-step is running | Every node of that step runs again, including nodes that had finished |
+| A node of a super-step fails | Finished nodes are kept as pending writes; a resume runs only the failed node |
 | Pause or completed step | No node of a checkpointed step runs again |
 
 Make a node with external side effects idempotent, for example with an idempotency
@@ -642,7 +645,7 @@ cargo run --example graph_checkpoint
 |---------|-----------|-----------|
 | State Management | TypedDict + Reducers | StateSchema + Reducers |
 | Execution Model | Pregel super-steps | Pregel super-steps |
-| Checkpointing | Memory, SQLite, Postgres | Memory, SQLite |
+| Checkpointing | Memory, SQLite, Postgres, Redis, MongoDB | Memory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j, Firestore |
 | Human-in-Loop | interrupt_before/after | interrupt_before/after + dynamic |
 | Streaming | 5 modes | 5 modes |
 | Cycles | Native support | Native support |
@@ -654,6 +657,8 @@ cargo run --example graph_checkpoint
 | Flag | Description |
 |------|-------------|
 | `sqlite` | Enable SQLite checkpointer |
+| `postgres`, `redis`, `mongodb`, `neo4j`, `firestore` | Checkpointers for shared databases |
+| `conformance` | `CheckpointerHarness` and `checkpointer_conformance_tests!` for testing a backend |
 | `functional` | Functional API: TaskContext, typed reducers, schema validation, proc macros |
 | `node-cache` | Per-node result caching; `redis-cache` adds a Redis store |
 | `delta-checkpoint` | Store the difference between super-steps instead of full state |

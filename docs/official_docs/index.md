@@ -29,6 +29,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Workflow Agents](agents/workflow-agents.md) - Deterministic agents: Sequential, Parallel, Loop
 - [Multi-Agent Systems](agents/multi-agent.md) - Building agent hierarchies with sub-agents
 - [Graph Agents](agents/graph-agents.md) - LangGraph-style workflow orchestration
+- [Graph Checkpointing](agents/graph-checkpointing.md) - Checkpointer backends, the version rule, durability modes, pending writes, and the conformance suite
 - [Realtime Agents](agents/realtime-agents.md) - Voice-enabled agents with OpenAI/Gemini
 
 ## Coding Agent

@@ -8,8 +8,8 @@ name: CI Nightly
 #     (ci.yml) never builds (realtime `full`, audio ONNX backends, GPU features).
 #   • supply-chain — `cargo audit` (enforcing) + `cargo deny` (advisory) over the
 #     workspace dependency graph.
-#   • durable-stores — the store conformance suites against live PostgreSQL, Redis,
-#     MongoDB, Neo4j, and the Firestore emulator.
+#   • durable-stores — the store and graph checkpointer conformance suites against
+#     live PostgreSQL, Redis, MongoDB, Neo4j, and the Firestore emulator.
 #   • integration-tests — the `#[ignore]`d integration tests that hit real
 #     provider APIs, gated on the relevant secrets being configured.
 #
@@ -288,6 +288,19 @@ jobs:
         --test store_conformance_neo4j
         --test store_conformance_firestore
         --test spend_ledger_postgres
+
+    - name: Run graph checkpointer conformance suites
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run -p adk-graph
+        --features sqlite,postgres,redis,mongodb,neo4j,firestore
+        --run-ignored all
+        --test checkpointer_conformance
+        --test checkpointer_conformance_postgres
+        --test checkpointer_conformance_redis
+        --test checkpointer_conformance_mongodb
+        --test checkpointer_conformance_neo4j
+        --test checkpointer_conformance_firestore
 
     - name: Durable-stores summary
       if: always()

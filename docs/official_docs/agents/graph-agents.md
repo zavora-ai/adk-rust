@@ -1186,6 +1186,11 @@ let graph = StateGraph::with_channels(&["task", "result"])
     .with_checkpointer(checkpointer);
 ```
 
+Every backend — memory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore —
+passes one conformance suite. See [Graph Checkpointing](graph-checkpointing.md) for the
+backend matrix, the version rule that keeps two writers from interleaving, durability
+modes, and pending writes.
+
 ### What a Checkpoint Records
 
 A checkpoint stores the accumulated state, the step number, and the **frontier** —
@@ -1222,7 +1227,9 @@ updates, and only then saves its checkpoint, so:
 | Event | Effect on resume |
 |-------|------------------|
 | Crash while a super-step is running | Every node of that step runs again, including nodes that had finished |
+| A node of a super-step fails | The step is saved with the finished nodes' outputs as pending writes; a resume runs only the failed node |
 | Checkpoint save fails | The run fails; the last saved step is where a resume starts |
+| Another writer advanced the thread | The save fails with `GraphError::CheckpointConflict` and the run stops |
 | Pause or completed step | No node of a checkpointed step runs again |
 
 Make a node with external side effects — a payment, an email, a write to another
@@ -1239,7 +1246,7 @@ and step, so a repeated execution is harmless.
 > it never did.
 
 
-Checkpoints also enable **durable resume** — if a graph execution crashes or the process restarts, execution resumes from the last persisted checkpoint rather than starting over. Use `SqliteCheckpointer` (the `sqlite` feature) for crash-safe persistence. `MemoryCheckpointer` holds checkpoints in the process, so they do not survive a restart. Those two are the backends this crate ships; implement the `Checkpointer` trait for anything else.
+Checkpoints also enable **durable resume** — if a graph execution crashes or the process restarts, execution resumes from the last persisted checkpoint rather than starting over. Use a durable backend — `SqliteCheckpointer`, `PostgresCheckpointer`, `RedisCheckpointer`, `MongoCheckpointer`, `Neo4jCheckpointer`, or `FirestoreCheckpointer` — for crash-safe persistence. `MemoryCheckpointer` holds checkpoints in the process, so they do not survive a restart. A custom backend implements the `Checkpointer` trait and runs the conformance suite; see [Graph Checkpointing](graph-checkpointing.md).
 
 ```rust
 // List all checkpoints for a thread

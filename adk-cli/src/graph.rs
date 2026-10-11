@@ -244,12 +244,16 @@ impl StandaloneTimeTravelHandle {
             ))
         })?;
 
+        // The fork continues after the new thread's newest checkpoint, if it has one.
+        let version =
+            self.checkpointer.load(new_thread_id).await?.map_or(1, |newest| newest.version + 1);
         let forked = adk_graph::state::Checkpoint::new(
             new_thread_id,
             checkpoint.state,
             checkpoint.step,
             checkpoint.pending_nodes,
-        );
+        )
+        .with_version(version);
 
         self.checkpointer.save(&forked).await?;
         Ok(())

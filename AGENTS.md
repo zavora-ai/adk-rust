@@ -441,6 +441,7 @@ Graph capability features (forwarded to `adk-graph`, which has no default featur
 - `graph-time-travel` — step, fork and state history, in `full`
 - `graph-sqlite` — the SQLite checkpointer; needs a database, so not in `full`
 - `graph-redis-cache` — Redis-backed node cache; needs a server, so not in `full`
+- `graph-postgres`, `graph-redis`, `graph-mongodb`, `graph-neo4j`, `graph-firestore` — shared-database checkpointers; need a server, so not in `full`
 
 Production backend features (require external infrastructure, NOT included in `full`):
 - `postgres-session`, `redis-session`, `mongodb-session`, `firestore-session`, `neo4j-session`,

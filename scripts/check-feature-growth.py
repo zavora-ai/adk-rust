@@ -106,6 +106,8 @@ ALIASES: dict[str, tuple[str, str, str]] = {
     "gemini-interactions": ("keep", "a distinct Beta transport on the same client", "gemini-interactions"),
     "graph": ("canonical", "the graph crate", "graph"),
     "graph-time-travel": ("keep", "pure logic, no dependency", "graph-time-travel"),
+    "graph-sqlite": ("keep", "SQLite checkpointer; shares the sqlx crate", "graph-sqlite"),
+    "graph-postgres": ("keep", "PostgreSQL checkpointer; shares the sqlx crate", "graph-postgres"),
     "sqlite-memory": ("canonical", "the default memory backend", "sqlite-memory"),
     "memory": ("keep", "the memory trait surface, links the default backend", "memory"),
     "sessions": ("keep", "the session trait surface, links the default backend", "sessions"),
