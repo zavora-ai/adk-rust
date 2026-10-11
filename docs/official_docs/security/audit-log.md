@@ -163,7 +163,8 @@ adk-rust audit export --database-url postgres://localhost/app --log-id audit/rep
 adk-rust audit verify audit.jsonl --key "$(cat audit.vkey)" --checkpoints /mnt/worm/audit-checkpoints.jsonl
 ```
 
-`audit export` needs the `audit-sql` feature of `adk-cli`. `audit verify` exits 0 when the log
+`audit verify` and `audit keygen` need the `audit` feature of `adk-cli`, which is on by
+default; `audit export` needs `audit-sql`. `audit verify` exits 0 when the log
 verifies and 1 when it does not; `--json` prints the report as JSON.
 
 ```rust

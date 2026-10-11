@@ -14,7 +14,8 @@
   (`audit_log.checkpoint_conflict`), and `prune` drops record bodies but keeps hashes.
 - **`verify` and `adk-rust audit`** (`adk-auth`, `adk-cli`): `signed_audit::verify` reports
   flipped bytes, deleted, reordered, or truncated records, forks, untrusted signatures, and
-  rotations that are not dual-signed. `adk-rust audit verify`, `audit keygen`, and
-  `audit export` (feature `audit-sql`) expose it on the command line.
+  rotations that are not dual-signed. `adk-rust audit verify` and `audit keygen` (feature `audit`,
+  on by default) and `audit export` (feature `audit-sql`) expose it on the command line;
+  a build without `audit` drops the subcommands and the `adk-auth` dependency.
 - **Agent identity types** (`adk-core`): `principal::{AgentId, SubjectKind, SubjectRef,
   AgentPrincipal, ActingContext}`.

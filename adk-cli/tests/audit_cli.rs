@@ -1,5 +1,7 @@
 //! `adk-rust audit` verifies exports, rejects tampered ones, and generates keys.
 
+#![cfg(feature = "audit")]
+
 use std::process::Command;
 use std::sync::Arc;
 

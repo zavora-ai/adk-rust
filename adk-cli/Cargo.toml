@@ -22,7 +22,7 @@ path = "src/main.rs"
 
 [dependencies]
 adk-core.workspace = true
-adk-auth = { workspace = true, features = ["signed-audit"] }
+adk-auth = { workspace = true, features = ["signed-audit"], optional = true }
 adk-agent = { workspace = true, features = ["coding"] }
 adk-devtools.workspace = true
 adk-model.workspace = true
@@ -58,7 +58,7 @@ keyring = { version = "3.6.3", default-features = false, features = ["windows-na
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
-default = ["gemini"]
+default = ["gemini", "audit"]
 gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
@@ -80,8 +80,10 @@ optimize = []
 vertex-skill-registry = ["adk-skill/vertex-skill-registry"]
 # SQLite checkpointer for graph time-travel commands
 graph-sqlite = ["adk-graph/sqlite"]
+# `adk-rust audit verify` and `audit keygen` for signed audit logs (links aws-lc-rs)
+audit = ["dep:adk-auth"]
 # `adk-rust audit export`: read signed audit logs from SQLite or PostgreSQL
-audit-sql = ["adk-session/sqlite", "adk-session/postgres"]
+audit-sql = ["audit", "adk-session/sqlite", "adk-session/postgres"]
 
 [dev-dependencies]
 async-trait.workspace = true

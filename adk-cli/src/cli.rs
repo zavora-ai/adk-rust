@@ -156,12 +156,14 @@ pub enum Commands {
     },
 
     /// Signed audit log tools: verify an export, generate a checkpoint key
+    #[cfg(feature = "audit")]
     Audit {
         #[command(subcommand)]
         command: AuditCommands,
     },
 }
 
+#[cfg(feature = "audit")]
 #[derive(Subcommand, Clone)]
 pub enum AuditCommands {
     /// Verify an exported audit log against its signed checkpoints.
