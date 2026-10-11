@@ -1182,6 +1182,17 @@ pub struct RunConfig {
     pub tool_approvals: HashMap<String, crate::ToolApproval>,
     /// Where calls held for approval are recorded, and decisions taken from, between runs.
     pub approval_store: Option<Arc<dyn crate::ApprovalStore>>,
+    /// The approval inbox a call held for approval is submitted to, as an
+    /// [`ApprovalRequest`](crate::ApprovalRequest) under the service's routing policy.
+    ///
+    /// Set it with [`RunConfigBuilder::approval_service`], which also installs the
+    /// service's store as the [`approval_store`](Self::approval_store) the decisions are
+    /// taken from.
+    pub approval_service: Option<Arc<dyn crate::ApprovalService>>,
+    /// The [`DurableRunStore`](crate::DurableRunStore) run this invocation executes, if
+    /// any. Approval requests submitted during the run carry it, so a decision wakes the
+    /// run instead of waiting for the next one.
+    pub durable_run_id: Option<String>,
     /// How long the [`tool_confirmation_handler`](Self::tool_confirmation_handler) may take
     /// to decide one call before it is denied. Defaults to
     /// [`DEFAULT_TOOL_CONFIRMATION_TIMEOUT`](crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT).
@@ -1227,6 +1238,8 @@ impl Default for RunConfig {
             governance: Vec::new(),
             tool_approvals: HashMap::new(),
             approval_store: None,
+            approval_service: None,
+            durable_run_id: None,
             tool_confirmation_timeout: crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
             spend_ledger: None,
             llm_spend_estimate: None,
@@ -1444,6 +1457,24 @@ impl RunConfigBuilder {
     /// Sets where held calls and their decisions are kept between runs.
     pub fn approval_store(mut self, store: Arc<dyn crate::ApprovalStore>) -> Self {
         self.config.approval_store = Some(store);
+        self
+    }
+
+    /// Submits calls held for approval to `service`, and takes their decisions from the
+    /// service's store unless an [`approval_store`](Self::approval_store) is already set.
+    ///
+    /// See [`RunConfig::approval_service`].
+    pub fn approval_service(mut self, service: Arc<dyn crate::ApprovalService>) -> Self {
+        if self.config.approval_store.is_none() {
+            self.config.approval_store = service.approval_store();
+        }
+        self.config.approval_service = Some(service);
+        self
+    }
+
+    /// Records the durable run this invocation executes. See [`RunConfig::durable_run_id`].
+    pub fn durable_run_id(mut self, run_id: impl Into<String>) -> Self {
+        self.config.durable_run_id = Some(run_id.into());
         self
     }
 

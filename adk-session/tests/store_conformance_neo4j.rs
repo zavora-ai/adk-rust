@@ -88,3 +88,10 @@ mod approvals {
         harness = super::Neo4j,
     }
 }
+
+mod approval_service {
+    adk_core::approval_service_conformance_tests! {
+        #[ignore = "requires a Neo4j server at NEO4J_URI"]
+        harness = super::Neo4j,
+    }
+}

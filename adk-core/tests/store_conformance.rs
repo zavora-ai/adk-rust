@@ -62,6 +62,10 @@ mod approvals {
     adk_core::approval_store_conformance_tests!(harness = super::InMemoryApprovals::default());
 }
 
+mod approval_service {
+    adk_core::approval_service_conformance_tests!(harness = super::InMemoryApprovals::default());
+}
+
 struct InMemoryLeases;
 
 #[async_trait]

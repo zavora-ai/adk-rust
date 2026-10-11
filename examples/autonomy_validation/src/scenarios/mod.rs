@@ -3,6 +3,7 @@
 
 pub mod anthropic;
 pub mod ap2;
+pub mod approvals;
 pub mod budget;
 pub mod builtin;
 pub mod codeact;
@@ -46,6 +47,7 @@ pub const ALL: &[&str] = &[
     "anthropic_thinking_replay",
     "builtin_tool_policy",
     "durable_crash_resume",
+    "approval_service",
 ];
 
 /// Runs the named scenario once.
@@ -78,6 +80,7 @@ pub async fn run(name: &str, cfg: &Config, provider: Provider) -> Verdict {
         "anthropic_thinking_replay" => providers::anthropic_thinking_replay(cfg, provider).await,
         "builtin_tool_policy" => builtin::builtin_tool_policy(cfg, provider).await,
         "durable_crash_resume" => durable::durable_crash_resume(cfg, provider).await,
+        "approval_service" => approvals::approval_service(cfg, provider).await,
         other => Verdict::Fail(format!("unknown scenario {other}")),
     }
 }

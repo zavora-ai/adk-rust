@@ -79,6 +79,9 @@ pub mod webhooks;
 #[cfg(feature = "background")]
 pub mod background;
 
+#[cfg(feature = "approvals")]
+pub mod approvals;
+
 #[cfg(feature = "agent-engine")]
 pub mod agent_engine;
 

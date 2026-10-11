@@ -12,6 +12,7 @@
 //! | [`Neo4jSpendLedger`] | `AdkSpendEntry` | `id` (unique) | Write lock on the organization's `AdkSpendOrg` node, taken before the limit check |
 //! | [`Neo4jActionLedger`] | `AdkAction` | `key` (unique) | The uniqueness constraint for `begin`; a write lock on the record for `complete` |
 //! | [`Neo4jApprovalStore`] | `AdkApprovalPending`, `AdkApprovalDecision` | scope + `fingerprint` (unique) | Write lock on the scope's `AdkApprovalScope` node for `decide` and `take_decision` |
+//! | [`Neo4jApprovalStore`] requests and delegations | `AdkApprovalRequest`, `AdkApprovalDelegation` | `id` (unique) | The uniqueness constraint for `create_request`; a write lock on the request before its version is compared for `replace_request` |
 //!
 //! Lock nodes are created by an auto-commit `MERGE` before the transaction, so the
 //! transaction only ever upgrades straight to a write lock and two writers cannot
@@ -24,11 +25,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use adk_core::principal::SubjectRef;
 use adk_core::{
-    ActionLedger, ActionOutcome, ActionRecord, AdkError, ApprovalScope, ApprovalStore, Clock,
-    DEFAULT_RESERVATION_TTL, ErrorCategory, ErrorComponent, PendingApproval, ReservationId, Result,
-    SpendError, SpendKey, SpendLedger, SpendLimits, SpendPeriod, SystemClock, ToolApproval,
-    ToolConfirmationDecision, ToolConfirmationRequest, ToolEffect,
+    ActionLedger, ActionOutcome, ActionRecord, AdkError, ApprovalDelegation, ApprovalRequest,
+    ApprovalRequestQuery, ApprovalScope, ApprovalStore, Clock, DEFAULT_RESERVATION_TTL,
+    ErrorCategory, ErrorComponent, PendingApproval, ReservationId, Result, SpendError, SpendKey,
+    SpendLedger, SpendLimits, SpendPeriod, SystemClock, ToolApproval, ToolConfirmationDecision,
+    ToolConfirmationRequest, ToolEffect,
     action_ledger::{already_completed_error, duplicate_key_error, missing_key_error},
 };
 use async_trait::async_trait;
@@ -681,8 +684,69 @@ fn approval_from_row(row: &Row) -> Result<ToolApproval> {
                 .ok_or_else(|| approval_error(format!("expiry {micros} is out of range")))
         })
         .transpose()?;
-    Ok(ToolApproval { decision, expires_at })
+    let edited_args = column::<Option<String>>(row, "edited_args")
+        .map_err(approval_error)?
+        .map(|json| {
+            serde_json::from_str(&json)
+                .map_err(|e| approval_error(format!("edited arguments are corrupt: {e}")))
+        })
+        .transpose()?;
+    let mut approval = match decision {
+        ToolConfirmationDecision::Approve => ToolApproval::approve(),
+        ToolConfirmationDecision::Deny => ToolApproval::deny(),
+    };
+    approval.expires_at = expires_at;
+    approval.edited_args = edited_args;
+    approval.message = column::<Option<String>>(row, "message").map_err(approval_error)?;
+    Ok(approval)
 }
+
+const DECISION_COLUMNS: &str = "d.decision AS decision, d.expires_at_us AS expires_at_us, \
+    d.edited_args AS edited_args, d.message AS message";
+
+fn stored_version(version: u64) -> Result<i64> {
+    i64::try_from(version)
+        .map_err(|_| approval_error(format!("approval request version {version} is out of range")))
+}
+
+fn encode_json<T: serde::Serialize>(value: &T, what: &str) -> Result<String> {
+    serde_json::to_string(value)
+        .map_err(|e| approval_error(format!("could not encode {what}: {e}")))
+}
+
+fn decode_records<T: serde::de::DeserializeOwned>(found: &[Row], what: &str) -> Result<Vec<T>> {
+    found
+        .iter()
+        .map(|row| {
+            let json: String = column(row, "record").map_err(approval_error)?;
+            serde_json::from_str(&json)
+                .map_err(|e| approval_error(format!("stored {what} is corrupt: {e}")))
+        })
+        .collect()
+}
+
+fn subject_kind(subject: &SubjectRef) -> Result<String> {
+    match serde_json::to_value(subject.kind) {
+        Ok(serde_json::Value::String(kind)) => Ok(kind),
+        _ => Err(approval_error("could not encode a subject kind".to_string())),
+    }
+}
+
+/// Binds a request's indexed properties and record to `$app`, `$state`, `$open`,
+/// `$created_us`, `$version`, and `$record`.
+fn with_request(statement: Query, request: &ApprovalRequest) -> Result<Query> {
+    Ok(statement
+        .param("id", request.id.clone())
+        .param("app", request.scope.app_name.clone())
+        .param("state", request.state.as_str())
+        .param("open", request.is_open())
+        .param("created_us", request.created_at.timestamp_micros())
+        .param("version", stored_version(request.version)?)
+        .param("record", encode_json(request, "request")?))
+}
+
+const SET_REQUEST: &str = "r.app = $app, r.state = $state, r.open = $open, \
+    r.created_us = $created_us, r.version = $version, r.record = $record";
 
 /// Neo4j-backed [`ApprovalStore`], so calls held for approval and their decisions
 /// survive a restart and are shared by every process.
@@ -753,6 +817,16 @@ impl Neo4jApprovalStore {
                 // `pending` lists one scope, which the four-property constraint cannot serve.
                 "CREATE INDEX adk_approval_pending_scope IF NOT EXISTS \
                  FOR (p:AdkApprovalPending) ON (p.app_name, p.user_id, p.session_id)",
+                "CREATE CONSTRAINT adk_approval_request_unique IF NOT EXISTS \
+                 FOR (r:AdkApprovalRequest) REQUIRE r.id IS UNIQUE",
+                "CREATE INDEX adk_approval_request_app IF NOT EXISTS \
+                 FOR (r:AdkApprovalRequest) ON (r.app, r.created_us)",
+                "CREATE INDEX adk_approval_request_open IF NOT EXISTS \
+                 FOR (r:AdkApprovalRequest) ON (r.open, r.created_us)",
+                "CREATE CONSTRAINT adk_approval_delegation_unique IF NOT EXISTS \
+                 FOR (d:AdkApprovalDelegation) REQUIRE d.id IS UNIQUE",
+                "CREATE INDEX adk_approval_delegation_to IF NOT EXISTS \
+                 FOR (d:AdkApprovalDelegation) ON (d.to_kind, d.to_id)",
             ],
             approval_error,
         )
@@ -797,13 +871,16 @@ impl Neo4jApprovalStore {
             scoped(
                 &format!(
                     "MERGE (d:AdkApprovalDecision {ENTRY_MATCH}) \
-                     SET d.decision = $decision, d.expires_at_us = $expires_at_us"
+                     SET d.decision = $decision, d.expires_at_us = $expires_at_us, \
+                         d.edited_args = $edited_args, d.message = $message"
                 ),
                 scope,
             )
             .param("fingerprint", fingerprint)
             .param("decision", decision_name(approval.decision))
-            .param("expires_at_us", approval.expires_at.map(|at| at.timestamp_micros())),
+            .param("expires_at_us", approval.expires_at.map(|at| at.timestamp_micros()))
+            .param("edited_args", approval.edited_args.as_ref().map(ToString::to_string))
+            .param("message", approval.message.clone()),
         )
         .await?;
         txn.commit().await?;
@@ -825,8 +902,8 @@ impl Neo4jApprovalStore {
             scoped(
                 &format!(
                     "MATCH (d:AdkApprovalDecision {ENTRY_MATCH}) \
-                     WITH d, d.decision AS decision, d.expires_at_us AS expires_at_us \
-                     DELETE d RETURN decision, expires_at_us"
+                     WITH d, {DECISION_COLUMNS} \
+                     DELETE d RETURN decision, expires_at_us, edited_args, message"
                 ),
                 scope,
             )
@@ -835,6 +912,47 @@ impl Neo4jApprovalStore {
         .await?;
         txn.commit().await?;
         Ok(taken.first().map(approval_from_row).transpose()?)
+    }
+
+    async fn try_replace(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: i64,
+    ) -> std::result::Result<bool, Failure> {
+        let mut txn = self.graph.start_txn().await?;
+        // Write-lock the request before reading its version, so the comparison sees
+        // every replace that committed first.
+        let locked = rows(
+            &mut txn,
+            query(
+                "MATCH (r:AdkApprovalRequest {id: $id}) \
+                 SET r.lock_seq = coalesce(r.lock_seq, 0) + 1 RETURN count(r) AS locked",
+            )
+            .param("id", request.id.clone()),
+        )
+        .await?;
+        if locked.first().and_then(|row| row.get::<i64>("locked").ok()).unwrap_or(0) == 0 {
+            let _ = txn.rollback().await;
+            return Ok(false);
+        }
+        let current = rows(
+            &mut txn,
+            query("MATCH (r:AdkApprovalRequest {id: $id}) RETURN r.version AS version")
+                .param("id", request.id.clone()),
+        )
+        .await?;
+        if current.first().and_then(|row| row.get::<i64>("version").ok()) != Some(expected_version)
+        {
+            let _ = txn.rollback().await;
+            return Ok(false);
+        }
+        txn.run(with_request(
+            query(&format!("MATCH (r:AdkApprovalRequest {{id: $id}}) SET {SET_REQUEST}")),
+            request,
+        )?)
+        .await?;
+        txn.commit().await?;
+        Ok(true)
     }
 }
 
@@ -909,18 +1027,23 @@ impl ApprovalStore for Neo4jApprovalStore {
         scope: &ApprovalScope,
         fingerprint: &str,
     ) -> Result<Option<ToolConfirmationDecision>> {
+        Ok(self.take_approval(scope, fingerprint).await?.map(|approval| approval.decision))
+    }
+
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> Result<Option<ToolApproval>> {
         let taken = retry_transient!(approval_error, self.try_take(scope, fingerprint))?;
-        Ok(taken.filter(|approval| approval.is_live(Utc::now())).map(|approval| approval.decision))
+        Ok(taken.filter(|approval| approval.is_live(Utc::now())))
     }
 
     async fn has_decision(&self, scope: &ApprovalScope, fingerprint: &str) -> Result<bool> {
         let found = graph_rows(
             &self.graph,
             scoped(
-                &format!(
-                    "MATCH (d:AdkApprovalDecision {ENTRY_MATCH}) \
-                     RETURN d.decision AS decision, d.expires_at_us AS expires_at_us"
-                ),
+                &format!("MATCH (d:AdkApprovalDecision {ENTRY_MATCH}) RETURN {DECISION_COLUMNS}"),
                 scope,
             )
             .param("fingerprint", fingerprint),
@@ -931,6 +1054,143 @@ impl ApprovalStore for Neo4jApprovalStore {
             Some(row) => Ok(approval_from_row(row)?.is_live(Utc::now())),
             None => Ok(false),
         }
+    }
+
+    async fn create_request(&self, request: &ApprovalRequest) -> Result<ApprovalRequest> {
+        let statement = with_request(
+            query(&format!(
+                "MERGE (r:AdkApprovalRequest {{id: $id}}) ON CREATE SET {SET_REQUEST} \
+                 RETURN r.record AS record"
+            )),
+            request,
+        )?;
+        let mut tries = 1;
+        let found = loop {
+            match graph_rows(&self.graph, statement.clone()).await {
+                // Two concurrent merges of one id: the loser fails the constraint and
+                // reads the winner's request on retry.
+                Err(error)
+                    if tries < TRANSIENT_ATTEMPTS
+                        && (neo4j_code(&error) == Some(CONSTRAINT_VIOLATION)
+                            || matches!(&error, neo4rs::Error::Neo4j(inner)
+                                if inner.kind() == Neo4jErrorKind::Transient)) =>
+                {
+                    tries += 1;
+                }
+                result => {
+                    break result.map_err(|e| approval_error(format!("create failed: {e}")))?;
+                }
+            }
+        };
+        decode_records(&found, "request")?
+            .pop()
+            .ok_or_else(|| approval_error(format!("approval request '{}' vanished", request.id)))
+    }
+
+    async fn get_request(&self, id: &str) -> Result<Option<ApprovalRequest>> {
+        let found = graph_rows(
+            &self.graph,
+            query("MATCH (r:AdkApprovalRequest {id: $id}) RETURN r.record AS record")
+                .param("id", id),
+        )
+        .await
+        .map_err(|e| approval_error(format!("read failed: {e}")))?;
+        Ok(decode_records(&found, "request")?.pop())
+    }
+
+    async fn replace_request(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: u64,
+    ) -> Result<bool> {
+        let expected = stored_version(expected_version)?;
+        retry_transient!(approval_error, self.try_replace(request, expected))
+    }
+
+    async fn list_requests(
+        &self,
+        query_spec: &ApprovalRequestQuery,
+    ) -> Result<Vec<ApprovalRequest>> {
+        let states: Vec<String> =
+            query_spec.states.iter().map(|state| state.as_str().to_string()).collect();
+        let found = graph_rows(
+            &self.graph,
+            query(
+                "MATCH (r:AdkApprovalRequest) \
+                 WHERE ($app IS NULL OR r.app = $app) \
+                   AND (size($states) = 0 OR r.state IN $states) \
+                   AND (NOT $open_only OR r.open = true) \
+                   AND ($after_id IS NULL OR r.created_us > $after_us \
+                        OR (r.created_us = $after_us AND r.id > $after_id)) \
+                 RETURN r.record AS record ORDER BY r.created_us, r.id LIMIT $limit",
+            )
+            .param("app", query_spec.app_name.clone())
+            .param("states", states)
+            .param("open_only", query_spec.open_only)
+            .param("after_id", query_spec.after.as_ref().map(|cursor| cursor.id.clone()))
+            .param(
+                "after_us",
+                query_spec.after.as_ref().map_or(0, |cursor| cursor.created_at.timestamp_micros()),
+            )
+            .param("limit", i64::try_from(query_spec.limit).unwrap_or(i64::MAX)),
+        )
+        .await
+        .map_err(|e| approval_error(format!("read failed: {e}")))?;
+        decode_records(&found, "request")
+    }
+
+    async fn put_delegation(&self, delegation: &ApprovalDelegation) -> Result<()> {
+        let statement = query(
+            "MERGE (d:AdkApprovalDelegation {id: $id}) \
+             SET d.to_kind = $to_kind, d.to_id = $to_id, d.record = $record",
+        )
+        .param("id", delegation.id.clone())
+        .param("to_kind", subject_kind(&delegation.to)?)
+        .param("to_id", delegation.to.id.clone())
+        .param("record", encode_json(delegation, "delegation")?);
+        let mut tries = 1;
+        loop {
+            match self.graph.run(statement.clone()).await {
+                Err(error)
+                    if tries < TRANSIENT_ATTEMPTS
+                        && neo4j_code(&error) == Some(CONSTRAINT_VIOLATION) =>
+                {
+                    tries += 1;
+                }
+                result => {
+                    break result.map_err(|e| approval_error(format!("write failed: {e}")));
+                }
+            }
+        }
+    }
+
+    async fn delegations_to(&self, to: &SubjectRef) -> Result<Vec<ApprovalDelegation>> {
+        let found = graph_rows(
+            &self.graph,
+            query(
+                "MATCH (d:AdkApprovalDelegation {to_kind: $to_kind, to_id: $to_id}) \
+                 RETURN d.record AS record ORDER BY d.id",
+            )
+            .param("to_kind", subject_kind(to)?)
+            .param("to_id", to.id.clone()),
+        )
+        .await
+        .map_err(|e| approval_error(format!("read failed: {e}")))?;
+        decode_records(&found, "delegation")
+    }
+
+    async fn delete_delegation(&self, id: &str) -> Result<bool> {
+        let found = graph_rows(
+            &self.graph,
+            query(
+                "MATCH (d:AdkApprovalDelegation {id: $id}) \
+                 WITH d, d.id AS id DELETE d RETURN count(id) AS deleted",
+            )
+            .param("id", id),
+        )
+        .await
+        .map_err(|e| approval_error(format!("delete failed: {e}")))?;
+        Ok(found.first().and_then(|row| row.get::<i64>("deleted").ok()).unwrap_or(0) > 0)
     }
 }
 

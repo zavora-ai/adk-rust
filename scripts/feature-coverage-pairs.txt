@@ -35,6 +35,8 @@
 # The background run store and its persistence are behind `background`; nothing compiled
 # them when durable run records were added.
 2 adk-server background
+# Approval inbox endpoints and the signed approval webhook notifier.
+2 adk-server approvals
 # Agent Engine dispatch surface; its wire-fixture and dispatch tests need the feature.
 2 adk-server agent-engine
 2 adk-server vertex-remote-engine

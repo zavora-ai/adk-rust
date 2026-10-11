@@ -170,3 +170,10 @@ mod audit_log {
         harness = super::Postgres,
     );
 }
+
+mod approval_service {
+    adk_core::approval_service_conformance_tests!(
+        #[ignore = "requires a PostgreSQL server at DATABASE_URL"]
+        harness = super::Postgres,
+    );
+}

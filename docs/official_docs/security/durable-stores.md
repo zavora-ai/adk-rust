@@ -7,7 +7,7 @@ keeps the signed audit log:
 |-------|-------|-------|--------|
 | Spend ledger | `SpendLedger` | Budget holds and committed spend | `RunConfig::spend_ledger`, `Runner::builder().spend_ledger(...)` |
 | Action ledger | `ActionLedger` | One record per non-idempotent tool call | `RunConfig::action_ledger`, `Runner::builder().action_ledger(...)` |
-| Approval store | `ApprovalStore` | Calls held for confirmation and the decisions for them | `RunConfig::approval_store`, `Runner::builder().approval_store(...)` |
+| Approval store | `ApprovalStore` | Calls held for confirmation and the decisions for them; the requests and delegations of the [approval service](approval-service.md) | `RunConfig::approval_store`, `Runner::builder().approval_store(...)`, `RunConfig::approval_service` |
 | Audit log store | `adk_core::audit_log::AuditLogStore` | Audit records, Merkle subtree hashes, and signed checkpoints | `adk_auth::signed_audit::AuditLog::builder(...)` — see [Audit Log](audit-log.md) |
 
 Every backend implements the same trait and passes the same conformance suite, so choosing
@@ -160,7 +160,8 @@ adk_core::action_ledger_conformance_tests! {
 |-------|-------|
 | `spend_ledger_conformance_tests!` | reserve/commit/release accounting; each reservation settles once; per-key limits; day and month rollover at UTC boundaries (driven by a `ManualClock`); expired holds; 40 concurrent reservations across two handles; holds and settlements across a restart |
 | `action_ledger_conformance_tests!` | begin/complete round trip; a recorded call answered without executing; a begun call read as `outcome_unknown` after a restart; 32 concurrent begins with one winner; write-once outcomes with one concurrent winner |
-| `approval_store_conformance_tests!` | pending kept once, oldest first, per scope; `has_decision` does not consume and `take_decision` consumes once; a later decision replaces an earlier one; expiry; scope isolation; 16 concurrent takes with one winner; records across a restart |
+| `approval_store_conformance_tests!` | pending kept once, oldest first, per scope; `has_decision` does not consume and `take_decision` consumes once; a later decision replaces an earlier one; expiry; scope isolation; 16 concurrent takes with one winner; records across a restart; decisions carry edited arguments and messages; requests created once; 16 concurrent `replace_request` calls across two handles with one winner; listing by state, openness, application, and cursor; delegations stored, replaced, listed, and deleted; requests and delegations across a restart |
+| `approval_service_conformance_tests!` | the `StoreApprovalService` over the store: expiry denies once; quorum of two stays pending after one approval; self-approval refused, also through a delegation; delegation only within its window; 12 concurrent decisions across two handles with one winner; edits restart the quorum and carry their arguments; escalation fires once; inbox by name, group, and delegation with paging; cancel and reject deny; a partly approved request across a restart |
 | `audit_log_store_conformance_tests!` | contiguous appends read back unchanged; a gap or overlap is `audit_log.seq_conflict`; malformed batches are `audit_log.invalid_batch`; concurrent appends at one position across two handles have one winner; logs are independent; leaf and subtree hashes; reads past the end fail; checkpoints never exceed the log or fork, and a re-signed note replaces the old one; pruning keeps hashes; data across a restart |
 
 Run the suites for the workspace backends:

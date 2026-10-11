@@ -295,6 +295,17 @@ keep requests across restarts and share them between processes — `SqliteApprov
 and `FirestoreApprovalStore` — each passing the same conformance suite. Install one with
 `Runner::builder().approval_store(...)`. See [Durable Stores](durable-stores.md).
 
+### Approval Service
+
+For approvals that need an inbox — several approvers, a quorum, delegation, escalation,
+expiry, notifications, or HTTP endpoints — set `RunConfig::approval_service` to a
+`StoreApprovalService` over the store. A held call is then also submitted as an
+`ApprovalRequest` under the service's routing policy, and the decision that resolves it is
+written to the store, where the next run takes it. An approver may edit the arguments; the
+edited call is a new call and passes the `ToolPolicy` and the tool screen again before it
+executes. A rejection or response is reported to the model as the call's refusal. See
+[Approval Service](approval-service.md).
+
 ### Decisions Keyed by Call ID
 
 `RunConfig::tool_confirmation_decisions` keys a decision by function call ID. It applies only

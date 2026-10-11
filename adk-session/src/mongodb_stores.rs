@@ -8,7 +8,7 @@
 //! |-------|-------------|------------------------|
 //! | [`MongoSpendLedger`] | `adk_spend_orgs`, `adk_spend_entries` | Compare-and-set on the organization's `seq`, which also parks the new hold in `pending` until its entry is written |
 //! | [`MongoActionLedger`] | `adk_action_ledger` | `insert_one` on `_id` = idempotency key; `update_one` filtered on `outcome: null` |
-//! | [`MongoApprovalStore`] | `adk_approvals` | `find_one_and_delete` takes a decision; upserts with `$setOnInsert` record pending calls |
+//! | [`MongoApprovalStore`] | `adk_approvals`, `adk_approval_requests`, `adk_approval_delegations` | `find_one_and_delete` takes a decision; upserts with `$setOnInsert` record pending calls; `insert_one` on `_id` creates a request once; `update_one` filtered on `version` changes it once per version |
 //!
 //! # Spend reservations
 //!
@@ -26,11 +26,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use adk_core::principal::SubjectRef;
 use adk_core::{
-    ActionLedger, ActionOutcome, ActionRecord, AdkError, ApprovalScope, ApprovalStore, Clock,
-    DEFAULT_RESERVATION_TTL, ErrorCategory, ErrorComponent, PendingApproval, ReservationId, Result,
-    SpendError, SpendKey, SpendLedger, SpendLimits, SpendPeriod, SystemClock, ToolApproval,
-    ToolConfirmationDecision, ToolConfirmationRequest, ToolEffect,
+    ActionLedger, ActionOutcome, ActionRecord, AdkError, ApprovalDelegation, ApprovalRequest,
+    ApprovalRequestQuery, ApprovalScope, ApprovalStore, Clock, DEFAULT_RESERVATION_TTL,
+    ErrorCategory, ErrorComponent, PendingApproval, ReservationId, Result, SpendError, SpendKey,
+    SpendLedger, SpendLimits, SpendPeriod, SystemClock, ToolApproval, ToolConfirmationDecision,
+    ToolConfirmationRequest, ToolEffect,
     action_ledger::{already_completed_error, duplicate_key_error, missing_key_error},
 };
 use async_trait::async_trait;
@@ -44,6 +46,8 @@ const SPEND_ORGS: &str = "adk_spend_orgs";
 const SPEND_ENTRIES: &str = "adk_spend_entries";
 const ACTION_LEDGER: &str = "adk_action_ledger";
 const APPROVALS: &str = "adk_approvals";
+const APPROVAL_REQUESTS: &str = "adk_approval_requests";
+const APPROVAL_DELEGATIONS: &str = "adk_approval_delegations";
 
 const STATE_RESERVED: &str = "reserved";
 const STATE_COMMITTED: &str = "committed";
@@ -594,6 +598,60 @@ fn approval_id(scope: &ApprovalScope, kind: &str, fingerprint: &str) -> Document
     }
 }
 
+fn stored_version(version: u64) -> Result<i64> {
+    i64::try_from(version)
+        .map_err(|_| approval_error(format!("approval request version {version} is out of range")))
+}
+
+fn encode_json<T: serde::Serialize>(value: &T, what: &str) -> Result<String> {
+    serde_json::to_string(value)
+        .map_err(|e| approval_error(format!("approval store could not encode {what}: {e}")))
+}
+
+fn decode_record<T: serde::de::DeserializeOwned>(document: &Document, what: &str) -> Result<T> {
+    let json = read_str(document, "record")
+        .ok_or_else(|| approval_error(format!("approval store {what} has no 'record' field")))?;
+    serde_json::from_str(json)
+        .map_err(|e| approval_error(format!("approval store {what} is corrupt: {e}")))
+}
+
+fn subject_kind(subject: &SubjectRef) -> Result<String> {
+    match serde_json::to_value(subject.kind) {
+        Ok(serde_json::Value::String(kind)) => Ok(kind),
+        _ => Err(approval_error("approval store could not encode a subject kind".to_string())),
+    }
+}
+
+/// The fields of a request document other than `_id`.
+fn request_fields(request: &ApprovalRequest) -> Result<Document> {
+    Ok(doc! {
+        "app": &request.scope.app_name,
+        "state": request.state.as_str(),
+        "open": request.is_open(),
+        "created_us": request.created_at.timestamp_micros(),
+        "version": stored_version(request.version)?,
+        "record": encode_json(request, "request")?,
+    })
+}
+
+async fn collect_records<T: serde::de::DeserializeOwned>(
+    mut cursor: mongodb::Cursor<Document>,
+    what: &str,
+) -> Result<Vec<T>> {
+    let mut found = Vec::new();
+    while cursor
+        .advance()
+        .await
+        .map_err(|e| approval_error(format!("approval store read failed: {e}")))?
+    {
+        let document = cursor
+            .deserialize_current()
+            .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+        found.push(decode_record(&document, what)?);
+    }
+    Ok(found)
+}
+
 fn decode_approval(document: &Document) -> Result<ToolApproval> {
     let json = read_str(document, "approval")
         .ok_or_else(|| approval_error("approval store field 'approval' is missing".to_string()))?;
@@ -646,12 +704,37 @@ impl MongoApprovalStore {
         Self { db }
     }
 
-    /// Creates the index that lists a scope's pending calls.
+    /// Creates the indexes that list a scope's pending calls, approval requests by
+    /// application, state, and openness, and delegations by delegate.
     ///
     /// # Errors
     ///
-    /// Returns an error when the index cannot be created.
+    /// Returns an error when an index cannot be created.
     pub async fn migrate(&self) -> Result<()> {
+        let index = |name: &str, keys: Document| {
+            IndexModel::builder()
+                .keys(keys)
+                .options(IndexOptions::builder().name(name.to_string()).build())
+                .build()
+        };
+        self.requests()
+            .create_indexes([
+                index("adk_approval_requests_open", doc! { "open": 1, "created_us": 1, "_id": 1 }),
+                index("adk_approval_requests_app", doc! { "app": 1, "created_us": 1, "_id": 1 }),
+                index(
+                    "adk_approval_requests_state",
+                    doc! { "state": 1, "created_us": 1, "_id": 1 },
+                ),
+            ])
+            .await
+            .map_err(|e| approval_error(format!("approval store index creation failed: {e}")))?;
+        self.delegations()
+            .create_index(index(
+                "adk_approval_delegations_to",
+                doc! { "to_kind": 1, "to_id": 1, "_id": 1 },
+            ))
+            .await
+            .map_err(|e| approval_error(format!("approval store index creation failed: {e}")))?;
         self.collection()
             .create_index(
                 IndexModel::builder()
@@ -671,6 +754,14 @@ impl MongoApprovalStore {
 
     fn collection(&self) -> Collection<Document> {
         self.db.collection(APPROVALS)
+    }
+
+    fn requests(&self) -> Collection<Document> {
+        self.db.collection(APPROVAL_REQUESTS)
+    }
+
+    fn delegations(&self) -> Collection<Document> {
+        self.db.collection(APPROVAL_DELEGATIONS)
     }
 
     async fn find(&self, id: Document) -> Result<Option<Document>> {
@@ -788,6 +879,14 @@ impl ApprovalStore for MongoApprovalStore {
         scope: &ApprovalScope,
         fingerprint: &str,
     ) -> Result<Option<ToolConfirmationDecision>> {
+        Ok(self.take_approval(scope, fingerprint).await?.map(|approval| approval.decision))
+    }
+
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> Result<Option<ToolApproval>> {
         let taken = self
             .collection()
             .find_one_and_delete(doc! { "_id": approval_id(scope, KIND_DECISION, fingerprint) })
@@ -797,7 +896,7 @@ impl ApprovalStore for MongoApprovalStore {
             return Ok(None);
         };
         let approval = decode_approval(&document)?;
-        Ok(approval.is_live(Utc::now()).then_some(approval.decision))
+        Ok(approval.is_live(Utc::now()).then_some(approval))
     }
 
     async fn has_decision(&self, scope: &ApprovalScope, fingerprint: &str) -> Result<bool> {
@@ -805,6 +904,121 @@ impl ApprovalStore for MongoApprovalStore {
             Some(document) => Ok(decode_approval(&document)?.is_live(Utc::now())),
             None => Ok(false),
         }
+    }
+
+    async fn create_request(&self, request: &ApprovalRequest) -> Result<ApprovalRequest> {
+        let mut document = doc! { "_id": &request.id };
+        document.extend(request_fields(request)?);
+        match self.requests().insert_one(document).await {
+            Ok(_) => Ok(request.clone()),
+            Err(error) if is_duplicate_key(&error) => {
+                self.get_request(&request.id).await?.ok_or_else(|| {
+                    approval_error(format!("approval request '{}' vanished", request.id))
+                })
+            }
+            Err(error) => Err(approval_error(format!("approval store write failed: {error}"))),
+        }
+    }
+
+    async fn get_request(&self, id: &str) -> Result<Option<ApprovalRequest>> {
+        self.requests()
+            .find_one(doc! { "_id": id })
+            .await
+            .map_err(|e| approval_error(format!("approval store read failed: {e}")))?
+            .map(|document| decode_record(&document, "request"))
+            .transpose()
+    }
+
+    async fn replace_request(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: u64,
+    ) -> Result<bool> {
+        let updated = self
+            .requests()
+            .update_one(
+                doc! { "_id": &request.id, "version": stored_version(expected_version)? },
+                doc! { "$set": request_fields(request)? },
+            )
+            .await
+            .map_err(|e| approval_error(format!("approval store write failed: {e}")))?;
+        Ok(updated.matched_count == 1)
+    }
+
+    async fn list_requests(&self, query: &ApprovalRequestQuery) -> Result<Vec<ApprovalRequest>> {
+        let mut filter = Document::new();
+        if let Some(app) = &query.app_name {
+            filter.insert("app", app);
+        }
+        if !query.states.is_empty() {
+            let states: Vec<&str> = query.states.iter().map(|state| state.as_str()).collect();
+            filter.insert("state", doc! { "$in": states });
+        }
+        if query.open_only {
+            filter.insert("open", true);
+        }
+        if let Some(after) = &query.after {
+            let at = after.created_at.timestamp_micros();
+            filter.insert(
+                "$or",
+                vec![
+                    doc! { "created_us": { "$gt": at } },
+                    doc! { "created_us": at, "_id": { "$gt": &after.id } },
+                ],
+            );
+        }
+        let limit = i64::try_from(query.limit).unwrap_or(i64::MAX);
+        let cursor = self
+            .requests()
+            .find(filter)
+            .with_options(
+                FindOptions::builder()
+                    .sort(doc! { "created_us": 1, "_id": 1 })
+                    .limit(limit)
+                    .build(),
+            )
+            .await
+            .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+        collect_records(cursor, "request").await
+    }
+
+    async fn put_delegation(&self, delegation: &ApprovalDelegation) -> Result<()> {
+        let filter = doc! { "_id": &delegation.id };
+        let update = doc! { "$set": {
+            "to_kind": subject_kind(&delegation.to)?,
+            "to_id": &delegation.to.id,
+            "record": encode_json(delegation, "delegation")?,
+        } };
+        // Two concurrent upserts of one `_id` can collide; the retry updates the winner's.
+        let mut result = self
+            .delegations()
+            .update_one(filter.clone(), update.clone())
+            .with_options(upsert())
+            .await;
+        if matches!(&result, Err(error) if is_duplicate_key(error)) {
+            result = self.delegations().update_one(filter, update).with_options(upsert()).await;
+        }
+        result.map_err(|e| approval_error(format!("approval store write failed: {e}")))?;
+        Ok(())
+    }
+
+    async fn delegations_to(&self, to: &SubjectRef) -> Result<Vec<ApprovalDelegation>> {
+        let cursor = self
+            .delegations()
+            .find(doc! { "to_kind": subject_kind(to)?, "to_id": &to.id })
+            .with_options(FindOptions::builder().sort(doc! { "_id": 1 }).build())
+            .await
+            .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+        collect_records(cursor, "delegation").await
+    }
+
+    async fn delete_delegation(&self, id: &str) -> Result<bool> {
+        let deleted = self
+            .delegations()
+            .delete_one(doc! { "_id": id })
+            .await
+            .map_err(|e| approval_error(format!("approval store write failed: {e}")))?;
+        Ok(deleted.deleted_count == 1)
     }
 }
 

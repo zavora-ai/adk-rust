@@ -12,7 +12,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 
 - **InMemorySessionService** - Simple in-memory session storage
 - **SqliteSessionService** - SQLite-backed persistence (`sqlite` feature)
-- **Durable stores** - `SpendLedger`, `ActionLedger`, and `ApprovalStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each behind its backend's feature and proven by the `adk-core` conformance suites
+- **Durable stores** - `SpendLedger`, `ActionLedger`, and `ApprovalStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each behind its backend's feature and proven by the `adk-core` conformance suites; the approval stores also hold the requests and delegations of the `adk-core` approval service
 - **Durable runtime stores** - `LeaseStore`, `DurableRunStore`, `ScheduleStore`, and `GovernanceStateStore` for SQLite and PostgreSQL
 - **PostgresSessionService** - PostgreSQL-backed persistence (`postgres` feature)
 - **RedisSessionService** - Redis-backed persistence (`redis` feature)

@@ -774,6 +774,26 @@ impl ServerBuilder {
         self
     }
 
+    /// Mount the approval inbox endpoints for `service` under `/api/approvals`, behind
+    /// the auth middleware. See [`crate::approvals`] for the routes.
+    ///
+    /// The endpoints need an authenticated caller, so configure a
+    /// `RequestContextExtractor`; without one every route answers `401`. Run
+    /// [`spawn_approval_ticker`](crate::approvals::spawn_approval_ticker) as well so
+    /// requests expire and escalate.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let app = ServerBuilder::new(config).with_approval_service(service).build();
+    /// ```
+    #[cfg(feature = "approvals")]
+    pub fn with_approval_service(self, service: Arc<dyn adk_core::ApprovalService>) -> Self {
+        self.add_api_routes(crate::approvals::approvals_router(
+            crate::approvals::ApprovalEndpoints::new(service),
+        ))
+    }
+
     /// Build the final Axum router with all routes and middleware applied.
     pub fn build(self) -> Router {
         self.build_inner().0

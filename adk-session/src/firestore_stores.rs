@@ -11,6 +11,12 @@
 //! | [`FirestoreSpendLedger`] | `adk_spend_entries` (reservation ID), `adk_spend_orgs` (hex of the organization), `adk_spend_orgs/{org}/days` (UTC date) | `reserve` reads the organization document, the current month's day totals, and the live holds, then writes the hold and bumps the organization's `seq`, so two reservations for one organization conflict and one retries |
 //! | [`FirestoreActionLedger`] | `adk_action_ledger` (digest of the key) | `begin` is a create, which fails when the document exists; `complete` re-reads the record in a transaction |
 //! | [`FirestoreApprovalStore`] | `adk_approvals` (digest of scope, kind, and fingerprint) | `take_decision` reads and deletes the decision in one transaction, so concurrent takers see it once |
+//! | [`FirestoreApprovalStore`] requests and delegations | `adk_approval_requests`, `adk_approval_delegations` (digest of the ID) | `create_request` is a create, which fails when the document exists; `replace_request` reads and compares the version in a transaction, so of concurrent replaces at one version one commits and the others retry, see the new version, and report `false` |
+//!
+//! `list_requests` queries with equality filters only — the application, `open`, or a
+//! single state — and orders, pages, and applies the remaining filters in memory, so no
+//! composite index is needed; a listing reads every request of the application (or
+//! every open request) it filters.
 //!
 //! Document IDs cannot hold `/` and are length-limited, so idempotency keys and
 //! fingerprints are addressed by their SHA-256 in hex. Each document also stores the full key,
@@ -33,11 +39,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_core::action_ledger::{already_completed_error, duplicate_key_error, missing_key_error};
+use adk_core::principal::SubjectRef;
 use adk_core::{
-    ActionLedger, ActionOutcome, ActionRecord, AdkError, ApprovalScope, ApprovalStore, Clock,
-    DEFAULT_RESERVATION_TTL, ErrorCategory, ErrorComponent, PendingApproval, ReservationId, Result,
-    SpendError, SpendKey, SpendLedger, SpendLimits, SpendPeriod, SystemClock, ToolApproval,
-    ToolConfirmationDecision, ToolConfirmationRequest,
+    ActionLedger, ActionOutcome, ActionRecord, AdkError, ApprovalDelegation, ApprovalRequest,
+    ApprovalRequestQuery, ApprovalScope, ApprovalStore, Clock, DEFAULT_RESERVATION_TTL,
+    ErrorCategory, ErrorComponent, PendingApproval, ReservationId, Result, SpendError, SpendKey,
+    SpendLedger, SpendLimits, SpendPeriod, SystemClock, ToolApproval, ToolConfirmationDecision,
+    ToolConfirmationRequest,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -53,6 +61,8 @@ const SPEND_ORGS: &str = "adk_spend_orgs";
 const SPEND_DAYS: &str = "days";
 const ACTIONS: &str = "adk_action_ledger";
 const APPROVALS: &str = "adk_approvals";
+const APPROVAL_REQUESTS: &str = "adk_approval_requests";
+const APPROVAL_DELEGATIONS: &str = "adk_approval_delegations";
 
 const STATE_RESERVED: &str = "reserved";
 const STATE_COMMITTED: &str = "committed";
@@ -921,6 +931,67 @@ fn digest_collision(fingerprint: &str) -> AdkError {
     ))
 }
 
+/// An [`ApprovalRequest`] with the fields its queries filter on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RequestDoc {
+    id: String,
+    app: String,
+    state: String,
+    open: bool,
+    created_us: i64,
+    version: i64,
+    /// JSON of the [`ApprovalRequest`].
+    record: String,
+}
+
+impl RequestDoc {
+    fn new(request: &ApprovalRequest) -> Result<Self> {
+        Ok(Self {
+            id: request.id.clone(),
+            app: request.scope.app_name.clone(),
+            state: request.state.as_str().to_string(),
+            open: request.is_open(),
+            created_us: request.created_at.timestamp_micros(),
+            version: i64::try_from(request.version).map_err(|_| {
+                approval_error(format!(
+                    "approval request version {} is out of range",
+                    request.version
+                ))
+            })?,
+            record: to_json(request, approval_error)?,
+        })
+    }
+
+    fn request(&self) -> Result<ApprovalRequest> {
+        from_json(&self.record, "approval request", approval_error)
+    }
+}
+
+/// An [`ApprovalDelegation`] with its delegate as query fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DelegationDoc {
+    id: String,
+    to_kind: String,
+    to_id: String,
+    /// JSON of the [`ApprovalDelegation`].
+    record: String,
+}
+
+fn subject_kind(subject: &SubjectRef) -> Result<String> {
+    match serde_json::to_value(subject.kind) {
+        Ok(serde_json::Value::String(kind)) => Ok(kind),
+        _ => Err(approval_error("could not encode a subject kind".to_string())),
+    }
+}
+
+fn request_doc_id(id: &str) -> String {
+    document_id(&json!(["request", id]))
+}
+
+fn delegation_doc_id(id: &str) -> String {
+    document_id(&json!(["delegation", id]))
+}
+
 /// Firestore-backed [`ApprovalStore`].
 ///
 /// Pending requests and decisions survive restarts and are shared by every process that
@@ -997,6 +1068,32 @@ impl FirestoreApprovalStore {
             .await
             .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
         Ok(stored.filter(|doc| doc.is_for(scope, kind, fingerprint)))
+    }
+
+    async fn read_request(&self, id: &str) -> Result<Option<RequestDoc>> {
+        let stored: Option<RequestDoc> = self
+            .db
+            .fluent()
+            .select()
+            .by_id_in(APPROVAL_REQUESTS)
+            .obj::<RequestDoc>()
+            .one(request_doc_id(id))
+            .await
+            .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+        Ok(stored.filter(|doc| doc.id == id))
+    }
+
+    async fn read_delegation(&self, id: &str) -> Result<Option<DelegationDoc>> {
+        let stored: Option<DelegationDoc> = self
+            .db
+            .fluent()
+            .select()
+            .by_id_in(APPROVAL_DELEGATIONS)
+            .obj::<DelegationDoc>()
+            .one(delegation_doc_id(id))
+            .await
+            .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+        Ok(stored.filter(|doc| doc.id == id))
     }
 }
 
@@ -1150,6 +1247,14 @@ impl ApprovalStore for FirestoreApprovalStore {
         scope: &ApprovalScope,
         fingerprint: &str,
     ) -> Result<Option<ToolConfirmationDecision>> {
+        Ok(self.take_approval(scope, fingerprint).await?.map(|approval| approval.decision))
+    }
+
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> Result<Option<ToolApproval>> {
         let request = Arc::new((scope.clone(), fingerprint.to_string()));
         let taken = self
             .db
@@ -1192,7 +1297,7 @@ impl ApprovalStore for FirestoreApprovalStore {
             )
             .await
             .map_err(|e| transaction_error(e, approval_error))?;
-        Ok(taken.filter(|approval| approval.is_live(Utc::now())).map(|approval| approval.decision))
+        Ok(taken.filter(|approval| approval.is_live(Utc::now())))
     }
 
     async fn has_decision(&self, scope: &ApprovalScope, fingerprint: &str) -> Result<bool> {
@@ -1201,6 +1306,186 @@ impl ApprovalStore for FirestoreApprovalStore {
         };
         let approval: ToolApproval = from_json(&stored.payload, "decision", approval_error)?;
         Ok(approval.is_live(Utc::now()))
+    }
+
+    async fn create_request(&self, request: &ApprovalRequest) -> Result<ApprovalRequest> {
+        let doc = RequestDoc::new(request)?;
+        let created = self
+            .db
+            .fluent()
+            .insert()
+            .into(APPROVAL_REQUESTS)
+            .document_id(request_doc_id(&request.id))
+            .object(&doc)
+            .execute::<RequestDoc>()
+            .await;
+        match created {
+            Ok(_) => Ok(request.clone()),
+            Err(FirestoreError::DataConflictError(_)) => {
+                match self.read_request(&request.id).await? {
+                    Some(existing) => existing.request(),
+                    None => Err(approval_error(format!(
+                        "approval request document for '{}' holds a different request with the same \
+                     digest",
+                        request.id
+                    ))),
+                }
+            }
+            Err(error) => Err(approval_error(format!("approval store write failed: {error}"))),
+        }
+    }
+
+    async fn get_request(&self, id: &str) -> Result<Option<ApprovalRequest>> {
+        self.read_request(id).await?.map(|doc| doc.request()).transpose()
+    }
+
+    async fn replace_request(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: u64,
+    ) -> Result<bool> {
+        let doc = RequestDoc::new(request)?;
+        let Ok(expected) = i64::try_from(expected_version) else {
+            return Ok(false);
+        };
+        let shared = Arc::new(doc);
+        self.db
+            .run_transaction_with_options(
+                move |db, transaction| -> TxFuture<'_, bool> {
+                    let doc = shared.clone();
+                    Box::pin(async move {
+                        let fail = |e: FirestoreError| {
+                            approval_error(format!("approval store replace failed: {e}"))
+                        };
+                        let doc_id = request_doc_id(&doc.id);
+                        let stored: Option<RequestDoc> = db
+                            .fluent()
+                            .select()
+                            .by_id_in(APPROVAL_REQUESTS)
+                            .obj::<RequestDoc>()
+                            .one(&doc_id)
+                            .await
+                            .map_err(|e| retry_or_fail(e, fail))?;
+                        if !stored
+                            .is_some_and(|stored| stored.id == doc.id && stored.version == expected)
+                        {
+                            return Ok(false);
+                        }
+                        db.fluent()
+                            .update()
+                            .in_col(APPROVAL_REQUESTS)
+                            .document_id(&doc_id)
+                            .object(&*doc)
+                            .add_to_transaction(transaction)
+                            .map_err(|e| retry_or_fail(e, fail))?;
+                        Ok(true)
+                    })
+                },
+                transaction_options(),
+            )
+            .await
+            .map_err(|e| transaction_error(e, approval_error))
+    }
+
+    async fn list_requests(&self, query: &ApprovalRequestQuery) -> Result<Vec<ApprovalRequest>> {
+        let single_state = match query.states.as_slice() {
+            [state] => Some(state.as_str()),
+            _ => None,
+        };
+        let app = query.app_name.clone();
+        let open_only = query.open_only;
+        let docs: Vec<RequestDoc> = self
+            .db
+            .fluent()
+            .select()
+            .from(APPROVAL_REQUESTS)
+            .filter(move |q| {
+                q.for_all([
+                    app.as_deref().and_then(|app| q.field("app").eq(app)),
+                    open_only.then(|| q.field("open").eq(true)).flatten(),
+                    single_state.and_then(|state| q.field("state").eq(state)),
+                ])
+            })
+            .obj::<RequestDoc>()
+            .query()
+            .await
+            .map_err(|e| approval_error(format!("approval store query failed: {e}")))?;
+        let mut requests = Vec::new();
+        for doc in docs {
+            let request = doc.request()?;
+            if query.matches(&request) {
+                requests.push(request);
+            }
+        }
+        requests.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+        requests.truncate(query.limit);
+        Ok(requests)
+    }
+
+    async fn put_delegation(&self, delegation: &ApprovalDelegation) -> Result<()> {
+        let doc = DelegationDoc {
+            id: delegation.id.clone(),
+            to_kind: subject_kind(&delegation.to)?,
+            to_id: delegation.to.id.clone(),
+            record: to_json(delegation, approval_error)?,
+        };
+        self.db
+            .fluent()
+            .update()
+            .in_col(APPROVAL_DELEGATIONS)
+            .document_id(delegation_doc_id(&delegation.id))
+            .object(&doc)
+            .execute::<DelegationDoc>()
+            .await
+            .map_err(|e| approval_error(format!("approval store write failed: {e}")))?;
+        Ok(())
+    }
+
+    async fn delegations_to(&self, to: &SubjectRef) -> Result<Vec<ApprovalDelegation>> {
+        let kind = subject_kind(to)?;
+        let docs: Vec<DelegationDoc> = self
+            .db
+            .fluent()
+            .select()
+            .from(APPROVAL_DELEGATIONS)
+            .filter(|q| {
+                q.for_all([
+                    q.field("to_kind").eq(kind.as_str()),
+                    q.field("to_id").eq(to.id.as_str()),
+                ])
+            })
+            .obj::<DelegationDoc>()
+            .query()
+            .await
+            .map_err(|e| approval_error(format!("approval store query failed: {e}")))?;
+        let mut delegations = docs
+            .iter()
+            .filter(|doc| doc.to_kind == kind && doc.to_id == to.id)
+            .map(|doc| from_json::<ApprovalDelegation>(&doc.record, "delegation", approval_error))
+            .collect::<Result<Vec<_>>>()?;
+        delegations.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(delegations)
+    }
+
+    async fn delete_delegation(&self, id: &str) -> Result<bool> {
+        if self.read_delegation(id).await?.is_none() {
+            return Ok(false);
+        }
+        match self
+            .db
+            .fluent()
+            .delete()
+            .from(APPROVAL_DELEGATIONS)
+            .document_id(delegation_doc_id(id))
+            .precondition(FirestoreWritePrecondition::Exists(true))
+            .execute()
+            .await
+        {
+            Ok(()) => Ok(true),
+            // Deleted concurrently between the read and the delete.
+            Err(FirestoreError::DataNotFoundError(_)) => Ok(false),
+            Err(error) => Err(approval_error(format!("approval store delete failed: {error}"))),
+        }
     }
 }
 

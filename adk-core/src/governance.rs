@@ -35,6 +35,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::approval::{ApprovalDelegation, ApprovalRequest, ApprovalRequestQuery};
 use crate::governance_state::{GovernanceScope, GovernanceState, GovernanceStateStore};
 use crate::principal::SubjectRef;
 use crate::{
@@ -604,7 +605,7 @@ impl GovernanceControl {
 /// assert_eq!(approval.decision, ToolConfirmationDecision::Approve);
 /// assert!(approval.is_live(chrono::Utc::now()));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolApproval {
     /// The decision.
@@ -612,17 +613,53 @@ pub struct ToolApproval {
     /// When the decision stops applying. `None` never expires.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
+    /// Arguments an approver substituted for the call's own.
+    ///
+    /// An approval with edited arguments executes the call with them, after the
+    /// governed path checks them against the [`ToolPolicy`](crate::ToolPolicy) and the
+    /// agent's tool screen again. Ignored on a denial.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_args: Option<Value>,
+    /// What the approver said: a rejection reason or a response that stands in for the
+    /// call's result. A denial reports it to the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 impl ToolApproval {
     /// An approval that does not expire.
     pub fn approve() -> Self {
-        Self { decision: ToolConfirmationDecision::Approve, expires_at: None }
+        Self {
+            decision: ToolConfirmationDecision::Approve,
+            expires_at: None,
+            edited_args: None,
+            message: None,
+        }
     }
 
     /// A denial that does not expire.
     pub fn deny() -> Self {
-        Self { decision: ToolConfirmationDecision::Deny, expires_at: None }
+        Self {
+            decision: ToolConfirmationDecision::Deny,
+            expires_at: None,
+            edited_args: None,
+            message: None,
+        }
+    }
+
+    /// Executes the call with `args` instead of its own. See
+    /// [`edited_args`](Self::edited_args).
+    #[must_use]
+    pub fn with_edited_args(mut self, args: Value) -> Self {
+        self.edited_args = Some(args);
+        self
+    }
+
+    /// Sets what the approver said. See [`message`](Self::message).
+    #[must_use]
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
     }
 
     /// Sets the instant the decision stops applying.
@@ -761,6 +798,89 @@ pub trait ApprovalStore: std::fmt::Debug + Send + Sync {
     async fn has_decision(&self, scope: &ApprovalScope, fingerprint: &str) -> Result<bool> {
         Ok(!self.pending(scope).await?.iter().any(|entry| entry.fingerprint == fingerprint))
     }
+
+    /// Takes the live decision for `fingerprint` with what the approver attached to it —
+    /// edited arguments or a message — consuming it.
+    ///
+    /// The governed path takes decisions through this method. The default wraps
+    /// [`take_decision`](Self::take_decision), so a store that predates edits reports
+    /// bare decisions. An expired decision is discarded and reported as `None`.
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> Result<Option<ToolApproval>> {
+        Ok(self.take_decision(scope, fingerprint).await?.map(|decision| match decision {
+            ToolConfirmationDecision::Approve => ToolApproval::approve(),
+            ToolConfirmationDecision::Deny => ToolApproval::deny(),
+        }))
+    }
+
+    /// Stores a new [`ApprovalRequest`] unless one with the same ID exists, and returns
+    /// the stored request: `request` when it was created, otherwise the existing one,
+    /// unchanged.
+    ///
+    /// Backs [`ApprovalService::submit`](crate::ApprovalService::submit). The default
+    /// reports `approval.store_unsupported`.
+    async fn create_request(&self, request: &ApprovalRequest) -> Result<ApprovalRequest> {
+        let _ = request;
+        Err(crate::approval::store_unsupported("create_request"))
+    }
+
+    /// Reads the request with `id`.
+    ///
+    /// The default reports `approval.store_unsupported`.
+    async fn get_request(&self, id: &str) -> Result<Option<ApprovalRequest>> {
+        let _ = id;
+        Err(crate::approval::store_unsupported("get_request"))
+    }
+
+    /// Replaces the stored request with the same ID by `request` when the stored
+    /// [`version`](ApprovalRequest::version) equals `expected_version`, atomically.
+    ///
+    /// Returns `false`, writing nothing, when the request is missing or its version
+    /// differs, so of several writers that read the same version exactly one succeeds.
+    /// The default reports `approval.store_unsupported`.
+    async fn replace_request(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: u64,
+    ) -> Result<bool> {
+        let _ = (request, expected_version);
+        Err(crate::approval::store_unsupported("replace_request"))
+    }
+
+    /// Lists stored requests matching `query`, ordered by creation time and then ID.
+    ///
+    /// The default reports `approval.store_unsupported`.
+    async fn list_requests(&self, query: &ApprovalRequestQuery) -> Result<Vec<ApprovalRequest>> {
+        let _ = query;
+        Err(crate::approval::store_unsupported("list_requests"))
+    }
+
+    /// Stores `delegation`, replacing one with the same ID.
+    ///
+    /// The default reports `approval.store_unsupported`.
+    async fn put_delegation(&self, delegation: &ApprovalDelegation) -> Result<()> {
+        let _ = delegation;
+        Err(crate::approval::store_unsupported("put_delegation"))
+    }
+
+    /// Lists the delegations granted to `to`, live or not, ordered by ID.
+    ///
+    /// The default reports `approval.store_unsupported`.
+    async fn delegations_to(&self, to: &SubjectRef) -> Result<Vec<ApprovalDelegation>> {
+        let _ = to;
+        Err(crate::approval::store_unsupported("delegations_to"))
+    }
+
+    /// Removes the delegation with `id`. Returns whether one was removed.
+    ///
+    /// The default reports `approval.store_unsupported`.
+    async fn delete_delegation(&self, id: &str) -> Result<bool> {
+        let _ = id;
+        Err(crate::approval::store_unsupported("delete_delegation"))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -771,11 +891,13 @@ struct ScopeApprovals {
 
 /// An [`ApprovalStore`] held in process memory.
 ///
-/// Pending requests and decisions survive between runs of one process; they do not
-/// survive a restart.
+/// Pending requests, decisions, approval requests, and delegations survive between
+/// runs of one process; they do not survive a restart.
 #[derive(Debug, Default)]
 pub struct InMemoryApprovalStore {
     scopes: tokio::sync::RwLock<HashMap<ApprovalScope, ScopeApprovals>>,
+    requests: tokio::sync::RwLock<std::collections::BTreeMap<String, ApprovalRequest>>,
+    delegations: tokio::sync::RwLock<std::collections::BTreeMap<String, ApprovalDelegation>>,
 }
 
 impl InMemoryApprovalStore {
@@ -828,15 +950,19 @@ impl ApprovalStore for InMemoryApprovalStore {
         scope: &ApprovalScope,
         fingerprint: &str,
     ) -> Result<Option<ToolConfirmationDecision>> {
+        Ok(self.take_approval(scope, fingerprint).await?.map(|approval| approval.decision))
+    }
+
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> Result<Option<ToolApproval>> {
         let mut scopes = self.scopes.write().await;
         let Some(entries) = scopes.get_mut(scope) else {
             return Ok(None);
         };
-        Ok(entries
-            .decisions
-            .remove(fingerprint)
-            .filter(|approval| approval.is_live(Utc::now()))
-            .map(|approval| approval.decision))
+        Ok(entries.decisions.remove(fingerprint).filter(|approval| approval.is_live(Utc::now())))
     }
 
     async fn has_decision(&self, scope: &ApprovalScope, fingerprint: &str) -> Result<bool> {
@@ -845,6 +971,59 @@ impl ApprovalStore for InMemoryApprovalStore {
             .get(scope)
             .and_then(|entries| entries.decisions.get(fingerprint))
             .is_some_and(|approval| approval.is_live(Utc::now())))
+    }
+
+    async fn create_request(&self, request: &ApprovalRequest) -> Result<ApprovalRequest> {
+        let mut requests = self.requests.write().await;
+        Ok(requests.entry(request.id.clone()).or_insert_with(|| request.clone()).clone())
+    }
+
+    async fn get_request(&self, id: &str) -> Result<Option<ApprovalRequest>> {
+        Ok(self.requests.read().await.get(id).cloned())
+    }
+
+    async fn replace_request(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: u64,
+    ) -> Result<bool> {
+        let mut requests = self.requests.write().await;
+        match requests.get_mut(&request.id) {
+            Some(stored) if stored.version == expected_version => {
+                *stored = request.clone();
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn list_requests(&self, query: &ApprovalRequestQuery) -> Result<Vec<ApprovalRequest>> {
+        let requests = self.requests.read().await;
+        let mut matching: Vec<ApprovalRequest> =
+            requests.values().filter(|request| query.matches(request)).cloned().collect();
+        matching.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+        matching.truncate(query.limit);
+        Ok(matching)
+    }
+
+    async fn put_delegation(&self, delegation: &ApprovalDelegation) -> Result<()> {
+        self.delegations.write().await.insert(delegation.id.clone(), delegation.clone());
+        Ok(())
+    }
+
+    async fn delegations_to(&self, to: &SubjectRef) -> Result<Vec<ApprovalDelegation>> {
+        Ok(self
+            .delegations
+            .read()
+            .await
+            .values()
+            .filter(|delegation| delegation.to == *to)
+            .cloned()
+            .collect())
+    }
+
+    async fn delete_delegation(&self, id: &str) -> Result<bool> {
+        Ok(self.delegations.write().await.remove(id).is_some())
     }
 }
 
@@ -1116,30 +1295,100 @@ pub async fn authorize_tool_call(
         function_call_id: Some(function_call_id),
         args: args.clone(),
     };
-    match resolve_confirmation(gate, &request).await? {
-        Some(ToolConfirmationDecision::Approve) => {
+    let Some(approval) = resolve_confirmation(gate, &request).await? else {
+        if let Some(store) = &config.approval_store {
+            store.record_pending(&gate.scope, &request).await?;
+        }
+        let reason = match approval_reason {
+            Some(reason) => format!("Tool '{tool_name}' requires confirmation: {reason}"),
+            None => format!("Tool '{tool_name}' requires confirmation"),
+        };
+        if let Some(service) = &config.approval_service {
+            let call = crate::approval::ApprovalCall {
+                scope: gate.scope.clone(),
+                request: request.clone(),
+                reason: reason.clone(),
+                agent_name: gate.agent_name.to_string(),
+                invocation_id: gate.invocation_id.to_string(),
+                run_id: config.durable_run_id.clone(),
+                // Integration point: the agent-identity workstream supplies the acting
+                // context once `ActingContext` is carried on the invocation.
+                acting: None,
+            };
+            service.submit_call(call).await?;
+        }
+        return Ok(ToolAuthorization::Pending { request, reason });
+    };
+    match approval.decision {
+        ToolConfirmationDecision::Approve => {
             // A freeze can land while a person is deciding.
             config.check_governance()?;
-            Ok(ToolAuthorization::Execute {
-                args,
-                confirmation: Some(ToolConfirmationDecision::Approve),
-            })
+            match approval.edited_args {
+                Some(edited) if edited != args => {
+                    authorize_edited_args(gate, &tool_name, effect, edited).await
+                }
+                _ => Ok(ToolAuthorization::Execute {
+                    args,
+                    confirmation: Some(ToolConfirmationDecision::Approve),
+                }),
+            }
         }
-        Some(ToolConfirmationDecision::Deny) => Ok(ToolAuthorization::Refuse {
-            reason: format!("Tool '{tool_name}' execution denied by confirmation policy"),
+        ToolConfirmationDecision::Deny => Ok(ToolAuthorization::Refuse {
+            reason: match approval.message {
+                Some(message) => {
+                    format!("Tool '{tool_name}' was not run; the approver declined it: {message}")
+                }
+                None => format!("Tool '{tool_name}' execution denied by confirmation policy"),
+            },
             confirmation: Some(ToolConfirmationDecision::Deny),
         }),
-        None => {
-            if let Some(store) = &config.approval_store {
-                store.record_pending(&gate.scope, &request).await?;
+    }
+}
+
+/// Re-authorizes a call whose approver substituted `edited` for its arguments.
+///
+/// The edit is a new call with a new fingerprint, so it passes the policy and the tool
+/// screen again; the approval stands in for confirmation, because the approver chose
+/// exactly these arguments. A policy denial of the edit, or of a screen's rewrite of
+/// it, refuses the call.
+async fn authorize_edited_args(
+    gate: &ToolGate<'_>,
+    tool_name: &str,
+    effect: ToolEffect,
+    edited: Value,
+) -> Result<ToolAuthorization> {
+    let mut decision = evaluate_policy(gate, tool_name, &edited, effect).await;
+    let mut args = edited;
+    if !matches!(decision, PolicyDecision::Deny { .. })
+        && let Some(screen) = gate.screen
+    {
+        match screen.screen(tool_name, &args).await {
+            Ok(screened) => {
+                if screened != args {
+                    let again = evaluate_policy(gate, tool_name, &screened, effect).await;
+                    decision = decision.stricter(again);
+                    args = screened;
+                }
             }
-            let reason = match approval_reason {
-                Some(reason) => format!("Tool '{tool_name}' requires confirmation: {reason}"),
-                None => format!("Tool '{tool_name}' requires confirmation"),
-            };
-            Ok(ToolAuthorization::Pending { request, reason })
+            Err(reason) => {
+                return Ok(ToolAuthorization::Refuse {
+                    reason,
+                    confirmation: Some(ToolConfirmationDecision::Approve),
+                });
+            }
         }
     }
+    if let PolicyDecision::Deny { reason } = decision {
+        tracing::info!(tool.name = %tool_name, policy.reason = %reason, "edited tool call denied by policy");
+        return Ok(ToolAuthorization::Refuse {
+            reason: format!(
+                "Tool '{tool_name}' with the approver's edited arguments denied by policy: {reason}"
+            ),
+            confirmation: Some(ToolConfirmationDecision::Approve),
+        });
+    }
+    tracing::info!(tool.name = %tool_name, "executing tool call with the approver's edited arguments");
+    Ok(ToolAuthorization::Execute { args, confirmation: Some(ToolConfirmationDecision::Approve) })
 }
 
 async fn evaluate_policy(
@@ -1168,9 +1417,13 @@ async fn evaluate_policy(
 async fn resolve_confirmation(
     gate: &ToolGate<'_>,
     request: &ToolConfirmationRequest,
-) -> Result<Option<ToolConfirmationDecision>> {
+) -> Result<Option<ToolApproval>> {
     let config = gate.run_config;
     let fingerprint = request.fingerprint();
+    let bare = |decision: ToolConfirmationDecision| match decision {
+        ToolConfirmationDecision::Approve => ToolApproval::approve(),
+        ToolConfirmationDecision::Deny => ToolApproval::deny(),
+    };
 
     if let Some(call_id) = request.function_call_id.as_deref()
         && let Some(decision) = config.tool_confirmation_decisions.get(call_id)
@@ -1181,21 +1434,21 @@ async fn resolve_confirmation(
                 function_call.id = %call_id,
                 "confirmation decision does not match this call's arguments, treating as unconfirmed"
             ),
-            _ => return Ok(Some(*decision)),
+            _ => return Ok(Some(bare(*decision))),
         }
     }
 
     if let Some(approval) = config.tool_approvals.get(&fingerprint) {
         if approval.is_live(Utc::now()) {
-            return Ok(Some(approval.decision));
+            return Ok(Some(approval.clone()));
         }
         tracing::debug!(tool.name = %request.tool_name, "approval for this call has expired");
     }
 
     if let Some(store) = &config.approval_store
-        && let Some(decision) = store.take_decision(&gate.scope, &fingerprint).await?
+        && let Some(approval) = store.take_approval(&gate.scope, &fingerprint).await?
     {
-        return Ok(Some(decision));
+        return Ok(Some(approval));
     }
 
     let Some(handler) = config.tool_confirmation_handler.as_ref() else {
@@ -1225,7 +1478,7 @@ async fn resolve_confirmation(
         None => decide.await,
     };
     match decided {
-        Ok(Ok(decision)) => Ok(Some(decision)),
+        Ok(Ok(decision)) => Ok(Some(bare(decision))),
         Ok(Err(error)) => Err(error),
         Err(_) => {
             tracing::warn!(
@@ -1233,7 +1486,7 @@ async fn resolve_confirmation(
                 timeout_secs = timeout.as_secs(),
                 "confirmation handler did not decide in time, denying the call"
             );
-            Ok(Some(ToolConfirmationDecision::Deny))
+            Ok(Some(ToolApproval::deny()))
         }
     }
 }
@@ -1730,7 +1983,10 @@ impl BuiltinToolGovernor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DeclarativePolicy, PolicyRule, ToolConfirmationHandler, tool_call_fingerprint};
+    use crate::{
+        ApprovalService, DeclarativePolicy, PolicyRule, ToolConfirmationHandler,
+        tool_call_fingerprint,
+    };
     use serde_json::json;
 
     fn gate(config: &RunConfig) -> ToolGate<'_> {
@@ -2321,5 +2577,138 @@ mod tests {
             panic!("expected a pending call, got {outcome:?}");
         };
         assert_eq!(reason, "Tool 'pay' requires confirmation: money moves");
+    }
+
+    fn transfer_policy() -> DeclarativePolicy {
+        // Up to 1000 needs approval; anything larger is denied outright.
+        DeclarativePolicy::builder()
+            .rule(
+                PolicyRule::require_approval("pay", "money moves")
+                    .when(crate::ArgPredicate::at_most("/amount", 1000.0)),
+            )
+            .deny("pay", "over the transfer limit")
+            .build()
+    }
+
+    #[tokio::test]
+    async fn an_edited_approval_is_checked_against_the_policy_again() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let config = RunConfig::builder()
+            .tool_policy(Arc::new(transfer_policy()))
+            .approval_store(store.clone())
+            .build();
+        let scope = ApprovalScope::new("app", "user", "session");
+        let call = || GovernedCall::new("pay", "c1", json!({ "amount": 900 }));
+        let fingerprint = tool_call_fingerprint("pay", &json!({ "amount": 900 }));
+
+        // An edit the policy allows executes with the edited arguments.
+        let edit = ToolApproval::approve().with_edited_args(json!({ "amount": 400 }));
+        store.decide(&scope, &fingerprint, edit).await.unwrap();
+        assert_eq!(
+            authorize_tool_call(&gate(&config), call()).await.unwrap(),
+            ToolAuthorization::Execute {
+                args: json!({ "amount": 400 }),
+                confirmation: Some(ToolConfirmationDecision::Approve),
+            }
+        );
+
+        // An edit past the limit is a new call the policy denies.
+        let edit = ToolApproval::approve().with_edited_args(json!({ "amount": 5000 }));
+        store.decide(&scope, &fingerprint, edit).await.unwrap();
+        let ToolAuthorization::Refuse { reason, confirmation } =
+            authorize_tool_call(&gate(&config), call()).await.unwrap()
+        else {
+            panic!("expected the edited call to be refused");
+        };
+        assert!(reason.contains("over the transfer limit"), "{reason}");
+        assert_eq!(confirmation, Some(ToolConfirmationDecision::Approve));
+
+        // A screen that refuses the edited arguments refuses the call.
+        struct NoLargeAmounts;
+        #[async_trait]
+        impl ToolCallScreen for NoLargeAmounts {
+            async fn screen(
+                &self,
+                _tool: &str,
+                args: &Value,
+            ) -> std::result::Result<Value, String> {
+                if args["amount"].as_f64().unwrap_or(0.0) > 500.0 {
+                    Err("screened out".into())
+                } else {
+                    Ok(args.clone())
+                }
+            }
+        }
+        let screen = NoLargeAmounts;
+        let screened = gate(&config).with_screen(&screen);
+        let small = || GovernedCall::new("pay", "c2", json!({ "amount": 100 }));
+        let edit = ToolApproval::approve().with_edited_args(json!({ "amount": 800 }));
+        let small_fingerprint = tool_call_fingerprint("pay", &json!({ "amount": 100 }));
+        store.decide(&scope, &small_fingerprint, edit).await.unwrap();
+        assert_eq!(
+            authorize_tool_call(&screened, small()).await.unwrap(),
+            ToolAuthorization::Refuse {
+                reason: "screened out".into(),
+                confirmation: Some(ToolConfirmationDecision::Approve),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_denial_reports_the_approvers_message() {
+        let config = RunConfig::builder()
+            .tool_approval(
+                tool_call_fingerprint("pay", &json!({})),
+                ToolApproval::deny().with_message("the approver responded instead: use INV-43"),
+            )
+            .build();
+        let call = GovernedCall::new("pay", "c", json!({})).requiring_confirmation(true);
+        let ToolAuthorization::Refuse { reason, .. } =
+            authorize_tool_call(&gate(&config), call).await.unwrap()
+        else {
+            panic!("expected a refusal");
+        };
+        assert_eq!(
+            reason,
+            "Tool 'pay' was not run; the approver declined it: the approver responded instead: use INV-43"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_held_call_is_submitted_to_the_approval_service_once() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let service = Arc::new(
+            crate::StoreApprovalService::new(store.clone())
+                .with_router(crate::ApprovalPolicy::new([crate::ApproverSelector::group("ops")])),
+        );
+        let config =
+            RunConfig::builder().approval_service(service.clone()).durable_run_id("run-7").build();
+        let call =
+            || GovernedCall::new("pay", "c1", json!({ "amount": 3 })).requiring_confirmation(true);
+        for _ in 0..2 {
+            assert!(matches!(
+                authorize_tool_call(&gate(&config), call()).await.unwrap(),
+                ToolAuthorization::Pending { .. }
+            ));
+        }
+        let inbox = service.inbox(crate::InboxQuery::for_group("ops")).await.unwrap();
+        assert_eq!(inbox.items.len(), 1, "holding the call again reuses its request");
+        let request = &inbox.items[0];
+        assert_eq!(request.run_id.as_deref(), Some("run-7"));
+        assert_eq!(request.requester, Some(SubjectRef::human("user")));
+        assert_eq!(request.summary, "Tool 'pay' requires confirmation");
+
+        service
+            .decide(
+                &request.id,
+                request.version,
+                crate::ApprovalDecision::approve(SubjectRef::human("ana")).with_groups(["ops"]),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            authorize_tool_call(&gate(&config), call()).await.unwrap(),
+            ToolAuthorization::Execute { .. }
+        ));
     }
 }

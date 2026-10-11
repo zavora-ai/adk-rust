@@ -449,6 +449,11 @@ async fn an_undecided_held_call_stays_held_until_a_decision_arrives() {
         model.function_responses(),
         vec![(Some("call-1".to_string()), json!({ "status": "sent" }))]
     );
+    // The model answered "any news?" after the hold, so the resumed result sits before
+    // that answer; the request still ends on a user turn, not a model prefill.
+    let last_request = model.requests.lock().unwrap().last().cloned().unwrap();
+    let last = last_request.contents.last().unwrap();
+    assert_eq!(last.role, "user", "{:?}", last_request.contents);
 }
 
 #[tokio::test]

@@ -157,3 +157,7 @@ impl adk_core::conformance::AuditLogStoreHarness for FileDatabase {
 mod audit_log {
     adk_core::audit_log_store_conformance_tests!(harness = super::FileDatabase::new(),);
 }
+
+mod approval_service {
+    adk_core::approval_service_conformance_tests!(harness = super::FileDatabase::new());
+}

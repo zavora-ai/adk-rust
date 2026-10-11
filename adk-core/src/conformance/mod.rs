@@ -9,6 +9,7 @@
 //! | [`SpendLedger`](crate::SpendLedger) | [`SpendLedgerHarness`](crate::conformance::SpendLedgerHarness) | [`spend_ledger_conformance_tests!`](crate::spend_ledger_conformance_tests) | [`spend_ledger`](crate::conformance::spend_ledger) |
 //! | [`ActionLedger`](crate::ActionLedger) | [`ActionLedgerHarness`](crate::conformance::ActionLedgerHarness) | [`action_ledger_conformance_tests!`](crate::action_ledger_conformance_tests) | [`action_ledger`](crate::conformance::action_ledger) |
 //! | [`ApprovalStore`](crate::ApprovalStore) | [`ApprovalStoreHarness`](crate::conformance::ApprovalStoreHarness) | [`approval_store_conformance_tests!`](crate::approval_store_conformance_tests) | [`approval_store`](crate::conformance::approval_store) |
+//! | [`StoreApprovalService`](crate::StoreApprovalService) over an [`ApprovalStore`](crate::ApprovalStore) | [`ApprovalStoreHarness`](crate::conformance::ApprovalStoreHarness) | [`approval_service_conformance_tests!`](crate::approval_service_conformance_tests) | [`approval_service`](crate::conformance::approval_service) |
 //! | [`LeaseStore`](crate::LeaseStore) | [`LeaseStoreHarness`](crate::conformance::LeaseStoreHarness) | [`lease_store_conformance_tests!`](crate::lease_store_conformance_tests) | [`lease_store`](crate::conformance::lease_store) |
 //! | [`DurableRunStore`](crate::DurableRunStore) | [`RunStoreHarness`](crate::conformance::RunStoreHarness) | [`run_store_conformance_tests!`](crate::run_store_conformance_tests) | [`run_store`](crate::conformance::run_store) |
 //! | [`ScheduleStore`](crate::ScheduleStore) | [`ScheduleStoreHarness`](crate::conformance::ScheduleStoreHarness) | [`schedule_store_conformance_tests!`](crate::schedule_store_conformance_tests) | [`schedule_store`](crate::conformance::schedule_store) |
@@ -60,6 +61,7 @@
 //! ```
 
 pub mod action_ledger;
+pub mod approval_service;
 pub mod approval_store;
 pub mod audit_log_store;
 pub mod governance_state_store;
@@ -233,6 +235,109 @@ macro_rules! approval_store_conformance_tests {
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn approval_records_survive_a_restart() {
             $crate::conformance::approval_store::records_survive_a_restart(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_decisions_carry_edits_and_messages() {
+            $crate::conformance::approval_store::decisions_carry_edits_and_messages(&$harness)
+                .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_requests_are_created_once() {
+            $crate::conformance::approval_store::requests_are_created_once(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_concurrent_replace_has_one_winner() {
+            $crate::conformance::approval_store::concurrent_replace_has_one_winner(&$harness)
+                .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_requests_list_in_order_with_filters() {
+            $crate::conformance::approval_store::requests_list_in_order_with_filters(&$harness)
+                .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_delegations_round_trip() {
+            $crate::conformance::approval_store::delegations_round_trip(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_requests_survive_a_restart() {
+            $crate::conformance::approval_store::approval_requests_survive_a_restart(&$harness)
+                .await;
+        }
+    };
+}
+
+/// Generates one test per [`approval_service`] case for an [`ApprovalStoreHarness`]:
+/// the [`StoreApprovalService`](crate::StoreApprovalService) over the harness's store.
+///
+/// See the [module documentation](crate::conformance) for an example.
+#[macro_export]
+macro_rules! approval_service_conformance_tests {
+    ($(#[$attr:meta])* harness = $harness:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_expiry_denies_the_call() {
+            $crate::conformance::approval_service::expiry_denies_the_call(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_quorum_needs_distinct_approvers() {
+            $crate::conformance::approval_service::quorum_needs_distinct_approvers(&$harness)
+                .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_self_approval_is_refused() {
+            $crate::conformance::approval_service::self_approval_is_refused(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_delegation_applies_only_in_its_window() {
+            $crate::conformance::approval_service::delegation_applies_only_in_its_window(
+                &$harness,
+            )
+            .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_concurrent_decide_has_one_winner() {
+            $crate::conformance::approval_service::concurrent_decide_has_one_winner(&$harness)
+                .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_edit_substitutes_arguments() {
+            $crate::conformance::approval_service::edit_substitutes_arguments(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_escalation_fires_once() {
+            $crate::conformance::approval_service::escalation_fires_once(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_inbox_lists_what_an_approver_may_decide() {
+            $crate::conformance::approval_service::inbox_lists_what_an_approver_may_decide(
+                &$harness,
+            )
+            .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_cancel_and_reject_deny_the_call() {
+            $crate::conformance::approval_service::cancel_and_reject_deny_the_call(&$harness)
+                .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_requests_survive_a_restart() {
+            $crate::conformance::approval_service::requests_survive_a_restart(&$harness).await;
         }
     };
 }

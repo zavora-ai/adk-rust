@@ -78,3 +78,10 @@ mod approvals {
         harness = super::Redis,
     }
 }
+
+mod approval_service {
+    adk_core::approval_service_conformance_tests! {
+        #[ignore = "requires a Redis server at REDIS_URL"]
+        harness = super::Redis,
+    }
+}

@@ -82,3 +82,10 @@ mod approvals {
         harness = super::Mongo,
     }
 }
+
+mod approval_service {
+    adk_core::approval_service_conformance_tests! {
+        #[ignore = "requires a MongoDB server at MONGODB_URL"]
+        harness = super::Mongo,
+    }
+}

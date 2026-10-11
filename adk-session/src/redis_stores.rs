@@ -15,6 +15,11 @@
 //! | `adk:action:<key>` | Hash | One ledgered call: tool name, argument digest, effect, start time, outcome |
 //! | `adk:approval:{<app>:<user>:<session>}:pending` | Hash | Fingerprint → JSON [`PendingApproval`](adk_core::PendingApproval) |
 //! | `adk:approval:{<app>:<user>:<session>}:decisions` | Hash | Fingerprint → JSON [`ToolApproval`](adk_core::ToolApproval) |
+//! | `adk:{approvals}:request:<id>` | String | JSON [`ApprovalRequest`](adk_core::ApprovalRequest) |
+//! | `adk:{approvals}:versions` | Hash | Request ID → version, the compare-and-swap token |
+//! | `adk:{approvals}:index:all`, `:index:open`, `:index:state:<state>`, `:index:app:<app>` | Sorted set | Request IDs scored by creation time (µs); ties list by ID |
+//! | `adk:{approvals}:delegation:<id>` | String | JSON [`ApprovalDelegation`](adk_core::ApprovalDelegation) |
+//! | `adk:{approvals}:delegates:<kind>:<id>` | Sorted set | IDs of the delegations granted to one subject, all scored 0 so they list by ID |
 //!
 //! Organization, app, user, and session segments are percent-encoded (`%`, `:`, `{`,
 //! `}`), so an identifier cannot spill into the next segment or move a key's hash slot.
@@ -31,6 +36,12 @@
 //! | `complete` | One script sets the outcome only when the record exists and has none |
 //! | `decide` | One script clears the pending entry and writes the decision |
 //! | `take_decision` | One script reads and deletes the decision |
+//! | `create_request` | One script writes the request and its index entries only when the ID is absent |
+//! | `replace_request` | One script compares the stored version, then rewrites the request and moves its index entries |
+//!
+//! Approval requests and delegations share the `{approvals}` hash tag, so each script's
+//! keys sit in one Redis Cluster slot; a request's application never changes after it
+//! is created, so its application index entry is written once.
 //!
 //! Reservation holds are removed when settled. A hold that is never settled stays in
 //! the holds hash, without counting once it expires, so a late commit still records
@@ -42,8 +53,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_core::action_ledger::{already_completed_error, duplicate_key_error, missing_key_error};
+use adk_core::principal::SubjectRef;
 use adk_core::{
-    ActionLedger, ActionOutcome, ActionRecord, AdkError, ApprovalScope, ApprovalStore, Clock,
+    ActionLedger, ActionOutcome, ActionRecord, AdkError, ApprovalDelegation, ApprovalRequest,
+    ApprovalRequestQuery, ApprovalScope, ApprovalState, ApprovalStore, Clock,
     DEFAULT_RESERVATION_TTL, ErrorCategory, ErrorComponent, PendingApproval, ReservationId, Result,
     SpendError, SpendKey, SpendLedger, SpendLimits, SpendPeriod, SystemClock, ToolApproval,
     ToolConfirmationDecision, ToolConfirmationRequest, ToolEffect,
@@ -616,6 +629,59 @@ if raw then redis.call('HDEL', KEYS[1], ARGV[1]) end
 return raw
 "#;
 
+/// KEYS: record, versions, all, open, app, state. ARGV: id, version, record JSON, score
+/// (creation time, µs), open (`1` or `0`). Returns the stored record JSON.
+const CREATE_REQUEST_SCRIPT: &str = r#"
+local existing = redis.call('GET', KEYS[1])
+if existing then return existing end
+redis.call('SET', KEYS[1], ARGV[3])
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
+redis.call('ZADD', KEYS[3], ARGV[4], ARGV[1])
+if ARGV[5] == '1' then redis.call('ZADD', KEYS[4], ARGV[4], ARGV[1]) end
+redis.call('ZADD', KEYS[5], ARGV[4], ARGV[1])
+redis.call('ZADD', KEYS[6], ARGV[4], ARGV[1])
+return ARGV[3]
+"#;
+
+/// KEYS: record, versions, all, open, app, then the six state indexes in
+/// [`ApprovalState::ALL`] order. ARGV: id, expected version, new version, record JSON,
+/// score, open (`1` or `0`), position of the new state (1-based). Returns 1 when written.
+const REPLACE_REQUEST_SCRIPT: &str = r#"
+local current = redis.call('HGET', KEYS[2], ARGV[1])
+if (not current) or current ~= ARGV[2] then return 0 end
+redis.call('SET', KEYS[1], ARGV[4])
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[3])
+redis.call('ZADD', KEYS[3], ARGV[5], ARGV[1])
+if ARGV[6] == '1' then
+  redis.call('ZADD', KEYS[4], ARGV[5], ARGV[1])
+else
+  redis.call('ZREM', KEYS[4], ARGV[1])
+end
+redis.call('ZADD', KEYS[5], ARGV[5], ARGV[1])
+for i = 6, 11 do redis.call('ZREM', KEYS[i], ARGV[1]) end
+redis.call('ZADD', KEYS[5 + tonumber(ARGV[7])], ARGV[5], ARGV[1])
+return 1
+"#;
+
+/// KEYS: delegation, new delegate index, previous delegate index. ARGV: id, JSON.
+const PUT_DELEGATION_SCRIPT: &str = r#"
+redis.call('ZREM', KEYS[3], ARGV[1])
+redis.call('SET', KEYS[1], ARGV[2])
+redis.call('ZADD', KEYS[2], 0, ARGV[1])
+return 1
+"#;
+
+/// KEYS: delegation, delegate index. ARGV: id. Returns 1 when a delegation was removed.
+const DELETE_DELEGATION_SCRIPT: &str = r#"
+redis.call('ZREM', KEYS[2], ARGV[1])
+return redis.call('DEL', KEYS[1])
+"#;
+
+const APPROVALS_PREFIX: &str = "adk:{approvals}";
+
+/// How many index entries one `list_requests` round trip reads.
+const LIST_BATCH: i64 = 200;
+
 fn approval_error(message: String) -> AdkError {
     AdkError::new(
         ErrorComponent::Session,
@@ -623,6 +689,48 @@ fn approval_error(message: String) -> AdkError {
         "session.approval_store.storage",
         message,
     )
+}
+
+fn request_key(id: &str) -> String {
+    format!("{APPROVALS_PREFIX}:request:{}", encode_segment(id))
+}
+
+fn versions_key() -> String {
+    format!("{APPROVALS_PREFIX}:versions")
+}
+
+fn index_key(index: &str) -> String {
+    format!("{APPROVALS_PREFIX}:index:{index}")
+}
+
+fn state_index(state: ApprovalState) -> String {
+    index_key(&format!("state:{}", state.as_str()))
+}
+
+fn app_index(app_name: &str) -> String {
+    index_key(&format!("app:{}", encode_segment(app_name)))
+}
+
+fn delegation_key(id: &str) -> String {
+    format!("{APPROVALS_PREFIX}:delegation:{}", encode_segment(id))
+}
+
+fn delegates_key(subject: &SubjectRef) -> Result<String> {
+    let kind = match serde_json::to_value(subject.kind) {
+        Ok(serde_json::Value::String(kind)) => kind,
+        _ => return Err(approval_error("could not encode a subject kind".to_string())),
+    };
+    Ok(format!("{APPROVALS_PREFIX}:delegates:{kind}:{}", encode_segment(&subject.id)))
+}
+
+fn parse_json<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> Result<T> {
+    serde_json::from_str(json)
+        .map_err(|e| approval_error(format!("approval store {what} is corrupt: {e}")))
+}
+
+fn encode_json<T: serde::Serialize>(value: &T, what: &str) -> Result<String> {
+    serde_json::to_string(value)
+        .map_err(|e| approval_error(format!("approval store could not encode {what}: {e}")))
 }
 
 fn approval_prefix(scope: &ApprovalScope) -> String {
@@ -683,7 +791,28 @@ impl RedisApprovalStore {
     ///
     /// Returns an error when the server rejects a script.
     pub async fn migrate(&self) -> Result<()> {
-        load_scripts(&self.client, &[DECIDE_SCRIPT, TAKE_SCRIPT]).await.map_err(approval_error)
+        load_scripts(
+            &self.client,
+            &[
+                DECIDE_SCRIPT,
+                TAKE_SCRIPT,
+                CREATE_REQUEST_SCRIPT,
+                REPLACE_REQUEST_SCRIPT,
+                PUT_DELEGATION_SCRIPT,
+                DELETE_DELEGATION_SCRIPT,
+            ],
+        )
+        .await
+        .map_err(approval_error)
+    }
+
+    async fn read_delegation(&self, id: &str) -> Result<Option<ApprovalDelegation>> {
+        let stored: Option<String> = self
+            .client
+            .get(delegation_key(id))
+            .await
+            .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+        stored.map(|json| parse_json(&json, "delegation")).transpose()
     }
 }
 
@@ -756,6 +885,14 @@ impl ApprovalStore for RedisApprovalStore {
         scope: &ApprovalScope,
         fingerprint: &str,
     ) -> Result<Option<ToolConfirmationDecision>> {
+        Ok(self.take_approval(scope, fingerprint).await?.map(|approval| approval.decision))
+    }
+
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> Result<Option<ToolApproval>> {
         let taken: Option<String> = self
             .client
             .eval(
@@ -769,7 +906,7 @@ impl ApprovalStore for RedisApprovalStore {
             return Ok(None);
         };
         let approval = parse_approval(&json)?;
-        Ok(approval.is_live(Utc::now()).then_some(approval.decision))
+        Ok(approval.is_live(Utc::now()).then_some(approval))
     }
 
     async fn has_decision(&self, scope: &ApprovalScope, fingerprint: &str) -> Result<bool> {
@@ -782,6 +919,178 @@ impl ApprovalStore for RedisApprovalStore {
             Some(json) => Ok(parse_approval(&json)?.is_live(Utc::now())),
             None => Ok(false),
         }
+    }
+
+    async fn create_request(&self, request: &ApprovalRequest) -> Result<ApprovalRequest> {
+        let stored: String = self
+            .client
+            .eval(
+                CREATE_REQUEST_SCRIPT,
+                vec![
+                    request_key(&request.id),
+                    versions_key(),
+                    index_key("all"),
+                    index_key("open"),
+                    app_index(&request.scope.app_name),
+                    state_index(request.state),
+                ],
+                vec![
+                    request.id.clone(),
+                    request.version.to_string(),
+                    encode_json(request, "request")?,
+                    request.created_at.timestamp_micros().to_string(),
+                    if request.is_open() { "1" } else { "0" }.to_string(),
+                ],
+            )
+            .await
+            .map_err(|e| approval_error(format!("approval store write failed: {e}")))?;
+        parse_json(&stored, "request")
+    }
+
+    async fn get_request(&self, id: &str) -> Result<Option<ApprovalRequest>> {
+        let stored: Option<String> = self
+            .client
+            .get(request_key(id))
+            .await
+            .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+        stored.map(|json| parse_json(&json, "request")).transpose()
+    }
+
+    async fn replace_request(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: u64,
+    ) -> Result<bool> {
+        let mut keys = vec![
+            request_key(&request.id),
+            versions_key(),
+            index_key("all"),
+            index_key("open"),
+            app_index(&request.scope.app_name),
+        ];
+        keys.extend(ApprovalState::ALL.into_iter().map(state_index));
+        let position = ApprovalState::ALL
+            .iter()
+            .position(|state| *state == request.state)
+            .map_or(1, |index| index + 1);
+        let written: i64 = self
+            .client
+            .eval(
+                REPLACE_REQUEST_SCRIPT,
+                keys,
+                vec![
+                    request.id.clone(),
+                    expected_version.to_string(),
+                    request.version.to_string(),
+                    encode_json(request, "request")?,
+                    request.created_at.timestamp_micros().to_string(),
+                    if request.is_open() { "1" } else { "0" }.to_string(),
+                    position.to_string(),
+                ],
+            )
+            .await
+            .map_err(|e| approval_error(format!("approval store write failed: {e}")))?;
+        Ok(written == 1)
+    }
+
+    async fn list_requests(&self, query: &ApprovalRequestQuery) -> Result<Vec<ApprovalRequest>> {
+        // The most selective index the query names; `matches` applies the rest.
+        let index = match (&query.app_name, query.open_only, query.states.as_slice()) {
+            (Some(app), _, _) => app_index(app),
+            (None, true, _) => index_key("open"),
+            (None, false, [state]) => state_index(*state),
+            (None, false, _) => index_key("all"),
+        };
+        let min =
+            query.after.as_ref().map_or(i64::MIN, |cursor| cursor.created_at.timestamp_micros());
+        let mut found = Vec::new();
+        let mut offset = 0;
+        while found.len() < query.limit {
+            let ids: Vec<String> = self
+                .client
+                .zrangebyscore(&index, min, "+inf", false, Some((offset, LIST_BATCH)))
+                .await
+                .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+            if ids.is_empty() {
+                break;
+            }
+            let keys: Vec<String> = ids.iter().map(|id| request_key(id)).collect();
+            let records: Vec<Option<String>> = self
+                .client
+                .mget(keys)
+                .await
+                .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+            for json in records.into_iter().flatten() {
+                let request: ApprovalRequest = parse_json(&json, "request")?;
+                if query.matches(&request) && found.len() < query.limit {
+                    found.push(request);
+                }
+            }
+            if i64::try_from(ids.len()).unwrap_or(LIST_BATCH) < LIST_BATCH {
+                break;
+            }
+            offset += LIST_BATCH;
+        }
+        Ok(found)
+    }
+
+    async fn put_delegation(&self, delegation: &ApprovalDelegation) -> Result<()> {
+        let index = delegates_key(&delegation.to)?;
+        let previous = match self.read_delegation(&delegation.id).await? {
+            Some(previous) => delegates_key(&previous.to)?,
+            None => index.clone(),
+        };
+        let _: i64 = self
+            .client
+            .eval(
+                PUT_DELEGATION_SCRIPT,
+                vec![delegation_key(&delegation.id), index, previous],
+                vec![delegation.id.clone(), encode_json(delegation, "delegation")?],
+            )
+            .await
+            .map_err(|e| approval_error(format!("approval store write failed: {e}")))?;
+        Ok(())
+    }
+
+    async fn delegations_to(&self, to: &SubjectRef) -> Result<Vec<ApprovalDelegation>> {
+        let ids: Vec<String> = self
+            .client
+            .zrange(delegates_key(to)?, 0, -1, None, false, None, false)
+            .await
+            .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys: Vec<String> = ids.iter().map(|id| delegation_key(id)).collect();
+        let records: Vec<Option<String>> = self
+            .client
+            .mget(keys)
+            .await
+            .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
+        let mut delegations = Vec::new();
+        for json in records.into_iter().flatten() {
+            let delegation: ApprovalDelegation = parse_json(&json, "delegation")?;
+            if delegation.to == *to {
+                delegations.push(delegation);
+            }
+        }
+        Ok(delegations)
+    }
+
+    async fn delete_delegation(&self, id: &str) -> Result<bool> {
+        let Some(stored) = self.read_delegation(id).await? else {
+            return Ok(false);
+        };
+        let removed: i64 = self
+            .client
+            .eval(
+                DELETE_DELEGATION_SCRIPT,
+                vec![delegation_key(id), delegates_key(&stored.to)?],
+                vec![id.to_string()],
+            )
+            .await
+            .map_err(|e| approval_error(format!("approval store write failed: {e}")))?;
+        Ok(removed == 1)
     }
 }
 

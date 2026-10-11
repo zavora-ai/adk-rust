@@ -85,6 +85,9 @@ pub mod agent;
 pub mod agent_invoker;
 /// Dynamic agent loading by name.
 pub mod agent_loader;
+/// Approval service: an inbox of approval requests with quorum, delegation, escalation,
+/// and expiry over an approval store.
+pub mod approval;
 /// Append-only audit log records and the store that holds them.
 pub mod audit_log;
 /// Run budgets: limits on model calls, tokens, cost, wall time, and tool calls.
@@ -157,6 +160,14 @@ pub use agent::{
 };
 pub use agent_invoker::AgentInvoker;
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
+pub use approval::{
+    APPROVAL_REAPPLY_GRACE, ApprovalAction, ApprovalCall, ApprovalCursor, ApprovalDecision,
+    ApprovalDelegation, ApprovalEventKind, ApprovalNotification, ApprovalNotifier, ApprovalPolicy,
+    ApprovalRequest, ApprovalRequestQuery, ApprovalRisk, ApprovalRoute, ApprovalRouter,
+    ApprovalService, ApprovalState, ApprovalTick, ApproverSelector, DEFAULT_APPROVAL_PAGE,
+    DelegationScope, DelegationWindow, EscalationStep, ExpiryAction, InboxPage, InboxQuery,
+    StoreApprovalService,
+};
 pub use budget::{
     BUDGET_LIMIT_KEY, BUDGET_RECORDED_KEY, BudgetExceeded, BudgetLimit, BudgetTracker, BudgetUsage,
     ModelCallMeter, RunBudget, budget_exceeded_event, generate_with_budget, meter_stream,

@@ -417,6 +417,21 @@ impl PromptConfig {
                     .iter()
                     .any(|part| !matches!(part, Part::Text { text } if text.trim().is_empty()))
         });
+        // Without its empty turn, a resuming run whose model already answered after the
+        // held call would end on a model message, which providers read as a prefill and
+        // models without prefill support (Anthropic's newer ones) reject.
+        let empty_turn = current_user_content
+            .parts
+            .iter()
+            .all(|part| matches!(part, Part::Text { text } if text.trim().is_empty()));
+        if empty_turn
+            && session_history.last().is_some_and(|last| {
+                last.role == "model"
+                    && !last.parts.iter().any(|part| matches!(part, Part::FunctionCall { .. }))
+            })
+        {
+            session_history.push(Content::new("user").with_text(RESUMED_TURN_NOTE));
+        }
 
         Ok(match self.include_contents {
             adk_core::IncludeContents::None => {
@@ -430,6 +445,11 @@ impl PromptConfig {
         })
     }
 }
+
+/// The user turn a run without user input sends when the conversation would otherwise
+/// end on a model message.
+const RESUMED_TURN_NOTE: &str =
+    "(No new message from the user. Continue from the tool results above.)";
 
 struct ToolSetup {
     tools: Vec<Arc<dyn Tool>>,

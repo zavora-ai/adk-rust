@@ -305,6 +305,7 @@ rewrites and immediately before `Tool::execute`:
 | Policy | `ToolPolicy`, `DeclarativePolicy` | Allow, deny, or require approval; `DeclarativePolicy` denies unlisted tools |
 | Screen | `ToolCallScreen` | The agent's guardrails; a rewrite is checked against the policy again |
 | Confirmation | `ToolApproval`, `ApprovalStore` | Decisions bind to the call's fingerprint, so they survive a re-issued call ID |
+| Approval service | `ApprovalService`, `StoreApprovalService`, `ApprovalPolicy` | An inbox over the approval store: quorum, delegation, escalation, expiry, and edit / reject / respond actions with compare-and-swap decisions |
 
 ```rust
 use adk_core::{ArgPredicate, DeclarativePolicy, PolicyDecision, PolicyRule, ToolPolicyRequest};

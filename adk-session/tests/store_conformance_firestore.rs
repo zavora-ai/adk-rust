@@ -87,3 +87,10 @@ mod approvals {
         harness = super::Approvals,
     );
 }
+
+mod approval_service {
+    adk_core::approval_service_conformance_tests!(
+        #[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+        harness = super::Approvals,
+    );
+}

@@ -71,6 +71,8 @@ a2a-interceptors = []
 openai-webhooks = ["dep:hmac", "dep:sha2", "dep:hex"]
 # Enable background run endpoints and cron job management
 background = ["adk-core/cron"]
+# Approval inbox endpoints, the approval ticker, and the signed approval webhook notifier
+approvals = ["dep:hmac", "dep:sha2"]
 # Enable the Gemini Enterprise Agent Platform (ReasoningEngine) dispatch surface
 # and the turnkey serve_agent_engine entrypoint (tokio/net for the listener)
 agent-engine = ["dep:adk-memory", "tokio/net"]
