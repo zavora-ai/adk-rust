@@ -93,6 +93,22 @@ pub trait ReadonlyContext: Send + Sync {
     /// Returns the user's input content for this invocation.
     fn user_content(&self) -> &Content;
 
+    /// Returns who the running agent is and on whose behalf it acts.
+    ///
+    /// The runtime's contexts answer from the run's
+    /// [`RunConfig::acting_context`], and wrapper contexts must forward this to the
+    /// context they wrap. The default is the identity ADK-Rust derives when none is
+    /// configured: [`ActingContext::derived`](crate::ActingContext::derived) from the app
+    /// name, agent name, user, and invocation.
+    fn acting_context(&self) -> crate::ActingContext {
+        crate::ActingContext::derived(
+            self.app_name(),
+            self.agent_name(),
+            self.user_id(),
+            self.invocation_id(),
+        )
+    }
+
     /// Returns the session state when the runtime exposes it to dynamic toolsets.
     ///
     /// The default keeps lightweight contexts and third-party implementations
@@ -998,9 +1014,45 @@ pub struct ToolConfirmationRequest {
     pub function_call_id: Option<String>,
     /// Arguments the tool would be called with.
     pub args: Value,
+    /// The agent that made the call and the subject it acted for.
+    ///
+    /// Recorded for the approver and the audit trail; it is not part of the
+    /// [`fingerprint`](Self::fingerprint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acting: Option<crate::ActingContext>,
 }
 
 impl ToolConfirmationRequest {
+    /// A request for a call to `tool_name` with `args`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::ToolConfirmationRequest;
+    /// use serde_json::json;
+    ///
+    /// let request = ToolConfirmationRequest::new("transfer", json!({ "amount": 5 }))
+    ///     .with_function_call_id("call-1");
+    /// assert_eq!(request.function_call_id.as_deref(), Some("call-1"));
+    /// ```
+    pub fn new(tool_name: impl Into<String>, args: Value) -> Self {
+        Self { tool_name: tool_name.into(), function_call_id: None, args, acting: None }
+    }
+
+    /// Sets the function call ID.
+    #[must_use]
+    pub fn with_function_call_id(mut self, id: impl Into<String>) -> Self {
+        self.function_call_id = Some(id.into());
+        self
+    }
+
+    /// Records the acting context of the agent that made the call.
+    #[must_use]
+    pub fn with_acting_context(mut self, acting: crate::ActingContext) -> Self {
+        self.acting = Some(acting);
+        self
+    }
+
     /// The call's fingerprint: its tool name and canonical arguments.
     ///
     /// This is the key a decision is recorded under in
@@ -1222,6 +1274,16 @@ pub struct RunConfig {
     /// whose record cannot be written does not happen. See
     /// [`AuditTrail`](crate::audit_log::AuditTrail).
     pub audit: Option<crate::audit_log::AuditTrail>,
+    /// Who the run's agents act as, and for whom.
+    ///
+    /// `None` uses the identity ADK-Rust derives for each agent:
+    /// `urn:adk:agent:{app}/{agent}`, acting for the run's user. When set, its principal
+    /// applies to every agent in the run, including transfer targets; an agent tool
+    /// delegating to another agent sets the delegate's context, with the delegating
+    /// agent appended to the delegation chain. The runner sets this from its
+    /// [`IdentitySource`](crate::IdentitySource) at the start of each run when it is `None`.
+    /// See [`acting_context_for`](Self::acting_context_for).
+    pub acting_context: Option<crate::ActingContext>,
 }
 
 impl Default for RunConfig {
@@ -1255,6 +1317,7 @@ impl Default for RunConfig {
             spend_ledger: None,
             llm_spend_estimate: None,
             audit: None,
+            acting_context: None,
         }
     }
 }
@@ -1289,6 +1352,49 @@ impl RunConfig {
     /// Returns the frozen control's `governance.frozen` error.
     pub fn check_governance(&self) -> Result<()> {
         self.governance.iter().try_for_each(crate::GovernanceControl::check)
+    }
+
+    /// The acting context of `agent_name` running in `invocation_id` for `user_id`.
+    ///
+    /// The configured [`acting_context`](Self::acting_context), with its invocation set to
+    /// `invocation_id` and, when it names no subject, acting for `user_id`; otherwise
+    /// [`ActingContext::derived`](crate::ActingContext::derived).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{AgentId, AgentPrincipal, RunConfig, SubjectRef};
+    ///
+    /// let derived = RunConfig::default().acting_context_for("shop", "cashier", "alice", "inv-1");
+    /// assert_eq!(derived.agent.id.as_str(), "urn:adk:agent:shop/cashier");
+    ///
+    /// let config = RunConfig::builder()
+    ///     .agent_principal(AgentPrincipal::new(AgentId::new("spiffe://shop/cashier")?))
+    ///     .build();
+    /// let configured = config.acting_context_for("shop", "cashier", "alice", "inv-1");
+    /// assert_eq!(configured.agent.id.as_str(), "spiffe://shop/cashier");
+    /// assert_eq!(configured.on_behalf_of, Some(SubjectRef::human("alice")));
+    /// assert_eq!(configured.invocation_id, "inv-1");
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn acting_context_for(
+        &self,
+        app_name: &str,
+        agent_name: &str,
+        user_id: &str,
+        invocation_id: &str,
+    ) -> crate::ActingContext {
+        match &self.acting_context {
+            Some(configured) => {
+                let mut acting = configured.clone();
+                acting.invocation_id = invocation_id.to_string();
+                if acting.on_behalf_of.is_none() && !user_id.is_empty() {
+                    acting.on_behalf_of = Some(crate::SubjectRef::human(user_id));
+                }
+                acting
+            }
+            None => crate::ActingContext::derived(app_name, agent_name, user_id, invocation_id),
+        }
     }
 }
 
@@ -1515,6 +1621,20 @@ impl RunConfigBuilder {
     /// See [`RunConfig::llm_spend_estimate`].
     pub fn llm_spend_estimate(mut self, estimate: crate::LlmSpendEstimate) -> Self {
         self.config.llm_spend_estimate = Some(estimate);
+        self
+    }
+
+    /// Sets who the run's agents act as, and for whom. See [`RunConfig::acting_context`].
+    pub fn acting_context(mut self, acting: crate::ActingContext) -> Self {
+        self.config.acting_context = Some(acting);
+        self
+    }
+
+    /// Sets the principal every agent in the run acts as, acting for the run's user.
+    ///
+    /// See [`RunConfig::acting_context`].
+    pub fn agent_principal(mut self, principal: crate::AgentPrincipal) -> Self {
+        self.config.acting_context = Some(crate::ActingContext::new(principal, ""));
         self
     }
 

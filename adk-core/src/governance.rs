@@ -892,6 +892,7 @@ pub struct PendingApproval {
 ///     tool_name: "transfer".into(),
 ///     function_call_id: Some("call-1".into()),
 ///     args: json!({ "amount": 40 }),
+///     acting: None,
 /// };
 ///
 /// store.record_pending(&scope, &request).await?;
@@ -1280,6 +1281,7 @@ pub struct ToolGate<'a> {
     agent_name: &'a str,
     invocation_id: &'a str,
     scope: ApprovalScope,
+    acting: crate::ActingContext,
     screen: Option<&'a dyn ToolCallScreen>,
     abandon: Option<tokio::sync::watch::Receiver<bool>>,
     actor: Option<AuditActor>,
@@ -1287,17 +1289,28 @@ pub struct ToolGate<'a> {
 
 impl<'a> ToolGate<'a> {
     /// A gate over `run_config` for calls made by `agent_name` in `invocation_id`.
+    ///
+    /// The calls carry the acting context
+    /// [`RunConfig::acting_context_for`] gives for the agent and scope; replace it with
+    /// [`with_acting_context`](Self::with_acting_context).
     pub fn new(
         run_config: &'a RunConfig,
         agent_name: &'a str,
         invocation_id: &'a str,
         scope: ApprovalScope,
     ) -> Self {
+        let acting = run_config.acting_context_for(
+            &scope.app_name,
+            agent_name,
+            &scope.user_id,
+            invocation_id,
+        );
         Self {
             run_config,
             agent_name,
             invocation_id,
             scope,
+            acting,
             screen: None,
             abandon: None,
             actor: None,
@@ -1312,13 +1325,25 @@ impl<'a> ToolGate<'a> {
             ctx.invocation_id(),
             ApprovalScope::new(ctx.app_name(), ctx.user_id(), ctx.session_id()),
         )
-        .with_actor(AuditActor::for_context(ctx))
+        .with_acting_context(ctx.acting_context())
+    }
+
+    /// Sets the acting context every policy request, held call, and audit record of
+    /// this gate's calls carries.
+    #[must_use]
+    pub fn with_acting_context(mut self, acting: crate::ActingContext) -> Self {
+        self.acting = acting;
+        self
+    }
+
+    /// The acting context calls are evaluated and recorded under.
+    pub fn acting_context(&self) -> &crate::ActingContext {
+        &self.acting
     }
 
     /// Sets who the audit records of this gate's calls name as acting.
     ///
-    /// Without one, the actor is [`AuditActor::for_invocation`] of the gate's app,
-    /// agent, user, and invocation.
+    /// Without one, the actor is the gate's [acting context](Self::acting_context).
     #[must_use]
     pub fn with_actor(mut self, actor: AuditActor) -> Self {
         self.actor = Some(actor);
@@ -1330,14 +1355,7 @@ impl<'a> ToolGate<'a> {
         let Some(trail) = &self.run_config.audit else {
             return Ok(());
         };
-        let actor = self.actor.clone().unwrap_or_else(|| {
-            AuditActor::for_invocation(
-                &self.scope.app_name,
-                self.agent_name,
-                &self.scope.user_id,
-                self.invocation_id,
-            )
-        });
+        let actor = self.actor.clone().unwrap_or_else(|| AuditActor::from(&self.acting));
         trail
             .record(
                 draft.actor(actor).ext("sessionId", Value::String(self.scope.session_id.clone())),
@@ -1483,7 +1501,12 @@ pub async fn authorize_tool_call(
         PolicyDecision::Allow => None,
         PolicyDecision::RequireApproval { reason } => Some(reason),
         PolicyDecision::Deny { reason } => {
-            tracing::info!(tool.name = %tool_name, policy.reason = %reason, "tool call denied by policy");
+            tracing::info!(
+                tool.name = %tool_name,
+                agent.id = %gate.acting.agent.id,
+                policy.reason = %reason,
+                "tool call denied by policy"
+            );
             audited
                 .decision(&args, AuditDecision::Denied, policy_ref.as_deref(), Some(&reason))
                 .await?;
@@ -1495,6 +1518,11 @@ pub async fn authorize_tool_call(
     };
 
     if !requires_confirmation && approval_reason.is_none() {
+        tracing::debug!(
+            tool.name = %tool_name,
+            agent.id = %gate.acting.agent.id,
+            "tool call allowed by policy"
+        );
         audited.decision(&args, AuditDecision::Allowed, policy_ref.as_deref(), None).await?;
         return Ok(ToolAuthorization::Execute { args, confirmation: None });
     }
@@ -1503,6 +1531,7 @@ pub async fn authorize_tool_call(
         tool_name: tool_name.clone(),
         function_call_id: Some(function_call_id.clone()),
         args: args.clone(),
+        acting: Some(gate.acting.clone()),
     };
     let Some((approval, source)) = resolve_confirmation(gate, &request).await? else {
         let held_by = if approval_reason.is_some() {
@@ -1528,9 +1557,7 @@ pub async fn authorize_tool_call(
                 agent_name: gate.agent_name.to_string(),
                 invocation_id: gate.invocation_id.to_string(),
                 run_id: config.durable_run_id.clone(),
-                // Integration point: the agent-identity workstream supplies the acting
-                // context once `ActingContext` is carried on the invocation.
-                acting: None,
+                acting: Some(gate.acting.clone()),
             };
             service.submit_call(call).await?;
         }
@@ -1731,6 +1758,7 @@ async fn evaluate_policy(
         user_id: gate.scope.user_id.clone(),
         session_id: gate.scope.session_id.clone(),
         invocation_id: gate.invocation_id.to_string(),
+        acting: Some(gate.acting.clone()),
     };
     policy.evaluate(&request).await
 }
@@ -1893,6 +1921,7 @@ pub struct HeldToolCall {
 ///     tool_name: "pay".into(),
 ///     function_call_id: Some("call-1".into()),
 ///     args: json!({ "amount": 5 }),
+///     acting: None,
 /// });
 ///
 /// let calls = held_tool_calls(&[held], "agent", "");
@@ -2002,6 +2031,7 @@ pub fn held_tool_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<
 ///     tool_name: "pay".into(),
 ///     function_call_id: Some("call-1".into()),
 ///     args: json!({ "amount": 5 }),
+///     acting: None,
 /// };
 /// let config =
 ///     RunConfig::builder().tool_approval(request.fingerprint(), ToolApproval::approve()).build();
@@ -2266,8 +2296,7 @@ impl BuiltinToolGovernor {
             PolicyDecision::RequireApproval { reason } => reason,
         };
         let config = gate.run_config;
-        let request =
-            ToolConfirmationRequest { tool_name: name.to_string(), function_call_id: None, args };
+        let request = ToolConfirmationRequest::new(name, args);
         let fingerprint = request.fingerprint();
         let mut decision = self.decisions.get(&fingerprint).copied();
         if decision.is_none()
@@ -2734,6 +2763,7 @@ mod tests {
             tool_name: name.into(),
             function_call_id: Some(id.into()),
             args,
+            acting: None,
         });
         event
     }
@@ -2764,6 +2794,7 @@ mod tests {
                     tool_name: "pay".into(),
                     function_call_id: Some("c1".into()),
                     args: json!({ "amount": 500 }),
+                    acting: None,
                 },
                 id: Some("c1".into()),
                 args: json!({ "amount": 5 }),
@@ -2852,6 +2883,7 @@ mod tests {
             tool_name: "pay".into(),
             function_call_id: Some("c1".into()),
             args: json!({ "amount": 5 }),
+            acting: None,
         };
         let none = RunConfig::default();
         assert!(!confirmation_decision_available(&gate(&none), &request).await.unwrap());

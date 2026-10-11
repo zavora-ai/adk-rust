@@ -107,6 +107,10 @@ pub struct ToolPolicyRequest {
     pub session_id: String,
     /// Invocation the call happened in.
     pub invocation_id: String,
+    /// The calling agent's principal, the subject it acts for, and its delegation chain.
+    ///
+    /// The governed path always sets it; `None` only on a request built by hand.
+    pub acting: Option<crate::ActingContext>,
 }
 
 impl ToolPolicyRequest {
@@ -121,7 +125,31 @@ impl ToolPolicyRequest {
             user_id: String::new(),
             session_id: String::new(),
             invocation_id: String::new(),
+            acting: None,
         }
+    }
+
+    /// The calling agent's id, when the request carries an acting context.
+    pub fn agent_id(&self) -> Option<&crate::AgentId> {
+        self.acting.as_ref().map(|acting| &acting.agent.id)
+    }
+
+    /// Attaches the calling agent's acting context.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ActingContext, ToolPolicyRequest};
+    /// use serde_json::json;
+    ///
+    /// let request = ToolPolicyRequest::new("search", json!({}))
+    ///     .with_acting_context(ActingContext::derived("app", "researcher", "alice", "inv-1"));
+    /// assert_eq!(request.agent_id().unwrap().as_str(), "urn:adk:agent:app/researcher");
+    /// ```
+    #[must_use]
+    pub fn with_acting_context(mut self, acting: crate::ActingContext) -> Self {
+        self.acting = Some(acting);
+        self
     }
 
     /// Whether the called tool declares [`ToolEffect::ReadOnly`].
@@ -410,6 +438,9 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolicyRule {
     tool_pattern: String,
+    agent_pattern: Option<String>,
+    tenant: Option<String>,
+    class: Option<String>,
     effect: Option<ToolEffect>,
     predicates: Vec<ArgPredicate>,
     decision: PolicyDecision,
@@ -418,7 +449,15 @@ pub struct PolicyRule {
 impl PolicyRule {
     /// A rule that decides `decision` for calls to tools matching `tool_pattern`.
     pub fn new(tool_pattern: impl Into<String>, decision: PolicyDecision) -> Self {
-        Self { tool_pattern: tool_pattern.into(), effect: None, predicates: Vec::new(), decision }
+        Self {
+            tool_pattern: tool_pattern.into(),
+            agent_pattern: None,
+            tenant: None,
+            class: None,
+            effect: None,
+            predicates: Vec::new(),
+            decision,
+        }
     }
 
     /// A rule allowing calls to tools matching `tool_pattern`.
@@ -470,6 +509,46 @@ impl PolicyRule {
         self
     }
 
+    /// Restricts the rule to agents whose [`AgentId`](crate::AgentId) matches the glob
+    /// `agent_pattern`.
+    ///
+    /// A call with no acting context does not match.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ActingContext, PolicyRule, ToolPolicyRequest};
+    /// use serde_json::json;
+    ///
+    /// let rule = PolicyRule::allow("refund").for_agent("urn:adk:agent:shop/support-*");
+    /// let call = |agent: &str| {
+    ///     ToolPolicyRequest::new("refund", json!({}))
+    ///         .with_acting_context(ActingContext::derived("shop", agent, "u", "inv"))
+    /// };
+    /// assert!(rule.matches(&call("support-eu")));
+    /// assert!(!rule.matches(&call("marketing")));
+    /// assert!(!rule.matches(&ToolPolicyRequest::new("refund", json!({}))));
+    /// ```
+    #[must_use]
+    pub fn for_agent(mut self, agent_pattern: impl Into<String>) -> Self {
+        self.agent_pattern = Some(agent_pattern.into());
+        self
+    }
+
+    /// Restricts the rule to agents of `tenant` ([`AgentPrincipal::tenant`](crate::AgentPrincipal::tenant)).
+    #[must_use]
+    pub fn for_tenant(mut self, tenant: impl Into<String>) -> Self {
+        self.tenant = Some(tenant.into());
+        self
+    }
+
+    /// Restricts the rule to agents of `class` ([`AgentPrincipal::class`](crate::AgentPrincipal::class)).
+    #[must_use]
+    pub fn for_class(mut self, class: impl Into<String>) -> Self {
+        self.class = Some(class.into());
+        self
+    }
+
     /// The decision the rule makes when it matches.
     pub fn decision(&self) -> &PolicyDecision {
         &self.decision
@@ -477,7 +556,19 @@ impl PolicyRule {
 
     /// Whether the rule matches `request`.
     pub fn matches(&self, request: &ToolPolicyRequest) -> bool {
+        let principal = request.acting.as_ref().map(|acting| &acting.agent);
+        let identity_matches =
+            |required: &Option<String>, actual: fn(&crate::AgentPrincipal) -> Option<&str>| {
+                required
+                    .as_deref()
+                    .is_none_or(|required| principal.and_then(actual) == Some(required))
+            };
         glob_matches(&self.tool_pattern, &request.tool_name)
+            && self.agent_pattern.as_deref().is_none_or(|pattern| {
+                principal.is_some_and(|principal| glob_matches(pattern, principal.id.as_str()))
+            })
+            && identity_matches(&self.tenant, |principal| principal.tenant.as_deref())
+            && identity_matches(&self.class, |principal| principal.class.as_deref())
             && self.effect.is_none_or(|effect| effect == request.effect)
             && self.predicates.iter().all(|predicate| predicate.holds(&request.args))
     }
@@ -733,6 +824,45 @@ mod tests {
         );
         assert!(!idempotent.is_read_only());
         assert!(ToolPolicyRequest::new("search", json!({})).with_read_only(true).is_read_only());
+    }
+
+    #[test]
+    fn rules_can_match_on_the_acting_agent() {
+        use crate::{ActingContext, AgentId, AgentPrincipal};
+        let principal = |id: &str| AgentPrincipal::new(AgentId::new(id).unwrap());
+        let policy = DeclarativePolicy::builder()
+            .rule(PolicyRule::deny("*", "quarantined").for_agent("urn:adk:agent:ops/rogue"))
+            .rule(PolicyRule::allow("deploy").for_tenant("acme").for_class("release-bot"))
+            .rule(PolicyRule::allow("search").for_agent("urn:adk:agent:ops/*"))
+            .build();
+        let call = |tool: &str, principal: AgentPrincipal| {
+            ToolPolicyRequest::new(tool, json!({}))
+                .with_acting_context(ActingContext::new(principal, "inv"))
+        };
+
+        assert_eq!(
+            policy.decide(&call("search", principal("urn:adk:agent:ops/rogue"))),
+            PolicyDecision::deny("quarantined")
+        );
+        assert_eq!(
+            policy.decide(&call("search", principal("urn:adk:agent:ops/scout"))),
+            PolicyDecision::Allow
+        );
+        assert!(matches!(
+            policy.decide(&call("search", principal("urn:adk:agent:dev/scout"))),
+            PolicyDecision::Deny { .. }
+        ));
+        let release =
+            principal("spiffe://acme/release").with_tenant("acme").with_class("release-bot");
+        assert_eq!(policy.decide(&call("deploy", release.clone())), PolicyDecision::Allow);
+        assert!(matches!(
+            policy.decide(&call("deploy", release.with_tenant("globex"))),
+            PolicyDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            policy.decide(&ToolPolicyRequest::new("deploy", json!({}))),
+            PolicyDecision::Deny { .. }
+        ));
     }
 
     #[test]

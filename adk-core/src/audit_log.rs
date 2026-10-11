@@ -982,33 +982,13 @@ impl AuditActor {
         user_id: &str,
         invocation_id: &str,
     ) -> Self {
-        // Integration point (#799): the same identity as `ActingContext::derived`, which
-        // replaces this body once agent identity is merged.
-        let encode = |value: &str| -> String {
-            if value.is_empty() {
-                return "_".to_string();
-            }
-            let mut out = String::with_capacity(value.len());
-            for byte in value.bytes() {
-                if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
-                    out.push(byte as char);
-                } else {
-                    out.push_str(&format!("%{byte:02X}"));
-                }
-            }
-            out
-        };
-        let mut id = format!("urn:adk:agent:{}/{}", encode(app_name), encode(agent_name));
-        id.truncate(crate::principal::MAX_AGENT_ID_LEN);
-        Self {
-            agent: AgentId::new(id).ok(),
-            on_behalf_of: (!user_id.is_empty()).then(|| SubjectRef::human(user_id)),
-            invocation_id: Some(invocation_id.to_string()),
-            ..Self::default()
-        }
+        Self::from(&ActingContext::derived(app_name, agent_name, user_id, invocation_id))
     }
 
-    /// The actor of the agent running in `ctx`.
+    /// The actor of the agent running in `ctx`: its
+    /// [acting context](crate::ReadonlyContext::acting_context), which is the run's
+    /// configured agent principal and subject, or the derived identity of
+    /// [`for_invocation`](Self::for_invocation) when the run configures none.
     ///
     /// # Example
     ///
@@ -1016,8 +996,7 @@ impl AuditActor {
     /// let actor = AuditActor::for_context(tool_ctx.as_ref());
     /// ```
     pub fn for_context(ctx: &dyn crate::ReadonlyContext) -> Self {
-        // Integration point (#799): `AuditActor::from(&ctx.acting_context())`.
-        Self::for_invocation(ctx.app_name(), ctx.agent_name(), ctx.user_id(), ctx.invocation_id())
+        Self::from(&ctx.acting_context())
     }
 }
 

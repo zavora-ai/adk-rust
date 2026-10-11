@@ -16,6 +16,9 @@
 //! | [`delegations_round_trip`] | Delegations are stored, replaced by ID, listed per delegate by ID, and deleted once |
 //! | [`approval_requests_survive_a_restart`] | Requests and delegations read back unchanged after a restart |
 //!
+//! Every request carries an [`ActingContext`], and the cases compare whole requests,
+//! so each backend proves the acting agent is recorded with the held call.
+//!
 //! `has_decision` may report `true` when no live decision exists (the trait's default
 //! does), so the suite checks only that it never misses a live decision and never
 //! consumes one.
@@ -30,10 +33,10 @@ use serde_json::json;
 use super::{base_time, unique, unique_unicode};
 use crate::principal::SubjectRef;
 use crate::{
-    ApprovalCursor, ApprovalDecision, ApprovalDelegation, ApprovalPolicy, ApprovalRequest,
-    ApprovalRequestQuery, ApprovalScope, ApprovalState, ApprovalStore, ApproverSelector,
-    DelegationScope, DelegationWindow, PendingApproval, ToolApproval, ToolConfirmationDecision,
-    ToolConfirmationRequest,
+    ActingContext, AgentId, AgentPrincipal, ApprovalCursor, ApprovalDecision, ApprovalDelegation,
+    ApprovalPolicy, ApprovalRequest, ApprovalRequestQuery, ApprovalScope, ApprovalState,
+    ApprovalStore, ApproverSelector, DelegationScope, DelegationWindow, PendingApproval,
+    ToolApproval, ToolConfirmationDecision, ToolConfirmationRequest,
 };
 
 /// Opens an [`ApprovalStore`] backend for the conformance suite.
@@ -73,6 +76,19 @@ fn request(amount: u64, call_id: &str) -> ToolConfirmationRequest {
         tool_name: "conformance_transfer".into(),
         function_call_id: Some(call_id.into()),
         args: json!({ "amount": amount, "to": "acct:1/main" }),
+        // Every case compares whole requests, so each backend proves the acting context
+        // round-trips with the call.
+        acting: Some(
+            ActingContext::new(
+                AgentPrincipal::new(
+                    AgentId::new("spiffe://conformance.test/agent/treasurer").unwrap(),
+                )
+                .with_tenant("conformance")
+                .with_instance("replica-1"),
+                format!("inv-{call_id}"),
+            )
+            .on_behalf_of(SubjectRef::human("alice")),
+        ),
     }
 }
 

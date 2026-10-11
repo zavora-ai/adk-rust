@@ -57,6 +57,7 @@ impl Agent for ConfirmationAgent {
                     tool_name: "delete_file".to_string(),
                     function_call_id: Some("call-1".to_string()),
                     args: json!({ "path": "/tmp/report.txt" }),
+                    acting: None,
                 });
                 yield Ok(event);
             }

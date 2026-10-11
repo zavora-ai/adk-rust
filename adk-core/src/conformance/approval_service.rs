@@ -173,6 +173,7 @@ impl Fixture {
             tool_name: "conformance_transfer".into(),
             function_call_id: Some(unique("call")),
             args: json!({ "amount": amount, "to": "acct:1/main" }),
+            acting: None,
         };
         (scope, call)
     }

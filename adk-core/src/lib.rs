@@ -101,6 +101,8 @@ pub mod clock;
 pub mod conformance;
 /// Invocation context traits: state, session, artifacts, memory, and run configuration.
 pub mod context;
+/// Agent credentials, identity sources, and resource-scoped token brokers.
+pub mod credential;
 /// Unified structured error type and result alias.
 pub mod error;
 /// Event types representing agent interactions in a conversation.
@@ -126,6 +128,8 @@ pub mod model;
 pub mod policy;
 /// Agent identity: agent identifiers, principals, and acting contexts.
 pub mod principal;
+// Identity defaults, delegation, and error conversion for the `principal` types.
+mod acting;
 /// HTTP request context extracted by auth middleware.
 pub mod request_context;
 /// Durable runs: a queue of runs that workers claim under fenced leases.
@@ -186,6 +190,10 @@ pub use context::{
     ToolCallbackContext, ToolConcurrencyConfig, ToolConfirmationDecision, ToolConfirmationHandler,
     ToolConfirmationPolicy, ToolConfirmationRequest, ToolOutcome, tool_call_fingerprint,
     validate_state_key,
+};
+pub use credential::{
+    AgentCredential, CredentialBroker, CredentialKind, CredentialSecret, IdentitySource,
+    RevocationScope, ScopedToken, StaticIdentitySource, resource_indicator,
 };
 pub use error::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Result, RetryHint};
 pub use event::{
@@ -253,6 +261,7 @@ pub use types::{
     BlobResourceContents, Content, EmbeddedResource, FileDataPart, FunctionResponseData,
     InlineDataPart, MAX_INLINE_DATA_SIZE, Part, TextResourceContents,
 };
+pub use url::Url;
 
 // Re-export async_trait so the #[tool] macro's generated code can reference it
 // via adk_tool::async_trait (adk_tool re-exports from adk_core).

@@ -22,6 +22,7 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+url = { version = "2.5", features = ["serde"] }
 rustls = { workspace = true, optional = true }
 cron = { version = "0.15", optional = true }
 chrono-tz = { version = "0.10", optional = true }

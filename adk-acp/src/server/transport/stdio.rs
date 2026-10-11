@@ -913,6 +913,7 @@ mod tests {
                             tool_name: "delete_file".to_string(),
                             function_call_id: Some("call-1".to_string()),
                             args: serde_json::json!({"path": "/tmp/report.csv"}),
+                            acting: None,
                         });
                         yield Ok(event);
                     }

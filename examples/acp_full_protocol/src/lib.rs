@@ -218,6 +218,7 @@ impl Agent for ScriptedAgent {
                     tool_name: CONFIRM_TOOL.to_string(),
                     function_call_id: Some(CONFIRM_CALL_ID.to_string()),
                     args: json!({ "path": DELETE_TARGET }),
+                    acting: None,
                 });
                 yield Ok(event);
                 return;

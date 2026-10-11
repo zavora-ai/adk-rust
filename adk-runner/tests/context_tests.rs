@@ -1217,6 +1217,7 @@ fn held_then_resumed(id: Option<&str>) -> MutableSession {
         tool_name: "pay".to_string(),
         function_call_id: Some(id.unwrap_or("inv-1_pay_0").to_string()),
         args: serde_json::json!({"amount": 5}),
+        acting: None,
     });
     mutable.append_event(hold);
     mutable.append_event(event_with(

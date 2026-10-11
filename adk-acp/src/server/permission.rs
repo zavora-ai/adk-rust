@@ -147,6 +147,7 @@ mod tests {
             tool_name: "delete_file".into(),
             function_call_id: Some("call-42".into()),
             args: serde_json::json!({"path": "/tmp/x"}),
+            acting: None,
         }
     }
 

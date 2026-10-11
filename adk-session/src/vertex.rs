@@ -5567,6 +5567,7 @@ mod tests {
             tool_name: "tool".to_string(),
             function_call_id: None,
             args: deep_value(),
+            acting: None,
         });
         assert_depth_error(&confirmation);
 
