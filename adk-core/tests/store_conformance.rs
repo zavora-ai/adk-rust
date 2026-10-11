@@ -3,10 +3,13 @@
 use std::sync::Arc;
 
 use adk_core::conformance::{
-    ActionLedgerHarness, ApprovalStoreHarness, SpendLedgerHarness, SpendLedgerSetup,
+    ActionLedgerHarness, ApprovalStoreHarness, GovernanceStateStoreHarness, LeaseStoreHarness,
+    RunStoreHarness, ScheduleStoreHarness, SpendLedgerHarness, SpendLedgerSetup,
 };
 use adk_core::{
-    ActionLedger, ApprovalStore, InMemoryActionLedger, InMemoryApprovalStore, InMemorySpendLedger,
+    ActionLedger, ApprovalStore, Clock, DurableRunStore, GovernanceStateStore,
+    InMemoryActionLedger, InMemoryApprovalStore, InMemoryGovernanceStateStore, InMemoryLeaseStore,
+    InMemoryRunStore, InMemoryScheduleStore, InMemorySpendLedger, LeaseStore, ScheduleStore,
     SpendLedger, async_trait,
 };
 
@@ -57,4 +60,72 @@ mod actions {
 
 mod approvals {
     adk_core::approval_store_conformance_tests!(harness = super::InMemoryApprovals::default());
+}
+
+struct InMemoryLeases;
+
+#[async_trait]
+impl LeaseStoreHarness for InMemoryLeases {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn LeaseStore> {
+        Arc::new(InMemoryLeaseStore::new().with_clock(clock))
+    }
+
+    fn is_durable(&self) -> bool {
+        false
+    }
+}
+
+struct InMemoryRuns;
+
+#[async_trait]
+impl RunStoreHarness for InMemoryRuns {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn DurableRunStore> {
+        Arc::new(InMemoryRunStore::new().with_clock(clock))
+    }
+
+    fn is_durable(&self) -> bool {
+        false
+    }
+}
+
+struct InMemorySchedules;
+
+#[async_trait]
+impl ScheduleStoreHarness for InMemorySchedules {
+    async fn open(&self) -> Arc<dyn ScheduleStore> {
+        Arc::new(InMemoryScheduleStore::new())
+    }
+
+    fn is_durable(&self) -> bool {
+        false
+    }
+}
+
+struct InMemoryGovernance;
+
+#[async_trait]
+impl GovernanceStateStoreHarness for InMemoryGovernance {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn GovernanceStateStore> {
+        Arc::new(InMemoryGovernanceStateStore::new().with_clock(clock))
+    }
+
+    fn is_durable(&self) -> bool {
+        false
+    }
+}
+
+mod leases {
+    adk_core::lease_store_conformance_tests!(harness = super::InMemoryLeases);
+}
+
+mod runs {
+    adk_core::run_store_conformance_tests!(harness = super::InMemoryRuns);
+}
+
+mod schedules {
+    adk_core::schedule_store_conformance_tests!(harness = super::InMemorySchedules);
+}
+
+mod governance {
+    adk_core::governance_state_store_conformance_tests!(harness = super::InMemoryGovernance);
 }

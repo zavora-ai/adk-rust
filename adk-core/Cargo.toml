@@ -23,16 +23,20 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 rustls = { workspace = true, optional = true }
+cron = { version = "0.15", optional = true }
+chrono-tz = { version = "0.10", optional = true }
 
 [features]
 default = []
 rustls = ["dep:rustls"]
-# Conformance suites for SpendLedger, ActionLedger, and ApprovalStore backends.
+# Conformance suites for every durable store backend.
 conformance = ["tokio/rt"]
+# Cron schedule evaluation in IANA time zones (`adk_core::schedule::plan_fires`).
+cron = ["dep:cron", "dep:chrono-tz"]
 
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suites.
-adk-core = { path = ".", features = ["conformance"] }
+adk-core = { path = ".", features = ["conformance", "cron"] }
 async-stream = { workspace = true }
 proptest = "1.5"
 serde_json = { workspace = true }

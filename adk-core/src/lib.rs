@@ -17,6 +17,9 @@
 //! - [`ToolConfirmationPolicy`] / [`ToolConfirmationRequest`] - Human-in-the-loop tool authorization
 //! - [`ToolPolicy`] / [`DeclarativePolicy`] / [`authorize_tool_call`] - The governed tool execution path
 //! - [`GovernanceControl`] - Organisation-wide kill switch
+//! - [`AgentId`] / [`AgentPrincipal`] / [`ActingContext`] - Agent identity
+//! - [`LeaseStore`] / [`DurableRunStore`] / [`ScheduleStore`] / [`GovernanceStateStore`] -
+//!   Durable runtime contracts: fenced leases, the run queue, schedules, and freeze state
 //!
 //! ## What's New in 0.6.0
 //!
@@ -88,8 +91,7 @@ pub mod budget;
 pub mod callbacks;
 /// Time sources for stores whose behaviour depends on the current time.
 pub mod clock;
-/// Conformance suites that any `SpendLedger`, `ActionLedger`, or `ApprovalStore`
-/// backend runs against its implementation.
+/// Conformance suites that every durable store backend runs against its implementation.
 #[cfg(feature = "conformance")]
 pub mod conformance;
 /// Invocation context traits: state, session, artifacts, memory, and run configuration.
@@ -101,20 +103,30 @@ pub mod event;
 mod event_stream;
 /// Governed tool execution: kill switch, durable approvals, and the authorization path.
 pub mod governance;
+/// Durable freeze state for the kill switch, shared by every replica.
+pub mod governance_state;
 /// Typed identity primitives for app, user, session, and invocation.
 pub mod identity;
 /// Template-based instruction injection with session state interpolation.
 pub mod instruction_template;
 /// Intra-turn context compaction configuration.
 pub mod intra_compaction;
+/// Leases with fencing epochs: one owner of a named resource at a time.
+pub mod lease;
 /// Metering for every model call made on behalf of a run.
 pub mod metering;
 /// LLM trait, request/response types, and caching configuration.
 pub mod model;
 /// Tool execution policy: allow, deny, or require approval per call.
 pub mod policy;
+/// Agent identity: agent identifiers, principals, and acting contexts.
+pub mod principal;
 /// HTTP request context extracted by auth middleware.
 pub mod request_context;
+/// Durable runs: a queue of runs that workers claim under fenced leases.
+pub mod run_store;
+/// Schedules that enqueue durable runs, and the firing rule.
+pub mod schedule;
 /// Provider-aware JSON Schema normalization for tool declarations.
 pub mod schema_adapter;
 /// Thread-safe schema cache for tool parameter schemas.
@@ -177,11 +189,15 @@ pub use governance::{
     authorize_tool_call, builtin_tool_configuration, confirmation_decision_available,
     confirmation_pending_response, held_tool_calls, is_confirmation_pending,
 };
+pub use governance_state::{
+    GovernanceScope, GovernanceState, GovernanceStateStore, InMemoryGovernanceStateStore,
+};
 pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,
 };
 pub use instruction_template::inject_session_state;
 pub use intra_compaction::IntraCompactionConfig;
+pub use lease::{InMemoryLeaseStore, Lease, LeaseStore};
 pub use metering::{
     LlmSpendEstimate, MeteredLlm, ModelCallScope, ModelSpendHold, UNBOUNDED_HOLD_MICRO_USD,
     generate_metered, vendor_for_model,
@@ -195,7 +211,18 @@ pub use policy::{
     ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyDecision, PolicyRule,
     ToolPolicy, ToolPolicyRequest,
 };
+pub use principal::{
+    ActingContext, AgentId, AgentPrincipal, PrincipalError, SubjectKind, SubjectRef,
+};
 pub use request_context::RequestContext;
+pub use run_store::{
+    ClaimedRun, DurableRunStore, Enqueued, InMemoryRunStore, NewRun, OnConflict, RunCheckpointRef,
+    RunFilter, RunOutcome, RunRecord, RunState,
+};
+pub use schedule::{
+    FirePlan, InMemoryScheduleStore, MissedFirePolicy, Schedule, ScheduleSpec, ScheduleStore,
+    firing_idempotency_key, plan_fires,
+};
 pub use schema_adapter::{GenericSchemaAdapter, SchemaAdapter};
 pub use schema_cache::SchemaCache;
 pub use shared_state::{SharedState, SharedStateError};

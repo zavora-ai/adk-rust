@@ -329,11 +329,11 @@ budget, and in `UsageMetadata::cost`.
 ### Store Conformance Suites
 
 The `conformance` feature provides one suite per durable store trait — `SpendLedger`,
-`ActionLedger`, and `ApprovalStore`. A backend implements a harness that opens it and calls
-`spend_ledger_conformance_tests!`, `action_ledger_conformance_tests!`, or
-`approval_store_conformance_tests!`, which generate one `#[tokio::test]` per contract case:
-accounting, period rollover, concurrency across two handles, and restart survival. Every
-in-memory and `adk-session` backend runs the same suites.
+`ActionLedger`, `ApprovalStore`, `LeaseStore`, `DurableRunStore`, `ScheduleStore`, and
+`GovernanceStateStore`. A backend implements a harness that opens it and calls the matching
+`*_conformance_tests!` macro, which generates one `#[tokio::test]` per contract case:
+accounting, period rollover, fencing, single-winner concurrency across two handles, and
+restart survival. Every in-memory and `adk-session` backend runs the same suites.
 
 ```toml
 [dev-dependencies]
@@ -441,6 +441,40 @@ pub enum StreamingMode {
     None,  // Complete responses only
     SSE,   // Server-Sent Events (default)
     Bidi,  // Bidirectional (realtime)
+}
+```
+
+## Durable Runtime Contracts
+
+Backend-neutral traits for running agents durably across replicas, each with an in-memory
+implementation that takes a `Clock` through `with_clock`:
+
+| Trait | In-memory | Holds |
+|-------|-----------|-------|
+| `LeaseStore` | `InMemoryLeaseStore` | Leases with fencing epochs |
+| `DurableRunStore` | `InMemoryRunStore` | The run queue: claims, heartbeats, waits, retries, cancellation |
+| `ScheduleStore` | `InMemoryScheduleStore` | Cron, one-shot, and interval schedules with a revision CAS |
+| `GovernanceStateStore` | `InMemoryGovernanceStateStore` | Freeze state per organisation, tenant, and agent |
+
+`AgentId`, `AgentPrincipal`, and `ActingContext` (module `principal`) identify the agent a
+run acts as. `schedule::plan_fires` computes fire times; cron specs need the `cron` feature.
+
+```rust
+use std::time::Duration;
+
+use adk_core::{DurableRunStore, InMemoryRunStore, NewRun, RunOutcome};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let runs = InMemoryRunStore::new();
+    runs.enqueue(NewRun::new("default", "app", "user", "agent", json!({}))).await?;
+    let claimed = runs.claim("default", "worker-1", Duration::from_secs(30)).await?.unwrap();
+    let done = runs
+        .finish(&claimed.record.run_id, claimed.epoch, RunOutcome::Completed(json!("ok")))
+        .await?;
+    assert!(done.state.is_terminal());
+    Ok(())
 }
 ```
 
