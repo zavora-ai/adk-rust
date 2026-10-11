@@ -49,8 +49,9 @@
 //! - Built-in tool fees ([`BuiltinToolFee`](crate::pricing::BuiltinToolFee))
 //!   apply on the vendor's own API only, ignore free allowances, and leave
 //!   container-billed tools unpriced.
-//! - DeepSeek cache hits are billed at the cache-miss rate and off-peak
-//!   discounts are ignored, which over-estimates.
+//! - DeepSeek's off-peak discount ([`OffPeak`](crate::pricing::OffPeak)) applies outside the published
+//!   UTC peak hours on weekdays; Chinese public holidays, which are off-peak in
+//!   full, are billed at the peak rate, which over-estimates.
 //! - Models a vendor prices only on request ("Contact Sales") or at a
 //!   temporary sale price are left out: Groq's Llama and MiniMax models, and
 //!   Mistral Large 4.
@@ -303,6 +304,47 @@ pub struct ModelPrice {
     /// Largest output, reasoning included, the model produces for one request; used to
     /// bound a request that sets no output cap.
     pub max_output_tokens: Option<u64>,
+    /// Discounted rates outside the vendor's peak hours.
+    pub off_peak: Option<OffPeak>,
+}
+
+/// A time-of-day discount: outside the peak windows every rate is multiplied by `factor`.
+///
+/// # Example
+///
+/// ```
+/// use adk_model::pricing::OffPeak;
+/// use chrono::{TimeZone, Utc};
+///
+/// // DeepSeek: peak 01:00–04:00 and 06:00–10:00 UTC on weekdays, half price otherwise.
+/// let off_peak = OffPeak::weekdays(0.5, &[(1, 4), (6, 10)]);
+/// assert!(off_peak.is_peak(Utc.with_ymd_and_hms(2026, 10, 12, 7, 30, 0).unwrap()));
+/// assert!(!off_peak.is_peak(Utc.with_ymd_and_hms(2026, 10, 12, 12, 0, 0).unwrap()));
+/// assert!(!off_peak.is_peak(Utc.with_ymd_and_hms(2026, 10, 11, 7, 30, 0).unwrap()));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct OffPeak {
+    /// Multiplier applied to every rate off peak.
+    pub factor: f64,
+    /// Peak windows as `[start, end)` UTC hours, Monday through Friday.
+    pub peak_hours_utc: Vec<(u32, u32)>,
+}
+
+impl OffPeak {
+    /// Peak during `peak_hours_utc` on weekdays; `factor` applies at all other times.
+    pub fn weekdays(factor: f64, peak_hours_utc: &[(u32, u32)]) -> Self {
+        Self { factor, peak_hours_utc: peak_hours_utc.to_vec() }
+    }
+
+    /// Whether `at` falls in a peak window.
+    pub fn is_peak(&self, at: chrono::DateTime<chrono::Utc>) -> bool {
+        use chrono::{Datelike, Timelike, Weekday};
+        if matches!(at.weekday(), Weekday::Sat | Weekday::Sun) {
+            return false;
+        }
+        let hour = at.hour();
+        self.peak_hours_utc.iter().any(|(start, end)| hour >= *start && hour < *end)
+    }
 }
 
 impl ModelPrice {
@@ -315,7 +357,14 @@ impl ModelPrice {
             long_context: None,
             change: None,
             max_output_tokens: None,
+            off_peak: None,
         }
+    }
+
+    /// Discounts every rate outside the peak windows of `off_peak`.
+    pub fn with_off_peak(mut self, off_peak: OffPeak) -> Self {
+        self.off_peak = Some(off_peak);
+        self
     }
 
     /// Sets the model's maximum output tokens per request.
@@ -380,6 +429,28 @@ impl ModelPrice {
     /// assert!((price.cost_usd(&usage, today) - 1.5).abs() < 1e-9);
     /// ```
     pub fn cost_usd(&self, usage: &UsageMetadata, date: NaiveDate) -> f64 {
+        self.cost_with_rates(usage, self.rates_for(non_negative(usage.prompt_token_count), date))
+    }
+
+    /// Cost in USD of one response's usage at the instant `at`, with any off-peak
+    /// discount applied.
+    pub fn cost_usd_at(&self, usage: &UsageMetadata, at: chrono::DateTime<chrono::Utc>) -> f64 {
+        let mut rates = self.rates_for(non_negative(usage.prompt_token_count), at.date_naive());
+        if let Some(off_peak) = &self.off_peak
+            && !off_peak.is_peak(at)
+        {
+            rates = ModelRates {
+                input: rates.input * off_peak.factor,
+                output: rates.output * off_peak.factor,
+                cache_read: rates.cache_read * off_peak.factor,
+                cache_write_5m: rates.cache_write_5m * off_peak.factor,
+                cache_write_1h: rates.cache_write_1h * off_peak.factor,
+            };
+        }
+        self.cost_with_rates(usage, rates)
+    }
+
+    fn cost_with_rates(&self, usage: &UsageMetadata, rates: ModelRates) -> f64 {
         let prompt = non_negative(usage.prompt_token_count);
         let cache_read = non_negative(usage.cache_read_input_token_count.unwrap_or(0));
         let cache_write = non_negative(usage.cache_creation_input_token_count.unwrap_or(0));
@@ -387,7 +458,6 @@ impl ModelPrice {
         let write_5m = cache_write - write_1h;
         let uncached = prompt.saturating_sub(cache_read.saturating_add(cache_write));
         let output = non_negative(usage.candidates_token_count);
-        let rates = self.rates_for(prompt, date);
         (uncached as f64 * rates.input
             + cache_read as f64 * rates.cache_read
             + write_5m as f64 * rates.cache_write_5m
@@ -652,7 +722,7 @@ impl PricingCatalog {
         }
         let price = self.lookup(provider, model)?;
         Some(
-            price.cost_usd(usage, chrono::Utc::now().date_naive())
+            price.cost_usd_at(usage, chrono::Utc::now())
                 + self.builtin_tool_cost_usd(provider, model, usage),
         )
     }
@@ -832,6 +902,7 @@ fn standard_catalog() -> PricingCatalog {
     let cached = |vendor: PriceVendor, model: &str, input: f64, output: f64, cache_read: f64| {
         ModelPrice::new(vendor, model, ModelRates::new(input, output).with_cache_read(cache_read))
     };
+    let deepseek_off_peak = OffPeak::weekdays(0.5, &[(1, 4), (6, 10)]);
     let grok = |model: &str, base: (f64, f64, f64), long: (f64, f64, f64)| {
         cached(XAi, model, base.0, base.2, base.1)
             .with_long_context(XAI_LONG, ModelRates::new(long.0, long.2).with_cache_read(long.1))
@@ -847,10 +918,16 @@ fn standard_catalog() -> PricingCatalog {
 
     let prices = vec![
         // ── Google Gemini ──
+        // https://ai.google.dev/gemini-api/docs/pricing, retrieved 2026-10-11: Gemini 3.8
+        // Flash at the 3.6 Flash rates. `gemini-3.7-flash` is not listed there; requests for
+        // it are routed to and reported as `gemini-3.8-flash`.
+        gemini("gemini-3.8-flash", 0.75, 3.75, 0.075).with_change(flash_2027, flash_2027_rates),
         gemini("gemini-3.7-flash", 0.75, 3.75, 0.075).with_change(flash_2027, flash_2027_rates),
         gemini("gemini-3.6-flash", 0.75, 3.75, 0.075).with_change(flash_2027, flash_2027_rates),
         gemini("gemini-3.5-flash", 1.50, 9.00, 0.15),
         gemini("gemini-3.5-flash-lite", 0.30, 2.50, 0.03),
+        gemini("gemini-3.1-pro-preview-customtools", 2.00, 12.00, 0.20)
+            .with_long_context(GEMINI_LONG, ModelRates::new(4.00, 18.00).with_cache_read(0.40)),
         gemini("gemini-3.1-pro-preview", 2.00, 12.00, 0.20)
             .with_long_context(GEMINI_LONG, ModelRates::new(4.00, 18.00).with_cache_read(0.40)),
         gemini("gemini-3-pro-preview", 2.00, 12.00, 0.20)
@@ -936,11 +1013,17 @@ fn standard_catalog() -> PricingCatalog {
         claude("claude-haiku-4-5", 1.0, 5.0, 0.10, 1.25, 2.0),
         claude("claude-haiku-3-5", 0.80, 4.0, 0.08, 1.0, 1.60),
         claude("claude-3-5-haiku", 0.80, 4.0, 0.08, 1.0, 1.60),
-        // ── DeepSeek (peak, cache-miss rates) ──
-        ModelPrice::new(DeepSeek, "deepseek-flash", ModelRates::new(0.44, 1.32)),
-        ModelPrice::new(DeepSeek, "deepseek-v4-flash", ModelRates::new(0.44, 1.32)),
-        ModelPrice::new(DeepSeek, "deepseek-chat", ModelRates::new(0.44, 1.32)),
-        ModelPrice::new(DeepSeek, "deepseek-v4-pro", ModelRates::new(1.32, 3.96)),
+        // ── DeepSeek ──
+        // Source: https://api-docs.deepseek.com/quick_start/pricing, retrieved 2026-10-11.
+        // Peak rates (cache miss, cache hit, output); "Peak hours are 01:00 - 04:00 and
+        // 06:00 - 10:00 UTC, Monday through Friday" and "Off-peak rates are half of the
+        // peak rates". The legacy `deepseek-v4-flash` is "billed at the Flash price";
+        // `deepseek-chat` and `deepseek-reasoner` are no longer listed and stay unpriced.
+        cached(DeepSeek, "deepseek-flash", 0.30, 1.20, 0.006)
+            .with_off_peak(deepseek_off_peak.clone()),
+        cached(DeepSeek, "deepseek-v4-flash", 0.30, 1.20, 0.006)
+            .with_off_peak(deepseek_off_peak.clone()),
+        cached(DeepSeek, "deepseek-v4-pro", 1.32, 3.96, 0.044).with_off_peak(deepseek_off_peak),
         // ── Groq ──
         // Source: https://console.groq.com/docs/models and the per-model pages under
         // https://console.groq.com/docs/model/, retrieved 2026-10-11. Cached-input rates
@@ -1003,6 +1086,7 @@ fn standard_catalog() -> PricingCatalog {
     // xAI publishes no output limit, so Grok requests bound only with an explicit cap.
     const GEMINI_MAX_OUTPUT: u64 = 65_536;
     let max_output: &[(&str, u64)] = &[
+        ("gemini-3.8-flash", GEMINI_MAX_OUTPUT),
         ("gemini-3.7-flash", GEMINI_MAX_OUTPUT),
         ("gemini-3.6-flash", GEMINI_MAX_OUTPUT),
         ("gemini-3.5-flash", GEMINI_MAX_OUTPUT),
@@ -1437,6 +1521,55 @@ mod tests {
             request_input_token_bound(&inline),
             Some(REQUEST_OVERHEAD_TOKENS + 16 + MEDIA_PART_MIN_TOKENS)
         );
+    }
+
+    #[test]
+    fn gemini_reports_37_flash_as_38_flash_and_both_are_priced() {
+        let catalog = PricingCatalog::standard();
+        let usage = usage(1_000_000, 100_000);
+        for model in ["gemini-3.8-flash", "gemini-3.7-flash", "models/gemini-3.8-flash"] {
+            let cost = price("gemini", model).cost_usd(&usage, today());
+            assert!((cost - (0.75 + 0.375)).abs() < 1e-9, "{model}: {cost}");
+        }
+        assert_eq!(price("gemini", "gemini-3.8-flash").max_output_tokens, Some(65_536));
+        let after = price("gemini", "gemini-3.8-flash")
+            .cost_usd(&usage, NaiveDate::from_ymd_opt(2027, 1, 1).unwrap());
+        assert!((after - (1.50 + 0.75)).abs() < 1e-9, "{after}");
+        assert!(
+            catalog
+                .cost_usd(Some("gemini"), "gemini-3.1-pro-preview-customtools", &usage)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn deepseek_bills_peak_rates_in_peak_hours_and_half_off_peak() {
+        use chrono::TimeZone;
+        let usage = UsageMetadata {
+            cache_read_input_token_count: Some(500_000),
+            ..usage(1_000_000, 100_000)
+        };
+        let flash = price("deepseek", "deepseek-flash");
+        // Monday 2026-10-12 07:00 UTC is peak; 12:00 UTC and Sunday are off-peak.
+        let peak = chrono::Utc.with_ymd_and_hms(2026, 10, 12, 7, 0, 0).unwrap();
+        let midday = chrono::Utc.with_ymd_and_hms(2026, 10, 12, 12, 0, 0).unwrap();
+        let sunday = chrono::Utc.with_ymd_and_hms(2026, 10, 11, 7, 0, 0).unwrap();
+        // 500K uncached × $0.30 + 500K cache hits × $0.006 + 100K × $1.20.
+        let expected_peak = 0.15 + 0.003 + 0.12;
+        assert!((flash.cost_usd_at(&usage, peak) - expected_peak).abs() < 1e-9);
+        assert!((flash.cost_usd_at(&usage, midday) - expected_peak / 2.0).abs() < 1e-9);
+        assert!((flash.cost_usd_at(&usage, sunday) - expected_peak / 2.0).abs() < 1e-9);
+        let pro = price("deepseek", "deepseek-v4-pro");
+        assert!((pro.cost_usd_at(&usage, peak) - (0.66 + 0.022 + 0.396)).abs() < 1e-9);
+        assert_eq!(price("deepseek", "deepseek-v4-flash").rates, flash.rates);
+        assert!(PricingCatalog::standard().lookup(Some("deepseek"), "deepseek-chat").is_none());
+        // The bound prices at peak, so it covers an off-peak call too.
+        let request = text_request("deepseek-flash", "hi");
+        let bound = PricingCatalog::standard()
+            .max_cost_micro_usd(Some("deepseek"), "deepseek-flash", &request, None)
+            .unwrap();
+        let prompt = request_input_token_bound(&request).unwrap() as f64;
+        assert_eq!(bound, (prompt * 0.30 + 393_216.0 * 1.20).ceil() as u64 + 1);
     }
 
     #[test]
