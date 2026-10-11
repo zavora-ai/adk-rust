@@ -35,6 +35,9 @@
 //! | `app:` | [`KEY_PREFIX_APP`] | Application state |
 //! | `temp:` | [`KEY_PREFIX_TEMP`] | Temporary data |
 
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+/// SQL-backed approval stores for calls held for confirmation.
+pub mod approval;
 /// Event types and the [`Events`] trait for accessing session event history.
 pub mod event;
 /// In-memory session backend for testing and lightweight use cases.
@@ -59,18 +62,33 @@ pub mod encryption_key;
 #[cfg(feature = "firestore")]
 /// Google Cloud Firestore session backend.
 pub mod firestore;
+#[cfg(feature = "firestore")]
+/// Firestore-backed spend ledger, action ledger, and approval store.
+pub mod firestore_stores;
 #[cfg(feature = "mongodb")]
 /// MongoDB session backend.
 pub mod mongodb;
+#[cfg(feature = "mongodb")]
+/// MongoDB-backed spend ledger, action ledger, and approval store.
+pub mod mongodb_stores;
 #[cfg(feature = "neo4j")]
 /// Neo4j graph database session backend.
 pub mod neo4j;
+#[cfg(feature = "neo4j")]
+/// Neo4j-backed spend ledger, action ledger, and approval store.
+pub mod neo4j_stores;
 #[cfg(feature = "postgres")]
 /// PostgreSQL session backend.
 pub mod postgres;
+#[cfg(feature = "postgres")]
+/// PostgreSQL-backed action ledger for non-idempotent tool calls.
+pub mod postgres_action_ledger;
 #[cfg(feature = "redis")]
 /// Redis session backend with TTL support.
 pub mod redis;
+#[cfg(feature = "redis")]
+/// Redis-backed spend ledger, action ledger, and approval store.
+pub mod redis_stores;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 /// SQL-backed spend ledgers shared by model calls and payments.
 pub mod spend;
@@ -93,6 +111,20 @@ pub use session::{KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER, Session};
 pub use state::{ReadonlyState, State};
 pub use state_utils::{extract_state_deltas, merge_states};
 
+#[cfg(feature = "postgres")]
+pub use approval::PostgresApprovalStore;
+#[cfg(feature = "sqlite")]
+pub use approval::SqliteApprovalStore;
+#[cfg(feature = "firestore")]
+pub use firestore_stores::{FirestoreActionLedger, FirestoreApprovalStore, FirestoreSpendLedger};
+#[cfg(feature = "mongodb")]
+pub use mongodb_stores::{MongoActionLedger, MongoApprovalStore, MongoSpendLedger};
+#[cfg(feature = "neo4j")]
+pub use neo4j_stores::{Neo4jActionLedger, Neo4jApprovalStore, Neo4jSpendLedger};
+#[cfg(feature = "postgres")]
+pub use postgres_action_ledger::PostgresActionLedger;
+#[cfg(feature = "redis")]
+pub use redis_stores::{RedisActionLedger, RedisApprovalStore, RedisSpendLedger};
 #[cfg(feature = "postgres")]
 pub use spend::PostgresSpendLedger;
 #[cfg(feature = "sqlite")]

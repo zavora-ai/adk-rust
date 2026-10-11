@@ -29,12 +29,15 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "chrono", "json"], option
 fred = { version = "10", optional = true, features = ["i-scripts"] }
 mongodb = { version = "3", optional = true }
 firestore = { version = "0.48", optional = true }
+# Already a dependency of `firestore`; named directly for the emulator token source.
+gcloud-sdk = { version = "0.29", optional = true, default-features = false }
 neo4rs = { version = "0.8", optional = true }
 aes-gcm = { version = "0.10", optional = true }
 rand = { version = "0.9", optional = true }
 base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
+adk-core = { path = "../adk-core", features = ["conformance"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 axum = "0.8"
 futures.workspace = true
@@ -48,8 +51,8 @@ sqlite = ["sqlx/sqlite"]
 database = ["sqlite"]
 postgres = ["sqlx/postgres"]
 redis = ["fred"]
-mongodb = ["dep:mongodb"]
-firestore = ["dep:firestore"]
+mongodb = ["dep:mongodb", "tokio"]
+firestore = ["dep:firestore", "dep:gcloud-sdk", "sha2", "tokio"]
 neo4j = ["dep:neo4rs"]
 vertex-session = ["adk-gcp", "base64", "google-cloud-auth", "reqwest", "sha2", "tokio"]
 encrypted-session = ["aes-gcm", "rand", "base64"]

@@ -74,7 +74,7 @@ macro_rules! sql_migration_body {
         int_type: $int_type:expr $(,)?
     ) => {{
         let registry_table: &str = $registry_table;
-        let steps: &[(i64, &str, &str)] = $steps;
+        let steps: &'static [(i64, &'static str, &'static str)] = $steps;
 
         // Step 1: Create registry table if missing
         let create_sql = format!(
@@ -156,7 +156,9 @@ macro_rules! sql_migration_body {
 
             // Execute the migration SQL (raw_sql supports multiple
             // semicolon-separated statements in a single call).
-            sqlx::raw_sql(sql).execute(&mut *tx).await.map_err(|e| {
+            // `Executor::execute` returns a boxed `Send` future; `RawSql::execute` is an
+            // `async fn` whose future is not provably `Send` for PostgreSQL connections.
+            sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(sql)).await.map_err(|e| {
                 adk_core::AdkError::session(format!(
                     "{}",
                     MigrationError {
@@ -234,7 +236,7 @@ macro_rules! impl_sql_migration_runner {
             pub async fn run_sql_migrations<F, Fut>(
                 pool: &$pool_ty,
                 registry_table: &str,
-                steps: &[(i64, &str, &str)],
+                steps: &'static [(i64, &'static str, &'static str)],
                 detect_existing: F,
             ) -> Result<(), adk_core::AdkError>
             where
@@ -267,7 +269,7 @@ macro_rules! impl_sql_migration_runner {
             pub async fn run_sql_migrations_on_connection<F>(
                 conn: &mut $conn_ty,
                 registry_table: &str,
-                steps: &[(i64, &str, &str)],
+                steps: &'static [(i64, &'static str, &'static str)],
                 detect_existing: F,
             ) -> Result<(), adk_core::AdkError>
             where
@@ -312,3 +314,47 @@ impl_sql_migration_runner!(sqlite_runner, sqlx::SqlitePool, sqlx::SqliteConnecti
 
 #[cfg(feature = "postgres")]
 impl_sql_migration_runner!(pg_runner, sqlx::PgPool, sqlx::PgConnection, "BIGINT");
+
+/// Runs migrations for a PostgreSQL-backed store under a session-level advisory lock
+/// keyed by `registry_table`, so concurrent processes migrate one at a time.
+///
+/// The lock is held on a dedicated connection opened outside `pool`, so a pool with a
+/// single connection can still run the statements. Closing that connection releases
+/// the lock even when this future is cancelled. Tables are created with
+/// `IF NOT EXISTS`, so no baseline detection is needed.
+#[cfg(feature = "postgres")]
+pub(crate) fn run_pg_migrations_locked(
+    pool: &sqlx::PgPool,
+    registry_table: &'static str,
+    steps: &'static [(i64, &'static str, &'static str)],
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), adk_core::AdkError>> + Send>> {
+    use sqlx::Connection;
+
+    // Boxed so the future is checked for `Send` here, with concrete lifetimes; callers
+    // inside `async_trait` methods otherwise hit rustc's higher-ranked `Send` inference
+    // limits on sqlx executors.
+    let pool = pool.clone();
+    Box::pin(async move {
+        let lock_key = registry_table
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+            })
+            .cast_signed();
+        let mut lock = sqlx::PgConnection::connect_with(&pool.connect_options())
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("database connection failed: {e}")))?;
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(lock_key)
+            .execute(&mut lock)
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::session(format!("advisory lock acquisition failed: {e}"))
+            })?;
+        let result =
+            pg_runner::run_sql_migrations(&pool, registry_table, steps, || async { Ok(false) })
+                .await;
+        let _ = lock.close().await;
+        result
+    })
+}

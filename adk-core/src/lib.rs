@@ -86,6 +86,12 @@ pub mod agent_loader;
 pub mod budget;
 /// Callback type aliases for agent, model, and tool lifecycle hooks.
 pub mod callbacks;
+/// Time sources for stores whose behaviour depends on the current time.
+pub mod clock;
+/// Conformance suites that any `SpendLedger`, `ActionLedger`, or `ApprovalStore`
+/// backend runs against its implementation.
+#[cfg(feature = "conformance")]
+pub mod conformance;
 /// Invocation context traits: state, session, artifacts, memory, and run configuration.
 pub mod context;
 /// Unified structured error type and result alias.
@@ -145,6 +151,7 @@ pub use callbacks::{
     BeforeToolCallback, EventsCompactionConfig, GlobalInstructionProvider, InstructionProvider,
     InvocationHooks, OnToolErrorCallback,
 };
+pub use clock::{Clock, ManualClock, SystemClock};
 pub use context::{
     Artifacts, BackpressurePolicy, CallbackContext, IncludeContents, InvocationContext,
     MAX_STATE_KEY_LEN, Memory, MemoryEntry, ReadonlyContext, ReadonlyState, RunConfig,

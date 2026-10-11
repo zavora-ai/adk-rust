@@ -1,8 +1,8 @@
-//! SQL-backed [`SpendLedger`] implementations.
+//! SQL-backed [`SpendLedger`](adk_core::SpendLedger) implementations.
 //!
 //! Every reservation, commit, and release is one row in `adk_spend_entries`, so spend
 //! survives restarts and is shared by every process that points at the same database.
-//! Limits are configuration, not data: give every process the same [`SpendLimits`].
+//! Limits are configuration, not data: give every process the same [`SpendLimits`](adk_core::SpendLimits).
 //!
 //! | Backend | Feature | How reservations serialize |
 //! |---------|---------|----------------------------|
@@ -12,11 +12,12 @@
 //! A reservation that is neither committed nor released stops counting once its
 //! `expires_at` passes; its row stays for audit.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use adk_core::{
-    DEFAULT_RESERVATION_TTL, ReservationId, Result, SpendError, SpendKey, SpendLedger, SpendLimits,
-    SpendPeriod,
+    Clock, DEFAULT_RESERVATION_TTL, ReservationId, Result, SpendError, SpendKey, SpendLedger,
+    SpendLimits, SpendPeriod, SystemClock,
 };
 use chrono::{DateTime, Utc};
 
@@ -123,6 +124,7 @@ WHERE state = 'committed' AND settled_at_us >= ?1 \
         pool: SqlitePool,
         limits: SpendLimits,
         ttl: Duration,
+        clock: Arc<dyn Clock>,
     }
 
     impl SqliteSpendLedger {
@@ -138,7 +140,12 @@ WHERE state = 'committed' AND settled_at_us >= ?1 \
 
         /// Uses an existing pool, such as the one a `SqliteSessionService` holds.
         pub fn from_pool(pool: SqlitePool) -> Self {
-            Self { pool, limits: SpendLimits::new(), ttl: DEFAULT_RESERVATION_TTL }
+            Self {
+                pool,
+                limits: SpendLimits::new(),
+                ttl: DEFAULT_RESERVATION_TTL,
+                clock: Arc::new(SystemClock),
+            }
         }
 
         /// Sets the limits every reservation is checked against.
@@ -150,6 +157,12 @@ WHERE state = 'committed' AND settled_at_us >= ?1 \
         /// Sets how long an unsettled reservation holds budget.
         pub fn with_reservation_ttl(mut self, ttl: Duration) -> Self {
             self.ttl = ttl;
+            self
+        }
+
+        /// Sets the clock that picks period windows and expires reservations.
+        pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+            self.clock = clock;
             self
         }
 
@@ -176,7 +189,7 @@ WHERE state = 'committed' AND settled_at_us >= ?1 \
             // The write lock is taken before the limit check, so a concurrent reservation
             // waits for this one to commit instead of reading the same total.
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(unavailable)?;
-            let now = Utc::now();
+            let now = self.clock.now();
             let now_us = now.timestamp_micros();
             for limit in self.limits.applicable(key) {
                 let consumed: i64 = sqlx::query(CONSUMED)
@@ -223,7 +236,7 @@ WHERE state = 'committed' AND settled_at_us >= ?1 \
             )
             .bind(STATE_COMMITTED)
             .bind(amount)
-            .bind(Utc::now().timestamp_micros())
+            .bind(self.clock.now().timestamp_micros())
             .bind(id.as_str())
             .bind(STATE_RESERVED)
             .execute(&self.pool)
@@ -241,7 +254,7 @@ WHERE state = 'committed' AND settled_at_us >= ?1 \
                  WHERE id = ?3 AND state = ?4",
             )
             .bind(STATE_RELEASED)
-            .bind(Utc::now().timestamp_micros())
+            .bind(self.clock.now().timestamp_micros())
             .bind(id.as_str())
             .bind(STATE_RESERVED)
             .execute(&self.pool)
@@ -255,7 +268,7 @@ WHERE state = 'committed' AND settled_at_us >= ?1 \
 
         async fn spent(&self, key: &SpendKey, period: SpendPeriod) -> Result<u64> {
             let spent: i64 = sqlx::query(SPENT)
-                .bind(window_start_micros(period, Utc::now()))
+                .bind(window_start_micros(period, self.clock.now()))
                 .bind(&key.org)
                 .bind(key.agent.as_deref())
                 .bind(key.vendor.as_deref())
@@ -335,6 +348,7 @@ WHERE state = 'committed' AND settled_at_us >= $1 \
         pool: PgPool,
         limits: SpendLimits,
         ttl: Duration,
+        clock: Arc<dyn Clock>,
     }
 
     impl PostgresSpendLedger {
@@ -350,7 +364,12 @@ WHERE state = 'committed' AND settled_at_us >= $1 \
 
         /// Uses an existing pool, such as the one a `PostgresSessionService` holds.
         pub fn from_pool(pool: PgPool) -> Self {
-            Self { pool, limits: SpendLimits::new(), ttl: DEFAULT_RESERVATION_TTL }
+            Self {
+                pool,
+                limits: SpendLimits::new(),
+                ttl: DEFAULT_RESERVATION_TTL,
+                clock: Arc::new(SystemClock),
+            }
         }
 
         /// Sets the limits every reservation is checked against.
@@ -365,19 +384,20 @@ WHERE state = 'committed' AND settled_at_us >= $1 \
             self
         }
 
-        /// Creates or upgrades the ledger tables.
+        /// Sets the clock that picks period windows and expires reservations.
+        pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+            self.clock = clock;
+            self
+        }
+
+        /// Creates or upgrades the ledger tables under an advisory lock, so concurrent
+        /// processes can call it at startup.
         ///
         /// # Errors
         ///
         /// Returns an error when a migration statement fails.
         pub async fn migrate(&self) -> Result<()> {
-            crate::migration::pg_runner::run_sql_migrations(
-                &self.pool,
-                REGISTRY_TABLE,
-                MIGRATIONS,
-                || async { Ok(false) },
-            )
-            .await
+            crate::migration::run_pg_migrations_locked(&self.pool, REGISTRY_TABLE, MIGRATIONS).await
         }
     }
 
@@ -398,7 +418,7 @@ WHERE state = 'committed' AND settled_at_us >= $1 \
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(unavailable)?;
-            let now = Utc::now();
+            let now = self.clock.now();
             let now_us = now.timestamp_micros();
             for limit in self.limits.applicable(key) {
                 let consumed: i64 = sqlx::query(CONSUMED)
@@ -445,7 +465,7 @@ WHERE state = 'committed' AND settled_at_us >= $1 \
             )
             .bind(STATE_COMMITTED)
             .bind(amount)
-            .bind(Utc::now().timestamp_micros())
+            .bind(self.clock.now().timestamp_micros())
             .bind(id.as_str())
             .bind(STATE_RESERVED)
             .execute(&self.pool)
@@ -463,7 +483,7 @@ WHERE state = 'committed' AND settled_at_us >= $1 \
                  WHERE id = $3 AND state = $4",
             )
             .bind(STATE_RELEASED)
-            .bind(Utc::now().timestamp_micros())
+            .bind(self.clock.now().timestamp_micros())
             .bind(id.as_str())
             .bind(STATE_RESERVED)
             .execute(&self.pool)
@@ -477,7 +497,7 @@ WHERE state = 'committed' AND settled_at_us >= $1 \
 
         async fn spent(&self, key: &SpendKey, period: SpendPeriod) -> Result<u64> {
             let spent: i64 = sqlx::query(SPENT)
-                .bind(window_start_micros(period, Utc::now()))
+                .bind(window_start_micros(period, self.clock.now()))
                 .bind(&key.org)
                 .bind(key.agent.as_deref())
                 .bind(key.vendor.as_deref())

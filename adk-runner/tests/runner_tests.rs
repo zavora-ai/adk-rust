@@ -1466,3 +1466,90 @@ async fn interrupt_with_a_global_token_cancels_only_the_target_run() {
     }
     assert_eq!(count, 3, "a later run must not inherit the interrupted run's cancellation");
 }
+
+// ── Durable stores ─────────────────────────────────────────────────────
+
+/// The durable stores one run's config carried.
+type SeenStores = (
+    Option<Arc<dyn adk_core::ActionLedger>>,
+    Option<Arc<dyn adk_core::ApprovalStore>>,
+    Option<Arc<dyn adk_core::SpendLedger>>,
+);
+
+/// Records the durable stores each run's config carries.
+#[derive(Default)]
+struct StoreCapturingAgent {
+    seen: Mutex<Vec<SeenStores>>,
+}
+
+#[async_trait]
+impl Agent for StoreCapturingAgent {
+    fn name(&self) -> &str {
+        "store_capturing_agent"
+    }
+
+    fn description(&self) -> &str {
+        "Records the durable stores in its run config"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let config = ctx.run_config();
+        self.seen.lock().unwrap().push((
+            config.action_ledger.clone(),
+            config.approval_store.clone(),
+            config.spend_ledger.clone(),
+        ));
+        Ok(Box::pin(futures::stream::empty()))
+    }
+}
+
+#[tokio::test]
+async fn runner_installs_its_durable_stores_on_runs_that_carry_none() {
+    let agent = Arc::new(StoreCapturingAgent::default());
+    let actions: Arc<dyn adk_core::ActionLedger> = Arc::new(adk_core::InMemoryActionLedger::new());
+    let approvals: Arc<dyn adk_core::ApprovalStore> =
+        Arc::new(adk_core::InMemoryApprovalStore::new());
+    let spend: Arc<dyn adk_core::SpendLedger> = Arc::new(adk_core::InMemorySpendLedger::default());
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(agent.clone() as Arc<dyn Agent>)
+        .session_service(Arc::new(MockSessionService) as Arc<dyn SessionService>)
+        .action_ledger(actions.clone())
+        .approval_store(approvals.clone())
+        .spend_ledger(spend.clone())
+        .build()
+        .unwrap();
+
+    let run_own = adk_core::RunConfig::builder()
+        .action_ledger(Arc::new(adk_core::InMemoryActionLedger::new()))
+        .build();
+    let own_ledger = run_own.action_ledger.clone().unwrap();
+    for config in [None, Some(run_own)] {
+        let mut stream = runner
+            .run_with_config(
+                UserId::new("user123").unwrap(),
+                SessionId::new("stores-session").unwrap(),
+                Content::new("user").with_text("go"),
+                config,
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+
+    let seen = agent.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    let (action, approval, spent) = &seen[0];
+    assert!(Arc::ptr_eq(action.as_ref().unwrap(), &actions), "runner's action ledger");
+    assert!(Arc::ptr_eq(approval.as_ref().unwrap(), &approvals), "runner's approval store");
+    assert!(Arc::ptr_eq(spent.as_ref().unwrap(), &spend), "runner's spend ledger");
+    let (action, approval, _) = &seen[1];
+    assert!(Arc::ptr_eq(action.as_ref().unwrap(), &own_ledger), "a run's own ledger is kept");
+    assert!(Arc::ptr_eq(approval.as_ref().unwrap(), &approvals), "missing stores are filled");
+}

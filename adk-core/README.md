@@ -319,6 +319,20 @@ let request = ToolPolicyRequest::new("transfer", json!({ "amount": 500 }));
 assert!(matches!(policy.decide(&request), PolicyDecision::Deny { .. }));
 ```
 
+### Store Conformance Suites
+
+The `conformance` feature provides one suite per durable store trait — `SpendLedger`,
+`ActionLedger`, and `ApprovalStore`. A backend implements a harness that opens it and calls
+`spend_ledger_conformance_tests!`, `action_ledger_conformance_tests!`, or
+`approval_store_conformance_tests!`, which generate one `#[tokio::test]` per contract case:
+accounting, period rollover, concurrency across two handles, and restart survival. Every
+in-memory and `adk-session` backend runs the same suites.
+
+```toml
+[dev-dependencies]
+adk-core = { version = "3.0.0", features = ["conformance"] }
+```
+
 ### Inline Data Size Limit
 
 `Content::with_inline_data()` and `Part::inline_data()` enforce a 10 MB limit (`MAX_INLINE_DATA_SIZE`) to prevent oversized payloads.
@@ -340,8 +354,9 @@ assert!(validate_state_key("../etc/passwd").is_err());
 against every `SpendLimits` cap that covers a `SpendKey` (org, agent, vendor; day, month,
 or lifetime in UTC), `commit` records the actual amount, and `release` drops the hold.
 Unsettled holds expire after a TTL. `InMemorySpendLedger` is the process-local
-implementation; `adk-session` provides SQLite and PostgreSQL ledgers. Set
-`RunConfig::spend_ledger` to cap a run.
+implementation; `adk-session` provides SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and
+Firestore ledgers. Set `RunConfig::spend_ledger` to cap a run. `with_clock` takes a
+`Clock`; `ManualClock` lets a test cross a day or month boundary.
 
 ```rust
 use adk_core::{InMemorySpendLedger, SpendKey, SpendLimits, SpendPeriod};

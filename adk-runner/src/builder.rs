@@ -21,8 +21,8 @@ use std::sync::Arc;
 #[cfg(feature = "artifacts")]
 use adk_artifact::ArtifactService;
 use adk_core::{
-    Agent, CacheCapable, ContextCacheConfig, GovernanceControl, Memory, Result, RunBudget,
-    RunConfig, ToolPolicy,
+    ActionLedger, Agent, ApprovalStore, CacheCapable, ContextCacheConfig, GovernanceControl,
+    Memory, Result, RunBudget, RunConfig, SpendLedger, ToolPolicy,
 };
 #[cfg(feature = "plugins")]
 use adk_plugin::PluginManager;
@@ -78,6 +78,9 @@ pub struct RunnerConfigBuilder<A, G, S> {
     budget: Option<RunBudget>,
     tool_policy: Option<Arc<dyn ToolPolicy>>,
     governance: Option<GovernanceControl>,
+    action_ledger: Option<Arc<dyn ActionLedger>>,
+    approval_store: Option<Arc<dyn ApprovalStore>>,
+    spend_ledger: Option<Arc<dyn SpendLedger>>,
     _marker: PhantomData<(A, G, S)>,
 }
 
@@ -106,6 +109,9 @@ impl RunnerConfigBuilder<NoAppName, NoAgent, NoSessionService> {
             budget: None,
             tool_policy: None,
             governance: None,
+            action_ledger: None,
+            approval_store: None,
+            spend_ledger: None,
             _marker: PhantomData,
         }
     }
@@ -146,6 +152,9 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             budget: self.budget,
             tool_policy: self.tool_policy,
             governance: self.governance,
+            action_ledger: self.action_ledger,
+            approval_store: self.approval_store,
+            spend_ledger: self.spend_ledger,
             _marker: PhantomData,
         }
     }
@@ -174,6 +183,9 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             budget: self.budget,
             tool_policy: self.tool_policy,
             governance: self.governance,
+            action_ledger: self.action_ledger,
+            approval_store: self.approval_store,
+            spend_ledger: self.spend_ledger,
             _marker: PhantomData,
         }
     }
@@ -205,6 +217,9 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             budget: self.budget,
             tool_policy: self.tool_policy,
             governance: self.governance,
+            action_ledger: self.action_ledger,
+            approval_store: self.approval_store,
+            spend_ledger: self.spend_ledger,
             _marker: PhantomData,
         }
     }
@@ -347,6 +362,51 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self
     }
 
+    /// Set the ledger that records non-idempotent tool calls (optional).
+    ///
+    /// The runner installs it on each run's [`RunConfig::action_ledger`] when the run
+    /// does not carry one. Every backend implements the same
+    /// [`ActionLedger`] trait, so switching from SQLite to PostgreSQL, Redis, or
+    /// MongoDB changes only the value passed here.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_session::PostgresActionLedger;
+    ///
+    /// let ledger = PostgresActionLedger::from_pool(pool.clone());
+    /// ledger.migrate().await?;
+    /// let runner = Runner::builder()
+    ///     .app_name("payments")
+    ///     .agent(agent)
+    ///     .session_service(sessions)
+    ///     .action_ledger(Arc::new(ledger))
+    ///     .build()?;
+    /// ```
+    pub fn action_ledger(mut self, ledger: Arc<dyn ActionLedger>) -> Self {
+        self.action_ledger = Some(ledger);
+        self
+    }
+
+    /// Set where calls held for approval and their decisions are kept (optional).
+    ///
+    /// The runner installs it on each run's [`RunConfig::approval_store`] when the run
+    /// does not carry one.
+    pub fn approval_store(mut self, store: Arc<dyn ApprovalStore>) -> Self {
+        self.approval_store = Some(store);
+        self
+    }
+
+    /// Set the ledger that model calls and payment tools reserve budget against
+    /// (optional).
+    ///
+    /// The runner installs it on each run's [`RunConfig::spend_ledger`] when the run
+    /// does not carry one.
+    pub fn spend_ledger(mut self, ledger: Arc<dyn SpendLedger>) -> Self {
+        self.spend_ledger = Some(ledger);
+        self
+    }
+
     /// Set the context compaction configuration for token-budget overflow handling (optional).
     ///
     /// When configured, the runner applies the given [`CompactionStrategy`](crate::compaction::CompactionStrategy)
@@ -391,6 +451,9 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             context_compaction: self.context_compaction,
             tool_policy: self.tool_policy,
             governance: self.governance,
+            action_ledger: self.action_ledger,
+            approval_store: self.approval_store,
+            spend_ledger: self.spend_ledger,
         }
     }
 
@@ -427,6 +490,9 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             context_compaction: self.context_compaction,
             tool_policy: self.tool_policy,
             governance: self.governance,
+            action_ledger: self.action_ledger,
+            approval_store: self.approval_store,
+            spend_ledger: self.spend_ledger,
         };
         Runner::new(config)
     }

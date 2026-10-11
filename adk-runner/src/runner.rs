@@ -249,6 +249,18 @@ pub struct RunnerConfig {
     /// Optional kill switch shared with other runners. Without one the runner creates
     /// its own; see [`Runner::governance`].
     pub governance: Option<adk_core::GovernanceControl>,
+    /// Optional ledger of non-idempotent tool calls.
+    ///
+    /// Installed on each run's [`RunConfig::action_ledger`] when the run carries none.
+    pub action_ledger: Option<Arc<dyn adk_core::ActionLedger>>,
+    /// Optional store for calls held for approval and their decisions.
+    ///
+    /// Installed on each run's [`RunConfig::approval_store`] when the run carries none.
+    pub approval_store: Option<Arc<dyn adk_core::ApprovalStore>>,
+    /// Optional ledger that model calls and payment tools reserve budget against.
+    ///
+    /// Installed on each run's [`RunConfig::spend_ledger`] when the run carries none.
+    pub spend_ledger: Option<Arc<dyn adk_core::SpendLedger>>,
 }
 
 /// Agent execution runtime.
@@ -288,6 +300,10 @@ pub struct Runner {
     tool_policy: Option<Arc<dyn adk_core::ToolPolicy>>,
     /// Kill switch checked at the start of every run and carried into it.
     governance: adk_core::GovernanceControl,
+    /// Durable stores installed on runs that carry none.
+    action_ledger: Option<Arc<dyn adk_core::ActionLedger>>,
+    approval_store: Option<Arc<dyn adk_core::ApprovalStore>>,
+    spend_ledger: Option<Arc<dyn adk_core::SpendLedger>>,
     /// Serializes externally triggered invocations per session. The weak values prevent the
     /// per-trigger session policy from retaining one lock forever for every completed event.
     pub(crate) external_session_locks: Arc<
@@ -372,6 +388,9 @@ impl Runner {
             next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             tool_policy: config.tool_policy,
             governance: config.governance.unwrap_or_default(),
+            action_ledger: config.action_ledger,
+            approval_store: config.approval_store,
+            spend_ledger: config.spend_ledger,
             external_session_locks: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -533,6 +552,15 @@ impl Runner {
         // its own config; the config travels into transfers and agent tools with them.
         if run_config.tool_policy.is_none() {
             run_config.tool_policy = self.tool_policy.clone();
+        }
+        if run_config.action_ledger.is_none() {
+            run_config.action_ledger = self.action_ledger.clone();
+        }
+        if run_config.approval_store.is_none() {
+            run_config.approval_store = self.approval_store.clone();
+        }
+        if run_config.spend_ledger.is_none() {
+            run_config.spend_ledger = self.spend_ledger.clone();
         }
         if !run_config.governance.iter().any(|control| control.same_as(&self.governance)) {
             run_config.governance.push(self.governance.clone());

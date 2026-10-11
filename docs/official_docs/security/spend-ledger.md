@@ -58,9 +58,15 @@ apply together.
 | `InMemorySpendLedger` | `adk-core` | One mutex; process-local, nothing survives a restart |
 | `SqliteSpendLedger` | `adk-session`, `sqlite` | `BEGIN IMMEDIATE` takes the write lock before the limit check |
 | `PostgresSpendLedger` | `adk-session`, `postgres` | `SELECT ... FOR UPDATE` on the organization's row |
+| `RedisSpendLedger` | `adk-session`, `redis` | One Lua script per reservation |
+| `MongoSpendLedger` | `adk-session`, `mongodb` | Compare-and-set on the organization document |
+| `Neo4jSpendLedger` | `adk-session`, `neo4j` | Transaction that writes the organization node first |
+| `FirestoreSpendLedger` | `adk-session`, `firestore` | Serializable transaction over the organization's documents |
 
-Concurrent reservations never overshoot a cap. Limits are configuration, not data: give
-every process that shares a database the same `SpendLimits`.
+Concurrent reservations never overshoot a cap; every backend passes the same conformance
+suite (see [Durable Stores](durable-stores.md)). Limits are configuration, not data: give
+every process that shares a database the same `SpendLimits`. `with_clock` replaces the
+system clock, which tests use to cross a day or month boundary.
 
 ```rust
 use adk_core::{SpendKey, SpendLimits, SpendPeriod};

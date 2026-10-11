@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -24,7 +25,7 @@ use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Result};
+use crate::{AdkError, Clock, ErrorCategory, ErrorComponent, ErrorDetails, Result, SystemClock};
 
 /// How long a reservation holds budget when it is neither committed nor released.
 pub const DEFAULT_RESERVATION_TTL: Duration = Duration::from_secs(15 * 60);
@@ -492,18 +493,30 @@ impl LedgerState {
 pub struct InMemorySpendLedger {
     limits: SpendLimits,
     ttl: Duration,
+    clock: Arc<dyn Clock>,
     state: Mutex<LedgerState>,
 }
 
 impl InMemorySpendLedger {
     /// Creates a ledger enforcing `limits`, with [`DEFAULT_RESERVATION_TTL`].
     pub fn new(limits: SpendLimits) -> Self {
-        Self { limits, ttl: DEFAULT_RESERVATION_TTL, state: Mutex::new(LedgerState::default()) }
+        Self {
+            limits,
+            ttl: DEFAULT_RESERVATION_TTL,
+            clock: Arc::new(SystemClock),
+            state: Mutex::new(LedgerState::default()),
+        }
     }
 
     /// Sets how long an unsettled reservation holds budget.
     pub fn with_reservation_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
+        self
+    }
+
+    /// Sets the clock that picks period windows and expires reservations.
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -523,7 +536,7 @@ impl Default for InMemorySpendLedger {
 impl SpendLedger for InMemorySpendLedger {
     async fn reserve(&self, key: &SpendKey, amount_micro_usd: u64) -> Result<ReservationId> {
         let mut state = self.state.lock().await;
-        let now = Utc::now();
+        let now = self.clock.now();
         for limit in self.limits.applicable(key) {
             let consumed = state
                 .committed(&limit.key, limit.key.period, now)
@@ -554,7 +567,7 @@ impl SpendLedger for InMemorySpendLedger {
     async fn commit(&self, id: ReservationId, actual_micro_usd: u64) -> Result<()> {
         let mut state = self.state.lock().await;
         let hold = state.holds.remove(&id).ok_or(SpendError::UnknownReservation(id))?;
-        let bucket = (Attribution::of(&hold.key), Utc::now().date_naive());
+        let bucket = (Attribution::of(&hold.key), self.clock.now().date_naive());
         let total = state.committed.entry(bucket).or_default();
         *total = total.saturating_add(actual_micro_usd);
         Ok(())
@@ -566,7 +579,7 @@ impl SpendLedger for InMemorySpendLedger {
     }
 
     async fn spent(&self, key: &SpendKey, period: SpendPeriod) -> Result<u64> {
-        Ok(self.state.lock().await.committed(key, period, Utc::now()))
+        Ok(self.state.lock().await.committed(key, period, self.clock.now()))
     }
 }
 

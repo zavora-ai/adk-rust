@@ -12,7 +12,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 
 - **InMemorySessionService** - Simple in-memory session storage
 - **SqliteSessionService** - SQLite-backed persistence (`sqlite` feature)
-- **SqliteActionLedger** - Durable `ActionLedger` that keeps non-idempotent tool calls from repeating across restarts (`sqlite` feature)
+- **Durable stores** - `SpendLedger`, `ActionLedger`, and `ApprovalStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each behind its backend's feature and proven by the `adk-core` conformance suites
 - **PostgresSessionService** - PostgreSQL-backed persistence (`postgres` feature)
 - **RedisSessionService** - Redis-backed persistence (`redis` feature)
 - **MongoSessionService** - MongoDB-backed persistence (`mongodb` feature)
@@ -321,12 +321,24 @@ println!("Schema version: {version}");
 
 Each backend detects pre-existing tables (baseline detection) and registers them as already applied, so `migrate()` is safe to call on both fresh and existing databases.
 
-## Spend Ledgers
+## Durable Stores
 
-`SqliteSpendLedger` (`sqlite` feature) and `PostgresSpendLedger` (`postgres` feature)
-implement `adk_core::SpendLedger` durably. Concurrent reservations never overshoot a cap:
-SQLite takes the write lock with `BEGIN IMMEDIATE` before the limit check, and PostgreSQL
-locks the organization's row with `SELECT ... FOR UPDATE`.
+| Backend | Feature | Spend ledger | Action ledger | Approval store |
+|---------|---------|--------------|---------------|----------------|
+| SQLite | `sqlite` | `SqliteSpendLedger` | `SqliteActionLedger` | `SqliteApprovalStore` |
+| PostgreSQL | `postgres` | `PostgresSpendLedger` | `PostgresActionLedger` | `PostgresApprovalStore` |
+| Redis | `redis` | `RedisSpendLedger` | `RedisActionLedger` | `RedisApprovalStore` |
+| MongoDB | `mongodb` | `MongoSpendLedger` | `MongoActionLedger` | `MongoApprovalStore` |
+| Neo4j | `neo4j` | `Neo4jSpendLedger` | `Neo4jActionLedger` | `Neo4jApprovalStore` |
+| Firestore | `firestore` | `FirestoreSpendLedger` | `FirestoreActionLedger` | `FirestoreApprovalStore` |
+
+Each type has `new(...)`, a constructor over the handle a session service holds
+(`from_pool`, `from_client`, `from_database`, `from_graph`, `from_db`), and `migrate()`.
+Spend ledgers add `with_limits`, `with_reservation_ttl`, and `with_clock`. Concurrent
+reservations never overshoot a cap, `begin` admits one caller per key, and a decision is
+taken once. Every type passes the `adk-core` conformance suites
+(`tests/store_conformance_*.rs`); see the
+[Durable Stores guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/durable-stores.md).
 
 ```rust
 use adk_core::{SpendKey, SpendLimits, SpendPeriod};

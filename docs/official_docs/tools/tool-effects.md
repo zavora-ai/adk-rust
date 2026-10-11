@@ -139,6 +139,15 @@ stable identifier, not a cryptographic hash — never the payloads themselves.
 |----------------|-------|--------------------|
 | `InMemoryActionLedger` | `adk-core` | No |
 | `SqliteActionLedger` | `adk-session` (`sqlite` feature) | Yes |
+| `PostgresActionLedger` | `adk-session` (`postgres` feature) | Yes |
+| `RedisActionLedger` | `adk-session` (`redis` feature) | Yes, with server persistence |
+| `MongoActionLedger` | `adk-session` (`mongodb` feature) | Yes |
+| `Neo4jActionLedger` | `adk-session` (`neo4j` feature) | Yes |
+| `FirestoreActionLedger` | `adk-session` (`firestore` feature) | Yes |
+
+Every implementation passes the same conformance suite; see
+[Durable Stores](../security/durable-stores.md) for the backend matrix and which store
+combinations prevent duplicate execution.
 
 ```toml
 [dependencies]

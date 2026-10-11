@@ -87,6 +87,9 @@
 5 adk-realtime openai
 5 adk-session vertex-session
 5 adk-session postgres
+# Durable stores on every backend: compiles them and runs the SQLite conformance suites;
+# the live-server suites run in the nightly `durable-stores` job.
+5 adk-session sqlite,redis,mongodb,neo4j,firestore
 # Memory Bank backend; its mock contract tests need the feature.
 5 adk-memory vertex-memory
 # `adk-memory --features database-memory` once stopped compiling entirely while every

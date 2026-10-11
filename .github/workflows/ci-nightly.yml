@@ -8,6 +8,8 @@ name: CI Nightly
 #     (ci.yml) never builds (realtime `full`, audio ONNX backends, GPU features).
 #   • supply-chain — `cargo audit` (enforcing) + `cargo deny` (advisory) over the
 #     workspace dependency graph.
+#   • durable-stores — the store conformance suites against live PostgreSQL, Redis,
+#     MongoDB, Neo4j, and the Firestore emulator.
 #   • integration-tests — the `#[ignore]`d integration tests that hit real
 #     provider APIs, gated on the relevant secrets being configured.
 #
@@ -202,6 +204,95 @@ jobs:
       if: always()
       shell: bash
       run: echo "### 🔐 supply-chain checks (cargo audit + cargo deny) completed" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Durable stores: conformance suites on live backends ────────
+  # Every SpendLedger, ActionLedger, and ApprovalStore backend in adk-session runs the
+  # adk-core conformance suites. SQLite runs on every PR (feature-coverage shard 5); the
+  # server-backed suites are #[ignore]d and run here against service containers. Needs
+  # no secrets.
+  durable-stores:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mongodb:
+        image: mongo:7
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      neo4j:
+        image: neo4j:5
+        env:
+          NEO4J_AUTH: neo4j/conformance-pass
+          NEO4J_server_memory_heap_max__size: 512m
+        ports: ["7687:7687"]
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p conformance-pass 'RETURN 1'"
+          --health-interval 5s --health-timeout 10s --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      REDIS_URL: redis://localhost:6379
+      MONGODB_URL: mongodb://localhost:27017
+      NEO4J_URI: bolt://localhost:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: conformance-pass
+      FIRESTORE_EMULATOR_HOST: localhost:8080
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: durable-stores
+        neutralize-wild: 'true'
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+      with:
+        tool: cargo-nextest
+
+    # The emulator needs a start command, which service containers cannot pass.
+    - name: Start the Firestore emulator
+      timeout-minutes: 10
+      run: |
+        docker run -d --name firestore -p 8080:8080 \
+          gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+          gcloud emulators firestore start --host-port=0.0.0.0:8080
+        for _ in $(seq 120); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
+        docker logs firestore
+        exit 1
+
+    - name: Run store conformance suites
+      run: >-
+        cargo nextest run -p adk-session
+        --features sqlite,postgres,redis,mongodb,neo4j,firestore
+        --run-ignored all
+        --test store_conformance_sqlite
+        --test store_conformance_postgres
+        --test store_conformance_redis
+        --test store_conformance_mongodb
+        --test store_conformance_neo4j
+        --test store_conformance_firestore
+        --test spend_ledger_postgres
+
+    - name: Durable-stores summary
+      if: always()
+      shell: bash
+      run: echo "### 🗄️ durable store conformance suites completed" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Integration tests: #[ignore]d tests gated on secrets ───────
   # Requirement 2.3 (scheduled integration coverage). The workspace marks tests

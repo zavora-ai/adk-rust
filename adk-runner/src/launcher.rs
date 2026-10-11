@@ -135,6 +135,9 @@ impl Launcher {
                 context_compaction: None,
                 tool_policy: None,
                 governance: None,
+                action_ledger: None,
+                approval_store: None,
+                spend_ledger: None,
             })?;
 
             let mut stream = runner

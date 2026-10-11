@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use tracing::instrument;
 use uuid::Uuid;
 
-/// Neo4j-backed session service implementing [`SessionService`](crate::SessionService).
+/// Neo4j-backed session service implementing [`SessionService`].
 ///
 /// Stores sessions as graph nodes with relationships to event, app-state,
 /// and user-state nodes. Each state key is a node property holding the value

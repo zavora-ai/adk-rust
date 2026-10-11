@@ -419,6 +419,7 @@ dependencies = [
 name = "adk-core"
 version = "3.0.0"
 dependencies = [
+ "adk-core",
  "async-stream",
  "async-trait",
  "chrono",
@@ -1038,6 +1039,7 @@ dependencies = [
  "firestore",
  "fred",
  "futures",
+ "gcloud-sdk",
  "google-cloud-auth 1.15.0",
  "http 1.5.0",
  "mongodb",

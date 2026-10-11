@@ -218,8 +218,11 @@ for pending in store.pending(&scope).await? {
 }
 ```
 
-`InMemoryApprovalStore` lives for the process. Implement `ApprovalStore` over a database to
-keep requests across restarts.
+`InMemoryApprovalStore` lives for the process. `adk-session` provides durable stores that
+keep requests across restarts and share them between processes — `SqliteApprovalStore`,
+`PostgresApprovalStore`, `RedisApprovalStore`, `MongoApprovalStore`, `Neo4jApprovalStore`,
+and `FirestoreApprovalStore` — each passing the same conformance suite. Install one with
+`Runner::builder().approval_store(...)`. See [Durable Stores](durable-stores.md).
 
 ### Decisions Keyed by Call ID
 

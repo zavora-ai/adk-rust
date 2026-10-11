@@ -73,7 +73,7 @@ pub struct FirestoreSessionConfig {
     pub root_collection: Option<String>,
 }
 
-/// Firestore-backed session service implementing [`SessionService`](crate::SessionService).
+/// Firestore-backed session service implementing [`SessionService`].
 ///
 /// Uses Google Cloud Firestore with Application Default Credentials for authentication.
 /// Data is organized using subcollections under a configurable root collection. See the

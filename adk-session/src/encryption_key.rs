@@ -1,7 +1,7 @@
 //! AES-256-GCM encryption key management.
 //!
 //! Provides [`EncryptionKey`] for generating, loading, and managing
-//! 256-bit encryption keys used by [`EncryptedSession`](super::EncryptedSession).
+//! 256-bit encryption keys used by [`EncryptedSession`](crate::EncryptedSession).
 
 use adk_core::AdkError;
 

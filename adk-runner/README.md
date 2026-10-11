@@ -68,6 +68,8 @@ while let Some(event) = stream.next().await {
 
 The builder enforces required fields (`app_name`, `agent`, `session_service`) at compile time. Optional fields default to sensible values. The old `Runner::new(RunnerConfig { ... })` constructor remains available for backward compatibility.
 
+`action_ledger`, `approval_store`, and `spend_ledger` install durable stores on every run that does not carry its own in `RunConfig`. Any backend implementing the `adk-core` traits works — in-memory, or SQLite, PostgreSQL, Redis, MongoDB, Neo4j, or Firestore from `adk-session`.
+
 ## RunnerConfig
 
 | Field | Type | Description |

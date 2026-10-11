@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use tracing::instrument;
 use uuid::Uuid;
 
-/// MongoDB-backed session service implementing [`SessionService`](crate::SessionService).
+/// MongoDB-backed session service implementing [`SessionService`].
 ///
 /// Uses four collections for the three-tier state model:
 /// - `sessions` — session documents with session-level state
