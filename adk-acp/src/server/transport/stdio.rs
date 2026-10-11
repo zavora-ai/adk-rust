@@ -2008,4 +2008,135 @@ mod tests {
         server_task.abort();
         let _ = server_task.await;
     }
+
+    /// Raw JSON-RPC lines in and out of `serve_connection`, standing in for an
+    /// editor on stdin/stdout. Dropping the returned sender is stdin EOF.
+    type RawServer = (
+        futures::channel::mpsc::UnboundedSender<std::io::Result<String>>,
+        futures::channel::mpsc::UnboundedReceiver<String>,
+        tokio::task::JoinHandle<Result<(), Error>>,
+    );
+
+    fn raw_server(agent: Arc<dyn AdkAgent>) -> RawServer {
+        use futures::SinkExt as _;
+        let (_, session_service) = mock_agent_and_session();
+        let config = AcpServerConfigBuilder::new()
+            .agent(agent)
+            .session_service(session_service)
+            .agent_name("raw-agent")
+            .build()
+            .expect("valid config");
+        let capabilities = CapabilitiesBuilder::build(&config);
+        let handler =
+            Arc::new(AcpSessionHandler::new(&config, CancellationToken::new()).expect("handler"));
+        let (in_tx, in_rx) = futures::channel::mpsc::unbounded::<std::io::Result<String>>();
+        let (out_tx, out_rx) = futures::channel::mpsc::unbounded::<String>();
+        let lines = agent_client_protocol::Lines::new(
+            out_tx.sink_map_err(|error| std::io::Error::other(error.to_string())),
+            in_rx,
+        );
+        let server = tokio::spawn(serve_connection(
+            handler,
+            capabilities,
+            "raw-agent".into(),
+            String::new(),
+            lines,
+        ));
+        (in_tx, out_rx, server)
+    }
+
+    async fn response_to(
+        out: &mut futures::channel::mpsc::UnboundedReceiver<String>,
+        id: u64,
+    ) -> serde_json::Value {
+        use futures::StreamExt as _;
+        loop {
+            let line = tokio::time::timeout(std::time::Duration::from_secs(5), out.next())
+                .await
+                .expect("no response within 5s")
+                .expect("output closed");
+            let message: serde_json::Value = serde_json::from_str(&line).expect("json line");
+            if message["id"] == id {
+                return message;
+            }
+        }
+    }
+
+    fn open_session_lines(cwd: &str) -> [String; 2] {
+        [
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": 1}})
+            .to_string(),
+            serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+                "params": {"cwd": cwd, "mcpServers": []}})
+            .to_string(),
+        ]
+    }
+
+    #[tokio::test]
+    async fn server_returns_when_the_editor_closes_stdin_while_idle() {
+        let (agent, _) = mock_agent_and_session();
+        let (in_tx, mut out, server) = raw_server(agent);
+        let cwd = std::env::current_dir().expect("cwd").display().to_string();
+        let [init, new] = open_session_lines(&cwd);
+        in_tx.unbounded_send(Ok(init)).expect("send");
+        assert_eq!(response_to(&mut out, 1).await["result"]["protocolVersion"], 1);
+        in_tx.unbounded_send(Ok(new)).expect("send");
+        assert!(response_to(&mut out, 2).await["result"]["sessionId"].is_string());
+        drop(in_tx);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("server did not return after stdin EOF")
+            .expect("server task");
+        assert!(result.is_ok(), "got {result:?}");
+    }
+
+    #[tokio::test]
+    async fn server_returns_when_the_editor_closes_stdin_mid_prompt() {
+        let started = Arc::new(Notify::new());
+        let agent: Arc<dyn AdkAgent> = Arc::new(PendingAgent { started: started.clone() });
+        let (in_tx, mut out, server) = raw_server(agent);
+        let cwd = std::env::current_dir().expect("cwd").display().to_string();
+        let [init, new] = open_session_lines(&cwd);
+        in_tx.unbounded_send(Ok(init)).expect("send");
+        response_to(&mut out, 1).await;
+        in_tx.unbounded_send(Ok(new)).expect("send");
+        let session_id = response_to(&mut out, 2).await["result"]["sessionId"].clone();
+        in_tx
+            .unbounded_send(Ok(serde_json::json!({"jsonrpc": "2.0", "id": 3,
+                "method": "session/prompt",
+                "params": {"sessionId": session_id,
+                    "prompt": [{"type": "text", "text": "wait"}]}})
+            .to_string()))
+            .expect("send");
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .expect("prompt did not start");
+        drop(in_tx);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("server did not return after stdin EOF during a running prompt")
+            .expect("server task");
+        assert!(result.is_ok(), "got {result:?}");
+    }
+
+    #[tokio::test]
+    async fn server_errors_keep_their_json_rpc_codes_on_the_wire() {
+        let (agent, _) = mock_agent_and_session();
+        let (in_tx, mut out, _server) = raw_server(agent);
+        let cwd = std::env::current_dir().expect("cwd").display().to_string();
+        let [init, _] = open_session_lines(&cwd);
+        in_tx.unbounded_send(Ok(init)).expect("send");
+        response_to(&mut out, 1).await;
+        in_tx
+            .unbounded_send(Ok(serde_json::json!({"jsonrpc": "2.0", "id": 7,
+                "method": "session/prompt",
+                "params": {"sessionId": "no-such-session",
+                    "prompt": [{"type": "text", "text": "hi"}]}})
+            .to_string()))
+            .expect("send");
+        let response = response_to(&mut out, 7).await;
+        assert_eq!(response["error"]["code"], -32602, "got {response}");
+        assert!(response["error"]["data"].is_string(), "got {response}");
+    }
 }
