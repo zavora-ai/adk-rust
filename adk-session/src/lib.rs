@@ -39,10 +39,10 @@
 /// SQL-backed approval stores for calls held for confirmation.
 pub mod approval;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
-mod durable_sql;
-#[cfg(any(feature = "sqlite", feature = "postgres"))]
 /// SQL-backed audit log stores for signed, Merkle-hashed audit logs.
 pub mod audit_log;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+mod durable_sql;
 /// Event types and the [`Events`] trait for accessing session event history.
 pub mod event;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
