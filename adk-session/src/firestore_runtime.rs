@@ -15,6 +15,7 @@
 //! | `adk_runs` (run ID, a UUID) | The [`RunRecord`](adk_core::RunRecord) as JSON, the queue, the enqueue sequence, the state, and the derived keys below |
 //! | `adk_run_queues` (SHA-256 of the queue) | The queue's enqueue sequence counter, written by every enqueue and claim in the queue |
 //! | `adk_run_keys` (SHA-256 of queue and idempotency key) | The queue, the key, and the run it names |
+//! | `adk_run_key_holders` (SHA-256 of queue and concurrency key) | The unfinished runs holding the key, in enqueue order |
 //! | `adk_schedules` (hex of the schedule ID) | The [`Schedule`](adk_core::Schedule) as JSON and `due_us` |
 //! | `adk_governance` (SHA-256 of the scope key) | The scope key and the [`GovernanceState`](adk_core::GovernanceState) as JSON |
 //!
@@ -30,7 +31,6 @@
 //! | Field | Present on | Value | Query |
 //! |-------|------------|-------|-------|
 //! | `claim_key` | Unfinished runs | `{queue digest}:{ready time}:{sequence}` | `claim`: the queue's runs whose ready time has passed, oldest ready first, then by enqueue order |
-//! | `holder_key` | Unfinished runs with a concurrency key | `{queue and key digest}:{sequence}` | The oldest unfinished holder of a concurrency key |
 //! | `finished_us` | Finished runs | When the run finished, in microseconds | `prune` |
 //! | `queue` | Every run | The queue | `list` with a queue filter |
 //! | `due_us` | Unpaused schedules with a next fire time | The next fire time, in microseconds | `due` |
@@ -43,17 +43,21 @@
 //! | Operation | Transaction reads | Transaction writes |
 //! |-----------|-------------------|--------------------|
 //! | `acquire`, `renew`, `release` | The lease document | The lease document |
-//! | `enqueue` | The queue document, the idempotency document, the key's unfinished holders | The queue document (next sequence), the run, the idempotency document, holders cancelled by `Interrupt` |
-//! | `claim` | The queue document, the ready candidates, the oldest holder of a candidate's key | The queue document, the claimed run, runs failed for exhausted attempts |
+//! | `enqueue` | The queue document, the idempotency document, the key's holders document, each holder `Interrupt` cancels | The queue document (next sequence), the run, the idempotency document, the holders document, cancelled holders |
+//! | `claim` (one transaction per candidate) | The candidate run; for a queued keyed run, its key's holders document | The claimed run; a run failed for exhausted attempts and its key's holders |
 //! | `heartbeat`, `set_checkpoint`, `wait`, `finish`, `wake`, `request_cancel` | The run | The run, when it changes |
 //! | `prune` | Each finished run in a batch | Deletes the run and its idempotency document |
 //! | Schedule `upsert`, `set_paused`, `advance`, `delete` | The schedule | The schedule, when it changes |
 //! | Governance `set` | The scope's document | The scope's document, when the epoch matches |
 //!
-//! Every enqueue and claim in a queue reads and writes the queue's document, so they
-//! serialize per queue: a claim sees every run enqueued before it, and two claims never
-//! take the same run at the same epoch. A worker write reads the run's epoch in the
-//! transaction that writes it, so a stale epoch is refused with `run_store.stale_epoch`.
+//! No transaction runs a query. A claim finds candidates with a plain query on
+//! `claim_key`, then re-reads and claims each one in its own transaction, so two claims
+//! never take the same run at the same epoch. Concurrency keys keep their unfinished
+//! holders in one document, read by `get` inside the transactions that change it: an
+//! enqueue appends to it, a run leaves it in the transaction that finishes or cancels
+//! it, and only its first holder is claimable while queued. A worker write reads the
+//! run's epoch in the transaction that writes it, so a stale epoch is refused with
+//! `run_store.stale_epoch`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -95,6 +99,7 @@ const LEASES: &str = "adk_leases";
 const RUNS: &str = "adk_runs";
 const RUN_QUEUES: &str = "adk_run_queues";
 const RUN_KEYS: &str = "adk_run_keys";
+const RUN_KEY_HOLDERS: &str = "adk_run_key_holders";
 const SCHEDULES: &str = "adk_schedules";
 const GOVERNANCE: &str = "adk_governance";
 
@@ -366,8 +371,6 @@ struct QueueDoc {
     queue: String,
     #[serde(default)]
     seq: i64,
-    #[serde(default)]
-    claims: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -380,8 +383,6 @@ struct RunDoc {
     record: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claim_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    holder_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     finished_us: Option<i64>,
 }
@@ -399,15 +400,6 @@ fn queue_id(queue: &str) -> String {
 
 fn run_key_id(queue: &str, key: &str) -> String {
     document_id(&json!(["idempotency", queue, key]))
-}
-
-fn holder_prefix(queue: &str, key: &str) -> String {
-    document_id(&json!(["holder", queue, key]))
-}
-
-/// The upper bound (exclusive) of every key that starts with `prefix:`.
-fn prefix_end(prefix: &str) -> String {
-    format!("{prefix};")
 }
 
 /// Run IDs are hyphenated UUIDs; anything else names no run and is never a document path.
@@ -431,11 +423,6 @@ fn run_doc(record: &RunRecord, seq: i64) -> TxResult<RunDoc> {
                 sortable(seq)
             )
         }),
-        holder_key: record
-            .concurrency_key
-            .as_deref()
-            .filter(|_| unfinished)
-            .map(|key| format!("{}:{}", holder_prefix(&record.queue, key), sortable(seq))),
         finished_us: (!unfinished).then(|| record.updated_at.timestamp_micros()),
     })
 }
@@ -519,42 +506,62 @@ fn write_queue(
     Ok(())
 }
 
-/// The unfinished runs holding `key` in `queue`, oldest first; at most `limit`.
-async fn holders(
-    db: &FirestoreDb,
-    queue: &str,
-    key: &str,
-    limit: Option<u32>,
-) -> TxResult<Vec<(RunRecord, i64)>> {
-    let prefix = format!("{}:", holder_prefix(queue, key));
-    let end = prefix_end(&holder_prefix(queue, key));
-    let query = db
+/// The unfinished runs holding one concurrency key, in enqueue order.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct KeyHoldersDoc {
+    queue: String,
+    key: String,
+    #[serde(default)]
+    holders: Vec<String>,
+}
+
+fn key_holders_id(queue: &str, key: &str) -> String {
+    document_id(&json!(["holders", queue, key]))
+}
+
+async fn read_holders(db: &FirestoreDb, queue: &str, key: &str) -> TxResult<KeyHoldersDoc> {
+    let stored: Option<KeyHoldersDoc> = db
         .fluent()
         .select()
-        .from(RUNS)
-        .filter(|q| {
-            q.for_all([
-                q.field("holder_key").greater_than_or_equal(prefix.as_str()),
-                q.field("holder_key").less_than(end.as_str()),
-            ])
-        })
-        .order_by([("holder_key", FirestoreQueryDirection::Ascending)]);
-    let query = match limit {
-        Some(limit) => query.limit(limit),
-        None => query,
-    };
-    let docs: Vec<RunDoc> = query.obj::<RunDoc>().query().await.map_err(tx_fail(RUN_STORAGE))?;
-    let mut found = Vec::new();
-    for doc in docs {
-        let record = decode_run(&doc).map_err(BackoffError::permanent)?;
-        if record.queue == queue
-            && record.concurrency_key.as_deref() == Some(key)
-            && !record.state.is_terminal()
-        {
-            found.push((record, doc.seq));
-        }
+        .by_id_in(RUN_KEY_HOLDERS)
+        .obj::<KeyHoldersDoc>()
+        .one(key_holders_id(queue, key))
+        .await
+        .map_err(tx_fail(RUN_STORAGE))?;
+    Ok(stored.filter(|doc| doc.queue == queue && doc.key == key).unwrap_or_else(|| KeyHoldersDoc {
+        queue: queue.to_string(),
+        key: key.to_string(),
+        holders: Vec::new(),
+    }))
+}
+
+fn write_holders(
+    db: &FirestoreDb,
+    transaction: &mut firestore::FirestoreTransaction<'_>,
+    doc: &KeyHoldersDoc,
+) -> TxResult<()> {
+    db.fluent()
+        .update()
+        .in_col(RUN_KEY_HOLDERS)
+        .document_id(key_holders_id(&doc.queue, &doc.key))
+        .object(doc)
+        .add_to_transaction(transaction)
+        .map_err(tx_fail(RUN_STORAGE))?;
+    Ok(())
+}
+
+/// Removes a run that just finished from its concurrency key's holders.
+async fn leave_key(
+    db: &FirestoreDb,
+    transaction: &mut firestore::FirestoreTransaction<'_>,
+    record: &RunRecord,
+) -> TxResult<()> {
+    if let Some(key) = record.concurrency_key.as_deref().filter(|_| record.state.is_terminal()) {
+        let mut doc = read_holders(db, &record.queue, key).await?;
+        doc.holders.retain(|id| *id != record.run_id);
+        write_holders(db, transaction, &doc)?;
     }
-    Ok(found)
+    Ok(())
 }
 
 /// Changes one run in a transaction; returns what `op` returns.
@@ -632,6 +639,57 @@ impl FirestoreRunStore {
         Ok(())
     }
 
+    /// Claims one candidate in a transaction over the run and, for a queued keyed run,
+    /// its key's holders; `None` when the candidate is no longer claimable, and an
+    /// exhausted recovery fails the run.
+    async fn claim_one(
+        &self,
+        run_id: &str,
+        worker: &str,
+        ttl: Duration,
+    ) -> Result<Option<ClaimedRun>> {
+        let clock = self.clock.clone();
+        let request = Arc::new((run_id.to_string(), worker.to_string()));
+        self.db
+            .run_transaction_with_options(
+                move |db, transaction| -> TxFuture<'_, Option<ClaimedRun>> {
+                    let (request, clock) = (request.clone(), clock.clone());
+                    Box::pin(async move {
+                        let (run_id, worker) = &*request;
+                        let now = stored_now(clock.now());
+                        let expires_at = deadline(now, ttl, "run_store.invalid_ttl")
+                            .map_err(BackoffError::permanent)?;
+                        let Some((mut record, seq)) = read_run(&db, run_id).await? else {
+                            return Ok(None);
+                        };
+                        let started = match claim_step(&record, now) {
+                            ClaimStep::NotReady => return Ok(None),
+                            ClaimStep::Exhaust => {
+                                apply_exhaust(&mut record, now);
+                                leave_key(&db, transaction, &record).await?;
+                                write_run(&db, transaction, &record, seq, None)?;
+                                return Ok(None);
+                            }
+                            ClaimStep::Claim { started } => started,
+                        };
+                        if record.state == adk_core::run_store::RunState::Queued
+                            && let Some(key) = &record.concurrency_key
+                            && read_holders(&db, &record.queue, key).await?.holders.first()
+                                != Some(&record.run_id)
+                        {
+                            return Ok(None);
+                        }
+                        let epoch = apply_claim(&mut record, started, worker, now, expires_at);
+                        write_run(&db, transaction, &record, seq, None)?;
+                        Ok(Some(ClaimedRun { record, epoch }))
+                    })
+                },
+                transaction_options(),
+            )
+            .await
+            .map_err(|e| transaction_error(e, |m| storage_error(RUN_STORAGE, m)))
+    }
+
     async fn mutate<T: Send + 'static>(&self, run_id: &str, op: Arc<RunOp<T>>) -> Result<T> {
         let clock = self.clock.clone();
         let run_id = Arc::new(run_id.to_string());
@@ -649,6 +707,7 @@ impl FirestoreRunStore {
                             Err(error) => return refuse(error),
                         };
                         if changed {
+                            leave_key(&db, transaction, &record).await?;
                             write_run(
                                 &db,
                                 transaction,
@@ -697,27 +756,39 @@ impl DurableRunStore for FirestoreRunStore {
                                 return Ok(Enqueued::Existing(existing));
                             }
                         }
-                        if let Some(key) = &run.concurrency_key {
+                        let mut holders = match &run.concurrency_key {
+                            Some(key) => Some(read_holders(&db, &run.queue, key).await?),
+                            None => None,
+                        };
+                        if let Some(doc) = &mut holders {
                             match run.on_conflict {
                                 OnConflict::Reject => {
-                                    let oldest = holders(&db, &run.queue, key, Some(1)).await?;
-                                    if let Some((holder, _)) = oldest.into_iter().next() {
+                                    if let Some(blocking_run_id) = doc.holders.first() {
                                         return Ok(Enqueued::Rejected {
-                                            blocking_run_id: holder.run_id,
+                                            blocking_run_id: blocking_run_id.clone(),
                                         });
                                     }
                                 }
                                 OnConflict::Interrupt => {
-                                    for (mut holder, seq) in
-                                        holders(&db, &run.queue, key, None).await?
-                                    {
+                                    for holder_id in doc.holders.clone() {
+                                        let Some((mut holder, seq)) =
+                                            read_run(&db, &holder_id).await?
+                                        else {
+                                            doc.holders.retain(|id| *id != holder_id);
+                                            continue;
+                                        };
                                         if apply_cancel(&mut holder, now) {
                                             write_run(&db, transaction, &holder, seq, None)?;
+                                        }
+                                        if holder.state.is_terminal() {
+                                            doc.holders.retain(|id| *id != holder_id);
                                         }
                                     }
                                 }
                                 _ => {}
                             }
+                            doc.holders.push(run_id.clone());
+                            write_holders(&db, transaction, doc)?;
                         }
                         queue.seq += 1;
                         write_queue(&db, transaction, &queue)?;
@@ -753,101 +824,51 @@ impl DurableRunStore for FirestoreRunStore {
     }
 
     async fn claim(&self, queue: &str, worker: &str, ttl: Duration) -> Result<Option<ClaimedRun>> {
-        deadline(stored_now(self.clock.now()), ttl, "run_store.invalid_ttl")?;
-        let clock = self.clock.clone();
-        let request = Arc::new((queue.to_string(), worker.to_string()));
-        self.db
-            .run_transaction_with_options(
-                move |db, transaction| -> TxFuture<'_, Option<ClaimedRun>> {
-                    let (request, clock) = (request.clone(), clock.clone());
-                    Box::pin(async move {
-                        let (queue, worker) = &*request;
-                        let now = stored_now(clock.now());
-                        let expires_at = deadline(now, ttl, "run_store.invalid_ttl")
-                            .map_err(BackoffError::permanent)?;
-                        let mut queue_doc = read_queue(&db, queue).await?;
-                        let prefix = queue_id(queue);
-                        let end = format!("{prefix}:{};", sortable(now.timestamp_micros()));
-                        let mut after = format!("{prefix}:");
-                        let mut first_page = true;
-                        // Transaction reads do not see its own writes, so key holders
-                        // failed by this claim are skipped by hand.
-                        let mut exhausted: Vec<String> = Vec::new();
-                        loop {
-                            let lower = after.clone();
-                            let docs: Vec<RunDoc> = db
-                                .fluent()
-                                .select()
-                                .from(RUNS)
-                                .filter(|q| {
-                                    q.for_all([
-                                        if first_page {
-                                            q.field("claim_key")
-                                                .greater_than_or_equal(lower.as_str())
-                                        } else {
-                                            q.field("claim_key").greater_than(lower.as_str())
-                                        },
-                                        q.field("claim_key").less_than(end.as_str()),
-                                    ])
-                                })
-                                .order_by([("claim_key", FirestoreQueryDirection::Ascending)])
-                                .limit(CLAIM_PAGE)
-                                .obj::<RunDoc>()
-                                .query()
-                                .await
-                                .map_err(tx_fail(RUN_STORAGE))?;
-                            first_page = false;
-                            let page_len = docs.len();
-                            for doc in docs {
-                                if let Some(key) = &doc.claim_key {
-                                    after.clone_from(key);
-                                }
-                                let mut record =
-                                    decode_run(&doc).map_err(BackoffError::permanent)?;
-                                if record.queue != *queue {
-                                    continue;
-                                }
-                                let started = match claim_step(&record, now) {
-                                    ClaimStep::NotReady => continue,
-                                    ClaimStep::Exhaust => {
-                                        apply_exhaust(&mut record, now);
-                                        write_run(&db, transaction, &record, doc.seq, None)?;
-                                        exhausted.push(record.run_id);
-                                        continue;
-                                    }
-                                    ClaimStep::Claim { started } => started,
-                                };
-                                if record.state == adk_core::run_store::RunState::Queued
-                                    && let Some(key) = &record.concurrency_key
-                                {
-                                    let limit =
-                                        u32::try_from(exhausted.len() + 1).unwrap_or(u32::MAX);
-                                    let oldest = holders(&db, queue, key, Some(limit)).await?;
-                                    if oldest
-                                        .iter()
-                                        .find(|(holder, _)| !exhausted.contains(&holder.run_id))
-                                        .is_some_and(|(holder, _)| holder.run_id != record.run_id)
-                                    {
-                                        continue;
-                                    }
-                                }
-                                let epoch =
-                                    apply_claim(&mut record, started, worker, now, expires_at);
-                                write_run(&db, transaction, &record, doc.seq, None)?;
-                                queue_doc.claims += 1;
-                                write_queue(&db, transaction, &queue_doc)?;
-                                return Ok(Some(ClaimedRun { record, epoch }));
-                            }
-                            if page_len < CLAIM_PAGE as usize {
-                                return Ok(None);
-                            }
-                        }
-                    })
-                },
-                transaction_options(),
-            )
-            .await
-            .map_err(|e| transaction_error(e, |m| storage_error(RUN_STORAGE, m)))
+        let now = stored_now(self.clock.now());
+        deadline(now, ttl, "run_store.invalid_ttl")?;
+        let prefix = queue_id(queue);
+        let end = format!("{prefix}:{};", sortable(now.timestamp_micros()));
+        let mut after: Option<String> = None;
+        loop {
+            // Candidates are read outside any transaction, so a claim never holds a query
+            // range; each candidate is then re-read and claimed in its own transaction.
+            let lower = after.clone().unwrap_or_else(|| format!("{prefix}:"));
+            let first_page = after.is_none();
+            let docs: Vec<RunDoc> = self
+                .db
+                .fluent()
+                .select()
+                .from(RUNS)
+                .filter(|q| {
+                    q.for_all([
+                        if first_page {
+                            q.field("claim_key").greater_than_or_equal(lower.as_str())
+                        } else {
+                            q.field("claim_key").greater_than(lower.as_str())
+                        },
+                        q.field("claim_key").less_than(end.as_str()),
+                    ])
+                })
+                .order_by([("claim_key", FirestoreQueryDirection::Ascending)])
+                .limit(CLAIM_PAGE)
+                .obj::<RunDoc>()
+                .query()
+                .await
+                .map_err(|e| storage_error(RUN_STORAGE, format!("run store query failed: {e}")))?;
+            let page_len = docs.len();
+            for doc in docs {
+                after = doc.claim_key.clone();
+                if doc.queue != queue {
+                    continue;
+                }
+                if let Some(claimed) = self.claim_one(&doc.run_id, worker, ttl).await? {
+                    return Ok(Some(claimed));
+                }
+            }
+            if page_len < CLAIM_PAGE as usize {
+                return Ok(None);
+            }
+        }
     }
 
     async fn heartbeat(&self, run_id: &str, epoch: u64, ttl: Duration) -> Result<bool> {
@@ -1541,7 +1562,6 @@ mod tests {
         assert!(key.as_str() >= format!("{prefix}:").as_str() && key < end);
         let later = format!("{prefix}:{}:{}", sortable(11), sortable(1));
         assert!(later > end, "a run ready later is outside the range");
-        assert!(prefix_end(&prefix) > key);
         assert_ne!(queue_id("a"), queue_id("b"));
     }
 
@@ -1551,11 +1571,11 @@ mod tests {
             .with_concurrency_key("k", OnConflict::Enqueue);
         let mut record = RunRecord::queued(uuid::Uuid::new_v4().to_string(), run, Utc::now());
         let doc = run_doc(&record, 7).unwrap();
-        assert!(doc.claim_key.is_some() && doc.holder_key.is_some() && doc.finished_us.is_none());
+        assert!(doc.claim_key.is_some() && doc.finished_us.is_none());
         assert_eq!(doc.state, "queued");
         assert!(apply_cancel(&mut record, Utc::now()));
         let doc = run_doc(&record, 7).unwrap();
-        assert!(doc.claim_key.is_none() && doc.holder_key.is_none() && doc.finished_us.is_some());
+        assert!(doc.claim_key.is_none() && doc.finished_us.is_some());
         assert_eq!(decode_run(&doc).unwrap(), record);
     }
 
