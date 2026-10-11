@@ -149,6 +149,13 @@ impl MutableSession {
                 continue;
             }
 
+            // A confirmation interrupt's text is a notice to the caller, not model output; in
+            // the history it would end the conversation on an assistant turn after the call's
+            // response, which providers without assistant prefill reject.
+            if event.actions.tool_confirmation.is_some() {
+                continue;
+            }
+
             // Skip events that were already compacted
             if let Some(boundary) = compaction_boundary
                 && event.timestamp <= boundary
@@ -213,6 +220,14 @@ struct PendingFunctionCall {
     invocation_id: Option<String>,
 }
 
+/// A call whose current answer is a confirmation-pending response.
+struct HeldAnswer {
+    /// Where the pending response sits in the source history.
+    response: PartLocation,
+    id: Option<String>,
+    name: String,
+}
+
 /// Makes persisted conversation history valid for the next model turn without
 /// rewriting the source events.
 ///
@@ -223,10 +238,17 @@ struct PendingFunctionCall {
 /// closed only when a later user turn exists and has no durable response in the
 /// retained history. Such calls are omitted from the model projection rather
 /// than assigned a result that did not occur.
+///
+/// A call held for confirmation is answered with a confirmation-pending response,
+/// and a later run that resumes the call persists its real response. The later
+/// response supersedes the pending one in place, so every call keeps exactly one
+/// response and providers that reject duplicates accept the history.
 fn close_interrupted_tool_calls(history: Vec<HistoryContent>) -> Vec<Content> {
     let mut pending = Vec::<PendingFunctionCall>::new();
     let mut removed_parts = std::collections::HashSet::<PartLocation>::new();
-    let mut responses_after = HashMap::<usize, Vec<(usize, String, Part)>>::new();
+    let mut responses_after = HashMap::<usize, Vec<(usize, String, PartLocation, Part)>>::new();
+    let mut held_answers = Vec::<HeldAnswer>::new();
+    let mut superseded = HashMap::<PartLocation, Part>::new();
     let mut user_turn = 0;
 
     // Reconcile against the complete retained history first. Concurrent runs can
@@ -274,11 +296,18 @@ fn close_interrupted_tool_calls(history: Vec<HistoryContent>) -> Vec<Content> {
                                 }
                             }),
                     };
+                    let location = PartLocation { content: content_index, part: part_index };
                     if let Some(index) = matching_index {
                         let call = pending.remove(index);
+                        if adk_core::is_confirmation_pending(&function_response.response) {
+                            held_answers.push(HeldAnswer {
+                                response: location,
+                                id: id.clone(),
+                                name: function_response.name.clone(),
+                            });
+                        }
                         if call.user_turn < user_turn {
-                            removed_parts
-                                .insert(PartLocation { content: content_index, part: part_index });
+                            removed_parts.insert(location);
                             let mut insertion_index = call.location.content;
                             while let Some(next) = history.get(insertion_index + 1) {
                                 if next.content.parts.is_empty()
@@ -295,8 +324,19 @@ fn close_interrupted_tool_calls(history: Vec<HistoryContent>) -> Vec<Content> {
                             responses_after.entry(insertion_index).or_default().push((
                                 call.location.part,
                                 content.role.clone(),
+                                location,
                                 part.clone(),
                             ));
+                        }
+                    } else if let Some(index) = held_answers.iter().rposition(|held| match id {
+                        Some(response_id) => held.id.as_deref() == Some(response_id.as_str()),
+                        None => held.id.is_none() && held.name == function_response.name,
+                    }) {
+                        // The resumed call's response takes the pending response's place.
+                        removed_parts.insert(location);
+                        superseded.insert(held_answers[index].response, part.clone());
+                        if !adk_core::is_confirmation_pending(&function_response.response) {
+                            held_answers.remove(index);
                         }
                     }
                 }
@@ -324,21 +364,23 @@ fn close_interrupted_tool_calls(history: Vec<HistoryContent>) -> Vec<Content> {
             .parts
             .into_iter()
             .enumerate()
-            .filter(|(part_index, _)| {
-                !removed_parts.contains(&PartLocation { content: content_index, part: *part_index })
+            .filter_map(|(part_index, part)| {
+                let location = PartLocation { content: content_index, part: part_index };
+                if removed_parts.contains(&location) {
+                    return None;
+                }
+                Some(superseded.remove(&location).unwrap_or(part))
             })
-            .map(|(_, part)| part)
             .collect();
         if !content.parts.is_empty() {
             normalized.push(content);
         }
         if let Some(mut responses) = responses_after.remove(&content_index) {
-            responses.sort_by_key(|(call_part, _, _)| *call_part);
-            normalized.extend(
-                responses
-                    .into_iter()
-                    .map(|(_, role, response)| Content { role, parts: vec![response] }),
-            );
+            responses.sort_by_key(|(call_part, _, _, _)| *call_part);
+            normalized.extend(responses.into_iter().map(|(_, role, location, response)| {
+                let response = superseded.remove(&location).unwrap_or(response);
+                Content { role, parts: vec![response] }
+            }));
         }
     }
 
@@ -376,6 +418,14 @@ impl adk_core::Session for MutableSession {
         branch: &str,
     ) -> Vec<adk_core::Content> {
         self.conversation_history_for_agent_impl(agent_name, branch)
+    }
+
+    fn held_tool_calls(&self, agent_name: &str, branch: &str) -> Vec<adk_core::HeldToolCall> {
+        let Ok(events) = self.events.read() else {
+            tracing::error!("events RwLock poisoned in held_tool_calls — returning none");
+            return Vec::new();
+        };
+        adk_core::held_tool_calls(&events, agent_name, branch)
     }
 }
 

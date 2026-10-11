@@ -188,9 +188,11 @@ resumes execution with the mapped decision. An approval maps to allow, and a
 denial or a cancellation both map to deny, so a cancelled request never executes
 the tool. Each outcome is correlated to the exact call by its function-call
 identifier and fed back to the runner through
-`RunConfig::tool_confirmation_decisions`, and by the call's fingerprint through
-`RunConfig::tool_approvals`, so a model that re-issues the call under a new ID on
-the resumed run still receives the decision.
+`RunConfig::tool_confirmation_decisions`. The resumed run carries an empty user
+turn, and an `LlmAgent` dispatches the held call again under its original ID
+before its next model call, so the decision applies whether or not the model
+would issue the call again. A call the model issues again under a new ID is a
+new call and produces a new permission request.
 
 The nested `session/request_permission` is issued from the task that already
 handles the outer `session/prompt`, spawned through `ConnectionTo::spawn`, so it

@@ -419,6 +419,9 @@ pub struct CallPairing {
 
 /// Pairs every function call id in `events` with the function responses carrying the same id.
 ///
+/// A confirmation-pending response is superseded by a later response to the same call, as in
+/// the history the model sees, so a held call that later resumed counts as answered once.
+///
 /// Returns the pairings and a list of problems: calls without an id, calls answered zero or
 /// several times, and responses whose id matches no call.
 pub fn pair_calls(events: &[Event]) -> (Vec<CallPairing>, Vec<String>) {
@@ -449,10 +452,11 @@ pub fn pair_calls(events: &[Event]) -> (Vec<CallPairing>, Vec<String>) {
                     problems.push(format!("call to {name} has no id"));
                 }
                 Part::FunctionResponse { function_response, id: Some(id), .. } => {
-                    responses
-                        .entry(id.clone())
-                        .or_default()
-                        .push(function_response.response.clone());
+                    let answers = responses.entry(id.clone()).or_default();
+                    if answers.last().is_some_and(adk_core::is_confirmation_pending) {
+                        answers.pop();
+                    }
+                    answers.push(function_response.response.clone());
                 }
                 Part::FunctionResponse { function_response, id: None, .. } => {
                     problems.push(format!("response from {} has no id", function_response.name));

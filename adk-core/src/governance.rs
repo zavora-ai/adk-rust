@@ -17,6 +17,13 @@
 //! ([`RunConfig::tool_approvals`]), the run's [`ApprovalStore`], and the live
 //! [`ToolConfirmationHandler`](crate::ToolConfirmationHandler), which is bounded by
 //! [`RunConfig::tool_confirmation_timeout`] and denies when it expires.
+//!
+//! A call held without a decision is answered with a [`confirmation_pending_response`]
+//! and stays held across runs. At the start of a later run the agent finds its held
+//! calls with [`held_tool_calls`] and, for each one with a decision
+//! ([`confirmation_decision_available`]), dispatches the original call again through
+//! the same path, so the decision authorizes or refuses it without the model issuing
+//! it a second time. The call's real response supersedes the pending one.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,8 +36,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    AdkError, ErrorCategory, ErrorComponent, InvocationContext, PolicyDecision, Result, RunConfig,
-    Tool, ToolConfirmationDecision, ToolConfirmationRequest, ToolEffect, ToolPolicyRequest,
+    AdkError, ErrorCategory, ErrorComponent, Event, InvocationContext, Part, PolicyDecision,
+    Result, RunConfig, Tool, ToolConfirmationDecision, ToolConfirmationRequest, ToolEffect,
+    ToolPolicyRequest, tool_call_fingerprint,
 };
 
 /// How long a [`ToolConfirmationHandler`](crate::ToolConfirmationHandler) may take to
@@ -307,6 +315,19 @@ pub trait ApprovalStore: std::fmt::Debug + Send + Sync {
         scope: &ApprovalScope,
         fingerprint: &str,
     ) -> Result<Option<ToolConfirmationDecision>>;
+
+    /// Whether a decision for `fingerprint` may be waiting, without consuming it.
+    ///
+    /// An agent resuming a held call asks this before it runs the call through the
+    /// governed path, which then [takes](Self::take_decision) the decision. A `true`
+    /// that turns out to have no live decision holds the call again.
+    ///
+    /// The default reports a decision whenever `fingerprint` is no longer
+    /// [pending](Self::pending), because [`decide`](Self::decide) clears the pending
+    /// entry. Override it when the store can answer exactly.
+    async fn has_decision(&self, scope: &ApprovalScope, fingerprint: &str) -> Result<bool> {
+        Ok(!self.pending(scope).await?.iter().any(|entry| entry.fingerprint == fingerprint))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -383,6 +404,14 @@ impl ApprovalStore for InMemoryApprovalStore {
             .remove(fingerprint)
             .filter(|approval| approval.is_live(Utc::now()))
             .map(|approval| approval.decision))
+    }
+
+    async fn has_decision(&self, scope: &ApprovalScope, fingerprint: &str) -> Result<bool> {
+        let scopes = self.scopes.read().await;
+        Ok(scopes
+            .get(scope)
+            .and_then(|entries| entries.decisions.get(fingerprint))
+            .is_some_and(|approval| approval.is_live(Utc::now())))
     }
 }
 
@@ -560,7 +589,8 @@ pub enum ToolAuthorization {
     Pending {
         /// The request to show the approver; its arguments are the final ones.
         request: ToolConfirmationRequest,
-        /// The message reported to the model as the call's error.
+        /// The message reported to the model as the call's error, in a
+        /// [`confirmation_pending_response`].
         reason: String,
     },
 }
@@ -775,6 +805,230 @@ async fn resolve_confirmation(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Held calls and resume
+// ---------------------------------------------------------------------------
+
+/// The `status` value of the function response that answers a call held for
+/// confirmation.
+pub const CONFIRMATION_PENDING_STATUS: &str = "confirmation_pending";
+
+/// Builds the function response for a call held for confirmation.
+///
+/// The response stands in for the call's result while the call waits for a
+/// decision, so the history keeps one response per call. When a later run executes
+/// or refuses the call, its real response supersedes this one in what the model
+/// sees.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{CONFIRMATION_PENDING_STATUS, confirmation_pending_response};
+///
+/// let response = confirmation_pending_response("Tool 'pay' requires confirmation");
+/// assert_eq!(response["status"], CONFIRMATION_PENDING_STATUS);
+/// assert_eq!(response["error"], "Tool 'pay' requires confirmation");
+/// ```
+pub fn confirmation_pending_response(reason: impl Into<String>) -> Value {
+    serde_json::json!({ "error": reason.into(), "status": CONFIRMATION_PENDING_STATUS })
+}
+
+/// Returns `true` when `response` is a [`confirmation_pending_response`].
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{confirmation_pending_response, is_confirmation_pending};
+///
+/// assert!(is_confirmation_pending(&confirmation_pending_response("held")));
+/// assert!(!is_confirmation_pending(&serde_json::json!({ "error": "held" })));
+/// ```
+pub fn is_confirmation_pending(response: &Value) -> bool {
+    response.get("status").and_then(Value::as_str) == Some(CONFIRMATION_PENDING_STATUS)
+}
+
+/// A tool call an agent held for confirmation that has not been answered since.
+///
+/// Returned by [`held_tool_calls`]. An agent resumes it at the start of a later run
+/// once a decision exists for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeldToolCall {
+    /// The request the agent surfaced. Its arguments are the call's final ones,
+    /// after plugin and callback rewrites; its fingerprint is the decision key.
+    pub request: ToolConfirmationRequest,
+    /// The call's ID as the model issued it; `None` when the provider omitted it.
+    pub id: Option<String>,
+    /// The arguments as the model issued them, before plugin and callback rewrites.
+    pub args: Value,
+}
+
+/// Finds the tool calls `agent_name` holds for confirmation in `events`.
+///
+/// `events` is a session's event log in order. A call is held from the event that
+/// carries its [`ToolConfirmationRequest`] until a later response answers it: a
+/// response to the same call ID, or to a call with the same tool and arguments. A
+/// [`confirmation_pending_response`] answers nothing. A later hold of a call with the
+/// same fingerprint replaces an earlier one, so one decision resumes one call.
+///
+/// Only events visible on `branch` and newer than the latest compaction count, as in
+/// the conversation history the agent sees.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{Event, ToolConfirmationRequest, held_tool_calls};
+/// use serde_json::json;
+///
+/// let mut held = Event::new("inv-1");
+/// held.author = "agent".into();
+/// held.actions.tool_confirmation = Some(ToolConfirmationRequest {
+///     tool_name: "pay".into(),
+///     function_call_id: Some("call-1".into()),
+///     args: json!({ "amount": 5 }),
+/// });
+///
+/// let calls = held_tool_calls(&[held], "agent", "");
+/// assert_eq!(calls.len(), 1);
+/// assert_eq!(calls[0].request.tool_name, "pay");
+/// ```
+pub fn held_tool_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<HeldToolCall> {
+    let boundary = events
+        .iter()
+        .rev()
+        .find_map(|event| event.actions.compaction.as_ref().map(|c| c.end_timestamp));
+    // Calls the agent issued, by ID; idless calls by invocation and name.
+    let mut issued = HashMap::<String, (String, Value)>::new();
+    let mut idless = Vec::<(String, String, Value)>::new();
+    let mut held = Vec::<HeldToolCall>::new();
+
+    for event in events {
+        if event.llm_response.partial
+            || event.actions.compaction.is_some()
+            || boundary.is_some_and(|end| event.timestamp <= end)
+            || !crate::event_belongs_to_branch(branch, &event.branch)
+        {
+            continue;
+        }
+        let own = event.author == agent_name;
+        if !own && event.author != "user" {
+            continue;
+        }
+        let parts = event.llm_response.content.iter().flat_map(|content| content.parts.iter());
+        for part in parts {
+            match part {
+                Part::FunctionCall { name, args, id, .. } if own => match id {
+                    Some(id) => {
+                        issued.insert(id.clone(), (name.clone(), args.clone()));
+                    }
+                    None => idless.push((event.invocation_id.clone(), name.clone(), args.clone())),
+                },
+                Part::FunctionResponse { function_response, id, .. }
+                    if !is_confirmation_pending(&function_response.response) =>
+                {
+                    match id {
+                        Some(id) => {
+                            let answered = issued
+                                .get(id)
+                                .map(|(name, args)| tool_call_fingerprint(name, args));
+                            held.retain(|call| {
+                                call.request.function_call_id.as_deref() != Some(id)
+                                    && call.id.as_deref() != Some(id)
+                                    && answered.as_deref()
+                                        != Some(&tool_call_fingerprint(
+                                            &call.request.tool_name,
+                                            &call.args,
+                                        ))
+                            });
+                        }
+                        None => held.retain(|call| {
+                            call.id.is_some() || call.request.tool_name != function_response.name
+                        }),
+                    }
+                }
+                _ => {}
+            }
+        }
+        if own && let Some(request) = &event.actions.tool_confirmation {
+            let (id, args) = match request.function_call_id.as_deref() {
+                Some(call_id) if issued.contains_key(call_id) => {
+                    (Some(call_id.to_string()), issued[call_id].1.clone())
+                }
+                _ => match idless.iter().rev().find(|(invocation, name, _)| {
+                    *invocation == event.invocation_id && *name == request.tool_name
+                }) {
+                    Some((_, _, args)) => (None, args.clone()),
+                    None => (request.function_call_id.clone(), request.args.clone()),
+                },
+            };
+            let fingerprint = request.fingerprint();
+            held.retain(|call| call.request.fingerprint() != fingerprint);
+            held.push(HeldToolCall { request: request.clone(), id, args });
+        }
+    }
+    held
+}
+
+/// Whether a decision for `request` may be available to the governed path.
+///
+/// Reports `true` for a call-ID decision that matches the call's fingerprint, a live
+/// fingerprint approval, a decision in the run's [`ApprovalStore`] (asked through
+/// [`ApprovalStore::has_decision`], which consumes nothing), or a configured
+/// [`ToolConfirmationHandler`](crate::ToolConfirmationHandler), which decides when
+/// asked. An agent resumes a [`HeldToolCall`] only when this is `true`.
+///
+/// # Errors
+///
+/// Returns an error when the approval store cannot be read.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{
+///     ApprovalScope, RunConfig, ToolApproval, ToolConfirmationRequest, ToolGate,
+///     confirmation_decision_available,
+/// };
+/// use serde_json::json;
+///
+/// # futures::executor::block_on(async {
+/// let request = ToolConfirmationRequest {
+///     tool_name: "pay".into(),
+///     function_call_id: Some("call-1".into()),
+///     args: json!({ "amount": 5 }),
+/// };
+/// let config =
+///     RunConfig::builder().tool_approval(request.fingerprint(), ToolApproval::approve()).build();
+/// let gate = ToolGate::new(&config, "agent", "inv-2", ApprovalScope::new("app", "u", "s"));
+/// assert!(confirmation_decision_available(&gate, &request).await?);
+/// # Ok::<(), adk_core::AdkError>(())
+/// # }).unwrap();
+/// ```
+pub async fn confirmation_decision_available(
+    gate: &ToolGate<'_>,
+    request: &ToolConfirmationRequest,
+) -> Result<bool> {
+    let config = gate.run_config;
+    let fingerprint = request.fingerprint();
+    if let Some(call_id) = request.function_call_id.as_deref()
+        && config.tool_confirmation_decisions.contains_key(call_id)
+        && config
+            .tool_confirmation_fingerprints
+            .get(call_id)
+            .is_none_or(|bound| *bound == fingerprint)
+    {
+        return Ok(true);
+    }
+    if config.tool_approvals.get(&fingerprint).is_some_and(|approval| approval.is_live(Utc::now()))
+    {
+        return Ok(true);
+    }
+    if let Some(store) = &config.approval_store
+        && store.has_decision(&gate.scope, &fingerprint).await?
+    {
+        return Ok(true);
+    }
+    Ok(config.tool_confirmation_handler.is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -982,6 +1236,186 @@ mod tests {
                 .unwrap(),
             ToolAuthorization::Refuse { .. }
         ));
+    }
+
+    fn event(author: &str, invocation: &str, parts: Vec<Part>) -> Event {
+        let mut event = Event::new(invocation);
+        event.author = author.to_string();
+        event.llm_response.content = Some(crate::Content { role: "model".into(), parts });
+        event
+    }
+
+    fn function_call(name: &str, args: Value, id: &str) -> Part {
+        Part::FunctionCall { name: name.into(), args, id: Some(id.into()), thought_signature: None }
+    }
+
+    fn function_response(name: &str, response: Value, id: &str) -> Part {
+        Part::FunctionResponse {
+            function_response: crate::FunctionResponseData::new(name, response),
+            id: Some(id.into()),
+            annotations: None,
+        }
+    }
+
+    fn hold(author: &str, invocation: &str, name: &str, args: Value, id: &str) -> Event {
+        let mut event = Event::new(invocation);
+        event.author = author.to_string();
+        event.actions.tool_confirmation = Some(ToolConfirmationRequest {
+            tool_name: name.into(),
+            function_call_id: Some(id.into()),
+            args,
+        });
+        event
+    }
+
+    /// Run 1 of agent `ops`: `pay` called as `c1`, answered pending, then held.
+    fn held_run() -> Vec<Event> {
+        vec![
+            event("user", "inv-1", vec![Part::Text { text: "pay 5".into() }]),
+            event("ops", "inv-1", vec![function_call("pay", json!({ "amount": 5 }), "c1")]),
+            event(
+                "ops",
+                "inv-1",
+                vec![function_response("pay", confirmation_pending_response("held"), "c1")],
+            ),
+            hold("ops", "inv-1", "pay", json!({ "amount": 5 }), "c1"),
+        ]
+    }
+
+    #[test]
+    fn a_held_call_carries_the_models_arguments_and_original_id() {
+        let mut events = held_run();
+        // A plugin rewrote the arguments before the hold; the request carries the rewrite.
+        events[3] = hold("ops", "inv-1", "pay", json!({ "amount": 500 }), "c1");
+        assert_eq!(
+            held_tool_calls(&events, "ops", ""),
+            vec![HeldToolCall {
+                request: ToolConfirmationRequest {
+                    tool_name: "pay".into(),
+                    function_call_id: Some("c1".into()),
+                    args: json!({ "amount": 500 }),
+                },
+                id: Some("c1".into()),
+                args: json!({ "amount": 5 }),
+            }]
+        );
+        assert!(held_tool_calls(&events, "other", "").is_empty(), "holds belong to their agent");
+    }
+
+    #[test]
+    fn a_real_response_releases_a_held_call_and_a_pending_one_does_not() {
+        let mut events = held_run();
+        events.push(event("user", "inv-2", vec![Part::Text { text: String::new() }]));
+        events.push(event(
+            "ops",
+            "inv-2",
+            vec![function_response("pay", confirmation_pending_response("still held"), "c1")],
+        ));
+        assert_eq!(held_tool_calls(&events, "ops", "").len(), 1);
+
+        events.push(event(
+            "ops",
+            "inv-2",
+            vec![function_response("pay", json!({ "ok": 1 }), "c1")],
+        ));
+        assert!(held_tool_calls(&events, "ops", "").is_empty());
+    }
+
+    #[test]
+    fn executing_the_same_call_under_a_new_id_releases_the_hold() {
+        let mut events = held_run();
+        events.push(event(
+            "ops",
+            "inv-2",
+            vec![function_call("pay", json!({ "amount": 5 }), "c2")],
+        ));
+        events.push(event(
+            "ops",
+            "inv-2",
+            vec![function_response("pay", json!({ "ok": 1 }), "c2")],
+        ));
+        assert!(held_tool_calls(&events, "ops", "").is_empty());
+    }
+
+    #[test]
+    fn a_later_hold_of_the_same_call_replaces_the_earlier_one() {
+        let mut events = held_run();
+        events.push(event(
+            "ops",
+            "inv-2",
+            vec![function_call("pay", json!({ "amount": 5 }), "c2")],
+        ));
+        events.push(event(
+            "ops",
+            "inv-2",
+            vec![function_response("pay", confirmation_pending_response("held"), "c2")],
+        ));
+        events.push(hold("ops", "inv-2", "pay", json!({ "amount": 5 }), "c2"));
+        let held = held_tool_calls(&events, "ops", "");
+        assert_eq!(held.len(), 1, "one decision resumes one call");
+        assert_eq!(held[0].id.as_deref(), Some("c2"));
+    }
+
+    #[test]
+    fn holds_before_a_compaction_or_on_another_branch_are_ignored() {
+        let mut compacted = held_run();
+        let mut compaction = Event::new("inv-2");
+        compaction.actions.compaction = Some(crate::EventCompaction {
+            start_timestamp: compacted[0].timestamp,
+            end_timestamp: compacted[3].timestamp,
+            compacted_content: crate::Content::new("model").with_text("summary"),
+        });
+        compacted.push(compaction);
+        assert!(held_tool_calls(&compacted, "ops", "").is_empty());
+
+        let mut branched = held_run();
+        for event in &mut branched {
+            event.branch = "root.left".into();
+        }
+        assert!(held_tool_calls(&branched, "ops", "root.right").is_empty());
+        assert_eq!(held_tool_calls(&branched, "ops", "root.left").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_decision_is_available_from_each_source_without_being_consumed() {
+        let request = ToolConfirmationRequest {
+            tool_name: "pay".into(),
+            function_call_id: Some("c1".into()),
+            args: json!({ "amount": 5 }),
+        };
+        let none = RunConfig::default();
+        assert!(!confirmation_decision_available(&gate(&none), &request).await.unwrap());
+
+        let by_id = RunConfig::builder()
+            .tool_confirmation_decisions(HashMap::from([(
+                "c1".to_string(),
+                ToolConfirmationDecision::Deny,
+            )]))
+            .build();
+        assert!(confirmation_decision_available(&gate(&by_id), &request).await.unwrap());
+
+        let mut rebound = by_id.clone();
+        rebound
+            .tool_confirmation_fingerprints
+            .insert("c1".into(), tool_call_fingerprint("pay", &json!({ "amount": 6 })));
+        assert!(!confirmation_decision_available(&gate(&rebound), &request).await.unwrap());
+
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let stored = RunConfig::builder().approval_store(store.clone()).build();
+        let scope = ApprovalScope::new("app", "user", "session");
+        store.record_pending(&scope, &request).await.unwrap();
+        assert!(!confirmation_decision_available(&gate(&stored), &request).await.unwrap());
+        store.decide(&scope, &request.fingerprint(), ToolApproval::approve()).await.unwrap();
+        assert!(confirmation_decision_available(&gate(&stored), &request).await.unwrap());
+        assert_eq!(
+            store.take_decision(&scope, &request.fingerprint()).await.unwrap(),
+            Some(ToolConfirmationDecision::Approve),
+            "asking did not consume the decision"
+        );
+
+        let handled =
+            RunConfig::builder().tool_confirmation_handler(Arc::new(NeverDecides)).build();
+        assert!(confirmation_decision_available(&gate(&handled), &request).await.unwrap());
     }
 
     #[tokio::test]

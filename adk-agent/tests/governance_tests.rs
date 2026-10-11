@@ -393,7 +393,7 @@ fn two_runs() -> Arc<ScriptedModel> {
 }
 
 #[tokio::test]
-async fn an_approval_by_fingerprint_authorizes_the_call_reissued_in_the_next_run() {
+async fn an_approval_by_fingerprint_covers_every_matching_call_in_its_run() {
     let (transfer, executions) = RecordingTool::new("transfer");
     let runner = runner(approval_agent(two_runs(), transfer), |builder| builder).await;
 
@@ -402,16 +402,18 @@ async fn an_approval_by_fingerprint_authorizes_the_call_reissued_in_the_next_run
     assert_eq!(held.len(), 1);
     assert!(executions.lock().unwrap().is_empty());
 
+    // The held call resumes, and the approval also covers the model's repeat in the
+    // same run, as `RunConfig::tool_approvals` documents.
     let config =
         RunConfig::builder().tool_approval(held[0].fingerprint(), ToolApproval::approve()).build();
     let second = run(&runner, Some(config)).await;
 
     assert!(confirmation_requests(&second).is_empty(), "{second:?}");
-    assert_eq!(*executions.lock().unwrap(), vec![json!({ "amount": 40 })]);
+    assert_eq!(*executions.lock().unwrap(), vec![json!({ "amount": 40 }), json!({ "amount": 40 })]);
 }
 
 #[tokio::test]
-async fn a_call_id_decision_does_not_reach_the_reissued_call() {
+async fn a_call_id_decision_resumes_the_held_call_but_not_a_reissued_one() {
     let (transfer, executions) = RecordingTool::new("transfer");
     let runner = runner(approval_agent(two_runs(), transfer), |builder| builder).await;
 
@@ -422,8 +424,10 @@ async fn a_call_id_decision_does_not_reach_the_reissued_call() {
         .build();
     let second = run(&runner, Some(config)).await;
 
-    assert!(executions.lock().unwrap().is_empty());
-    assert_eq!(confirmation_requests(&second).len(), 1, "the new call ID is still held");
+    assert_eq!(*executions.lock().unwrap(), vec![json!({ "amount": 40 })]);
+    let held_again = confirmation_requests(&second);
+    assert_eq!(held_again.len(), 1, "the new call ID is still held");
+    assert_eq!(held_again[0].function_call_id.as_deref(), Some("call-run2"));
 }
 
 #[tokio::test]

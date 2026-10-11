@@ -228,6 +228,24 @@ fn build_final_llm_event(
     event
 }
 
+/// The event that ends a run on a call held for confirmation.
+fn confirmation_event(
+    invocation_id: &str,
+    agent_name: &str,
+    request: ToolConfirmationRequest,
+) -> Event {
+    let mut event = Event::new(invocation_id);
+    event.author = agent_name.to_string();
+    event.llm_response.interrupted = true;
+    event.llm_response.turn_complete = true;
+    event.llm_response.content = Some(Content::new("model").with_text(format!(
+        "Tool confirmation required for '{}'. Provide approve/deny decision to continue.",
+        request.tool_name
+    )));
+    event.actions.tool_confirmation = Some(request);
+    event
+}
+
 /// An LLM-powered agent that orchestrates tool calls and sub-agent delegation.
 ///
 /// `LlmAgent` is the primary agent type in ADK. It sends requests to an LLM,
@@ -391,6 +409,15 @@ impl PromptConfig {
         } else {
             session_history.push(current_user_content.clone());
         }
+        // A run that resumes held calls carries an empty user turn. It adds nothing to the
+        // conversation, and providers such as Anthropic reject empty text blocks.
+        session_history.retain(|content| {
+            content.role != "user"
+                || content
+                    .parts
+                    .iter()
+                    .any(|part| !matches!(part, Part::Text { text } if text.trim().is_empty()))
+        });
 
         Ok(match self.include_contents {
             adk_core::IncludeContents::None => {
@@ -1981,6 +2008,113 @@ struct ToolExecutor<'a> {
 }
 
 impl ToolExecutor<'_> {
+    /// Runs one batch of calls under `strategy`, returning results in completion order.
+    async fn dispatch(
+        &self,
+        strategy: ToolDispatchMode,
+        fc_parts: Vec<PendingToolCall>,
+    ) -> Result<Vec<ToolExecutionResult>> {
+        let results: Vec<ToolExecutionResult> = match strategy {
+            ToolDispatchMode::Sequential => {
+                let mut results = Vec::with_capacity(fc_parts.len());
+                for call in fc_parts {
+                    results.push(self.execute(call).await?);
+                }
+                results
+            }
+            ToolDispatchMode::Parallel => {
+                use futures::StreamExt as _;
+                // Parallel is an explicit caller override. Tool
+                // safety metadata is intentionally not inspected.
+                // All concurrency enforcement is handled by the
+                // ToolConcurrencyManager semaphore inside ToolExecutor.
+                // Use fc_parts.len() as buffer so all futures can start
+                // and queue on the semaphore for proper per-tool limiting.
+                let buffer_size = fc_parts.len().max(1);
+                futures::stream::iter(fc_parts.into_iter().map(|call| self.execute(call)))
+                    .buffer_unordered(buffer_size)
+                    // Running tools finish before an approval error ends the turn.
+                    .collect::<Vec<_>>()
+                    .await
+                    .into_iter()
+                    .collect::<Result<Vec<_>>>()?
+            }
+            ToolDispatchMode::ParallelDelegations => {
+                use futures::StreamExt as _;
+
+                let mut all_results = Vec::with_capacity(fc_parts.len());
+                let mut calls = fc_parts.into_iter().peekable();
+                while let Some(call) = calls.next() {
+                    let is_delegation = self
+                        .tool_map
+                        .get(&call.name)
+                        .is_some_and(|tool| tool.is_agent_delegation());
+                    if !is_delegation {
+                        all_results.push(self.execute(call).await?);
+                        continue;
+                    }
+
+                    let mut delegation_batch = vec![call];
+                    while calls.peek().is_some_and(|next| {
+                        self.tool_map.get(&next.name).is_some_and(|tool| tool.is_agent_delegation())
+                    }) {
+                        if let Some(next) = calls.next() {
+                            delegation_batch.push(next);
+                        }
+                    }
+
+                    let buffer_size = delegation_batch.len();
+                    all_results.extend(
+                        futures::stream::iter(
+                            delegation_batch.into_iter().map(|call| self.execute(call)),
+                        )
+                        .buffer_unordered(buffer_size)
+                        .collect::<Vec<_>>()
+                        .await
+                        .into_iter()
+                        .collect::<Result<Vec<_>>>()?,
+                    );
+                }
+                all_results
+            }
+            ToolDispatchMode::Auto => {
+                // A call may overlap another only when its tool is
+                // read-only *and* declares concurrency safety.
+                let (concurrent_fcs, sequential_fcs): (Vec<_>, Vec<_>) =
+                    fc_parts.into_iter().partition(|call| {
+                        self.tool_map
+                            .get(&call.name)
+                            .is_some_and(|tool| tool.is_read_only() && tool.is_concurrency_safe())
+                    });
+                let mut all_results = Vec::new();
+
+                // Concurrency enforcement is handled by the semaphore
+                // inside ToolExecutor.
+                if !concurrent_fcs.is_empty() {
+                    use futures::StreamExt as _;
+                    let buffer_size = concurrent_fcs.len().max(1);
+                    all_results.extend(
+                        futures::stream::iter(
+                            concurrent_fcs.into_iter().map(|call| self.execute(call)),
+                        )
+                        .buffer_unordered(buffer_size)
+                        .collect::<Vec<_>>()
+                        .await
+                        .into_iter()
+                        .collect::<Result<Vec<_>>>()?,
+                    );
+                }
+
+                // Everything else runs one at a time.
+                for call in sequential_fcs {
+                    all_results.push(self.execute(call).await?);
+                }
+                all_results
+            }
+        };
+        Ok(results)
+    }
+
     async fn execute(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
         let result = self.execute_inner(call).await?;
         let mut event = Event::new(self.invocation_id);
@@ -2132,7 +2266,17 @@ impl ToolExecutor<'_> {
                     run_after_tool_callbacks = false;
                 }
                 Ok(ToolAuthorization::Pending { request, reason }) => {
-                    response_content = Some(error_response(reason));
+                    response_content = Some(Content {
+                        role: "function".to_string(),
+                        parts: vec![Part::FunctionResponse {
+                            function_response: FunctionResponseData::new(
+                                name.clone(),
+                                adk_core::confirmation_pending_response(reason),
+                            ),
+                            id: id.clone(),
+                            annotations: None,
+                        }],
+                    });
                     pending_confirmation = Some(request);
                     run_after_tool_callbacks = false;
                 }
@@ -2789,6 +2933,160 @@ impl Agent for LlmAgent {
 
             // Shared with sub-agents, transfer targets and agent tools through the run config.
             let budget_tracker = ctx.run_config().budget_tracker.clone();
+
+            // ===== RESUME HELD CALLS =====
+            // A call held for confirmation in an earlier run, with a decision now, is
+            // dispatched again as the same call before the first model call, so the
+            // decision applies whether or not the model would issue the call again. It
+            // runs the whole tool path, where the governed path finds the decision.
+            let mut resumed_calls = Vec::new();
+            {
+                let gate = ToolGate::for_context(ctx.as_ref());
+                for held in ctx.session().held_tool_calls(&agent_name, ctx.branch()) {
+                    let Some(function_call_id) = held.request.function_call_id.clone() else {
+                        continue;
+                    };
+                    match adk_core::confirmation_decision_available(&gate, &held.request).await {
+                        Ok(true) => resumed_calls.push(PendingToolCall {
+                            index: resumed_calls.len(),
+                            name: held.request.tool_name,
+                            args: held.args,
+                            id: held.id,
+                            function_call_id,
+                        }),
+                        Ok(false) => {}
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    }
+                }
+            }
+            if !resumed_calls.is_empty() {
+                if ctx.is_cancelled() {
+                    return;
+                }
+                // The held calls keep their pending responses, so a refused batch leaves
+                // them held for a later run.
+                if let Some(tracker) = budget_tracker.as_ref()
+                    && let Err(exceeded) = tracker.begin_tool_calls(resumed_calls.len() as u64)
+                {
+                    yield Err(exceeded.into());
+                    return;
+                }
+                tracing::info!(
+                    agent.name = %agent_name,
+                    tool.calls = resumed_calls.len(),
+                    "resuming tool calls held for confirmation"
+                );
+                let strategy = ToolDispatchMode::resolve(
+                    agent_tool_execution_strategy.unwrap_or(ToolExecutionStrategy::Sequential),
+                    parallelize_agent_delegations,
+                );
+                let cb_mutex = std::sync::Mutex::new(circuit_breaker_state.take());
+                let concurrency_manager =
+                    adk_core::ToolConcurrencyManager::new(&ctx.run_config().tool_concurrency);
+                let (progress_tx, mut progress_rx) =
+                    tokio::sync::mpsc::channel::<Event>(TOOL_PROGRESS_CAPACITY);
+                let executor = ToolExecutor {
+                    ctx: ctx.clone(),
+                    tool_map: &tool_map,
+                    tool_retry_budgets: &tool_retry_budgets,
+                    default_retry_budget: &default_retry_budget,
+                    before_tool_callbacks: &before_tool_callbacks,
+                    after_tool_callbacks: &after_tool_callbacks,
+                    after_tool_callbacks_full: &after_tool_callbacks_full,
+                    on_tool_error_callbacks: &on_tool_error_callbacks,
+                    hook_callbacks: &hook_callbacks,
+                    tool_confirmation_policy: &tool_confirmation_policy,
+                    tool_guardrails: tool_guardrails.as_ref(),
+                    cb_mutex: &cb_mutex,
+                    invocation_id: &invocation_id,
+                    concurrency_manager: &concurrency_manager,
+                    progress_tx,
+                    tool_timeout,
+                    approval_failed: tokio::sync::watch::channel(false).0,
+                    #[cfg(feature = "enhanced-plugins")]
+                    enhanced_plugin_manager: &enhanced_plugin_manager,
+                };
+                let mut results = {
+                    let dispatch = executor.dispatch(strategy, resumed_calls);
+                    tokio::pin!(dispatch);
+                    let results = loop {
+                        tokio::select! {
+                            biased;
+                            Some(progress_event) = progress_rx.recv() => {
+                                yield Ok(progress_event);
+                            }
+                            done = &mut dispatch => break done,
+                        }
+                    };
+                    while let Ok(progress_event) = progress_rx.try_recv() {
+                        yield Ok(progress_event);
+                    }
+                    match results {
+                        Ok(results) => results,
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    }
+                };
+                results.sort_by_key(|r| r.index);
+                drop(executor);
+                circuit_breaker_state = cb_mutex.into_inner().unwrap_or_else(|e| e.into_inner());
+
+                let mut held_again = Vec::new();
+                for result in results {
+                    if result.escalate_or_skip {
+                        return;
+                    }
+                    held_again.extend(result.pending);
+                    // Each result takes the place of its call's pending response, so the
+                    // model sees one response per call.
+                    for response in result.content.parts {
+                        let Part::FunctionResponse { function_response, id, .. } = &response else {
+                            continue;
+                        };
+                        let slot = conversation_history
+                            .iter_mut()
+                            .rev()
+                            .flat_map(|content| content.parts.iter_mut().rev())
+                            .find(|part| match part {
+                                Part::FunctionResponse {
+                                    function_response: pending,
+                                    id: pending_id,
+                                    ..
+                                } => {
+                                    adk_core::is_confirmation_pending(&pending.response)
+                                        && pending_id == id
+                                        && (id.is_some() || pending.name == function_response.name)
+                                }
+                                _ => false,
+                            });
+                        if let Some(slot) = slot {
+                            *slot = response;
+                        }
+                    }
+                }
+                if !held_again.is_empty() {
+                    for request in held_again {
+                        yield Ok(confirmation_event(&invocation_id, &agent_name, request));
+                    }
+                    return;
+                }
+
+                let refreshed_tools = match tool_setup.resolve(&ctx).await {
+                    Ok(tools) => tools,
+                    Err(error) => {
+                        yield Err(error);
+                        return;
+                    }
+                };
+                tool_map = refreshed_tools.map;
+                tool_declarations = refreshed_tools.declarations;
+                valid_transfer_targets = refreshed_tools.transfer_targets;
+            }
 
             // Multi-turn loop with max iterations
             let mut iteration = 0;
@@ -3569,114 +3867,7 @@ impl Agent for LlmAgent {
                     // and circuit-breaker mutex) is dropped before we reclaim
                     // `cb_mutex` below.
                     let mut results = {
-                        let dispatch = async {
-                            let results: Vec<ToolExecutionResult> = match strategy {
-                                ToolDispatchMode::Sequential => {
-                                    let mut results = Vec::with_capacity(fc_parts.len());
-                                    for call in fc_parts {
-                                        results.push(executor.execute(call).await?);
-                                    }
-                                    results
-                                }
-                                ToolDispatchMode::Parallel => {
-                                    use futures::StreamExt as _;
-                                    // Parallel is an explicit caller override. Tool
-                                    // safety metadata is intentionally not inspected.
-                                    // All concurrency enforcement is handled by the
-                                    // ToolConcurrencyManager semaphore inside ToolExecutor.
-                                    // Use fc_parts.len() as buffer so all futures can start
-                                    // and queue on the semaphore for proper per-tool limiting.
-                                    let buffer_size = fc_parts.len().max(1);
-                                    futures::stream::iter(
-                                        fc_parts.into_iter().map(|call| executor.execute(call)),
-                                    )
-                                    .buffer_unordered(buffer_size)
-                                    // Running tools finish before an approval error ends the turn.
-                                    .collect::<Vec<_>>()
-                                    .await
-                                    .into_iter()
-                                    .collect::<Result<Vec<_>>>()?
-                                }
-                                ToolDispatchMode::ParallelDelegations => {
-                                    use futures::StreamExt as _;
-
-                                    let mut all_results = Vec::with_capacity(fc_parts.len());
-                                    let mut calls = fc_parts.into_iter().peekable();
-                                    while let Some(call) = calls.next() {
-                                        let is_delegation = tool_map
-                                            .get(&call.name)
-                                            .is_some_and(|tool| tool.is_agent_delegation());
-                                        if !is_delegation {
-                                            all_results.push(executor.execute(call).await?);
-                                            continue;
-                                        }
-
-                                        let mut delegation_batch = vec![call];
-                                        while calls.peek().is_some_and(|next| {
-                                            tool_map.get(&next.name).is_some_and(|tool| {
-                                                tool.is_agent_delegation()
-                                            })
-                                        }) {
-                                            if let Some(next) = calls.next() {
-                                                delegation_batch.push(next);
-                                            }
-                                        }
-
-                                        let buffer_size = delegation_batch.len();
-                                        all_results.extend(
-                                            futures::stream::iter(
-                                                delegation_batch
-                                                    .into_iter()
-                                                    .map(|call| executor.execute(call)),
-                                            )
-                                            .buffer_unordered(buffer_size)
-                                            .collect::<Vec<_>>()
-                                            .await
-                                            .into_iter()
-                                            .collect::<Result<Vec<_>>>()?,
-                                        );
-                                    }
-                                    all_results
-                                }
-                                ToolDispatchMode::Auto => {
-                                    // A call may overlap another only when its tool is
-                                    // read-only *and* declares concurrency safety.
-                                    let (concurrent_fcs, sequential_fcs): (Vec<_>, Vec<_>) =
-                                        fc_parts.into_iter().partition(|call| {
-                                            tool_map.get(&call.name).is_some_and(|tool| {
-                                                tool.is_read_only() && tool.is_concurrency_safe()
-                                            })
-                                        });
-                                    let mut all_results = Vec::new();
-
-                                    // Concurrency enforcement is handled by the semaphore
-                                    // inside ToolExecutor.
-                                    if !concurrent_fcs.is_empty() {
-                                        use futures::StreamExt as _;
-                                        let buffer_size = concurrent_fcs.len().max(1);
-                                        all_results.extend(
-                                            futures::stream::iter(
-                                                concurrent_fcs
-                                                    .into_iter()
-                                                    .map(|call| executor.execute(call)),
-                                            )
-                                            .buffer_unordered(buffer_size)
-                                            .collect::<Vec<_>>()
-                                            .await
-                                            .into_iter()
-                                            .collect::<Result<Vec<_>>>()?,
-                                        );
-                                    }
-
-                                    // Everything else runs one at a time.
-                                    for call in sequential_fcs {
-                                        all_results.push(executor.execute(call).await?);
-                                    }
-                                    all_results
-                                }
-                            };
-                            Ok::<_, adk_core::AdkError>(results)
-                        };
+                        let dispatch = executor.dispatch(strategy, fc_parts);
 
                         // Drain tool progress concurrently with execution, yielding
                         // each chunk as a partial Event the moment it arrives. The
@@ -3724,25 +3915,11 @@ impl Agent for LlmAgent {
 
                     // ===== TOOL CONFIRMATION INTERRUPT =====
                     // A call held for a decision ends the run. Its request carries the final
-                    // arguments, so a decision recorded against its fingerprint authorizes the
-                    // same call when the next run's model issues it again.
+                    // arguments, and the next run that has a decision for it resumes the call
+                    // before its first model call.
                     if !held_for_confirmation.is_empty() {
                         for request in held_for_confirmation {
-                            let mut ce = Event::new(&invocation_id);
-                            ce.author = agent_name.clone();
-                            ce.llm_response.interrupted = true;
-                            ce.llm_response.turn_complete = true;
-                            ce.llm_response.content = Some(Content {
-                                role: "model".to_string(),
-                                parts: vec![Part::Text {
-                                    text: format!(
-                                        "Tool confirmation required for '{}'. Provide approve/deny decision to continue.",
-                                        request.tool_name
-                                    ),
-                                }],
-                            });
-                            ce.actions.tool_confirmation = Some(request);
-                            yield Ok(ce);
+                            yield Ok(confirmation_event(&invocation_id, &agent_name, request));
                         }
                         return;
                     }

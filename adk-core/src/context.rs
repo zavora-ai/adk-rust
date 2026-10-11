@@ -288,6 +288,15 @@ pub trait Session: Send + Sync {
             None => self.conversation_history(),
         }
     }
+    /// Returns the tool calls `agent_name` holds for confirmation on `branch`.
+    ///
+    /// An agent resumes these at the start of a run once a decision exists for them.
+    /// Implementations backed by an event log return
+    /// [`held_tool_calls`](crate::held_tool_calls) over it. The default returns none,
+    /// so a session without an event log never resumes a held call.
+    fn held_tool_calls(&self, _agent_name: &str, _branch: &str) -> Vec<crate::HeldToolCall> {
+        Vec::new()
+    }
     /// Append content to conversation history (for sequential agent support)
     fn append_to_history(&self, _content: Content) {
         // Default no-op - implementations can override to track history

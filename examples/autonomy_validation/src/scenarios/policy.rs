@@ -248,51 +248,41 @@ async fn approval(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
     // An approver decides by fingerprint, outside any run.
     store.decide(&scope, &entry.fingerprint, ToolApproval::approve()).await?;
 
-    // Run 2: a new run; the model re-issues the call under a new call ID.
-    let second = run_turn_with(
-        &runner,
-        USER,
-        session_id,
-        "The invoice has been approved. Send invoice INV-42 to customer acme for 300 USD now.",
-        None,
-    )
-    .await;
+    // Run 2: an empty turn resumes the held call under its original call ID before the model
+    // is asked anything, so the approval does not depend on the model issuing the call again.
+    let second = run_turn_with(&runner, USER, session_id, "", None).await;
     if let Some(error) = &second.error {
         return Ok(Verdict::Fail(format!("run 2 failed: {}", brief(error))));
     }
-    let held_again = second.events.iter().any(|event| event.actions.tool_confirmation.is_some());
     let executed = invoice.executions();
-    if executed == 0 {
-        let reason = if held_again {
-            "model re-issued send_invoice with different arguments, so the approval did not match"
-        } else {
-            "model did not re-issue send_invoice in run 2"
-        };
-        return Ok(Verdict::Retry(reason.to_string()));
-    }
     if executed != 1 {
-        return Ok(Verdict::Fail(format!("one approval authorized {executed} executions")));
+        return Ok(Verdict::Fail(format!(
+            "one approval authorized {executed} executions of the held call"
+        )));
     }
+    let held_again = second.events.iter().any(|event| event.actions.tool_confirmation.is_some());
     let events = session_events(sessions.as_ref(), app, USER, session_id).await?;
     let (pairings, problems) = pair_calls(&events);
     if !problems.is_empty() {
         return Ok(Verdict::Fail(format!("history pairing: {}", problems.join("; "))));
     }
-    let ids: Vec<&str> = pairings
-        .iter()
-        .filter(|pairing| pairing.name == "send_invoice")
-        .map(|pairing| pairing.id.as_str())
-        .collect();
     let first_id = request.function_call_id.as_deref().unwrap_or_default();
-    if ids.iter().filter(|id| **id != first_id).count() == 0 {
-        return Ok(Verdict::Fail("run 2 reused run 1's call ID".to_string()));
+    let Some(resumed) = pairings.iter().find(|pairing| pairing.id == first_id) else {
+        return Ok(Verdict::Fail("run 1's call is missing from the history".to_string()));
+    };
+    if resumed.responses.first().and_then(|response| response.get("sent")).is_none() {
+        return Ok(Verdict::Fail(format!(
+            "run 1's call was not answered by its execution: {:?}",
+            resumed.responses
+        )));
     }
     if store.take_decision(&scope, &entry.fingerprint).await?.is_some() {
         return Ok(Verdict::Fail("the approval was not consumed by the execution".to_string()));
     }
     Ok(Verdict::Pass(format!(
-        "run 1 held send_invoice (0 executions, 1 pending); approved by fingerprint; run 2 re-issued it under a new call ID and executed 1x; decision consumed ({} calls in history)",
-        ids.len()
+        "run 1 held send_invoice (0 executions, 1 pending); approved by fingerprint; run 2 resumed it under its original call ID and executed 1x; decision consumed; {} send_invoice calls in history, one response each{}",
+        pairings.iter().filter(|pairing| pairing.name == "send_invoice").count(),
+        if held_again { "; the model's repeat was held again" } else { "" }
     )))
 }
 

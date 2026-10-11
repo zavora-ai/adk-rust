@@ -31,7 +31,7 @@ ends with `all checks passed`; any failed check exits non-zero with the reason.
 ## Phases
 
 1. **One-shot.** `prompt_agent_with_policy` spawns a fresh agent process, which reads
-   `secret.txt` — a random marker in a temporary workspace — and returns its contents.
+   `marker.txt` — a random marker in a temporary workspace — and returns its contents.
 2. **Agent-driven.** A coordinator `LlmAgent` reaches the workspace agent only through
    `delegate_to_workspace_agent`, backed by one persistent `AcpSession`. The workspace agent
    records the marker with `record_finding`, which requires confirmation, so the ADK

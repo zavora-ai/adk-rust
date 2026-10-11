@@ -1166,3 +1166,103 @@ fn conversation_history_for_agent_double_transfer_sees_own_prior_events() {
     assert_eq!(filtered[2].role, "function"); // own tool response
     assert_eq!(filtered[3].role, "model"); // own transfer-back text
 }
+
+fn event_with(author: &str, invocation: &str, role: &str, parts: Vec<Part>) -> Event {
+    let mut event = Event::new(invocation);
+    event.author = author.to_string();
+    event.llm_response.content = Some(Content { role: role.to_string(), parts });
+    event
+}
+
+fn response_part(response: serde_json::Value, id: Option<&str>) -> Part {
+    Part::FunctionResponse {
+        function_response: FunctionResponseData::new("pay", response),
+        id: id.map(str::to_string),
+        annotations: None,
+    }
+}
+
+/// Run 1 holds `pay`; run 2 resumes it after an empty user turn.
+fn held_then_resumed(id: Option<&str>) -> MutableSession {
+    let mutable = MutableSession::new(Arc::new(MockSessionWithState::new()));
+    mutable.append_event(event_with(
+        "user",
+        "inv-1",
+        "user",
+        vec![Part::Text { text: "pay 5".to_string() }],
+    ));
+    mutable.append_event(event_with(
+        "ops",
+        "inv-1",
+        "model",
+        vec![Part::FunctionCall {
+            name: "pay".to_string(),
+            args: serde_json::json!({"amount": 5}),
+            id: id.map(str::to_string),
+            thought_signature: None,
+        }],
+    ));
+    mutable.append_event(event_with(
+        "ops",
+        "inv-1",
+        "function",
+        vec![response_part(adk_core::confirmation_pending_response("held"), id)],
+    ));
+    let mut hold = Event::new("inv-1");
+    hold.author = "ops".to_string();
+    // The confirmation notice is left out of the projected history.
+    hold.llm_response.content =
+        Some(Content::new("model").with_text("Tool confirmation required for 'pay'."));
+    hold.actions.tool_confirmation = Some(adk_core::ToolConfirmationRequest {
+        tool_name: "pay".to_string(),
+        function_call_id: Some(id.unwrap_or("inv-1_pay_0").to_string()),
+        args: serde_json::json!({"amount": 5}),
+    });
+    mutable.append_event(hold);
+    mutable.append_event(event_with(
+        "user",
+        "inv-2",
+        "user",
+        vec![Part::Text { text: String::new() }],
+    ));
+    mutable
+}
+
+#[test]
+fn a_resumed_response_supersedes_the_pending_response_in_place() {
+    for id in [Some("call-1"), None] {
+        let mutable = held_then_resumed(id);
+        assert_eq!(mutable.held_tool_calls("ops", "").len(), 1);
+
+        mutable.append_event(event_with(
+            "ops",
+            "inv-2",
+            "function",
+            vec![response_part(serde_json::json!({"status": "paid"}), id)],
+        ));
+
+        assert!(mutable.held_tool_calls("ops", "").is_empty());
+        let history = mutable.conversation_history_for_agent("ops");
+        let roles: Vec<&str> = history.iter().map(|content| content.role.as_str()).collect();
+        assert_eq!(roles, ["user", "model", "function", "user"], "id {id:?}");
+        assert_eq!(
+            history[2].parts,
+            vec![response_part(serde_json::json!({"status": "paid"}), id)],
+            "exactly one response per call, the real one, in the pending one's place"
+        );
+    }
+}
+
+#[test]
+fn a_response_that_supersedes_nothing_pending_is_left_unchanged() {
+    let mutable = held_then_resumed(Some("call-1"));
+    let answered = response_part(serde_json::json!({"status": "paid"}), Some("call-1"));
+    mutable.append_event(event_with("ops", "inv-2", "function", vec![answered.clone()]));
+    // A second real response does not replace the first one.
+    let duplicate = response_part(serde_json::json!({"status": "again"}), Some("call-1"));
+    mutable.append_event(event_with("ops", "inv-2", "function", vec![duplicate.clone()]));
+
+    let history = mutable.conversation_history_for_agent("ops");
+    assert_eq!(history[2].parts, vec![answered]);
+    assert_eq!(history.last().unwrap().parts, vec![duplicate]);
+}

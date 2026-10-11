@@ -38,7 +38,7 @@ const SERVE_FLAG: &str = "--serve-acp";
 const DEFAULT_MODEL: &str = "gpt-6-luna";
 const WORKSPACE_VAR: &str = "ACP_E2E_WORKSPACE";
 const ENV_PROBE_VAR: &str = "ACP_E2E_ENV_PROBE";
-const SECRET_FILE: &str = "secret.txt";
+const MARKER_FILE: &str = "marker.txt";
 const PROBE_FILE: &str = ".probe";
 const FINDINGS_FILE: &str = "findings.log";
 const READ_TOOL: &str = "read_workspace_file";
@@ -110,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
     let workspace = tempfile::tempdir()?;
     let marker = format!("ACP-E2E-{}", uuid::Uuid::new_v4());
     let probe = uuid::Uuid::new_v4().to_string();
-    std::fs::write(workspace.path().join(SECRET_FILE), &marker)?;
+    std::fs::write(workspace.path().join(MARKER_FILE), &marker)?;
 
     let exe = std::env::current_exe()?;
     let command = format!("{} {SERVE_FLAG}", shell_words::quote(&exe.to_string_lossy()));
@@ -146,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
         prompt_agent_with_policy(
             &config,
             &format!(
-                "Use {READ_TOOL} to read {SECRET_FILE} and reply with its exact contents only."
+                "Use {READ_TOOL} to read {MARKER_FILE} and reply with its exact contents only."
             ),
             Arc::clone(&policy),
         ),
@@ -193,7 +193,7 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     let request = format!(
-        "Have the workspace agent read {SECRET_FILE} and record its exact contents as a finding \
+        "Have the workspace agent read {MARKER_FILE} and record its exact contents as a finding \
          with {RECORD_TOOL}. Then tell me the exact contents."
     );
     let mut final_text = String::new();

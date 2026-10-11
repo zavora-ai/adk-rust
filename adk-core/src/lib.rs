@@ -161,9 +161,11 @@ pub use event::{
 };
 pub use event_stream::EventTextDeltas;
 pub use governance::{
-    ApprovalScope, ApprovalStore, DEFAULT_TOOL_CONFIRMATION_TIMEOUT, GovernanceControl,
-    GovernedCall, InMemoryApprovalStore, PendingApproval, ToolApproval, ToolAuthorization,
-    ToolCallScreen, ToolGate, authorize_tool_call,
+    ApprovalScope, ApprovalStore, CONFIRMATION_PENDING_STATUS, DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
+    GovernanceControl, GovernedCall, HeldToolCall, InMemoryApprovalStore, PendingApproval,
+    ToolApproval, ToolAuthorization, ToolCallScreen, ToolGate, authorize_tool_call,
+    confirmation_decision_available, confirmation_pending_response, held_tool_calls,
+    is_confirmation_pending,
 };
 pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,

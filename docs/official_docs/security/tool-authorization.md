@@ -106,12 +106,13 @@ let agent = LlmAgentBuilder::new("assistant")
      }
    }
    ```
-3. The held call is answered with `{"error": "Tool 'delete_file' requires confirmation"}`,
+3. The held call is answered with a confirmation-pending response —
+   `{"error": "Tool 'delete_file' requires confirmation", "status": "confirmation_pending"}` —
    calls in the same turn that need no approval still run, and the agent stream ends
 4. Your UI shows the user: "The agent wants to delete `/data/report.csv`. Allow?"
-5. On the next run, pass the decision **keyed by the request's fingerprint** — its tool
-   name and canonical arguments. The model re-issues the call under a new function call
-   ID, and the fingerprint still matches:
+5. Run again with a decision for the call. Any decision source works: an approval keyed by
+   the request's fingerprint (its tool name and canonical arguments), a decision keyed by its
+   call ID, or the `ApprovalStore`. An empty user turn resumes without adding a message:
 
 ```rust
 use adk_core::{Content, RunConfig, ToolApproval};
@@ -125,7 +126,7 @@ let config = RunConfig::builder()
     )
     .build();
 let stream = runner
-    .run_with_config(user_id, session_id, Content::new("user").with_text("approved"), Some(config))
+    .run_with_config(user_id, session_id, Content::new("user").with_text(""), Some(config))
     .await?;
 ```
 
@@ -139,6 +140,41 @@ the arguments after an approval changes the fingerprint, and the call is held ag
 > **Note:** A fingerprint approval in `RunConfig::tool_approvals` applies to every matching
 > call in the run it is passed to. For an approval that authorizes exactly one execution,
 > record it in an [`ApprovalStore`](#approval-store) instead.
+
+### Resuming a Held Call
+
+At the start of every run, before its first model call, `LlmAgent` finds the calls it holds
+for confirmation (`adk_core::held_tool_calls` over the session's events) and resumes each one
+that has a decision. The decision does not depend on the model issuing the call again.
+
+| Decision for the held call | What the resumed run does |
+|----------------------------|---------------------------|
+| Approve | Dispatches the original call — same tool, same model arguments, same call ID — through the full tool path in the [evaluation order](#combining-mechanisms); the governed path finds the decision, and an `ApprovalStore` entry is consumed |
+| Deny | Answers the call with "Tool 'delete_file' execution denied by confirmation policy"; the tool does not run |
+| None yet | Leaves the call held; the run continues to the model, which sees the pending response |
+
+- **One response per call.** The resumed call's response supersedes its confirmation-pending
+  response, both in the running turn and in the history projected for later runs, so providers
+  that reject duplicate responses accept the history.
+- **Events.** The resumed call's response event streams to the caller and persists in the
+  session like any other tool result.
+- **Model context.** The resume run's empty user turn and the "Tool confirmation required"
+  notice are not sent to the model; they carry nothing the model said or needs.
+- **Run budget.** The resumed calls are reserved as one batch. A batch that does not fit ends
+  the run with `ResourceExhausted` and leaves the calls held.
+- **Still held.** A held call stays held across runs until a real response answers it, or the
+  same call, re-issued, is executed or refused. A newer hold of the same call replaces the
+  older one, so one decision resumes one call.
+- **A repeat after resume.** If the model issues the same call again after it was resumed,
+  the call takes the normal path as a new call: a consumed `ApprovalStore` decision does not
+  authorize it, and a call-ID decision names a different ID. A fingerprint approval in
+  `RunConfig::tool_approvals` still covers it, as noted above.
+- **Scope.** Held calls before a compaction, on another branch, or of another agent are not
+  resumed. A `Session` that keeps no event log returns no held calls.
+
+`CodeActAgent` resumes a held call from its checkpoint (`Disposition::AwaitingConfirmation`),
+which already re-dispatches the call through the governed path. Realtime agents answer a held
+call with the reason inside the live session and have no later run to resume it in.
 
 ### Decisions Authorize One Exact Call
 
@@ -156,8 +192,10 @@ always toward asking again rather than executing.
 
 An `ApprovalStore` keeps held requests and decisions between runs, scoped to the app,
 user, and session. When a run holds a call, the agent records the request; an approver
-lists them, decides, and the next run that makes the same call takes the decision.
+lists them, decides, and the next run resumes the held call with the decision.
 Taking it consumes it, so one approval authorizes one execution.
+`ApprovalStore::has_decision` reports a waiting decision without consuming it; the agent
+asks it before resuming a call.
 
 ```rust
 use adk_core::{ApprovalScope, ApprovalStore, InMemoryApprovalStore, RunConfig, ToolApproval};
@@ -186,8 +224,9 @@ keep requests across restarts.
 ### Decisions Keyed by Call ID
 
 `RunConfig::tool_confirmation_decisions` keys a decision by function call ID. It applies only
-when a run dispatches that exact call ID again — a graph resuming its checkpointed frontier, for
-example — and not to a call the model re-issues, which receives a new ID.
+when a run dispatches that exact call ID again — an agent resuming its held call, or a graph
+resuming its checkpointed frontier — and not to a call the model re-issues, which receives a
+new ID.
 
 ### Binding a Decision to Its Arguments
 

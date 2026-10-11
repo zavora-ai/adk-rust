@@ -284,6 +284,10 @@ impl Session for HistoryTrackingSession {
         self.conversation_history()
     }
 
+    fn held_tool_calls(&self, agent_name: &str, branch: &str) -> Vec<adk_core::HeldToolCall> {
+        self.parent_ctx.session().held_tool_calls(agent_name, branch)
+    }
+
     fn append_to_history(&self, content: Content) {
         self.history.write().unwrap_or_else(|e| e.into_inner()).push(content);
     }

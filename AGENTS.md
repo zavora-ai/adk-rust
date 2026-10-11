@@ -651,6 +651,12 @@ one through `ServerConfig::governance` and exposes `POST /api/admin/freeze` / `u
 `RealtimeAgent`, `RealtimeRunner`, and `IntegratedRealtimeRunner` dispatch through the same
 governed path.
 
+A held call resumes deterministically: at the start of each run, before its first model call,
+`LlmAgent` finds its held calls (`adk_core::held_tool_calls`) and dispatches each one that has a
+decision (`adk_core::confirmation_decision_available`) under its original call ID through the
+order below. Its response supersedes the call's `confirmation_pending_response` in the projected
+history; a call without a decision stays held. `CodeActAgent` resumes from its checkpoint.
+
 Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`:
 
 1. Run budget (`RunConfig::budget`) — the model turn's whole tool batch is reserved before any

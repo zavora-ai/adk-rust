@@ -59,6 +59,7 @@ dependencies = [
 name = "adk-acp"
 version = "3.0.0"
 dependencies = [
+ "adk-agent",
  "adk-core",
  "adk-runner",
  "adk-session",

@@ -31,7 +31,7 @@ impl Tool for ReadWorkspaceFile {
     }
 
     fn description(&self) -> &str {
-        "Read a file from the workspace. Pass a bare file `name` such as `secret.txt`."
+        "Read a file from the workspace. Pass a bare file `name` such as `marker.txt`."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -108,7 +108,7 @@ fn confined_path(workspace: &Path, name: &str) -> Result<PathBuf> {
         && Path::new(name).components().count() == 1;
     if !is_bare {
         return Err(AdkError::tool(format!(
-            "'{name}' is not a bare file name; pass a name such as `secret.txt`"
+            "'{name}' is not a bare file name; pass a name such as `marker.txt`"
         )));
     }
     Ok(workspace.join(name))
