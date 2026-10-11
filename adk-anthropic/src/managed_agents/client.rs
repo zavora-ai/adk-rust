@@ -1573,11 +1573,14 @@ impl ManagedAgentsClient {
 
     /// List files scoped to a session.
     pub async fn list_session_files(&self, session_id: &str) -> Result<Vec<serde_json::Value>> {
-        let url = format!("{}?scope_id={session_id}", self.build_url("files"));
-        let response =
-            self.client.get(&url).headers((*self.cached_headers).clone()).send().await.map_err(
-                |e| Error::connection(format!("failed to list session files: {e}"), None),
-            )?;
+        let response = self
+            .client
+            .get(self.build_url("files"))
+            .query(&[("scope_id", session_id)])
+            .headers((*self.cached_headers).clone())
+            .send()
+            .await
+            .map_err(|e| Error::connection(format!("failed to list session files: {e}"), None))?;
 
         let body: serde_json::Value = handle_response(response).await?;
         Ok(body.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default())

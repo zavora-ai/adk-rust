@@ -86,7 +86,7 @@ pub struct OAuth2Config {
     pub client_id: String,
     /// OAuth2 client secret (optional for public clients)
     pub client_secret: Option<String>,
-    /// Token endpoint URL
+    /// Token endpoint URL. Must use `https`, except for a loopback host.
     pub token_url: String,
     /// Requested scopes
     pub scopes: Vec<String>,
@@ -187,6 +187,21 @@ impl OAuth2Config {
         // Make request (using reqwest if available)
         #[cfg(feature = "http-transport")]
         {
+            // Client credentials and the issued token travel in this request, so
+            // plain HTTP is accepted only for a loopback token endpoint.
+            let url = reqwest::Url::parse(&self.token_url).map_err(|e| {
+                AuthError::TokenFetch(format!("invalid token URL '{}': {e}", self.token_url))
+            })?;
+            let host =
+                url.host_str().unwrap_or_default().trim_start_matches('[').trim_end_matches(']');
+            let loopback = host.eq_ignore_ascii_case("localhost")
+                || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
+            if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+                return Err(AuthError::TokenFetch(format!(
+                    "token URL '{}' must use https; plain http is accepted only for localhost",
+                    self.token_url
+                )));
+            }
             let client = reqwest::Client::builder()
                 .timeout(self.timeout)
                 .build()
@@ -350,5 +365,20 @@ mod tests {
         assert_eq!(config.client_id, "client-id");
         assert_eq!(config.client_secret, Some("client-secret".to_string()));
         assert_eq!(config.scopes, vec!["read", "write"]);
+    }
+
+    #[cfg(feature = "http-transport")]
+    #[tokio::test]
+    async fn plain_http_token_url_is_refused_unless_loopback() {
+        let config =
+            OAuth2Config::new("client-id", "http://auth.example.com/token").with_secret("s3cret");
+        let err = config.get_or_refresh_token().await.unwrap_err();
+        assert!(err.to_string().contains("must use https"), "got {err}");
+
+        for url in ["http://localhost:1/token", "http://127.0.0.1:1/token", "http://[::1]:1/token"]
+        {
+            let err = OAuth2Config::new("client-id", url).get_or_refresh_token().await.unwrap_err();
+            assert!(!err.to_string().contains("must use https"), "{url} was refused: {err}");
+        }
     }
 }

@@ -1,0 +1,2 @@
+- `adk-tool`: the MCP OAuth client refuses a plain-HTTP `token_url` unless its host is loopback, so client credentials and issued tokens are not sent unencrypted.
+- `adk-anthropic`: `list_session_files` URL-encodes the session ID in the `scope_id` query parameter.
