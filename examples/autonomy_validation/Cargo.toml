@@ -20,6 +20,7 @@ adk-model = { path = "../../adk-model", default-features = false, features = ["o
 adk-payments = { path = "../../adk-payments", features = ["ap2"] }
 adk-plugin = { path = "../../adk-plugin" }
 adk-runner = { path = "../../adk-runner" }
+adk-server = { path = "../../adk-server", features = ["background"] }
 adk-rust-macros = { path = "../../adk-rust-macros" }
 adk-session = { path = "../../adk-session", features = ["sqlite"] }
 adk-tool = { path = "../../adk-tool", features = ["mcp"] }

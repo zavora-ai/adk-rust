@@ -4,7 +4,7 @@ Exercises the cron scheduling API from `adk-server`: create jobs, list them, and
 
 ## What This Shows
 
-- **`CronState` / `CronJobStore`** — job storage and the scheduling loop
+- **`CronState` / `ScheduleStore`** — cron jobs stored as schedules (in memory here) and the `DurableScheduler` loop
 - **Concurrency policies** — `skip`, `allow`, and `queue`
 - **`POST/GET/PATCH/DELETE /cron`** — the job management surface
 

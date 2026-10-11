@@ -205,21 +205,26 @@ let state = agent
 
 ## Background Runs
 
-The `background` feature in `adk-server` adds REST endpoints for async workflow execution.
+The `background` feature in `adk-server` adds REST endpoints for durable background runs.
+Runs live in a `DurableRunStore` — an `InMemoryRunStore` by default, or a shared backend so
+several replicas serve one queue — and a `DurableWorker` claims and executes them under fenced
+leases. See [Durable Runtime](../core/durable-runtime.md) for the worker, crash resume, and the
+scheduler.
 
 ### Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/runs` | Submit a background run |
-| GET | `/runs/{run_id}` | Poll run status |
-| DELETE | `/runs/{run_id}` | Cancel a run |
+| POST | `/runs` | Enqueue a run of a workflow or an agent |
+| GET | `/runs` | List runs (`state`, `sessionId`, `limit` query parameters) |
+| GET | `/runs/{run_id}` | Read a run's status, attempts, checkpoint, and result |
+| DELETE | `/runs/{run_id}` | Cancel a run; a running run stops at its worker's next heartbeat |
 
 ### Usage
 
-A run names a `workflowId`. Something has to turn that name into work, so register a
-`WorkflowExecutor` — without one, a submitted run **fails** rather than reporting
-completion:
+A run names a `target` (or, for existing clients, `workflowId`). Register a `WorkflowExecutor`
+for workflows and a `Runner` per agent target; submitting an unknown target returns **404**
+rather than queuing a run that can never execute.
 
 ```rust
 use adk_server::background::{
@@ -228,16 +233,26 @@ use adk_server::background::{
 use serde_json::json;
 use std::sync::Arc;
 
-let registry = WorkflowRegistry::new().register("summarize", |input, cancel| async move {
-    if cancel.is_cancelled() {
-        return Err("cancelled before starting".to_string());
-    }
-    Ok(json!({ "summary": "…", "of": input.get("document") }))
-});
+let registry = WorkflowRegistry::new()
+    .register("summarize", |input, cancel| async move {
+        if cancel.is_cancelled() {
+            return Err("cancelled before starting".to_string());
+        }
+        Ok(json!({ "summary": "…", "of": input.get("document") }))
+    })
+    // Receives the attempt's WorkflowRunContext, so a recovered run resumes from its
+    // checkpoint thread instead of restarting.
+    .register_durable("settle", |_input, run| async move {
+        Ok(json!({ "thread": run.thread_id, "resumed": run.resumed }))
+    });
 
 let state = BackgroundState::new().with_executor(Arc::new(registry));
 let app = axum::Router::new().merge(background_runs_router_with_state(state));
 ```
+
+The embedded worker starts when the router is built inside a Tokio runtime. Disable it with
+`with_embedded_worker(false)` on API-only replicas, and share one store across replicas with
+`with_run_store`.
 
 > **Important:** `background_runs_router` and `background_runs_router_with_state` carry no
 > authentication. Anyone who reaches a standalone mount can submit and cancel runs. Mount
@@ -253,69 +268,67 @@ let app = axum::Router::new().merge(background_runs_router_with_state(state));
 >     .build(); // serves /api/runs and /api/runs/{run_id}
 > ```
 
-Submitting an unregistered `workflowId` returns **404** rather than queuing a run that
-can never execute. Implement `WorkflowExecutor` directly to bridge to `adk-graph`, the
-functional API, or your own dispatcher; return `Err` to fail the run, which is what makes
-the retry budget meaningful.
+### Request fields
+
+| Field | Meaning |
+|-------|---------|
+| `target` / `workflowId` | The agent or workflow to run |
+| `input` | Workflow state for a workflow; a string, `{"text": ...}`, or `{"content": ...}` for an agent |
+| `maxRetries` | Retries after the first attempt; `maxAttempts` is this plus one |
+| `sessionId` | The session an agent run continues; defaults to `run-{runId}` |
+| `idempotencyKey` | An existing key returns the existing run with **200** and `"existing": true` |
+| `concurrencyKey`, `onConflict` | Double texting: `reject` returns **409** with `blockingRunId`, `enqueue` queues behind, `interrupt` cancels the unfinished runs |
+| `notBefore` | The run is not claimed before this time |
 
 ### Status Lifecycle
 
 ```
 queued → running → completed
-                 → failed (retries if configured)
+                 → failed (requeued while attempts remain)
                  → cancelled (via DELETE)
+running → waiting → running (timer or wake)
 ```
 
-Retry re-executes the workflow **from the beginning** with the original input. It is not
-checkpoint-aware, so a workflow with side effects should be idempotent or guard its own
-progress.
-
-> **Important:** run records live in an in-memory store. A process restart loses every
-> record, including in-flight runs. Treat these endpoints as an async execution surface,
-> not a durable job queue.
+A failed attempt is retried while the run has attempts left. A run whose worker stopped is
+recovered by another worker once its lease expires, at the next attempt: an agent continues its
+session, and a workflow registered with `register_durable` resumes from its checkpoint thread.
+Run records survive a restart when the run store is durable.
 
 ## Cron Scheduling
 
-The `background` feature also includes cron job management.
+The `background` feature also includes cron jobs. A cron job is a `Schedule` in a
+`ScheduleStore` (in memory by default, shared across replicas with
+`CronState::with_schedule_store`); its id is its name.
 
 ### Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/cron` | Create a cron job |
+| POST | `/cron` | Create a cron job (`name`, `workflowId`, `cronExpression`, `timezone`, `input`, `concurrencyPolicy`, `missedFirePolicy`) |
 | GET | `/cron` | List all jobs |
 | GET | `/cron/{job_id}` | Get one job |
 | PATCH | `/cron/{job_id}` | Pause/resume |
 | DELETE | `/cron/{job_id}` | Delete a job |
 
+Expressions have five, six, or seven fields and are evaluated in `timezone` (an IANA name,
+default `UTC`). A second job with an existing name returns **409**.
+
 ### Concurrency Policies
 
-- **skip**: Skip the occurrence if a previous run is still active (default)
-- **allow**: Permit concurrent executions
-- **queue**: Queue the occurrence and run it when the active run finishes
+| Policy | Run template | Effect |
+|--------|--------------|--------|
+| `skip` (default) | Concurrency key `cron:{name}`, `OnConflict::Reject` | An occurrence that arrives while a run is active is skipped |
+| `queue` | Concurrency key `cron:{name}`, `OnConflict::Enqueue` | The occurrence queues behind the active run |
+| `allow` | No concurrency key | Runs alongside the active run |
 
-Each schedule occurrence is claimed once, so an occurrence that arrives while a run is
-active produces exactly one queued run rather than one per scheduler poll. Queued runs
-drain in order, and each is monitored the same way a directly triggered run is, so the
-active count returns to zero even if a run fails or is cancelled.
-
-A job's queue holds at most 100 runs by default (`DEFAULT_MAX_QUEUE_DEPTH`). An occurrence
-that arrives while the queue is full is skipped with a warning. Set the depth with
-`CronState::with_max_queue_depth` before cloning the state into the router and scheduler.
+`missedFirePolicy` (`skip`, `fireOnce`, or `{"catchUp": n}`) decides which occurrences fire
+after the scheduler fell behind.
 
 ### Pause and Resume
 
-Resuming a paused job (`PATCH` with `"status": "active"`) skips every occurrence that fell
-inside the pause: the next run is the first occurrence after the resume instant, so a
-per-minute job paused for a day fires once at the next minute rather than replaying its
-missed occurrences. `lastExecution` reports the scheduling cursor — the latest claimed
-occurrence, or the resume instant after a pause.
-
-`executionCount` counts the runs the scheduler started, including runs taken off the
-queue. Occurrences dropped by `skip` or by a full queue are not counted.
-
-Cron jobs use the same executor as background runs — a job whose `workflowId` is not
-registered will fail its runs.
+Resuming a paused job (`PATCH` with `"status": "active"`) moves its next fire time to the first
+occurrence after the resume instant, so occurrences that fell inside the pause are skipped
+rather than replayed. Responses report `nextFireAt` and the schedule's `revision`.
 
 ### Usage
 
@@ -326,7 +339,7 @@ let bg_state = BackgroundState::new();
 let cron_state = CronState::new(bg_state);
 let app = axum::Router::new().merge(cron_jobs_router_with_state(cron_state.clone()));
 
-// Start the background scheduler
+// Start the scheduler on every replica; each fire time is enqueued once.
 start_cron_scheduler(cron_state);
 ```
 

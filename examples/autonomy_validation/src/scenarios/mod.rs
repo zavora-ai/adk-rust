@@ -7,6 +7,7 @@ pub mod budget;
 pub mod builtin;
 pub mod codeact;
 pub mod commerce;
+pub mod durable;
 pub mod eval;
 pub mod governance;
 pub mod graph;
@@ -44,6 +45,7 @@ pub const ALL: &[&str] = &[
     "openai_tools_routing",
     "anthropic_thinking_replay",
     "builtin_tool_policy",
+    "durable_crash_resume",
 ];
 
 /// Runs the named scenario once.
@@ -75,6 +77,7 @@ pub async fn run(name: &str, cfg: &Config, provider: Provider) -> Verdict {
         "openai_tools_routing" => providers::openai_tools_routing(cfg, provider).await,
         "anthropic_thinking_replay" => providers::anthropic_thinking_replay(cfg, provider).await,
         "builtin_tool_policy" => builtin::builtin_tool_policy(cfg, provider).await,
+        "durable_crash_resume" => durable::durable_crash_resume(cfg, provider).await,
         other => Verdict::Fail(format!("unknown scenario {other}")),
     }
 }

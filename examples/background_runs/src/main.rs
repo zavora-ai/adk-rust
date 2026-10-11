@@ -1,7 +1,7 @@
 //! Background Runs Example
 //!
 //! Demonstrates the Background Runs REST API from `adk-server`:
-//! - BackgroundState and BackgroundRunner
+//! - BackgroundState with the embedded DurableWorker
 //! - Axum server with background_runs_router
 //! - Submit a run via POST /runs
 //! - Poll status via GET /runs/{run_id}
@@ -15,14 +15,14 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 
 use adk_server::background::{
-    BackgroundState, background_runs_router_with_state,
+    BackgroundState, WorkflowRegistry, background_runs_router_with_state,
 };
 
 fn print_banner() {
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║         Background Runs REST API — Complete Example          ║");
     println!("║                                                              ║");
-    println!("║  Demonstrates: BackgroundState, BackgroundRunner,             ║");
+    println!("║  Demonstrates: BackgroundState, DurableWorker,                 ║");
     println!("║  POST /runs, GET /runs/{{id}}, DELETE /runs/{{id}}                ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
@@ -36,21 +36,27 @@ fn print_section(title: &str) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .with_target(false)
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").with_target(false).init();
 
     print_banner();
 
     // ─── Step 1: Create BackgroundState and server ───────────────────────
     print_section("Step 1: Creating BackgroundState & Axum Server");
 
-    let bg_state = BackgroundState::new();
-    println!("  ✓ BackgroundState created (RunStore + BackgroundRunner)");
+    // Runs live in an in-memory DurableRunStore; the embedded DurableWorker claims and
+    // executes them. Pass a shared store with `with_run_store` to serve several replicas.
+    let registry = WorkflowRegistry::new()
+        .register("data-pipeline-v1", |input, _cancel| async move {
+            Ok(serde_json::json!({ "rows": 1200, "source": input.get("source").cloned() }))
+        })
+        .register("long-running-analysis", |_input, cancel| async move {
+            cancel.cancelled().await;
+            Err("cancelled".to_string())
+        });
+    let bg_state = BackgroundState::new().with_executor(std::sync::Arc::new(registry));
+    println!("  ✓ BackgroundState created (InMemoryRunStore + embedded DurableWorker)");
 
-    let app: Router = Router::new()
-        .merge(background_runs_router_with_state(bg_state.clone()));
+    let app: Router = Router::new().merge(background_runs_router_with_state(bg_state.clone()));
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
@@ -76,15 +82,10 @@ async fn main() -> Result<()> {
             "source": "s3://bucket/data.csv",
             "format": "csv"
         },
-        "timeoutSecs": 60,
         "maxRetries": 2
     });
 
-    let resp = client
-        .post(format!("{base_url}/runs"))
-        .json(&submit_body)
-        .send()
-        .await?;
+    let resp = client.post(format!("{base_url}/runs")).json(&submit_body).send().await?;
 
     let status_code = resp.status();
     let body: Value = resp.json().await?;
@@ -101,10 +102,7 @@ async fn main() -> Result<()> {
     for attempt in 1..=3 {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let resp = client
-            .get(format!("{base_url}/runs/{run_id}"))
-            .send()
-            .await?;
+        let resp = client.get(format!("{base_url}/runs/{run_id}")).send().await?;
 
         let status_code = resp.status();
         let body: Value = resp.json().await?;
@@ -130,27 +128,19 @@ async fn main() -> Result<()> {
         "input": {
             "dataset": "production-logs",
             "window": "7d"
-        },
-        "timeoutSecs": 300
+        }
     });
 
-    let resp = client
-        .post(format!("{base_url}/runs"))
-        .json(&submit_body2)
-        .send()
-        .await?;
+    let resp = client.post(format!("{base_url}/runs")).json(&submit_body2).send().await?;
 
     let body: Value = resp.json().await?;
     let run_id_2 = body["runId"].as_str().unwrap().to_string();
     println!("  ✓ Submitted second run: {run_id_2}");
 
-    // Small delay then cancel
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    // Let the worker start it, then cancel: the embedded worker sees the request at once.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let resp = client
-        .delete(format!("{base_url}/runs/{run_id_2}"))
-        .send()
-        .await?;
+    let resp = client.delete(format!("{base_url}/runs/{run_id_2}")).send().await?;
 
     let status_code = resp.status();
     let body: Value = resp.json().await?;
@@ -163,10 +153,7 @@ async fn main() -> Result<()> {
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let resp = client
-        .get(format!("{base_url}/runs/{run_id}"))
-        .send()
-        .await?;
+    let resp = client.get(format!("{base_url}/runs/{run_id}")).send().await?;
 
     let body: Value = resp.json().await?;
     println!("  Run 1 ({run_id}):");
@@ -177,10 +164,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let resp = client
-        .get(format!("{base_url}/runs/{run_id_2}"))
-        .send()
-        .await?;
+    let resp = client.get(format!("{base_url}/runs/{run_id_2}")).send().await?;
 
     let body: Value = resp.json().await?;
     println!("  Run 2 ({run_id_2}):");
@@ -189,10 +173,7 @@ async fn main() -> Result<()> {
     // ─── Step 6: Error handling — non-existent run ───────────────────────
     print_section("Step 6: Error Handling (Non-existent Run)");
 
-    let resp = client
-        .get(format!("{base_url}/runs/non-existent-id"))
-        .send()
-        .await?;
+    let resp = client.get(format!("{base_url}/runs/non-existent-id")).send().await?;
 
     let status_code = resp.status();
     let body: Value = resp.json().await?;
@@ -202,7 +183,7 @@ async fn main() -> Result<()> {
     // ─── Summary ─────────────────────────────────────────────────────────
     print_section("Summary");
     println!("  All Background Runs API features demonstrated:");
-    println!("    ✓ BackgroundState with RunStore + BackgroundRunner");
+    println!("    ✓ BackgroundState with InMemoryRunStore + DurableWorker");
     println!("    ✓ POST /runs — submit workflow runs");
     println!("    ✓ GET /runs/{{run_id}} — poll run status");
     println!("    ✓ DELETE /runs/{{run_id}} — cancel running workflows");

@@ -186,7 +186,8 @@ pub use event_stream::EventTextDeltas;
 pub use governance::{
     ApprovalScope, ApprovalStore, BUILTIN_TOOLS_WITHHELD_KEY, BuiltinToolGovernor,
     BuiltinToolWithholding, CONFIRMATION_PENDING_STATUS, DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
-    GovernanceControl, GovernedCall, HeldToolCall, InMemoryApprovalStore, PendingApproval,
+    GOVERNANCE_FROZEN_CODE, GOVERNANCE_STALE_CODE, GovernanceControl, GovernanceMirrorConfig,
+    GovernanceWatch, GovernedCall, HeldToolCall, InMemoryApprovalStore, PendingApproval,
     ToolApproval, ToolAuthorization, ToolCallScreen, ToolGate, WithheldBuiltinTool,
     authorize_tool_call, builtin_tool_configuration, confirmation_decision_available,
     confirmation_pending_response, held_tool_calls, is_confirmation_pending,
