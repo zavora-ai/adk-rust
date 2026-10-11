@@ -17,7 +17,7 @@ use adk_core::audit_log::{
     AuditActor, AuditDecision, AuditLogStore, AuditRecordDraft, AuditRecordKind,
     AuditRecordOutcome, InMemoryAuditLogStore,
 };
-use adk_core::principal::{ActingContext, AgentId, AgentPrincipal, SubjectKind, SubjectRef};
+use adk_core::principal::{ActingContext, AgentId, AgentPrincipal, SubjectRef};
 use chrono::{TimeZone, Utc};
 use serde_json::json;
 
@@ -36,19 +36,10 @@ fn clock() -> ManualClock {
 }
 
 fn acting() -> ActingContext {
-    ActingContext {
-        agent: AgentPrincipal {
-            id: AgentId::new("urn:adk:agent:billing").unwrap(),
-            tenant: Some("acme".into()),
-            class: None,
-            instance: Some(LOG_ID.into()),
-            sponsor: None,
-            attributes: Default::default(),
-        },
-        on_behalf_of: Some(SubjectRef { kind: SubjectKind::Human, id: "alice".into() }),
-        delegation_chain: Vec::new(),
-        invocation_id: "inv-1".into(),
-    }
+    let agent = AgentPrincipal::new(AgentId::new("urn:adk:agent:billing").unwrap())
+        .with_tenant("acme")
+        .with_instance(LOG_ID);
+    ActingContext::new(agent, "inv-1").on_behalf_of(SubjectRef::human("alice"))
 }
 
 fn draft(n: u64) -> AuditRecordDraft {
@@ -258,10 +249,7 @@ async fn key_rotation_is_dual_signed_and_learned() {
         log.append(draft(n)).await.unwrap();
     }
     let rotation = log
-        .rotate_signer(
-            new.clone(),
-            AuditActor::subject(SubjectRef { kind: SubjectKind::Human, id: "secops".into() }),
-        )
+        .rotate_signer(new.clone(), AuditActor::subject(SubjectRef::human("secops")))
         .await
         .unwrap();
     assert_eq!(rotation.size, 6);

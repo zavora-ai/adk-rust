@@ -8,7 +8,7 @@ use adk_core::audit_log::{
     AuditActor, AuditAppend, AuditCheckpoint, AuditDecision, AuditHash, AuditLogEntry,
     AuditLogStore, AuditRecord, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome,
 };
-use adk_core::principal::{SubjectKind, SubjectRef};
+use adk_core::principal::SubjectRef;
 use adk_core::{AdkError, Clock, ErrorCategory, ErrorComponent, Result, SystemClock};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -657,7 +657,7 @@ fn draft_from_event(event: AuditEvent) -> AuditRecordDraft {
     };
     let mut draft =
         AuditRecordDraft::new(kind, event.action.clone().unwrap_or_else(|| event.resource.clone()))
-            .actor(AuditActor::subject(SubjectRef { kind: SubjectKind::Human, id: event.user }));
+            .actor(AuditActor::subject(SubjectRef::human(event.user)));
     draft.decision = decision;
     draft.outcome = outcome;
     draft.ext.insert("resource".into(), serde_json::Value::String(event.resource));

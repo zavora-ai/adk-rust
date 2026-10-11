@@ -17,5 +17,3 @@
   rotations that are not dual-signed. `adk-rust audit verify` and `audit keygen` (feature `audit`,
   on by default) and `audit export` (feature `audit-sql`) expose it on the command line;
   a build without `audit` drops the subcommands and the `adk-auth` dependency.
-- **Agent identity types** (`adk-core`): `principal::{AgentId, SubjectKind, SubjectRef,
-  AgentPrincipal, ActingContext}`.

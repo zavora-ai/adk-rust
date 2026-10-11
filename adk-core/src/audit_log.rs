@@ -230,9 +230,9 @@ pub enum AuditRecordOutcome {
 ///
 /// ```rust
 /// use adk_core::audit_log::AuditActor;
-/// use adk_core::principal::{SubjectKind, SubjectRef};
+/// use adk_core::principal::SubjectRef;
 ///
-/// let actor = AuditActor::subject(SubjectRef { kind: SubjectKind::Human, id: "alice".into() });
+/// let actor = AuditActor::subject(SubjectRef::human("alice"));
 /// assert!(actor.agent.is_none());
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -582,7 +582,7 @@ fn audit_error(category: ErrorCategory, code: &'static str, message: String) -> 
 /// The error a store returns when `append` does not start at the log's size.
 pub fn seq_conflict_error(log_id: &str, expected: u64, got: u64) -> AdkError {
     audit_error(
-        ErrorCategory::InvalidInput,
+        ErrorCategory::Conflict,
         "audit_log.seq_conflict",
         format!(
             "audit log '{log_id}' has {expected} records but the append starts at {got}. \
@@ -603,7 +603,7 @@ pub fn out_of_range_error(log_id: &str, size: u64, requested: u64) -> AdkError {
 /// The error a store returns when a checkpoint would equivocate.
 pub fn checkpoint_conflict_error(log_id: &str, size: u64) -> AdkError {
     audit_error(
-        ErrorCategory::InvalidInput,
+        ErrorCategory::Conflict,
         "audit_log.checkpoint_conflict",
         format!(
             "audit log '{log_id}' already has a checkpoint at size {size} with a different root; \
