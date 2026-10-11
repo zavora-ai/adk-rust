@@ -1,8 +1,9 @@
 //! Append-only audit log records and the store that holds them.
 //!
-//! An [`AuditRecord`] is one entry in a per-replica log identified by `log_id`. A
+//! An [`AuditRecord`](crate::audit_log::AuditRecord) is one entry in a per-replica log identified by `log_id`. A
 //! writer (`adk_auth::signed_audit::AuditLog`) canonicalizes each record, hashes it into
-//! a Merkle tree, and signs checkpoints of the tree. The [`AuditLogStore`] persists the
+//! a Merkle tree, and signs checkpoints of the tree. The
+//! [`AuditLogStore`](crate::audit_log::AuditLogStore) persists the
 //! result and computes nothing itself:
 //!
 //! | Data | Stored as |
@@ -16,7 +17,7 @@
 //! `audit_log.seq_conflict` instead of forking the log. Pruning drops record bodies
 //! and keeps their hashes, so signed checkpoints and proofs stay verifiable.
 //!
-//! [`InMemoryAuditLogStore`] is the reference implementation; `adk-session` ships SQLite
+//! [`InMemoryAuditLogStore`](crate::audit_log::InMemoryAuditLogStore) is the reference implementation; `adk-session` ships SQLite
 //! and PostgreSQL ones. Every backend passes the same conformance suite
 //! (`adk_core::audit_log_store_conformance_tests!`, `conformance` feature).
 

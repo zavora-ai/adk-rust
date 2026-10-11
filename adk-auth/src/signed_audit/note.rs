@@ -478,11 +478,12 @@ impl CheckpointBody {
     pub fn parse(text: &str) -> Result<Self, NoteError> {
         let mut lines = text.lines();
         let origin = lines.next().filter(|line| !line.is_empty());
-        let size = lines.next().and_then(|line| {
-            (!line.starts_with('+') && !(line.len() > 1 && line.starts_with('0')))
-                .then(|| line.parse::<u64>().ok())
-                .flatten()
-        });
+        // Decimal digits only, no sign and no leading zero, as C2SP requires.
+        let size = lines
+            .next()
+            .filter(|line| line.bytes().all(|b| b.is_ascii_digit()))
+            .filter(|line| *line == "0" || !line.starts_with('0'))
+            .and_then(|line| line.parse::<u64>().ok());
         let root = lines.next().and_then(|line| BASE64.decode(line).ok());
         match (origin, size, root) {
             (Some(origin), Some(size), Some(root)) => {
