@@ -1457,6 +1457,49 @@ mod runner_tests {
     }
 
     #[tokio::test]
+    async fn policy_rules_match_the_configured_voice_agent() {
+        let counts = Arc::new(Counts::default());
+        let executions = Arc::new(AtomicUsize::new(0));
+        let principal = adk_core::AgentPrincipal::new(
+            adk_core::AgentId::new("spiffe://acme.test/agent/voice").unwrap(),
+        );
+        let config = adk_core::RunConfig::builder()
+            .tool_policy(Arc::new(
+                adk_core::DeclarativePolicy::builder()
+                    .rule(
+                        adk_core::PolicyRule::allow("pay")
+                            .for_agent("spiffe://acme.test/agent/voice"),
+                    )
+                    .build(),
+            ))
+            .agent_principal(principal)
+            .build();
+        let runner = governed_runner(Arc::clone(&counts), Arc::clone(&executions), config).await;
+
+        runner.dispatch_tool_call("c1", "pay", "{}").await.unwrap();
+        assert_eq!(executions.load(Ordering::SeqCst), 1, "the voice agent's rule allows it");
+
+        let unconfigured = adk_core::RunConfig::builder()
+            .tool_policy(Arc::new(
+                adk_core::DeclarativePolicy::builder()
+                    .rule(
+                        adk_core::PolicyRule::allow("pay")
+                            .for_agent("spiffe://acme.test/agent/voice"),
+                    )
+                    .build(),
+            ))
+            .build();
+        let runner =
+            governed_runner(Arc::clone(&counts), Arc::clone(&executions), unconfigured).await;
+        runner.dispatch_tool_call("c2", "pay", "{}").await.unwrap();
+        assert_eq!(
+            executions.load(Ordering::SeqCst),
+            1,
+            "the derived identity urn:adk:agent:voice/realtime is not the voice agent"
+        );
+    }
+
+    #[tokio::test]
     async fn send_audio_chunk_preserves_bytes_and_format_on_raw_path() {
         let counts = Arc::new(Counts::default());
         let runner = runner_with_session(Arc::clone(&counts)).await;
