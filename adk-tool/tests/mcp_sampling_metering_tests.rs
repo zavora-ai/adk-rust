@@ -220,7 +220,9 @@ async fn sampling_during_a_run_counts_against_its_budget_and_ledger() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let usage = tracker.usage();
     assert_eq!((usage.model_calls, usage.total_tokens, usage.cost_micro_usd), (1, 30, 1_500));
-    let vendor_key = SpendKey::org("acme").with_agent("researcher").with_vendor("sampler-vendor");
+    let vendor_key = SpendKey::org("acme")
+        .with_agent("urn:adk:agent:acme/researcher")
+        .with_vendor("sampler-vendor");
     assert_eq!(ledger.spent(&vendor_key, SpendPeriod::Lifetime).await.unwrap(), 1_500);
 }
 

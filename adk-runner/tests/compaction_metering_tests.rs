@@ -201,7 +201,9 @@ async fn a_compaction_call_counts_against_the_run_budget_and_spend_ledger() {
     assert_eq!(fixture.compaction_events().await, 1);
     let usage = tracker.usage();
     assert_eq!((usage.model_calls, usage.total_tokens, usage.cost_micro_usd), (1, 500, 2_000));
-    let key = SpendKey::org("acme").with_agent("assistant").with_vendor("summary-vendor");
+    let key = SpendKey::org("acme")
+        .with_agent("urn:adk:agent:acme/assistant")
+        .with_vendor("summary-vendor");
     assert_eq!(ledger.spent(&key, SpendPeriod::Lifetime).await.unwrap(), 2_000);
 }
 
@@ -262,7 +264,7 @@ async fn intra_invocation_compaction_is_metered_and_refused_over_budget() {
     assert!(calls >= 1, "intra-invocation compaction ran");
     assert_eq!(tracker.usage().model_calls, calls as u64);
     assert_eq!(tracker.usage().total_tokens, 500 * calls as u64);
-    let key = SpendKey::org("acme").with_agent("assistant");
+    let key = SpendKey::org("acme").with_agent("urn:adk:agent:acme/assistant");
     assert_eq!(ledger.spent(&key, SpendPeriod::Lifetime).await.unwrap(), 2_000 * calls as u64);
 
     let exhausted = Arc::new(BudgetTracker::new(RunBudget::new().max_model_calls(0)));

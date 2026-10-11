@@ -270,7 +270,8 @@ async fn llm_routing_spend_is_committed_under_the_router() {
         .await;
 
     assert!(events.iter().all(Result::is_ok), "{events:?}");
-    let router_gemini = SpendKey::org("acme").with_agent("router").with_vendor("gemini");
+    let router_gemini =
+        SpendKey::org("acme").with_agent("urn:adk:agent:acme/router").with_vendor("gemini");
     assert_eq!(spent(&ledger, router_gemini).await, 4_000);
     assert_eq!(spent(&ledger, SpendKey::org("acme").with_vendor("anthropic")).await, 2_000);
 }
