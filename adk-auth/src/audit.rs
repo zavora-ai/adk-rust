@@ -139,6 +139,12 @@ pub struct AuditEvent {
     /// SHA-256 hash of the previous event (for cryptographic chaining).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prev_hash: Option<String>,
+    /// Stable id of the agent that acted ([`AgentId`](adk_core::AgentId)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// The person or service the agent acted for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_behalf_of: Option<adk_core::SubjectRef>,
 }
 
 impl AuditEvent {
@@ -164,6 +170,8 @@ impl AuditEvent {
             resource_id: None,
             action: None,
             prev_hash: None,
+            agent_id: None,
+            on_behalf_of: None,
         }
     }
 
@@ -250,6 +258,38 @@ impl AuditEvent {
         self
     }
 
+    /// Set the acting agent's id.
+    pub fn with_agent_id(mut self, agent_id: impl Into<String>) -> Self {
+        self.agent_id = Some(agent_id.into());
+        self
+    }
+
+    /// Records the acting agent, the subject it acted for, and its tenant.
+    ///
+    /// Sets [`agent_id`](Self::agent_id) and [`on_behalf_of`](Self::on_behalf_of), and
+    /// [`tenant_id`](Self::tenant_id) from the principal's tenant when no tenant is set.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_auth::{AuditEvent, AuditOutcome};
+    /// use adk_core::{ActingContext, SubjectRef};
+    ///
+    /// let acting = ActingContext::derived("shop", "cashier", "alice", "inv-1");
+    /// let event = AuditEvent::tool_access("alice", "refund", AuditOutcome::Allowed)
+    ///     .with_acting_context(&acting);
+    /// assert_eq!(event.agent_id.as_deref(), Some("urn:adk:agent:shop/cashier"));
+    /// assert_eq!(event.on_behalf_of, Some(SubjectRef::human("alice")));
+    /// ```
+    pub fn with_acting_context(mut self, acting: &adk_core::ActingContext) -> Self {
+        self.agent_id = Some(acting.agent.id.to_string());
+        self.on_behalf_of = acting.on_behalf_of.clone();
+        if self.tenant_id.is_none() {
+            self.tenant_id = acting.agent.tenant.clone();
+        }
+        self
+    }
+
     /// Set action verb.
     pub fn with_action(mut self, action: impl Into<String>) -> Self {
         self.action = Some(action.into());
@@ -300,6 +340,9 @@ pub struct AuditFilter {
     /// Filter by resource UUID.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_id: Option<String>,
+    /// Filter by acting agent id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     /// Events after this timestamp.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after: Option<DateTime<Utc>>,
@@ -349,6 +392,11 @@ impl AuditFilter {
         }
         if let Some(ref rid) = self.resource_id
             && event.resource_id.as_ref() != Some(rid)
+        {
+            return false;
+        }
+        if let Some(ref agent) = self.agent_id
+            && event.agent_id.as_ref() != Some(agent)
         {
             return false;
         }

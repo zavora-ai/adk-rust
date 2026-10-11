@@ -25,6 +25,8 @@ postgres-audit = ["dep:sqlx"]
 otlp-audit = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
 # Signed, Merkle-hashed audit log with Ed25519 checkpoints and offline verification
 signed-audit = ["dep:aws-lc-rs", "base64", "dep:ryu-js", "serde_json/float_roundtrip", "tokio/rt"]
+# RFC 8693 token-exchange credential broker
+token-exchange = ["reqwest"]
 
 [dependencies]
 adk-core.workspace = true
@@ -74,3 +76,4 @@ opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"], optional = t
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
 proptest = "1.5"
+wiremock = "0.6"

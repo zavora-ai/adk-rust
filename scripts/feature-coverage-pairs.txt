@@ -128,3 +128,4 @@
 # A surrealdb 3.2 parser change broke create_collection while every required check stayed
 # green; tests run on the embedded kv-mem engine.
 7 adk-rag surrealdb
+6 adk-auth token-exchange

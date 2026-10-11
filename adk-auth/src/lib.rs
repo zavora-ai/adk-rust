@@ -47,6 +47,7 @@
 
 mod access_control;
 mod audit;
+mod broker;
 mod error;
 mod middleware;
 mod permission;
@@ -63,6 +64,9 @@ pub mod sso;
 // Cloud secret manager integration
 pub mod secrets;
 
+#[cfg(feature = "token-exchange")]
+mod token_exchange;
+
 // Enterprise audit sinks (feature-gated)
 #[cfg(feature = "otlp-audit")]
 pub mod audit_otlp;
@@ -76,6 +80,7 @@ pub use audit::{
     AuditEvent, AuditEventType, AuditFailureMode, AuditFilter, AuditOutcome, AuditSink,
     FileAuditSink, InMemoryAuditSink,
 };
+pub use broker::SecretCredentialBroker;
 pub use error::{AccessDenied, AuthError};
 pub use middleware::{AuthMiddleware, ProtectedTool, ProtectedToolDyn, ToolExt};
 pub use permission::Permission;
@@ -87,6 +92,9 @@ pub use scope::{
 
 #[cfg(feature = "auth-bridge")]
 pub use auth_bridge::{JwtRequestContextExtractor, JwtRequestContextExtractorBuilder};
+
+#[cfg(feature = "token-exchange")]
+pub use token_exchange::TokenExchangeBroker;
 
 #[cfg(feature = "otlp-audit")]
 pub use audit_otlp::OtlpAuditSink;

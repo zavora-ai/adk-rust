@@ -97,6 +97,10 @@ const MIGRATION_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_events (user_id, timestamp DESC)",
     "CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_events (event_type, timestamp DESC)",
     "CREATE INDEX IF NOT EXISTS idx_audit_resource_id ON audit_events (resource_id) WHERE resource_id IS NOT NULL",
+    // Tables created before agent identity existed gain the columns in place.
+    "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS agent_id TEXT",
+    "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS on_behalf_of JSONB",
+    "CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_events (agent_id, timestamp DESC)",
 ];
 
 #[async_trait::async_trait]
@@ -117,8 +121,8 @@ impl AuditSink for PostgresAuditSink {
             r#"INSERT INTO audit_events
                (timestamp, user_id, session_id, event_type, resource, outcome,
                 metadata, workspace_id, tenant_id, request_id, ip_address,
-                resource_id, action, prev_hash)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#,
+                resource_id, action, prev_hash, agent_id, on_behalf_of)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)"#,
         )
         .bind(event.timestamp)
         .bind(&event.user)
@@ -134,6 +138,8 @@ impl AuditSink for PostgresAuditSink {
         .bind(&event.resource_id)
         .bind(&event.action)
         .bind(&event.prev_hash)
+        .bind(&event.agent_id)
+        .bind(on_behalf_of_json(&event)?)
         .execute(&self.pool)
         .await
         .map_err(|e| AuthError::AuditError(format!("insert failed: {e}")))?;
@@ -169,8 +175,8 @@ impl AuditSink for PostgresAuditSink {
                 r#"INSERT INTO audit_events
                    (timestamp, user_id, session_id, event_type, resource, outcome,
                     metadata, workspace_id, tenant_id, request_id, ip_address,
-                    resource_id, action, prev_hash)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#,
+                    resource_id, action, prev_hash, agent_id, on_behalf_of)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)"#,
             )
             .bind(event.timestamp)
             .bind(&event.user)
@@ -186,6 +192,8 @@ impl AuditSink for PostgresAuditSink {
             .bind(&event.resource_id)
             .bind(&event.action)
             .bind(&event.prev_hash)
+            .bind(&event.agent_id)
+            .bind(on_behalf_of_json(event)?)
             .execute(&mut *tx)
             .await
             .map_err(|e| AuthError::AuditError(format!("batch insert failed: {e}")))?;
@@ -232,6 +240,10 @@ impl AuditSink for PostgresAuditSink {
             conditions.push(format!("resource_id = ${bind_idx}"));
             bind_idx += 1;
         }
+        if filter.agent_id.is_some() {
+            conditions.push(format!("agent_id = ${bind_idx}"));
+            bind_idx += 1;
+        }
         if filter.after.is_some() {
             conditions.push(format!("timestamp > ${bind_idx}"));
             bind_idx += 1;
@@ -252,7 +264,7 @@ impl AuditSink for PostgresAuditSink {
         let sql = format!(
             "SELECT timestamp, user_id, session_id, event_type, resource, outcome, \
              metadata, workspace_id, tenant_id, request_id, ip_address, resource_id, \
-             action, prev_hash \
+             action, prev_hash, agent_id, on_behalf_of \
              FROM audit_events {where_clause} \
              ORDER BY timestamp DESC \
              LIMIT {limit} OFFSET {offset}"
@@ -291,6 +303,9 @@ impl AuditSink for PostgresAuditSink {
         }
         if let Some(ref rid) = filter.resource_id {
             query = query.bind(rid);
+        }
+        if let Some(ref agent) = filter.agent_id {
+            query = query.bind(agent);
         }
         if let Some(after) = filter.after {
             query = query.bind(after);
@@ -338,6 +353,17 @@ struct AuditRow {
     resource_id: Option<String>,
     action: Option<String>,
     prev_hash: Option<String>,
+    agent_id: Option<String>,
+    on_behalf_of: Option<serde_json::Value>,
+}
+
+fn on_behalf_of_json(event: &AuditEvent) -> Result<Option<serde_json::Value>, AuthError> {
+    event
+        .on_behalf_of
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| AuthError::AuditError(format!("serialize on_behalf_of: {e}")))
 }
 
 impl AuditRow {
@@ -366,6 +392,8 @@ impl AuditRow {
             resource_id: self.resource_id,
             action: self.action,
             prev_hash: self.prev_hash,
+            agent_id: self.agent_id,
+            on_behalf_of: self.on_behalf_of.and_then(|value| serde_json::from_value(value).ok()),
         }
     }
 }

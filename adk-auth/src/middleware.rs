@@ -178,7 +178,8 @@ async fn authorize_tool_access(
             let outcome =
                 if check_result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
             let event = AuditEvent::tool_access(ctx.user_id(), tool_name, outcome)
-                .with_session(ctx.session_id());
+                .with_session(ctx.session_id())
+                .with_acting_context(&ctx.acting_context());
             record_decision(sink.as_ref(), event, audit_failure_mode, tool_name).await
         }
         None => Ok(()),
