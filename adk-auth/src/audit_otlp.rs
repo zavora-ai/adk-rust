@@ -130,7 +130,8 @@ impl AuditSink for OtlpAuditSink {
             attributes.push(("audit.agent_id", agent.clone()));
         }
         if let Some(ref subject) = event.on_behalf_of {
-            attributes.push(("audit.on_behalf_of", subject.to_string()));
+            attributes
+                .push(("audit.on_behalf_of", serde_json::to_string(subject).unwrap_or_default()));
         }
 
         let mut record = logger.create_log_record();
