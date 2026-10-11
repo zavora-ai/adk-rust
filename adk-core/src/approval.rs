@@ -2125,3 +2125,66 @@ mod option_duration_secs {
         Ok(Option::<u64>::deserialize(deserializer)?.map(Duration::from_secs))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn policies_serialize_in_camel_case_with_whole_seconds() {
+        let policy = ApprovalPolicy::new([ApproverSelector::group("finance")])
+            .with_quorum(2)
+            .escalate_after(Duration::from_secs(900), [ApproverSelector::human("cfo")])
+            .expires_after(Duration::from_secs(3_600));
+        let value = serde_json::to_value(&policy).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "approvers": [{ "group": "finance" }],
+                "quorum": 2,
+                "forbidSelfApproval": true,
+                "escalation": [{
+                    "afterSecs": 900,
+                    "to": [{ "subject": { "kind": "human", "id": "cfo" } }]
+                }],
+                "onExpiry": "deny",
+                "expiresAfterSecs": 3600
+            })
+        );
+        assert_eq!(serde_json::from_value::<ApprovalPolicy>(value).unwrap(), policy);
+    }
+
+    #[test]
+    fn cursors_round_trip_ids_containing_colons() {
+        let cursor = ApprovalCursor { created_at: Utc::now(), id: "a:b/ü".into() };
+        let decoded = ApprovalCursor::decode(&cursor.encode()).unwrap();
+        assert_eq!(decoded.id, cursor.id);
+        assert_eq!(decoded.created_at.timestamp_micros(), cursor.created_at.timestamp_micros());
+        assert_eq!(ApprovalCursor::decode("nope").unwrap_err().code, "approval.invalid_cursor");
+    }
+
+    #[test]
+    fn call_ids_change_with_the_hold_time() {
+        let scope = ApprovalScope::new("app", "u", "s");
+        let at = Utc::now();
+        let id = ApprovalRequest::id_for_call(&scope, "fp", at);
+        assert_eq!(id, ApprovalRequest::id_for_call(&scope, "fp", at));
+        assert_ne!(
+            id,
+            ApprovalRequest::id_for_call(&scope, "fp", at + chrono::Duration::seconds(1))
+        );
+        assert!(id.starts_with("apr_"));
+    }
+
+    #[test]
+    fn invalid_policies_are_refused() {
+        assert!(ApprovalPolicy::new([]).validate().is_err());
+        let zero = ApprovalPolicy::new([ApproverSelector::group("g")]).with_quorum(0);
+        assert_eq!(zero.validate().unwrap_err().code, "approval.invalid_policy");
+        let unordered = ApprovalPolicy::new([ApproverSelector::group("g")])
+            .escalate_after(Duration::from_secs(60), [])
+            .escalate_after(Duration::from_secs(30), []);
+        assert!(unordered.validate().is_err());
+    }
+}
