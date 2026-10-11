@@ -179,7 +179,7 @@ impl PaymentApprover for ToolCallApprover {
             tool_name: self.tool_name.clone(),
             function_call_id: Some(call_id.clone()),
             args: self.args.clone(),
-            acting: Some(self.ctx.acting_context()),
+            acting: Some(Box::new(self.ctx.acting_context())),
         };
         if let Some(config) = self.ctx.run_config() {
             let bound =

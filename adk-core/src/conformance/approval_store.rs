@@ -78,7 +78,7 @@ fn request(amount: u64, call_id: &str) -> ToolConfirmationRequest {
         args: json!({ "amount": amount, "to": "acct:1/main" }),
         // Every case compares whole requests, so each backend proves the acting context
         // round-trips with the call.
-        acting: Some(
+        acting: Some(Box::new(
             ActingContext::new(
                 AgentPrincipal::new(
                     AgentId::new("spiffe://conformance.test/agent/treasurer").unwrap(),
@@ -88,7 +88,7 @@ fn request(amount: u64, call_id: &str) -> ToolConfirmationRequest {
                 format!("inv-{call_id}"),
             )
             .on_behalf_of(SubjectRef::human("alice")),
-        ),
+        )),
     }
 }
 

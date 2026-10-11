@@ -53,6 +53,11 @@ const USER: &str = "user-1";
 const SESSION: &str = "session-1";
 const MERCHANT_ID: &str = "merchant-ap2";
 const SHOPPER: &str = "shopper-agent";
+
+/// The id a payment tool reports for the shopper: the identity derived from app and agent.
+fn shopper_agent_id() -> String {
+    adk_core::AgentPrincipal::derived(APP, SHOPPER).id.to_string()
+}
 /// 120 USD, the total of every cart these tests build.
 const CART_MICRO_USD: u64 = 120_000_000;
 
@@ -1087,7 +1092,8 @@ async fn the_mcp_payment_tool_is_governed_by_the_runs_spend_ledger() {
     assert_eq!(response["outcome"], "completed");
     assert_eq!(response["continuation"]["transactionId"], "tx-1");
     assert_eq!(
-        spent(&ledger, SpendKey::org(APP).with_agent(SHOPPER).with_vendor(MERCHANT_ID)).await,
+        spent(&ledger, SpendKey::org(APP).with_agent(&shopper_agent_id()).with_vendor(MERCHANT_ID))
+            .await,
         CART_MICRO_USD
     );
 

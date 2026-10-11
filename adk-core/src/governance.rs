@@ -1531,7 +1531,7 @@ pub async fn authorize_tool_call(
         tool_name: tool_name.clone(),
         function_call_id: Some(function_call_id.clone()),
         args: args.clone(),
-        acting: Some(gate.acting.clone()),
+        acting: Some(Box::new(gate.acting.clone())),
     };
     let Some((approval, source)) = resolve_confirmation(gate, &request).await? else {
         let held_by = if approval_reason.is_some() {

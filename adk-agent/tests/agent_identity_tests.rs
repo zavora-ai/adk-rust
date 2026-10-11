@@ -315,7 +315,7 @@ async fn held_approvals_record_the_acting_context() {
 
     let pending = store.pending(&ApprovalScope::new(APP, "alice", "s1")).await.unwrap();
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].request.acting.as_ref(), policy.acting().first());
+    assert_eq!(pending[0].request.acting.as_deref(), policy.acting().first());
     assert_eq!(pending[0].request.acting.as_ref().unwrap().agent.id.as_str(), AGENT_ID);
 }
 

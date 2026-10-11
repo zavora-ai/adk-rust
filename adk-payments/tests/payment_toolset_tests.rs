@@ -241,7 +241,7 @@ async fn a_scoped_call_reports_the_calling_agent_and_session() {
     assert_eq!(
         context.actor,
         CommerceActor {
-            actor_id: "shopper".to_string(),
+            actor_id: "urn:adk:agent:store/shopper".to_string(),
             role: CommerceActorRole::AgentSurface,
             display_name: Some("shopper".to_string()),
             tenant_id: None,

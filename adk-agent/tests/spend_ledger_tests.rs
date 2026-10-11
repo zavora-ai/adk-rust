@@ -155,7 +155,10 @@ async fn model_spend_is_recorded_per_vendor_and_agent() {
 
     assert_eq!(spent(&ledger, SpendKey::org("acme").with_vendor("gemini")).await, 12_500);
     assert_eq!(spent(&ledger, SpendKey::org("acme").with_vendor("anthropic")).await, 20_000);
-    assert_eq!(spent(&ledger, SpendKey::org("acme").with_agent("writer")).await, 20_000);
+    assert_eq!(
+        spent(&ledger, SpendKey::org("acme").with_agent("urn:adk:agent:acme/writer")).await,
+        20_000
+    );
     assert_eq!(spent(&ledger, SpendKey::org("acme")).await, 32_500);
 }
 
@@ -173,7 +176,10 @@ async fn spend_is_committed_under_the_provider_the_response_names() {
 
     assert_eq!(spent(&ledger, SpendKey::org("acme").with_vendor("bedrock")).await, 20_000);
     assert_eq!(spent(&ledger, SpendKey::org("acme").with_vendor("anthropic")).await, 0);
-    assert_eq!(spent(&ledger, SpendKey::org("acme").with_agent("writer")).await, 20_000);
+    assert_eq!(
+        spent(&ledger, SpendKey::org("acme").with_agent("urn:adk:agent:acme/writer")).await,
+        20_000
+    );
     assert_eq!(spent(&ledger, SpendKey::org("acme")).await, 20_000);
 }
 

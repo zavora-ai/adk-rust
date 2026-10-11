@@ -1023,7 +1023,7 @@ pub struct ToolConfirmationRequest {
     /// Recorded for the approver and the audit trail; it is not part of the
     /// [`fingerprint`](Self::fingerprint).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub acting: Option<crate::ActingContext>,
+    pub acting: Option<Box<crate::ActingContext>>,
 }
 
 impl ToolConfirmationRequest {
@@ -1053,7 +1053,7 @@ impl ToolConfirmationRequest {
     /// Records the acting context of the agent that made the call.
     #[must_use]
     pub fn with_acting_context(mut self, acting: crate::ActingContext) -> Self {
-        self.acting = Some(acting);
+        self.acting = Some(Box::new(acting));
         self
     }
 

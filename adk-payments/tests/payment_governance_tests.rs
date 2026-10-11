@@ -456,8 +456,13 @@ async fn a_daily_spend_cap_spans_two_checkouts() {
 
     shop.buy(&caller, usd(6_000)).await.expect("60 USD fits under the 100 USD cap");
     assert_eq!(
-        spent(&ledger, SpendKey::org("store").with_agent("shopper").with_vendor("merchant-1"))
-            .await,
+        spent(
+            &ledger,
+            SpendKey::org("store")
+                .with_agent("urn:adk:agent:store/shopper")
+                .with_vendor("merchant-1")
+        )
+        .await,
         60_000_000
     );
 
