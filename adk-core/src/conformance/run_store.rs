@@ -110,6 +110,12 @@ async fn get(store: &dyn DurableRunStore, run_id: &str) -> RunRecord {
 fn assert_code<T: std::fmt::Debug>(result: crate::Result<T>, code: &str, context: &str) {
     let error = result.expect_err(context);
     assert_eq!(error.code, code, "{context}: {error}");
+    let category = if code == RUN_STALE_EPOCH_CODE {
+        crate::ErrorCategory::Conflict
+    } else {
+        crate::ErrorCategory::NotFound
+    };
+    assert_eq!(error.category, category, "{context}: {error}");
 }
 
 /// A run reads back exactly as enqueued, is claimed at attempt 1 and epoch 1 by one

@@ -51,6 +51,8 @@ fn arb_category() -> impl Strategy<Value = ErrorCategory> {
         Just(ErrorCategory::Cancelled),
         Just(ErrorCategory::Internal),
         Just(ErrorCategory::Unsupported),
+        Just(ErrorCategory::ResourceExhausted),
+        Just(ErrorCategory::Conflict),
     ]
 }
 
@@ -156,6 +158,8 @@ proptest! {
             ErrorCategory::Cancelled,
             ErrorCategory::Internal,
             ErrorCategory::Unsupported,
+            ErrorCategory::ResourceExhausted,
+            ErrorCategory::Conflict,
         ] {
             let err = AdkError::new(component, category, "test.non_retryable", &msg);
             prop_assert!(
@@ -218,6 +222,8 @@ fn prop_http_status_code_mapping() {
         (ErrorCategory::Cancelled, 499),
         (ErrorCategory::Internal, 500),
         (ErrorCategory::Unsupported, 501),
+        (ErrorCategory::ResourceExhausted, 429),
+        (ErrorCategory::Conflict, 409),
     ];
 
     for (category, expected_status) in cases {

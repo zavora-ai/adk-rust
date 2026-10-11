@@ -75,6 +75,7 @@ async fn two_handles<H: LeaseStoreHarness + ?Sized>(
 fn assert_stale(result: crate::Result<Lease>, context: &str) {
     let error = result.expect_err(context);
     assert_eq!(error.code, LEASE_STALE_EPOCH_CODE, "{context}: {error}");
+    assert_eq!(error.category, crate::ErrorCategory::Conflict, "{context}: {error}");
 }
 
 /// Grants start at epoch 1, a second owner is refused while the lease is live, renew

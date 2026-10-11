@@ -107,7 +107,7 @@ pub trait LeaseStore: Send + Sync {
 pub fn lease_stale_epoch_error(resource: &str, epoch: u64) -> AdkError {
     AdkError::new(
         ErrorComponent::Agent,
-        ErrorCategory::Forbidden,
+        ErrorCategory::Conflict,
         LEASE_STALE_EPOCH_CODE,
         format!(
             "lease on '{resource}' at epoch {epoch} is no longer held; stop work done under it \

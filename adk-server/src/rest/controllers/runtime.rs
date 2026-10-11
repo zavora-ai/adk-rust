@@ -1666,3 +1666,24 @@ pub async fn run_collect(
 #[cfg(test)]
 #[path = "runtime_stream_tests.rs"]
 mod stream_tests;
+
+#[cfg(test)]
+mod error_status_tests {
+    use super::*;
+    use adk_core::{AdkError, ErrorCategory, ErrorComponent};
+
+    #[test]
+    fn conflict_errors_map_to_409_with_their_code() {
+        let error = AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::Conflict,
+            "run_store.stale_epoch",
+            "run is no longer held",
+        );
+        let (status, body) = adk_err_to_runtime(error);
+        assert_eq!(status, StatusCode::CONFLICT);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"]["category"], "conflict");
+        assert_eq!(body["error"]["code"], "run_store.stale_epoch");
+    }
+}

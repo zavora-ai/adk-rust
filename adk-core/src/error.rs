@@ -84,6 +84,8 @@ impl fmt::Display for ErrorComponent {
 /// - [`Unsupported`](Self::Unsupported) — requested feature or operation is not supported
 /// - [`ResourceExhausted`](Self::ResourceExhausted) — a configured budget (model calls, tokens,
 ///   cost, wall time, tool calls) is used up; not retryable within the same run
+/// - [`Conflict`](Self::Conflict) — the write lost a race or used a stale version; reload and
+///   retry, or stop
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCategory {
@@ -112,6 +114,11 @@ pub enum ErrorCategory {
     /// Not retryable within the same run: retrying spends against the same
     /// exhausted budget. See [`RunBudget`](crate::RunBudget).
     ResourceExhausted,
+    /// The write lost a race or used a stale version; reload and retry, or stop.
+    ///
+    /// Not retryable as is: repeating the same write with the same stale version or
+    /// epoch fails again. Maps to HTTP 409.
+    Conflict,
 }
 
 impl fmt::Display for ErrorCategory {
@@ -128,6 +135,7 @@ impl fmt::Display for ErrorCategory {
             Self::Internal => "internal",
             Self::Unsupported => "unsupported",
             Self::ResourceExhausted => "resource_exhausted",
+            Self::Conflict => "conflict",
         };
         f.write_str(s)
     }
@@ -469,6 +477,10 @@ impl AdkError {
     pub fn is_timeout(&self) -> bool {
         self.category == ErrorCategory::Timeout
     }
+    /// Returns `true` if the write lost a race or used a stale version.
+    pub fn is_conflict(&self) -> bool {
+        self.category == ErrorCategory::Conflict
+    }
 }
 
 impl AdkError {
@@ -487,6 +499,7 @@ impl AdkError {
             ErrorCategory::Internal => 500,
             ErrorCategory::Unsupported => 501,
             ErrorCategory::ResourceExhausted => 429,
+            ErrorCategory::Conflict => 409,
             _ => 500,
         }
     }
@@ -684,6 +697,7 @@ mod tests {
             ErrorCategory::Internal,
             ErrorCategory::Unsupported,
             ErrorCategory::ResourceExhausted,
+            ErrorCategory::Conflict,
         ] {
             let err = AdkError::new(ErrorComponent::Model, cat, "test", "msg");
             assert!(!err.is_retryable(), "expected is_retryable() == false for {cat}");
@@ -704,6 +718,7 @@ mod tests {
             (ErrorCategory::Internal, 500),
             (ErrorCategory::Unsupported, 501),
             (ErrorCategory::ResourceExhausted, 429),
+            (ErrorCategory::Conflict, 409),
         ];
         for (cat, expected) in &cases {
             let err = AdkError::new(ErrorComponent::Server, *cat, "test", "msg");
@@ -758,6 +773,21 @@ mod tests {
         assert_eq!(o["category"], "rate_limited");
         assert_eq!(o["requestId"], "req-123");
         assert_eq!(o["upstreamStatusCode"], 429);
+    }
+
+    #[test]
+    fn test_conflict_category() {
+        let err = AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::Conflict,
+            "run_store.stale_epoch",
+            "stale",
+        );
+        assert!(err.is_conflict());
+        assert!(!err.is_retryable());
+        assert_eq!(err.http_status_code(), 409);
+        assert_eq!(ErrorCategory::Conflict.to_string(), "conflict");
+        assert_eq!(err.to_problem_json()["error"]["category"], "conflict");
     }
 
     #[test]

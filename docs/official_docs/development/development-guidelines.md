@@ -236,6 +236,8 @@ pub async fn my_function() -> Result<String> {
 | `Cancelled` | 499 | Cancelled by caller or system |
 | `Internal` | 500 | Bugs, invariant violations |
 | `Unsupported` | 501 | Feature not supported |
+| `ResourceExhausted` | 429 | A configured run budget is used up (not retryable within the run) |
+| `Conflict` | 409 | The write lost a race or used a stale version; reload and retry, or stop |
 
 ### Convenience Constructors
 

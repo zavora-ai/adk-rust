@@ -68,6 +68,7 @@ fn tenant() -> GovernanceScope {
 fn assert_conflict(result: crate::Result<GovernanceState>, current_epoch: u64, context: &str) {
     let error = result.expect_err(context);
     assert_eq!(error.code, GOVERNANCE_CONFLICT_CODE, "{context}: {error}");
+    assert_eq!(error.category, crate::ErrorCategory::Conflict, "{context}: {error}");
     assert_eq!(
         error.details.metadata.get("current_epoch"),
         Some(&current_epoch.into()),

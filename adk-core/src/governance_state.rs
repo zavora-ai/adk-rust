@@ -154,7 +154,7 @@ pub fn governance_conflict_error(
     details.metadata.insert("current_epoch".to_string(), current_epoch.into());
     AdkError::new(
         ErrorComponent::Agent,
-        ErrorCategory::InvalidInput,
+        ErrorCategory::Conflict,
         GOVERNANCE_CONFLICT_CODE,
         format!(
             "governance state of '{}' is at epoch {current_epoch}, not {expected_epoch}; another \

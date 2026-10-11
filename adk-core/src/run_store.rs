@@ -657,7 +657,7 @@ pub trait DurableRunStore: Send + Sync {
 pub fn run_stale_epoch_error(run_id: &str, epoch: u64) -> AdkError {
     AdkError::new(
         ErrorComponent::Agent,
-        ErrorCategory::Forbidden,
+        ErrorCategory::Conflict,
         RUN_STALE_EPOCH_CODE,
         format!(
             "run '{run_id}' is no longer held at epoch {epoch}; another worker recovered it or it \

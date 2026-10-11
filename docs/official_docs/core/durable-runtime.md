@@ -66,6 +66,9 @@ is one higher than the resource's previous grant, and epochs never repeat, even 
 | `renew` | Extended while the epoch is current and the lease was not released | Extended | `lease.stale_epoch` |
 | `release` | No-op | Released | No-op |
 
+Stale epochs and compare-and-swap conflicts (`lease.stale_epoch`, `run_store.stale_epoch`,
+`governance.conflict`) carry `ErrorCategory::Conflict`, which maps to HTTP 409.
+
 A holder that stalls past its expiry while another owner takes the resource holds a lower
 epoch, so its next renew fails with `lease.stale_epoch` and any store that checks the epoch
 refuses its writes.
