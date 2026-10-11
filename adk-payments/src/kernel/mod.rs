@@ -7,7 +7,7 @@
 pub mod commands;
 pub mod correlator;
 pub mod errors;
-mod governed;
+pub(crate) mod governed;
 pub mod service;
 
 pub use commands::{

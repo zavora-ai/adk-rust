@@ -249,6 +249,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
@@ -561,6 +562,8 @@ version = "0.0.1"
 dependencies = [
  "adk-agent",
  "adk-anthropic",
+ "adk-artifact",
+ "adk-auth",
  "adk-codeact-monty",
  "adk-core",
  "adk-eval",

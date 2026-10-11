@@ -513,3 +513,80 @@ async fn an_explicit_spend_guardrail_without_a_ledger_fails_closed() {
     assert_eq!(error.code, PAYMENT_POLICY_DENIED_CODE, "{error}");
     assert_eq!(shop.kernel.completions.load(Ordering::SeqCst), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+/// An audit sink whose storage is down.
+struct DownSink;
+
+#[async_trait]
+impl adk_auth::AuditSink for DownSink {
+    async fn log(
+        &self,
+        _event: adk_auth::AuditEvent,
+    ) -> std::result::Result<(), adk_auth::AuthError> {
+        Err(adk_auth::AuthError::AuditError("disk full".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn an_audit_write_failure_blocks_a_governed_completion() {
+    let kernel = Arc::new(MemoryKernel::default());
+    let ledger = daily_ledger(100_000_000);
+    let lenient = GovernedCheckoutService::new(kernel.clone(), PaymentPolicySet::new());
+    let audited = GovernedCheckoutService::new(kernel.clone(), PaymentPolicySet::new())
+        .with_spend_ledger(ledger.clone())
+        .with_auditor(adk_payments::auth::PaymentAuditor::new(Arc::new(DownSink)));
+    let caller = adk_payments::kernel::PaymentCaller::new().with_org("store").with_agent("shopper");
+    let context = CommerceContext {
+        transaction_id: TransactionId::from("tx-audit"),
+        session_identity: None,
+        actor: CommerceActor {
+            actor_id: "shopper".to_string(),
+            role: CommerceActorRole::AgentSurface,
+            display_name: None,
+            tenant_id: None,
+            extensions: ProtocolExtensions::default(),
+        },
+        merchant_of_record: MerchantRef {
+            merchant_id: "merchant-1".to_string(),
+            legal_name: "Merchant".to_string(),
+            display_name: None,
+            statement_descriptor: None,
+            country_code: None,
+            website: None,
+            extensions: ProtocolExtensions::default(),
+        },
+        payment_processor: None,
+        mode: CommerceMode::HumanPresent,
+        protocol: ProtocolDescriptor::acp("2026-01-30"),
+        extensions: ProtocolExtensions::default(),
+    };
+    lenient
+        .create_checkout(CreateCheckoutCommand {
+            context: context.clone(),
+            cart: serde_json::from_value(cart(usd(2_000))).unwrap(),
+            fulfillment: None,
+        })
+        .await
+        .unwrap();
+
+    let error = audited
+        .complete_checkout_as(
+            CompleteCheckoutCommand {
+                context,
+                selected_payment_method: None,
+                extensions: ProtocolExtensions::default(),
+            },
+            &caller,
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "payments.auth.audit_failed", "{error}");
+    assert_eq!(kernel.completions.load(Ordering::SeqCst), 0);
+    assert_eq!(spent(&ledger, SpendKey::org("store")).await, 0);
+    ledger.reserve(&SpendKey::org("store"), 100_000_000).await.expect("the hold was released");
+}

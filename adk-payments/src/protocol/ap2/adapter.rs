@@ -1,20 +1,27 @@
 use std::sync::Arc;
 
-use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result, SpendLedger};
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
+use crate::auth::PaymentAuditor;
 use crate::domain::{
     CommerceMode, EvidenceReference, InterventionKind, InterventionState, InterventionStatus,
     ProtocolEnvelopeDigest, ProtocolExtensions, ProtocolReference, TransactionRecord,
     TransactionState,
 };
+#[cfg(doc)]
+use crate::guardrail::SpendLimitGuardrail;
+use crate::guardrail::{PaymentOperation, PaymentPolicySet, usd_micro_amount};
+use crate::kernel::governed::{
+    PaymentGovernor, Settlement, caller_from, checkout_settlement, with_spend_limit,
+};
 use crate::kernel::{
     BeginInterventionCommand, CommerceContext, CreateCheckoutCommand, EvidenceLookup,
-    EvidenceStore, InterventionService, MerchantCheckoutService, PaymentExecutionOutcome,
-    PaymentExecutionResult, PaymentExecutionService, ProtocolCorrelator, ProtocolRefKind,
-    StoreEvidenceCommand, StoredEvidence, TransactionLookup, TransactionStore,
+    EvidenceStore, InterventionService, MerchantCheckoutService, PaymentCaller,
+    PaymentExecutionOutcome, PaymentExecutionResult, PaymentExecutionService, ProtocolCorrelator,
+    ProtocolRefKind, StoreEvidenceCommand, StoredEvidence, TransactionLookup, TransactionStore,
     UpdateCheckoutCommand,
 };
 use crate::protocol::ap2::error::Ap2Error;
@@ -22,7 +29,8 @@ use crate::protocol::ap2::ledger::{InMemoryPaymentMandateLedger, PaymentMandateL
 use crate::protocol::ap2::mapper::{
     ap2_descriptor, cart_amount_scale, cart_from_cart_mandate, execute_payment_command,
     fulfillment_from_cart_mandate, intent_create_checkout_command, merge_extensions,
-    sync_payment_outcome_command, update_record_extensions, update_record_state_from_receipt,
+    payment_amount, sync_payment_outcome_command, update_record_extensions,
+    update_record_state_from_receipt,
 };
 use crate::protocol::ap2::types::{
     AuthorizationArtifact, CartMandate, IntentMandate, PaymentMandate, PaymentReceipt,
@@ -36,6 +44,20 @@ use crate::protocol::ap2::verification::{
 /// `ProtocolReference::reference_kind` marking a payment mandate that reached
 /// the payment backend.
 const EXECUTED_PAYMENT_MANDATE_REF_KIND: &str = "ap2_executed_payment_mandate_id";
+
+/// Extension field carrying the key a payment backend deduplicates a payment by.
+const IDEMPOTENCY_KEY_FIELD: &str = "idempotency_key";
+
+/// The idempotency key already on `context`, such as the one a payment tool supplies.
+fn context_idempotency_key(context: &CommerceContext) -> Option<String> {
+    context.extensions.as_slice().iter().find_map(|envelope| {
+        envelope
+            .fields
+            .get(IDEMPOTENCY_KEY_FIELD)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    })
+}
 
 struct StoredArtifactSet {
     envelope: crate::domain::ProtocolExtensionEnvelope,
@@ -60,6 +82,12 @@ struct ProtocolRefUpdate {
 /// single-use: a mandate that reached the payment backend is refused when
 /// resubmitted, and a transaction executes at most one payment mandate.
 ///
+/// Money movement is governed like a [`GovernedCheckoutService`](crate::kernel::GovernedCheckoutService)
+/// checkout: the [`PaymentPolicySet`] is evaluated before a cart mandate creates a
+/// checkout and before a payment mandate reaches the payment backend, the payment total
+/// is reserved in the spend ledger and committed once the backend authorizes it, and an
+/// optional [`PaymentAuditor`] records each decision before money moves.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -80,6 +108,7 @@ pub struct Ap2Adapter {
     allow_unverified_authorizations: bool,
     payment_mandate_ledger: Arc<dyn PaymentMandateLedger>,
     intervention_service: Option<Arc<dyn InterventionService>>,
+    governor: PaymentGovernor,
 }
 
 impl Ap2Adapter {
@@ -92,6 +121,8 @@ impl Ap2Adapter {
     /// are called. Executed payment mandates are tracked in an
     /// [`InMemoryPaymentMandateLedger`] unless
     /// [`with_payment_mandate_ledger`](Self::with_payment_mandate_ledger) replaces it.
+    /// Payments are governed by [`SpendLimitGuardrail::when_configured`] until
+    /// [`with_payment_policies`](Self::with_payment_policies) adds further policies.
     #[must_use]
     pub fn new(
         checkout_service: Arc<dyn MerchantCheckoutService>,
@@ -109,7 +140,46 @@ impl Ap2Adapter {
             allow_unverified_authorizations: false,
             payment_mandate_ledger: Arc::new(InMemoryPaymentMandateLedger::new()),
             intervention_service: None,
+            governor: PaymentGovernor::new(with_spend_limit(PaymentPolicySet::new())),
         }
+    }
+
+    /// Evaluates `policies` before every cart-mandate checkout creation and every payment
+    /// mandate execution.
+    ///
+    /// When `policies` has no spend guardrail, [`SpendLimitGuardrail::when_configured`] is
+    /// added, which reserves against [`with_spend_ledger`](Self::with_spend_ledger) or the
+    /// caller's ledger.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_payments::guardrail::{AmountThresholdGuardrail, PaymentPolicySet};
+    ///
+    /// let adapter = adapter.with_payment_policies(
+    ///     PaymentPolicySet::new()
+    ///         .with(AmountThresholdGuardrail::new(Some(5_000), Some(50_000)).with_currency("USD", 2)),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn with_payment_policies(mut self, policies: PaymentPolicySet) -> Self {
+        self.governor.set_policies(with_spend_limit(policies));
+        self
+    }
+
+    /// Reserves payments against `ledger`, ahead of any ledger the caller supplies.
+    #[must_use]
+    pub fn with_spend_ledger(mut self, ledger: Arc<dyn SpendLedger>) -> Self {
+        self.governor.set_spend_ledger(ledger);
+        self
+    }
+
+    /// Records every governed decision with `auditor` before money moves, refusing a
+    /// payment whose decision cannot be recorded.
+    #[must_use]
+    pub fn with_payment_auditor(mut self, auditor: PaymentAuditor) -> Self {
+        self.governor.set_auditor(auditor);
+        self
     }
 
     /// Sets the merchant authorization verifier used for cart mandates.
@@ -276,12 +346,26 @@ impl Ap2Adapter {
                 })
                 .await?
         } else {
-            self.checkout_service
-                .create_checkout(CreateCheckoutCommand {
-                    context: context.clone(),
-                    cart,
-                    fulfillment,
-                })
+            let mut proposed = TransactionRecord::new(
+                context.transaction_id.clone(),
+                context.actor.clone(),
+                context.merchant_of_record.clone(),
+                context.mode,
+                cart.clone(),
+                Utc::now(),
+            );
+            proposed.session_identity = context.session_identity.clone();
+            proposed.payment_processor = context.payment_processor.clone();
+            let command = CreateCheckoutCommand { context: context.clone(), cart, fulfillment };
+            self.governor
+                .govern(
+                    PaymentOperation::CreateCheckout,
+                    &proposed,
+                    &context.protocol,
+                    &caller_from(&context),
+                    || self.checkout_service.create_checkout(command),
+                    checkout_settlement,
+                )
                 .await?
         };
 
@@ -299,11 +383,37 @@ impl Ap2Adapter {
 
     /// Executes or escalates a payment mandate against the canonical payment service.
     ///
+    /// The payment is attributed to the session's app and the acting actor; see
+    /// [`submit_payment_mandate_as`](Self::submit_payment_mandate_as).
+    ///
+    /// # Errors
+    ///
+    /// See [`submit_payment_mandate_as`](Self::submit_payment_mandate_as).
+    pub async fn submit_payment_mandate(
+        &self,
+        context: CommerceContext,
+        payment_mandate: PaymentMandate,
+    ) -> Result<PaymentExecutionResult> {
+        let caller = caller_from(&context);
+        self.submit_payment_mandate_as(context, payment_mandate, &caller).await
+    }
+
+    /// Executes or escalates a payment mandate for `caller` against the canonical payment
+    /// service.
+    ///
+    /// The mandate's authorization is verified first, and a verification failure refuses
+    /// the payment. The payment policies are then evaluated on the stored transaction at
+    /// the mandate's total: a denial, a refused or pending escalation, a refused spend
+    /// reservation, or an audit record that cannot be written stops the payment before
+    /// the mandate is consumed, so the same mandate can be resubmitted once approved.
+    ///
     /// Payment mandates are single-use. The mandate identifier is consumed in
     /// the [`PaymentMandateLedger`] immediately before the payment backend is
     /// called and recorded on the transaction afterwards, so a resubmitted
     /// mandate never executes twice and a transaction never executes a second
-    /// mandate.
+    /// mandate. The backend receives an `idempotency_key` extension field: the key
+    /// already on `context` (a payment tool supplies its call's key), otherwise one
+    /// derived from the payment mandate ID.
     ///
     /// # Errors
     ///
@@ -311,13 +421,17 @@ impl Ap2Adapter {
     /// user authorization verification, was already executed, targets a
     /// transaction that already executed a payment or is bound to another
     /// mandate, or the flow lacks user authorization and cannot proceed
-    /// autonomously.
-    pub async fn submit_payment_mandate(
+    /// autonomously. Returns `payments.policy.denied`,
+    /// `payments.policy.approval_required`, or `payments.policy.approval_denied` when
+    /// the payment policies stop the payment, and `payments.auth.audit_failed` when the
+    /// decision cannot be recorded.
+    pub async fn submit_payment_mandate_as(
         &self,
         context: CommerceContext,
         payment_mandate: PaymentMandate,
+        caller: &PaymentCaller,
     ) -> Result<PaymentExecutionResult> {
-        let context = self.normalize_context(context, ProtocolExtensions::default());
+        let mut context = self.normalize_context(context, ProtocolExtensions::default());
         let existing = self.lookup(&context).await?.ok_or_else(|| {
             AdkError::from(Ap2Error::TransactionNotFound {
                 transaction_id: context.transaction_id.as_str().to_string(),
@@ -332,6 +446,9 @@ impl Ap2Adapter {
             })?;
         self.validate_payment_mandate_against_cart(&payment_mandate, &cart_mandate)?;
         let amount_scale = cart_amount_scale(&cart_mandate)?;
+        if context.merchant_of_record.merchant_id.is_empty() {
+            context.merchant_of_record = existing.merchant_of_record.clone();
+        }
 
         let authorization = match payment_mandate.user_authorization.clone() {
             Some(user_authorization) => {
@@ -366,45 +483,74 @@ impl Ap2Adapter {
 
         let payment_mandate_id =
             payment_mandate.payment_mandate_contents.payment_mandate_id.clone();
-        if let Some(previous) = self
-            .payment_mandate_ledger
-            .consume(&payment_mandate_id, &context.transaction_id)
-            .await?
-        {
-            return Err(Ap2Error::PaymentMandateReplayed {
-                payment_mandate_id,
-                transaction_id: previous.as_str().to_string(),
-            }
-            .into());
-        }
+        let amount = payment_amount(&payment_mandate, amount_scale)?;
+        // Policies judge the transaction at the amount about to move.
+        let mut judged = existing.clone();
+        judged.cart.total = amount.clone();
+        let idempotency_key = context_idempotency_key(&context)
+            .unwrap_or_else(|| format!("ap2:payment_mandate:{payment_mandate_id}"));
+        let committed_amount = usd_micro_amount(&amount).ok();
 
-        let artifacts = self
-            .store_payment_artifacts(
-                &context,
-                &payment_mandate,
-                authorization.as_ref().map(|(artifact, _)| artifact),
-                authorization.as_ref().map(|(_, verification)| verification),
+        let (result, payment_envelope, evidence) = self
+            .governor
+            .govern(
+                PaymentOperation::ExecutePayment,
+                &judged,
+                &context.protocol,
+                caller,
+                || async {
+                    if let Some(previous) = self
+                        .payment_mandate_ledger
+                        .consume(&payment_mandate_id, &context.transaction_id)
+                        .await?
+                    {
+                        return Err(Ap2Error::PaymentMandateReplayed {
+                            payment_mandate_id: payment_mandate_id.clone(),
+                            transaction_id: previous.as_str().to_string(),
+                        }
+                        .into());
+                    }
+
+                    let artifacts = self
+                        .store_payment_artifacts(
+                            &context,
+                            &payment_mandate,
+                            authorization.as_ref().map(|(artifact, _)| artifact),
+                            authorization.as_ref().map(|(_, verification)| verification),
+                        )
+                        .await?;
+                    let evidence = artifacts.evidence;
+                    let supporting_evidence_refs = self.ap2_evidence_refs(&existing, &evidence);
+                    let payment_envelope = self
+                        .payment_envelope(
+                            &payment_mandate,
+                            authorization.as_ref().map(|(_, verification)| verification),
+                            &evidence,
+                        )
+                        .with_field(IDEMPOTENCY_KEY_FIELD, json!(idempotency_key));
+                    let mut command = execute_payment_command(
+                        &payment_mandate,
+                        amount_scale,
+                        self.normalize_context(
+                            context.clone(),
+                            ProtocolExtensions::from(vec![payment_envelope.clone()]),
+                        ),
+                        supporting_evidence_refs,
+                    )?;
+                    command.extensions = ProtocolExtensions::from(vec![payment_envelope.clone()]);
+
+                    let result = self.payment_service.execute_payment(command).await?;
+                    Ok((result, payment_envelope, evidence))
+                },
+                |(result, _, _)| match result.outcome {
+                    PaymentExecutionOutcome::Authorized | PaymentExecutionOutcome::Completed => {
+                        Settlement::Commit(committed_amount)
+                    }
+                    PaymentExecutionOutcome::InterventionRequired
+                    | PaymentExecutionOutcome::Failed => Settlement::Release,
+                },
             )
             .await?;
-        let evidence = artifacts.evidence;
-        let supporting_evidence_refs = self.ap2_evidence_refs(&existing, &evidence);
-        let payment_envelope = self.payment_envelope(
-            &payment_mandate,
-            authorization.as_ref().map(|(_, verification)| verification),
-            &evidence,
-        );
-        let mut command = execute_payment_command(
-            &payment_mandate,
-            amount_scale,
-            self.normalize_context(
-                context.clone(),
-                ProtocolExtensions::from(vec![payment_envelope.clone()]),
-            ),
-            supporting_evidence_refs,
-        )?;
-        command.extensions = ProtocolExtensions::from(vec![payment_envelope.clone()]);
-
-        let result = self.payment_service.execute_payment(command).await?;
         let transaction = self
             .finalize_record(
                 &context,
@@ -829,6 +975,17 @@ impl Ap2Adapter {
             }
             .into());
         };
+        // Only an intent whose user authorization was verified grants autonomous authority;
+        // an intent submitted human-present without one does not.
+        if !existing.evidence_refs.iter().any(|evidence_ref| {
+            evidence_ref.protocol.name == "ap2"
+                && evidence_ref.artifact_kind == "intent_authorization"
+        }) {
+            return Err(Ap2Error::MissingIntentAuthorization {
+                transaction_id: context.transaction_id.as_str().to_string(),
+            }
+            .into());
+        }
         self.validate_intent_constraints(context, existing, cart_mandate).await?;
         if intent_mandate.user_cart_confirmation_required
             || cart_mandate.contents.user_cart_confirmation_required

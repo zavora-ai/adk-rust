@@ -26,6 +26,7 @@ conversation history or semantic memory.
 - Semantic recall uses masked summaries through `adk-memory`.
 - `adk-auth` binds request identity, tenant scope, and audit metadata.
 - `GovernedCheckoutService` evaluates a `PaymentPolicySet` (amount, merchant, currency, protocol-version, intervention, and spend policies) before every checkout creation and completion; the payment tools apply it automatically.
+- `Ap2Adapter` evaluates the same policies, reserves spend, and records audit events before an AP2 cart mandate creates a checkout and before a payment mandate reaches the payment backend.
 - Redaction guardrails mask card numbers and personal data in tool outputs and telemetry.
 
 ## Verification Defaults
@@ -97,9 +98,77 @@ spend guardrail, the toolset adds `SpendLimitGuardrail::when_configured()`, whic
 only when a ledger is configured. Only USD totals can be reserved; other currencies are
 denied.
 
-For ACP and AP2 traffic, hand the protocol adapters a `GovernedCheckoutService`. The
-adapters supply no approver, so an escalated protocol request is refused rather than
-completed.
+For ACP traffic, hand the ACP adapter a `GovernedCheckoutService`. The adapters supply
+no approver, so an escalated protocol request is refused rather than completed.
+
+`GovernedCheckoutService::with_auditor` records each allowed decision with a
+`PaymentAuditor` before the backend is reached; when the audit sink fails, the
+operation is refused with `payments.auth.audit_failed`. Refusals are recorded on a
+best-effort basis.
+
+## AP2 Payment Governance
+
+`Ap2Adapter` routes AP2 money movement through the same governance as a governed
+checkout.
+
+| Entry point | Moves or authorizes money | Governance |
+|-------------|---------------------------|------------|
+| `submit_intent_mandate` | Authorizes a later human-not-present payment | User authorization verified when present (required human-not-present); no amount to evaluate |
+| `submit_cart_mandate` (new checkout) | Sets the amount to be paid | Merchant authorization verified; payment policies (`CreateCheckout`) |
+| `submit_payment_mandate`, `submit_payment_mandate_as` | Executes the payment | Verification, payment policies (`ExecutePayment`), spend reservation, approval, audit, single-use mandate, idempotency key |
+| `apply_payment_receipt` | Records the processor's outcome | Bound to the executed payment mandate |
+| `payments_ap2_payment_submit` tool | Executes the payment | As `submit_payment_mandate_as`, plus scope guard, `ToolEffect::NonIdempotent`, and the action ledger |
+
+A payment mandate is processed in this order:
+
+1. The user authorization is verified. A human-not-present payment without one
+   requires an intent mandate whose authorization was verified.
+2. The payment policies evaluate the stored transaction at the mandate total. A
+   denial fails with `payments.policy.denied`; an escalation goes to the caller's
+   `PaymentApprover` and fails with `payments.policy.approval_required` without one.
+3. `SpendLimitGuardrail` reserves the total in the spend ledger — the adapter's
+   (`with_spend_ledger`) or else the caller's — under `app / agent / merchant_id`.
+4. With `with_payment_auditor`, the decision is recorded; a failed write releases the
+   reservation and fails with `payments.auth.audit_failed`.
+5. The mandate is consumed in the `PaymentMandateLedger`, so a refusal in steps 1 to 4
+   leaves it available for resubmission.
+6. The payment backend runs with an `idempotency_key` extension field: the caller's key
+   (the tool's call key) or `ap2:payment_mandate:<payment_mandate_id>`.
+7. The reservation is committed when the outcome is `Authorized` or `Completed` and
+   released otherwise.
+
+`PaymentToolsetBuilder::with_ap2_adapter` adds the `payments_ap2_payment_submit` tool
+under the toolset's scope guard (`payments:payment:execute`). The tool declares
+`ToolEffect::NonIdempotent`: an agent never retries it, and with
+`RunConfig::action_ledger` a timed-out payment is answered `outcome_unknown` on retry
+or resume instead of paying twice. An escalation goes through the run's tool
+confirmation flow. With `ap2-mcp`, the tool response includes the
+`Ap2McpPaymentContinuation` view. A2A carries mandates as data
+(`Ap2A2aMessage::extract_payment_mandate`); submitting the extracted mandate through the
+adapter applies the same governance.
+
+```rust,ignore
+use adk_payments::auth::PaymentAuditor;
+use adk_payments::guardrail::{AmountThresholdGuardrail, PaymentPolicySet};
+use adk_payments::protocol::ap2::Ap2Adapter;
+use adk_payments::tools::PaymentToolsetBuilder;
+use std::sync::Arc;
+
+let adapter = Arc::new(
+    Ap2Adapter::new(checkout_service, payment_service, transaction_store.clone(), evidence_store)
+        .with_merchant_authorization_verifier(merchant_verifier)
+        .with_user_authorization_verifier(user_verifier)
+        .with_payment_policies(
+            PaymentPolicySet::new()
+                .with(AmountThresholdGuardrail::new(Some(5_000), Some(50_000)).with_currency("USD", 2)),
+        )
+        .with_spend_ledger(spend_ledger)
+        .with_payment_auditor(PaymentAuditor::new(audit_sink)),
+);
+let toolset = PaymentToolsetBuilder::new(merchant_checkout, transaction_store)
+    .with_ap2_adapter(adapter)
+    .build();
+```
 
 ## Amounts
 
@@ -122,6 +191,7 @@ Use the integration tests as the authoritative end-to-end validation path:
 ```bash
 cargo test -p adk-payments --features acp --test acp_integration_tests
 cargo test -p adk-payments --features ap2,ap2-a2a,ap2-mcp --test ap2_integration_tests
+cargo test -p adk-payments --features ap2,ap2-a2a,ap2-mcp --test ap2_governance_tests
 cargo test -p adk-payments --test cross_protocol_correlation_tests
 cargo test -p adk-payments --features acp-experimental --test acp_experimental_integration_tests
 ```
@@ -130,6 +200,7 @@ Reference files:
 
 - `adk-payments/tests/acp_integration_tests.rs`
 - `adk-payments/tests/ap2_integration_tests.rs`
+- `adk-payments/tests/ap2_governance_tests.rs`
 - `adk-payments/tests/cross_protocol_correlation_tests.rs`
 - `examples/payments/README.md`
 

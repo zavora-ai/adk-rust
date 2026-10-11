@@ -17,6 +17,9 @@ pub const PAYMENT_CHECKOUT_COMPLETE_SCOPE: &str = "payments:checkout:complete";
 /// Scope for checkout cancelation.
 pub const PAYMENT_CHECKOUT_CANCEL_SCOPE: &str = "payments:checkout:cancel";
 
+/// Scope for executing a payment directly, such as an AP2 payment mandate.
+pub const PAYMENT_EXECUTE_SCOPE: &str = "payments:payment:execute";
+
 /// Scope for delegated credential use.
 pub const PAYMENT_CREDENTIAL_DELEGATE_SCOPE: &str = "payments:credential:delegate";
 
@@ -44,6 +47,9 @@ pub const CHECKOUT_COMPLETE_SCOPES: &[&str] = &[PAYMENT_CHECKOUT_COMPLETE_SCOPE]
 /// Scope set for checkout cancelation.
 pub const CHECKOUT_CANCEL_SCOPES: &[&str] = &[PAYMENT_CHECKOUT_CANCEL_SCOPE];
 
+/// Scope set for direct payment execution.
+pub const PAYMENT_EXECUTE_SCOPES: &[&str] = &[PAYMENT_EXECUTE_SCOPE];
+
 /// Scope set for delegated credential usage.
 pub const CREDENTIAL_DELEGATE_SCOPES: &[&str] = &[PAYMENT_CREDENTIAL_DELEGATE_SCOPE];
 
@@ -65,6 +71,7 @@ pub const ALL_PAYMENT_SCOPES: &[&str] = &[
     PAYMENT_CHECKOUT_UPDATE_SCOPE,
     PAYMENT_CHECKOUT_COMPLETE_SCOPE,
     PAYMENT_CHECKOUT_CANCEL_SCOPE,
+    PAYMENT_EXECUTE_SCOPE,
     PAYMENT_CREDENTIAL_DELEGATE_SCOPE,
     PAYMENT_INTERVENTION_CONTINUE_SCOPE,
     PAYMENT_ORDER_UPDATE_SCOPE,
@@ -89,6 +96,7 @@ pub enum PaymentOperation {
     UpdateCheckout,
     CompleteCheckout,
     CancelCheckout,
+    ExecutePayment,
     DelegateCredential,
     ContinueIntervention,
     UpdateOrder,
@@ -105,6 +113,7 @@ impl PaymentOperation {
             Self::UpdateCheckout => "checkout_update",
             Self::CompleteCheckout => "checkout_complete",
             Self::CancelCheckout => "checkout_cancel",
+            Self::ExecutePayment => "payment_execute",
             Self::DelegateCredential => "credential_delegate",
             Self::ContinueIntervention => "intervention_continue",
             Self::UpdateOrder => "order_update",
@@ -121,6 +130,7 @@ impl PaymentOperation {
             Self::UpdateCheckout => "payments.checkout.update",
             Self::CompleteCheckout => "payments.checkout.complete",
             Self::CancelCheckout => "payments.checkout.cancel",
+            Self::ExecutePayment => "payments.payment.execute",
             Self::DelegateCredential => "payments.credential.delegate",
             Self::ContinueIntervention => "payments.intervention.continue",
             Self::UpdateOrder => "payments.order.update",
@@ -137,6 +147,7 @@ impl PaymentOperation {
             Self::UpdateCheckout => CHECKOUT_UPDATE_SCOPES,
             Self::CompleteCheckout => CHECKOUT_COMPLETE_SCOPES,
             Self::CancelCheckout => CHECKOUT_CANCEL_SCOPES,
+            Self::ExecutePayment => PAYMENT_EXECUTE_SCOPES,
             Self::DelegateCredential => CREDENTIAL_DELEGATE_SCOPES,
             Self::ContinueIntervention => INTERVENTION_CONTINUE_SCOPES,
             Self::UpdateOrder => ORDER_UPDATE_SCOPES,

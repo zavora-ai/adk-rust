@@ -30,6 +30,12 @@ const SCENARIOS: &[Scenario] = &[
         references: &["adk-payments/tests/ap2_integration_tests.rs"],
     },
     Scenario {
+        id: "ap2-governed",
+        title: "Governed AP2 payment mandates",
+        summary: "Payment policies, spend-ledger reservation, approvals, and fail-closed audit before an AP2 payment mandate reaches the payment backend; the non-idempotent AP2 payment tool is answered outcome_unknown instead of paying twice.",
+        references: &["adk-payments/tests/ap2_governance_tests.rs"],
+    },
+    Scenario {
         id: "dual-protocol",
         title: "Dual-protocol backend correlation",
         summary: "ACP and AP2 identifiers correlate into one canonical transaction record with explicit lossy-conversion refusal at protocol boundaries.",

@@ -203,6 +203,36 @@ currency's ISO 4217 minor-unit scale, or a finer scale when an item needs it;
 malformed values, mixed currencies, more than 18 fraction digits, and overflow
 return `Ap2Error::InvalidAmount`.
 
+AP2 money movement runs under the same governance as a governed ACP checkout:
+
+| Step | Governance |
+|------|------------|
+| Cart mandate creates a checkout | Payment policies (`CreateCheckout`) |
+| Payment mandate | Authorization verified first; a verification failure refuses the payment |
+| Payment mandate | Payment policies (`ExecutePayment`) on the stored transaction at the mandate total |
+| Payment mandate | `SpendLimitGuardrail` reserves the total under `app / agent / merchant_id`, committed when the backend authorizes or completes the payment, released otherwise |
+| Payment mandate | `with_payment_auditor` records the decision before money moves; a failed write refuses the payment |
+| Payment mandate | Consumed only after governance allows it; the backend receives an `idempotency_key` extension field |
+| Human-not-present payment without user authorization | Requires a verified intent authorization |
+
+```rust,ignore
+use adk_payments::auth::PaymentAuditor;
+use adk_payments::guardrail::{AmountThresholdGuardrail, PaymentPolicySet};
+
+let adapter = adapter
+    .with_payment_policies(
+        PaymentPolicySet::new()
+            .with(AmountThresholdGuardrail::new(Some(5_000), Some(50_000)).with_currency("USD", 2)),
+    )
+    .with_spend_ledger(spend_ledger)
+    .with_payment_auditor(PaymentAuditor::new(audit_sink));
+```
+
+`submit_payment_mandate` attributes a payment to the session's app and the acting
+actor; `submit_payment_mandate_as` takes a `PaymentCaller` with its own attribution,
+ledger, and approver. A protocol request has no approver, so an escalated payment
+fails with `payments.policy.approval_required` and its mandate stays unconsumed.
+
 ### 3. Register Agent-Facing Payment Tools
 
 ```rust,ignore
@@ -238,8 +268,18 @@ evaluates the policies passed to `with_payment_policies` on every call. A denial
 refuses the checkout, an escalation goes through the run's tool confirmation flow, and
 `SpendLimitGuardrail` reserves each completed checkout against the spend ledger
 (`with_spend_ledger` or `RunConfig::spend_ledger`), failing closed when the ledger is
-unreachable. Wrap the backend handed to the ACP and AP2 adapters in a
-`GovernedCheckoutService` to govern protocol traffic too.
+unreachable. Wrap the backend handed to the ACP adapter in a `GovernedCheckoutService`
+to govern ACP protocol traffic too; the AP2 adapter governs its own checkouts and
+payment mandates.
+
+With the `ap2` feature, `with_ap2_adapter` adds `payments_ap2_payment_submit`
+(`payments:payment:execute`), which submits an AP2 payment mandate through the adapter
+under the same scope guard. The tool is `ToolEffect::NonIdempotent`, so with an action
+ledger a timed-out payment is answered `outcome_unknown` instead of repeated; it passes
+the call's idempotency key to the payment backend, routes escalations through the run's
+tool confirmation flow, and reserves against `RunConfig::spend_ledger` when the adapter
+has no ledger. With `ap2-mcp`, its response includes the `Ap2McpPaymentContinuation`
+view for MCP clients.
 
 ## Primary Journeys
 
@@ -256,7 +296,7 @@ The crate is currently shaped around five first-class journeys:
 - Raw payment credentials, merchant signatures, user authorizations, and receipt artifacts are stored as evidence.
 - Session state and semantic memory retain only masked transaction summaries.
 - `adk-auth` binds requests to session identity and audit metadata.
-- `GovernedCheckoutService` enforces amount, merchant, currency, intervention, protocol-version, and spend policies before every checkout creation and completion.
+- `GovernedCheckoutService` enforces amount, merchant, currency, intervention, protocol-version, and spend policies before every checkout creation and completion; the AP2 adapter enforces the same policies, spend ledger, and audit before every cart-mandate checkout and payment mandate.
 - `AmountThresholdGuardrail` compares totals by value across scales; `with_currency` binds its thresholds to one currency and denies the others.
 - The AP2 adapter rejects authorizations until cryptographic verifiers are configured, and executes each payment mandate at most once.
 - Delegated-payment method selections keep display fields only (type, brand, last four digits); the raw card reaches the tokenization backend and evidence store, not the selection.
@@ -269,6 +309,7 @@ The integration tests are the authoritative executable reference path:
 ```bash
 cargo test -p adk-payments --features acp --test acp_integration_tests
 cargo test -p adk-payments --features ap2,ap2-a2a,ap2-mcp --test ap2_integration_tests
+cargo test -p adk-payments --features ap2,ap2-a2a,ap2-mcp --test ap2_governance_tests
 cargo test -p adk-payments --test cross_protocol_correlation_tests
 cargo test -p adk-payments --features acp-experimental --test acp_experimental_integration_tests
 ```
@@ -277,6 +318,7 @@ Use these as the starting point for real implementations:
 
 - `adk-payments/tests/acp_integration_tests.rs`
 - `adk-payments/tests/ap2_integration_tests.rs`
+- `adk-payments/tests/ap2_governance_tests.rs`
 - `adk-payments/tests/cross_protocol_correlation_tests.rs`
 - `examples/payments/`
 - `docs/official_docs/security/payments.md`

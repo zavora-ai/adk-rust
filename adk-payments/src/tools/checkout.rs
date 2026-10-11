@@ -79,7 +79,10 @@ struct ToolResponse {
     summary: SafeTransactionSummary,
 }
 
-fn parse_args<T: serde::de::DeserializeOwned>(tool_name: &str, args: Value) -> Result<T> {
+pub(super) fn parse_args<T: serde::de::DeserializeOwned>(
+    tool_name: &str,
+    args: Value,
+) -> Result<T> {
     serde_json::from_value(args).map_err(|err| {
         AdkError::new(
             ErrorComponent::Tool,
@@ -95,7 +98,7 @@ fn parse_args<T: serde::de::DeserializeOwned>(tool_name: &str, args: Value) -> R
 /// The call's idempotency key travels in the `idempotency_key` extension field, where
 /// the ACP adapter places the `Idempotency-Key` header, so a backend deduplicates a
 /// retried or replayed tool call the same way it deduplicates a replayed HTTP request.
-fn tool_context(
+pub(super) fn tool_context(
     ctx: &dyn ToolContext,
     transaction_id: &str,
     merchant_id: &str,
@@ -197,7 +200,11 @@ impl PaymentApprover for ToolCallApprover {
 
 /// The paying caller for a tool call: the app, the agent, the run's spend ledger, and
 /// the confirmation flow for escalations.
-fn tool_caller(ctx: &Arc<dyn ToolContext>, tool_name: &str, args: Value) -> PaymentCaller {
+pub(super) fn tool_caller(
+    ctx: &Arc<dyn ToolContext>,
+    tool_name: &str,
+    args: Value,
+) -> PaymentCaller {
     let mut caller =
         PaymentCaller::new().with_org(ctx.app_name()).with_agent(ctx.agent_name()).with_approver(
             Arc::new(ToolCallApprover { ctx: ctx.clone(), tool_name: tool_name.to_string(), args }),

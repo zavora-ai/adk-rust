@@ -3,8 +3,11 @@ use std::sync::Arc;
 use adk_auth::{ContextScopeResolver, ScopeGuard};
 use adk_core::{SpendLedger, Tool};
 
-use crate::guardrail::{PaymentPolicyGuardrail, PaymentPolicySet, SpendLimitGuardrail};
+use crate::guardrail::PaymentPolicySet;
+#[cfg(doc)]
+use crate::guardrail::SpendLimitGuardrail;
 use crate::kernel::GovernedCheckoutService;
+use crate::kernel::governed::with_spend_limit;
 use crate::kernel::service::{InterventionService, MerchantCheckoutService, TransactionStore};
 
 use super::checkout::{governed_complete_checkout_tool, governed_create_checkout_tool};
@@ -47,6 +50,8 @@ pub struct PaymentToolsetBuilder {
     scope_guard: Option<ScopeGuard>,
     policies: PaymentPolicySet,
     spend_ledger: Option<Arc<dyn SpendLedger>>,
+    #[cfg(feature = "ap2")]
+    ap2_adapter: Option<Arc<crate::protocol::ap2::Ap2Adapter>>,
 }
 
 impl PaymentToolsetBuilder {
@@ -63,6 +68,8 @@ impl PaymentToolsetBuilder {
             scope_guard: None,
             policies: PaymentPolicySet::new(),
             spend_ledger: None,
+            #[cfg(feature = "ap2")]
+            ap2_adapter: None,
         }
     }
 
@@ -118,14 +125,27 @@ impl PaymentToolsetBuilder {
         self
     }
 
+    /// Adds the `payments_ap2_payment_submit` tool, which submits AP2 payment mandates
+    /// through `adapter` under the same scope guard as the checkout tools.
+    ///
+    /// The adapter enforces its own payment policies and spend ledger
+    /// ([`Ap2Adapter::with_payment_policies`](crate::protocol::ap2::Ap2Adapter::with_payment_policies));
+    /// see [`ap2_payment_tool`](super::ap2_payment_tool).
+    #[cfg(feature = "ap2")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "ap2")))]
+    #[must_use]
+    pub fn with_ap2_adapter(mut self, adapter: Arc<crate::protocol::ap2::Ap2Adapter>) -> Self {
+        self.ap2_adapter = Some(adapter);
+        self
+    }
+
     /// Builds the payment toolset containing all configured tools.
     #[must_use]
     pub fn build(self) -> PaymentToolset {
-        let mut policies = self.policies;
-        if !policies.contains(SpendLimitGuardrail::new().name()) {
-            policies = policies.with(SpendLimitGuardrail::when_configured());
-        }
-        let mut governed = GovernedCheckoutService::new(self.checkout_service.clone(), policies);
+        let mut governed = GovernedCheckoutService::new(
+            self.checkout_service.clone(),
+            with_spend_limit(self.policies),
+        );
         if let Some(ledger) = self.spend_ledger {
             governed = governed.with_spend_ledger(ledger);
         }
@@ -139,6 +159,10 @@ impl PaymentToolsetBuilder {
         ];
         if let Some(intervention_service) = self.intervention_service {
             tools.push(Arc::new(continue_intervention_tool(intervention_service)));
+        }
+        #[cfg(feature = "ap2")]
+        if let Some(adapter) = self.ap2_adapter {
+            tools.push(Arc::new(super::ap2_payment_tool(adapter)));
         }
         let scope_guard = self.scope_guard.unwrap_or_else(|| ScopeGuard::new(ContextScopeResolver));
         PaymentToolset { tools: scope_guard.protect_all(tools) }

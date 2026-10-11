@@ -99,13 +99,35 @@ impl PaymentPolicyDecision {
     }
 }
 
-/// The checkout operation a payment policy is evaluated for.
+/// The payment operation a payment policy is evaluated for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PaymentOperation {
     /// A checkout session is being created.
     CreateCheckout,
     /// A checkout is being completed, which moves money.
     CompleteCheckout,
+    /// A payment is executed directly, such as an AP2 payment mandate, which moves money.
+    ExecutePayment,
+}
+
+impl PaymentOperation {
+    /// Returns `true` when the operation moves money.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_payments::guardrail::PaymentOperation;
+    ///
+    /// assert!(PaymentOperation::ExecutePayment.moves_money());
+    /// assert!(!PaymentOperation::CreateCheckout.moves_money());
+    /// ```
+    #[must_use]
+    pub const fn moves_money(self) -> bool {
+        match self {
+            Self::CreateCheckout => false,
+            Self::CompleteCheckout | Self::ExecutePayment => true,
+        }
+    }
 }
 
 /// Budget a policy reserved while evaluating one operation.
@@ -254,6 +276,9 @@ pub trait PaymentPolicyGuardrail: Send + Sync {
 }
 
 /// Ordered collection of payment policy guardrails.
+///
+/// Cloning shares the guardrail instances.
+#[derive(Clone)]
 pub struct PaymentPolicySet {
     guardrails: Vec<Arc<dyn PaymentPolicyGuardrail>>,
 }

@@ -235,6 +235,11 @@ pub(crate) fn payment_method_selection(mandate: &PaymentMandate) -> PaymentMetho
 }
 
 /// Builds the payment command, expressing the amount at the cart's `scale`.
+/// The amount a payment mandate pays, at the cart's `scale`.
+pub(crate) fn payment_amount(mandate: &PaymentMandate, scale: u32) -> Result<Money, Ap2Error> {
+    money_at_scale(&mandate.payment_mandate_contents.payment_details_total.amount, scale)
+}
+
 pub(crate) fn execute_payment_command(
     mandate: &PaymentMandate,
     scale: u32,
@@ -243,10 +248,7 @@ pub(crate) fn execute_payment_command(
 ) -> Result<ExecutePaymentCommand, Ap2Error> {
     Ok(ExecutePaymentCommand {
         context,
-        amount: money_at_scale(
-            &mandate.payment_mandate_contents.payment_details_total.amount,
-            scale,
-        )?,
+        amount: payment_amount(mandate, scale)?,
         selected_payment_method: Some(payment_method_selection(mandate)),
         supporting_evidence_refs,
         extensions: ProtocolExtensions::default(),

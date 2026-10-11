@@ -2,6 +2,7 @@
 //! [`Verdict`](crate::common::Verdict).
 
 pub mod anthropic;
+pub mod ap2;
 pub mod budget;
 pub mod codeact;
 pub mod commerce;
@@ -38,6 +39,7 @@ pub const ALL: &[&str] = &[
     "approval_across_runs",
     "kill_switch",
     "spend_ledger_daily_cap",
+    "ap2_payment_governed",
     "openai_tools_routing",
     "anthropic_thinking_replay",
 ];
@@ -67,6 +69,7 @@ pub async fn run(name: &str, cfg: &Config, provider: Provider) -> Verdict {
         "approval_across_runs" => policy::approval_across_runs(cfg, provider).await,
         "kill_switch" => policy::kill_switch(cfg, provider).await,
         "spend_ledger_daily_cap" => budget::spend_ledger_daily_cap(cfg, provider).await,
+        "ap2_payment_governed" => ap2::ap2_payment_governed(cfg, provider).await,
         "openai_tools_routing" => providers::openai_tools_routing(cfg, provider).await,
         "anthropic_thinking_replay" => providers::anthropic_thinking_replay(cfg, provider).await,
         other => Verdict::Fail(format!("unknown scenario {other}")),

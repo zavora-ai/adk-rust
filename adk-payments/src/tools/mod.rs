@@ -14,6 +14,7 @@
 //! | `payments_checkout_cancel` | `payments:checkout:cancel` | Cancel a checkout or transaction |
 //! | `payments_status_lookup` | `payments:checkout:create` | Look up transaction status |
 //! | `payments_intervention_continue` | `payments:intervention:continue` | Resume an intervention |
+//! | `payments_ap2_payment_submit` (`ap2`) | `payments:payment:execute` | Execute an AP2 payment mandate |
 //!
 //! [`PaymentToolsetBuilder`] wraps every tool in an `adk-auth` `ScopeGuard`. The
 //! individual constructors such as [`create_checkout_tool`] return the bare tool,
@@ -35,6 +36,8 @@
 //! let tools = toolset.tools();
 //! ```
 
+#[cfg(feature = "ap2")]
+mod ap2;
 mod checkout;
 mod intervention;
 mod status;
@@ -61,6 +64,9 @@ fn caller_identity(ctx: &dyn ToolContext) -> Option<AdkIdentity> {
     ctx.try_identity().ok()
 }
 
+#[cfg(feature = "ap2")]
+#[cfg_attr(docsrs, doc(cfg(feature = "ap2")))]
+pub use ap2::ap2_payment_tool;
 pub use checkout::{
     cancel_checkout_tool, complete_checkout_tool, create_checkout_tool, update_checkout_tool,
 };

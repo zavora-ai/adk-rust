@@ -11,11 +11,13 @@ description = "Live OpenAI, Anthropic, and Gemini validation of the autonomy-rea
 adk-agent = { path = "../../adk-agent", features = ["guardrails", "codeact"] }
 adk-codeact-monty = { path = "../../adk-codeact-monty" }
 adk-anthropic = { path = "../../adk-anthropic" }
+adk-artifact = { path = "../../adk-artifact" }
+adk-auth = { path = "../../adk-auth" }
 adk-core = { path = "../../adk-core" }
 adk-eval = { path = "../../adk-eval" }
 adk-graph = { path = "../../adk-graph", features = ["functional", "sqlite"] }
 adk-model = { path = "../../adk-model", default-features = false, features = ["openai", "anthropic", "gemini"] }
-adk-payments = { path = "../../adk-payments" }
+adk-payments = { path = "../../adk-payments", features = ["ap2"] }
 adk-plugin = { path = "../../adk-plugin" }
 adk-runner = { path = "../../adk-runner" }
 adk-rust-macros = { path = "../../adk-rust-macros" }

@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use crate::domain::{Money, ProtocolDescriptor, TransactionRecord};
 
 use super::{
-    PaymentOperation, PaymentPolicyContext, PaymentPolicyDecision, PaymentPolicyFinding,
-    PaymentPolicyGuardrail, SpendHold,
+    PaymentPolicyContext, PaymentPolicyDecision, PaymentPolicyFinding, PaymentPolicyGuardrail,
+    SpendHold,
 };
 
 /// Name under which [`SpendLimitGuardrail`] reports findings.
@@ -45,15 +45,17 @@ pub fn usd_micro_amount(amount: &Money) -> Result<u64, String> {
     converted.ok_or_else(|| format!("{text} is too large for the spend ledger"))
 }
 
-/// Reserves each checkout's total in the [spend ledger](adk_core::SpendLedger) before it
-/// completes.
+/// Reserves each payment's total in the [spend ledger](adk_core::SpendLedger) before money
+/// moves.
 ///
-/// On [`PaymentOperation::CompleteCheckout`] the guardrail reserves the cart total under
-/// the key `org / agent / merchant_id`, where `org` and `agent` come from the
-/// [`PaymentPolicyContext`] and fall back to the transaction's session app name and
+/// On an operation that [moves money](super::PaymentOperation::moves_money) —
+/// [`CompleteCheckout`](super::PaymentOperation::CompleteCheckout) and
+/// [`ExecutePayment`](super::PaymentOperation::ExecutePayment) — the guardrail reserves
+/// the cart total under the key `org / agent / merchant_id`, where `org` and `agent` come
+/// from the [`PaymentPolicyContext`] and fall back to the transaction's session app name and
 /// initiating actor. A reservation the ledger refuses denies the payment; an unreachable
-/// ledger also denies it. The enforcer commits the hold when the checkout completes and
-/// releases it when the checkout fails. Checkout creation moves no money and is allowed.
+/// ledger also denies it. The enforcer commits the hold when the payment succeeds and
+/// releases it when the payment fails. Checkout creation moves no money and is allowed.
 ///
 /// # Example
 ///
@@ -107,9 +109,8 @@ impl PaymentPolicyGuardrail for SpendLimitGuardrail {
         _protocol: &ProtocolDescriptor,
         context: &PaymentPolicyContext,
     ) -> PaymentPolicyDecision {
-        match context.operation() {
-            PaymentOperation::CreateCheckout => return PaymentPolicyDecision::allow(),
-            PaymentOperation::CompleteCheckout => {}
+        if !context.operation().moves_money() {
+            return PaymentPolicyDecision::allow();
         }
         let Some(ledger) = context.spend_ledger() else {
             return if self.required {

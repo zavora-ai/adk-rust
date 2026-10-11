@@ -16,6 +16,10 @@
 //! tool surfaces rather than dedicated HTTP routes. The `Ap2Adapter` in
 //! `crate::protocol::ap2` can be wired into existing A2A or MCP server
 //! helpers already present in `adk-server`.
+//! The adapter governs every cart-mandate checkout and payment mandate with its
+//! payment policies, spend ledger, and auditor, whichever surface delivers the
+//! mandate. With the `ap2` feature, `crate::tools::ap2_payment_tool` exposes payment
+//! mandate submission as an agent tool that an MCP server can serve.
 //!
 //! # Payment tools
 //!
