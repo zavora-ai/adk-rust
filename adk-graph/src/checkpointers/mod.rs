@@ -1,17 +1,18 @@
 //! Checkpointers for shared databases.
 //!
 //! Each backend sits behind the feature of the same name and passes the
-//! [conformance suite](crate::conformance). They store the whole [`Checkpoint`] as
+//! conformance suite (the `conformance` feature). They store the whole
+//! [`Checkpoint`](crate::state::Checkpoint) as
 //! JSON text next to the columns or keys they query, so a loaded checkpoint equals
 //! the saved one and new checkpoint fields need no schema change.
 //!
 //! | Backend | Feature | Version rule enforced by |
 //! |---------|---------|--------------------------|
-//! | [`PostgresCheckpointer`](crate::PostgresCheckpointer) | `postgres` | A guarded `INSERT` and a unique index on `(thread_id, version)` |
-//! | [`RedisCheckpointer`](crate::RedisCheckpointer) | `redis` | One Lua script per save, reading the thread's highest version |
-//! | [`MongoCheckpointer`](crate::MongoCheckpointer) | `mongodb` | A compare-and-set on the thread's head document and a unique index on `(thread_id, version)` |
-//! | [`Neo4jCheckpointer`](crate::Neo4jCheckpointer) | `neo4j` | A write lock on the thread's node, taken before the head is read |
-//! | [`FirestoreCheckpointer`](crate::FirestoreCheckpointer) | `firestore` | A read-write transaction over the thread's head document |
+//! | `PostgresCheckpointer` | `postgres` | A guarded `INSERT` and a unique index on `(thread_id, version)` |
+//! | `RedisCheckpointer` | `redis` | One Lua script per save, reading the thread's highest version |
+//! | `MongoCheckpointer` | `mongodb` | A compare-and-set on the thread's head document and a unique index on `(thread_id, version)` |
+//! | `Neo4jCheckpointer` | `neo4j` | A write lock on the thread's node, taken before the head is read |
+//! | `FirestoreCheckpointer` | `firestore` | A read-write transaction over the thread's head document |
 
 #[cfg(any(
     feature = "postgres",

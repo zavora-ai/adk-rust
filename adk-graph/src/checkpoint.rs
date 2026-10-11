@@ -7,7 +7,7 @@
 //!
 //! Every backend — the ones in this crate and any third-party one — keeps these
 //! rules, and proves it by passing the conformance suite (the `conformance` feature,
-//! [`checkpointer_conformance_tests!`](crate::checkpointer_conformance_tests)):
+//! `adk_graph::checkpointer_conformance_tests!`):
 //!
 //! | Rule | Behaviour |
 //! |------|-----------|
