@@ -13,7 +13,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 - **InMemorySessionService** - Simple in-memory session storage
 - **SqliteSessionService** - SQLite-backed persistence (`sqlite` feature)
 - **Durable stores** - `SpendLedger`, `ActionLedger`, and `ApprovalStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each behind its backend's feature and proven by the `adk-core` conformance suites; the approval stores also hold the requests and delegations of the `adk-core` approval service
-- **Durable runtime stores** - `LeaseStore`, `DurableRunStore`, `ScheduleStore`, and `GovernanceStateStore` for SQLite and PostgreSQL
+- **Durable runtime stores** - `LeaseStore`, `DurableRunStore`, `ScheduleStore`, and `GovernanceStateStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each proven by the `adk-core` conformance suites
 - **PostgresSessionService** - PostgreSQL-backed persistence (`postgres` feature)
 - **RedisSessionService** - Redis-backed persistence (`redis` feature)
 - **MongoSessionService** - MongoDB-backed persistence (`mongodb` feature)
@@ -360,9 +360,14 @@ ledger.migrate().await?;
 |---------|---------|-------------|-----------|----------------|------------------------|
 | SQLite | `sqlite` | `SqliteLeaseStore` | `SqliteRunStore` | `SqliteScheduleStore` | `SqliteGovernanceStateStore` |
 | PostgreSQL | `postgres` | `PostgresLeaseStore` | `PostgresRunStore` | `PostgresScheduleStore` | `PostgresGovernanceStateStore` |
+| Redis | `redis` | `RedisLeaseStore` | `RedisRunStore` | `RedisScheduleStore` | `RedisGovernanceStateStore` |
+| MongoDB | `mongodb` | `MongoLeaseStore` | `MongoRunStore` | `MongoScheduleStore` | `MongoGovernanceStateStore` |
+| Neo4j | `neo4j` | `Neo4jLeaseStore` | `Neo4jRunStore` | `Neo4jScheduleStore` | `Neo4jGovernanceStateStore` |
+| Firestore | `firestore` | `FirestoreLeaseStore` | `FirestoreRunStore` | `FirestoreScheduleStore` | `FirestoreGovernanceStateStore` |
 
-Each type has `new(url)`, `from_pool` over the pool a session service uses, and
-`migrate()`; the lease, run, and governance stores add `with_clock`. PostgreSQL claims runs
+The SQL types have `new(url)` and `from_pool` over the pool a session service uses; the
+Redis, MongoDB, Neo4j, and Firestore types have `new(...)` and a constructor over a shared
+handle (`from_client`, `from_database`, `from_graph`, `from_db`). Every type has `migrate()`; the lease, run, and governance stores add `with_clock`. PostgreSQL claims runs
 with `SELECT ... FOR UPDATE SKIP LOCKED`, SQLite under `BEGIN IMMEDIATE`, and every worker
 write is fenced on the run's lease epoch. Every type passes the `adk-core` conformance
 suites; see the

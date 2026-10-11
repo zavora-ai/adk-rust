@@ -74,16 +74,16 @@ const KIND_DECISION: &str = "decision";
 /// How long one operation may spend retrying conflicting transactions.
 const TRANSACTION_DEADLINE: chrono::TimeDelta = chrono::TimeDelta::seconds(120);
 
-type TxResult<T> = std::result::Result<T, BackoffError<AdkError>>;
-type TxFuture<'b, T> = Pin<Box<dyn Future<Output = TxResult<T>> + Send + 'b>>;
+pub(crate) type TxResult<T> = std::result::Result<T, BackoffError<AdkError>>;
+pub(crate) type TxFuture<'b, T> = Pin<Box<dyn Future<Output = TxResult<T>> + Send + 'b>>;
 
-fn transaction_options() -> FirestoreTransactionOptions {
+pub(crate) fn transaction_options() -> FirestoreTransactionOptions {
     FirestoreTransactionOptions::new().with_max_elapsed_time(TRANSACTION_DEADLINE)
 }
 
 /// Retries a transaction on a read Firestore reports as retryable, such as a contention
 /// abort, and gives up on any other failure.
-fn retry_or_fail(
+pub(crate) fn retry_or_fail(
     error: FirestoreError,
     fail: impl FnOnce(FirestoreError) -> AdkError,
 ) -> BackoffError<AdkError> {
@@ -97,7 +97,10 @@ fn retry_or_fail(
 
 /// Recovers the [`AdkError`] a transaction body failed with, or reports the transaction
 /// failure itself through `fail`.
-fn transaction_error(error: FirestoreError, fail: impl FnOnce(String) -> AdkError) -> AdkError {
+pub(crate) fn transaction_error(
+    error: FirestoreError,
+    fail: impl FnOnce(String) -> AdkError,
+) -> AdkError {
     match error {
         FirestoreError::ErrorInTransaction(inner) => match inner.source.downcast::<AdkError>() {
             Ok(adk_error) => *adk_error,
@@ -111,11 +114,14 @@ fn storage_error(code: &'static str, message: String) -> AdkError {
     AdkError::new(ErrorComponent::Session, ErrorCategory::Unavailable, code, message)
 }
 
-fn to_json<T: Serialize>(value: &T, fail: impl FnOnce(String) -> AdkError) -> Result<String> {
+pub(crate) fn to_json<T: Serialize>(
+    value: &T,
+    fail: impl FnOnce(String) -> AdkError,
+) -> Result<String> {
     serde_json::to_string(value).map_err(|e| fail(format!("serialize failed: {e}")))
 }
 
-fn from_json<T: serde::de::DeserializeOwned>(
+pub(crate) fn from_json<T: serde::de::DeserializeOwned>(
     text: &str,
     what: &str,
     fail: impl FnOnce(String) -> AdkError,
@@ -127,7 +133,7 @@ fn hex(text: &str) -> String {
     text.bytes().map(|byte| format!("{byte:02x}")).collect()
 }
 
-async fn connect(project_id: &str) -> std::result::Result<FirestoreDb, String> {
+pub(crate) async fn connect(project_id: &str) -> std::result::Result<FirestoreDb, String> {
     FirestoreDb::new(project_id).await.map_err(|e| format!("firestore connection failed: {e}"))
 }
 
@@ -689,7 +695,7 @@ struct ActionDoc {
 
 /// SHA-256 of `value`'s JSON text, in hex: path-safe, fixed length, and collision
 /// resistant, so a crafted key cannot occupy another call's document.
-fn document_id(value: &serde_json::Value) -> String {
+pub(crate) fn document_id(value: &serde_json::Value) -> String {
     use sha2::{Digest, Sha256};
     use std::fmt::Write;
 

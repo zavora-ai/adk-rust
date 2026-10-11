@@ -69,7 +69,7 @@ use fred::prelude::*;
 /// window that reads day buckets (a month) with room to spare.
 const DAY_BUCKET_TTL_SECS: i64 = 70 * 24 * 60 * 60;
 
-async fn connect(url: &str) -> std::result::Result<Client, String> {
+pub(crate) async fn connect(url: &str) -> std::result::Result<Client, String> {
     let config = Config::from_url(url).map_err(|e| format!("redis connection failed: {e}"))?;
     let client = Builder::from_config(config)
         .build()
@@ -78,7 +78,10 @@ async fn connect(url: &str) -> std::result::Result<Client, String> {
     Ok(client)
 }
 
-async fn load_scripts(client: &Client, scripts: &[&str]) -> std::result::Result<(), String> {
+pub(crate) async fn load_scripts(
+    client: &Client,
+    scripts: &[&str],
+) -> std::result::Result<(), String> {
     for script in scripts {
         let _: String = client
             .script_load(*script)

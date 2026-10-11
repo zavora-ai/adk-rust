@@ -1,4 +1,6 @@
-//! The Firestore stores pass the shared conformance suites.
+//! The Firestore spend ledger, action ledger, approval store, lease store, run store,
+//! schedule store, and governance state store pass the shared conformance suites, and
+//! the run store passes a claim contention check across two clients.
 //!
 //! Run against the Firestore emulator at `FIRESTORE_EMULATOR_HOST`. Each case writes
 //! under fresh identifiers, so the suites share one emulator database:
@@ -14,14 +16,24 @@
 
 #![cfg(feature = "firestore")]
 
+#[path = "common/run_contention.rs"]
+mod run_contention;
+
 use std::sync::Arc;
 
 use adk_core::conformance::{
-    ActionLedgerHarness, ApprovalStoreHarness, SpendLedgerHarness, SpendLedgerSetup,
+    ActionLedgerHarness, ApprovalStoreHarness, GovernanceStateStoreHarness, LeaseStoreHarness,
+    RunStoreHarness, ScheduleStoreHarness, SpendLedgerHarness, SpendLedgerSetup,
 };
-use adk_core::{ActionLedger, ApprovalStore, SpendLedger, async_trait};
+use adk_core::{
+    ActionLedger, ApprovalStore, Clock, DurableRunStore, GovernanceStateStore, LeaseStore,
+    ScheduleStore, SpendLedger, async_trait,
+};
 use adk_session::firestore_stores::connect_firestore_emulator;
-use adk_session::{FirestoreActionLedger, FirestoreApprovalStore, FirestoreSpendLedger};
+use adk_session::{
+    FirestoreActionLedger, FirestoreApprovalStore, FirestoreGovernanceStateStore,
+    FirestoreLeaseStore, FirestoreRunStore, FirestoreScheduleStore, FirestoreSpendLedger,
+};
 use firestore::FirestoreDb;
 
 /// A new client per call, as a restarted process would create.
@@ -88,9 +100,86 @@ mod approvals {
     );
 }
 
+/// Opens the durable runtime stores, each on a new client.
+struct Runtime;
+
+#[async_trait]
+impl LeaseStoreHarness for Runtime {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn LeaseStore> {
+        let store = FirestoreLeaseStore::from_db(emulator_db().await).with_clock(clock);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
+#[async_trait]
+impl RunStoreHarness for Runtime {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn DurableRunStore> {
+        let store = FirestoreRunStore::from_db(emulator_db().await).with_clock(clock);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
+#[async_trait]
+impl ScheduleStoreHarness for Runtime {
+    async fn open(&self) -> Arc<dyn ScheduleStore> {
+        let store = FirestoreScheduleStore::from_db(emulator_db().await);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
+#[async_trait]
+impl GovernanceStateStoreHarness for Runtime {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn GovernanceStateStore> {
+        let store = FirestoreGovernanceStateStore::from_db(emulator_db().await).with_clock(clock);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
 mod approval_service {
     adk_core::approval_service_conformance_tests!(
         #[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
         harness = super::Approvals,
     );
+}
+
+mod leases {
+    adk_core::lease_store_conformance_tests!(
+        #[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+        harness = super::Runtime,
+    );
+}
+
+mod runs {
+    adk_core::run_store_conformance_tests!(
+        #[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+        harness = super::Runtime,
+    );
+}
+
+mod schedules {
+    adk_core::schedule_store_conformance_tests!(
+        #[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+        harness = super::Runtime,
+    );
+}
+
+mod governance {
+    adk_core::governance_state_store_conformance_tests!(
+        #[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+        harness = super::Runtime,
+    );
+}
+
+/// Claimers on two clients drain one queue, each run claimed exactly once.
+#[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn run_claims_under_contention_are_exclusive() {
+    let first: Arc<dyn DurableRunStore> = Arc::new(FirestoreRunStore::from_db(emulator_db().await));
+    let second: Arc<dyn DurableRunStore> =
+        Arc::new(FirestoreRunStore::from_db(emulator_db().await));
+    run_contention::claimers_drain_a_queue_exactly_once(first, second).await;
 }

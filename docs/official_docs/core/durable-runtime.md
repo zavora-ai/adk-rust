@@ -404,20 +404,58 @@ the run `Cancelled`.
 | In memory (`adk-core`) | `InMemoryLeaseStore` | `InMemoryRunStore` | `InMemoryScheduleStore` | `InMemoryGovernanceStateStore` |
 | SQLite (`adk-session`, `sqlite`) | `SqliteLeaseStore` | `SqliteRunStore` | `SqliteScheduleStore` | `SqliteGovernanceStateStore` |
 | PostgreSQL (`adk-session`, `postgres`) | `PostgresLeaseStore` | `PostgresRunStore` | `PostgresScheduleStore` | `PostgresGovernanceStateStore` |
-| Redis | Planned | Planned | Planned | Planned |
-| MongoDB | Planned | Planned | Planned | Planned |
-| Neo4j | Planned | Planned | Planned | Planned |
-| Firestore | Planned | Planned | Planned | Planned |
+| Redis (`adk-session`, `redis`) | `RedisLeaseStore` | `RedisRunStore` | `RedisScheduleStore` | `RedisGovernanceStateStore` |
+| MongoDB (`adk-session`, `mongodb`) | `MongoLeaseStore` | `MongoRunStore` | `MongoScheduleStore` | `MongoGovernanceStateStore` |
+| Neo4j (`adk-session`, `neo4j`) | `Neo4jLeaseStore` | `Neo4jRunStore` | `Neo4jScheduleStore` | `Neo4jGovernanceStateStore` |
+| Firestore (`adk-session`, `firestore`) | `FirestoreLeaseStore` | `FirestoreRunStore` | `FirestoreScheduleStore` | `FirestoreGovernanceStateStore` |
+
+The Redis, MongoDB, Neo4j, and Firestore types live in `adk-session` behind the backend's
+existing feature. Each has `new(...)`, a constructor over the handle a session service holds (`from_client`,
+`from_database`, `from_graph`, `from_db`), and `migrate()`; the lease, run, and governance
+stores add `with_clock`.
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_core::{DurableRunStore, NewRun, RunOutcome};
+use adk_session::RedisRunStore;
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let runs: Arc<dyn DurableRunStore> = {
+        let store = RedisRunStore::new("redis://localhost:6379").await?;
+        store.migrate().await?;
+        Arc::new(store)
+    };
+    runs.enqueue(NewRun::new("default", "billing", "user-1", "invoice_agent", json!({}))).await?;
+    if let Some(claimed) = runs.claim("default", "worker-1", Duration::from_secs(30)).await? {
+        let run_id = &claimed.record.run_id;
+        runs.finish(run_id, claimed.epoch, RunOutcome::Completed(json!("done"))).await?;
+    }
+    Ok(())
+}
+```
 
 The atomic primitive each guarantee needs:
 
 | Guarantee | SQL | Redis | MongoDB | Neo4j, Firestore |
 |-----------|-----|-------|---------|------------------|
 | Single lease winner | Conditional upsert on the resource row | One Lua script | `findOneAndUpdate` with `upsert` | Transaction over the resource record |
-| Idempotent enqueue | Unique index on `(queue, idempotency_key)` | Lua create-if-absent | Unique index | Transaction over the key record |
-| Single claim winner | `SELECT ... FOR UPDATE SKIP LOCKED` (PostgreSQL), `BEGIN IMMEDIATE` (SQLite) | One Lua script | `findOneAndUpdate` | Transaction that writes the new epoch |
-| Fenced worker writes | `UPDATE ... WHERE lease_epoch = $epoch` | Lua epoch compare | `updateOne` filtered on the epoch | Transaction that checks the epoch |
-| Schedule advance, governance set | `UPDATE ... WHERE revision = $expected` | Lua compare | Filtered `updateOne` | Transaction that checks the revision |
+| Idempotent enqueue | Unique index on `(queue, idempotency_key)` | Lua create-if-absent | Unique partial index | Transaction over the key record |
+| Single claim winner | `SELECT ... FOR UPDATE SKIP LOCKED` (PostgreSQL), `BEGIN IMMEDIATE` (SQLite) | One Lua script | Replace filtered on the run's `revision` | Transaction that re-reads the run and writes the new epoch |
+| Fenced worker writes | `UPDATE ... WHERE lease_epoch = $epoch` | Lua epoch compare | Replace filtered on the `revision` after the epoch check | Transaction that checks the epoch |
+| Schedule advance, governance set | `UPDATE ... WHERE revision = $expected` | Lua compare | Filtered `updateOne` or replace | Transaction that checks the revision |
+
+### Backend notes
+
+| Backend | Atomicity | Storage | Notes |
+|---------|-----------|---------|-------|
+| Redis | Every conditional change is one Lua script | One hash per lease and run; sorted sets of ready runs (by enqueue order), timers (delays, waits, lease expiry), key holders, and due schedules | No key expiry: deadlines are timestamps compared in the scripts, so the durable truth never depends on eviction. Each store keeps its keys under one hash tag, so it runs on Redis Cluster on one slot per store |
+| MongoDB | Single-document writes only: filtered `findOneAndUpdate`, revision-filtered replace, unique indexes | `adk_leases`, `adk_runs` (record as JSON plus queried fields), `adk_run_keys`, `adk_schedules`, `adk_governance` | Works on a standalone `mongod`. A concurrency key's `adk_run_keys` document lists its unfinished holders in order; only the first is claimable. Two windows remain without transactions: a `Reject` that loses admission deletes the run it inserted, which a concurrent enqueue with the same idempotency key can briefly see as `Existing`; and a keyed run whose enqueue stopped before admission is admitted by a claim a minute later |
+| Neo4j | Transactions that write-lock a lock node before reading | `AdkLease`, `AdkRun` (record as JSON), `AdkRunQueue`, `AdkSchedule`, `AdkGovernanceState` nodes | Enqueues and claims serialize per queue on the `AdkRunQueue` node; worker writes lock the run node. Transient errors such as deadlocks are retried up to 30 times |
+| Firestore | Read-write transactions that read documents by ID only | `adk_leases`, `adk_runs`, `adk_run_queues`, `adk_run_keys`, `adk_run_key_holders`, `adk_schedules`, `adk_governance` | Enqueues serialize per queue on the `adk_run_queues` document. A claim queries candidates outside any transaction, then re-reads and claims each in its own transaction. A concurrency key's holders live in one document. Every query ranges over one field, so no composite index is needed. Claims take the run that became claimable first, then the oldest enqueued; for undelayed queued runs that is enqueue order |
 
 ### SQL stores
 
@@ -510,11 +548,19 @@ for a harness whose `is_durable` returns `false`.
 | In memory | `cargo nextest run -p adk-core --test store_conformance` |
 | SQLite | `cargo nextest run -p adk-session --features sqlite --test store_conformance_sqlite` |
 | PostgreSQL | `DATABASE_URL=postgres://... cargo nextest run -p adk-session --features postgres --run-ignored only --test store_conformance_postgres --test run_store_multiprocess_postgres` |
+| Redis | `REDIS_URL=redis://localhost:6379 cargo nextest run -p adk-session --features redis --run-ignored only --test store_conformance_redis` |
+| MongoDB | `MONGODB_URL=mongodb://localhost:27017 cargo nextest run -p adk-session --features mongodb --run-ignored only --test store_conformance_mongodb` |
+| Neo4j | `NEO4J_URI=bolt://localhost:7687 NEO4J_USER=neo4j NEO4J_PASSWORD=<password> cargo nextest run -p adk-session --features neo4j --run-ignored only --test store_conformance_neo4j` |
+| Firestore | `FIRESTORE_EMULATOR_HOST=localhost:8080 cargo nextest run -p adk-session --features firestore --run-ignored only --test store_conformance_firestore` |
 
 `run_store_multiprocess_postgres` starts three OS processes that claim from one queue of
 200 runs at once and checks that each run is claimed and finished exactly once. The SQLite
 suites run on every pull request; the PostgreSQL suites run in the nightly `durable-stores`
 job.
+
+Each backend file also runs a contention case beyond the suites: 24 claimers, half on each of
+two handles, drain one queue of 48 runs, and every run is claimed exactly once. The nightly
+`durable-stores` job runs all of them against live servers and the Firestore emulator.
 
 ## Related
 

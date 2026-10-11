@@ -70,6 +70,11 @@ pub mod state;
 /// Shared utilities for extracting and merging state deltas across backends.
 pub mod state_utils;
 
+#[cfg(any(feature = "redis", feature = "mongodb", feature = "neo4j", feature = "firestore"))]
+mod durable_common;
+#[cfg(any(feature = "mongodb", feature = "neo4j", feature = "firestore"))]
+mod durable_transitions;
+
 #[cfg(feature = "encrypted-session")]
 /// AES-256-GCM encrypted session wrapper with key rotation.
 pub mod encrypted;
@@ -80,17 +85,26 @@ pub mod encryption_key;
 /// Google Cloud Firestore session backend.
 pub mod firestore;
 #[cfg(feature = "firestore")]
+/// Firestore-backed lease, run, schedule, and governance state stores.
+pub mod firestore_runtime;
+#[cfg(feature = "firestore")]
 /// Firestore-backed spend ledger, action ledger, and approval store.
 pub mod firestore_stores;
 #[cfg(feature = "mongodb")]
 /// MongoDB session backend.
 pub mod mongodb;
 #[cfg(feature = "mongodb")]
+/// MongoDB-backed lease, run, schedule, and governance state stores.
+pub mod mongodb_runtime;
+#[cfg(feature = "mongodb")]
 /// MongoDB-backed spend ledger, action ledger, and approval store.
 pub mod mongodb_stores;
 #[cfg(feature = "neo4j")]
 /// Neo4j graph database session backend.
 pub mod neo4j;
+#[cfg(feature = "neo4j")]
+/// Neo4j-backed lease, run, schedule, and governance state stores.
+pub mod neo4j_runtime;
 #[cfg(feature = "neo4j")]
 /// Neo4j-backed spend ledger, action ledger, and approval store.
 pub mod neo4j_stores;
@@ -103,6 +117,9 @@ pub mod postgres_action_ledger;
 #[cfg(feature = "redis")]
 /// Redis session backend with TTL support.
 pub mod redis;
+#[cfg(feature = "redis")]
+/// Redis-backed lease, run, schedule, and governance state stores.
+pub mod redis_runtime;
 #[cfg(feature = "redis")]
 /// Redis-backed spend ledger, action ledger, and approval store.
 pub mod redis_stores;
@@ -137,6 +154,10 @@ pub use audit_log::PostgresAuditLogStore;
 #[cfg(feature = "sqlite")]
 pub use audit_log::SqliteAuditLogStore;
 #[cfg(feature = "firestore")]
+pub use firestore_runtime::{
+    FirestoreGovernanceStateStore, FirestoreLeaseStore, FirestoreRunStore, FirestoreScheduleStore,
+};
+#[cfg(feature = "firestore")]
 pub use firestore_stores::{FirestoreActionLedger, FirestoreApprovalStore, FirestoreSpendLedger};
 #[cfg(feature = "postgres")]
 pub use governance_state::PostgresGovernanceStateStore;
@@ -147,11 +168,23 @@ pub use lease::PostgresLeaseStore;
 #[cfg(feature = "sqlite")]
 pub use lease::SqliteLeaseStore;
 #[cfg(feature = "mongodb")]
+pub use mongodb_runtime::{
+    MongoGovernanceStateStore, MongoLeaseStore, MongoRunStore, MongoScheduleStore,
+};
+#[cfg(feature = "mongodb")]
 pub use mongodb_stores::{MongoActionLedger, MongoApprovalStore, MongoSpendLedger};
+#[cfg(feature = "neo4j")]
+pub use neo4j_runtime::{
+    Neo4jGovernanceStateStore, Neo4jLeaseStore, Neo4jRunStore, Neo4jScheduleStore,
+};
 #[cfg(feature = "neo4j")]
 pub use neo4j_stores::{Neo4jActionLedger, Neo4jApprovalStore, Neo4jSpendLedger};
 #[cfg(feature = "postgres")]
 pub use postgres_action_ledger::PostgresActionLedger;
+#[cfg(feature = "redis")]
+pub use redis_runtime::{
+    RedisGovernanceStateStore, RedisLeaseStore, RedisRunStore, RedisScheduleStore,
+};
 #[cfg(feature = "redis")]
 pub use redis_stores::{RedisActionLedger, RedisApprovalStore, RedisSpendLedger};
 #[cfg(feature = "postgres")]

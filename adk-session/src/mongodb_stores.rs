@@ -59,12 +59,15 @@ const MAX_CLAIM_ATTEMPTS: u32 = 200;
 /// MongoDB's duplicate key error code.
 const DUPLICATE_KEY: i32 = 11000;
 
-async fn connect(connection_string: &str, database_name: &str) -> mongodb::error::Result<Database> {
+pub(crate) async fn connect(
+    connection_string: &str,
+    database_name: &str,
+) -> mongodb::error::Result<Database> {
     let options = ClientOptions::parse(connection_string).await?;
     Ok(Client::with_options(options)?.database(database_name))
 }
 
-fn is_duplicate_key(error: &mongodb::error::Error) -> bool {
+pub(crate) fn is_duplicate_key(error: &mongodb::error::Error) -> bool {
     match error.kind.as_ref() {
         ErrorKind::Write(WriteFailure::WriteError(write)) => write.code == DUPLICATE_KEY,
         ErrorKind::Command(command) => command.code == DUPLICATE_KEY,
@@ -77,7 +80,7 @@ fn upsert() -> UpdateOptions {
 }
 
 /// Reads an integer field the server may return as `Int32`, `Int64`, or `Double`.
-fn read_i64(document: &Document, field: &str) -> Option<i64> {
+pub(crate) fn read_i64(document: &Document, field: &str) -> Option<i64> {
     match document.get(field)? {
         Bson::Int32(value) => Some(i64::from(*value)),
         Bson::Int64(value) => Some(*value),

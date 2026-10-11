@@ -50,10 +50,10 @@ const SCHEMA_ALREADY_EXISTS: [&str; 4] = [
     "Neo.ClientError.Schema.ConstraintWithNameAlreadyExists",
 ];
 
-const CONSTRAINT_VIOLATION: &str = "Neo.ClientError.Schema.ConstraintValidationFailed";
+pub(crate) const CONSTRAINT_VIOLATION: &str = "Neo.ClientError.Schema.ConstraintValidationFailed";
 
 /// A failure inside a store operation: either the database's or the store's own verdict.
-enum Failure {
+pub(crate) enum Failure {
     Neo4j(neo4rs::Error),
     Store(AdkError),
 }
@@ -71,11 +71,11 @@ impl From<AdkError> for Failure {
 }
 
 impl Failure {
-    fn is_transient(&self) -> bool {
+    pub(crate) fn is_transient(&self) -> bool {
         matches!(self, Self::Neo4j(neo4rs::Error::Neo4j(error)) if error.kind() == Neo4jErrorKind::Transient)
     }
 
-    fn into_adk(self, storage_error: impl FnOnce(String) -> AdkError) -> AdkError {
+    pub(crate) fn into_adk(self, storage_error: impl FnOnce(String) -> AdkError) -> AdkError {
         match self {
             Self::Neo4j(error) => storage_error(error.to_string()),
             Self::Store(error) => error,
@@ -83,7 +83,7 @@ impl Failure {
     }
 }
 
-fn neo4j_code(error: &neo4rs::Error) -> Option<&str> {
+pub(crate) fn neo4j_code(error: &neo4rs::Error) -> Option<&str> {
     match error {
         neo4rs::Error::Neo4j(error) => Some(error.code()),
         _ => None,
@@ -105,7 +105,10 @@ macro_rules! retry_transient {
 }
 
 /// Reads every row of `query` inside `txn`.
-async fn rows(txn: &mut Txn, query: Query) -> std::result::Result<Vec<Row>, neo4rs::Error> {
+pub(crate) async fn rows(
+    txn: &mut Txn,
+    query: Query,
+) -> std::result::Result<Vec<Row>, neo4rs::Error> {
     let mut stream = txn.execute(query).await?;
     let mut rows = Vec::new();
     while let Some(row) = stream.next(&mut *txn).await? {
@@ -115,7 +118,10 @@ async fn rows(txn: &mut Txn, query: Query) -> std::result::Result<Vec<Row>, neo4
 }
 
 /// Reads every row of an auto-commit `query`.
-async fn graph_rows(graph: &Graph, query: Query) -> std::result::Result<Vec<Row>, neo4rs::Error> {
+pub(crate) async fn graph_rows(
+    graph: &Graph,
+    query: Query,
+) -> std::result::Result<Vec<Row>, neo4rs::Error> {
     let mut stream = graph.execute(query).await?;
     let mut rows = Vec::new();
     while let Some(row) = stream.next().await? {
@@ -124,13 +130,16 @@ async fn graph_rows(graph: &Graph, query: Query) -> std::result::Result<Vec<Row>
     Ok(rows)
 }
 
-fn column<T: serde::de::DeserializeOwned>(row: &Row, name: &str) -> std::result::Result<T, String> {
+pub(crate) fn column<T: serde::de::DeserializeOwned>(
+    row: &Row,
+    name: &str,
+) -> std::result::Result<T, String> {
     row.get::<T>(name).map_err(|error| format!("column '{name}' unreadable: {error}"))
 }
 
 /// Runs idempotent schema statements, tolerating a concurrent `migrate` that created the
 /// same rule first.
-async fn run_schema(
+pub(crate) async fn run_schema(
     graph: &Graph,
     statements: &[&str],
     storage_error: fn(String) -> AdkError,
@@ -157,7 +166,7 @@ async fn run_schema(
     Ok(())
 }
 
-async fn connect(
+pub(crate) async fn connect(
     uri: &str,
     user: &str,
     password: &str,
