@@ -3,7 +3,7 @@ name = "autonomy-validation"
 version = "0.0.1"
 edition = "2024"
 publish = false
-description = "Live OpenAI, Anthropic, and Gemini validation of the autonomy-readiness Phase 0 and Phase 1 fixes"
+description = "Live OpenAI, Anthropic, and Gemini validation of the autonomy-readiness Phase 0, Phase 1, and Phase 2 fixes"
 
 [workspace]
 

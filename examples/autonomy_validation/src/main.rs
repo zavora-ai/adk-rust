@@ -1,4 +1,4 @@
-//! Live validation of the autonomy-readiness Phase 0 and Phase 1 fixes against OpenAI,
+//! Live validation of the autonomy-readiness Phase 0, Phase 1, and Phase 2 fixes against OpenAI,
 //! Anthropic, and Gemini.
 //!
 //! Each scenario drives real model calls through the public ADK APIs and asserts on observable
@@ -162,7 +162,7 @@ async fn main() -> ExitCode {
     let cfg = Config::from_env();
 
     println!("════════════════════════════════════════════════════════════════");
-    println!(" ADK-Rust autonomy validation — Phase 0 and Phase 1 against live models");
+    println!(" ADK-Rust autonomy validation — Phase 0, 1, and 2 against live models");
     println!("════════════════════════════════════════════════════════════════");
     for provider in &providers {
         let model = match provider {

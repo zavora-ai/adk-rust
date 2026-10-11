@@ -395,8 +395,13 @@ async fn daily_cap(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> 
         ledger.spent(&SpendKey::org(app).with_vendor(vendor), SpendPeriod::Day).await?;
     let payments =
         ledger.spent(&SpendKey::org(app).with_vendor(MERCHANT), SpendPeriod::Day).await?;
-    let by_agent =
-        ledger.spent(&SpendKey::org(app).with_agent("assistant"), SpendPeriod::Day).await?;
+    let by_agent = ledger
+        .spent(
+            &SpendKey::org(app)
+                .with_agent(adk_core::AgentPrincipal::derived(app, "assistant").id.as_str()),
+            SpendPeriod::Day,
+        )
+        .await?;
     if payments != CHECKOUT_MICRO_USD || model_spend + payments != total || by_agent != total {
         return Ok(Verdict::Fail(format!(
             "spend {total} not split into model spend under '{vendor}' ({model_spend}) and the checkout under '{MERCHANT}' ({payments}); agent total {by_agent}"

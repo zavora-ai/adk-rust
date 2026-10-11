@@ -1,6 +1,6 @@
 # Autonomy Validation
 
-Live validation of the autonomy-readiness Phase 0 and Phase 1 fixes against OpenAI, Anthropic,
+Live validation of the autonomy-readiness Phase 0, Phase 1, and Phase 2 fixes against OpenAI, Anthropic,
 and Gemini. Each
 scenario drives real model calls through the public ADK APIs and asserts on observable facts —
 session history, tool execution counters, persisted state, checkpoints, and usage — never on model
@@ -42,6 +42,12 @@ retry is reported next to the result.
 | `builtin_tool_policy` | Built-in tools | A default-deny policy keeps the provider's web search tool (`OpenAIWebSearchTool`, Anthropic `WebSearchTool`, Gemini `GoogleSearchTool`) out of every request: no built-in use is reported and the model events carry a `policyDenied` withheld record. With `allow_read_only()` the tool is attached, the reported uses land in `UsageMetadata::builtin_tool_uses`, and `cost` equals the token cost plus the published fee; `openai-chat` is skipped |
 | `durable_crash_resume` | Durable worker | A `DurableWorker` is killed while the non-idempotent `charge_card` call is in flight; a second worker recovers the run after its lease expires, answers the unanswered call `outcome_unknown` from the SQLite action ledger, and completes the run on the same session: the card is charged once and the call has one response |
 | `audit_trail` | Signed audit log | A runner with `audit_log` over a SQLite `AuditLogStore` and a named default-deny policy: one turn makes an allowed `lookup_account`, a denied `delete_account`, and a `buy_credits` purchase through the `adk-payments` checkout tools. The log holds exactly tool_call allowed, denied, allowed, then a decision and an outcome for each payment step, each naming `urn:adk:agent:<app>/<agent>` acting for the user, and no record contains an argument. The exported log passes `adk-rust audit verify` (with `ADK_RUST_BIN` set; the library `verify` otherwise), and fails once the denial is edited |
+
+### Phase 2
+
+| Scenario | Area | Passes when |
+|----------|------|-------------|
+| `agent_identity` | Agent identity | Two deployments (`replica-a`, `replica-b`) of a billing agent configured with `Runner::builder().agent_principal(...)` call `lookup_invoice` under a policy that allows only `spiffe://autonomy.test/agent/billing` in tenant `acme`: every policy decision carries that agent id, the call executes, and all model spend is recorded under the agent id rather than the derived `urn:adk:agent:autonomy-identity/billing` |
 
 ## Providers
 

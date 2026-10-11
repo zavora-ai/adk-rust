@@ -354,7 +354,12 @@ async fn scenario(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
         return Ok(Verdict::Fail(format!("the payment backend executed {payments:?}")));
     }
     let spent = ledger
-        .spent(&SpendKey::org(APP).with_agent(AGENT).with_vendor(MERCHANT), SpendPeriod::Day)
+        .spent(
+            &SpendKey::org(APP)
+                .with_agent(adk_core::AgentPrincipal::derived(APP, AGENT).id.as_str())
+                .with_vendor(MERCHANT),
+            SpendPeriod::Day,
+        )
         .await?;
     if spent != CART_MICRO_USD {
         return Ok(Verdict::Fail(format!(

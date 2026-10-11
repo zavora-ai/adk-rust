@@ -1,4 +1,4 @@
-//! One module per Phase 0 and Phase 1 area; each scenario returns a
+//! One module per Phase 0, Phase 1, and Phase 2 area; each scenario returns a
 //! [`Verdict`](crate::common::Verdict).
 
 pub mod anthropic;
@@ -13,6 +13,7 @@ pub mod durable;
 pub mod eval;
 pub mod governance;
 pub mod graph;
+pub mod identity;
 pub mod mcp;
 pub mod payments;
 pub mod policy;
@@ -50,6 +51,7 @@ pub const ALL: &[&str] = &[
     "durable_crash_resume",
     "approval_service",
     "audit_trail",
+    "agent_identity",
 ];
 
 /// Runs the named scenario once.
@@ -84,6 +86,7 @@ pub async fn run(name: &str, cfg: &Config, provider: Provider) -> Verdict {
         "durable_crash_resume" => durable::durable_crash_resume(cfg, provider).await,
         "approval_service" => approvals::approval_service(cfg, provider).await,
         "audit_trail" => audit::audit_trail(cfg, provider).await,
+        "agent_identity" => identity::agent_identity(cfg, provider).await,
         other => Verdict::Fail(format!("unknown scenario {other}")),
     }
 }
