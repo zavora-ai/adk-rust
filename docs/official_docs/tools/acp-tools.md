@@ -12,7 +12,7 @@ ADK-Rust implements both sides of stable ACP protocol version 1:
 
 The implementation uses the official `agent-client-protocol` Rust SDK. The SDK
 crate version and ACP wire version are separate: ADK-Rust currently uses SDK
-1.2 while negotiating protocol version 1 during `initialize`.
+3.1 while negotiating protocol version 1 during `initialize`.
 
 ## Read this section
 

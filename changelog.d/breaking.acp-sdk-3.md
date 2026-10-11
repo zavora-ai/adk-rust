@@ -1,0 +1,1 @@
+- `adk-acp`: upgrades `agent-client-protocol` from 2.2 to 3.1. `adk-acp` re-exports the SDK as `adk_acp::agent_client_protocol`, so code that uses the re-export directly follows the SDK's [3.0 migration notes](https://github.com/agentclientprotocol/rust-sdk/blob/main/src/agent-client-protocol/CHANGELOG.md). The ACP wire protocol stays at version 1.
