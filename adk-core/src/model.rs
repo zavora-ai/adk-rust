@@ -45,6 +45,21 @@ pub trait Llm: Send + Sync {
     fn uses_interactions_api(&self) -> bool {
         false
     }
+
+    /// Returns an upper bound, in micro-USD, on what `request` can cost on this model.
+    ///
+    /// The spend ledger reserves this amount before the call, so the call's committed
+    /// cost never exceeds its reservation and a hard cap is never overshot. Providers
+    /// derive it from the request's size, its output cap (or the model's maximum output),
+    /// and the highest per-token rate that can apply. `None` means the call cannot be
+    /// bounded — an unpriced model, or a request whose size is unknown; see
+    /// [`ModelCallScope`](crate::ModelCallScope) for how such calls are reserved.
+    ///
+    /// The default returns `None`. Wrappers forward to the model they wrap.
+    fn max_cost_micro_usd(&self, request: &LlmRequest) -> Option<u64> {
+        let _ = request;
+        None
+    }
 }
 
 /// A request to an LLM provider.

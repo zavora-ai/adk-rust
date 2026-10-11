@@ -4,8 +4,8 @@
 //! [`UsageMetadata::cost`](adk_core::UsageMetadata::cost) on provider responses that do not report a cost
 //! themselves. It consolidates the vendor tables in `adk_gemini::pricing`,
 //! `adk_model::openai::pricing` and `adk_anthropic::pricing` (tests keep the
-//! rates in step) and adds DeepSeek list prices. Every rate is USD per one
-//! million tokens.
+//! rates in step) and adds DeepSeek, Groq, xAI and Mistral list prices. Every
+//! rate is USD per one million tokens.
 //!
 //! # Usage normalization
 //!
@@ -33,8 +33,10 @@
 //! A vendor's list price applies only to providers that bill it: Google rates
 //! to `gemini` and `openrouter`; OpenAI rates to `openai`, `openai-responses`,
 //! `azure-openai`, `azure-ai` and `openrouter`; Anthropic rates to `anthropic`,
-//! `bedrock`, `azure-ai` and `openrouter`; DeepSeek rates to `deepseek`.
-//! `ollama` runs locally and costs zero, except `*cloud*` models.
+//! `bedrock`, `azure-ai` and `openrouter`; DeepSeek rates to `deepseek`; Groq
+//! rates to `groq`; xAI rates to `xai` and `openrouter`; Mistral rates to
+//! `mistral` and `openrouter`. `ollama` runs locally and costs zero, except
+//! `*cloud*` models.
 //!
 //! # Limitations
 //!
@@ -49,6 +51,9 @@
 //!   container-billed tools unpriced.
 //! - DeepSeek cache hits are billed at the cache-miss rate and off-peak
 //!   discounts are ignored, which over-estimates.
+//! - Models a vendor prices only on request ("Contact Sales") or at a
+//!   temporary sale price are left out: Groq's Llama and MiniMax models, and
+//!   Mistral Large 4.
 //!
 //! `None` from [`PricingCatalog::cost_usd`] means the cost is unknown, never
 //! that the request was free.
@@ -72,13 +77,13 @@
 //! assert!(PricingCatalog::standard().cost_usd(Some("openai"), "my-fine-tune", &usage).is_none());
 //! ```
 
-use adk_core::UsageMetadata;
+use adk_core::{LlmRequest, Part, UsageMetadata};
 use chrono::NaiveDate;
 use std::sync::LazyLock;
 
 /// Date the standard catalog's rates were last verified against the vendors'
 /// published price lists.
-pub const PRICING_EFFECTIVE_DATE: &str = "2026-10-10";
+pub const PRICING_EFFECTIVE_DATE: &str = "2026-10-11";
 
 /// The vendor whose published list price a [`ModelPrice`] carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -92,6 +97,12 @@ pub enum PriceVendor {
     Anthropic,
     /// DeepSeek.
     DeepSeek,
+    /// Groq, which hosts open-weight models at its own prices.
+    Groq,
+    /// xAI Grok.
+    XAi,
+    /// Mistral AI.
+    Mistral,
 }
 
 impl PriceVendor {
@@ -107,6 +118,9 @@ impl PriceVendor {
                 matches!(provider, "anthropic" | "bedrock" | "azure-ai" | "openrouter")
             }
             Self::DeepSeek => provider == "deepseek",
+            Self::Groq => provider == "groq",
+            Self::XAi => matches!(provider, "xai" | "openrouter"),
+            Self::Mistral => matches!(provider, "mistral" | "openrouter"),
         }
     }
 }
@@ -120,6 +134,9 @@ impl PriceVendor {
             Self::OpenAI => matches!(provider, "openai" | "openai-responses"),
             Self::Anthropic => provider == "anthropic",
             Self::DeepSeek => provider == "deepseek",
+            Self::Groq => provider == "groq",
+            Self::XAi => provider == "xai",
+            Self::Mistral => provider == "mistral",
         }
     }
 }
@@ -283,12 +300,41 @@ pub struct ModelPrice {
     pub long_context: Option<LongContextTier>,
     /// Scheduled change to the base rates, such as the end of an introductory price.
     pub change: Option<RateChange>,
+    /// Largest output, reasoning included, the model produces for one request; used to
+    /// bound a request that sets no output cap.
+    pub max_output_tokens: Option<u64>,
 }
 
 impl ModelPrice {
     /// Creates a price with only base rates.
     pub fn new(vendor: PriceVendor, model: impl Into<String>, rates: ModelRates) -> Self {
-        Self { vendor, model: model.into(), rates, long_context: None, change: None }
+        Self {
+            vendor,
+            model: model.into(),
+            rates,
+            long_context: None,
+            change: None,
+            max_output_tokens: None,
+        }
+    }
+
+    /// Sets the model's maximum output tokens per request.
+    pub fn with_max_output_tokens(mut self, tokens: u64) -> Self {
+        self.max_output_tokens = Some(tokens);
+        self
+    }
+
+    /// Upper bound in USD on a request of at most `prompt_tokens` input tokens and
+    /// `output_tokens` output tokens, priced on `date`.
+    ///
+    /// Every input token is priced at the highest input-side rate (uncached, cache read
+    /// or cache write) of the tier the prompt bound falls in, so cache writes and
+    /// long-context switches never push the actual cost above the bound.
+    pub fn max_cost_usd(&self, prompt_tokens: u64, output_tokens: u64, date: NaiveDate) -> f64 {
+        let rates = self.rates_for(prompt_tokens, date);
+        let input =
+            rates.input.max(rates.cache_read).max(rates.cache_write_5m).max(rates.cache_write_1h);
+        (prompt_tokens as f64 * input + output_tokens as f64 * rates.output) / 1_000_000.0
     }
 
     /// Adds a long-context tier.
@@ -501,6 +547,95 @@ impl PricingCatalog {
         }
     }
 
+    /// Upper bound in micro-USD on what `request` can cost on `model` as served by
+    /// `provider`, or `None` when it cannot be bounded.
+    ///
+    /// `max_output_tokens` is the output cap the client sends with the request; `None`
+    /// uses the model's maximum output ([`ModelPrice::max_output_tokens`]). Built-in tool
+    /// fees are included: per-response fees once each, per-use fees up to each declared
+    /// built-in tool's `max_uses`. The bound is `None` for an unpriced model, a model with
+    /// neither output cap, a request whose input size is unknown
+    /// ([`request_input_token_bound`]), or a request declaring a fee-bearing built-in tool
+    /// without `max_uses`. Local Ollama models bound at zero.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::{Content, LlmRequest};
+    /// use adk_model::pricing::PricingCatalog;
+    ///
+    /// let request = LlmRequest::new("gpt-4.1", vec![Content::new("user").with_text("hi")]);
+    /// let catalog = PricingCatalog::standard();
+    /// let bound = catalog.max_cost_micro_usd(Some("openai"), "gpt-4.1", &request, Some(1_000));
+    /// // (2,048 + 16 + 2) input tokens × $2.00 + 1,000 output tokens × $8.00, rounded up.
+    /// assert_eq!(bound, Some(12_133));
+    /// assert_eq!(catalog.max_cost_micro_usd(Some("openai"), "my-fine-tune", &request, Some(1_000)), None);
+    /// ```
+    pub fn max_cost_micro_usd(
+        &self,
+        provider: Option<&str>,
+        model: &str,
+        request: &LlmRequest,
+        max_output_tokens: Option<u64>,
+    ) -> Option<u64> {
+        if provider == Some("ollama") {
+            return (!model.contains("cloud")).then_some(0);
+        }
+        let price = self.lookup(provider, model)?;
+        let output = max_output_tokens.or(price.max_output_tokens)?;
+        let prompt = request_input_token_bound(request)?;
+        let today = chrono::Utc::now().date_naive();
+        // A call that starts before a scheduled rate change can be priced after it.
+        let tomorrow = today.succ_opt().unwrap_or(today);
+        let usd = price
+            .max_cost_usd(prompt, output, today)
+            .max(price.max_cost_usd(prompt, output, tomorrow))
+            + self.builtin_tool_fee_bound_usd(provider, model, price.vendor, request)?;
+        // One extra micro-USD absorbs floating-point rounding in the commit.
+        adk_core::usd_to_micro_usd(usd).map(|micro| micro.saturating_add(1))
+    }
+
+    /// Upper bound in USD on the built-in tool fees one response to `request` can incur.
+    ///
+    /// Per-response fees count once each. Per-use fees are bounded only when every
+    /// built-in tool the request declares caps its uses (`max_uses`); otherwise the
+    /// fees, and so the request, cannot be bounded.
+    fn builtin_tool_fee_bound_usd(
+        &self,
+        provider: Option<&str>,
+        model: &str,
+        vendor: PriceVendor,
+        request: &LlmRequest,
+    ) -> Option<f64> {
+        let declared: Vec<&serde_json::Value> =
+            request.tools.values().filter_map(adk_core::builtin_tool_configuration).collect();
+        if declared.is_empty() {
+            return Some(0.0);
+        }
+        let applicable = self.fees.iter().filter(|fee| {
+            fee.usd > 0.0
+                && fee.vendor == vendor
+                && provider.is_none_or(|provider| fee.vendor.first_party(provider))
+                && fee.applies_to(model)
+        });
+        let mut per_response = 0.0;
+        let mut per_use: Option<f64> = None;
+        for fee in applicable {
+            match fee.unit {
+                FeeUnit::PerResponse => per_response += fee.usd,
+                FeeUnit::PerUse => per_use = Some(per_use.map_or(fee.usd, |max| max.max(fee.usd))),
+            }
+        }
+        let Some(per_use) = per_use else {
+            return Some(per_response);
+        };
+        let mut uses = 0u64;
+        for configuration in declared {
+            uses = uses.saturating_add(configuration.get("max_uses")?.as_u64()?);
+        }
+        Some(per_response + uses as f64 * per_use)
+    }
+
     /// Cost in USD of one response's usage, or `None` when the model is unpriced.
     ///
     /// The cost is the token cost plus the fees for the response's
@@ -520,6 +655,85 @@ impl PricingCatalog {
             price.cost_usd(usage, chrono::Utc::now().date_naive())
                 + self.builtin_tool_cost_usd(provider, model, usage),
         )
+    }
+}
+
+/// Tokens counted for one inline image, audio or video part when its byte size is smaller.
+///
+/// Providers bill media by dimensions or duration rather than bytes, so a small but
+/// highly compressed file can cost more tokens than it has bytes.
+pub const MEDIA_PART_MIN_TOKENS: u64 = 16_384;
+
+/// Fixed input tokens added to every request bound for provider-side framing: role
+/// markers, tool-use system prompts and response-format instructions.
+pub const REQUEST_OVERHEAD_TOKENS: u64 = 2_048;
+
+/// Upper bound on the input tokens of `request`, or `None` when the request references
+/// content whose size is unknown (a `FileData` URI).
+///
+/// Every tokenizer `adk-model` providers use emits at most one token per UTF-8 byte, so
+/// the byte length of each text and JSON part bounds its tokens. Inline media counts its
+/// byte length, at least [`MEDIA_PART_MIN_TOKENS`]; [`REQUEST_OVERHEAD_TOKENS`] plus 16
+/// tokens per message and per tool cover the framing a provider adds.
+///
+/// # Example
+///
+/// ```
+/// use adk_core::{Content, LlmRequest};
+/// use adk_model::pricing::{REQUEST_OVERHEAD_TOKENS, request_input_token_bound};
+///
+/// let request = LlmRequest::new("gpt-5.4-mini", vec![Content::new("user").with_text("hello")]);
+/// assert_eq!(request_input_token_bound(&request), Some(REQUEST_OVERHEAD_TOKENS + 16 + 5));
+/// ```
+pub fn request_input_token_bound(request: &LlmRequest) -> Option<u64> {
+    let json_len = |value: &dyn erased::Json| value.byte_len();
+    let mut tokens = REQUEST_OVERHEAD_TOKENS;
+    for content in &request.contents {
+        tokens = tokens.saturating_add(16);
+        for part in &content.parts {
+            let part_tokens = match part {
+                Part::Text { text } => text.len() as u64,
+                Part::Thinking { thinking, signature } => {
+                    (thinking.len() + signature.as_ref().map_or(0, String::len)) as u64
+                }
+                Part::InlineData { data, .. } => (data.len() as u64).max(MEDIA_PART_MIN_TOKENS),
+                Part::FileData { .. } => return None,
+                _ => json_len(part),
+            };
+            tokens = tokens.saturating_add(part_tokens);
+        }
+    }
+    for declaration in request.tools.values() {
+        tokens = tokens.saturating_add(16).saturating_add(json_len(declaration));
+    }
+    if let Some(config) = &request.config {
+        if let Some(schema) = &config.response_schema {
+            tokens = tokens.saturating_add(json_len(schema));
+        }
+        tokens = tokens.saturating_add(config.stop_sequences.iter().map(|s| s.len() as u64).sum());
+    }
+    Some(tokens)
+}
+
+/// The output cap a request sets, if any.
+pub(crate) fn request_output_cap(request: &LlmRequest) -> Option<u64> {
+    request
+        .config
+        .as_ref()
+        .and_then(|config| config.max_output_tokens)
+        .and_then(|tokens| u64::try_from(tokens).ok())
+}
+
+mod erased {
+    /// Serialized JSON length of a value, for token bounds.
+    pub trait Json {
+        fn byte_len(&self) -> u64;
+    }
+
+    impl<T: serde::Serialize> Json for T {
+        fn byte_len(&self) -> u64 {
+            serde_json::to_vec(self).map_or(u64::MAX / 4, |bytes| bytes.len() as u64)
+        }
     }
 }
 
@@ -591,7 +805,7 @@ fn is_version_suffix(rest: &str) -> bool {
 }
 
 fn standard_catalog() -> PricingCatalog {
-    use PriceVendor::{Anthropic, DeepSeek, Google, OpenAI};
+    use PriceVendor::{Anthropic, DeepSeek, Google, Groq, Mistral, OpenAI, XAi};
 
     let gemini = |model: &str, input: f64, output: f64, cache_read: f64| {
         ModelPrice::new(Google, model, ModelRates::new(input, output).with_cache_read(cache_read))
@@ -612,6 +826,21 @@ fn standard_catalog() -> PricingCatalog {
     const GEMINI_LONG: u64 = 200_001;
     // OpenAI's long-context rates apply from 272K tokens.
     const OPENAI_LONG: u64 = 272_000;
+    // xAI bills every token of a request at the long-context rate once the prompt
+    // reaches 200K tokens.
+    const XAI_LONG: u64 = 200_000;
+    let cached = |vendor: PriceVendor, model: &str, input: f64, output: f64, cache_read: f64| {
+        ModelPrice::new(vendor, model, ModelRates::new(input, output).with_cache_read(cache_read))
+    };
+    let grok = |model: &str, base: (f64, f64, f64), long: (f64, f64, f64)| {
+        cached(XAi, model, base.0, base.2, base.1)
+            .with_long_context(XAI_LONG, ModelRates::new(long.0, long.2).with_cache_read(long.1))
+    };
+    // (input, cached input, output) per million tokens.
+    let grok_47 = ((2.00, 0.50, 6.00), (4.00, 1.00, 12.00));
+    let grok_45 = ((2.00, 0.30, 6.00), (4.00, 0.60, 12.00));
+    let grok_420 = ((1.25, 0.20, 2.50), (2.50, 0.40, 5.00));
+    let grok_build = ((1.00, 0.20, 2.00), (2.00, 0.40, 4.00));
     // Gemini 3.7 and 3.6 Flash introductory rates end on 2026-12-31.
     let flash_2027 = NaiveDate::from_ymd_opt(2027, 1, 1).unwrap_or(NaiveDate::MAX);
     let flash_2027_rates = ModelRates::new(1.50, 7.50).with_cache_read(0.15);
@@ -712,7 +941,136 @@ fn standard_catalog() -> PricingCatalog {
         ModelPrice::new(DeepSeek, "deepseek-v4-flash", ModelRates::new(0.44, 1.32)),
         ModelPrice::new(DeepSeek, "deepseek-chat", ModelRates::new(0.44, 1.32)),
         ModelPrice::new(DeepSeek, "deepseek-v4-pro", ModelRates::new(1.32, 3.96)),
+        // ── Groq ──
+        // Source: https://console.groq.com/docs/models and the per-model pages under
+        // https://console.groq.com/docs/model/, retrieved 2026-10-11. Cached-input rates
+        // are listed for the GPT-OSS models; https://console.groq.com/docs/prompt-caching
+        // states a 50% cached-input discount for gpt-oss-safeguard-20b.
+        cached(Groq, "gpt-oss-120b", 0.15, 0.60, 0.075),
+        cached(Groq, "gpt-oss-20b", 0.075, 0.30, 0.037),
+        cached(Groq, "gpt-oss-safeguard-20b", 0.075, 0.30, 0.0375),
+        ModelPrice::new(Groq, "qwen3.8-27b", ModelRates::new(0.80, 4.00)),
+        // ── xAI ──
+        // Source: https://docs.x.ai/docs/models, retrieved 2026-10-11. Aliases are the ones
+        // the page lists for each model; `-latest` and dated suffixes resolve automatically.
+        grok("grok-4.7", grok_47.0, grok_47.1),
+        grok("grok-4.6", grok_47.0, grok_47.1),
+        grok("grok-4.5", grok_45.0, grok_45.1),
+        grok("grok-build-latest", grok_45.0, grok_45.1),
+        grok("grok-4.3", grok_420.0, grok_420.1),
+        grok("grok-4.20", grok_420.0, grok_420.1),
+        grok("grok-4.20-0309-reasoning", grok_420.0, grok_420.1),
+        grok("grok-4.20-reasoning", grok_420.0, grok_420.1),
+        grok("grok-4.20-0309-non-reasoning", grok_420.0, grok_420.1),
+        grok("grok-4.20-non-reasoning", grok_420.0, grok_420.1),
+        grok("grok-4.20-multi-agent-0309", grok_420.0, grok_420.1),
+        grok("grok-4.20-multi-agent", grok_420.0, grok_420.1),
+        grok("grok-build-0.1", grok_build.0, grok_build.1),
+        grok("grok-code-fast-1", grok_build.0, grok_build.1),
+        grok("grok-code-fast", grok_build.0, grok_build.1),
+        // ── Mistral ──
+        // Source: https://docs.mistral.ai/inference/pricing, with API ids from the model
+        // pages under https://docs.mistral.ai/models/, retrieved 2026-10-11. Only the
+        // `-latest` aliases the pages list are priced, so a retired dated id never
+        // resolves to a current model's rate.
+        cached(Mistral, "mistral-medium-3-5", 1.5, 7.5, 0.15),
+        cached(Mistral, "mistral-medium-3", 1.5, 7.5, 0.15),
+        cached(Mistral, "mistral-medium-latest", 1.5, 7.5, 0.15),
+        cached(Mistral, "mistral-large-2512", 0.5, 1.5, 0.05),
+        cached(Mistral, "mistral-large-latest", 0.5, 1.5, 0.05),
+        cached(Mistral, "mistral-small-2603", 0.15, 0.6, 0.015),
+        cached(Mistral, "mistral-small-latest", 0.15, 0.6, 0.015),
+        cached(Mistral, "ministral-14b-2512", 0.2, 0.2, 0.02),
+        cached(Mistral, "ministral-14b-latest", 0.2, 0.2, 0.02),
+        cached(Mistral, "ministral-8b-2512", 0.15, 0.15, 0.015),
+        cached(Mistral, "ministral-8b-latest", 0.15, 0.15, 0.015),
+        cached(Mistral, "ministral-3b-2512", 0.1, 0.1, 0.01),
+        cached(Mistral, "ministral-3b-latest", 0.1, 0.1, 0.01),
+        cached(Mistral, "codestral-2508", 0.3, 0.9, 0.03),
+        cached(Mistral, "codestral-latest", 0.3, 0.9, 0.03),
     ];
+
+    // Maximum output tokens per request, reasoning included, used to bound requests that
+    // set no output cap. Sources, retrieved 2026-10-11:
+    // - Gemini: https://ai.google.dev/gemini-api/docs/models/<id> ("Output token limit");
+    //   https://ai.google.dev/gemini-api/docs/thinking counts thought tokens in the limit.
+    // - OpenAI: https://developers.openai.com/api/docs/models/<id> ("max output tokens");
+    //   https://developers.openai.com/api/docs/guides/reasoning counts reasoning tokens.
+    // - DeepSeek: https://api-docs.deepseek.com/quick_start/pricing ("MAXIMUM: 384K").
+    // - Groq: https://console.groq.com/docs/models ("Max Completion Tokens").
+    // - Mistral: https://docs.mistral.ai/models/<slug> states only a context window, which
+    //   Mistral defines as input plus output tokens, so the window bounds the output.
+    // xAI publishes no output limit, so Grok requests bound only with an explicit cap.
+    const GEMINI_MAX_OUTPUT: u64 = 65_536;
+    let max_output: &[(&str, u64)] = &[
+        ("gemini-3.7-flash", GEMINI_MAX_OUTPUT),
+        ("gemini-3.6-flash", GEMINI_MAX_OUTPUT),
+        ("gemini-3.5-flash", GEMINI_MAX_OUTPUT),
+        ("gemini-3.5-flash-lite", GEMINI_MAX_OUTPUT),
+        ("gemini-3.1-pro-preview", GEMINI_MAX_OUTPUT),
+        ("gemini-3.1-flash-lite", GEMINI_MAX_OUTPUT),
+        ("gemini-3-flash-preview", GEMINI_MAX_OUTPUT),
+        ("gemini-2.5-pro", GEMINI_MAX_OUTPUT),
+        ("gemini-2.5-flash", GEMINI_MAX_OUTPUT),
+        ("gemini-2.5-flash-lite", GEMINI_MAX_OUTPUT),
+        ("gpt-5.6", 128_000),
+        ("gpt-5.6-sol", 128_000),
+        ("gpt-5.6-terra", 128_000),
+        ("gpt-5.6-luna", 128_000),
+        ("gpt-5.6-cyber", 128_000),
+        ("gpt-5.5", 128_000),
+        ("gpt-5.5-pro", 128_000),
+        ("gpt-5.4", 128_000),
+        ("gpt-5.4-pro", 128_000),
+        ("gpt-5.4-mini", 128_000),
+        ("gpt-5.4-nano", 128_000),
+        ("gpt-5.3-codex", 128_000),
+        ("gpt-5.2", 128_000),
+        ("gpt-5.2-pro", 128_000),
+        ("gpt-5.1", 128_000),
+        ("gpt-5", 128_000),
+        ("gpt-5-mini", 128_000),
+        ("gpt-5-nano", 128_000),
+        ("gpt-5-pro", 272_000),
+        ("gpt-4.1", 32_768),
+        ("gpt-4.1-mini", 32_768),
+        ("gpt-4.1-nano", 32_768),
+        ("o3", 100_000),
+        ("o4-mini", 100_000),
+        ("o3-mini", 100_000),
+        ("o1", 100_000),
+        ("gpt-4o", 16_384),
+        ("gpt-4o-mini", 16_384),
+        ("deepseek-flash", 393_216),
+        ("deepseek-v4-flash", 393_216),
+        ("deepseek-v4-pro", 393_216),
+        ("gpt-oss-120b", 65_536),
+        ("gpt-oss-20b", 65_536),
+        ("gpt-oss-safeguard-20b", 65_536),
+        ("qwen3.8-27b", 16_384),
+        ("mistral-medium-3-5", 262_144),
+        ("mistral-medium-3", 262_144),
+        ("mistral-medium-latest", 262_144),
+        ("mistral-large-2512", 262_144),
+        ("mistral-large-latest", 262_144),
+        ("mistral-small-2603", 262_144),
+        ("mistral-small-latest", 262_144),
+        ("ministral-14b-2512", 262_144),
+        ("ministral-14b-latest", 262_144),
+        ("ministral-8b-2512", 262_144),
+        ("ministral-8b-latest", 262_144),
+        ("ministral-3b-2512", 262_144),
+        ("ministral-3b-latest", 262_144),
+        ("codestral-2508", 131_072),
+        ("codestral-latest", 131_072),
+    ];
+    let prices = prices
+        .into_iter()
+        .map(|price| match max_output.iter().find(|(model, _)| *model == price.model) {
+            Some((_, tokens)) => price.with_max_output_tokens(*tokens),
+            None => price,
+        })
+        .collect();
     PricingCatalog { version: PRICING_EFFECTIVE_DATE.to_string(), prices, fees: standard_fees() }
 }
 
@@ -894,6 +1252,14 @@ mod tests {
             ("openrouter", "google/gemini-3.7-flash", "gemini-3.7-flash"),
             ("gemini", "models/gemini-2.5-flash-001", "gemini-2.5-flash"),
             ("anthropic", "claude-opus-5-5-latest", "claude-opus-5-5"),
+            ("groq", "openai/gpt-oss-120b", "gpt-oss-120b"),
+            ("groq", "qwen/qwen3.8-27b", "qwen3.8-27b"),
+            ("xai", "grok-4.5-latest", "grok-4.5"),
+            ("xai", "grok-4.20-0309", "grok-4.20"),
+            ("xai", "grok-code-fast-1-0825", "grok-code-fast-1"),
+            ("openrouter", "x-ai/grok-4.6", "grok-4.6"),
+            ("mistral", "mistral-medium-latest", "mistral-medium-latest"),
+            ("mistral", "codestral-2508", "codestral-2508"),
         ] {
             assert_eq!(
                 catalog.lookup(Some(provider), model).map(|price| price.model.as_str()),
@@ -906,13 +1272,171 @@ mod tests {
             ("openai", "gpt-5-turbo"),
             ("openai", "gpt-image-2"),
             ("gemini", "gemini-3.1-flash-live-preview"),
-            ("groq", "openai/gpt-oss-120b"),
+            ("groq", "llama-3.3-70b-versatile"),
+            ("groq", "minimaxai/minimax-m2.7"),
+            ("cerebras", "gpt-oss-120b"),
+            ("xai", "grok-5"),
+            ("mistral", "mistral-large-4"),
+            ("mistral", "mistral-medium-2508"),
             ("together", "gpt-4.1"),
             ("deepseek", "gpt-4.1"),
             ("opencode", "claude-sonnet-5"),
         ] {
             assert!(catalog.lookup(Some(provider), model).is_none(), "{provider}/{model}");
         }
+    }
+
+    #[test]
+    fn xai_long_context_starts_at_200k_and_bills_the_whole_request() {
+        let price = price("xai", "grok-4.6");
+        let short = price.cost_usd(&usage(199_999, 1_000), today());
+        let long = price.cost_usd(&usage(200_000, 1_000), today());
+        assert!((short - (199_999.0 * 2.00 + 1_000.0 * 6.00) / 1e6).abs() < 1e-12, "{short}");
+        assert!((long - (200_000.0 * 4.00 + 1_000.0 * 12.00) / 1e6).abs() < 1e-12, "{long}");
+    }
+
+    #[test]
+    fn groq_cached_input_is_billed_at_the_cached_rate() {
+        let usage =
+            UsageMetadata { cache_read_input_token_count: Some(500_000), ..usage(1_000_000, 0) };
+        let cost = price("groq", "openai/gpt-oss-20b").cost_usd(&usage, today());
+        assert!((cost - (500_000.0 * 0.075 + 500_000.0 * 0.037) / 1e6).abs() < 1e-12, "{cost}");
+    }
+
+    fn text_request(model: &str, text: &str) -> LlmRequest {
+        LlmRequest::new(model, vec![adk_core::Content::new("user").with_text(text)])
+    }
+
+    #[test]
+    fn the_cost_bound_covers_the_most_expensive_usage_the_request_allows() {
+        let catalog = PricingCatalog::standard();
+        let request = text_request("claude-sonnet-4-5", &"word ".repeat(10_000));
+        let prompt = request_input_token_bound(&request).unwrap();
+        let bound = catalog
+            .max_cost_micro_usd(Some("anthropic"), "claude-sonnet-4-5", &request, Some(4_096))
+            .unwrap();
+        // Worst case: every prompt token written to the 1-hour cache, full output.
+        let worst = UsageMetadata {
+            prompt_token_count: prompt as i32,
+            candidates_token_count: 4_096,
+            cache_creation_input_token_count: Some(prompt as i32),
+            provider_usage: Some(serde_json::json!({ "cache_creation_input_tokens_1h": prompt })),
+            ..Default::default()
+        };
+        let cost = catalog.cost_usd(Some("anthropic"), "claude-sonnet-4-5", &worst).unwrap();
+        assert!(adk_core::usd_to_micro_usd(cost).unwrap() <= bound, "{cost} vs {bound}");
+    }
+
+    #[test]
+    fn a_prompt_bound_past_the_long_context_threshold_uses_long_rates() {
+        let catalog = PricingCatalog::standard();
+        let request = text_request("gemini-2.5-pro", &"x".repeat(300_000));
+        let bound = catalog
+            .max_cost_micro_usd(Some("gemini"), "gemini-2.5-pro", &request, Some(0))
+            .unwrap();
+        let prompt = request_input_token_bound(&request).unwrap() as f64;
+        assert_eq!(bound, (prompt * 2.50).ceil() as u64 + 1);
+    }
+
+    #[test]
+    fn requests_without_an_output_cap_use_the_model_limit_or_stay_unbounded() {
+        let catalog = PricingCatalog::standard();
+        let request = text_request("gpt-4.1", "hi");
+        let uncapped = catalog.max_cost_micro_usd(Some("openai"), "gpt-4.1", &request, None);
+        let capped = catalog.max_cost_micro_usd(Some("openai"), "gpt-4.1", &request, Some(32_768));
+        assert_eq!(uncapped, capped);
+        // xAI publishes no output limit.
+        assert_eq!(catalog.max_cost_micro_usd(Some("xai"), "grok-4.6", &request, None), None);
+        assert!(catalog.max_cost_micro_usd(Some("xai"), "grok-4.6", &request, Some(100)).is_some());
+        assert_eq!(
+            catalog.max_cost_micro_usd(Some("together"), "gpt-4.1", &request, Some(1)),
+            None
+        );
+        assert_eq!(catalog.max_cost_micro_usd(Some("ollama"), "qwen3.5", &request, None), Some(0));
+    }
+
+    #[test]
+    fn built_in_tool_fees_are_bounded_by_max_uses_or_left_unbounded() {
+        let catalog = PricingCatalog::standard();
+        let with_tool = |model: &str, tool: serde_json::Value| {
+            let mut request = text_request(model, "search the web");
+            request.tools.insert("web_search".to_string(), tool);
+            request
+        };
+        let plain = catalog
+            .max_cost_micro_usd(
+                Some("anthropic"),
+                "claude-sonnet-4-6",
+                &text_request("claude-sonnet-4-6", "search the web"),
+                Some(1_000),
+            )
+            .unwrap();
+        let capped = with_tool(
+            "claude-sonnet-4-6",
+            serde_json::json!({ "x-adk-anthropic-tool": { "type": "web_search_20250305", "max_uses": 3 } }),
+        );
+        let bound = catalog.max_cost_micro_usd(
+            Some("anthropic"),
+            "claude-sonnet-4-6",
+            &capped,
+            Some(1_000),
+        );
+        // Three searches at $0.01 each, plus the declaration's own input bytes.
+        assert!(bound.unwrap() >= plain + 30_000, "{bound:?} vs {plain}");
+        // Off the vendor's own API the fee does not apply.
+        assert!(
+            catalog
+                .max_cost_micro_usd(Some("bedrock"), "claude-sonnet-4-6", &capped, Some(1_000))
+                .unwrap()
+                < plain + 30_000
+        );
+
+        let uncapped = with_tool(
+            "claude-sonnet-4-6",
+            serde_json::json!({ "x-adk-anthropic-tool": { "type": "web_search_20250305" } }),
+        );
+        assert_eq!(
+            catalog.max_cost_micro_usd(
+                Some("anthropic"),
+                "claude-sonnet-4-6",
+                &uncapped,
+                Some(1_000)
+            ),
+            None
+        );
+
+        // Gemini 2.5 grounding is billed once per response.
+        let grounded = with_tool(
+            "gemini-2.5-flash",
+            serde_json::json!({ "x-adk-gemini-tool": { "googleSearch": {} } }),
+        );
+        let bound = catalog
+            .max_cost_micro_usd(Some("gemini"), "gemini-2.5-flash", &grounded, Some(0))
+            .unwrap();
+        let tokens = request_input_token_bound(&grounded).unwrap() as f64;
+        assert_eq!(bound, (tokens * 0.30 + 35_000.0 + 25_000.0).ceil() as u64 + 1);
+    }
+
+    #[test]
+    fn a_request_referencing_a_file_uri_cannot_be_bounded() {
+        let mut request = text_request("gpt-4.1", "describe");
+        request.contents[0].parts.push(Part::FileData {
+            mime_type: "video/mp4".to_string(),
+            file_uri: "gs://bucket/video.mp4".to_string(),
+            annotations: None,
+        });
+        assert_eq!(request_input_token_bound(&request), None);
+        let mut inline = text_request("gpt-4.1", "");
+        inline.contents[0].parts.push(Part::InlineData {
+            mime_type: "image/png".to_string(),
+            data: vec![0; 10],
+            uri: None,
+            annotations: None,
+        });
+        assert_eq!(
+            request_input_token_bound(&inline),
+            Some(REQUEST_OVERHEAD_TOKENS + 16 + MEDIA_PART_MIN_TOKENS)
+        );
     }
 
     #[test]

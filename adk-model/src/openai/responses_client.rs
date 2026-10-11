@@ -848,6 +848,16 @@ pub(super) fn map_openai_error(e: async_openai::error::OpenAIError) -> AdkError 
 
 #[async_trait]
 impl Llm for OpenAIResponsesClient {
+    // The request's `max_output_tokens`, reasoning included, or the model's output limit.
+    fn max_cost_micro_usd(&self, request: &adk_core::LlmRequest) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().max_cost_micro_usd(
+            Some("openai-responses"),
+            self.name(),
+            request,
+            crate::pricing::request_output_cap(request),
+        )
+    }
+
     fn name(&self) -> &str {
         &self.model
     }

@@ -559,6 +559,11 @@ Sampling, roots, and logging are deprecated upstream by SEP-2577. The
 `mcp-sampling` feature exists for compatible deployments and should not be the
 default design for a new system.
 
+`LlmSamplingHandler` meters each sampling request against the budget and spend ledger
+of the run whose tool call is in flight on the connection. Requests outside any run
+count against the scope attached with `McpToolset::with_sampling_scope`, or are
+unmetered without one.
+
 When migrating code that imports `rmcp` types directly, align it to `rmcp 3.1`
 or import the SDK through `adk_tool::mcp::rmcp`.
 

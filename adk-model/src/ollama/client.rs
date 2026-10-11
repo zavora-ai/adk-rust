@@ -152,6 +152,16 @@ fn map_json_value_to_ollama_schema(value: &serde_json::Value) -> Result<FormatTy
 
 #[async_trait]
 impl Llm for OllamaModel {
+    // Local models bound at zero.
+    fn max_cost_micro_usd(&self, request: &adk_core::LlmRequest) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().max_cost_micro_usd(
+            Some("ollama"),
+            self.name(),
+            request,
+            crate::pricing::request_output_cap(request),
+        )
+    }
+
     fn name(&self) -> &str {
         &self.model_name
     }

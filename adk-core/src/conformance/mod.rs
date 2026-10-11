@@ -111,6 +111,12 @@ macro_rules! spend_ledger_conformance_tests {
         async fn spend_reservations_survive_a_restart() {
             $crate::conformance::spend_ledger::reservations_survive_a_restart(&$harness).await;
         }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn spend_unbounded_holds_need_an_uncapped_key() {
+            $crate::conformance::spend_ledger::unbounded_holds_need_an_uncapped_key(&$harness)
+                .await;
+        }
     };
 }
 

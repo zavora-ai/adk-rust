@@ -23,6 +23,10 @@ The summary should be concise and capture the essence of the interaction.\n\n\
 /// When called with a list of events, this formats the events, generates a
 /// summary using an LLM, and returns a new [`Event`] containing the summary
 /// within an [`EventCompaction`].
+///
+/// The summary call goes through [`adk_core::generate_metered`], so when the
+/// runner compacts a session it counts against the run's budget and spend
+/// ledger, and a call the budget refuses is never sent.
 pub struct LlmEventSummarizer {
     llm: Arc<dyn Llm>,
     prompt_template: String,
@@ -77,17 +81,19 @@ impl BaseEventsSummarizer for LlmEventSummarizer {
             previous_response_id: None,
         };
 
-        // Generate summary (non-streaming)
-        let mut response_stream = self.llm.generate_content(request, false).await?;
+        // Counts against the run's budget and spend ledger when the runner made a scope current.
+        let mut response_stream =
+            adk_core::generate_metered(self.llm.as_ref(), request, false).await?;
 
         use futures::StreamExt;
         let mut summary_content: Option<Content> = None;
+        // Drained to the end so the call's usage, which may follow the content, is metered.
         while let Some(chunk_result) = response_stream.next().await {
             if let Ok(chunk) = chunk_result
+                && summary_content.is_none()
                 && chunk.content.is_some()
             {
                 summary_content = chunk.content;
-                break;
             }
         }
 

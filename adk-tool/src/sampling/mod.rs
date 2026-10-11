@@ -5,6 +5,22 @@
 //!
 //! Enable with the `mcp-sampling` feature flag.
 //!
+//! # Metering
+//!
+//! A sampling request is a model call made on behalf of whoever triggered it, so
+//! [`LlmSamplingHandler`] calls its model through [`adk_core::generate_metered`]:
+//!
+//! | When the request arrives | It counts against |
+//! |--------------------------|-------------------|
+//! | While an [`McpToolset`](crate::McpToolset) tool call from a run is in flight on the connection | That run's budget and spend ledger ([`ModelCallScope::for_run`]); with calls from several runs in flight, the most recently started one |
+//! | Outside any run's tool call, with a scope attached ([`McpToolset::with_sampling_scope`](crate::McpToolset::with_sampling_scope) or [`AdkClientHandler::with_sampling_scope`](crate::mcp::AdkClientHandler::with_sampling_scope)) | The attached scope |
+//! | Otherwise | Nothing: the call is unmetered |
+//!
+//! A request the budget or spend ledger refuses is never sent to the model; the
+//! MCP server receives an error. A custom [`SamplingHandler`] is metered the same
+//! way when it calls its model through [`adk_core::generate_metered`] or
+//! [`adk_core::MeteredLlm`].
+//!
 //! # Overview
 //!
 //! The MCP protocol allows servers to request that the client generate a message
@@ -34,11 +50,93 @@
 
 use adk_core::model::{FinishReason, GenerateContentConfig, LlmRequest};
 use adk_core::types::{Content, Part};
-use adk_core::{AdkError, Llm, Result};
+use adk_core::{AdkError, ErrorCategory, Llm, ModelCallScope, Result};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tracing::debug;
+
+/// The [`ModelCallScope`]s that sampling requests on one MCP connection count against.
+///
+/// [`McpToolset`](crate::McpToolset) tools register their run's scope for the length of
+/// each call; [`resolve`](Self::resolve) returns the most recently registered scope still
+/// in flight, or the fallback scope when no call is in flight.
+///
+/// # Example
+///
+/// ```
+/// use std::sync::Arc;
+/// use adk_core::{BudgetTracker, ModelCallScope, RunBudget};
+/// use adk_tool::sampling::SamplingScopes;
+///
+/// let scopes = Arc::new(SamplingScopes::default());
+/// assert!(scopes.resolve().is_none());
+///
+/// let tracker = Arc::new(BudgetTracker::new(RunBudget::new().max_model_calls(5)));
+/// let guard = scopes.enter(ModelCallScope::new().with_budget(tracker.clone()));
+/// assert!(Arc::ptr_eq(scopes.resolve().unwrap().budget().unwrap(), &tracker));
+/// drop(guard);
+/// assert!(scopes.resolve().is_none());
+/// ```
+#[derive(Debug, Default)]
+pub struct SamplingScopes {
+    active: Mutex<Vec<(u64, ModelCallScope)>>,
+    fallback: Mutex<Option<ModelCallScope>>,
+    next_id: AtomicU64,
+}
+
+impl SamplingScopes {
+    /// Sets the scope used when no registered call is in flight.
+    pub fn set_fallback(&self, scope: Option<ModelCallScope>) {
+        *self.fallback.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = scope;
+    }
+
+    /// The scope used when no registered call is in flight.
+    pub fn fallback(&self) -> Option<ModelCallScope> {
+        self.fallback.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    }
+
+    /// Registers `scope` until the returned guard is dropped.
+    pub fn enter(self: &Arc<Self>, scope: ModelCallScope) -> SamplingScopeGuard {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.active.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((id, scope));
+        SamplingScopeGuard { scopes: Arc::clone(self), id }
+    }
+
+    /// The scope a sampling request arriving now counts against.
+    pub fn resolve(&self) -> Option<ModelCallScope> {
+        let active = self.active.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((_, latest)) = active.last() {
+            if active.iter().any(|(_, scope)| !scope.same_as(latest)) {
+                debug!(
+                    in_flight = active.len(),
+                    "tool calls from several runs are in flight; sampling counts against the latest"
+                );
+            }
+            return Some(latest.clone());
+        }
+        drop(active);
+        self.fallback()
+    }
+}
+
+/// Keeps a scope registered in [`SamplingScopes`] while it is alive.
+#[derive(Debug)]
+pub struct SamplingScopeGuard {
+    scopes: Arc<SamplingScopes>,
+    id: u64,
+}
+
+impl Drop for SamplingScopeGuard {
+    fn drop(&mut self) {
+        self.scopes
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|(id, _)| *id != self.id);
+    }
+}
 
 /// Trait for handling MCP `sampling/createMessage` requests.
 ///
@@ -265,9 +363,10 @@ impl SamplingResponse {
 
 /// Default sampling handler that routes requests through an LLM provider.
 ///
-/// Converts [`SamplingRequest`] to an [`LlmRequest`], calls
-/// [`Llm::generate_content`], and converts the response back to a
-/// [`SamplingResponse`].
+/// Converts [`SamplingRequest`] to an [`LlmRequest`], calls the model through
+/// [`adk_core::generate_metered`], and converts the response back to a
+/// [`SamplingResponse`]. See [Metering](self#metering) for what the call counts
+/// against.
 ///
 /// # Example
 ///
@@ -299,11 +398,14 @@ impl SamplingHandler for LlmSamplingHandler {
             "routing sampling/createMessage to LLM"
         );
 
-        let mut stream = self
-            .llm
-            .generate_content(llm_request, false)
+        // Counts against the run that triggered the request; a refused call is not sent.
+        let mut stream = adk_core::generate_metered(self.llm.as_ref(), llm_request, false)
             .await
-            .map_err(|e| AdkError::tool(format!("LLM sampling failed: {e}")))?;
+            .map_err(|e| match e.category {
+                ErrorCategory::ResourceExhausted => e,
+                _ if e.code == adk_core::SPEND_LIMIT_EXCEEDED_CODE => e,
+                _ => AdkError::tool(format!("LLM sampling failed: {e}")),
+            })?;
 
         // Collect the final (non-partial) response from the stream.
         let mut last_response = None;

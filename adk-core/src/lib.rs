@@ -107,6 +107,8 @@ pub mod identity;
 pub mod instruction_template;
 /// Intra-turn context compaction configuration.
 pub mod intra_compaction;
+/// Metering for every model call made on behalf of a run.
+pub mod metering;
 /// LLM trait, request/response types, and caching configuration.
 pub mod model;
 /// Tool execution policy: allow, deny, or require approval per call.
@@ -180,6 +182,10 @@ pub use identity::{
 };
 pub use instruction_template::inject_session_state;
 pub use intra_compaction::IntraCompactionConfig;
+pub use metering::{
+    LlmSpendEstimate, MeteredLlm, ModelCallScope, ModelSpendHold, UNBOUNDED_HOLD_MICRO_USD,
+    generate_metered, vendor_for_model,
+};
 pub use model::{
     BuiltinToolUse, CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig,
     FinishReason, GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream,

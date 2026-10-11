@@ -390,3 +390,94 @@ async fn gemini_stream_accumulates_builtin_uses_onto_the_final_chunk() {
     assert_eq!(uses(last), [("code_execution".into(), 1), ("google_search".into(), 2)]);
     assert_cost(last, (1_000.0 * 0.75 + 10.0 * 3.75) / 1e6 + 2.0 * 0.014);
 }
+
+#[cfg(any(feature = "openai", feature = "groq"))]
+fn chat_completion(model: &str, prompt: i32, completion: i32, cached: i32) -> serde_json::Value {
+    json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "ok"},
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "prompt_tokens_details": {"cached_tokens": cached}
+        }
+    })
+}
+
+#[cfg(feature = "groq")]
+#[tokio::test]
+async fn groq_responses_are_priced_at_groq_rates() {
+    let server =
+        mock_json(chat_completion("openai/gpt-oss-120b", 1_000_000, 100_000, 400_000)).await;
+    let model = adk_model::groq::GroqClient::new(
+        adk_model::groq::GroqConfig::gpt_oss_120b("test-key").with_base_url(server.uri()),
+    )
+    .unwrap()
+    .with_retry_config(adk_model::RetryConfig::disabled());
+
+    let response = final_response(&model, "openai/gpt-oss-120b").await;
+
+    assert_eq!(response.provider.as_deref(), Some("groq"));
+    // 600K uncached × $0.15 + 400K cached × $0.075 + 100K × $0.60.
+    assert_cost(&response, 0.09 + 0.03 + 0.06);
+}
+
+#[cfg(feature = "groq")]
+#[tokio::test]
+async fn groq_models_without_a_published_price_stay_unpriced() {
+    let server = mock_json(chat_completion("llama-3.3-70b-versatile", 10, 5, 0)).await;
+    let model = adk_model::groq::GroqClient::new(
+        adk_model::groq::GroqConfig::llama70b("test-key").with_base_url(server.uri()),
+    )
+    .unwrap()
+    .with_retry_config(adk_model::RetryConfig::disabled());
+
+    let response = final_response(&model, "llama-3.3-70b-versatile").await;
+
+    assert_eq!(response.provider.as_deref(), Some("groq"));
+    assert_eq!(response.usage_metadata.unwrap().cost, None);
+}
+
+#[cfg(feature = "openai")]
+#[tokio::test]
+async fn xai_responses_are_priced_at_xai_rates() {
+    let server = mock_json(chat_completion("grok-4.6", 100_000, 10_000, 40_000)).await;
+    let model = adk_model::OpenAICompatible::new(
+        adk_model::OpenAICompatibleConfig::xai("test-key", "grok-4.6").with_base_url(server.uri()),
+    )
+    .unwrap()
+    .with_retry_config(adk_model::RetryConfig::disabled());
+
+    let response = final_response(&model, "grok-4.6").await;
+
+    assert_eq!(response.provider.as_deref(), Some("xai"));
+    // Under the 200K long-context threshold: 60K uncached × $2.00 + 40K cached × $0.50
+    // + 10K × $6.00.
+    assert_cost(&response, 0.12 + 0.02 + 0.06);
+}
+
+#[cfg(feature = "openai")]
+#[tokio::test]
+async fn mistral_responses_are_priced_at_mistral_rates() {
+    let server = mock_json(chat_completion("mistral-medium-latest", 1_000_000, 100_000, 0)).await;
+    let model = adk_model::OpenAICompatible::new(
+        adk_model::OpenAICompatibleConfig::mistral("test-key", "mistral-medium-latest")
+            .with_base_url(server.uri()),
+    )
+    .unwrap()
+    .with_retry_config(adk_model::RetryConfig::disabled());
+
+    let response = final_response(&model, "mistral-medium-latest").await;
+
+    assert_eq!(response.provider.as_deref(), Some("mistral"));
+    // 1M × $1.50 + 100K × $7.50.
+    assert_cost(&response, 1.50 + 0.75);
+}

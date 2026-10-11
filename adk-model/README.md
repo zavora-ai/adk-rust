@@ -616,10 +616,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Every provider sets `LlmResponse::provider` and `LlmResponse::model` and fills
 `UsageMetadata::cost` (USD) from `pricing::PricingCatalog` when the provider did
 not report a cost. Cached prompt tokens are billed once, Anthropic cache writes
-by TTL, and long-context tiers apply where the vendor publishes them. Unpriced
-models keep `cost: None`. Built-in tool uses the provider reports (web search,
-file search, Google Search grounding) land in `UsageMetadata::builtin_tool_uses`, and
-their published per-use fees are added to `cost` on the vendor's own API.
+by TTL, and long-context tiers apply where the vendor publishes them. Gemini,
+OpenAI, Anthropic, DeepSeek, Groq, xAI and Mistral list prices are included;
+local Ollama models cost zero. Unpriced models keep `cost: None`. Built-in tool uses the
+provider reports (web search, file search, Google Search grounding) land in
+`UsageMetadata::builtin_tool_uses`, and their published per-use fees are added to `cost`
+on the vendor's own API.
 
 ```rust
 use adk_core::UsageMetadata;

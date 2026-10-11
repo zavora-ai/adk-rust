@@ -262,12 +262,18 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
         let model_ctx: Arc<dyn CallbackContext> = invocation_ctx.clone();
         // Shared with every agent in the invocation through the run config.
         let budget_tracker = invocation_ctx.run_config().budget_tracker.clone();
+        // Model calls reserve their upper-bound cost and count against the run budget.
+        let model_scope = adk_core::ModelCallScope::for_run(
+            invocation_ctx.run_config(),
+            invocation_ctx.app_name(),
+            invocation_ctx.agent_name(),
+        );
         let model_hooks = ModelHooks {
             before: before_model_callbacks.as_slice(),
             after: after_model_callbacks.as_slice(),
             hooks: &hook_callbacks,
             ctx: &model_ctx,
-            budget: budget_tracker.as_ref(),
+            scope: &model_scope,
             #[cfg(feature = "enhanced-plugins")]
             plugins: enhanced_plugin_manager.as_deref(),
         };
@@ -1406,8 +1412,8 @@ struct ModelHooks<'a> {
     /// The run's invocation hooks, iterated ahead of `before` and `after`.
     hooks: &'a HookCallbacks,
     ctx: &'a Arc<dyn CallbackContext>,
-    /// The run budget model calls count against.
-    budget: Option<&'a Arc<adk_core::BudgetTracker>>,
+    /// The run budget and spend ledger model calls count against.
+    scope: &'a adk_core::ModelCallScope,
     #[cfg(feature = "enhanced-plugins")]
     plugins: Option<&'a EnhancedPluginManager>,
 }
@@ -1454,8 +1460,7 @@ async fn next_script(
     }
 
     if content.is_none() {
-        let mut stream =
-            adk_core::generate_with_budget(model, request, false, hooks.budget).await?;
+        let mut stream = hooks.scope.generate(model, request, false).await?;
         let mut text = String::new();
         while let Some(chunk) = stream.next().await {
             if let Some(c) = chunk?.content {

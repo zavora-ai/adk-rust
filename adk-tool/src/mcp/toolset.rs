@@ -60,6 +60,10 @@ where
     /// Held while a replacement connects, so concurrent failures replace a
     /// dead connection once instead of once per caller.
     refresh: Mutex<()>,
+    /// Run scopes that sampling requests count against, shared with every
+    /// connection's [`AdkClientHandler`](super::AdkClientHandler).
+    #[cfg(feature = "mcp-sampling")]
+    sampling_scopes: Arc<crate::sampling::SamplingScopes>,
 }
 
 impl<S> SharedClient<S>
@@ -67,7 +71,16 @@ where
     S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
 {
     fn new(client: RunningService<RoleClient, S>) -> Self {
-        Self { current: RwLock::new((Arc::new(client), 0)), refresh: Mutex::new(()) }
+        #[cfg(feature = "mcp-sampling")]
+        let sampling_scopes = adk_client_handler(&client)
+            .map(super::elicitation::AdkClientHandler::sampling_scopes)
+            .unwrap_or_default();
+        Self {
+            current: RwLock::new((Arc::new(client), 0)),
+            refresh: Mutex::new(()),
+            #[cfg(feature = "mcp-sampling")]
+            sampling_scopes,
+        }
     }
 
     async fn connection(&self) -> Connection<S> {
@@ -124,6 +137,10 @@ where
             .await
             .map_err(|e| AdkError::tool(format!("Failed to refresh MCP connection: {e}")))?;
         restore_subscriptions(&new_client, subscriptions).await?;
+        #[cfg(feature = "mcp-sampling")]
+        if let Some(handler) = adk_client_handler(&new_client) {
+            handler.share_sampling_scopes(Arc::clone(&self.sampling_scopes));
+        }
 
         let mut current = self.current.write().await;
         current.0 = Arc::new(new_client);
@@ -142,6 +159,17 @@ struct CachedToolList {
     tools: Vec<rmcp::model::Tool>,
 }
 
+/// The [`AdkClientHandler`](super::AdkClientHandler) serving `connection`, if it uses one.
+fn adk_client_handler<S>(
+    connection: &RunningService<RoleClient, S>,
+) -> Option<&super::elicitation::AdkClientHandler>
+where
+    S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
+{
+    (connection.service() as &dyn std::any::Any)
+        .downcast_ref::<super::elicitation::AdkClientHandler>()
+}
+
 /// Counts `notifications/tools/list_changed` on connections served by
 /// [`AdkClientHandler`](super::AdkClientHandler). Other handlers report zero,
 /// so their cached list expires only by TTL or explicit invalidation.
@@ -149,8 +177,7 @@ fn tool_list_changes<S>(connection: &RunningService<RoleClient, S>) -> u64
 where
     S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
 {
-    (connection.service() as &dyn std::any::Any)
-        .downcast_ref::<super::elicitation::AdkClientHandler>()
+    adk_client_handler(connection)
         .map_or(0, super::elicitation::AdkClientHandler::tool_list_changes)
 }
 
@@ -574,6 +601,30 @@ where
     /// ```
     pub fn with_client_handler(client: RunningService<RoleClient, S>) -> Self {
         Self::new(client)
+    }
+
+    /// Meters sampling requests that arrive outside any run's tool call against `scope`.
+    ///
+    /// Requests that arrive while a tool call from a run is in flight count against that
+    /// run's budget and spend ledger instead. Without a scope, such requests are unmetered.
+    /// See [sampling metering](crate::sampling#metering).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::{InMemorySpendLedger, ModelCallScope};
+    ///
+    /// let scope = ModelCallScope::new()
+    ///     .with_spend_ledger(Arc::new(InMemorySpendLedger::default()), "acme")
+    ///     .with_agent("mcp-sampling");
+    /// let toolset = McpToolset::with_sampling_handler(transport, elicitation, sampling)
+    ///     .await?
+    ///     .with_sampling_scope(scope);
+    /// ```
+    #[cfg(feature = "mcp-sampling")]
+    pub fn with_sampling_scope(self, scope: adk_core::ModelCallScope) -> Self {
+        self.client.sampling_scopes.set_fallback(Some(scope));
+        self
     }
 
     /// Set a custom name for this toolset.
@@ -1910,7 +1961,18 @@ where
         self.output_schema.clone()
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        // Sampling requests the server sends while this call is in flight count against the run.
+        #[cfg(feature = "mcp-sampling")]
+        let _sampling_scope = ctx
+            .run_config()
+            .map(|config| {
+                adk_core::ModelCallScope::for_run(config, ctx.app_name(), ctx.agent_name())
+            })
+            .filter(|scope| !scope.is_unmetered())
+            .map(|scope| self.client.sampling_scopes.enter(scope));
+        #[cfg(not(feature = "mcp-sampling"))]
+        let _ = ctx;
         self.execute_value(args).await
     }
 }

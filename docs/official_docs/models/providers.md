@@ -677,7 +677,9 @@ Every `adk-model` provider sets `LlmResponse::provider` and `LlmResponse::model`
 configured identifier — and fills `UsageMetadata::cost` in USD when the provider
 did not report a cost itself. Rates come from `adk_model::pricing::PricingCatalog`,
 which consolidates the Gemini, OpenAI and Anthropic pricing modules and adds
-DeepSeek list prices.
+DeepSeek, Groq, xAI and Mistral list prices. Each vendor table cites the
+published price page and the date it was read; `PricingCatalog::version()`
+returns that verification date.
 
 | Rule | Behaviour |
 |------|-----------|
@@ -686,6 +688,9 @@ DeepSeek list prices.
 | Long context | Gemini (over 200K), OpenAI GPT-5.4/5.5 (272K and above) and Claude Haiku 5.5 (over 100K) switch the whole request to the long-context rates |
 | Dated aliases | `gpt-4.1-2025-04-14`, `claude-sonnet-4-5-20250929`, `claude-sonnet-4-5@20250929` and `us.anthropic.claude-sonnet-4-5-20250929-v1:0` resolve to the listed model |
 | Billing provider | A vendor's list price applies only to providers that bill it at that price; an OpenAI model name served by another gateway stays unpriced |
+| Groq | GPT-OSS and Qwen models at Groq's published rates; models Groq prices only on request (Llama, MiniMax) stay unpriced |
+| xAI | Grok models, with the whole request at the long-context rate once the prompt reaches 200K tokens |
+| Mistral | Current models and their `-latest` aliases; retired dated ids and Mistral Large 4 (sale price) stay unpriced |
 | Ollama | Local models cost zero; `*cloud*` models stay unpriced |
 | OpenCode | Responses are attributed to `opencode` / `opencode-go` and stay unpriced |
 | Unknown models | `cost` stays `None`, which means unknown, never free |

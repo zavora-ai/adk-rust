@@ -1,8 +1,8 @@
 # Spend Ledger
 
 A `SpendLedger` holds one budget for everything an agent spends: model calls and payments
-draw on the same limits. Set it on `RunConfig::spend_ledger` and the runner reserves before
-each model call, while the payment tools reserve each checkout before it completes.
+draw on the same limits. Set it on `RunConfig::spend_ledger` and every model call reserves its upper-bound cost
+before it is sent, while the payment tools reserve each checkout before it completes.
 
 ## Reserve, commit, release
 
@@ -80,18 +80,48 @@ ledger.migrate().await?;
 
 ## Model spend
 
-With a ledger on the run config, the runner installs an `LlmSpendRecorder` ahead of every
-other invocation hook. The key is the runner's app name, the calling agent, and the vendor.
-The reservation precedes the response, so it names the vendor read from the model id
-(`gemini-*` is `gemini`, `claude-*` is `anthropic`, `gpt-*`, `o1`, `o3`, and `o4` are
-`openai`; unrecognized ids are `unknown`). The cost is committed under the provider the
-response reports in `LlmResponse::provider` — `bedrock` for a Claude model served by
-Amazon Bedrock, for example — and the model's later calls in the run reserve under that
-provider.
+With a ledger on the run config, every model call made on behalf of the run reserves before
+it is sent and commits once it completes, through `adk_core::ModelCallScope`. The key is the
+runner's app name, the calling agent, and the vendor. The reservation precedes the response,
+so it names the vendor read from the model id (`gemini-*` is `gemini`, `claude-*` is
+`anthropic`, `gpt-*`, `o1`, `o3`, and `o4` are `openai`, `deepseek-*` is `deepseek`,
+`grok-*` is `xai`, Mistral model families are `mistral`; unrecognized ids are `unknown`).
+The cost is committed under the provider the response reports in `LlmResponse::provider` —
+`bedrock` for a Claude model served by Amazon Bedrock, for example.
 
 > **Note:** when a limit already refuses a zero-amount reservation under the reported
 > provider, the cost is committed under the vendor read from the model id and a warning is
 > logged. Organization and agent totals are correct either way.
+
+### Hard caps
+
+The reservation is an upper bound on the call's cost, `Llm::max_cost_micro_usd`, so the
+committed cost never exceeds it and a cap is never overshot.
+
+| Bound term | Value |
+|------------|-------|
+| Input tokens | UTF-8 byte length of every text and JSON part, tool declaration and response schema (no tokenizer emits more than one token per byte), inline media at least 16,384 tokens per part, plus 2,048 tokens of framing and 16 per message and per tool |
+| Input rate | The highest of the uncached, cache-read and cache-write rates, at the long-context tier when the input bound reaches it |
+| Output tokens | The request's output cap (`max_output_tokens`, reasoning and thinking included), or the model's published output limit when the request sets none |
+| Output rate | The model's output rate at the same tier |
+| Built-in tool fees | Per-response fees once each; per-use fees × each declared built-in tool's `max_uses` |
+
+| Provider | Output tokens used for the bound |
+|----------|----------------------------------|
+| Gemini, OpenAI (Chat and Responses), OpenAI-compatible, Azure AI | Request cap, else the model's output limit |
+| Anthropic | The `max_tokens` the client sends (request cap, `AnthropicConfig::max_tokens`, or the model default) |
+| Groq, DeepSeek | The model's output limit; neither vendor states whether reasoning counts toward the request cap |
+| Bedrock | Request cap only |
+| Ollama (local), mistral.rs | Zero: local inference has no per-token price |
+| OpenRouter, OpenCode, xAI without a request cap, unpriced models | No bound |
+
+A call with no bound reserves `UNBOUNDED_HOLD_MICRO_USD`, which every cap refuses: it is
+refused wherever a limit covers its key, and runs only where none does. It then commits its
+reported cost, or the `LlmSpendEstimate` when it reports none. Set an output cap on the
+agent (`LlmAgentBuilder::max_output_tokens`) to keep reservations small under a tight cap.
+
+> **Important:** a custom `Llm` wrapper must forward `max_cost_micro_usd` to the model it
+> wraps; without it the wrapper's calls are unbounded and refused under a cap.
 
 ```rust
 use adk_core::{RunConfig, SpendKey, SpendLimits, SpendPeriod};
@@ -112,24 +142,69 @@ let runner = Runner::builder()
     .session_service(sessions)
     .run_config(RunConfig::builder().spend_ledger(ledger).build())
     .build()?
-    // Hold 4,096 output tokens at 10 USD per million when the request caps output.
-    .with_llm_spend_estimate(LlmSpendEstimate::per_call(50_000).with_output_price(10_000_000));
+    // Committed by calls to unpriced models whose responses report no cost.
+    .with_llm_spend_estimate(LlmSpendEstimate::per_call(50_000));
 ```
 
-| What the recorder saw | Ledger action |
-|-----------------------|---------------|
-| A chunk reporting `usage_metadata.cost` | Commit that cost |
-| Chunks, but no cost | Commit the estimate and log a warning |
-| No chunk (the call failed or a later callback skipped it) | Release |
+| What the call returned | Ledger action |
+|------------------------|---------------|
+| A response reporting `usage_metadata.cost` | Commit that cost at the turn-complete response |
+| Responses, but no cost | Commit the bound (or, for an unbounded call, the estimate) and log a warning |
+| No response (the call failed) | Release |
 
 The committed cost includes the published fees of provider-executed built-in tools — web
 search, file search, Google Search grounding — the call used; see
-[Built-in tool uses and fees](../models/providers.md#built-in-tool-uses-and-fees). Size the
-estimate for calls that may search, since the fees are known only once the response arrives.
+[Built-in tool uses and fees](../models/providers.md#built-in-tool-uses-and-fees). The
+bound covers them: per-response fees once each, per-use fees up to each declared built-in
+tool's `max_uses`. A request declaring a fee-bearing built-in tool without `max_uses` has no
+bound, so it is refused under a cap.
 
 A refused reservation fails the model call with the ledger's `spend.limit_exceeded` error,
-so the run stops before it spends past the cap. The overshoot is bounded by the difference
-between one call's actual cost and its estimate.
+so the run stops before it spends past the cap.
+
+### What is metered
+
+Every model call made on behalf of a run reserves, commits and releases through the same
+ledger and counts against the same [run budget](../core/runner.md#run-budgets).
+
+| Model call | Metered through | Attributed to |
+|------------|-----------------|---------------|
+| `LlmAgent` and `CodeActAgent` turns | `ModelCallScope::for_run` | The calling agent |
+| `LlmConditionalAgent` routing | `ModelCallScope::for_run` | The routing agent |
+| Post-run compaction (`EventsCompactionConfig`) | `ModelCallScope`, made current around the summarizer | The agent whose context is compacted |
+| Intra-invocation compaction (`IntraCompactionConfig`) | `ModelCallScope`, made current around the summarizer | The agent about to run |
+| Token-limit compaction (`context-compaction` feature) | `ModelCallScope`, made current around the strategy | The agent about to run |
+| MCP sampling (`mcp-sampling` feature) | `ModelCallScope` of the run whose tool call is in flight | The agent that called the MCP tool |
+
+The built-in summarizers (`LlmEventSummarizer`, `SummarisationCompaction`) and
+`LlmSamplingHandler` call their model through `adk_core::generate_metered`, which meters
+against the scope the runner or the MCP client made current. A custom `BaseEventsSummarizer`,
+`CompactionStrategy` or `SamplingHandler` is metered the same way when it calls its model
+through `generate_metered` or wraps it in `adk_core::MeteredLlm`.
+
+| Behaviour | Detail |
+|-----------|--------|
+| Refusal | A call the ledger or the budget refuses is never sent; a refused compaction is skipped with a warning and the run continues, a refused sampling request returns an error to the MCP server |
+| Hold size | The call's upper bound; see [Hard caps](#hard-caps) |
+| Sampling outside a run | Counts against the scope attached with `McpToolset::with_sampling_scope`, otherwise unmetered |
+| Several runs on one MCP connection | A sampling request counts against the run whose tool call started most recently |
+
+```rust
+use adk_core::{InMemorySpendLedger, ModelCallScope};
+use std::sync::Arc;
+
+// Calls outside any run: meter them explicitly.
+let scope = ModelCallScope::new()
+    .with_spend_ledger(Arc::new(InMemorySpendLedger::default()), "support-app")
+    .with_agent("nightly-digest");
+let stream = scope.generate(model.as_ref(), request, false).await?;
+```
+
+Out of scope: evaluation judges, prompt optimizers and simulators in `adk-eval` run in the
+evaluation harness, not on behalf of a run; wrap their model in `MeteredLlm` with an explicit
+scope to meter them. `OpenAIResponsesClient::compact_response` is called by application
+code, not by the runner. Realtime sessions (`adk-realtime`) are billed per session and audio
+minute and do not go through the `Llm` trait.
 
 ## Payment spend
 

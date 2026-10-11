@@ -284,6 +284,11 @@ impl Default for MistralRsMultiModel {
 
 #[async_trait]
 impl Llm for MistralRsMultiModel {
+    // Local inference has no per-token price.
+    fn max_cost_micro_usd(&self, _request: &adk_core::LlmRequest) -> Option<u64> {
+        Some(0)
+    }
+
     fn name(&self) -> &str {
         &self.name
     }

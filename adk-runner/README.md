@@ -222,10 +222,13 @@ See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/of
 
 ## Spend Ledger
 
-When `RunConfig::spend_ledger` is set, the runner reserves an estimate before each model
-call (`Runner::with_llm_spend_estimate`, 0.05 USD per call by default) and commits the
-call's reported `UsageMetadata::cost`, keyed by app, agent, and vendor. A reservation the
-ledger refuses fails the call, so a capped run stops before it spends. See
+When `RunConfig::spend_ledger` is set, every model call of the run — agent turns,
+compaction summaries (post-run, intra-invocation and `context-compaction`), LLM routing and
+MCP sampling — reserves its upper-bound cost (`Llm::max_cost_micro_usd`) before it is sent
+and commits its reported `UsageMetadata::cost`, keyed by app, agent, and vendor, through
+`adk_core::ModelCallScope`. A reservation the ledger refuses fails the call, so a capped run
+never spends past its cap. `Runner::with_llm_spend_estimate` sets what an unpriced call
+commits when it reports no cost. See
 [Spend Ledger](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/spend-ledger.md).
 
 ## Related Crates

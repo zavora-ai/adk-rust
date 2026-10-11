@@ -114,6 +114,16 @@ impl GroqClient {
 
 #[async_trait]
 impl Llm for GroqClient {
+    // Groq does not state whether reasoning counts toward `max_completion_tokens`, so the model's output limit bounds every request.
+    fn max_cost_micro_usd(&self, request: &adk_core::LlmRequest) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().max_cost_micro_usd(
+            Some("groq"),
+            self.name(),
+            request,
+            None,
+        )
+    }
+
     fn name(&self) -> &str {
         &self.config.model
     }

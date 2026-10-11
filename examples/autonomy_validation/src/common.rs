@@ -190,6 +190,10 @@ impl Llm for CountingLlm {
         self.inner.name()
     }
 
+    fn max_cost_micro_usd(&self, request: &LlmRequest) -> Option<u64> {
+        self.inner.max_cost_micro_usd(request)
+    }
+
     async fn generate_content(
         &self,
         req: LlmRequest,

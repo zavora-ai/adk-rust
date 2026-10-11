@@ -1188,9 +1188,18 @@ pub struct RunConfig {
     pub tool_confirmation_timeout: std::time::Duration,
     /// Ledger that model calls and payment tools reserve budget against.
     ///
-    /// When set, the runner reserves an estimate before each model call and commits its
+    /// When set, every model call of the run reserves its upper-bound cost
+    /// ([`Llm::max_cost_micro_usd`](crate::Llm::max_cost_micro_usd)) through a
+    /// [`ModelCallScope`](crate::ModelCallScope) built from this config and commits its
     /// reported cost, and payment tools reserve checkout totals. See [`crate::SpendLedger`].
     pub spend_ledger: Option<Arc<dyn crate::SpendLedger>>,
+    /// What a call to an unpriced model commits in the [`spend_ledger`](Self::spend_ledger)
+    /// when its response reports no cost.
+    ///
+    /// `None` uses the runner's estimate (`Runner::with_llm_spend_estimate`), which the
+    /// runner writes here at the start of each run, or
+    /// [`LlmSpendEstimate::default`](crate::LlmSpendEstimate::default) outside a runner.
+    pub llm_spend_estimate: Option<crate::LlmSpendEstimate>,
 }
 
 impl Default for RunConfig {
@@ -1220,6 +1229,7 @@ impl Default for RunConfig {
             approval_store: None,
             tool_confirmation_timeout: crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
             spend_ledger: None,
+            llm_spend_estimate: None,
         }
     }
 }
@@ -1448,6 +1458,14 @@ impl RunConfigBuilder {
     /// See [`RunConfig::spend_ledger`].
     pub fn spend_ledger(mut self, ledger: Arc<dyn crate::SpendLedger>) -> Self {
         self.config.spend_ledger = Some(ledger);
+        self
+    }
+
+    /// Sets the hold reserved in the spend ledger before each model call.
+    ///
+    /// See [`RunConfig::llm_spend_estimate`].
+    pub fn llm_spend_estimate(mut self, estimate: crate::LlmSpendEstimate) -> Self {
+        self.config.llm_spend_estimate = Some(estimate);
         self
     }
 

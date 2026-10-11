@@ -184,6 +184,10 @@ impl CompactionStrategy for TruncationCompaction {
 /// prompt, and replaces them with a single summary event. Recent events are
 /// preserved verbatim to maintain conversational continuity.
 ///
+/// The summary call goes through [`adk_core::generate_metered`], so when the
+/// runner compacts a session it counts against the run's budget and spend
+/// ledger, and a call the budget refuses is never sent.
+///
 /// # Fields
 ///
 /// * `model` — the LLM used to generate summaries
@@ -237,7 +241,8 @@ impl CompactionStrategy for SummarisationCompaction {
             vec![adk_core::Content::new("user").with_text(summary_text)],
         );
 
-        let mut stream = self.model.generate_content(request, false).await?;
+        // Counts against the run's budget and spend ledger when the runner made a scope current.
+        let mut stream = adk_core::generate_metered(self.model.as_ref(), request, false).await?;
 
         // Collect the full response
         use futures::StreamExt;
@@ -549,6 +554,53 @@ mod tests {
                 event
             })
             .collect()
+    }
+
+    struct PricedSummaryModel;
+
+    #[async_trait]
+    impl Llm for PricedSummaryModel {
+        fn name(&self) -> &str {
+            "gemini-3.5-flash-lite"
+        }
+
+        async fn generate_content(
+            &self,
+            _request: adk_core::LlmRequest,
+            _stream: bool,
+        ) -> adk_core::Result<adk_core::LlmResponseStream> {
+            let response = adk_core::LlmResponse {
+                content: Some(Content::new("model").with_text("summary")),
+                usage_metadata: Some(adk_core::UsageMetadata {
+                    total_token_count: 50,
+                    cost: Some(0.0005),
+                    ..Default::default()
+                }),
+                provider: Some("gemini".to_string()),
+                turn_complete: true,
+                ..Default::default()
+            };
+            Ok(Box::pin(futures::stream::iter(vec![Ok(response)])))
+        }
+    }
+
+    #[tokio::test]
+    async fn summarisation_counts_against_the_current_scope_and_stops_over_budget() {
+        use adk_core::{BudgetTracker, ModelCallScope, RunBudget};
+
+        let strategy =
+            SummarisationCompaction { model: Arc::new(PricedSummaryModel), turns_to_summarise: 4 };
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new().max_model_calls(1)));
+        let scope = ModelCallScope::new().with_budget(tracker.clone());
+
+        let compacted = scope.clone().within(strategy.compact(make_events(10), 4096)).await;
+        assert_eq!(compacted.unwrap().len(), 7);
+        assert_eq!(tracker.usage().total_tokens, 50);
+        assert_eq!(tracker.usage().cost_micro_usd, 500);
+
+        let refused = scope.within(strategy.compact(make_events(10), 4096)).await;
+        assert_eq!(refused.unwrap_err().code, "budget.model_calls");
+        assert_eq!(tracker.usage().model_calls, 1);
     }
 
     #[tokio::test]

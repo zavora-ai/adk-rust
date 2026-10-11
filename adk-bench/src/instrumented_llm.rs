@@ -102,6 +102,10 @@ impl InstrumentedLlm {
 
 #[async_trait]
 impl Llm for InstrumentedLlm {
+    fn max_cost_micro_usd(&self, request: &LlmRequest) -> Option<u64> {
+        self.inner.max_cost_micro_usd(request)
+    }
+
     fn name(&self) -> &str {
         self.inner.name()
     }

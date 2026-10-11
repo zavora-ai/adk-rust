@@ -122,6 +122,10 @@ impl AzureOpenAIClient {
 
 #[async_trait]
 impl Llm for AzureOpenAIClient {
+    fn max_cost_micro_usd(&self, request: &adk_core::LlmRequest) -> Option<u64> {
+        self.inner.max_cost_micro_usd(request)
+    }
+
     fn name(&self) -> &str {
         self.inner.name()
     }

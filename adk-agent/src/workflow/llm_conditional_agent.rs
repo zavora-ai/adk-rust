@@ -332,16 +332,13 @@ impl Agent for LlmConditionalAgent {
                 previous_response_id: None,
             };
 
-            // Call LLM for classification; the call counts against the run budget.
-            let budget_tracker = run_ctx.run_config().budget_tracker.clone();
-            let mut response_stream = match adk_core::generate_with_budget(
-                model.as_ref(),
-                request,
-                false,
-                budget_tracker.as_ref(),
-            )
-            .await
-            {
+            // Call LLM for classification; the call counts against the run budget and spend ledger.
+            let scope = adk_core::ModelCallScope::for_run(
+                run_ctx.run_config(),
+                run_ctx.app_name(),
+                &agent_name,
+            );
+            let mut response_stream = match scope.generate(model.as_ref(), request, false).await {
                 Ok(stream) => stream,
                 Err(e) => {
                     yield Err(e);

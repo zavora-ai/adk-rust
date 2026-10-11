@@ -144,6 +144,16 @@ impl BedrockClient {
 
 #[async_trait]
 impl Llm for BedrockClient {
+    // Only a request with `max_output_tokens` is bounded: without one Bedrock applies the model's own limit, which the catalog does not carry for Claude.
+    fn max_cost_micro_usd(&self, request: &adk_core::LlmRequest) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().max_cost_micro_usd(
+            Some("bedrock"),
+            self.name(),
+            request,
+            crate::pricing::request_output_cap(request),
+        )
+    }
+
     fn name(&self) -> &str {
         &self.model_id
     }

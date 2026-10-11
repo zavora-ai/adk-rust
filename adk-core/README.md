@@ -365,6 +365,10 @@ implementation; `adk-session` provides SQLite, PostgreSQL, Redis, MongoDB, Neo4j
 Firestore ledgers. Set `RunConfig::spend_ledger` to cap a run. `with_clock` takes a
 `Clock`; `ManualClock` lets a test cross a day or month boundary.
 
+`ModelCallScope` applies the run budget and the spend ledger to model calls made outside
+an agent's own loop — compaction summaries, LLM routing, MCP sampling. `generate_metered`
+and `MeteredLlm` meter against the scope made current with `ModelCallScope::within`.
+
 ```rust
 use adk_core::{InMemorySpendLedger, SpendKey, SpendLimits, SpendPeriod};
 

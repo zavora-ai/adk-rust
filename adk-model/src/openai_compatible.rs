@@ -804,6 +804,16 @@ fn parse_usage_from_chunk(chunk: &serde_json::Value) -> Option<UsageMetadata> {
 
 #[async_trait]
 impl Llm for OpenAICompatible {
+    // The request's `max_completion_tokens`, reasoning included, or the model's output limit.
+    fn max_cost_micro_usd(&self, request: &adk_core::LlmRequest) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().max_cost_micro_usd(
+            Some(&self.provider_name),
+            self.name(),
+            request,
+            crate::pricing::request_output_cap(request),
+        )
+    }
+
     fn name(&self) -> &str {
         &self.model
     }

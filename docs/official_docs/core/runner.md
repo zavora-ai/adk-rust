@@ -439,7 +439,7 @@ let runner = Runner::builder()
 
 | Checkpoint | Limits checked |
 |------------|----------------|
-| Before every model call | model calls, total tokens, cost, wall time; tool calls already over the limit |
+| Before every model call, compaction summaries and MCP sampling included | model calls, total tokens, cost, wall time; tool calls already over the limit |
 | Before every model request | built-in tools are withheld when no tool calls are left |
 | Before every tool dispatch | tool calls, total tokens, cost, wall time |
 | After every event | usage from agents that call models directly |
@@ -469,9 +469,18 @@ the session, with `llm_response.error_code` set to the `budget.*` code and the
 limit named under the `adk.budget.limit` event metadata key — followed by an
 `AdkError` with category `ResourceExhausted`.
 
+Compaction summaries (post-run, intra-invocation and token-limit compaction),
+`LlmConditionalAgent` routing and MCP sampling requests made during a tool call
+are model calls too: they go through `adk_core::ModelCallScope`, which checks
+the budget before the call is sent and counts its tokens and cost, and reserves
+in the [spend ledger](../security/spend-ledger.md#what-is-metered) when the run
+has one. A refused compaction is skipped and the run continues to the next
+model call, which the budget then stops.
+
 Agents that call models outside `LlmAgent`, `CodeActAgent` and
 `LlmConditionalAgent` count against the budget through
-`adk_core::generate_with_budget`. Pass a `BudgetTracker` in
+`adk_core::generate_with_budget`, or against the budget and the spend ledger
+through `ModelCallScope::for_run`. Pass a `BudgetTracker` in
 `RunConfig::budget_tracker` to `run_with_config` to share one budget across
 several runs.
 

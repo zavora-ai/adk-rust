@@ -3247,25 +3247,28 @@ impl Agent for LlmAgent {
                     let should_stream_to_client = matches!(streaming_mode, StreamingMode::SSE | StreamingMode::Bidi)
                         && output_guardrails.is_empty();
 
-                    // Reserve the call against the run budget before it starts. The meter
-                    // records the call's usage once, from its first non-partial response
-                    // carrying usage, so partial chunks never inflate the totals.
-                    let mut call_meter = match budget_tracker.as_ref() {
-                        Some(tracker) => match tracker.begin_model_call(model.name()) {
-                            Ok(meter) => Some(meter),
-                            Err(exceeded) => {
-                                yield Err(exceeded.into());
-                                return;
-                            }
-                        },
-                        None => None,
-                    };
-
+                    // Reserves the call's upper-bound cost in the spend ledger and one model
+                    // call in the run budget before it starts; the stream records the call's
+                    // usage once, from its first non-partial response carrying usage, and
+                    // commits its cost. A refusal stops the run before anything is sent.
+                    let call_scope = adk_core::ModelCallScope::for_run(
+                        ctx.run_config(),
+                        ctx.app_name(),
+                        &agent_name,
+                    );
+                    let call_metered = call_scope.budget().is_some();
                     // Always use streaming internally for LLM calls
-                    let mut response_stream = model
-                        .generate_content(request, true)
+                    let mut response_stream = match call_scope
+                        .generate(model.as_ref(), request, true)
                         .instrument(llm_span.clone())
-                        .await?;
+                        .await
+                    {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    };
 
                     use futures::StreamExt;
 
@@ -3292,11 +3295,6 @@ impl Agent for LlmAgent {
                                 return;
                             }
                         };
-                        // Budgets count what the provider reported, before callbacks edit it.
-                        if let Some(meter) = call_meter.as_mut() {
-                            meter.observe(&chunk);
-                        }
-
                         // ===== AFTER MODEL CALLBACKS (per chunk) =====
                         // Callbacks can modify each streaming chunk
                         for callback in
@@ -3354,7 +3352,7 @@ impl Agent for LlmAgent {
                                 &chunk,
                                 long_running_tool_ids,
                             );
-                            if call_meter.is_some() {
+                            if call_metered {
                                 event.provider_metadata.insert(
                                     adk_core::BUDGET_RECORDED_KEY.to_string(),
                                     "true".to_string(),
@@ -3405,8 +3403,7 @@ impl Agent for LlmAgent {
                     // A stream that ended without a non-partial usage report is settled
                     // here, before any tool runs, from the best usage it carried.
                     drop(response_stream);
-                    let metered = call_meter.is_some();
-                    drop(call_meter);
+                    let metered = call_metered;
 
                     // For None mode: yield single final event with accumulated content
                     if !should_stream_to_client {

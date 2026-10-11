@@ -402,10 +402,12 @@ impl Runner {
         Arc::clone(&self.root_agent)
     }
 
-    /// Sets the hold the runner reserves before each model call when the run config carries
-    /// a [`spend_ledger`](RunConfig::spend_ledger).
+    /// Sets what a call to an unpriced model commits in the run's
+    /// [`spend_ledger`](RunConfig::spend_ledger) when its response reports no cost.
     ///
-    /// Defaults to [`LlmSpendEstimate::default`](crate::LlmSpendEstimate::default).
+    /// Priced calls reserve and commit their upper-bound cost instead; see
+    /// [`ModelCallScope`](adk_core::ModelCallScope). The runner writes the estimate into
+    /// [`RunConfig::llm_spend_estimate`] when the run's config has none. Defaults to [`LlmSpendEstimate::default`](crate::LlmSpendEstimate::default).
     pub fn with_llm_spend_estimate(mut self, estimate: crate::LlmSpendEstimate) -> Self {
         self.llm_spend_estimate = estimate;
         self
@@ -582,16 +584,8 @@ impl Runner {
                 run_config.invocation_hooks.insert(0, hooks);
             }
         }
-        // First in line, so it sees every chunk before a later hook can replace it.
-        let spend_recorder = run_config.spend_ledger.clone().map(|ledger| {
-            let recorder = Arc::new(crate::spend::LlmSpendRecorder::new(
-                ledger,
-                app_name.clone(),
-                self.llm_spend_estimate,
-            ));
-            run_config.invocation_hooks.insert(0, recorder.clone());
-            recorder
-        });
+        // Agents, compaction, sampling and routing read the estimate from the config.
+        run_config.llm_spend_estimate.get_or_insert(self.llm_spend_estimate);
         let compaction_config = self.compaction_config.clone();
         let context_cache_config = self.context_cache_config.clone();
         let cache_capable = self.cache_capable.clone();
@@ -1001,7 +995,13 @@ impl Runner {
             if let Some(ref compactor) = intra_compactor {
                 compactor.reset_cycle();
                 let session_events = ctx.mutable_session().as_ref().events_snapshot();
-                match compactor.maybe_compact(&session_events).await {
+                // The summary call counts against the run's budget and spend ledger.
+                let scope = adk_core::ModelCallScope::for_run(
+                    adk_core::InvocationContext::run_config(ctx.as_ref()),
+                    ctx.app_name(),
+                    agent_to_run.name(),
+                );
+                match scope.within(compactor.maybe_compact(&session_events)).await {
                     Ok(Some(compacted_events)) => {
                         ctx.mutable_session().replace_events(compacted_events);
                         tracing::info!("intra-invocation compaction applied before agent execution");
@@ -1027,7 +1027,12 @@ impl Runner {
                         budget = cc_config.context_budget,
                         "context exceeds budget, applying proactive compaction"
                     );
-                    match crate::compaction::apply_compaction_with_retry(cc_config, session_events).await {
+                    let scope = adk_core::ModelCallScope::for_run(
+                        adk_core::InvocationContext::run_config(ctx.as_ref()),
+                        ctx.app_name(),
+                        agent_to_run.name(),
+                    );
+                    match scope.within(crate::compaction::apply_compaction_with_retry(cc_config, session_events)).await {
                         Ok(compacted) => {
                             ctx.mutable_session().replace_events(compacted);
                             tracing::info!("proactive context compaction succeeded");
@@ -1066,7 +1071,12 @@ impl Runner {
                         "agent execution failed with token limit error, attempting compaction"
                     );
                     let session_events = ctx.mutable_session().events_snapshot();
-                    match crate::compaction::apply_compaction_with_retry(cc_config, session_events).await {
+                    let scope = adk_core::ModelCallScope::for_run(
+                        adk_core::InvocationContext::run_config(ctx.as_ref()),
+                        ctx.app_name(),
+                        agent_to_run.name(),
+                    );
+                    match scope.within(crate::compaction::apply_compaction_with_retry(cc_config, session_events)).await {
                         Ok(compacted) => {
                             ctx.mutable_session().replace_events(compacted);
                             tracing::info!("context compaction succeeded after token limit error, retrying agent");
@@ -1592,7 +1602,12 @@ impl Runner {
                         if compact_up_to > 0 {
                             let events_to_compact = &all_events[..compact_up_to];
 
-                            match compaction_cfg.summarizer.summarize_events(events_to_compact).await {
+                            let scope = adk_core::ModelCallScope::for_run(
+                                adk_core::InvocationContext::run_config(ctx.as_ref()),
+                                ctx.app_name(),
+                                ctx.agent_name(),
+                            );
+                            match scope.within(compaction_cfg.summarizer.summarize_events(events_to_compact)).await {
                                 Ok(Some(compaction_event)) => {
                                     // Persist the compaction event
                                     if let Err(e) = session_service
@@ -1664,10 +1679,7 @@ impl Runner {
             }
         };
 
-        let events: EventStream = match spend_recorder {
-            Some(recorder) => Box::pin(crate::spend::settle_when_done(events, recorder)),
-            None => Box::pin(events),
-        };
+        let events: EventStream = Box::pin(events);
         Ok(RunnerInvocation { invocation_id, events })
     }
 

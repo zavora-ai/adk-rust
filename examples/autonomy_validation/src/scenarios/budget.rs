@@ -49,6 +49,10 @@ impl Llm for CostTap {
         self.inner.name()
     }
 
+    fn max_cost_micro_usd(&self, request: &LlmRequest) -> Option<u64> {
+        self.inner.max_cost_micro_usd(request)
+    }
+
     async fn generate_content(
         &self,
         req: LlmRequest,
@@ -240,6 +244,36 @@ pub async fn spend_ledger_daily_cap(cfg: &Config, provider: Provider) -> Verdict
     }
 }
 
+/// Output cap for the spend-ledger runs, so each call's reservation is a small upper bound.
+const PRICED_RUN_MAX_OUTPUT_TOKENS: i32 = 2_048;
+
+/// Forwards to an [`InMemorySpendLedger`] and records the largest reservation, which is the
+/// upper-bound cost of one call.
+#[derive(Debug, Default)]
+struct HoldTap {
+    inner: InMemorySpendLedger,
+    largest_hold: Mutex<u64>,
+}
+
+#[async_trait]
+impl SpendLedger for HoldTap {
+    async fn reserve(&self, key: &SpendKey, amount: u64) -> AdkResult<adk_core::ReservationId> {
+        let id = self.inner.reserve(key, amount).await?;
+        let mut largest = self.largest_hold.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *largest = (*largest).max(amount);
+        Ok(id)
+    }
+    async fn commit(&self, id: adk_core::ReservationId, actual: u64) -> AdkResult<()> {
+        self.inner.commit(id, actual).await
+    }
+    async fn release(&self, id: adk_core::ReservationId) -> AdkResult<()> {
+        self.inner.release(id).await
+    }
+    async fn spent(&self, key: &SpendKey, period: SpendPeriod) -> AdkResult<u64> {
+        self.inner.spent(key, period).await
+    }
+}
+
 /// Runs one single-call turn against `ledger`, returning the turn and the model's call count.
 async fn priced_run(
     cfg: &Config,
@@ -247,12 +281,12 @@ async fn priced_run(
     app: &str,
     session_id: &str,
     ledger: Arc<dyn SpendLedger>,
-    estimate: u64,
 ) -> anyhow::Result<(crate::common::Turn, usize)> {
     let model = cfg.model(provider)?;
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::clone(&model) as Arc<dyn Llm>)
         .instruction("Reply with exactly one word: OK")
+        .max_output_tokens(PRICED_RUN_MAX_OUTPUT_TOKENS)
         .build()?;
     let sessions = session(app, session_id).await?;
     let runner = Runner::builder()
@@ -261,7 +295,8 @@ async fn priced_run(
         .session_service(sessions as Arc<dyn SessionService>)
         .run_config(RunConfig::builder().spend_ledger(ledger).build())
         .build()?
-        .with_llm_spend_estimate(LlmSpendEstimate::per_call(estimate));
+        // Priced calls reserve their upper bound; the estimate applies only to unpriced ones.
+        .with_llm_spend_estimate(LlmSpendEstimate::per_call(1));
     let turn = run_turn(&runner, USER, session_id, "Status?").await;
     Ok((turn, model.calls()))
 }
@@ -270,23 +305,30 @@ async fn daily_cap(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> 
     let app = "autonomy-spend";
     let vendor = provider.vendor();
 
-    // A probe run prices one call, so the cap holds a few calls on any model.
-    let probe = Arc::new(InMemorySpendLedger::default());
-    let (turn, _) = priced_run(cfg, provider, app, "probe", probe.clone(), 1).await?;
+    // A probe run prices one call and its upper bound, so the cap holds a few calls on any
+    // model.
+    let probe = Arc::new(HoldTap::default());
+    let (turn, _) = priced_run(cfg, provider, app, "probe", probe.clone()).await?;
     if let Some(error) = &turn.error {
         return Ok(Verdict::Fail(format!("probe run failed: {}", brief(error))));
     }
     let per_call = probe.spent(&SpendKey::org(app).with_vendor(vendor), SpendPeriod::Day).await?;
+    let bound = *probe.largest_hold.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if per_call <= 1 {
         return Ok(Verdict::Fail(format!(
             "the probe call was not recorded under vendor '{vendor}' at its reported cost ({per_call} micro-USD)"
         )));
     }
-    // One org cap covers model spend and payments: a one-cent checkout plus about three
-    // model calls.
+    if bound < per_call {
+        return Ok(Verdict::Fail(format!(
+            "the probe call reserved {bound} micro-USD but cost {per_call}: the hold is not an upper bound"
+        )));
+    }
+    // One org cap covers model spend and payments: a one-cent checkout, then runs while the
+    // committed spend plus one call's upper bound fits — about three calls.
     const CHECKOUT_CENTS: i64 = 1;
     const CHECKOUT_MICRO_USD: u64 = 10_000;
-    let cap = CHECKOUT_MICRO_USD + per_call * 7 / 2;
+    let cap = CHECKOUT_MICRO_USD + bound + per_call * 5 / 2;
     let ledger = Arc::new(InMemorySpendLedger::new(
         SpendLimits::new().limit(SpendKey::org(app).per(SpendPeriod::Day), cap),
     ));
@@ -303,7 +345,7 @@ async fn daily_cap(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> 
     for attempt in 0..10 {
         let session_id = format!("run-{attempt}");
         let (turn, model_calls) =
-            priced_run(cfg, provider, app, &session_id, ledger.clone(), per_call).await?;
+            priced_run(cfg, provider, app, &session_id, ledger.clone()).await?;
         match &turn.failure {
             Some((code, _)) if code == "spend.limit_exceeded" => {
                 refused = Some(model_calls);
@@ -327,9 +369,12 @@ async fn daily_cap(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> 
     if model_calls != 0 {
         return Ok(Verdict::Fail(format!("the refused run still called the model {model_calls}x")));
     }
-    // The same cap now refuses a payment, before the merchant completes it.
+    // The same cap now refuses a payment larger than the remaining room, before the
+    // merchant completes it.
     let completions = merchant.completions();
-    let over_cap = buy(&merchant, with_ledger, app, "assistant", "buy-2", CHECKOUT_CENTS).await;
+    let remaining = cap.saturating_sub(ledger.spent(&SpendKey::org(app), SpendPeriod::Day).await?);
+    let over_cap_cents = i64::try_from(remaining / CHECKOUT_MICRO_USD + 1).unwrap_or(i64::MAX);
+    let over_cap = buy(&merchant, with_ledger, app, "assistant", "buy-2", over_cap_cents).await;
     match &over_cap {
         // The payment policy set reports the spend guardrail's refusal.
         Err(error)
@@ -357,14 +402,15 @@ async fn daily_cap(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> 
             "spend {total} not split into model spend under '{vendor}' ({model_spend}) and the checkout under '{MERCHANT}' ({payments}); agent total {by_agent}"
         )));
     }
-    if total > cap + per_call {
+    // A hard cap: each call reserves its upper bound, so spend never passes the cap.
+    if total > cap {
         return Ok(Verdict::Fail(format!("committed {total} micro-USD past the {cap} cap")));
     }
     if completed == 0 {
         return Ok(Verdict::Fail("the cap refused the first run".to_string()));
     }
     Ok(Verdict::Pass(format!(
-        "org cap {cap}: 1c checkout ({payments}) + {completed} runs ({model_spend} under '{vendor}'); run {} refused before its model call; a further 1c checkout refused by the spend_limit policy before the merchant",
+        "org cap {cap}: 1c checkout ({payments}) + {completed} runs ({model_spend} under '{vendor}', bound {bound}/call) = {total} ≤ cap; run {} refused before its model call; a {over_cap_cents}c checkout refused by the spend_limit policy before the merchant",
         completed + 1
     )))
 }

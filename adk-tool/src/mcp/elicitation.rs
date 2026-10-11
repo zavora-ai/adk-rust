@@ -136,6 +136,9 @@ pub struct AdkClientHandler {
     tool_list_changes: Arc<AtomicU64>,
     #[cfg(feature = "mcp-sampling")]
     sampling_handler: Option<Arc<dyn crate::sampling::SamplingHandler>>,
+    /// Scopes sampling requests count against; a toolset swaps in its own on connect.
+    #[cfg(feature = "mcp-sampling")]
+    sampling_scopes: Arc<std::sync::RwLock<Arc<crate::sampling::SamplingScopes>>>,
 }
 
 impl AdkClientHandler {
@@ -148,6 +151,8 @@ impl AdkClientHandler {
             tool_list_changes: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "mcp-sampling")]
             sampling_handler: None,
+            #[cfg(feature = "mcp-sampling")]
+            sampling_scopes: Arc::default(),
         }
     }
 
@@ -261,6 +266,37 @@ impl AdkClientHandler {
         self.sampling_handler = Some(handler);
         self
     }
+
+    /// Meters sampling requests that arrive outside any run's tool call against `scope`.
+    ///
+    /// Requests that arrive while a run's [`McpToolset`](crate::McpToolset) tool call is
+    /// in flight count against that run instead. See
+    /// [sampling metering](crate::sampling#metering).
+    #[cfg(feature = "mcp-sampling")]
+    pub fn with_sampling_scope(self, scope: adk_core::ModelCallScope) -> Self {
+        self.sampling_scopes().set_fallback(Some(scope));
+        self
+    }
+
+    #[cfg(feature = "mcp-sampling")]
+    pub(crate) fn sampling_scopes(&self) -> Arc<crate::sampling::SamplingScopes> {
+        Arc::clone(&self.sampling_scopes.read().unwrap_or_else(|poisoned| poisoned.into_inner()))
+    }
+
+    /// Makes this connection's sampling requests resolve against `scopes`, keeping this
+    /// handler's fallback scope when `scopes` has none.
+    #[cfg(feature = "mcp-sampling")]
+    pub(crate) fn share_sampling_scopes(&self, scopes: Arc<crate::sampling::SamplingScopes>) {
+        let mut current =
+            self.sampling_scopes.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if Arc::ptr_eq(&current, &scopes) {
+            return;
+        }
+        if scopes.fallback().is_none() {
+            scopes.set_fallback(current.fallback());
+        }
+        *current = scopes;
+    }
 }
 
 impl rmcp::handler::client::ClientHandler for AdkClientHandler {
@@ -355,10 +391,13 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
             temperature: params.temperature.map(|t| t as f64),
         };
 
-        match std::panic::AssertUnwindSafe(sampling_handler.handle_create_message(request))
-            .catch_unwind()
-            .await
-        {
+        // The request counts against the run whose tool call is in flight, if any.
+        let handled = sampling_handler.handle_create_message(request);
+        let handled = match self.sampling_scopes().resolve() {
+            Some(scope) => futures::future::Either::Left(scope.within(handled)),
+            None => futures::future::Either::Right(handled),
+        };
+        match std::panic::AssertUnwindSafe(handled).catch_unwind().await {
             Ok(Ok(response)) => {
                 // Convert our SamplingResponse → rmcp CreateMessageResult
                 let text = match &response.content {

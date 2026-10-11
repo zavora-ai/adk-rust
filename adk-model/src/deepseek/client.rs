@@ -187,6 +187,16 @@ fn mentions_json(messages: &[convert::Message]) -> bool {
 
 #[async_trait]
 impl Llm for DeepSeekClient {
+    // DeepSeek does not state whether thinking counts toward `max_tokens`, so the model's output limit bounds every request.
+    fn max_cost_micro_usd(&self, request: &adk_core::LlmRequest) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().max_cost_micro_usd(
+            Some("deepseek"),
+            self.name(),
+            request,
+            None,
+        )
+    }
+
     fn name(&self) -> &str {
         &self.config.model
     }

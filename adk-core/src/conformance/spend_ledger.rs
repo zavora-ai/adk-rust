@@ -9,6 +9,7 @@
 //! | [`expired_reservations_stop_holding_budget`] | An abandoned hold stops counting after its time to live; a late commit still records spend |
 //! | [`concurrent_reservations_never_exceed_a_cap`] | Concurrent reservations through two handles never grant more than the cap |
 //! | [`reservations_survive_a_restart`] | Holds and settlements made before a restart count after it |
+//! | [`unbounded_holds_need_an_uncapped_key`] | A [`UNBOUNDED_HOLD_MICRO_USD`] hold is refused by every covering cap, granted where none applies, and leaves other caps' totals untouched |
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +21,7 @@ use super::unique;
 use crate::{
     AdkError, Clock, DEFAULT_RESERVATION_TTL, ErrorCategory, ManualClock, ReservationId,
     SPEND_LIMIT_EXCEEDED_CODE, SpendKey, SpendLedger, SpendLimits, SpendPeriod,
+    UNBOUNDED_HOLD_MICRO_USD,
 };
 
 /// How the suite configures a ledger it opens.
@@ -398,4 +400,39 @@ pub async fn reservations_survive_a_restart<H: SpendLedgerHarness + ?Sized>(harn
     after.release(to_release).await.expect("release a reservation made before the restart");
     assert_eq!(spent(&*after, &SpendKey::org(&org), SpendPeriod::Day).await, 30);
     after.reserve(&key, 70).await.expect("the released hold no longer counts");
+}
+
+/// A model call that cannot be bounded reserves [`UNBOUNDED_HOLD_MICRO_USD`]: every cap
+/// that covers it refuses it, a key no cap covers accepts it (twice over, without
+/// overflow), and settling it records the actual amount without touching other caps.
+pub async fn unbounded_holds_need_an_uncapped_key<H: SpendLedgerHarness + ?Sized>(harness: &H) {
+    let capped_org = unique("org");
+    let uncapped_org = unique("org");
+    let clock = ManualClock::new(base_time());
+    let ledger = harness.open(setup(daily_cap(&capped_org, 1_000), &clock)).await;
+    let capped = SpendKey::org(&capped_org).with_agent("agent").with_vendor("vendor");
+    let uncapped = SpendKey::org(&uncapped_org).with_agent("agent").with_vendor("vendor");
+
+    let error = ledger
+        .reserve(&capped, UNBOUNDED_HOLD_MICRO_USD)
+        .await
+        .expect_err("a covering cap refuses an unbounded hold");
+    assert_limit_exceeded(
+        &error,
+        &SpendKey::org(&capped_org).per(SpendPeriod::Day),
+        0,
+        UNBOUNDED_HOLD_MICRO_USD,
+        "unbounded hold under a cap",
+    );
+
+    let first = ledger.reserve(&uncapped, UNBOUNDED_HOLD_MICRO_USD).await.expect("no cap applies");
+    let second =
+        ledger.reserve(&uncapped, UNBOUNDED_HOLD_MICRO_USD).await.expect("holds are not summed");
+    let full = ledger.reserve(&capped, 1_000).await.expect("other caps are unaffected");
+
+    ledger.commit(first, 25).await.expect("commit the actual amount");
+    ledger.release(second).await.expect("release");
+    ledger.release(full).await.expect("release");
+    assert_eq!(spent(&*ledger, &SpendKey::org(&uncapped_org), SpendPeriod::Day).await, 25);
+    assert_eq!(spent(&*ledger, &SpendKey::org(&capped_org), SpendPeriod::Day).await, 0);
 }
