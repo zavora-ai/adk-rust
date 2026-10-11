@@ -174,7 +174,7 @@ impl ActionRecord {
 /// Durable store of non-idempotent tool calls, keyed by idempotency key.
 ///
 /// Set one on [`RunConfig::action_ledger`](crate::RunConfig::action_ledger).
-/// `LlmAgent` calls [`begin`](Self::begin) before executing a
+/// `LlmAgent` and `CodeActAgent` call [`begin`](Self::begin) before executing a
 /// [`ToolEffect::NonIdempotent`] tool and [`complete`](Self::complete) after,
 /// and consults [`get`](Self::get) first so a replayed call never executes
 /// twice. An error from `get` or `begin` fails the call closed: the tool is not

@@ -6,7 +6,6 @@ use adk_core::{
     MemoryEntry, OnToolErrorCallback, Part, ReadonlyContext, Result, RetryBudget, Tool,
     ToolAuthorization, ToolCallbackContext, ToolConfirmationPolicy, ToolConfirmationRequest,
     ToolContext, ToolEffect, ToolExecutionStrategy, ToolGate, ToolOutcome, Toolset,
-    action_ledger::{ActionOutcome, ActionRecord},
     authorize_tool_call,
 };
 use async_stream::stream;
@@ -2327,53 +2326,17 @@ impl ToolExecutor<'_> {
                 // A non-idempotent call executes at most once per idempotency key. A record
                 // that exists answers the call; a ledger that cannot be read or written
                 // fails the call closed.
-                let ledger = match effect {
-                    ToolEffect::NonIdempotent => self.ctx.run_config().action_ledger.clone(),
-                    _ => None,
-                };
-                let idempotency_key = tool_ctx.idempotency_key();
-                if let Some(ledger) = &ledger {
-                    let answer = match ledger.get(&idempotency_key).await {
-                        Ok(Some(record)) => Some(match record.outcome {
-                            Some(ActionOutcome::Succeeded { result_digest }) => serde_json::json!({
-                                "status": "already_succeeded",
-                                "result_digest": result_digest,
-                                "detail": format!("this call to '{name}' already completed; it was not executed again"),
-                            }),
-                            Some(ActionOutcome::Failed { error }) => serde_json::json!({
-                                "status": "already_failed",
-                                "error": error,
-                                "detail": format!("this call to '{name}' already failed; it was not executed again"),
-                            }),
-                            _ => adk_core::outcome_unknown_response(format!(
-                                "an earlier attempt of this call to '{name}' began but recorded no outcome, so it may have taken effect; it was not executed again"
-                            )),
-                        }),
-                        Ok(None) => ledger
-                            .begin(&ActionRecord::new(
-                                idempotency_key.clone(),
-                                name.clone(),
-                                &final_args,
-                                effect,
-                            ))
-                            .await
-                            .err()
-                            .map(|error| {
-                                serde_json::json!({
-                                    "error": format!("tool '{name}' was not executed: the action ledger could not record the call: {error}")
-                                })
-                            }),
-                        Err(error) => Some(serde_json::json!({
-                            "error": format!("tool '{name}' was not executed: the action ledger could not be read: {error}")
-                        })),
-                    };
-                    if let Some(answer) = answer {
-                        tracing::warn!(
-                            tool.name = %name,
-                            tool.idempotency_key = %idempotency_key,
-                            response = %answer,
-                            "non-idempotent call answered by the action ledger without executing"
-                        );
+                let ledgered = match crate::tool_ledger::begin_ledgered_call(
+                    self.ctx.run_config(),
+                    effect,
+                    tool_ctx.idempotency_key(),
+                    &name,
+                    &final_args,
+                )
+                .await
+                {
+                    Ok(ledgered) => ledgered,
+                    Err(answer) => {
                         return Ok(ToolExecutionResult {
                             index,
                             content: Content {
@@ -2392,7 +2355,7 @@ impl ToolExecutor<'_> {
                             pending: None,
                         });
                     }
-                }
+                };
 
                 let span_name = format!("execute_tool {name}");
                 let tool_span = tracing::info_span!(
@@ -2500,23 +2463,10 @@ impl ToolExecutor<'_> {
                 let outcome_unknown = interrupted && effect == ToolEffect::NonIdempotent;
                 // A call that ended mid-flight keeps its begun record, so a replay is answered
                 // with an unknown outcome instead of executing again.
-                if let Some(ledger) = &ledger
+                if let Some(ledgered) = ledgered
                     && !outcome_unknown
                 {
-                    let outcome = match &retry_result {
-                        Some(value) => {
-                            ActionOutcome::Succeeded { result_digest: adk_core::json_digest(value) }
-                        }
-                        None => ActionOutcome::Failed { error: last_error.clone() },
-                    };
-                    if let Err(error) = ledger.complete(&idempotency_key, outcome).await {
-                        tracing::error!(
-                            tool.name = %name,
-                            tool.idempotency_key = %idempotency_key,
-                            error = %error,
-                            "action ledger could not record the outcome; a replay will report it as unknown"
-                        );
-                    }
+                    ledgered.complete(&name, retry_result.as_ref(), &last_error).await;
                 }
 
                 let tool_duration = tool_start.elapsed();
@@ -2525,9 +2475,7 @@ impl ToolExecutor<'_> {
                     None if outcome_unknown => (
                         false,
                         Some(last_error.clone()),
-                        adk_core::outcome_unknown_response(format!(
-                            "{last_error}. The call may have taken effect; check its result before calling it again."
-                        )),
+                        crate::tool_ledger::interrupted_call_response(&last_error),
                     ),
                     None => (
                         false,

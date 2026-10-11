@@ -165,6 +165,7 @@ impl CodeRuntime for ScriptedRuntime {
 
 /// A minimal [`InvocationContext`] backed by an in-memory session state map.
 pub(crate) struct MockInvocationContext {
+    invocation_id: String,
     user_content: Content,
     session: MockSession,
     run_config: RunConfig,
@@ -174,10 +175,17 @@ impl MockInvocationContext {
     /// Create a context with the given incoming message and empty session state.
     pub(crate) fn new(user_content: Content) -> Self {
         Self {
+            invocation_id: "inv-test".to_string(),
             user_content,
             session: MockSession::new(HashMap::new()),
             run_config: RunConfig::default(),
         }
+    }
+
+    /// Set the invocation id, as a later invocation of the same session has.
+    pub(crate) fn with_invocation_id(mut self, invocation_id: &str) -> Self {
+        self.invocation_id = invocation_id.to_string();
+        self
     }
 
     /// Seed the session state (e.g. a persisted checkpoint from a prior run).
@@ -229,7 +237,7 @@ impl MockInvocationContext {
 #[async_trait]
 impl ReadonlyContext for MockInvocationContext {
     fn invocation_id(&self) -> &str {
-        "inv-test"
+        &self.invocation_id
     }
     fn agent_name(&self) -> &str {
         "code-agent"

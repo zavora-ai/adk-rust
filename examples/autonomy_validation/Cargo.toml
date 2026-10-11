@@ -8,7 +8,8 @@ description = "Live OpenAI, Anthropic, and Gemini validation of the autonomy-rea
 [workspace]
 
 [dependencies]
-adk-agent = { path = "../../adk-agent", features = ["guardrails"] }
+adk-agent = { path = "../../adk-agent", features = ["guardrails", "codeact"] }
+adk-codeact-monty = { path = "../../adk-codeact-monty" }
 adk-anthropic = { path = "../../adk-anthropic" }
 adk-core = { path = "../../adk-core" }
 adk-eval = { path = "../../adk-eval" }

@@ -803,9 +803,9 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
       checked against the policy again
    4. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
       approval, the `ApprovalStore`, the `ToolConfirmationHandler`, or a hold
-6. Action ledger (`LlmAgent`, `ToolEffect::NonIdempotent` tools, `RunConfig::action_ledger`) — a
-   recorded call is answered from its record without executing; otherwise the call is begun
-   under its `ToolContext::idempotency_key()`
+6. Action ledger (`ToolEffect::NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded
+   call is answered from its record without executing (`CodeActAgent` raises the answer into
+   the script); otherwise the call is begun under its `ToolContext::idempotency_key()`
 7. Tool executes under its timeout — the RBAC (`ProtectedTool`) and scope (`ScopeGuard`) wrappers
    check here, inside `execute()`, so a denial is a tool error. Only `ReadOnly` and `Idempotent`
    tools are retried, after a retryable error or a timeout, with backoff

@@ -3,6 +3,7 @@
 
 pub mod anthropic;
 pub mod budget;
+pub mod codeact;
 pub mod commerce;
 pub mod eval;
 pub mod governance;
@@ -31,6 +32,7 @@ pub const ALL: &[&str] = &[
     "anthropic_cache_cost",
     "mcp_concurrency",
     "payment_timeout_once",
+    "codeact_payment_once",
     "team_budget_cap",
     "default_deny_policy",
     "approval_across_runs",
@@ -59,6 +61,7 @@ pub async fn run(name: &str, cfg: &Config, provider: Provider) -> Verdict {
         "anthropic_cache_cost" => anthropic::cache_cost(cfg, provider).await,
         "mcp_concurrency" => mcp::run(cfg, provider).await,
         "payment_timeout_once" => payments::payment_timeout_once(cfg, provider).await,
+        "codeact_payment_once" => codeact::codeact_payment_once(cfg, provider).await,
         "team_budget_cap" => budget::team_budget_cap(cfg, provider).await,
         "default_deny_policy" => policy::default_deny_policy(cfg, provider).await,
         "approval_across_runs" => policy::approval_across_runs(cfg, provider).await,

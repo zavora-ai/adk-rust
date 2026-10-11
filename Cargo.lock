@@ -383,9 +383,13 @@ dependencies = [
  "adk-agent",
  "adk-code",
  "adk-core",
+ "adk-runner",
+ "adk-session",
  "async-trait",
+ "futures",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

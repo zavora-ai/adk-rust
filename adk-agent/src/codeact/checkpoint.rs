@@ -43,8 +43,9 @@ pub enum ResolutionRecord {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Disposition {
-    /// Written **before** an inline tool runs. On recovery the tool is re-run to
-    /// produce the result (safe: only pure script execution preceded it).
+    /// Written **before** an inline tool runs. On recovery the call is re-run to
+    /// produce the result; a non-idempotent call recorded in the action ledger is
+    /// answered from its record instead of executing again.
     PendingResult,
     /// Written **after** an inline tool returns. On recovery the continuation is
     /// resumed with the stored result — the tool is **not** re-run.
@@ -80,6 +81,14 @@ pub struct CodeActCheckpoint {
     /// The tool roster at suspend time, to detect a mismatched resume (the
     /// external-function set is baked into the snapshot).
     pub tool_roster: Vec<String>,
+    /// The agent run that wrote this checkpoint.
+    ///
+    /// Tool-call idempotency keys are scoped to it, so a call replayed from this
+    /// checkpoint in a later invocation keeps its key and the action ledger
+    /// answers it instead of executing it again. `None` in checkpoints written
+    /// before the field existed; resuming one starts a new scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -98,6 +107,7 @@ mod tests {
                 pending_handle: Some(json!({"task": "t1"})),
             },
             tool_roster: vec!["slow".into()],
+            run_id: Some("run-1".into()),
         };
         let value = serde_json::to_value(&cp).unwrap();
         let back: CodeActCheckpoint = serde_json::from_value(value.clone()).unwrap();

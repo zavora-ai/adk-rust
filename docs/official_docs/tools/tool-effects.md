@@ -102,9 +102,24 @@ let agent = LlmAgentBuilder::new("support")
 ## Idempotency keys
 
 `ToolContext::idempotency_key()` identifies one tool call across every attempt and
-replay. The default is `"{app}/{user}/{session}/{invocation}/{function_call_id}"`. When a
-provider assigns no call ID, `LlmAgent` assigns one unique to the model turn, so two calls
-in one invocation never share a key.
+replay.
+
+| Agent | Key | Unique per |
+|-------|-----|------------|
+| `LlmAgent` | `{app}/{user}/{session}/{invocation}/{function_call_id}` | Model function call; when a provider assigns no call ID, `LlmAgent` assigns one unique to the model turn |
+| `CodeActAgent` | `{app}/{user}/{session}/codeact/{run_id}/{iteration}/{call_id}` | Tool call of one generated program |
+
+A `CodeActAgent` key names the agent run (`run_id`, stored in every checkpoint), the model
+turn whose program made the call (`iteration`), and the interpreter's call id, which counts
+the program's tool calls in order:
+
+- Two identical calls in one program have different call ids, so both execute.
+- A call replayed from a checkpoint — crash recovery from the write-ahead checkpoint, or the
+  resume of a call held for confirmation — runs in a later invocation but resolves to the
+  same key, because the run ID, the turn, and the call id come from the checkpoint and the
+  interpreter snapshot.
+- A program the model regenerates on a later turn or in a new run is a new set of calls with
+  new keys. The ledger does not match calls by tool name or arguments.
 
 ## The action ledger
 
@@ -120,7 +135,8 @@ let config = RunConfig::builder()
     .build();
 ```
 
-`LlmAgent` consults the ledger under the call's idempotency key before executing:
+`LlmAgent` and `CodeActAgent` consult the ledger under the call's idempotency key after the
+governed path authorizes the call and before it executes:
 
 | Ledger state | Behaviour | Function response |
 |--------------|-----------|-------------------|
@@ -132,7 +148,12 @@ let config = RunConfig::builder()
 
 A call that times out or panics keeps its begun record, so a replay of it after a crash,
 a timeout, or a cancelled run is answered as `outcome_unknown` rather than executed a
-second time. The ledger stores `json_digest` digests of the arguments and result — a
+second time.
+
+`CodeActAgent` raises every ledger answer into the program at the call site, with the
+response above as the error message — for example `{"status":"outcome_unknown","detail":"…"}`.
+Code that catches the error can inspect it; an uncaught one reaches the model with the
+program's traceback. The ledger stores `json_digest` digests of the arguments and result — a
 stable identifier, not a cryptographic hash — never the payloads themselves.
 
 | Implementation | Crate | Survives a restart |
@@ -167,9 +188,9 @@ invitation to try again:
 
 | Cause | Source |
 |-------|--------|
-| The call hit the agent's tool timeout | `LlmAgent` |
-| The tool panicked | `LlmAgent` |
-| The ledger holds a begun record for the key | `LlmAgent` |
+| The call hit the agent's tool timeout | `LlmAgent`, `CodeActAgent` |
+| The tool panicked | `LlmAgent`, `CodeActAgent` |
+| The ledger holds a begun record for the key | `LlmAgent`, `CodeActAgent` |
 | The run was cancelled while the call was in flight | `Runner` |
 
 When a run is cancelled — `Runner::interrupt()` or a cancellation token — the runner

@@ -29,3 +29,9 @@ serde_json = { workspace = true }
 async-trait = { workspace = true }
 # Temp directories for the filesystem-access integration tests.
 tempfile = "3"
+# The action-ledger tests drive a real CodeActAgent through a Runner. Internal
+# dev-dependencies are path-only so they never constrain the publish order.
+adk-runner = { path = "../adk-runner" }
+adk-session = { path = "../adk-session" }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }

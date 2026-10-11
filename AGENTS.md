@@ -668,8 +668,9 @@ Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`
 5. The governed path, `adk_core::authorize_tool_call`, on the final arguments: kill switch →
    `ToolPolicy` → `ToolGuardrailSet` (a rewrite is checked against the policy again) →
    confirmation (call-ID decision, fingerprint approval, `ApprovalStore`, handler, or hold).
-6. Action ledger begin (`LlmAgent`, `NonIdempotent` tools, `RunConfig::action_ledger`) — a
-   recorded call is answered from its record without executing.
+6. Action ledger begin (`NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded call is
+   answered from its record without executing (`CodeActAgent` raises the answer into the
+   script). Shared helper: `adk-agent/src/tool_ledger.rs`.
 7. `execute()` under the tool's timeout — `adk-auth` wrappers (`ProtectedTool`, `ScopeGuard`)
    check RBAC and scopes here, so a denial is a tool error. Only `ReadOnly` and `Idempotent`
    tools are retried (retryable error or timeout, with backoff).

@@ -120,6 +120,38 @@ fn dump_and_resume_round_trips_across_a_fresh_runtime() {
 }
 
 #[test]
+fn call_ids_are_distinct_within_a_program_and_stable_across_resume() {
+    // The agent keys each tool call by its interpreter call id, so identical calls
+    // in one program must differ, and a continuation resumed from a snapshot must
+    // number its calls the same way every time.
+    let rt = MontyRuntime::new();
+    let script = "\
+a = call_tool(\"charge\", {\"amount\": 5})
+b = call_tool(\"charge\", {\"amount\": 5})
+{\"type\": \"final_result\", \"value\": [a, b]}
+";
+    let RunStep::Call { call, .. } = rt.start(script, "test").expect("start") else {
+        panic!("expected a tool call");
+    };
+    let first = call.call_id();
+    let snapshot = call.dump().expect("dump");
+
+    let second_ids: Vec<u64> = (0..2)
+        .map(|_| {
+            let step =
+                MontyRuntime::new().resume(&snapshot, ResumeWith::Value(json!(1))).expect("resume");
+            let RunStep::Call { call, .. } = step else {
+                panic!("expected the second tool call");
+            };
+            assert_eq!(kwargs_object(call.keyword_args()), json!({"amount": 5}));
+            call.call_id()
+        })
+        .collect();
+    assert_ne!(first, second_ids[0]);
+    assert_eq!(second_ids[0], second_ids[1]);
+}
+
+#[test]
 fn tool_error_is_raised_into_the_script_and_catchable() {
     let rt = MontyRuntime::new();
     // The script catches the raised tool error and reports a clean final result.

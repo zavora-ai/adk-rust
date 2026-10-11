@@ -54,10 +54,24 @@ and resumes — the confirmation decision arrives via `RunConfig::tool_approvals
 `FunctionResponse` in the next message. Inline tool calls are bracketed with
 write-ahead (SAVE-BEFORE) and SAVE-AFTER checkpoints: once the SAVE-AFTER
 checkpoint is persisted, recovery resumes with the stored result and never
-re-runs the tool. A crash in the narrow window after a tool's side effect but
-before its SAVE-AFTER checkpoint lands will re-run the tool on recovery, so
-tools that are not idempotent should guard against that (the same at-least-once
-boundary as `LlmAgent`).
+re-runs the tool. A crash after a tool's side effect but before its SAVE-AFTER
+checkpoint lands re-runs the call on recovery.
+
+With `RunConfig::action_ledger` set, a `ToolEffect::NonIdempotent` call is
+recorded before it executes, under an idempotency key that a recovered or
+resumed call keeps. The re-run is then answered from the ledger instead of
+executing again, and the answer is raised into the program at the call site:
+
+| Ledger state | Raised into the program |
+|--------------|-------------------------|
+| Completed with a result | `{"status": "already_succeeded", "result_digest": …}` |
+| Completed with an error | `{"status": "already_failed", "error": …}` |
+| Begun, never completed (crash or timeout mid-call) | `{"status": "outcome_unknown", "detail": …}` |
+
+A non-idempotent call that times out or panics is raised as `outcome_unknown`
+with or without a ledger. Without a ledger, recovery re-runs the call (at least
+once). See [Tool Effects and the Action Ledger](../tools/tool-effects.md) for the
+key format.
 
 This requires a runtime that can snapshot a paused call. A runtime that cannot
 runs long-running tools inline and rejects confirmation pauses.

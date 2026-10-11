@@ -501,6 +501,15 @@ or short-circuit a tool call). Each tool call gets a fresh per-call `ToolContext
 that carries the interpreter call id and delegates artifacts, memory, shared
 state, user scopes, and secrets to the live invocation.
 
+With `RunConfig::action_ledger` set, `CodeActAgent` records each
+`NonIdempotent` call like `LlmAgent` does. The idempotency key names the run,
+the model turn, and the interpreter call id, so two identical calls in one
+program both execute, and a call replayed from a checkpoint (crash recovery or
+a confirmed resume) is answered from the ledger instead of executing again. A
+ledger answer, and a non-idempotent call that times out or panics, is raised
+into the script as the same `already_succeeded` / `already_failed` /
+`outcome_unknown` payload `LlmAgent` returns.
+
 A runnable, dependency-free end-to-end demo (a self-contained `CodeRuntime` and a
 deterministic model) lives in
 [`examples/codeact_agent`](https://github.com/zavora-ai/adk-rust/tree/main/examples/codeact_agent).

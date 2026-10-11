@@ -8,8 +8,9 @@
 //! tool call (a write-ahead log written to session state via `state_delta`):
 //!
 //! - **before** ([`Disposition::PendingResult`]): if the process crashes during
-//!   the tool, recovery re-runs it (only pure script execution preceded it, so
-//!   that is safe);
+//!   the tool, recovery re-runs the call. With `RunConfig::action_ledger` set, a
+//!   non-idempotent call keeps its idempotency key on recovery, so the ledger
+//!   answers it instead of executing it again;
 //! - **after** ([`Disposition::Resolved`]): once the tool has returned, recovery
 //!   resumes with the stored result and never re-runs the tool.
 //!
@@ -33,7 +34,8 @@ use adk_core::{
     IncludeContents, InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse,
     MemoryEntry, OnToolErrorCallback, Part, ReadonlyContext, RetryBudget, SharedState, Tool,
     ToolAuthorization, ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationPolicy,
-    ToolConfirmationRequest, ToolContext, ToolGate, ToolOutcome, Toolset, authorize_tool_call,
+    ToolConfirmationRequest, ToolContext, ToolEffect, ToolGate, ToolOutcome, Toolset,
+    authorize_tool_call,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -248,6 +250,12 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
             plugins: enhanced_plugin_manager.as_deref(),
         };
         let mut circuit = circuit_breaker_threshold.map(CircuitBreaker::new);
+        // Tool calls are keyed under the run that started the program, so a call replayed
+        // from a checkpoint in a later invocation keeps its idempotency key.
+        let run_id = pending
+            .as_ref()
+            .and_then(|cp| cp.run_id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         // Callback context for model-level hooks (the invocation context is also a
         // callback context). Tool-level callbacks get a fresh per-call context.
@@ -312,8 +320,11 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                     // Recovery re-runs an unfinished call, and a confirmed call runs now.
                     // Both pass through the governed path, which finds the decision.
                     Disposition::PendingResult | Disposition::AwaitingConfirmation => {
+                        let tool_ctx: Arc<dyn ToolContext> = Arc::new(CodeToolContext::new(
+                            invocation_ctx.clone(), &run_id, cp.iteration, cp.call.call_id,
+                        ));
                         match execute_for_resume(
-                            &tool_map, &invocation_ctx, &cp.call, &mut pending_actions,
+                            &tool_map, tool_ctx, &cp.call, &mut pending_actions,
                             &tool_policy, &mut circuit,
                         )
                         .await
@@ -378,6 +389,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 cp.call.clone(),
                                 Disposition::Resolved(rec.clone()),
                                 &roster,
+                                &run_id,
                             );
                             let mut after_ev =
                                 checkpoint_event(&invocation_id, &agent_name, &after);
@@ -507,7 +519,9 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 }
                             };
                             let tool_ctx: Arc<dyn ToolContext> =
-                                Arc::new(CodeToolContext::new(invocation_ctx.clone(), call_id));
+                                Arc::new(CodeToolContext::new(
+                                    invocation_ctx.clone(), &run_id, iteration, call_id,
+                                ));
                             let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
                                 ToolRun::Finished(exec) => exec,
                                 ToolRun::Held(request) => {
@@ -522,6 +536,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                         pcall,
                                         Disposition::AwaitingConfirmation,
                                         &roster,
+                                        &run_id,
                                     );
                                     let mut event =
                                         held_event(&invocation_id, &agent_name, &cp, request);
@@ -558,6 +573,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                         pcall,
                                         Disposition::AwaitingCompletion { pending_handle: Some(handle) },
                                         &roster,
+                                        &run_id,
                                     );
                                     let mut event = suspend_event(&invocation_id, &agent_name, &cp);
                                     flush_actions(&mut event, &mut pending_actions);
@@ -599,13 +615,16 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 pcall.clone(),
                                 Disposition::PendingResult,
                                 &roster,
+                                &run_id,
                             );
                             let mut before_ev = checkpoint_event(&invocation_id, &agent_name, &before);
                             flush_actions(&mut before_ev, &mut pending_actions);
                             yield Ok(before_ev);
 
                             let tool_ctx: Arc<dyn ToolContext> =
-                                Arc::new(CodeToolContext::new(invocation_ctx.clone(), call_id));
+                                Arc::new(CodeToolContext::new(
+                                    invocation_ctx.clone(), &run_id, iteration, call_id,
+                                ));
                             let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
                                 ToolRun::Finished(exec) => exec,
                                 ToolRun::Held(request) => {
@@ -621,6 +640,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                         pcall,
                                         Disposition::AwaitingConfirmation,
                                         &roster,
+                                        &run_id,
                                     );
                                     let mut event =
                                         held_event(&invocation_id, &agent_name, &cp, request);
@@ -662,6 +682,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 pcall,
                                 Disposition::Resolved(resolution.clone()),
                                 &roster,
+                                &run_id,
                             );
                             let mut after_ev = checkpoint_event(&invocation_id, &agent_name, &after);
                             flush_actions(&mut after_ev, &mut pending_actions);
@@ -669,7 +690,9 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                             resolution_to_resume(resolution)
                         } else {
                             let tool_ctx: Arc<dyn ToolContext> =
-                                Arc::new(CodeToolContext::new(invocation_ctx.clone(), call_id));
+                                Arc::new(CodeToolContext::new(
+                                    invocation_ctx.clone(), &run_id, iteration, call_id,
+                                ));
                             let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
                                 ToolRun::Finished(exec) => exec,
                                 ToolRun::Held(_) => Err(format!(
@@ -820,7 +843,7 @@ enum Resumed {
 /// interpreter, exactly as the inline path does.
 async fn execute_for_resume(
     tools: &ToolMap,
-    invocation_ctx: &Arc<dyn InvocationContext>,
+    tool_ctx: Arc<dyn ToolContext>,
     call: &PendingToolCall,
     pending: &mut EventActions,
     policy: &ToolPolicy<'_>,
@@ -828,8 +851,6 @@ async fn execute_for_resume(
 ) -> Resumed {
     match tools.get(&call.tool) {
         Some(tool) => {
-            let tool_ctx: Arc<dyn ToolContext> =
-                Arc::new(CodeToolContext::new(invocation_ctx.clone(), call.call_id));
             let result = match run_tool(tool, &tool_ctx, call.args.clone(), policy, circuit).await {
                 ToolRun::Finished(Ok(v)) => ResumeWith::Value(v),
                 ToolRun::Finished(Err(msg)) => ResumeWith::Raise(msg),
@@ -954,9 +975,25 @@ async fn run_authorized_tool(
             Err(error) => return Ok(ToolRun::Abort(error)),
         };
 
+    // A non-idempotent call executes at most once per idempotency key. A ledger
+    // answer is raised into the script, so the code sees that the call did not run.
+    let effect = tool.effect();
+    let ledgered = match crate::tool_ledger::begin_ledgered_call(
+        invocation_ctx.run_config(),
+        effect,
+        tool_ctx.idempotency_key(),
+        &name,
+        &args,
+    )
+    .await
+    {
+        Ok(ledgered) => ledgered,
+        Err(answer) => return Ok(ToolRun::Finished(Err(render_value(&answer)))),
+    };
+
     // Only a call that cannot repeat a side effect is retried, and only after a
     // retryable error.
-    let budget = policy.budget_for(&name).filter(|_| tool.effect().is_retry_safe());
+    let budget = policy.budget_for(&name).filter(|_| effect.is_retry_safe());
     let max_attempts = budget.map(|b| b.max_retries + 1).unwrap_or(1);
     let timeout = tool.timeout_override().unwrap_or(Some(policy.tool_timeout));
     // Actions are reset before each retry, so a failed attempt's state delta and
@@ -966,6 +1003,9 @@ async fn run_authorized_tool(
     let started = std::time::Instant::now();
     let mut last_error = String::new();
     let mut value = None;
+    // Set when the last attempt ended mid-flight (timeout or panic), so its side
+    // effect may or may not have happened.
+    let mut interrupted = false;
     // 0-based index of the attempt that produced the outcome (the successful
     // attempt, or the last failed one). Surfaced via `ToolOutcome::attempt`.
     let mut final_attempt: u32 = 0;
@@ -990,18 +1030,22 @@ async fn run_authorized_tool(
             match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(bounded)).await {
                 Ok(Ok(Ok(v))) => {
                     value = Some(v);
+                    interrupted = false;
                     break;
                 }
                 Ok(Ok(Err(err))) => {
                     last_error = tool_error_message(&err);
+                    interrupted = false;
                     err.is_retryable()
                 }
                 Ok(Err(limit)) => {
                     last_error = format!("tool timed out after {}s", limit.as_secs());
+                    interrupted = true;
                     true
                 }
                 Err(_) => {
                     last_error = format!("tool '{name}' panicked during execution");
+                    interrupted = true;
                     false
                 }
             };
@@ -1009,6 +1053,22 @@ async fn run_authorized_tool(
             break;
         }
     }
+
+    let outcome_unknown = interrupted && effect == ToolEffect::NonIdempotent;
+    // A call that ended mid-flight keeps its begun record, so a replay is answered
+    // with an unknown outcome instead of executing again.
+    if let Some(ledgered) = ledgered
+        && !outcome_unknown
+    {
+        ledgered.complete(&name, value.as_ref(), &last_error).await;
+    }
+    // What the script and the after-tool callbacks see when the call failed.
+    let failure = if outcome_unknown {
+        crate::tool_ledger::interrupted_call_response(&last_error)
+    } else {
+        serde_json::json!({ "error": last_error })
+    };
+    let failure_message = if outcome_unknown { render_value(&failure) } else { last_error.clone() };
 
     let tool_succeeded = value.is_some();
     if let Some(cb) = circuit.as_mut() {
@@ -1051,7 +1111,7 @@ async fn run_authorized_tool(
                     }
                 }
             }
-            fallback.ok_or_else(|| last_error.clone())
+            fallback.ok_or(failure_message)
         }
     };
 
@@ -1080,8 +1140,10 @@ async fn run_authorized_tool(
                 Err(e) => return Err(e.to_string()),
             }
         }
-        let callback_value =
-            result.clone().unwrap_or_else(|message| serde_json::json!({ "error": message }));
+        let callback_value = match &result {
+            Ok(value) => value.clone(),
+            Err(_) => failure.clone(),
+        };
         for callback in policy.after_tool_full {
             match callback(cb_ctx.clone(), tool.clone(), args.clone(), callback_value.clone()).await
             {
@@ -1190,6 +1252,7 @@ fn mk_checkpoint(
     call: PendingToolCall,
     disposition: Disposition,
     roster: &[String],
+    run_id: &str,
 ) -> CodeActCheckpoint {
     CodeActCheckpoint {
         iteration,
@@ -1198,6 +1261,7 @@ fn mk_checkpoint(
         call,
         disposition,
         tool_roster: roster.to_vec(),
+        run_id: Some(run_id.to_string()),
     }
 }
 
@@ -2312,6 +2376,10 @@ impl CodeActAgentBuilder {
     }
 
     /// Set the per-tool execution timeout (default: 5 minutes).
+    ///
+    /// A [`ToolEffect::NonIdempotent`] call that times out is raised into the
+    /// script as an [`outcome_unknown_response`](adk_core::outcome_unknown_response),
+    /// because its side effect may already have happened.
     pub fn tool_timeout(mut self, timeout: Duration) -> Self {
         self.tool_timeout = timeout;
         self
@@ -2645,14 +2713,28 @@ fn assemble_system_prompt(
 struct CodeToolContext {
     inner: Arc<dyn InvocationContext>,
     function_call_id: String,
+    idempotency_key: String,
     actions: Mutex<EventActions>,
 }
 
 impl CodeToolContext {
-    fn new(inner: Arc<dyn InvocationContext>, call_id: u64) -> Self {
+    /// Builds the context for call `call_id` of the program on model turn
+    /// `iteration` of run `run_id`.
+    ///
+    /// Interpreter call ids restart with every program, so the idempotency key
+    /// names the run and the turn as well: two calls in one program never share
+    /// a key, and a call replayed from a checkpoint keeps its key.
+    fn new(inner: Arc<dyn InvocationContext>, run_id: &str, iteration: u32, call_id: u64) -> Self {
+        let idempotency_key = format!(
+            "{}/{}/{}/codeact/{run_id}/{iteration}/{call_id}",
+            inner.app_name(),
+            inner.user_id(),
+            inner.session_id(),
+        );
         Self {
             inner,
             function_call_id: call_id.to_string(),
+            idempotency_key,
             actions: Mutex::new(EventActions::default()),
         }
     }
@@ -2697,6 +2779,9 @@ impl CallbackContext for CodeToolContext {
 impl ToolContext for CodeToolContext {
     fn function_call_id(&self) -> &str {
         &self.function_call_id
+    }
+    fn idempotency_key(&self) -> String {
+        self.idempotency_key.clone()
     }
     fn actions(&self) -> EventActions {
         self.actions.lock().unwrap().clone()
@@ -3148,6 +3233,7 @@ mod tests {
             call: PendingToolCall { call_id: 1, tool: "echo".into(), args: json!({}) },
             disposition: Disposition::Resolved(ResolutionRecord::Value(json!("stored"))),
             tool_roster: vec!["echo".to_string()],
+            run_id: None,
         };
         let events = drive(
             FakeLlm::new("noop"),
@@ -4524,6 +4610,7 @@ mod tests {
             call: PendingToolCall { call_id: 1, tool: "echo".into(), args: json!({"v": 1}) },
             disposition: Disposition::PendingResult,
             tool_roster: vec!["echo".to_string()],
+            run_id: None,
         };
         let events = drive(
             FakeLlm::new("noop"),
@@ -4583,6 +4670,7 @@ mod tests {
             call: PendingToolCall { call_id: 1, tool: "panic_button".into(), args: json!({}) },
             disposition: Disposition::PendingResult,
             tool_roster: vec!["panic_button".to_string()],
+            run_id: None,
         };
         let events = drive(
             FakeLlm::new("noop"),
@@ -4688,5 +4776,314 @@ mod tests {
         assert!(!outcome.success);
         assert_eq!(outcome.attempt, 0);
         assert!(outcome.error_message.unwrap().contains("not_found"));
+    }
+
+    // ----- action ledger -----
+
+    /// A `charge` tool that records the idempotency key of every execution. With a
+    /// delay it records the key first, so a call that times out has taken effect.
+    struct ChargeTool {
+        effect: adk_core::ToolEffect,
+        delay: Option<Duration>,
+        keys: Arc<StdMutex<Vec<String>>>,
+    }
+
+    fn charge_tool(
+        effect: adk_core::ToolEffect,
+        delay: Option<Duration>,
+    ) -> (Arc<dyn Tool>, Arc<StdMutex<Vec<String>>>) {
+        let keys = Arc::new(StdMutex::new(Vec::new()));
+        (Arc::new(ChargeTool { effect, delay, keys: keys.clone() }), keys)
+    }
+
+    #[async_trait]
+    impl Tool for ChargeTool {
+        fn name(&self) -> &str {
+            "charge"
+        }
+        fn description(&self) -> &str {
+            "charges a card"
+        }
+        fn effect(&self) -> adk_core::ToolEffect {
+            self.effect
+        }
+        async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
+            self.keys.lock().unwrap().push(ctx.idempotency_key());
+            if let Some(delay) = self.delay {
+                tokio::time::sleep(delay).await;
+            }
+            Ok(json!({ "charged": args["amount"] }))
+        }
+    }
+
+    /// An in-memory ledger that also records every key it begins.
+    #[derive(Debug, Default)]
+    struct RecordingLedger {
+        inner: adk_core::InMemoryActionLedger,
+        begun: StdMutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl adk_core::ActionLedger for RecordingLedger {
+        async fn begin(&self, record: &adk_core::ActionRecord) -> adk_core::Result<()> {
+            self.begun.lock().unwrap().push(record.key.clone());
+            self.inner.begin(record).await
+        }
+        async fn complete(
+            &self,
+            key: &str,
+            outcome: adk_core::ActionOutcome,
+        ) -> adk_core::Result<()> {
+            self.inner.complete(key, outcome).await
+        }
+        async fn get(&self, key: &str) -> adk_core::Result<Option<adk_core::ActionRecord>> {
+            self.inner.get(key).await
+        }
+    }
+
+    /// Loop inputs for one invocation `invocation` whose run config carries `ledger`.
+    fn ledgered_inputs(
+        runtime: Arc<dyn CodeRuntime>,
+        tools: Vec<Arc<dyn Tool>>,
+        ledger: Arc<RecordingLedger>,
+        invocation: &str,
+        decisions: HashMap<String, ToolConfirmationDecision>,
+    ) -> LoopInputs {
+        let incoming = user("pay");
+        let mut input = base_inputs(FakeLlm::new("noop"), runtime, incoming.clone());
+        input.invocation_ctx = Arc::new(
+            MockInvocationContext::new(incoming)
+                .with_invocation_id(invocation)
+                .with_run_config(adk_core::RunConfig::builder().action_ledger(ledger).build())
+                .with_confirmation_decisions(decisions),
+        );
+        input.tools = tools;
+        input
+    }
+
+    fn charge_program(call_ids: &[u64]) -> Vec<Planned> {
+        call_ids
+            .iter()
+            .map(|id| Planned::call("charge", json!({"amount": 5}), *id))
+            .chain(std::iter::once(Planned::Complete(
+                json!({"type": "final_result", "value": "paid"}),
+            )))
+            .collect()
+    }
+
+    fn checkpoints(events: &[Event]) -> Vec<CodeActCheckpoint> {
+        events.iter().filter_map(pending_in).collect()
+    }
+
+    #[tokio::test]
+    async fn a_non_idempotent_call_executes_once_when_its_step_is_replayed() {
+        let ledger = Arc::new(RecordingLedger::default());
+        let (charge, executions) = charge_tool(adk_core::ToolEffect::NonIdempotent, None);
+        let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![charge_program(&[0])]));
+        let input =
+            ledgered_inputs(runtime, vec![charge.clone()], ledger.clone(), "inv-1", HashMap::new());
+        let events = collect(input).await;
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("paid"));
+        assert_eq!(executions.lock().unwrap().len(), 1);
+
+        // The process crashed after the charge but before SAVE-AFTER landed: a later
+        // invocation recovers from the SAVE-BEFORE checkpoint.
+        let save_before = checkpoints(&events)
+            .into_iter()
+            .find(|cp| cp.disposition == Disposition::PendingResult)
+            .expect("a SAVE-BEFORE checkpoint");
+        let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+        let mut input =
+            ledgered_inputs(runtime.clone(), vec![charge], ledger.clone(), "inv-2", HashMap::new());
+        input.pending = Some(save_before);
+        let events = collect(input).await;
+
+        assert_eq!(executions.lock().unwrap().len(), 1, "the replayed call does not execute");
+        let raised: Value = serde_json::from_str(&runtime.last_raise().unwrap()).unwrap();
+        assert_eq!(raised["status"], "already_succeeded");
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("paid"));
+        assert_eq!(ledger.begun.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_recorded_call_is_answered_from_the_ledger_without_executing() {
+        use adk_core::ActionLedger as _;
+        let ledger = Arc::new(RecordingLedger::default());
+        let key = "app/user/sess-test/codeact/run-1/3/7";
+        let record = adk_core::ActionRecord::new(
+            key,
+            "charge",
+            &json!({"amount": 5}),
+            adk_core::ToolEffect::NonIdempotent,
+        );
+        ledger.inner.begin(&record).await.unwrap();
+        ledger
+            .inner
+            .complete(key, adk_core::ActionOutcome::Failed { error: "card declined".into() })
+            .await
+            .unwrap();
+        let (charge, executions) = charge_tool(adk_core::ToolEffect::NonIdempotent, None);
+        let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+        let mut input =
+            ledgered_inputs(runtime.clone(), vec![charge], ledger.clone(), "inv-2", HashMap::new());
+        input.pending = Some(CodeActCheckpoint {
+            iteration: 3,
+            transcript: vec![],
+            snapshot: serde_json::to_vec(&vec![Planned::Complete(
+                json!({"type": "final_result", "value": "recovered"}),
+            )])
+            .unwrap(),
+            call: PendingToolCall { call_id: 7, tool: "charge".into(), args: json!({"amount": 5}) },
+            disposition: Disposition::PendingResult,
+            tool_roster: vec!["charge".to_string()],
+            run_id: Some("run-1".to_string()),
+        });
+        collect(input).await;
+
+        assert!(executions.lock().unwrap().is_empty());
+        let raised: Value = serde_json::from_str(&runtime.last_raise().unwrap()).unwrap();
+        assert_eq!(
+            raised,
+            json!({
+                "status": "already_failed",
+                "error": "card declined",
+                "detail": "this call to 'charge' already failed; it was not executed again",
+            })
+        );
+        assert!(ledger.begun.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_non_idempotent_call_is_outcome_unknown_and_stays_begun() {
+        use adk_core::ActionLedger as _;
+        let ledger = Arc::new(RecordingLedger::default());
+        let (charge, executions) =
+            charge_tool(adk_core::ToolEffect::NonIdempotent, Some(Duration::from_secs(3600)));
+        let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![charge_program(&[0])]));
+        let mut input = ledgered_inputs(
+            runtime.clone(),
+            vec![charge.clone()],
+            ledger.clone(),
+            "inv-1",
+            HashMap::new(),
+        );
+        input.tool_timeout = Duration::from_millis(20);
+        // A retry budget never applies to a non-idempotent call.
+        input.default_retry_budget = Some(RetryBudget::new(3, Duration::from_millis(1)));
+        let events = collect(input).await;
+
+        assert_eq!(executions.lock().unwrap().len(), 1);
+        let raised: Value = serde_json::from_str(&runtime.last_raise().unwrap()).unwrap();
+        assert_eq!(
+            raised,
+            adk_core::outcome_unknown_response(
+                "tool timed out after 0s. The call may have taken effect; check its result before calling it again."
+            )
+        );
+        let key = ledger.begun.lock().unwrap()[0].clone();
+        let record = ledger.get(&key).await.unwrap().expect("a begun record");
+        assert!(!record.is_completed(), "a timed-out call keeps its begun record");
+
+        // A replay of the step is answered as unknown without executing.
+        let save_before = checkpoints(&events)
+            .into_iter()
+            .find(|cp| cp.disposition == Disposition::PendingResult)
+            .unwrap();
+        let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+        let mut input =
+            ledgered_inputs(runtime.clone(), vec![charge], ledger.clone(), "inv-2", HashMap::new());
+        input.pending = Some(save_before);
+        collect(input).await;
+        assert_eq!(executions.lock().unwrap().len(), 1);
+        let raised: Value = serde_json::from_str(&runtime.last_raise().unwrap()).unwrap();
+        assert!(adk_core::is_outcome_unknown(&raised), "{raised}");
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_non_idempotent_call_is_outcome_unknown_without_a_ledger() {
+        let (charge, _) =
+            charge_tool(adk_core::ToolEffect::NonIdempotent, Some(Duration::from_secs(3600)));
+        let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![charge_program(&[0])]));
+        let mut input = base_inputs(FakeLlm::new("noop"), runtime.clone(), user("pay"));
+        input.tools = vec![charge];
+        input.tool_timeout = Duration::from_millis(20);
+        collect(input).await;
+        let raised: Value = serde_json::from_str(&runtime.last_raise().unwrap()).unwrap();
+        assert!(adk_core::is_outcome_unknown(&raised), "{raised}");
+    }
+
+    #[tokio::test]
+    async fn identical_calls_in_one_program_and_across_programs_each_execute() {
+        let ledger = Arc::new(RecordingLedger::default());
+        let (charge, executions) = charge_tool(adk_core::ToolEffect::NonIdempotent, None);
+        let mut first = charge_program(&[0, 1]);
+        *first.last_mut().unwrap() = Planned::Complete(json!({"type": "observation", "value": 1}));
+        let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![first, charge_program(&[0])]));
+        let input = ledgered_inputs(runtime, vec![charge], ledger.clone(), "inv-1", HashMap::new());
+        let events = collect(input).await;
+
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("paid"));
+        let keys = executions.lock().unwrap().clone();
+        assert_eq!(keys.len(), 3, "every call executes: {keys:?}");
+        let distinct: std::collections::HashSet<_> = keys.iter().collect();
+        assert_eq!(distinct.len(), 3, "every call has its own key: {keys:?}");
+        assert_eq!(*ledger.begun.lock().unwrap(), keys);
+        let run_id = checkpoints(&events)[0].run_id.clone().unwrap();
+        assert_eq!(
+            keys,
+            vec![
+                format!("app/user/sess-test/codeact/{run_id}/1/0"),
+                format!("app/user/sess-test/codeact/{run_id}/1/1"),
+                format!("app/user/sess-test/codeact/{run_id}/2/0"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_and_idempotent_calls_are_not_ledgered() {
+        for effect in [adk_core::ToolEffect::ReadOnly, adk_core::ToolEffect::Idempotent] {
+            let ledger = Arc::new(RecordingLedger::default());
+            let (charge, executions) = charge_tool(effect, None);
+            let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![charge_program(&[0])]));
+            let input =
+                ledgered_inputs(runtime, vec![charge], ledger.clone(), "inv-1", HashMap::new());
+            collect(input).await;
+            assert_eq!(executions.lock().unwrap().len(), 1);
+            assert!(ledger.begun.lock().unwrap().is_empty(), "{effect:?} is not ledgered");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_call_executes_once_when_its_resume_is_replayed() {
+        let ledger = Arc::new(RecordingLedger::default());
+        let (charge, executions) = charge_tool(adk_core::ToolEffect::NonIdempotent, None);
+        let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![charge_program(&[1])]));
+        let mut input =
+            ledgered_inputs(runtime, vec![charge.clone()], ledger.clone(), "inv-1", HashMap::new());
+        input.policy = ToolConfirmationPolicy::Always;
+        let events = collect(input).await;
+        let held = checkpoints(&events).pop().expect("a held checkpoint");
+        assert_eq!(held.disposition, Disposition::AwaitingConfirmation);
+        assert!(executions.lock().unwrap().is_empty());
+        assert!(ledger.begun.lock().unwrap().is_empty(), "a held call never begins");
+
+        let approve = HashMap::from([("1".to_string(), ToolConfirmationDecision::Approve)]);
+        // The approved resume, then a replay of it after a crash before SAVE-AFTER landed.
+        for invocation in ["inv-2", "inv-3"] {
+            let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+            let mut input = ledgered_inputs(
+                runtime,
+                vec![charge.clone()],
+                ledger.clone(),
+                invocation,
+                approve.clone(),
+            );
+            input.policy = ToolConfirmationPolicy::Always;
+            input.pending = Some(held.clone());
+            let events = collect(input).await;
+            assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("paid"));
+        }
+        assert_eq!(executions.lock().unwrap().len(), 1);
+        assert_eq!(ledger.begun.lock().unwrap().len(), 1);
     }
 }
