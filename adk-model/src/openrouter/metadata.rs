@@ -54,6 +54,8 @@ pub fn chat_usage_to_metadata(usage: &OpenRouterChatUsage) -> UsageMetadata {
         cost: usage.cost,
         is_byok: usage.is_byok,
         provider_usage: (!provider_usage.is_empty()).then_some(Value::Object(provider_usage)),
+        // OpenRouter reports the cost of its server tools in `cost`.
+        builtin_tool_uses: Vec::new(),
     }
 }
 
@@ -101,6 +103,8 @@ pub fn responses_usage_to_metadata(usage: &OpenRouterResponsesUsage) -> UsageMet
         cost: usage.cost,
         is_byok: usage.is_byok,
         provider_usage: (!provider_usage.is_empty()).then_some(Value::Object(provider_usage)),
+        // OpenRouter reports the cost of its server tools in `cost`.
+        builtin_tool_uses: Vec::new(),
     }
 }
 

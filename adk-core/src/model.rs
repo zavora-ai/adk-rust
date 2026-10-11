@@ -281,6 +281,72 @@ pub struct UsageMetadata {
     /// that are not yet projected into the normalized counters above.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub provider_usage: Option<serde_json::Value>,
+
+    /// Provider-executed built-in tool uses the provider reported for this request.
+    ///
+    /// Each use counts as one tool call against a
+    /// [`RunBudget`](crate::RunBudget), and priced kinds add their per-use fee to
+    /// [`cost`](Self::cost). See [`BuiltinToolUse`] for the kinds providers report.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub builtin_tool_uses: Vec<BuiltinToolUse>,
+}
+
+impl UsageMetadata {
+    /// Total number of provider-executed built-in tool uses across all kinds.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::{BuiltinToolUse, UsageMetadata};
+    ///
+    /// let usage = UsageMetadata {
+    ///     builtin_tool_uses: vec![BuiltinToolUse::new("web_search", 2), BuiltinToolUse::new("web_fetch", 1)],
+    ///     ..Default::default()
+    /// };
+    /// assert_eq!(usage.builtin_tool_use_count(), 3);
+    /// ```
+    pub fn builtin_tool_use_count(&self) -> u64 {
+        self.builtin_tool_uses.iter().map(|used| u64::from(used.count)).sum()
+    }
+}
+
+/// How many times the provider ran one kind of built-in tool for a request.
+///
+/// Kinds are provider-neutral names:
+///
+/// | Kind | Reported by |
+/// |------|-------------|
+/// | `web_search` | Anthropic `usage.server_tool_use.web_search_requests`, OpenAI `web_search_call` items |
+/// | `web_fetch` | Anthropic `usage.server_tool_use.web_fetch_requests` |
+/// | `code_execution` | Anthropic `usage.server_tool_use.code_execution_requests`, OpenAI `code_interpreter_call` items, Gemini `executableCode` parts |
+/// | `file_search` | OpenAI `file_search_call` items |
+/// | `image_generation` | OpenAI `image_generation_call` items |
+/// | `mcp` | OpenAI `mcp_call` items |
+/// | `google_search` | Gemini `groundingMetadata.webSearchQueries` (one per query) |
+/// | `google_maps` | Gemini grounding chunks with a `maps` source (one per grounded response) |
+///
+/// # Example
+///
+/// ```
+/// use adk_core::BuiltinToolUse;
+///
+/// let used = BuiltinToolUse::new("web_search", 3);
+/// assert_eq!(used.kind, "web_search");
+/// assert_eq!(used.count, 3);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuiltinToolUse {
+    /// Provider-neutral tool kind, such as `web_search`.
+    pub kind: String,
+    /// Number of uses the provider reported.
+    pub count: u32,
+}
+
+impl BuiltinToolUse {
+    /// Creates a record of `count` uses of `kind`.
+    pub fn new(kind: impl Into<String>, count: u32) -> Self {
+        Self { kind: kind.into(), count }
+    }
 }
 
 /// Citation metadata emitted by model providers for source attribution.
@@ -561,6 +627,7 @@ mod tests {
                         "video_tokens": 8
                     }
                 })),
+                builtin_tool_uses: vec![BuiltinToolUse::new("web_search", 1)],
             }),
             finish_reason: Some(FinishReason::Stop),
             citation_metadata: None,
@@ -591,6 +658,10 @@ mod tests {
         assert_eq!(
             decoded.usage_metadata.as_ref().and_then(|u| u.is_byok),
             response.usage_metadata.as_ref().and_then(|u| u.is_byok),
+        );
+        assert_eq!(
+            decoded.usage_metadata.as_ref().map(|u| u.builtin_tool_uses.clone()),
+            Some(vec![BuiltinToolUse::new("web_search", 1)]),
         );
         assert_eq!(
             decoded.usage_metadata.as_ref().and_then(|u| u.provider_usage.clone()),

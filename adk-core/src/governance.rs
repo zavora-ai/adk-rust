@@ -25,7 +25,7 @@
 //! the same path, so the decision authorizes or refuses it without the model issuing
 //! it a second time. The call's real response supersedes the pending one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -1029,6 +1029,271 @@ pub async fn confirmation_decision_available(
     Ok(config.tool_confirmation_handler.is_some())
 }
 
+// ---------------------------------------------------------------------------
+// Provider-executed built-in tools
+// ---------------------------------------------------------------------------
+
+/// Event-level `provider_metadata` key listing the built-in tools withheld from the
+/// model request that produced the event, as a JSON array of [`WithheldBuiltinTool`].
+pub const BUILTIN_TOOLS_WITHHELD_KEY: &str = "adk.builtin_tools.withheld";
+
+/// Declaration keys that carry a provider-native tool definition.
+const BUILTIN_TOOL_MARKERS: [&str; 3] =
+    ["x-adk-gemini-tool", "x-adk-openai-tool", "x-adk-anthropic-tool"];
+
+/// Returns the provider-native definition a tool declaration carries, if any.
+///
+/// Built-in tools declare themselves to the provider adapters under
+/// `x-adk-gemini-tool`, `x-adk-openai-tool` or `x-adk-anthropic-tool`. The value is
+/// the tool's static configuration — allowed domains, maximum uses, store names — and
+/// is what a [`ToolPolicy`](crate::ToolPolicy) sees as the arguments of a built-in tool.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::builtin_tool_configuration;
+/// use serde_json::json;
+///
+/// let declaration = json!({
+///     "name": "web_search",
+///     "x-adk-anthropic-tool": { "type": "web_search_20250305", "max_uses": 3 }
+/// });
+/// assert_eq!(builtin_tool_configuration(&declaration).unwrap()["max_uses"], 3);
+/// assert!(builtin_tool_configuration(&json!({ "name": "lookup" })).is_none());
+/// ```
+pub fn builtin_tool_configuration(declaration: &Value) -> Option<&Value> {
+    BUILTIN_TOOL_MARKERS.iter().find_map(|marker| declaration.get(*marker))
+}
+
+/// Why a built-in tool was left out of a model request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BuiltinToolWithholding {
+    /// The run's policy denied the tool.
+    PolicyDenied,
+    /// The policy requires approval and no decision exists yet.
+    ApprovalRequired,
+    /// An approver denied the tool.
+    ApprovalDenied,
+    /// The run's tool-call budget has no calls left.
+    BudgetExhausted,
+}
+
+/// A built-in tool left out of a model request, and why.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{BuiltinToolWithholding, WithheldBuiltinTool};
+///
+/// let withheld = WithheldBuiltinTool {
+///     tool_name: "web_search".into(),
+///     cause: BuiltinToolWithholding::PolicyDenied,
+///     reason: "no web access".into(),
+/// };
+/// let json = serde_json::to_value(&withheld).unwrap();
+/// assert_eq!(json["cause"], "policyDenied");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithheldBuiltinTool {
+    /// Name of the withheld tool.
+    pub tool_name: String,
+    /// Why it was withheld.
+    pub cause: BuiltinToolWithholding,
+    /// Human-readable explanation.
+    pub reason: String,
+}
+
+/// Governs the provider-executed built-in tools of each model request in one invocation.
+///
+/// A built-in tool — Gemini Google Search, OpenAI web search, Anthropic web search and
+/// the rest — runs inside the provider, so no call reaches [`authorize_tool_call`].
+/// The governor applies the same controls before the request is sent, to every
+/// declaration carrying a provider-native definition (see
+/// [`builtin_tool_configuration`]) whose tool reports [`Tool::is_builtin`] or is not
+/// among the agent's tools:
+///
+/// 1. The kill switch — a frozen run ends with an error.
+/// 2. The run's tool-call budget — with no calls left, every built-in tool is withheld.
+/// 3. The run's [`ToolPolicy`](crate::ToolPolicy), with the tool's name, its declared
+///    [`Tool::effect`] and its provider-native configuration as the arguments.
+///
+/// | Decision | Result |
+/// |----------|--------|
+/// | `Allow` | Attached |
+/// | `Deny` | Withheld |
+/// | `RequireApproval` | Attached only when a decision already exists: a live fingerprint approval ([`RunConfig::tool_approvals`]) or a decision in the run's [`ApprovalStore`]. Otherwise withheld and recorded as pending in the store, so an approver can decide before the next run. |
+///
+/// The provider executes a built-in tool mid-response, so the confirmation handler
+/// and call-ID decisions do not apply. The fingerprint is
+/// [`tool_call_fingerprint`] of the tool name and its configuration. A decision taken
+/// from the store applies for the rest of the invocation.
+///
+/// Without a policy and without a tool-call limit every built-in tool is attached.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{
+///     ApprovalScope, BuiltinToolGovernor, DeclarativePolicy, RunConfig, Tool, ToolGate,
+/// };
+/// use serde_json::json;
+/// use std::collections::HashMap;
+/// use std::sync::Arc;
+///
+/// # futures::executor::block_on(async {
+/// let config = RunConfig::builder()
+///     .tool_policy(Arc::new(DeclarativePolicy::builder().allow("lookup").build()))
+///     .build();
+/// let gate = ToolGate::new(&config, "agent", "inv-1", ApprovalScope::new("app", "u", "s"));
+/// let mut declarations = HashMap::from([
+///     ("lookup".to_string(), json!({ "name": "lookup" })),
+///     ("google_search".to_string(), json!({ "x-adk-gemini-tool": { "google_search": {} } })),
+/// ]);
+///
+/// let tools: HashMap<String, Arc<dyn Tool>> = HashMap::new();
+/// let withheld = BuiltinToolGovernor::new().govern(&gate, &mut declarations, &tools).await?;
+/// assert_eq!(withheld[0].tool_name, "google_search");
+/// assert!(declarations.contains_key("lookup"));
+/// assert!(!declarations.contains_key("google_search"));
+/// # Ok::<(), adk_core::AdkError>(())
+/// # }).unwrap();
+/// ```
+#[derive(Debug, Default)]
+pub struct BuiltinToolGovernor {
+    /// Approval decisions by fingerprint, so a consumed store decision lasts the invocation.
+    decisions: HashMap<String, ToolConfirmationDecision>,
+    /// Tools whose withholding has been logged.
+    reported: HashSet<String>,
+}
+
+impl BuiltinToolGovernor {
+    /// Creates a governor with no decisions; use one per invocation.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Removes every built-in tool the run may not use from `declarations` and
+    /// returns what was removed, sorted by tool name.
+    ///
+    /// `tools` is the agent's tool map; it supplies each tool's declared effect and
+    /// tells client-executed tools with a provider-native declaration (Anthropic
+    /// bash and text editor) apart from built-in ones. Client-executed tools are
+    /// governed when they are called, not here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the run is frozen or the approval store fails.
+    pub async fn govern(
+        &mut self,
+        gate: &ToolGate<'_>,
+        declarations: &mut HashMap<String, Value>,
+        tools: &HashMap<String, Arc<dyn Tool>>,
+    ) -> Result<Vec<WithheldBuiltinTool>> {
+        let config = gate.run_config;
+        config.check_governance()?;
+        let mut builtin: Vec<String> = declarations
+            .iter()
+            .filter(|(name, declaration)| {
+                builtin_tool_configuration(declaration).is_some()
+                    && tools.get(name.as_str()).is_none_or(|tool| tool.is_builtin())
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        if builtin.is_empty() {
+            return Ok(Vec::new());
+        }
+        builtin.sort_unstable();
+        let budget_exhausted =
+            config.budget_tracker.as_ref().and_then(|tracker| tracker.tool_calls_remaining())
+                == Some(0);
+
+        let mut withheld = Vec::new();
+        for name in builtin {
+            let outcome = if budget_exhausted {
+                Some((
+                    BuiltinToolWithholding::BudgetExhausted,
+                    "the run's tool-call budget has no calls left".to_string(),
+                ))
+            } else {
+                let args = declarations
+                    .get(&name)
+                    .and_then(builtin_tool_configuration)
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let effect =
+                    tools.get(&name).map_or(ToolEffect::NonIdempotent, |tool| tool.effect());
+                self.decide(gate, &name, args, effect).await?
+            };
+            let Some((cause, reason)) = outcome else {
+                continue;
+            };
+            declarations.remove(&name);
+            if self.reported.insert(name.clone()) {
+                tracing::info!(
+                    tool.name = %name,
+                    builtin_tool.cause = ?cause,
+                    policy.reason = %reason,
+                    "built-in tool withheld from the model request"
+                );
+            }
+            withheld.push(WithheldBuiltinTool { tool_name: name, cause, reason });
+        }
+        Ok(withheld)
+    }
+
+    async fn decide(
+        &mut self,
+        gate: &ToolGate<'_>,
+        name: &str,
+        args: Value,
+        effect: ToolEffect,
+    ) -> Result<Option<(BuiltinToolWithholding, String)>> {
+        let approval_reason = match evaluate_policy(gate, name, &args, effect).await {
+            PolicyDecision::Allow => return Ok(None),
+            PolicyDecision::Deny { reason } => {
+                return Ok(Some((BuiltinToolWithholding::PolicyDenied, reason)));
+            }
+            PolicyDecision::RequireApproval { reason } => reason,
+        };
+        let config = gate.run_config;
+        let request =
+            ToolConfirmationRequest { tool_name: name.to_string(), function_call_id: None, args };
+        let fingerprint = request.fingerprint();
+        let mut decision = self.decisions.get(&fingerprint).copied();
+        if decision.is_none()
+            && let Some(approval) = config.tool_approvals.get(&fingerprint)
+            && approval.is_live(Utc::now())
+        {
+            decision = Some(approval.decision);
+        }
+        if decision.is_none()
+            && let Some(store) = &config.approval_store
+        {
+            decision = store.take_decision(&gate.scope, &fingerprint).await?;
+        }
+        match decision {
+            Some(decision) => {
+                self.decisions.insert(fingerprint, decision);
+                Ok(match decision {
+                    ToolConfirmationDecision::Approve => None,
+                    ToolConfirmationDecision::Deny => Some((
+                        BuiltinToolWithholding::ApprovalDenied,
+                        "an approver denied this built-in tool".to_string(),
+                    )),
+                })
+            }
+            None => {
+                if let Some(store) = &config.approval_store {
+                    store.record_pending(&gate.scope, &request).await?;
+                }
+                Ok(Some((BuiltinToolWithholding::ApprovalRequired, approval_reason)))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1037,6 +1302,200 @@ mod tests {
 
     fn gate(config: &RunConfig) -> ToolGate<'_> {
         ToolGate::new(config, "agent", "inv", ApprovalScope::new("app", "user", "session"))
+    }
+
+    struct Native {
+        name: &'static str,
+        builtin: bool,
+        effect: ToolEffect,
+    }
+
+    #[async_trait]
+    impl Tool for Native {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "native"
+        }
+        fn is_builtin(&self) -> bool {
+            self.builtin
+        }
+        fn effect(&self) -> ToolEffect {
+            self.effect
+        }
+        async fn execute(&self, _ctx: Arc<dyn crate::ToolContext>, _args: Value) -> Result<Value> {
+            Ok(Value::Null)
+        }
+    }
+
+    fn native_tools() -> (HashMap<String, Value>, HashMap<String, Arc<dyn Tool>>) {
+        let declarations = HashMap::from([
+            ("lookup".to_string(), json!({ "name": "lookup" })),
+            (
+                "web_search".to_string(),
+                json!({ "x-adk-anthropic-tool": { "type": "web_search_20250305", "max_uses": 2 } }),
+            ),
+            (
+                "code_exec".to_string(),
+                json!({ "x-adk-openai-tool": { "type": "code_interpreter" } }),
+            ),
+            ("bash".to_string(), json!({ "x-adk-anthropic-tool": { "type": "bash_20250124" } })),
+        ]);
+        let tools: HashMap<String, Arc<dyn Tool>> = HashMap::from([
+            (
+                "web_search".to_string(),
+                Arc::new(Native { name: "web_search", builtin: true, effect: ToolEffect::ReadOnly })
+                    as Arc<dyn Tool>,
+            ),
+            (
+                "bash".to_string(),
+                Arc::new(Native { name: "bash", builtin: false, effect: ToolEffect::NonIdempotent })
+                    as Arc<dyn Tool>,
+            ),
+        ]);
+        (declarations, tools)
+    }
+
+    fn names(declarations: &HashMap<String, Value>) -> Vec<&str> {
+        let mut names: Vec<&str> = declarations.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        names
+    }
+
+    #[tokio::test]
+    async fn builtin_tools_stay_attached_without_a_policy() {
+        let config = RunConfig::default();
+        let (mut declarations, tools) = native_tools();
+        let withheld = BuiltinToolGovernor::new()
+            .govern(&gate(&config), &mut declarations, &tools)
+            .await
+            .unwrap();
+        assert!(withheld.is_empty());
+        assert_eq!(names(&declarations), ["bash", "code_exec", "lookup", "web_search"]);
+    }
+
+    #[tokio::test]
+    async fn default_deny_withholds_builtin_tools_and_leaves_client_tools_to_call_time() {
+        let policy = DeclarativePolicy::builder().allow("lookup").build();
+        let config = RunConfig::builder().tool_policy(Arc::new(policy)).build();
+        let (mut declarations, tools) = native_tools();
+        let withheld = BuiltinToolGovernor::new()
+            .govern(&gate(&config), &mut declarations, &tools)
+            .await
+            .unwrap();
+        assert_eq!(names(&declarations), ["bash", "lookup"]);
+        assert_eq!(
+            withheld.iter().map(|w| (w.tool_name.as_str(), w.cause)).collect::<Vec<_>>(),
+            [
+                ("code_exec", BuiltinToolWithholding::PolicyDenied),
+                ("web_search", BuiltinToolWithholding::PolicyDenied),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn effect_and_configuration_reach_the_policy() {
+        let policy = DeclarativePolicy::builder()
+            .rule(
+                PolicyRule::allow("*")
+                    .with_effect(ToolEffect::ReadOnly)
+                    .when(crate::ArgPredicate::at_most("/max_uses", 3.0)),
+            )
+            .build();
+        let config = RunConfig::builder().tool_policy(Arc::new(policy)).build();
+        let (mut declarations, tools) = native_tools();
+        BuiltinToolGovernor::new().govern(&gate(&config), &mut declarations, &tools).await.unwrap();
+        // `code_exec` has no local tool, so it is treated as non-idempotent.
+        assert_eq!(names(&declarations), ["bash", "lookup", "web_search"]);
+    }
+
+    #[tokio::test]
+    async fn require_approval_withholds_until_a_decision_exists() {
+        let policy = DeclarativePolicy::builder()
+            .require_approval("web_search", "web access needs sign-off")
+            .allow("*")
+            .build();
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let config = RunConfig::builder()
+            .tool_policy(Arc::new(policy))
+            .approval_store(store.clone())
+            .build();
+        let (mut declarations, tools) = native_tools();
+        let withheld = BuiltinToolGovernor::new()
+            .govern(&gate(&config), &mut declarations, &tools)
+            .await
+            .unwrap();
+        assert_eq!(withheld.len(), 1);
+        assert_eq!(withheld[0].cause, BuiltinToolWithholding::ApprovalRequired);
+        assert_eq!(withheld[0].reason, "web access needs sign-off");
+        assert!(!declarations.contains_key("web_search"));
+
+        let scope = ApprovalScope::new("app", "user", "session");
+        let pending = store.pending(&scope).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].request.function_call_id, None);
+        store.decide(&scope, &pending[0].fingerprint, ToolApproval::approve()).await.unwrap();
+
+        // The next invocation takes the decision once and keeps it for every turn.
+        let mut governor = BuiltinToolGovernor::new();
+        for _ in 0..2 {
+            let (mut declarations, tools) = native_tools();
+            let withheld =
+                governor.govern(&gate(&config), &mut declarations, &tools).await.unwrap();
+            assert!(withheld.is_empty());
+            assert!(declarations.contains_key("web_search"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fingerprint_approval_attaches_and_a_denial_withholds() {
+        let policy =
+            DeclarativePolicy::builder().require_approval("web_search", "sign-off").build();
+        let config_args = json!({ "type": "web_search_20250305", "max_uses": 2 });
+        let fingerprint = tool_call_fingerprint("web_search", &config_args);
+        for (approval, attached) in [(ToolApproval::approve(), true), (ToolApproval::deny(), false)]
+        {
+            let config = RunConfig::builder()
+                .tool_policy(Arc::new(policy.clone()))
+                .tool_approval(fingerprint.clone(), approval)
+                .build();
+            let (mut declarations, tools) = native_tools();
+            let withheld = BuiltinToolGovernor::new()
+                .govern(&gate(&config), &mut declarations, &tools)
+                .await
+                .unwrap();
+            assert_eq!(declarations.contains_key("web_search"), attached);
+            if !attached {
+                assert!(withheld.iter().any(|w| w.tool_name == "web_search"
+                    && w.cause == BuiltinToolWithholding::ApprovalDenied));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_tool_budget_withholds_and_a_frozen_run_fails() {
+        let tracker =
+            Arc::new(crate::BudgetTracker::new(crate::RunBudget::new().max_tool_calls(1)));
+        tracker.begin_tool_calls(1).unwrap();
+        let control = GovernanceControl::new();
+        let mut config = RunConfig::builder().governance(control.clone()).build();
+        config.budget_tracker = Some(tracker);
+        let (mut declarations, tools) = native_tools();
+        let withheld = BuiltinToolGovernor::new()
+            .govern(&gate(&config), &mut declarations, &tools)
+            .await
+            .unwrap();
+        assert!(withheld.iter().all(|w| w.cause == BuiltinToolWithholding::BudgetExhausted));
+        assert_eq!(names(&declarations), ["bash", "lookup"]);
+
+        control.freeze("drill");
+        let (mut declarations, tools) = native_tools();
+        let error = BuiltinToolGovernor::new()
+            .govern(&gate(&config), &mut declarations, &tools)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "governance.frozen");
     }
 
     #[tokio::test]

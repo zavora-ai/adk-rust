@@ -226,3 +226,40 @@ async fn test_anthropic_text_editor_tool_executes_local_edits() {
 
     let _ = std::fs::remove_file(file_path);
 }
+
+#[test]
+fn builtin_tools_declare_effects_for_policy_rules() {
+    use adk_core::ToolEffect;
+    use adk_tool::{
+        GeminiCodeExecutionTool, GeminiComputerUseTool, GeminiFileSearchTool, GoogleMapsTool,
+        OpenAICodeInterpreterTool, OpenAIFileSearchTool, OpenAIImageGenerationTool,
+        OpenAIShellTool, UrlContextTool,
+    };
+
+    let read_only: Vec<Box<dyn Tool>> = vec![
+        Box::new(GoogleSearchTool::new()),
+        Box::new(UrlContextTool::new()),
+        Box::new(GoogleMapsTool::new()),
+        Box::new(GeminiFileSearchTool::new(["store"])),
+        Box::new(WebSearchTool::new()),
+        Box::new(OpenAIWebSearchTool::new()),
+        Box::new(OpenAIFileSearchTool::new(["vs_1"])),
+    ];
+    for tool in read_only {
+        assert!(tool.is_builtin(), "{}", tool.name());
+        assert_eq!(tool.effect(), ToolEffect::ReadOnly, "{}", tool.name());
+    }
+
+    let side_effecting: Vec<Box<dyn Tool>> = vec![
+        Box::new(GeminiCodeExecutionTool::new()),
+        Box::new(GeminiComputerUseTool::default()),
+        Box::new(OpenAICodeInterpreterTool::new()),
+        Box::new(OpenAIImageGenerationTool::new()),
+        Box::new(OpenAIShellTool::new()),
+        Box::new(AnthropicBashTool20250124::new()),
+        Box::new(AnthropicTextEditorTool20250728::new()),
+    ];
+    for tool in side_effecting {
+        assert_eq!(tool.effect(), ToolEffect::NonIdempotent, "{}", tool.name());
+    }
+}

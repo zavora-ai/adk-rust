@@ -11,7 +11,7 @@
 //!
 //! | Checkpoint | Limits checked |
 //! |------------|----------------|
-//! | Before every model call ([`BudgetTracker::begin_model_call`]) | model calls, total tokens, cost, wall time |
+//! | Before every model call ([`BudgetTracker::begin_model_call`]) | model calls, total tokens, cost, wall time; tool calls already over the limit |
 //! | Before every tool dispatch ([`BudgetTracker::begin_tool_calls`]) | tool calls, total tokens, cost, wall time |
 //! | After every non-partial event ([`BudgetTracker::record_event`]) | usage the call sites did not meter |
 //!
@@ -20,6 +20,11 @@
 //! model call can take usage past a limit; no further call starts after that.
 //!
 //! # Usage accounting
+//!
+//! Built-in tools the provider runs itself ([`UsageMetadata::builtin_tool_uses`])
+//! count as tool calls when the model call's usage is recorded. They cannot be
+//! reserved in advance, so a model call can take the tool-call count past its
+//! limit; the next model call is then refused.
 //!
 //! Each model call is metered once, from the first non-partial response that
 //! carries usage. Partial streaming chunks never add to the totals — Gemini
@@ -478,6 +483,9 @@ impl BudgetTracker {
         model: impl Into<String>,
     ) -> std::result::Result<ModelCallMeter, BudgetExceeded> {
         self.check()?;
+        // Provider-executed built-in tools are counted after the fact, so a turn can
+        // overshoot the tool-call limit; the next model call is refused instead.
+        self.check_chain(Strictness::Exceeded)?;
         self.reserve(Counter::ModelCalls, 1)?;
         Ok(ModelCallMeter {
             tracker: Arc::clone(self),
@@ -503,6 +511,31 @@ impl BudgetTracker {
             return Ok(());
         }
         self.reserve(Counter::ToolCalls, count)
+    }
+
+    /// Tool calls left before the tool-call limit is reached, across this tracker
+    /// and its ancestors. `None` when no tracker in the chain limits tool calls.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::{BudgetTracker, RunBudget};
+    ///
+    /// let tracker = BudgetTracker::new(RunBudget::new().max_tool_calls(3));
+    /// tracker.begin_tool_calls(2).unwrap();
+    /// assert_eq!(tracker.tool_calls_remaining(), Some(1));
+    /// assert_eq!(BudgetTracker::new(RunBudget::new()).tool_calls_remaining(), None);
+    /// ```
+    pub fn tool_calls_remaining(&self) -> Option<u64> {
+        let own = self
+            .budget
+            .max_tool_calls
+            .map(|max| max.saturating_sub(self.tool_calls.load(Ordering::SeqCst)));
+        let parent = self.parent.as_ref().and_then(|parent| parent.tool_calls_remaining());
+        match (own, parent) {
+            (Some(own), Some(parent)) => Some(own.min(parent)),
+            (own, parent) => own.or(parent),
+        }
     }
 
     /// Counts usage carried by an event that no call site metered.
@@ -666,6 +699,7 @@ impl BudgetTracker {
         match usage {
             Some(usage) => {
                 self.add(Counter::TotalTokens, u64::try_from(usage.total_token_count).unwrap_or(0));
+                self.add(Counter::ToolCalls, usage.builtin_tool_use_count());
                 match usage.cost {
                     Some(cost) => self.add(Counter::Cost, usd_to_micro(cost)),
                     None => self.flag_unpriced(model),
@@ -919,6 +953,34 @@ mod tests {
             model: Some("gemini-3.7-flash".to_string()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn builtin_tool_uses_count_as_tool_calls_and_refuse_the_next_turn_once_over() {
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new().max_tool_calls(2)));
+        let mut searched = usage(10, Some(0.0));
+        searched.builtin_tool_uses = vec![crate::BuiltinToolUse::new("web_search", 2)];
+        let mut meter = tracker.begin_model_call("m").unwrap();
+        meter.observe(&response(false, Some(searched.clone())));
+        drop(meter);
+        assert_eq!(tracker.usage().tool_calls, 2);
+        assert_eq!(tracker.tool_calls_remaining(), Some(0));
+        // Reaching the limit still allows a model turn that answers without tools.
+        let mut meter = tracker.begin_model_call("m").unwrap();
+        meter.observe(&response(false, Some(searched)));
+        drop(meter);
+        assert_eq!(tracker.usage().tool_calls, 4);
+        let error = tracker.begin_model_call("m").unwrap_err();
+        assert_eq!(error.limit(), BudgetLimit::ToolCalls);
+    }
+
+    #[test]
+    fn tool_calls_remaining_takes_the_tightest_ancestor() {
+        let parent = Arc::new(BudgetTracker::new(RunBudget::new().max_tool_calls(1)));
+        let child = BudgetTracker::with_parent(RunBudget::new().max_tool_calls(5), parent);
+        assert_eq!(child.tool_calls_remaining(), Some(1));
+        child.begin_tool_calls(1).unwrap();
+        assert_eq!(child.tool_calls_remaining(), Some(0));
     }
 
     #[test]

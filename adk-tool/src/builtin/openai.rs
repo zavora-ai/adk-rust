@@ -1,4 +1,4 @@
-use adk_core::{Result, Tool, ToolContext};
+use adk_core::{Result, Tool, ToolContext, ToolEffect};
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
@@ -136,6 +136,11 @@ impl Tool for OpenAIWebSearchTool {
         true
     }
 
+    // Runs on the provider; a policy sees this effect before the tool is attached.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::ReadOnly
+    }
+
     fn declaration(&self) -> Value {
         json!({
             "name": self.name(),
@@ -210,6 +215,11 @@ impl Tool for OpenAIFileSearchTool {
 
     fn is_builtin(&self) -> bool {
         true
+    }
+
+    // Runs on the provider; a policy sees this effect before the tool is attached.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::ReadOnly
     }
 
     fn declaration(&self) -> Value {
@@ -289,6 +299,11 @@ impl Tool for OpenAICodeInterpreterTool {
         true
     }
 
+    // Runs or acts outside the agent; never assumed safe to repeat.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
+    }
+
     fn declaration(&self) -> Value {
         json!({
             "name": self.name(),
@@ -339,6 +354,11 @@ impl Tool for OpenAIImageGenerationTool {
 
     fn is_builtin(&self) -> bool {
         true
+    }
+
+    // Runs or acts outside the agent; never assumed safe to repeat.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
     }
 
     fn declaration(&self) -> Value {
@@ -421,6 +441,11 @@ impl Tool for OpenAIComputerUseTool {
 
     fn is_builtin(&self) -> bool {
         true
+    }
+
+    // Runs or acts outside the agent; never assumed safe to repeat.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
     }
 
     fn declaration(&self) -> Value {
@@ -510,6 +535,11 @@ impl Tool for OpenAIMcpTool {
         true
     }
 
+    // Runs or acts outside the agent; never assumed safe to repeat.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
+    }
+
     fn declaration(&self) -> Value {
         json!({
             "name": self.name(),
@@ -546,6 +576,11 @@ impl Tool for OpenAILocalShellTool {
 
     fn is_builtin(&self) -> bool {
         true
+    }
+
+    // Runs or acts outside the agent; never assumed safe to repeat.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
     }
 
     fn declaration(&self) -> Value {
@@ -605,6 +640,11 @@ impl Tool for OpenAIShellTool {
         true
     }
 
+    // Runs or acts outside the agent; never assumed safe to repeat.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
+    }
+
     fn declaration(&self) -> Value {
         json!({
             "name": self.name(),
@@ -643,6 +683,11 @@ impl Tool for OpenAIApplyPatchTool {
 
     fn is_builtin(&self) -> bool {
         true
+    }
+
+    // Runs or acts outside the agent; never assumed safe to repeat.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
     }
 
     fn declaration(&self) -> Value {

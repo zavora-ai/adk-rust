@@ -168,11 +168,12 @@ pub use event::{
 };
 pub use event_stream::EventTextDeltas;
 pub use governance::{
-    ApprovalScope, ApprovalStore, CONFIRMATION_PENDING_STATUS, DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
+    ApprovalScope, ApprovalStore, BUILTIN_TOOLS_WITHHELD_KEY, BuiltinToolGovernor,
+    BuiltinToolWithholding, CONFIRMATION_PENDING_STATUS, DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
     GovernanceControl, GovernedCall, HeldToolCall, InMemoryApprovalStore, PendingApproval,
-    ToolApproval, ToolAuthorization, ToolCallScreen, ToolGate, authorize_tool_call,
-    confirmation_decision_available, confirmation_pending_response, held_tool_calls,
-    is_confirmation_pending,
+    ToolApproval, ToolAuthorization, ToolCallScreen, ToolGate, WithheldBuiltinTool,
+    authorize_tool_call, builtin_tool_configuration, confirmation_decision_available,
+    confirmation_pending_response, held_tool_calls, is_confirmation_pending,
 };
 pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,
@@ -180,8 +181,9 @@ pub use identity::{
 pub use instruction_template::inject_session_state;
 pub use intra_compaction::IntraCompactionConfig;
 pub use model::{
-    CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig, FinishReason,
-    GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,
+    BuiltinToolUse, CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig,
+    FinishReason, GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream,
+    UsageMetadata,
 };
 pub use policy::{
     ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyDecision, PolicyRule,

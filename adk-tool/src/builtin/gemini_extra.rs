@@ -1,5 +1,5 @@
 use crate::builtin::bypass::BypassMultiToolsLimit;
-use adk_core::{Result, Tool, ToolContext};
+use adk_core::{Result, Tool, ToolContext, ToolEffect};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -69,6 +69,11 @@ impl Tool for GoogleMapsTool {
         true
     }
 
+    // Runs on the provider; a policy sees this effect before the tool is attached.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::ReadOnly
+    }
+
     fn declaration(&self) -> Value {
         json!({
             "name": self.name(),
@@ -110,6 +115,11 @@ impl Tool for GeminiCodeExecutionTool {
 
     fn is_builtin(&self) -> bool {
         true
+    }
+
+    // Runs or acts outside the agent; never assumed safe to repeat.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
     }
 
     fn declaration(&self) -> Value {
@@ -154,6 +164,11 @@ impl Tool for GeminiFileSearchTool {
 
     fn is_builtin(&self) -> bool {
         true
+    }
+
+    // Runs on the provider; a policy sees this effect before the tool is attached.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::ReadOnly
     }
 
     fn declaration(&self) -> Value {
@@ -279,6 +294,11 @@ impl Tool for GeminiComputerUseTool {
 
     fn is_builtin(&self) -> bool {
         true
+    }
+
+    // Runs or acts outside the agent; never assumed safe to repeat.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
     }
 
     fn declaration(&self) -> Value {

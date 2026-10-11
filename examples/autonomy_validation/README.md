@@ -38,6 +38,7 @@ retry is reported next to the result.
 | `ap2_payment_governed` | AP2 governance | Two 12 USD AP2 payment mandates submitted by the model through `payments_ap2_payment_submit` under a 20 USD daily cap at the merchant: the first completes and commits 12 USD under `app / agent / merchant`, the second is refused by the `spend_limit` policy before the payment backend, and the payment audit trail records allowed then denied |
 | `openai_tools_routing` | Providers | `gpt-5.6-luna` with function tools on the Chat Completions client (`OpenAIClient`) completes a tool call (routed to the Responses API); `openai-chat` only |
 | `anthropic_thinking_replay` | Providers | `claude-haiku-4-5` with budget thinking, which thinks on every turn: two tool-use turns whose history replays signed thinking blocks are accepted; Anthropic only |
+| `builtin_tool_policy` | Built-in tools | A default-deny policy keeps the provider's web search tool (`OpenAIWebSearchTool`, Anthropic `WebSearchTool`, Gemini `GoogleSearchTool`) out of every request: no built-in use is reported and the model events carry a `policyDenied` withheld record. With `allow_read_only()` the tool is attached, the reported uses land in `UsageMetadata::builtin_tool_uses`, and `cost` equals the token cost plus the published fee; `openai-chat` is skipped |
 
 ## Providers
 
@@ -48,8 +49,9 @@ retry is reported next to the result.
 | `anthropic` | `AnthropicClient` | `claude-haiku-5-5` | `ANTHROPIC_MODEL` |
 | `gemini` | `GeminiModel` | `gemini-3.5-flash-lite` | `GEMINI_MODEL` |
 
-`anthropic_web_tools` uses `claude-sonnet-5-5` (`ANTHROPIC_WEB_MODEL`), since `web_search_20260209`
-is not available on Haiku. `openai_tools_routing` uses `OPENAI_ROUTED_MODEL` and
+`anthropic_web_tools` and `builtin_tool_policy` use `claude-sonnet-5-5` (`ANTHROPIC_WEB_MODEL`),
+since `web_search_20260209` is not available on Haiku. `builtin_tool_policy` uses
+`gemini-3.7-flash` (`GEMINI_SEARCH_MODEL`) for Google Search grounding. `openai_tools_routing` uses `OPENAI_ROUTED_MODEL` and
 `anthropic_thinking_replay` uses `ANTHROPIC_THINKING_MODEL`. `both` selects `openai` and
 `anthropic`; `all` selects `openai`, `openai-chat`, `anthropic`, and `gemini`.
 

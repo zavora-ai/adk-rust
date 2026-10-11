@@ -2881,6 +2881,9 @@ impl Agent for LlmAgent {
 
             // Shared with sub-agents, transfer targets and agent tools through the run config.
             let budget_tracker = ctx.run_config().budget_tracker.clone();
+            // Provider-executed built-in tools never reach the governed call path, so the
+            // policy and budget decide before each request whether they are attached.
+            let mut builtin_governor = adk_core::BuiltinToolGovernor::new();
 
             // ===== RESUME HELD CALLS =====
             // A call held for confirmation in an earlier run, with a decision now, is
@@ -3137,7 +3140,24 @@ impl Agent for LlmAgent {
                         }
                     }
                 }
-                let request = current_request;
+                let mut request = current_request;
+                // Governed after every request rewrite, so a callback cannot re-attach a
+                // withheld tool. A skipped model call sends nothing, so it is not governed.
+                let withheld_builtins = if model_response_override.is_none() {
+                    let gate = ToolGate::for_context(ctx.as_ref());
+                    match builtin_governor.govern(&gate, &mut request.tools, &tool_map).await {
+                        Ok(withheld) => withheld,
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    }
+                } else {
+                    Vec::new()
+                };
+                let withheld_builtins = (!withheld_builtins.is_empty())
+                    .then(|| serde_json::to_string(&withheld_builtins).unwrap_or_default());
+                let request = request;
 
                 // Determine streaming source: cached response or real model
                 let mut accumulated_content: Option<Content> = None;
@@ -3340,6 +3360,14 @@ impl Agent for LlmAgent {
                                     "true".to_string(),
                                 );
                             }
+                            if !chunk.partial
+                                && let Some(withheld) = &withheld_builtins
+                            {
+                                event.provider_metadata.insert(
+                                    adk_core::BUILTIN_TOOLS_WITHHELD_KEY.to_string(),
+                                    withheld.clone(),
+                                );
+                            }
                             // Runner persists terminal events as complete content.
                             // Providers can finish with tools/metadata after text
                             // deltas, so the last chunk alone is insufficient.
@@ -3414,6 +3442,12 @@ impl Agent for LlmAgent {
                             final_event.provider_metadata.insert(
                                 adk_core::BUDGET_RECORDED_KEY.to_string(),
                                 "true".to_string(),
+                            );
+                        }
+                        if let Some(withheld) = &withheld_builtins {
+                            final_event.provider_metadata.insert(
+                                adk_core::BUILTIN_TOOLS_WITHHELD_KEY.to_string(),
+                                withheld.clone(),
                             );
                         }
                         yield Ok(final_event);

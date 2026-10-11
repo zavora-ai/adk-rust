@@ -5,7 +5,8 @@
 //! carries [`LlmResponse::provider`] and [`LlmResponse::model`], usage carries
 //! a [`UsageMetadata::cost`](adk_core::UsageMetadata::cost) whenever the model is priced, and the active
 //! tracing span records standardized `gen_ai.usage.*` fields through
-//! [`adk_telemetry::record_llm_usage`].
+//! [`adk_telemetry::record_llm_usage`]. Each provider-executed built-in tool use
+//! on a final response is logged at `info` with its kind and count.
 
 use crate::pricing::PricingCatalog;
 use adk_core::{LlmResponse, LlmResponseStream, UsageMetadata};
@@ -117,6 +118,18 @@ fn record_usage_from_response(response: &LlmResponse, span: &Span) {
     if let Some(ref usage) = response.usage_metadata {
         let _entered = span.enter();
         record_usage(usage);
+        // Partial chunks repeat cumulative usage; the final response reports once.
+        if !response.partial {
+            for used in &usage.builtin_tool_uses {
+                tracing::info!(
+                    gen_ai.provider.name = response.provider.as_deref().unwrap_or_default(),
+                    gen_ai.response.model = response.model.as_deref().unwrap_or_default(),
+                    builtin_tool.kind = %used.kind,
+                    builtin_tool.count = used.count,
+                    "provider ran built-in tool"
+                );
+            }
+        }
     }
 }
 

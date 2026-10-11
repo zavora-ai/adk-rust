@@ -1,4 +1,4 @@
-use adk_core::{Result, Tool, ToolContext};
+use adk_core::{Result, Tool, ToolContext, ToolEffect};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -173,6 +173,11 @@ impl Tool for WebSearchTool {
 
     fn is_builtin(&self) -> bool {
         true
+    }
+
+    // Runs on the provider; a policy sees this effect before the tool is attached.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::ReadOnly
     }
 
     fn declaration(&self) -> Value {

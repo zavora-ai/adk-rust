@@ -319,6 +319,13 @@ let request = ToolPolicyRequest::new("transfer", json!({ "amount": 500 }));
 assert!(matches!(policy.decide(&request), PolicyDecision::Deny { .. }));
 ```
 
+Provider-executed built-in tools (Gemini Google Search, OpenAI hosted web search, Anthropic
+web search) never reach `authorize_tool_call`. `BuiltinToolGovernor` applies the kill switch,
+the tool-call budget and the policy to them before each model request: a denied tool, or one
+that needs an approval that does not exist yet, is withheld from the request. The uses a
+provider reports are counted in `UsageMetadata::builtin_tool_uses`, against the run's tool-call
+budget, and in `UsageMetadata::cost`.
+
 ### Store Conformance Suites
 
 The `conformance` feature provides one suite per durable store trait — `SpendLedger`,

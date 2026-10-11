@@ -11,7 +11,8 @@ use adk_anthropic::{
     UrlImageSource, UrlPdfSource,
 };
 use adk_core::{
-    Content, FinishReason, LlmResponse, Part, SchemaAdapter, SchemaCache, UsageMetadata,
+    BuiltinToolUse, Content, FinishReason, LlmResponse, Part, SchemaAdapter, SchemaCache,
+    UsageMetadata,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -338,6 +339,7 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
         cache_read_input_token_count: message.usage.cache_read_input_tokens,
         cache_creation_input_token_count: message.usage.cache_creation_input_tokens,
         provider_usage: serde_json::to_value(message.usage).ok(),
+        builtin_tool_uses: builtin_tool_uses(message),
         ..Default::default()
     });
 
@@ -373,6 +375,36 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
         },
         cache_meta,
     )
+}
+
+/// Server tool uses the response reports, from `usage.server_tool_use` when present,
+/// otherwise by counting `server_tool_use` blocks.
+fn builtin_tool_uses(message: &Message) -> Vec<BuiltinToolUse> {
+    let counts: Vec<(&str, u32)> = match message.usage.server_tool_use {
+        Some(reported) => vec![
+            ("web_search", u32::try_from(reported.web_search_requests).unwrap_or(0)),
+            ("web_fetch", u32::try_from(reported.web_fetch_requests).unwrap_or(0)),
+            ("code_execution", u32::try_from(reported.code_execution_requests).unwrap_or(0)),
+        ],
+        None => {
+            let mut counts = std::collections::BTreeMap::<&str, u32>::new();
+            for block in &message.content {
+                if let ContentBlock::ServerToolUse(server_tool_use) = block {
+                    let kind = match server_tool_use.name.as_str() {
+                        "bash_code_execution" | "text_editor_code_execution" => "code_execution",
+                        name => name,
+                    };
+                    *counts.entry(kind).or_default() += 1;
+                }
+            }
+            counts.into_iter().collect()
+        }
+    };
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(kind, count)| BuiltinToolUse::new(kind, count))
+        .collect()
 }
 
 /// Convert streaming text delta to ADK LlmResponse.

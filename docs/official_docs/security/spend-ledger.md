@@ -122,6 +122,11 @@ let runner = Runner::builder()
 | Chunks, but no cost | Commit the estimate and log a warning |
 | No chunk (the call failed or a later callback skipped it) | Release |
 
+The committed cost includes the published fees of provider-executed built-in tools — web
+search, file search, Google Search grounding — the call used; see
+[Built-in tool uses and fees](../models/providers.md#built-in-tool-uses-and-fees). Size the
+estimate for calls that may search, since the fees are known only once the response arrives.
+
 A refused reservation fails the model call with the ledger's `spend.limit_exceeded` error,
 so the run stops before it spends past the cap. The overshoot is bounded by the difference
 between one call's actual cost and its estimate.

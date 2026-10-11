@@ -6,7 +6,7 @@ Control which tools an agent can execute and when human approval is required. AD
 
 | Mechanism | Use Case | Granularity | Runtime |
 |-----------|----------|-------------|---------|
-| [Tool Policy](#tool-policy) | Run-wide allow, deny, or require approval | Per tool name and argument | Decides before execution |
+| [Tool Policy](#tool-policy) | Run-wide allow, deny, or require approval | Per tool name and argument | Decides before execution; for [built-in tools](#built-in-tools), before the request |
 | [Tool Confirmation Policy](#tool-confirmation-policy) | Interactive approval in CLI/web | Per-tool or all tools | Pauses execution, emits event |
 | [BeforeToolCallback](#beforetoolcallback) | Programmatic gate / audit | Custom logic per call | Sync decision, no pause |
 | [Access Control (RBAC)](#access-control) | Role-based enterprise security | Per-user, per-tool | Deny before execution |
@@ -65,6 +65,77 @@ The runner installs its policy on every run that does not carry one in its `RunC
 `ToolPolicy` directly for decisions that need outside data; `ToolPolicyRequest` carries the tool
 name, final arguments, declared `ToolEffect` (`Tool::effect()`), agent name, app, user, session,
 and invocation ID.
+
+## Built-in Tools
+
+Provider-executed built-in tools — Gemini Google Search, OpenAI hosted web search, Anthropic
+server web search and the rest — run inside the model provider, so no call reaches the governed
+call path. `LlmAgent` governs them before each model request instead, after every callback and
+plugin rewrite, with `adk_core::BuiltinToolGovernor`:
+
+1. **Kill switch** — a frozen run ends with `governance.frozen` before the request is sent.
+2. **Tool-call budget** — with no tool calls left in the run's `RunBudget`, every built-in tool
+   is withheld.
+3. **Tool policy** — `ToolPolicyRequest` carries the tool name, the tool's declared
+   `ToolEffect`, and its provider-native configuration as the arguments.
+
+| Decision | Result |
+|----------|--------|
+| `Allow` | The tool is attached to the request |
+| `Deny` | The tool is withheld; the provider never sees it |
+| `RequireApproval` | Attached only when a decision already exists — a live fingerprint approval in `RunConfig::tool_approvals` or a decision in the run's `ApprovalStore`. Otherwise withheld, and recorded as pending in the store so an approver can decide before the next run |
+
+The provider executes a built-in tool mid-response, so the confirmation handler and call-ID
+decisions do not apply. The fingerprint is `tool_call_fingerprint(tool_name, configuration)`
+(`ToolConfirmationRequest::fingerprint()` with no call ID). A decision taken from the store
+applies to every model request of that invocation.
+
+A run without a policy and without a tool-call limit attaches every built-in tool. Under a
+`DeclarativePolicy`, which denies by default, a built-in tool needs a rule that allows it:
+
+```rust
+use adk_core::{ArgPredicate, DeclarativePolicy, PolicyRule, ToolEffect};
+
+let policy = DeclarativePolicy::builder()
+    // Search and fetch tools declare `ToolEffect::ReadOnly`.
+    .allow_read_only()
+    // Anthropic web search only with a bounded number of searches per request.
+    .rule(PolicyRule::allow("web_search").when(ArgPredicate::at_most("/max_uses", 5.0)))
+    .deny("gemini_code_execution", "no server-side code execution")
+    .build();
+```
+
+| Tool | Provider | Name | Declared effect | Policy arguments |
+|------|----------|------|-----------------|------------------|
+| `GoogleSearchTool` | Gemini | `google_search` | `ReadOnly` | `{"google_search": {}}` |
+| `UrlContextTool` | Gemini | `url_context` | `ReadOnly` | `{"url_context": {}}` |
+| `GoogleMapsTool` | Gemini | `google_maps` | `ReadOnly` | `{"google_maps": {...}}` |
+| `GeminiFileSearchTool` | Gemini | `gemini_file_search` | `ReadOnly` | `{"file_search": {"file_search_store_names": [...]}}` |
+| `GeminiCodeExecutionTool` | Gemini | `gemini_code_execution` | `NonIdempotent` | `{"code_execution": {}}` |
+| `GeminiComputerUseTool` | Gemini | `gemini_computer_use` | `NonIdempotent` | `{"computer_use": {...}}` |
+| `OpenAIWebSearchTool` | OpenAI Responses | `openai_web_search` | `ReadOnly` | `{"type": "web_search", "filters": {"allowed_domains": [...]}, ...}` |
+| `OpenAIFileSearchTool` | OpenAI Responses | `openai_file_search` | `ReadOnly` | `{"type": "file_search", "vector_store_ids": [...], ...}` |
+| `OpenAICodeInterpreterTool` | OpenAI Responses | `openai_code_interpreter` | `NonIdempotent` | `{"type": "code_interpreter", "container": ...}` |
+| `OpenAIImageGenerationTool` | OpenAI Responses | `openai_image_generation` | `NonIdempotent` | `{"type": "image_generation", ...}` |
+| `OpenAIComputerUseTool`, `OpenAIShellTool`, `OpenAILocalShellTool`, `OpenAIApplyPatchTool` | OpenAI Responses | `openai_*` | `NonIdempotent` | The tool's `type` and settings |
+| `OpenAIMcpTool` | OpenAI Responses | the server label | `NonIdempotent` | `{"type": "mcp", "server_label": ..., ...}` |
+| `WebSearchTool` | Anthropic | `web_search` | `ReadOnly` | `{"type": "web_search_20250305", "max_uses": ..., "allowed_domains": [...], ...}` |
+
+Anthropic bash and text editor tools (`AnthropicBashTool*`, `AnthropicTextEditorTool*`) carry a
+provider-native declaration but run in the agent, so they are governed when called, like any
+function tool. A declaration with a provider-native definition and no matching tool — one a
+`BeforeModelCallback` added — is governed as a `NonIdempotent` built-in tool.
+
+Every model event of a request that withheld a tool carries the list under the
+`adk.builtin_tools.withheld` event metadata key (`BUILTIN_TOOLS_WITHHELD_KEY`), a JSON array of
+`WithheldBuiltinTool` (`toolName`, `cause` — `policyDenied`, `approvalRequired`, `approvalDenied`
+or `budgetExhausted` — and `reason`). Each withheld tool is also logged once per invocation at
+`info`.
+
+After the response, the uses the provider reports are counted in
+`UsageMetadata::builtin_tool_uses`, against the run's tool-call budget, and in
+`UsageMetadata::cost` — see [Run Budgets](../core/runner.md#run-budgets) and
+[Usage Attribution and Cost](../models/providers.md#usage-attribution-and-cost).
 
 ## Tool Confirmation Policy
 
@@ -830,7 +901,7 @@ reachable through `Runner::governance()`; share one control across runners with
 | Point | Effect |
 |-------|--------|
 | Run start | The run's stream yields a `governance.frozen` error before the session is read |
-| Before each model call | The agent ends the run with the error |
+| Before each model call | The agent ends the run with the error; no request, and so no built-in tool, reaches the provider |
 | Before each tool call | The tool does not execute and the run ends with the error |
 
 ```rust

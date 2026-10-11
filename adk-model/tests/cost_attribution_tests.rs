@@ -236,3 +236,157 @@ async fn anthropic_cost_splits_cache_writes_by_ttl() {
     // + 2K × $15.00.
     assert_cost(&response, 0.003 + 0.06 + 0.225 + 0.24 + 0.03);
 }
+
+fn uses(response: &LlmResponse) -> Vec<(String, u32)> {
+    response
+        .usage_metadata
+        .as_ref()
+        .unwrap()
+        .builtin_tool_uses
+        .iter()
+        .map(|used| (used.kind.clone(), used.count))
+        .collect()
+}
+
+#[cfg(feature = "anthropic")]
+#[tokio::test]
+async fn anthropic_server_tool_uses_add_their_fees() {
+    let server = mock_json(json!({
+        "id": "msg_1", "type": "message", "role": "assistant",
+        "content": [
+            {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "rust"}},
+            {"type": "text", "text": "ok"}
+        ],
+        "model": "claude-sonnet-4-6", "stop_reason": "end_turn", "stop_sequence": null,
+        "usage": {
+            "input_tokens": 1_000, "output_tokens": 1_000,
+            "server_tool_use": {"web_search_requests": 3, "web_fetch_requests": 2}
+        }
+    }))
+    .await;
+    let model = adk_model::anthropic::AnthropicClient::new(
+        adk_model::anthropic::AnthropicConfig::new("test-key", "claude-sonnet-4-6")
+            .with_base_url(server.uri()),
+    )
+    .unwrap()
+    .with_retry_config(adk_model::RetryConfig::disabled());
+
+    let response = final_response(&model, "claude-sonnet-4-6").await;
+
+    // `usage.server_tool_use` is authoritative over the blocks in the content.
+    assert_eq!(uses(&response), [("web_search".into(), 3), ("web_fetch".into(), 2)]);
+    // 1K × $3.00 + 1K × $15.00 + 3 searches × $0.01; web fetch has no fee.
+    assert_cost(&response, 0.003 + 0.015 + 0.03);
+}
+
+#[cfg(feature = "anthropic")]
+#[tokio::test]
+async fn anthropic_server_tool_blocks_are_counted_without_a_usage_report() {
+    let server = mock_json(json!({
+        "id": "msg_1", "type": "message", "role": "assistant",
+        "content": [
+            {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "a"}},
+            {"type": "server_tool_use", "id": "srvtoolu_2", "name": "bash_code_execution", "input": {"command": "ls"}},
+            {"type": "text", "text": "ok"}
+        ],
+        "model": "claude-sonnet-4-6", "stop_reason": "end_turn", "stop_sequence": null,
+        "usage": {"input_tokens": 1_000, "output_tokens": 1_000}
+    }))
+    .await;
+    let model = adk_model::anthropic::AnthropicClient::new(
+        adk_model::anthropic::AnthropicConfig::new("test-key", "claude-sonnet-4-6")
+            .with_base_url(server.uri()),
+    )
+    .unwrap()
+    .with_retry_config(adk_model::RetryConfig::disabled());
+
+    let response = final_response(&model, "claude-sonnet-4-6").await;
+
+    assert_eq!(uses(&response), [("code_execution".into(), 1), ("web_search".into(), 1)]);
+    assert_cost(&response, 0.003 + 0.015 + 0.01);
+}
+
+#[cfg(feature = "openai")]
+#[tokio::test]
+async fn openai_responses_hosted_tool_items_add_their_fees() {
+    let server = mock_json(json!({
+        "id": "resp_1", "object": "response", "created_at": 0, "model": "gpt-5.6-luna",
+        "status": "completed",
+        "output": [
+            {"type": "web_search_call", "id": "ws_1", "status": "completed",
+                "action": {"type": "search", "query": "rust"}},
+            {"type": "web_search_call", "id": "ws_2", "status": "completed",
+                "action": {"type": "search", "query": "rust 1.95"}},
+            {"type": "file_search_call", "id": "fs_1", "status": "completed", "queries": ["q"]},
+            {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}]}
+        ],
+        "usage": {
+            "input_tokens": 1_000_000, "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 0, "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 1_000_000
+        }
+    }))
+    .await;
+    let model = adk_model::openai::OpenAIResponsesClient::new(
+        adk_model::openai::OpenAIResponsesConfig::new("test-key", "gpt-5.6-luna")
+            .with_base_url(server.uri()),
+    )
+    .unwrap();
+
+    let response = final_response(&model, "gpt-5.6-luna").await;
+
+    assert_eq!(uses(&response), [("file_search".into(), 1), ("web_search".into(), 2)]);
+    // 1M input × $0.20 + 2 searches × $0.01 + 1 file search × $0.0025.
+    assert_cost(&response, 0.20 + 0.02 + 0.0025);
+}
+
+#[cfg(feature = "gemini")]
+#[tokio::test]
+async fn gemini_stream_accumulates_builtin_uses_onto_the_final_chunk() {
+    let usage =
+        json!({"promptTokenCount": 1_000, "candidatesTokenCount": 10, "totalTokenCount": 1_010});
+    let first = json!({
+        "candidates": [{"content": {"role": "model", "parts": [
+            {"executableCode": {"language": "PYTHON", "code": "print(1)"}}
+        ]}}],
+        "usageMetadata": usage
+    });
+    let last = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "1"}]},
+            "finishReason": "STOP",
+            "groundingMetadata": {"webSearchQueries": ["a", "b", "a"]}
+        }],
+        "usageMetadata": usage,
+        "modelVersion": "gemini-3.7-flash"
+    });
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(format!("data: {first}\n\ndata: {last}\n\n"), "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+    let model = adk_model::GeminiModel::new_with_base_url(
+        "test-key",
+        "gemini-3.7-flash",
+        format!("{}/v1beta/", server.uri()),
+    )
+    .unwrap();
+
+    let request = LlmRequest::new("gemini-3.7-flash", vec![Content::new("user").with_text("Hi")]);
+    let responses: Vec<LlmResponse> = model
+        .generate_content(request, true)
+        .await
+        .unwrap()
+        .map(|item| item.unwrap())
+        .collect()
+        .await;
+
+    let last = responses.iter().rfind(|response| !response.partial).unwrap();
+    // Distinct queries count once each; code execution has no fee.
+    assert_eq!(uses(last), [("code_execution".into(), 1), ("google_search".into(), 2)]);
+    assert_cost(last, (1_000.0 * 0.75 + 10.0 * 3.75) / 1e6 + 2.0 * 0.014);
+}

@@ -4,6 +4,7 @@
 pub mod anthropic;
 pub mod ap2;
 pub mod budget;
+pub mod builtin;
 pub mod codeact;
 pub mod commerce;
 pub mod eval;
@@ -42,6 +43,7 @@ pub const ALL: &[&str] = &[
     "ap2_payment_governed",
     "openai_tools_routing",
     "anthropic_thinking_replay",
+    "builtin_tool_policy",
 ];
 
 /// Runs the named scenario once.
@@ -72,6 +74,7 @@ pub async fn run(name: &str, cfg: &Config, provider: Provider) -> Verdict {
         "ap2_payment_governed" => ap2::ap2_payment_governed(cfg, provider).await,
         "openai_tools_routing" => providers::openai_tools_routing(cfg, provider).await,
         "anthropic_thinking_replay" => providers::anthropic_thinking_replay(cfg, provider).await,
+        "builtin_tool_policy" => builtin::builtin_tool_policy(cfg, provider).await,
         other => Verdict::Fail(format!("unknown scenario {other}")),
     }
 }

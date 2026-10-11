@@ -44,6 +44,9 @@
 //!   output is billed by modality are left out, so they resolve to `None`.
 //! - GPT-5.6 long-context rates are not applied: the threshold is unpublished.
 //! - Cache storage (Gemini per-hour storage) is not a per-request cost.
+//! - Built-in tool fees ([`BuiltinToolFee`](crate::pricing::BuiltinToolFee))
+//!   apply on the vendor's own API only, ignore free allowances, and leave
+//!   container-billed tools unpriced.
 //! - DeepSeek cache hits are billed at the cache-miss rate and off-peak
 //!   discounts are ignored, which over-estimates.
 //!
@@ -104,6 +107,102 @@ impl PriceVendor {
                 matches!(provider, "anthropic" | "bedrock" | "azure-ai" | "openrouter")
             }
             Self::DeepSeek => provider == "deepseek",
+        }
+    }
+}
+
+impl PriceVendor {
+    /// Returns `true` when `provider` is the vendor's own API, the only place its
+    /// published built-in tool fees apply.
+    pub fn first_party(self, provider: &str) -> bool {
+        match self {
+            Self::Google => provider == "gemini",
+            Self::OpenAI => matches!(provider, "openai" | "openai-responses"),
+            Self::Anthropic => provider == "anthropic",
+            Self::DeepSeek => provider == "deepseek",
+        }
+    }
+}
+
+/// How a [`BuiltinToolFee`] is charged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeeUnit {
+    /// Once per reported use, such as one search query.
+    PerUse,
+    /// Once per response that used the tool at all, such as one grounded prompt.
+    PerResponse,
+}
+
+/// A vendor's fee for a provider-executed built-in tool, on top of token costs.
+///
+/// `kind` is a [`BuiltinToolUse::kind`](adk_core::BuiltinToolUse::kind). The fee
+/// applies to every model of the vendor unless restricted with
+/// [`for_models`](Self::for_models).
+///
+/// # Example
+///
+/// ```
+/// use adk_model::pricing::{BuiltinToolFee, PriceVendor};
+///
+/// let fee = BuiltinToolFee::per_use(PriceVendor::Google, "google_search", 0.014)
+///     .for_models(["gemini-3*"]);
+/// assert!(fee.applies_to("gemini-3.7-flash"));
+/// assert!(!fee.applies_to("gemini-2.5-flash"));
+/// assert!((fee.cost_usd(3) - 0.042).abs() < 1e-12);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuiltinToolFee {
+    /// Vendor whose published fee this is.
+    pub vendor: PriceVendor,
+    /// Built-in tool kind the fee applies to.
+    pub kind: String,
+    /// Model identifiers the fee applies to; empty means every model. An entry
+    /// ending in `*` is a prefix; any other entry matches exactly or as a dated alias.
+    pub models: Vec<String>,
+    /// Fee in USD per [`unit`](Self::unit).
+    pub usd: f64,
+    /// What one fee is charged for.
+    pub unit: FeeUnit,
+}
+
+impl BuiltinToolFee {
+    /// A fee of `usd` per use of `kind`.
+    pub fn per_use(vendor: PriceVendor, kind: impl Into<String>, usd: f64) -> Self {
+        Self { vendor, kind: kind.into(), models: Vec::new(), usd, unit: FeeUnit::PerUse }
+    }
+
+    /// A fee of `usd` per response that used `kind` at least once.
+    pub fn per_response(vendor: PriceVendor, kind: impl Into<String>, usd: f64) -> Self {
+        Self { unit: FeeUnit::PerResponse, ..Self::per_use(vendor, kind, usd) }
+    }
+
+    /// Restricts the fee to `models`.
+    pub fn for_models(mut self, models: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.models = models.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Whether the fee applies to `model`.
+    pub fn applies_to(&self, model: &str) -> bool {
+        if self.models.is_empty() {
+            return true;
+        }
+        let canonical = canonical_model_id(model);
+        self.models.iter().any(|pattern| match pattern.strip_suffix('*') {
+            Some(prefix) => canonical.starts_with(prefix),
+            None => {
+                canonical == *pattern
+                    || canonical.strip_prefix(pattern.as_str()).is_some_and(is_version_suffix)
+            }
+        })
+    }
+
+    /// Fee in USD for `count` uses in one response.
+    pub fn cost_usd(&self, count: u32) -> f64 {
+        match self.unit {
+            FeeUnit::PerUse => f64::from(count) * self.usd,
+            FeeUnit::PerResponse if count > 0 => self.usd,
+            FeeUnit::PerResponse => 0.0,
         }
     }
 }
@@ -275,12 +374,13 @@ impl ModelPrice {
 pub struct PricingCatalog {
     version: String,
     prices: Vec<ModelPrice>,
+    fees: Vec<BuiltinToolFee>,
 }
 
 impl PricingCatalog {
     /// Creates an empty catalog labelled `version`.
     pub fn new(version: impl Into<String>) -> Self {
-        Self { version: version.into(), prices: Vec::new() }
+        Self { version: version.into(), prices: Vec::new(), fees: Vec::new() }
     }
 
     /// The standard catalog of published list prices, verified on
@@ -307,6 +407,78 @@ impl PricingCatalog {
         &self.prices
     }
 
+    /// Adds a built-in tool fee. Fees are matched in the order they were added.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::{BuiltinToolUse, UsageMetadata};
+    /// use adk_model::pricing::{
+    ///     BuiltinToolFee, ModelPrice, ModelRates, PriceVendor, PricingCatalog,
+    /// };
+    ///
+    /// let catalog = PricingCatalog::new("internal")
+    ///     .with_price(ModelPrice::new(PriceVendor::Anthropic, "my-claude", ModelRates::new(1.0, 5.0)))
+    ///     .with_builtin_tool_fee(BuiltinToolFee::per_use(PriceVendor::Anthropic, "web_search", 0.01));
+    /// let usage = UsageMetadata {
+    ///     builtin_tool_uses: vec![BuiltinToolUse::new("web_search", 2)],
+    ///     ..Default::default()
+    /// };
+    /// assert_eq!(catalog.cost_usd(Some("anthropic"), "my-claude", &usage), Some(0.02));
+    /// ```
+    pub fn with_builtin_tool_fee(mut self, fee: BuiltinToolFee) -> Self {
+        self.fees.push(fee);
+        self
+    }
+
+    /// Every built-in tool fee in the catalog.
+    pub fn builtin_tool_fees(&self) -> &[BuiltinToolFee] {
+        &self.fees
+    }
+
+    /// Resolves the fee for `kind` on `model` as served by `provider`.
+    ///
+    /// Fees apply only on the vendor's own API ([`PriceVendor::first_party`]);
+    /// `None` for `provider` matches any vendor.
+    pub fn builtin_tool_fee(
+        &self,
+        provider: Option<&str>,
+        model: &str,
+        kind: &str,
+    ) -> Option<&BuiltinToolFee> {
+        let vendor = self.lookup(provider, model).map(|price| price.vendor);
+        self.fees.iter().find(|fee| {
+            fee.kind == kind
+                && vendor.is_none_or(|vendor| vendor == fee.vendor)
+                && provider.is_none_or(|provider| fee.vendor.first_party(provider))
+                && fee.applies_to(model)
+        })
+    }
+
+    /// Fees in USD for the built-in tool uses in `usage`. Unpriced kinds add nothing.
+    pub fn builtin_tool_cost_usd(
+        &self,
+        provider: Option<&str>,
+        model: &str,
+        usage: &UsageMetadata,
+    ) -> f64 {
+        usage
+            .builtin_tool_uses
+            .iter()
+            .filter_map(|used| match self.builtin_tool_fee(provider, model, &used.kind) {
+                Some(fee) => Some(fee.cost_usd(used.count)),
+                None => {
+                    tracing::debug!(
+                        builtin_tool.kind = %used.kind,
+                        gen_ai.request.model = %model,
+                        "no published fee for built-in tool; cost covers tokens only"
+                    );
+                    None
+                }
+            })
+            .sum()
+    }
+
     /// Resolves the price for `model` as served by `provider`.
     ///
     /// `provider` is the [`LlmResponse::provider`](adk_core::LlmResponse::provider)
@@ -331,7 +503,9 @@ impl PricingCatalog {
 
     /// Cost in USD of one response's usage, or `None` when the model is unpriced.
     ///
-    /// Local Ollama models cost zero.
+    /// The cost is the token cost plus the fees for the response's
+    /// [`builtin_tool_uses`](UsageMetadata::builtin_tool_uses) that the catalog
+    /// prices. Local Ollama models cost zero.
     pub fn cost_usd(
         &self,
         provider: Option<&str>,
@@ -342,7 +516,10 @@ impl PricingCatalog {
             return (!model.contains("cloud")).then_some(0.0);
         }
         let price = self.lookup(provider, model)?;
-        Some(price.cost_usd(usage, chrono::Utc::now().date_naive()))
+        Some(
+            price.cost_usd(usage, chrono::Utc::now().date_naive())
+                + self.builtin_tool_cost_usd(provider, model, usage),
+        )
     }
 }
 
@@ -536,7 +713,40 @@ fn standard_catalog() -> PricingCatalog {
         ModelPrice::new(DeepSeek, "deepseek-chat", ModelRates::new(0.44, 1.32)),
         ModelPrice::new(DeepSeek, "deepseek-v4-pro", ModelRates::new(1.32, 3.96)),
     ];
-    PricingCatalog { version: PRICING_EFFECTIVE_DATE.to_string(), prices }
+    PricingCatalog { version: PRICING_EFFECTIVE_DATE.to_string(), prices, fees: standard_fees() }
+}
+
+/// Published built-in tool fees, verified on 2026-10-11.
+///
+/// Free monthly or daily allowances are not tracked, so a run inside an allowance
+/// is over-estimated. Kinds without a per-use fee here (Anthropic and OpenAI code
+/// execution, billed per container; OpenAI image generation and MCP; Gemini 3 Maps,
+/// billed per Maps query, which responses do not report) add no fee.
+fn standard_fees() -> Vec<BuiltinToolFee> {
+    use PriceVendor::{Anthropic, Google, OpenAI};
+    vec![
+        // https://platform.claude.com/docs/en/about-claude/pricing (fetched 2026-10-11):
+        // web search "$10 per 1,000 searches"; web fetch "no additional cost".
+        BuiltinToolFee::per_use(Anthropic, "web_search", 0.010),
+        BuiltinToolFee::per_use(Anthropic, "web_fetch", 0.0),
+        // https://developers.openai.com/api/docs/pricing (fetched 2026-10-11):
+        // web search "$10.00 / 1k calls"; file search tool call "$2.50 / 1k calls".
+        // `web_search_preview` on non-reasoning models costs $25.00 / 1k calls and is
+        // under-estimated, because the response does not name the tool version.
+        BuiltinToolFee::per_use(OpenAI, "web_search", 0.010),
+        BuiltinToolFee::per_use(OpenAI, "file_search", 0.0025),
+        // https://ai.google.dev/gemini-api/docs/pricing (fetched 2026-10-11):
+        // Gemini 3 and newer, Google Search "$14 per 1,000 requests" (search queries).
+        BuiltinToolFee::per_use(Google, "google_search", 0.014).for_models(["gemini-3*"]),
+        // Gemini 2.5 Pro and Flash, Google Search "$35 / 1,000 grounded prompts" and
+        // Google Maps "$25 / 1,000 grounded prompts".
+        BuiltinToolFee::per_response(Google, "google_search", 0.035)
+            .for_models(["gemini-2.5-pro", "gemini-2.5-flash"]),
+        BuiltinToolFee::per_response(Google, "google_maps", 0.025)
+            .for_models(["gemini-2.5-pro", "gemini-2.5-flash"]),
+        // "Code execution is billed at the standard token rates for the selected model."
+        BuiltinToolFee::per_use(Google, "code_execution", 0.0),
+    ]
 }
 
 #[cfg(test)]
@@ -554,6 +764,49 @@ mod tests {
             total_token_count: prompt + output,
             ..Default::default()
         }
+    }
+
+    fn tool_usage(uses: &[(&str, u32)]) -> UsageMetadata {
+        UsageMetadata {
+            builtin_tool_uses: uses
+                .iter()
+                .map(|(kind, count)| adk_core::BuiltinToolUse::new(*kind, *count))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn builtin_tool_fees_are_added_on_the_vendor_api_only() {
+        let catalog = PricingCatalog::standard();
+        let searched = tool_usage(&[("web_search", 3), ("web_fetch", 2), ("code_execution", 1)]);
+        let cost = |provider: &str, model: &str, usage: &UsageMetadata| {
+            catalog.cost_usd(Some(provider), model, usage).unwrap()
+        };
+        assert!((cost("anthropic", "claude-sonnet-4-6", &searched) - 0.03).abs() < 1e-12);
+        assert_eq!(cost("bedrock", "claude-sonnet-4-6", &searched), 0.0);
+        assert!(
+            (cost("openai", "gpt-5.6-luna", &tool_usage(&[("web_search", 2), ("file_search", 4)]))
+                - 0.03)
+                .abs()
+                < 1e-12
+        );
+
+        let gemini3 =
+            tool_usage(&[("google_search", 4), ("code_execution", 2), ("google_maps", 1)]);
+        assert!((cost("gemini", "gemini-3.7-flash", &gemini3) - 0.056).abs() < 1e-12);
+        let gemini25 = tool_usage(&[("google_search", 4), ("google_maps", 1)]);
+        assert!((cost("gemini", "gemini-2.5-flash", &gemini25) - 0.06).abs() < 1e-12);
+        assert!(
+            catalog
+                .builtin_tool_fee(Some("gemini"), "gemini-2.5-flash-lite", "google_search")
+                .is_none()
+        );
+        assert!(
+            catalog
+                .builtin_tool_fee(Some("anthropic"), "claude-haiku-4-5", "code_execution")
+                .is_none()
+        );
     }
 
     fn price(provider: &str, model: &str) -> &'static ModelPrice {

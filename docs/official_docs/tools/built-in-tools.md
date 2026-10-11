@@ -85,6 +85,12 @@ async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Valu
 | Description | "Performs a Google search to retrieve information from the web." |
 | Parameters | Determined by Gemini model |
 | Execution | Server-side (Gemini grounding) |
+| Effect | `ToolEffect::ReadOnly` |
+
+> **Important:** a run's `ToolPolicy` decides whether the tool is attached to each request, and
+> every search the response reports counts against the run's tool-call budget and cost. A
+> default-deny `DeclarativePolicy` withholds it unless a rule allows it, such as
+> `allow_read_only()`. See [Built-in Tools](../security/tool-authorization.md#built-in-tools).
 
 ### Use Cases
 

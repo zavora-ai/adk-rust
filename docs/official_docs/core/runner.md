@@ -439,7 +439,8 @@ let runner = Runner::builder()
 
 | Checkpoint | Limits checked |
 |------------|----------------|
-| Before every model call | model calls, total tokens, cost, wall time |
+| Before every model call | model calls, total tokens, cost, wall time; tool calls already over the limit |
+| Before every model request | built-in tools are withheld when no tool calls are left |
 | Before every tool dispatch | tool calls, total tokens, cost, wall time |
 | After every event | usage from agents that call models directly |
 
@@ -448,6 +449,13 @@ let runner = Runner::builder()
 - **Tool batches**: the calls of one model turn are reserved together. A batch
   that does not fit is answered with `not run` function responses, so the
   session history keeps one response per call.
+- **Built-in tools count as tool calls**: each use a provider reports in
+  `UsageMetadata::builtin_tool_uses` (web search, file search, code execution, …)
+  is added when the model call is metered. The provider runs them mid-response,
+  so a turn can take the count past `max_tool_calls`; the next model call is then
+  refused with `budget.tool_calls`. Once no tool calls are left, built-in tools
+  are withheld from the next request — see
+  [Built-in Tools](../security/tool-authorization.md#built-in-tools).
 - **Partial chunks never count**: each model call is metered once, from its
   first non-partial response carrying usage.
 - **Cost comes from the provider response**: `adk-model` fills

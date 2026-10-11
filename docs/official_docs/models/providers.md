@@ -709,8 +709,57 @@ fn main() {
 }
 ```
 
-Run budgets read this cost to enforce a spend cap; see
-[Run Budgets](../core/runner.md#run-budgets).
+### Built-in tool uses and fees
+
+Providers report the built-in tools they ran in `UsageMetadata::builtin_tool_uses`, one
+`BuiltinToolUse { kind, count }` per kind. `cost` adds the published per-use fee of every priced
+kind to the token cost.
+
+| Kind | Reported from | Fee in `PricingCatalog::standard()` |
+|------|---------------|--------------------------------------|
+| `web_search` | Anthropic `usage.server_tool_use.web_search_requests` | $10 per 1,000 searches |
+| `web_fetch` | Anthropic `usage.server_tool_use.web_fetch_requests` | None — token cost only |
+| `code_execution` | Anthropic `usage.server_tool_use.code_execution_requests` | Unpriced (billed per container hour) |
+| `web_search` | OpenAI Responses `web_search_call` items | $10 per 1,000 calls |
+| `file_search` | OpenAI Responses `file_search_call` items | $2.50 per 1,000 calls |
+| `code_execution` | OpenAI Responses `code_interpreter_call` items | Unpriced (billed per container session) |
+| `image_generation`, `mcp` | OpenAI Responses `image_generation_call`, `mcp_call` items | Unpriced |
+| `google_search` | Gemini `groundingMetadata.webSearchQueries`, one per distinct query | Gemini 3 and newer: $14 per 1,000 queries. Gemini 2.5 Pro and Flash: $35 per 1,000 grounded prompts |
+| `google_maps` | Gemini grounding chunks with a Maps source, one per response | Gemini 2.5 Pro and Flash: $25 per 1,000 grounded prompts. Gemini 3: unpriced (billed per Maps query, which responses do not report) |
+| `code_execution` | Gemini `executableCode` parts | None — token cost only |
+
+- **Vendor API only**: fees apply when the provider is the vendor's own API (`gemini`, `openai`,
+  `anthropic`); Bedrock, Azure and other gateways keep the token cost only.
+- **Free allowances are not tracked**: Gemini's monthly search allowance and similar quotas are
+  ignored, so a run inside an allowance is over-estimated.
+- **Unpriced kinds add nothing**: the uses still count against the tool-call budget.
+- **OpenAI `web_search_preview` on non-reasoning models** is billed at $25 per 1,000 calls; the
+  response does not name the tool version, so the catalog charges the $10 rate.
+
+Add fees for other kinds or contracts with `PricingCatalog::with_builtin_tool_fee`:
+
+```rust
+use adk_core::{BuiltinToolUse, UsageMetadata};
+use adk_model::pricing::{BuiltinToolFee, ModelPrice, ModelRates, PriceVendor, PricingCatalog};
+
+fn main() {
+    let catalog = PricingCatalog::new("contract-2026")
+        .with_price(ModelPrice::new(PriceVendor::Google, "gemini-3.7-flash", ModelRates::new(0.75, 3.75)))
+        .with_builtin_tool_fee(
+            BuiltinToolFee::per_use(PriceVendor::Google, "google_search", 0.010)
+                .for_models(["gemini-3*"]),
+        );
+    let usage = UsageMetadata {
+        builtin_tool_uses: vec![BuiltinToolUse::new("google_search", 3)],
+        ..Default::default()
+    };
+    let cost = catalog.cost_usd(Some("gemini"), "gemini-3.7-flash", &usage).unwrap();
+    assert!((cost - 0.03).abs() < 1e-9);
+}
+```
+
+Run budgets read this cost to enforce a spend cap, and count each built-in tool use as a tool
+call; see [Run Budgets](../core/runner.md#run-budgets).
 
 ---
 

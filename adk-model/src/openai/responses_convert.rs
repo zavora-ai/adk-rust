@@ -600,7 +600,10 @@ pub fn from_response(response: &Response) -> LlmResponse {
     let content =
         if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) };
 
-    let usage_metadata = response.usage.as_ref().map(convert_usage);
+    let usage_metadata = response.usage.as_ref().map(|usage| UsageMetadata {
+        builtin_tool_uses: builtin_tool_uses(&response.output),
+        ..convert_usage(usage)
+    });
     let finish_reason = map_finish_reason(response);
     let provider_metadata = build_provider_metadata(response);
     let mut citation_sources = Vec::new();
@@ -800,6 +803,26 @@ fn reasoning_history_parts(response: &Response) -> Vec<serde_json::Value> {
         })
         .filter_map(|part| serde_json::to_value(part).ok())
         .collect()
+}
+
+/// Hosted tool calls the provider ran while producing `output`, one use per item.
+///
+/// Computer, shell and apply-patch calls are executed by the client, not the
+/// provider, so they are not counted here.
+fn builtin_tool_uses(output: &[OutputItem]) -> Vec<adk_core::BuiltinToolUse> {
+    let mut counts = std::collections::BTreeMap::<&str, u32>::new();
+    for item in output {
+        let kind = match item {
+            OutputItem::WebSearchCall(_) => "web_search",
+            OutputItem::FileSearchCall(_) => "file_search",
+            OutputItem::CodeInterpreterCall(_) => "code_execution",
+            OutputItem::ImageGenerationCall(_) => "image_generation",
+            OutputItem::McpCall(_) => "mcp",
+            _ => continue,
+        };
+        *counts.entry(kind).or_default() += 1;
+    }
+    counts.into_iter().map(|(kind, count)| adk_core::BuiltinToolUse::new(kind, count)).collect()
 }
 
 /// Convert Responses API usage to ADK `UsageMetadata`.

@@ -83,6 +83,8 @@ pub struct Config {
     /// block is rejected.
     pub anthropic_thinking_model: String,
     pub gemini_model: String,
+    /// Gemini model for Google Search grounding.
+    pub gemini_search_model: String,
 }
 
 impl Config {
@@ -105,6 +107,8 @@ impl Config {
                 .unwrap_or_else(|| "claude-haiku-4-5".to_string()),
             gemini_model: key("GEMINI_MODEL")
                 .unwrap_or_else(|| "gemini-3.5-flash-lite".to_string()),
+            gemini_search_model: key("GEMINI_SEARCH_MODEL")
+                .unwrap_or_else(|| "gemini-3.7-flash".to_string()),
         }
     }
 
@@ -138,6 +142,12 @@ impl Config {
                 Ok(CountingLlm::wrap(Arc::new(GeminiModel::new(key, &self.gemini_model)?)))
             }
         }
+    }
+
+    /// A Gemini model, counted.
+    pub fn gemini(&self, model: &str) -> anyhow::Result<Arc<CountingLlm>> {
+        let key = self.gemini_key.clone().unwrap_or_default();
+        Ok(CountingLlm::wrap(Arc::new(GeminiModel::new(key, model)?)))
     }
 
     /// An OpenAI model on the Chat Completions client, counted.

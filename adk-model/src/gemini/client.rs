@@ -125,6 +125,52 @@ pub struct GeminiModel {
 }
 
 /// Convert a Gemini client error to a structured `AdkError` with proper category and retry hints.
+/// Built-in tool uses observed across the responses of one Gemini call.
+///
+/// Search is counted per distinct `webSearchQueries` entry, Maps once per grounded
+/// response and code execution per `executableCode` part.
+#[derive(Debug, Default)]
+struct GeminiBuiltinToolUses {
+    search_queries: std::collections::BTreeSet<String>,
+    maps_grounded: bool,
+    code_executions: u32,
+}
+
+impl GeminiBuiltinToolUses {
+    fn observe(&mut self, response: &adk_gemini::GenerationResponse) {
+        let Some(candidate) = response.candidates.first() else {
+            return;
+        };
+        if let Some(grounding) = &candidate.grounding_metadata {
+            self.search_queries.extend(grounding.web_search_queries.iter().flatten().cloned());
+            self.maps_grounded |=
+                grounding.grounding_chunks.iter().flatten().any(|chunk| chunk.maps.is_some());
+        }
+        let executions = candidate
+            .content
+            .parts
+            .iter()
+            .flatten()
+            .filter(|part| matches!(part, adk_gemini::Part::ExecutableCode { .. }))
+            .count();
+        self.code_executions =
+            self.code_executions.saturating_add(u32::try_from(executions).unwrap_or(u32::MAX));
+    }
+
+    fn uses(&self) -> Vec<adk_core::BuiltinToolUse> {
+        let searches = u32::try_from(self.search_queries.len()).unwrap_or(u32::MAX);
+        [
+            ("code_execution", self.code_executions),
+            ("google_maps", u32::from(self.maps_grounded)),
+            ("google_search", searches),
+        ]
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(kind, count)| adk_core::BuiltinToolUse::new(kind, count))
+        .collect()
+    }
+}
+
 pub(crate) fn gemini_error_to_adk(e: &adk_gemini::ClientError) -> adk_core::AdkError {
     fn format_error_chain(e: &dyn std::error::Error) -> String {
         let mut msg = e.to_string();
@@ -890,6 +936,11 @@ impl GeminiModel {
             thinking_token_count: u.thoughts_token_count,
             cache_read_input_token_count: u.cached_content_token_count,
             provider_usage: serde_json::to_value(u).ok(),
+            builtin_tool_uses: {
+                let mut uses = GeminiBuiltinToolUses::default();
+                uses.observe(resp);
+                uses.uses()
+            },
             ..Default::default()
         });
 
@@ -1388,11 +1439,17 @@ impl GeminiModel {
             let mapped_stream = async_stream::stream! {
                 let mut stream = response_stream;
                 let mut saw_partial_chunk = false;
+                // Gemini reports usage cumulatively per chunk; built-in tool uses follow suit.
+                let mut builtin_uses = GeminiBuiltinToolUses::default();
                 while let Some(result) = stream.try_next().await.transpose() {
                     match result {
                         Ok(resp) => {
+                            builtin_uses.observe(&resp);
                             match Self::convert_response(&resp) {
-                                Ok(llm_resp) => {
+                                Ok(mut llm_resp) => {
+                                    if let Some(usage) = llm_resp.usage_metadata.as_mut() {
+                                        usage.builtin_tool_uses = builtin_uses.uses();
+                                    }
                                     let (chunks, next_saw_partial) =
                                         Self::stream_chunks_from_response(llm_resp, saw_partial_chunk);
                                     saw_partial_chunk = next_saw_partial;
