@@ -154,3 +154,19 @@ mod governance {
         harness = super::Postgres,
     );
 }
+
+#[async_trait]
+impl adk_core::conformance::AuditLogStoreHarness for Postgres {
+    async fn open(&self) -> Arc<dyn adk_core::audit_log::AuditLogStore> {
+        let store = adk_session::PostgresAuditLogStore::from_pool(self.pool().await);
+        store.migrate().await.expect("audit log schema migrates");
+        Arc::new(store)
+    }
+}
+
+mod audit_log {
+    adk_core::audit_log_store_conformance_tests!(
+        #[ignore = "requires a PostgreSQL server at DATABASE_URL"]
+        harness = super::Postgres,
+    );
+}

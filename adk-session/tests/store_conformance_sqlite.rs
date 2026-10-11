@@ -144,3 +144,16 @@ mod schedules {
 mod governance {
     adk_core::governance_state_store_conformance_tests!(harness = super::FileDatabase::new());
 }
+
+#[async_trait]
+impl adk_core::conformance::AuditLogStoreHarness for FileDatabase {
+    async fn open(&self) -> Arc<dyn adk_core::audit_log::AuditLogStore> {
+        let store = adk_session::SqliteAuditLogStore::new(&self.url()).await.expect("SQLite opens");
+        store.migrate().await.expect("audit log schema migrates");
+        Arc::new(store)
+    }
+}
+
+mod audit_log {
+    adk_core::audit_log_store_conformance_tests!(harness = super::FileDatabase::new(),);
+}
