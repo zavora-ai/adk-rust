@@ -411,6 +411,31 @@ pub trait AuditSink: Send + Sync {
     }
 }
 
+/// A shared sink is a sink, so one sink (such as a signed audit log) can serve several
+/// guards and keep a handle for checkpoints or queries.
+#[async_trait::async_trait]
+impl<T: AuditSink + ?Sized> AuditSink for std::sync::Arc<T> {
+    async fn log(&self, event: AuditEvent) -> Result<(), crate::AuthError> {
+        (**self).log(event).await
+    }
+
+    async fn log_batch(&self, events: Vec<AuditEvent>) -> Result<(), crate::AuthError> {
+        (**self).log_batch(events).await
+    }
+
+    async fn query(&self, filter: &AuditFilter) -> Result<Vec<AuditEvent>, crate::AuthError> {
+        (**self).query(filter).await
+    }
+
+    async fn purge_before(&self, cutoff: DateTime<Utc>) -> Result<u64, crate::AuthError> {
+        (**self).purge_before(cutoff).await
+    }
+
+    async fn flush(&self) -> Result<(), crate::AuthError> {
+        (**self).flush().await
+    }
+}
+
 /// What a guarded tool does when its audit sink fails to record an access decision.
 ///
 /// [`ProtectedTool`](crate::ProtectedTool), [`ScopedTool`](crate::ScopedTool), and the

@@ -333,6 +333,9 @@ Each backend detects pre-existing tables (baseline detection) and registers them
 | Neo4j | `neo4j` | `Neo4jSpendLedger` | `Neo4jActionLedger` | `Neo4jApprovalStore` |
 | Firestore | `firestore` | `FirestoreSpendLedger` | `FirestoreActionLedger` | `FirestoreApprovalStore` |
 
+`SqliteAuditLogStore` (`sqlite`) and `PostgresAuditLogStore` (`postgres`) hold the signed
+audit log written by `adk_auth::signed_audit::AuditLog`.
+
 Each type has `new(...)`, a constructor over the handle a session service holds
 (`from_pool`, `from_client`, `from_database`, `from_graph`, `from_db`), and `migrate()`.
 Spend ledgers add `with_limits`, `with_reservation_ttl`, and `with_clock`. Concurrent

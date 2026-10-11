@@ -327,6 +327,18 @@ let events = FileAuditSink::verify_file("/archive/audit.jsonl", Some(key.as_slic
 inserted, reordered, or removed. A change to the newest line and lines cut from the end
 leave no broken link; record the newest line elsewhere to detect them.
 
+The chained file has one writer and a symmetric key. For logs that several replicas write,
+that a third party verifies with a public key, or that must detect truncation and rewrites,
+use the signed audit log (`signed-audit` feature): RFC 8785 records, an RFC 9162 Merkle tree,
+and Ed25519-signed checkpoints, stored in memory, SQLite, or PostgreSQL. `AuditLog` is itself
+an `AuditSink`. See [Audit Log](audit-log.md).
+
+| Sink | Integrity | Verifier needs | Writers |
+|------|-----------|----------------|---------|
+| `FileAuditSink::with_chaining` | SHA-256 chain | The file | One |
+| `FileAuditSink::with_hmac_chaining` | HMAC-SHA256 chain | The file and the secret key | One |
+| `signed_audit::AuditLog` | Chain, Merkle tree, signed checkpoints, optional anchors | The export and the public key | One per `log_id`, any number of replicas |
+
 ### Output Format (JSONL)
 
 ```json

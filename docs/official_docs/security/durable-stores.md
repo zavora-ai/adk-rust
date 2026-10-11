@@ -1,12 +1,14 @@
 # Durable Stores
 
-Three stores keep safe actions safe across restarts and across processes:
+Three stores keep safe actions safe across restarts and across processes, and a fourth
+keeps the signed audit log:
 
 | Store | Trait | Keeps | Set on |
 |-------|-------|-------|--------|
 | Spend ledger | `SpendLedger` | Budget holds and committed spend | `RunConfig::spend_ledger`, `Runner::builder().spend_ledger(...)` |
 | Action ledger | `ActionLedger` | One record per non-idempotent tool call | `RunConfig::action_ledger`, `Runner::builder().action_ledger(...)` |
 | Approval store | `ApprovalStore` | Calls held for confirmation and the decisions for them | `RunConfig::approval_store`, `Runner::builder().approval_store(...)` |
+| Audit log store | `adk_core::audit_log::AuditLogStore` | Audit records, Merkle subtree hashes, and signed checkpoints | `adk_auth::signed_audit::AuditLog::builder(...)` — see [Audit Log](audit-log.md) |
 
 Every backend implements the same trait and passes the same conformance suite, so choosing
 a backend changes one constructor and nothing else.
@@ -22,6 +24,12 @@ a backend changes one constructor and nothing else.
 | MongoDB | `mongodb` | `MongoSpendLedger` | `MongoActionLedger` | `MongoApprovalStore` | Nightly, live server |
 | Neo4j | `neo4j` | `Neo4jSpendLedger` | `Neo4jActionLedger` | `Neo4jApprovalStore` | Nightly, live server |
 | Firestore | `firestore` | `FirestoreSpendLedger` | `FirestoreActionLedger` | `FirestoreApprovalStore` | Nightly, emulator |
+
+| Backend | Feature | `AuditLogStore` | Conformance run |
+|---------|---------|-----------------|-----------------|
+| In memory | `adk-core` | `InMemoryAuditLogStore` | Every PR (`adk-core`) |
+| SQLite | `sqlite` | `SqliteAuditLogStore` | Every PR (`adk-session`) |
+| PostgreSQL | `postgres` | `PostgresAuditLogStore` | Nightly, live server |
 
 Every durable type in `adk-session` follows one setup sequence:
 
@@ -153,6 +161,7 @@ adk_core::action_ledger_conformance_tests! {
 | `spend_ledger_conformance_tests!` | reserve/commit/release accounting; each reservation settles once; per-key limits; day and month rollover at UTC boundaries (driven by a `ManualClock`); expired holds; 40 concurrent reservations across two handles; holds and settlements across a restart |
 | `action_ledger_conformance_tests!` | begin/complete round trip; a recorded call answered without executing; a begun call read as `outcome_unknown` after a restart; 32 concurrent begins with one winner; write-once outcomes with one concurrent winner |
 | `approval_store_conformance_tests!` | pending kept once, oldest first, per scope; `has_decision` does not consume and `take_decision` consumes once; a later decision replaces an earlier one; expiry; scope isolation; 16 concurrent takes with one winner; records across a restart |
+| `audit_log_store_conformance_tests!` | contiguous appends read back unchanged; a gap or overlap is `audit_log.seq_conflict`; malformed batches are `audit_log.invalid_batch`; concurrent appends at one position across two handles have one winner; logs are independent; leaf and subtree hashes; reads past the end fail; checkpoints never exceed the log or fork, and a re-signed note replaces the old one; pruning keeps hashes; data across a restart |
 
 Run the suites for the workspace backends:
 
@@ -172,5 +181,6 @@ and the Firestore emulator and runs every live suite.
 ## Related
 
 - [Spend Ledger](spend-ledger.md)
+- [Audit Log](audit-log.md)
 - [Tool Authorization](tool-authorization.md)
 - [Tool Effects](../tools/tool-effects.md)

@@ -44,6 +44,8 @@
 2 adk-cli vertex-skill-registry
 # The `deploy agent-engine` subcommand: arg-parse and mock create-contract tests.
 2 adk-cli gcp-deploy
+# `audit export` from SQLite and PostgreSQL audit stores.
+2 adk-cli audit-sql
 
 # Shard 3 — adk-graph, adk-managed, adk-code.
 # No workspace member enables these four; four clippy failures and two uncompilable doc
@@ -107,6 +109,8 @@
 # adk-auth's SSO/OAuth surface drifted out of the clippy gate; a jsonwebtoken major bump
 # broke it while every required check stayed green.
 6 adk-auth sso
+# Signed audit log: JCS, RFC 9162 proofs, signed-note checkpoints, tamper tests.
+6 adk-auth signed-audit
 # The GCS artifact backend must keep blob-name parity with adk-python.
 6 adk-artifact gcs
 6 adk-telemetry gcp

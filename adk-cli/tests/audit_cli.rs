@@ -4,7 +4,9 @@ use std::process::Command;
 use std::sync::Arc;
 
 use adk_auth::signed_audit::{AuditExport, AuditLog, AuditSigner, Ed25519Signer};
-use adk_core::audit_log::{AuditLogStore, AuditRecordDraft, AuditRecordKind, InMemoryAuditLogStore};
+use adk_core::audit_log::{
+    AuditLogStore, AuditRecordDraft, AuditRecordKind, InMemoryAuditLogStore,
+};
 
 fn adk_rust(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_adk-rust")).args(args).output().expect("binary runs")
@@ -79,8 +81,16 @@ async fn export_reads_a_sqlite_store() {
 
     let out = dir.path().join("export.jsonl");
     let out = out.to_str().unwrap();
-    let output =
-        adk_rust(&["audit", "export", "--database-url", &url, "--log-id", "replica-1", "--out", out]);
+    let output = adk_rust(&[
+        "audit",
+        "export",
+        "--database-url",
+        &url,
+        "--log-id",
+        "replica-1",
+        "--out",
+        out,
+    ]);
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let output = adk_rust(&["audit", "verify", out, "--key", &signer.verifier_key()]);
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));

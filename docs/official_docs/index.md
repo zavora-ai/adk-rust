@@ -140,6 +140,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Payments and Commerce](security/payments.md) - Agentic commerce journeys, protocol support, and validation paths
 - [Spend Ledger](security/spend-ledger.md) - One budget for model calls and payments, with daily, monthly, and lifetime caps
 - [Durable Stores](security/durable-stores.md) - Spend ledger, action ledger, and approval store backends, their conformance suite, and the no-duplicate guarantee
+- [Audit Log](security/audit-log.md) - Signed, Merkle-hashed audit log with checkpoints, key rotation, and offline verification
 
 ## Compliance
 

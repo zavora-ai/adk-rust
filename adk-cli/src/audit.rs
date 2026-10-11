@@ -1,6 +1,8 @@
 //! `adk-rust audit`: verify signed audit log exports and manage checkpoint keys.
 
-use adk_auth::signed_audit::{AuditExport, AuditSigner, Ed25519Signer, FileCheckpointAnchor, NoteVerifier};
+use adk_auth::signed_audit::{
+    AuditExport, AuditSigner, Ed25519Signer, FileCheckpointAnchor, NoteVerifier,
+};
 use anyhow::{Context, Result, bail};
 
 use crate::cli::AuditCommands;
@@ -35,7 +37,9 @@ fn verify(
     }
     let trusted = keys
         .iter()
-        .map(|key| key.parse::<NoteVerifier>().with_context(|| format!("invalid verifier key '{key}'")))
+        .map(|key| {
+            key.parse::<NoteVerifier>().with_context(|| format!("invalid verifier key '{key}'"))
+        })
         .collect::<Result<Vec<_>>>()?;
     let text =
         std::fs::read_to_string(export_path).with_context(|| format!("reading {export_path}"))?;
@@ -43,7 +47,8 @@ fn verify(
         .map_err(|(line, error)| anyhow::anyhow!("{export_path}:{line}: {error}"))?;
     for path in checkpoint_files {
         export.checkpoints.extend(
-            FileCheckpointAnchor::read(path).with_context(|| format!("reading checkpoints {path}"))?,
+            FileCheckpointAnchor::read(path)
+                .with_context(|| format!("reading checkpoints {path}"))?,
         );
     }
     let report = export.verify(&trusted);

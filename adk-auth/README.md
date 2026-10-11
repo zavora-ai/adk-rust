@@ -27,6 +27,9 @@ adk-auth = { version = "3.0.0", features = ["sso"] }
 
 # With auth bridge for adk-server identity flow (implies sso)
 adk-auth = { version = "3.0.0", features = ["auth-bridge"] }
+
+# With the signed, Merkle-hashed audit log
+adk-auth = { version = "3.0.0", features = ["signed-audit"] }
 ```
 
 ## Features
@@ -230,6 +233,16 @@ A protected or scoped tool refuses a call whose decision the sink fails to recor
 logs the failure and continues instead. `FileAuditSink::with_chaining` and
 `with_hmac_chaining` write a hash chain that resumes after a restart, and
 `FileAuditSink::verify` reports the first line that was edited, inserted, or removed.
+
+### Signed audit log (`signed-audit`)
+
+`signed_audit::AuditLog` writes RFC 8785 records into an RFC 9162 Merkle tree per replica,
+signs C2SP checkpoints with Ed25519 (Go `sumdb/note` compatible), rotates keys with a
+dual-signed checkpoint, and publishes checkpoints to optional anchors. It is an `AuditSink`.
+Records live in an `AuditLogStore` (in memory, `adk-session` SQLite or PostgreSQL), and
+`signed_audit::verify` or `adk-rust audit verify` detects flipped bytes, deletions,
+reorders, truncation, and forks. See the
+[Audit Log guide](../docs/official_docs/security/audit-log.md).
 
 ## Error Types
 
