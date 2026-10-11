@@ -2209,6 +2209,10 @@ impl adk_core::ReadonlyContext for TeamInvocationContext {
     fn user_content(&self) -> &adk_core::Content {
         self.inner.user_content()
     }
+
+    fn acting_context(&self) -> adk_core::ActingContext {
+        self.inner.acting_context()
+    }
 }
 
 #[async_trait]

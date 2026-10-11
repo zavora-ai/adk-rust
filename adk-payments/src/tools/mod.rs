@@ -48,13 +48,15 @@ use adk_core::identity::AdkIdentity;
 
 use crate::domain::{CommerceActor, CommerceActorRole, ProtocolExtensions};
 
-/// The calling agent, as the actor a payment tool reports to the commerce kernel.
+/// The calling agent, identified by its [`AgentId`](adk_core::AgentId), as the actor a
+/// payment tool reports to the commerce kernel.
 fn calling_agent(ctx: &dyn ToolContext) -> CommerceActor {
+    let principal = ctx.acting_context().agent;
     CommerceActor {
-        actor_id: ctx.agent_name().to_string(),
+        actor_id: principal.id.to_string(),
         role: CommerceActorRole::AgentSurface,
         display_name: Some(ctx.agent_name().to_string()),
-        tenant_id: None,
+        tenant_id: principal.tenant,
         extensions: ProtocolExtensions::default(),
     }
 }

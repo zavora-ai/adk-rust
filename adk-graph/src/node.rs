@@ -973,6 +973,15 @@ impl adk_core::ReadonlyContext for GraphInvocationContext {
     fn user_content(&self) -> &adk_core::Content {
         &self.user_content
     }
+
+    fn acting_context(&self) -> adk_core::ActingContext {
+        self.run_config.acting_context_for(
+            &self.app_name,
+            self.agent.name(),
+            &self.user_id,
+            &self.invocation_id,
+        )
+    }
 }
 
 // Implement CallbackContext (required by InvocationContext)

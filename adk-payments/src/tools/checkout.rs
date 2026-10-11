@@ -207,10 +207,14 @@ pub(super) fn tool_caller(
     tool_name: &str,
     args: Value,
 ) -> PaymentCaller {
-    let mut caller =
-        PaymentCaller::new().with_org(ctx.app_name()).with_agent(ctx.agent_name()).with_approver(
-            Arc::new(ToolCallApprover { ctx: ctx.clone(), tool_name: tool_name.to_string(), args }),
-        );
+    let mut caller = PaymentCaller::new()
+        .with_org(ctx.app_name())
+        .with_agent(ctx.acting_context().agent.id.as_str())
+        .with_approver(Arc::new(ToolCallApprover {
+            ctx: ctx.clone(),
+            tool_name: tool_name.to_string(),
+            args,
+        }));
     if let Some(ledger) = ctx.run_config().and_then(|config| config.spend_ledger.clone()) {
         caller = caller.with_spend_ledger(ledger);
     }

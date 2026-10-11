@@ -97,6 +97,7 @@ impl InFlightCalls {
     async fn audit_interrupted(
         &self,
         trail: &adk_core::audit_log::AuditTrail,
+        run_config: &RunConfig,
         app_name: &str,
         user_id: &str,
         session_id: &str,
@@ -106,12 +107,12 @@ impl InFlightCalls {
         };
         for call in &self.0 {
             let mut draft = AuditRecordDraft::new(AuditRecordKind::ToolCall, call.name.as_str())
-                .actor(AuditActor::for_invocation(
+                .actor(AuditActor::from(&run_config.acting_context_for(
                     app_name,
                     &call.author,
                     user_id,
                     &call.invocation_id,
-                ))
+                )))
                 .args_digest(trail.digest(&call.args))
                 .outcome(AuditRecordOutcome::OutcomeUnknown)
                 .ext("cause", serde_json::Value::String("cancelled".to_string()))
@@ -336,6 +337,12 @@ pub struct RunnerConfig {
     /// Installed on each run's [`RunConfig::audit`] when the run carries none, and
     /// attached to the runner's kill switch so freezes and unfreezes are recorded.
     pub audit: Option<adk_core::audit_log::AuditTrail>,
+    /// Optional source of the principal each run's agents act as.
+    ///
+    /// Read at the start of every run and installed on the run's
+    /// [`RunConfig::acting_context`] when the run carries none. Without one, each agent
+    /// acts as `urn:adk:agent:{app_name}/{agent_name}`.
+    pub identity_source: Option<Arc<dyn adk_core::IdentitySource>>,
 }
 
 /// Agent execution runtime.
@@ -382,6 +389,7 @@ pub struct Runner {
     durable_runs: Option<Arc<dyn adk_core::DurableRunStore>>,
     /// Audit trail installed on runs that carry none.
     audit: Option<adk_core::audit_log::AuditTrail>,
+    identity_source: Option<Arc<dyn adk_core::IdentitySource>>,
     /// Serializes externally triggered invocations per session. The weak values prevent the
     /// per-trigger session policy from retaining one lock forever for every completed event.
     pub(crate) external_session_locks: Arc<
@@ -476,6 +484,7 @@ impl Runner {
             spend_ledger: config.spend_ledger,
             durable_runs: config.durable_runs,
             audit: config.audit,
+            identity_source: config.identity_source,
             external_session_locks: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -674,6 +683,8 @@ impl Runner {
         }
         // Agents, compaction, sampling and routing read the estimate from the config.
         run_config.llm_spend_estimate.get_or_insert(self.llm_spend_estimate);
+        let identity_source =
+            if run_config.acting_context.is_none() { self.identity_source.clone() } else { None };
         let compaction_config = self.compaction_config.clone();
         let context_cache_config = self.context_cache_config.clone();
         let cache_capable = self.cache_capable.clone();
@@ -728,6 +739,22 @@ impl Runner {
             if let Err(error) = run_config.check_governance() {
                 yield Err(error);
                 return;
+            }
+
+            // Read per run, so a rotating workload identity is current; the agent id is
+            // stable across redeploys while the instance may change.
+            if let Some(source) = identity_source {
+                match source.current().await {
+                    Ok(principal) => {
+                        run_config.acting_context =
+                            Some(adk_core::ActingContext::new(principal, stream_invocation_id.clone()));
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "identity source failed; the run does not start");
+                        yield Err(error);
+                        return;
+                    }
+                }
             }
 
             // Use the effective token (combines global + per-session)
@@ -1632,7 +1659,13 @@ impl Runner {
                 drop(agent_stream);
                 if let Some(trail) = &run_config.audit {
                     in_flight
-                        .audit_interrupted(trail, &app_name, user_id.as_ref(), session_id.as_ref())
+                        .audit_interrupted(
+                            trail,
+                            &run_config,
+                            &app_name,
+                            user_id.as_ref(),
+                            session_id.as_ref(),
+                        )
                         .await;
                 }
                 for event in in_flight.answer_interrupted() {

@@ -72,6 +72,10 @@ impl ReadonlyContext for UserContentOverrideContext {
     fn user_content(&self) -> &Content {
         &self.user_content
     }
+
+    fn acting_context(&self) -> adk_core::ActingContext {
+        self.parent.acting_context()
+    }
 }
 
 #[async_trait]

@@ -346,6 +346,10 @@ impl adk_core::ReadonlyContext for HistoryTrackingContext {
     fn user_content(&self) -> &Content {
         self.parent_ctx.user_content()
     }
+
+    fn acting_context(&self) -> adk_core::ActingContext {
+        self.parent_ctx.acting_context()
+    }
 }
 
 #[async_trait]

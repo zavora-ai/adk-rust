@@ -85,6 +85,7 @@ struct AgentToolRuntimeConfig {
     state_merge_policy: AgentToolStateMergePolicy,
     state_merge_exempt_keys: Arc<HashSet<String>>,
     artifact_prefixes: Option<Arc<Vec<String>>>,
+    principal: Option<adk_core::AgentPrincipal>,
 }
 
 impl Default for AgentToolRuntimeConfig {
@@ -105,6 +106,7 @@ impl Default for AgentToolRuntimeConfig {
             state_merge_policy: AgentToolStateMergePolicy::Overwrite,
             state_merge_exempt_keys: Arc::new(HashSet::new()),
             artifact_prefixes: None,
+            principal: None,
         }
     }
 }
@@ -268,6 +270,27 @@ impl AgentTool {
     /// Bound the number of nested agent-as-tool delegations.
     pub fn max_delegation_depth(mut self, max_depth: u32) -> Self {
         self.runtime.max_delegation_depth = Some(max_depth);
+        self
+    }
+
+    /// Sets the principal the wrapped agent acts as when it is delegated to.
+    ///
+    /// Without one, the delegate acts as
+    /// [`AgentPrincipal::derived`](adk_core::AgentPrincipal::derived) from the app name and
+    /// the wrapped agent's name, in the caller's tenant. Either way it acts for the
+    /// caller's subject, and the caller is appended to its delegation chain.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::{AgentId, AgentPrincipal};
+    /// use adk_tool::AgentTool;
+    ///
+    /// let tool = AgentTool::new(researcher)
+    ///     .agent_principal(AgentPrincipal::new(AgentId::new("spiffe://acme/agent/researcher")?));
+    /// ```
+    pub fn agent_principal(mut self, principal: adk_core::AgentPrincipal) -> Self {
+        self.runtime.principal = Some(principal);
         self
     }
 
@@ -560,7 +583,15 @@ impl Tool for AgentTool {
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         adk_telemetry::debug!("Executing agent tool: {}", self.agent.name());
 
-        let parent_run_config = ctx.run_config().cloned().unwrap_or_default();
+        let mut parent_run_config = ctx.run_config().cloned().unwrap_or_default();
+        let caller = ctx.acting_context();
+        let delegate = self.runtime.principal.clone().unwrap_or_else(|| {
+            let mut derived = adk_core::AgentPrincipal::derived(ctx.app_name(), self.agent.name());
+            derived.tenant = caller.agent.tenant.clone();
+            derived
+        });
+        // The child's invocation id is assigned with its context; `acting_context_for` fills it.
+        parent_run_config.acting_context = Some(caller.delegate(delegate, String::new()));
         let child_depth = ctx.delegation_depth().saturating_add(1);
         let max_depth = self.runtime.max_delegation_depth.or(ctx.max_delegation_depth());
         if max_depth.is_some_and(|max| child_depth > max) {
@@ -891,6 +922,15 @@ impl ReadonlyContext for AgentToolInvocationContext {
 
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn acting_context(&self) -> adk_core::ActingContext {
+        self.run_config.acting_context_for(
+            self.app_name(),
+            self.agent_name(),
+            self.user_id(),
+            &self.invocation_id,
+        )
     }
 }
 

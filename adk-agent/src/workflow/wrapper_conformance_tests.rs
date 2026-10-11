@@ -27,6 +27,7 @@ use std::sync::Arc;
 const SENTINEL_SECRET_NAME: &str = "sentinel-secret";
 const SENTINEL_SECRET_VALUE: &str = "sentinel-value";
 const SENTINEL_SCOPE: &str = "sentinel:scope";
+const SENTINEL_AGENT_ID: &str = "spiffe://sentinel.test/agent/sentinel";
 const SENTINEL_METADATA_KEY: &str = "sentinel-metadata";
 const SENTINEL_STATE_KEY: &str = "sentinel-shared-key";
 
@@ -149,6 +150,18 @@ impl ReadonlyContext for SentinelContext {
     fn user_content(&self) -> &Content {
         &self.content
     }
+    fn acting_context(&self) -> adk_core::ActingContext {
+        sentinel_acting()
+    }
+}
+
+fn sentinel_acting() -> adk_core::ActingContext {
+    adk_core::ActingContext::new(
+        adk_core::AgentPrincipal::new(
+            adk_core::AgentId::new(SENTINEL_AGENT_ID).expect("valid sentinel agent id"),
+        ),
+        "sentinel-invocation",
+    )
 }
 
 #[async_trait]
@@ -223,6 +236,7 @@ async fn assert_capabilities_preserved(label: &str, wrapped: Arc<dyn InvocationC
         vec![SENTINEL_SCOPE.to_string()],
         "{label}: authenticated scopes were dropped"
     );
+    assert_eq!(wrapped.acting_context(), sentinel_acting(), "{label}: acting context dropped");
 
     assert!(
         wrapped.request_metadata().contains_key(SENTINEL_METADATA_KEY),
@@ -281,6 +295,11 @@ async fn shared_state_context_preserves_capabilities() {
 
     assert!(wrapped.is_cancelled(), "SharedStateContext: cancellation was dropped");
     assert_eq!(wrapped.user_scopes(), vec![SENTINEL_SCOPE.to_string()]);
+    assert_eq!(
+        wrapped.acting_context(),
+        sentinel_acting(),
+        "SharedStateContext: acting context dropped"
+    );
     assert!(wrapped.request_metadata().contains_key(SENTINEL_METADATA_KEY));
     let secret = wrapped.get_secret(SENTINEL_SECRET_NAME).await.unwrap();
     assert_eq!(secret.as_deref(), Some(SENTINEL_SECRET_VALUE));

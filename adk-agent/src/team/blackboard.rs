@@ -514,6 +514,10 @@ impl ReadonlyContext for BlackboardContext {
     fn user_content(&self) -> &Content {
         self.inner.user_content()
     }
+
+    fn acting_context(&self) -> adk_core::ActingContext {
+        self.inner.acting_context()
+    }
 }
 
 #[async_trait]

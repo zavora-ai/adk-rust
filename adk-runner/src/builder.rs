@@ -85,6 +85,7 @@ pub struct RunnerConfigBuilder<A, G, S> {
     durable_runs: Option<Arc<dyn adk_core::DurableRunStore>>,
     audit_recorder: Option<Arc<dyn AuditRecorder>>,
     audit_failure_mode: AuditFailureMode,
+    identity_source: Option<Arc<dyn adk_core::IdentitySource>>,
     _marker: PhantomData<(A, G, S)>,
 }
 
@@ -119,6 +120,7 @@ impl RunnerConfigBuilder<NoAppName, NoAgent, NoSessionService> {
             durable_runs: None,
             audit_recorder: None,
             audit_failure_mode: AuditFailureMode::Block,
+            identity_source: None,
             _marker: PhantomData,
         }
     }
@@ -165,6 +167,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             durable_runs: self.durable_runs,
             audit_recorder: self.audit_recorder,
             audit_failure_mode: self.audit_failure_mode,
+            identity_source: self.identity_source,
             _marker: PhantomData,
         }
     }
@@ -199,6 +202,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             durable_runs: self.durable_runs,
             audit_recorder: self.audit_recorder,
             audit_failure_mode: self.audit_failure_mode,
+            identity_source: self.identity_source,
             _marker: PhantomData,
         }
     }
@@ -236,6 +240,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             durable_runs: self.durable_runs,
             audit_recorder: self.audit_recorder,
             audit_failure_mode: self.audit_failure_mode,
+            identity_source: self.identity_source,
             _marker: PhantomData,
         }
     }
@@ -480,6 +485,43 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self
     }
 
+    /// Sets where each run's agent principal comes from.
+    ///
+    /// The runner asks the source for the current principal at the start of every run
+    /// and installs it on the run's [`RunConfig::acting_context`] when the run carries
+    /// none. Without a source, each agent acts as
+    /// `urn:adk:agent:{app_name}/{agent_name}`. A run whose source fails ends with the
+    /// source's error before any agent runs.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::{AgentId, AgentPrincipal, StaticIdentitySource};
+    ///
+    /// let source = StaticIdentitySource::new(
+    ///     AgentPrincipal::new(AgentId::new("spiffe://acme.example/agent/billing")?)
+    ///         .with_instance(std::env::var("HOSTNAME")?),
+    /// );
+    /// let runner = Runner::builder()
+    ///     .app_name("billing")
+    ///     .agent(agent)
+    ///     .session_service(sessions)
+    ///     .identity_source(Arc::new(source))
+    ///     .build()?;
+    /// ```
+    pub fn identity_source(mut self, source: Arc<dyn adk_core::IdentitySource>) -> Self {
+        self.identity_source = Some(source);
+        self
+    }
+
+    /// Sets a fixed principal every run's agents act as.
+    ///
+    /// Shorthand for [`identity_source`](Self::identity_source) with a
+    /// [`StaticIdentitySource`](adk_core::StaticIdentitySource).
+    pub fn agent_principal(self, principal: adk_core::AgentPrincipal) -> Self {
+        self.identity_source(Arc::new(adk_core::StaticIdentitySource::new(principal)))
+    }
+
     /// Set the context compaction configuration for token-budget overflow handling (optional).
     ///
     /// When configured, the runner applies the given [`CompactionStrategy`](crate::compaction::CompactionStrategy)
@@ -531,6 +573,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             audit: self.audit_recorder.map(|recorder| {
                 AuditTrail::new(recorder).with_failure_mode(self.audit_failure_mode)
             }),
+            identity_source: self.identity_source,
         }
     }
 
@@ -574,6 +617,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             audit: self.audit_recorder.map(|recorder| {
                 AuditTrail::new(recorder).with_failure_mode(self.audit_failure_mode)
             }),
+            identity_source: self.identity_source,
         };
         Runner::new(config)
     }

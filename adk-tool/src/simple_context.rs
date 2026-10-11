@@ -32,6 +32,7 @@ pub struct SimpleToolContext {
     function_call_id: String,
     user_content: Content,
     actions: Mutex<EventActions>,
+    acting: Option<adk_core::ActingContext>,
 }
 
 impl SimpleToolContext {
@@ -48,6 +49,7 @@ impl SimpleToolContext {
             function_call_id: uuid::Uuid::new_v4().to_string(),
             user_content: Content::new("user"),
             actions: Mutex::new(EventActions::default()),
+            acting: None,
         }
     }
 
@@ -67,6 +69,28 @@ impl SimpleToolContext {
     /// session-aware callbacks such as MCP elicitation.
     pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
         self.session_id = id.into();
+        self
+    }
+
+    /// Sets the acting context tools see through
+    /// [`acting_context`](ReadonlyContext::acting_context).
+    ///
+    /// Without one, the context reports the identity derived from the caller name.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ActingContext, AgentId, AgentPrincipal, ReadonlyContext};
+    /// use adk_tool::SimpleToolContext;
+    ///
+    /// let principal = AgentPrincipal::new(AgentId::new("urn:adk:agent:billing")?);
+    /// let ctx = SimpleToolContext::new("billing")
+    ///     .with_acting_context(ActingContext::new(principal, "inv-1"));
+    /// assert_eq!(ctx.acting_context().agent.id.as_str(), "urn:adk:agent:billing");
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn with_acting_context(mut self, acting: adk_core::ActingContext) -> Self {
+        self.acting = Some(acting);
         self
     }
 }
@@ -99,6 +123,17 @@ impl ReadonlyContext for SimpleToolContext {
 
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn acting_context(&self) -> adk_core::ActingContext {
+        self.acting.clone().unwrap_or_else(|| {
+            adk_core::ActingContext::derived(
+                &self.caller_name,
+                &self.caller_name,
+                "anonymous",
+                &self.invocation_id,
+            )
+        })
     }
 }
 

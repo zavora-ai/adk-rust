@@ -1729,6 +1729,10 @@ impl ReadonlyContext for AgentToolContext {
     fn user_content(&self) -> &Content {
         self.parent_ctx.user_content()
     }
+
+    fn acting_context(&self) -> adk_core::ActingContext {
+        self.parent_ctx.acting_context()
+    }
 }
 
 #[async_trait]
@@ -1877,6 +1881,10 @@ impl ReadonlyContext for ToolOutcomeCallbackContext {
 
     fn user_content(&self) -> &Content {
         self.inner.user_content()
+    }
+
+    fn acting_context(&self) -> adk_core::ActingContext {
+        self.inner.acting_context()
     }
 }
 

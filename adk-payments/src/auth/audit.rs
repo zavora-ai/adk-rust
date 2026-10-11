@@ -125,6 +125,8 @@ fn payment_audit_event(
         resource_id: None,
         action: Some("permission_check".to_string()),
         prev_hash: None,
+        agent_id: None,
+        on_behalf_of: None,
     }
 }
 
