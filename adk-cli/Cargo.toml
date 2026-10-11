@@ -22,6 +22,7 @@ path = "src/main.rs"
 
 [dependencies]
 adk-core.workspace = true
+adk-auth = { workspace = true, features = ["signed-audit"] }
 adk-agent = { workspace = true, features = ["coding"] }
 adk-devtools.workspace = true
 adk-model.workspace = true
@@ -79,6 +80,8 @@ optimize = []
 vertex-skill-registry = ["adk-skill/vertex-skill-registry"]
 # SQLite checkpointer for graph time-travel commands
 graph-sqlite = ["adk-graph/sqlite"]
+# `adk-rust audit export`: read signed audit logs from SQLite or PostgreSQL
+audit-sql = ["adk-session/sqlite", "adk-session/postgres"]
 
 [dev-dependencies]
 async-trait.workspace = true

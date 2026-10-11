@@ -317,6 +317,7 @@ version = "3.0.0"
 dependencies = [
  "adk-agent",
  "adk-artifact",
+ "adk-auth",
  "adk-core",
  "adk-deploy",
  "adk-devtools",

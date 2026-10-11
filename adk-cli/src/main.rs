@@ -1,3 +1,4 @@
+mod audit;
 mod cli;
 mod deploy;
 mod graph;
@@ -100,6 +101,7 @@ async fn main() -> Result<()> {
         #[cfg(feature = "vertex-agent-registry")]
         Some(Commands::Registry { command }) => registry::run(command).await,
         Some(Commands::Graph { command }) => graph::run(command).await,
+        Some(Commands::Audit { command }) => audit::run(command).await,
     }
 }
 

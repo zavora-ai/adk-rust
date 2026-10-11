@@ -154,6 +154,68 @@ pub enum Commands {
         #[command(subcommand)]
         command: GraphCommands,
     },
+
+    /// Signed audit log tools: verify an export, generate a checkpoint key
+    Audit {
+        #[command(subcommand)]
+        command: AuditCommands,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum AuditCommands {
+    /// Verify an exported audit log against its signed checkpoints.
+    ///
+    /// Exits 0 when the log verifies and 1 when it does not.
+    /// Example: `adk-rust audit verify audit.jsonl --key "$(cat audit.vkey)"`
+    Verify {
+        /// Export file (JSON lines of entries and checkpoints)
+        export: String,
+
+        /// Trusted verifier key, `<name>+<hash>+<base64>`; repeat for several keys
+        #[arg(long = "key", required_unless_present = "key_file")]
+        keys: Vec<String>,
+
+        /// File with one trusted verifier key per line
+        #[arg(long)]
+        key_file: Option<String>,
+
+        /// Extra checkpoints, such as a `FileCheckpointAnchor` file; repeatable
+        #[arg(long = "checkpoints")]
+        checkpoints: Vec<String>,
+
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Export a log from a SQLite or PostgreSQL audit store as JSON lines.
+    #[cfg(feature = "audit-sql")]
+    Export {
+        /// Database URL, `sqlite://...` or `postgres://...`
+        #[arg(long)]
+        database_url: String,
+
+        /// Log id to export
+        #[arg(long)]
+        log_id: String,
+
+        /// Output file; standard output when omitted
+        #[arg(long)]
+        out: Option<String>,
+    },
+
+    /// Generate an Ed25519 checkpoint key pair in signed-note format.
+    ///
+    /// Writes `<out>.key` (secret signer key) and `<out>.vkey` (verifier key).
+    Keygen {
+        /// Key name that appears in checkpoint signatures, e.g. `audit.example.com`
+        name: String,
+
+        /// Output path prefix
+        #[arg(long, default_value = "audit")]
+        out: String,
+    },
 }
 
 #[derive(Subcommand, Clone)]
