@@ -16,7 +16,9 @@ use thiserror::Error;
 /// let err = SandboxError::Timeout { timeout: Duration::from_secs(30) };
 /// assert!(err.to_string().contains("30s"));
 /// ```
+// Feature-gated variants (`workspace`) mean downstream crates cannot match exhaustively.
 #[derive(Debug, Clone, Error)]
+#[non_exhaustive]
 pub enum SandboxError {
     /// Execution exceeded the configured timeout.
     #[error("execution timed out after {timeout:?}")]
