@@ -19,7 +19,8 @@ fn checkpoint(thread: &str, id: &str, step: usize) -> Checkpoint {
         "step": step,
         "pending_nodes": ["next"],
         "metadata": {},
-        "created_at": "2026-08-20T00:00:00Z"
+        "created_at": "2026-08-20T00:00:00Z",
+        "version": 1
     }))
     .expect("test checkpoint must build")
 }
@@ -102,6 +103,8 @@ async fn from_pool_creates_the_full_schema() {
         "state",
         "step",
         "thread_id",
+        "version",
+        "pending_writes",
     ] {
         assert!(
             columns.iter().any(|c| c == required),
@@ -116,8 +119,8 @@ async fn from_pool_creates_the_full_schema() {
             .expect("index query");
 
     assert!(
-        indexes.iter().any(|i| i == "idx_graph_checkpoints_thread"),
-        "the thread index must be created on a caller-supplied pool; found {indexes:?}"
+        indexes.iter().any(|i| i == "idx_graph_checkpoints_thread_version"),
+        "the thread version index must be created on a caller-supplied pool; found {indexes:?}"
     );
 }
 
@@ -149,4 +152,39 @@ async fn adopting_the_same_pool_twice_succeeds() {
         Some("cp-twice".to_string()),
         "both checkpointers must address the same database"
     );
+}
+
+/// A database written before checkpoints carried versions numbers its rows in
+/// creation order, so the newest stays the newest.
+#[tokio::test]
+async fn a_database_without_versions_is_numbered_in_creation_order() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.expect("pool");
+    sqlx::query(
+        "CREATE TABLE graph_checkpoints (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, \
+         state TEXT NOT NULL, step INTEGER NOT NULL, pending_nodes TEXT NOT NULL, metadata TEXT, \
+         created_at TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy table");
+    for (id, created_at) in [("late", "2026-08-20T00:00:02Z"), ("early", "2026-08-20T00:00:01Z")] {
+        sqlx::query("INSERT INTO graph_checkpoints VALUES (?, 'legacy', '{}', 0, '[]', '{}', ?)")
+            .bind(id)
+            .bind(created_at)
+            .execute(&pool)
+            .await
+            .expect("legacy row");
+    }
+
+    let cp = SqliteCheckpointer::from_pool(pool).await.expect("migrate");
+    let listed: Vec<(String, u64)> = cp
+        .list("legacy")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.checkpoint_id, c.version))
+        .collect();
+    assert_eq!(listed, vec![("early".to_string(), 1), ("late".to_string(), 2)]);
+    assert_eq!(cp.load("legacy").await.unwrap().map(|c| c.checkpoint_id), Some("late".to_string()));
+    cp.save(&checkpoint("legacy", "next", 1)).await.expect_err("version 1 is behind");
 }

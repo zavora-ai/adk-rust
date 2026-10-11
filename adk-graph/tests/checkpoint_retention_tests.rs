@@ -123,7 +123,7 @@ async fn an_age_policy_discards_by_timestamp() {
         c.created_at = chrono::Utc::now() - chrono::Duration::hours(48);
         c
     };
-    let recent = Checkpoint::new("aged", State::new(), 1, vec![]);
+    let recent = Checkpoint::new("aged", State::new(), 1, vec![]).with_version(2);
     checkpointer.save(&old).await.unwrap();
     checkpointer.save(&recent).await.unwrap();
 
@@ -140,7 +140,8 @@ async fn a_policy_never_leaves_a_thread_empty() {
     // Every checkpoint is older than the limit, and one is still kept.
     let checkpointer = MemoryCheckpointer::new();
     for step in 0..3 {
-        let mut c = Checkpoint::new("all-old", State::new(), step, vec![]);
+        let mut c =
+            Checkpoint::new("all-old", State::new(), step, vec![]).with_version(step as u64 + 1);
         c.created_at = chrono::Utc::now() - chrono::Duration::days(30);
         checkpointer.save(&c).await.unwrap();
     }
@@ -163,7 +164,10 @@ async fn the_sqlite_backend_prunes_the_same_set() {
 
     let checkpointer = SqliteCheckpointer::new("sqlite::memory:").await.unwrap();
     for step in 0..5 {
-        checkpointer.save(&Checkpoint::new("sql", State::new(), step, vec![])).await.unwrap();
+        checkpointer
+            .save(&Checkpoint::new("sql", State::new(), step, vec![]).with_version(step as u64 + 1))
+            .await
+            .unwrap();
     }
 
     let removed = checkpointer.prune("sql", &RetentionPolicy::keep_last(2)).await.unwrap();

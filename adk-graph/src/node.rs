@@ -40,6 +40,9 @@ pub struct ExecutionConfig {
     /// [`ExecutionConfig::with_parent_context`] to carry them through; leaving it
     /// unset is standalone mode and is what a graph invoked outside a `Runner` gets.
     pub parent_context: Option<Arc<dyn adk_core::InvocationContext>>,
+    /// When the run writes each super-step's checkpoint. Defaults to
+    /// [`Durability::Sync`](crate::checkpoint::Durability::Sync).
+    pub durability: crate::checkpoint::Durability,
 }
 
 impl ExecutionConfig {
@@ -52,7 +55,24 @@ impl ExecutionConfig {
             recursion_limit: 50,
             metadata: HashMap::new(),
             parent_context: None,
+            durability: crate::checkpoint::Durability::default(),
         }
+    }
+
+    /// Sets when the run writes each super-step's checkpoint.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::checkpoint::Durability;
+    /// use adk_graph::node::ExecutionConfig;
+    ///
+    /// let config = ExecutionConfig::new("thread").with_durability(Durability::Exit);
+    /// assert_eq!(config.durability, Durability::Exit);
+    /// ```
+    pub fn with_durability(mut self, durability: crate::checkpoint::Durability) -> Self {
+        self.durability = durability;
+        self
     }
 
     /// Carry the invocation this graph run belongs to into its nodes.

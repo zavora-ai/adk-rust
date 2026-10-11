@@ -55,7 +55,7 @@ async fn test_memory_checkpointer_load_latest() {
     checkpointer.save(&cp1).await.unwrap();
 
     let state2 = State::new();
-    let cp2 = Checkpoint::new("thread-1", state2, 1, vec![]);
+    let cp2 = Checkpoint::new("thread-1", state2, 1, vec![]).with_version(2);
     checkpointer.save(&cp2).await.unwrap();
 
     // load() returns the latest (last saved)
@@ -71,7 +71,10 @@ async fn test_memory_checkpointer_list() {
     // Save checkpoints for different threads
     let state = State::new();
     checkpointer.save(&Checkpoint::new("thread-1", state.clone(), 0, vec![])).await.unwrap();
-    checkpointer.save(&Checkpoint::new("thread-1", state.clone(), 1, vec![])).await.unwrap();
+    checkpointer
+        .save(&Checkpoint::new("thread-1", state.clone(), 1, vec![]).with_version(2))
+        .await
+        .unwrap();
     checkpointer.save(&Checkpoint::new("thread-2", state.clone(), 0, vec![])).await.unwrap();
 
     let thread1_checkpoints = checkpointer.list("thread-1").await.unwrap();
@@ -160,7 +163,8 @@ async fn test_checkpoint_ordering() {
     for step in 0..5 {
         let mut state = State::new();
         state.insert("step".to_string(), json!(step));
-        let checkpoint = Checkpoint::new("ordered-thread", state, step, vec![]);
+        let checkpoint =
+            Checkpoint::new("ordered-thread", state, step, vec![]).with_version(step as u64 + 1);
         checkpointer.save(&checkpoint).await.unwrap();
     }
 

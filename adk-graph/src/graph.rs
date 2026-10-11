@@ -191,6 +191,7 @@ impl StateGraph {
             deferred_configs: self.deferred_configs,
             max_concurrency: None,
             retry_policies: HashMap::new(),
+            node_effects: HashMap::new(),
             strict_channels: false,
             retention: None,
             #[cfg(feature = "node-cache")]
@@ -401,6 +402,8 @@ pub struct CompiledGraph {
     pub(crate) max_concurrency: Option<usize>,
     /// Per-node retry policies, keyed by node name.
     pub(crate) retry_policies: HashMap<String, crate::retry::RetryPolicy>,
+    /// Side effects nodes declared, keyed by node name.
+    pub(crate) node_effects: HashMap<String, adk_core::ToolEffect>,
     /// Whether a node writing an undeclared channel fails the run.
     pub(crate) strict_channels: bool,
     /// How many checkpoints to keep per thread. `None` keeps every one.
@@ -607,6 +610,39 @@ impl CompiledGraph {
     /// that configures none.
     pub fn with_node_retry(mut self, node: &str, policy: crate::retry::RetryPolicy) -> Self {
         self.retry_policies.insert(node.to_string(), policy);
+        self
+    }
+
+    /// Declares the most consequential side effect a node can cause.
+    ///
+    /// Under [`Durability::Async`](crate::checkpoint::Durability::Async) or
+    /// [`Durability::Exit`](crate::checkpoint::Durability::Exit), a super-step that
+    /// runs a [`ToolEffect::NonIdempotent`](adk_core::ToolEffect::NonIdempotent) node
+    /// first writes every earlier checkpoint, as
+    /// [`Durability::Sync`](crate::checkpoint::Durability::Sync) does. A node that
+    /// declares nothing is not treated as having an effect.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::ToolEffect;
+    /// use adk_graph::edge::{END, START};
+    /// use adk_graph::graph::StateGraph;
+    /// use adk_graph::node::NodeOutput;
+    ///
+    /// # fn build() -> adk_graph::Result<()> {
+    /// let graph = StateGraph::with_channels(&["receipt"])
+    ///     .add_node_fn("charge", |_ctx| async { Ok(NodeOutput::new()) })
+    ///     .add_edge(START, "charge")
+    ///     .add_edge("charge", END)
+    ///     .compile()?
+    ///     .with_node_effect("charge", ToolEffect::NonIdempotent);
+    /// # let _ = graph;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_node_effect(mut self, node: &str, effect: adk_core::ToolEffect) -> Self {
+        self.node_effects.insert(node.to_string(), effect);
         self
     }
 

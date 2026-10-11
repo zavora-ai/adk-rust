@@ -79,6 +79,9 @@ pub struct TaskContext {
     /// Calls made so far of each `#[task]`, keyed by task name, so each call
     /// gets its own execution-log key; see [`super::task_call_id`].
     task_call_counters: std::sync::Mutex<HashMap<String, usize>>,
+    /// The thread's newest checkpoint version, once read. Held across each save,
+    /// so parallel tasks write their checkpoints one at a time, in version order.
+    head_version: tokio::sync::Mutex<Option<u64>>,
 }
 
 impl TaskContext {
@@ -108,6 +111,7 @@ impl TaskContext {
             resume_values: HashMap::new(),
             interrupt_ordinal: Arc::new(RwLock::new(0)),
             task_call_counters: std::sync::Mutex::new(HashMap::new()),
+            head_version: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -256,11 +260,9 @@ impl TaskContext {
             .with_metadata("execution_log", serde_json::to_value(&*log)?)
         };
 
-        self.checkpointer.save(&checkpoint).await.map_err(|e| {
-            FunctionalError::CheckpointFailed {
-                task: "interrupt".to_string(),
-                message: e.to_string(),
-            }
+        self.save_checkpoint(checkpoint).await.map_err(|e| FunctionalError::CheckpointFailed {
+            task: "interrupt".to_string(),
+            message: e.to_string(),
         })?;
 
         // Mark the current task as interrupted in the execution log.
@@ -560,11 +562,31 @@ impl TaskContext {
                     serde_json::to_value(&*self.execution_log.read().await).unwrap_or(Value::Null),
                 );
 
-        self.checkpointer.save(&checkpoint).await.map_err(|e| {
-            FunctionalError::CheckpointFailed { task: task_id.to_string(), message: e.to_string() }
+        self.save_checkpoint(checkpoint).await.map_err(|e| FunctionalError::CheckpointFailed {
+            task: task_id.to_string(),
+            message: e.to_string(),
         })?;
 
         Ok(())
+    }
+
+    /// Saves a checkpoint as the thread's next version.
+    ///
+    /// Every checkpoint of a functional run goes through here, including the
+    /// entrypoint's own, so parallel tasks never race for one version.
+    #[doc(hidden)]
+    pub async fn save_checkpoint(
+        &self,
+        checkpoint: crate::state::Checkpoint,
+    ) -> crate::error::Result<String> {
+        let mut head = self.head_version.lock().await;
+        let current = match *head {
+            Some(version) => version,
+            None => self.checkpointer.load(&self.thread_id).await?.map_or(0, |c| c.version),
+        };
+        let id = self.checkpointer.save(&checkpoint.with_version(current + 1)).await?;
+        *head = Some(current + 1);
+        Ok(id)
     }
 
     /// Records an interrupt's answer in the execution log and checkpoints it, so a
@@ -583,11 +605,9 @@ impl TaskContext {
             .with_metadata("execution_log", serde_json::to_value(&*log)?)
         };
 
-        self.checkpointer.save(&checkpoint).await.map_err(|e| {
-            FunctionalError::CheckpointFailed {
-                task: continuation_key.to_string(),
-                message: e.to_string(),
-            }
+        self.save_checkpoint(checkpoint).await.map_err(|e| FunctionalError::CheckpointFailed {
+            task: continuation_key.to_string(),
+            message: e.to_string(),
         })?;
         Ok(())
     }
@@ -617,8 +637,9 @@ impl TaskContext {
                     serde_json::to_value(&*self.execution_log.read().await).unwrap_or(Value::Null),
                 );
 
-        self.checkpointer.save(&checkpoint).await.map_err(|e| {
-            FunctionalError::CheckpointFailed { task: task_id.to_string(), message: e.to_string() }
+        self.save_checkpoint(checkpoint).await.map_err(|e| FunctionalError::CheckpointFailed {
+            task: task_id.to_string(),
+            message: e.to_string(),
         })?;
 
         Ok(())

@@ -4,16 +4,17 @@
 
 #[cfg(feature = "node-cache")]
 use crate::cache::compute_cache_key;
+use crate::checkpoint::Durability;
 use crate::deferred::{FAN_IN_METADATA_KEY, FanInSnapshot, FanInTracker};
 use crate::error::{GraphError, InterruptedExecution, Result};
 use crate::graph::CompiledGraph;
 use crate::interrupt::{GraphToolConfirmationPause, Interrupt};
 use crate::node::{ExecutionConfig, NodeContext};
-use crate::state::{Checkpoint, State};
+use crate::state::{Checkpoint, PendingWrite, State};
 use crate::stream::{StreamEvent, StreamMode};
 use crate::timeout::{OnTimeout, ProgressHandle, execute_with_timeout, item_timeout_budget};
 use futures::stream::{self, StreamExt};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -73,6 +74,15 @@ pub struct PregelExecutor<'a> {
     restart_completed: bool,
     /// The step this run started at; the recursion limit counts from here.
     run_start_step: usize,
+    /// The highest checkpoint version this run knows of for its thread; its next
+    /// checkpoint is one higher.
+    head_version: u64,
+    /// Writes of the nodes that finished in a super-step that has not completed.
+    pending_writes: BTreeMap<String, PendingWrite>,
+    /// A checkpoint being written in the background under `Durability::Async`.
+    inflight: Option<tokio::task::JoinHandle<Result<String>>>,
+    /// Whether a completed super-step has not been checkpointed yet.
+    unsaved: bool,
 }
 
 impl<'a> PregelExecutor<'a> {
@@ -101,6 +111,10 @@ impl<'a> PregelExecutor<'a> {
             cleared_interrupt: None,
             restart_completed: false,
             run_start_step: 0,
+            head_version: 0,
+            pending_writes: BTreeMap::new(),
+            inflight: None,
+            unsaved: false,
         }
     }
 
@@ -138,6 +152,14 @@ impl<'a> PregelExecutor<'a> {
         };
 
         if let Some(checkpoint) = checkpoint {
+            // A fork from an earlier checkpoint continues after the thread's newest.
+            self.head_version = checkpoint.version;
+            if self.config.resume_from.is_some()
+                && let Some(cp) = self.graph.checkpointer.as_ref()
+                && let Some(newest) = cp.load(&checkpoint.thread_id).await?
+            {
+                self.head_version = self.head_version.max(newest.version);
+            }
             let finished = checkpoint.pending_nodes.is_empty();
             self.state = checkpoint.state;
             self.step = checkpoint.step;
@@ -153,6 +175,7 @@ impl<'a> PregelExecutor<'a> {
                 self.cleared_interrupt = checkpoint.cleared_interrupt;
                 self.attempts = checkpoint.attempts;
                 *self.child_ledger.lock().expect("child ledger") = checkpoint.child_ledger;
+                self.pending_writes = checkpoint.pending_writes;
                 if let Some(snapshot) = FanInSnapshot::from_metadata(&checkpoint.metadata)? {
                     let (trackers, started) =
                         snapshot.restore(|node| self.graph.get_upstream_nodes(node));
@@ -191,27 +214,13 @@ impl<'a> PregelExecutor<'a> {
                 return Err(GraphError::RecursionLimitExceeded(steps_taken));
             }
 
+            self.flush_before_side_effects().await?;
+
             // Execute super-step
             let result = match self.execute_super_step().await {
                 Ok(result) => result,
                 Err(error) => {
-                    // Checkpoint before propagating, so a retry budget already
-                    // spent is not handed out again by the next invocation. The
-                    // frontier still holds the failed node, which is what makes
-                    // the run resumable at all.
-                    let any_retryable = self
-                        .pending_nodes
-                        .iter()
-                        .any(|node| self.graph.retry_policy_for(node).is_some());
-                    if any_retryable && let Err(save_error) = self.save_checkpoint().await {
-                        tracing::warn!(
-                            thread_id = %self.config.thread_id,
-                            step = self.step,
-                            error = %save_error,
-                            "failed to checkpoint a failing super-step; a resumed run restarts \
-                             its retry budget"
-                        );
-                    }
+                    self.checkpoint_failed_step().await;
                     return Err(error);
                 }
             };
@@ -247,13 +256,14 @@ impl<'a> PregelExecutor<'a> {
 
             // An empty frontier is a terminal checkpoint: resuming it re-reads
             // the final state instead of restarting the graph.
-            self.save_checkpoint().await?;
+            self.checkpoint_step().await?;
 
             if self.pending_nodes.is_empty() {
                 break;
             }
         }
 
+        self.finish_checkpoints().await?;
         Ok(self.state.clone())
     }
 
@@ -302,6 +312,11 @@ impl<'a> PregelExecutor<'a> {
                     return;
                 }
 
+                if let Err(error) = self.flush_before_side_effects().await {
+                    yield Err(error);
+                    return;
+                }
+
                 // Emit node_start events BEFORE execution (in Debug mode)
                 if matches!(mode, StreamMode::Debug | StreamMode::Custom | StreamMode::Messages) {
                     for node_name in &self.pending_nodes {
@@ -319,9 +334,29 @@ impl<'a> PregelExecutor<'a> {
                         result.interrupt = Some(interrupt);
                     }
 
-                    for node_name in &self.pending_nodes {
+                    // Nodes run one after another here, each applying its updates, so
+                    // a failure restores the state the step started from and keeps
+                    // what finished as pending writes.
+                    let step_start_state = self.state.clone();
+                    let mut step_writes: BTreeMap<String, PendingWrite> = BTreeMap::new();
+
+                    for node_name in self.pending_nodes.clone().iter() {
                         if result.interrupt.is_some() {
                             break;
+                        }
+                        if let Some(write) = self.pending_writes.get(node_name).cloned() {
+                            result.executed_nodes.push(node_name.clone());
+                            if let Some(targets) = write.goto.clone() {
+                                result.goto.insert(node_name.clone(), targets);
+                            }
+                            if let Some(targets) = write.goto_parent.clone() {
+                                self.goto_parent = Some(targets);
+                            }
+                            for (key, value) in &write.updates {
+                                self.graph.schema.apply_update(&mut self.state, key, value.clone());
+                            }
+                            step_writes.insert(node_name.clone(), write);
+                            continue;
                         }
                         if let Some(node) = self.graph.nodes.get(node_name) {
                             let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
@@ -430,6 +465,9 @@ impl<'a> PregelExecutor<'a> {
                                 drop(node_stream);
 
                                 if let Some(e) = failure {
+                                    self.state = step_start_state.clone();
+                                    self.pending_writes = step_writes.clone();
+                                    self.checkpoint_failed_step().await;
                                     yield Err(e);
                                     return;
                                 }
@@ -451,6 +489,9 @@ impl<'a> PregelExecutor<'a> {
                                         streamed_updates.clear();
                                     }
                                     OnTimeout::Fail | OnTimeout::Retry { .. } => {
+                                        self.state = step_start_state.clone();
+                                        self.pending_writes = step_writes.clone();
+                                        self.checkpoint_failed_step().await;
                                         yield Err(GraphError::NodeTimedOut {
                                             node: node_name.clone(),
                                             elapsed,
@@ -469,9 +510,15 @@ impl<'a> PregelExecutor<'a> {
                                 result.interrupt = Some(interrupt);
                             } else {
                                 result.executed_nodes.push(node_name.clone());
+                                let mut write = PendingWrite::default();
                                 if let Some((source, targets)) = streamed_goto {
+                                    write.goto = Some(targets.clone());
                                     result.goto.insert(source, targets);
                                 }
+                                for updates in &streamed_updates {
+                                    write.updates.extend(updates.clone());
+                                }
+                                step_writes.insert(node_name.clone(), write);
                                 for updates in streamed_updates {
                                     self.ensure_channels_declared(
                                         node_name,
@@ -511,6 +558,7 @@ impl<'a> PregelExecutor<'a> {
                         }
                         // Persist before reporting: without this the pause cannot be
                         // resumed and the work already done is lost.
+                        self.pending_writes.clear();
                         let checkpoint_id = match self.save_checkpoint().await {
                             Ok(checkpoint_id) => checkpoint_id,
                             Err(error) => {
@@ -559,10 +607,12 @@ impl<'a> PregelExecutor<'a> {
                     };
                     self.step += 1;
 
+                    self.pending_writes.clear();
+
                     // The other path checkpoints every super-step. This one did not,
                     // so a run in this mode left no state to resume from and
                     // `get_state` reported nothing.
-                    if let Err(e) = self.save_checkpoint().await {
+                    if let Err(e) = self.checkpoint_step().await {
                         yield Err(e);
                         return;
                     }
@@ -573,6 +623,7 @@ impl<'a> PregelExecutor<'a> {
                 let result = match self.execute_super_step().await {
                     Ok(r) => r,
                     Err(e) => {
+                        self.checkpoint_failed_step().await;
                         yield Err(e);
                         return;
                     }
@@ -681,12 +732,16 @@ impl<'a> PregelExecutor<'a> {
                 };
                 self.step += 1;
 
-                if let Err(e) = self.save_checkpoint().await {
+                if let Err(e) = self.checkpoint_step().await {
                     yield Err(e);
                     return;
                 }
             }
 
+            if let Err(e) = self.finish_checkpoints().await {
+                yield Err(e);
+                return;
+            }
             yield Ok(StreamEvent::done(self.state.clone(), self.step + 1));
         }
     }
@@ -835,6 +890,29 @@ impl<'a> PregelExecutor<'a> {
 
         // Collect all updates and check for errors/interrupts
         let mut all_updates = Vec::new();
+        // Each successful node's output, kept as a pending write if the step fails.
+        let mut step_writes: BTreeMap<String, PendingWrite> = BTreeMap::new();
+
+        // Nodes that finished before an earlier attempt at this step failed are
+        // answered from their pending writes instead of running again.
+        let mut to_run: Vec<String> = Vec::new();
+        for node_name in &self.pending_nodes {
+            match self.pending_writes.get(node_name) {
+                Some(write) => {
+                    tracing::debug!(node = %node_name, "applying pending write instead of re-running node");
+                    result.executed_nodes.push(node_name.clone());
+                    if let Some(targets) = &write.goto {
+                        result.goto.insert(node_name.clone(), targets.clone());
+                    }
+                    if let Some(targets) = &write.goto_parent {
+                        self.goto_parent = Some(targets.clone());
+                    }
+                    all_updates.push((node_name.clone(), write.updates.clone()));
+                    step_writes.insert(node_name.clone(), write.clone());
+                }
+                None => to_run.push(node_name.clone()),
+            }
+        }
 
         // Node cache lookups. Every key is computed from the pre-step state, the
         // state each node in this step reads, and a hit's updates join the same
@@ -845,7 +923,7 @@ impl<'a> PregelExecutor<'a> {
         #[cfg(feature = "node-cache")]
         let mut nodes_to_execute: Vec<String> = Vec::new();
         #[cfg(feature = "node-cache")]
-        for node_name in &self.pending_nodes {
+        for node_name in &to_run {
             let Some(cache) = self.graph.node_caches.get(node_name) else {
                 nodes_to_execute.push(node_name.clone());
                 continue;
@@ -862,7 +940,9 @@ impl<'a> PregelExecutor<'a> {
                 Some(serde_json::Value::Object(updates)) => {
                     result.executed_nodes.push(node_name.clone());
                     result.events.push(StreamEvent::node_end(node_name, self.step, 0));
-                    all_updates.push((node_name.clone(), updates.into_iter().collect()));
+                    let updates: HashMap<String, serde_json::Value> = updates.into_iter().collect();
+                    step_writes.insert(node_name.clone(), PendingWrite::new(updates.clone()));
+                    all_updates.push((node_name.clone(), updates));
                 }
                 // A cached value is always the map of a node's updates; anything
                 // else is unusable, so the node runs.
@@ -884,8 +964,8 @@ impl<'a> PregelExecutor<'a> {
         };
         #[cfg(not(feature = "node-cache"))]
         let pending_for_execution = {
-            self.pending_nodes.sort();
-            &self.pending_nodes
+            to_run.sort();
+            &to_run
         };
 
         // Execute all pending nodes in parallel
@@ -988,6 +1068,7 @@ impl<'a> PregelExecutor<'a> {
         outputs.sort_by(|left, right| left.0.cmp(&right.0));
 
         let mut interrupt = None;
+        let mut failure = None;
 
         for (node_name, output_result, duration_ms, step, attempts) in outputs {
             // Record the budget spent, so a resumed run does not restart it. A
@@ -1025,6 +1106,14 @@ impl<'a> PregelExecutor<'a> {
                         cache.set(cache_key, updates_value, ttl).await;
                     }
 
+                    step_writes.insert(
+                        node_name.clone(),
+                        PendingWrite {
+                            updates: output.updates.clone(),
+                            goto: output.goto.clone(),
+                            goto_parent: output.goto_parent.clone(),
+                        },
+                    );
                     // A node that named its successors overrides its declared edges.
                     if let Some(targets) = output.goto {
                         result.goto.insert(node_name.clone(), targets);
@@ -1046,6 +1135,14 @@ impl<'a> PregelExecutor<'a> {
                     match self.graph.error_handler_for(&node_name) {
                         Some(handler) if !matches!(e, GraphError::Interrupted(_)) => {
                             let recovery = handler(&node_name, &e, &self.state)?;
+                            step_writes.insert(
+                                node_name.clone(),
+                                PendingWrite {
+                                    updates: recovery.updates.clone(),
+                                    goto: recovery.goto.clone(),
+                                    goto_parent: None,
+                                },
+                            );
                             if let Some(targets) = recovery.goto {
                                 result.goto.insert(node_name.clone(), targets);
                             }
@@ -1053,15 +1150,25 @@ impl<'a> PregelExecutor<'a> {
                             all_updates.push((node_name, recovery.updates));
                         }
                         _ => {
-                            return Err(GraphError::NodeExecutionFailed {
-                                node: node_name,
-                                message: e.to_string(),
-                            });
+                            // The first failure in name order is reported; the
+                            // remaining outputs are still collected as pending writes.
+                            if failure.is_none() {
+                                failure = Some(GraphError::NodeExecutionFailed {
+                                    node: node_name,
+                                    message: e.to_string(),
+                                });
+                            }
                         }
                     }
                 }
             }
         }
+
+        if let Some(error) = failure {
+            self.pending_writes = step_writes;
+            return Err(error);
+        }
+        self.pending_writes.clear();
 
         // Apply all updates atomically using reducers.
         //
@@ -1246,42 +1353,135 @@ impl<'a> PregelExecutor<'a> {
         }
     }
 
-    async fn save_checkpoint(&self) -> Result<String> {
-        if let Some(cp) = &self.graph.checkpointer {
-            let mut checkpoint = Checkpoint::new(
-                &self.config.thread_id,
-                self.state.clone(),
-                self.step,
-                self.pending_nodes.clone(),
-            );
-            checkpoint.cleared_interrupt = self.cleared_interrupt.clone();
-            checkpoint.attempts = self.attempts.clone();
-            checkpoint.child_ledger = self.child_ledger.lock().expect("child ledger").clone();
-            // Carried in metadata rather than a field, so every backend persists
-            // it without a schema change and older checkpoints load as before.
-            if let Some(snapshot) =
-                FanInSnapshot::capture(&self.pending_deferred, &self.deferred_start_times)
-            {
-                checkpoint.metadata.insert(FAN_IN_METADATA_KEY.to_string(), snapshot.to_value());
-            }
-            let id = cp.save(&checkpoint).await?;
-
-            // Trimmed as the run proceeds, so the cost stays proportional to the run
-            // and no external job is needed. After the save, so the newest counts.
-            if let Some(policy) = &self.graph.retention {
-                let removed = cp.prune(&self.config.thread_id, policy).await?;
-                if removed > 0 {
-                    tracing::debug!(
-                        thread_id = %self.config.thread_id,
-                        removed,
-                        "pruned old checkpoints"
-                    );
-                }
-            }
-            return Ok(id);
+    /// Builds the checkpoint of the run as it stands, one version past the head.
+    fn build_checkpoint(&mut self) -> Checkpoint {
+        self.head_version += 1;
+        let mut checkpoint = Checkpoint::new(
+            &self.config.thread_id,
+            self.state.clone(),
+            self.step,
+            self.pending_nodes.clone(),
+        )
+        .with_version(self.head_version);
+        checkpoint.cleared_interrupt = self.cleared_interrupt.clone();
+        checkpoint.attempts = self.attempts.clone();
+        checkpoint.child_ledger = self.child_ledger.lock().expect("child ledger").clone();
+        checkpoint.pending_writes = self.pending_writes.clone();
+        // Carried in metadata rather than a field, so every backend persists
+        // it without a schema change and older checkpoints load as before.
+        if let Some(snapshot) =
+            FanInSnapshot::capture(&self.pending_deferred, &self.deferred_start_times)
+        {
+            checkpoint.metadata.insert(FAN_IN_METADATA_KEY.to_string(), snapshot.to_value());
         }
-        Ok(String::new())
+        checkpoint
     }
+
+    /// Writes the run's checkpoint now, after any background write finishes.
+    async fn save_checkpoint(&mut self) -> Result<String> {
+        self.await_inflight().await?;
+        let Some(cp) = self.graph.checkpointer.clone() else { return Ok(String::new()) };
+        let checkpoint = self.build_checkpoint();
+        self.unsaved = false;
+        write_checkpoint(cp, self.graph.retention.clone(), checkpoint).await
+    }
+
+    /// Checkpoints a completed super-step as the run's durability mode asks.
+    async fn checkpoint_step(&mut self) -> Result<()> {
+        let Some(cp) = self.graph.checkpointer.clone() else { return Ok(()) };
+        match self.config.durability {
+            Durability::Sync => {
+                self.save_checkpoint().await?;
+            }
+            Durability::Async => {
+                // One write at a time, so versions reach the store in order.
+                self.await_inflight().await?;
+                let checkpoint = self.build_checkpoint();
+                self.unsaved = false;
+                self.inflight = Some(tokio::spawn(write_checkpoint(
+                    cp,
+                    self.graph.retention.clone(),
+                    checkpoint,
+                )));
+            }
+            Durability::Exit => self.unsaved = true,
+        }
+        Ok(())
+    }
+
+    /// Waits for a background checkpoint write and reports its failure.
+    async fn await_inflight(&mut self) -> Result<()> {
+        if let Some(handle) = self.inflight.take() {
+            handle.await.map_err(|error| {
+                GraphError::CheckpointError(format!("background checkpoint write failed: {error}"))
+            })??;
+        }
+        Ok(())
+    }
+
+    /// Makes every completed super-step durable before the run returns.
+    async fn finish_checkpoints(&mut self) -> Result<()> {
+        self.await_inflight().await?;
+        if self.unsaved {
+            self.save_checkpoint().await?;
+        }
+        Ok(())
+    }
+
+    /// Writes every earlier checkpoint before a super-step that runs a
+    /// non-idempotent node, so a crash during its side effect cannot resume from
+    /// before an earlier step and repeat that step.
+    async fn flush_before_side_effects(&mut self) -> Result<()> {
+        let side_effecting = self.pending_nodes.iter().any(|node| {
+            self.graph.node_effects.get(node) == Some(&adk_core::ToolEffect::NonIdempotent)
+        });
+        if side_effecting {
+            self.finish_checkpoints().await?;
+        }
+        Ok(())
+    }
+
+    /// Checkpoints a super-step that failed, when a resume would gain from it.
+    ///
+    /// The frontier still holds the failed node, so the run resumes at this step:
+    /// the retry budget already spent is not handed out again, and the nodes that
+    /// finished are answered from their pending writes instead of re-running. A
+    /// failure to write is logged, not raised, so the node's own error is reported.
+    async fn checkpoint_failed_step(&mut self) {
+        let any_retryable =
+            self.pending_nodes.iter().any(|node| self.graph.retry_policy_for(node).is_some());
+        let result = if any_retryable || !self.pending_writes.is_empty() || self.unsaved {
+            self.save_checkpoint().await.map(drop)
+        } else {
+            self.await_inflight().await
+        };
+        if let Err(error) = result {
+            tracing::warn!(
+                thread_id = %self.config.thread_id,
+                step = self.step,
+                error = %error,
+                "failed to checkpoint a failing super-step; a resumed run repeats its work"
+            );
+        }
+    }
+}
+
+/// Saves a checkpoint, then trims the thread to its retention policy.
+async fn write_checkpoint(
+    cp: Arc<dyn crate::checkpoint::Checkpointer>,
+    retention: Option<crate::checkpoint::RetentionPolicy>,
+    checkpoint: Checkpoint,
+) -> Result<String> {
+    let id = cp.save(&checkpoint).await?;
+    // Trimmed as the run proceeds, so the cost stays proportional to the run
+    // and no external job is needed. After the save, so the newest counts.
+    if let Some(policy) = &retention {
+        let removed = cp.prune(&checkpoint.thread_id, policy).await?;
+        if removed > 0 {
+            tracing::debug!(thread_id = %checkpoint.thread_id, removed, "pruned old checkpoints");
+        }
+    }
+    Ok(id)
 }
 
 /// Convenience methods for CompiledGraph
@@ -1384,13 +1584,15 @@ impl CompiledGraph {
                 self.schema.apply_update(&mut state, &key, value);
             }
             let mut new_checkpoint =
-                Checkpoint::new(thread_id, state, checkpoint.step, checkpoint.pending_nodes);
+                Checkpoint::new(thread_id, state, checkpoint.step, checkpoint.pending_nodes)
+                    .with_version(checkpoint.version + 1);
             // Everything a resume restores carries over, so editing state between
             // a pause and its resume keeps the answered gate, the retry budget,
             // finished children, and the arrivals a waiting join has recorded.
             new_checkpoint.cleared_interrupt = checkpoint.cleared_interrupt;
             new_checkpoint.attempts = checkpoint.attempts;
             new_checkpoint.child_ledger = checkpoint.child_ledger;
+            new_checkpoint.pending_writes = checkpoint.pending_writes;
             if let Some(fan_in) = checkpoint.metadata.get(FAN_IN_METADATA_KEY) {
                 new_checkpoint.metadata.insert(FAN_IN_METADATA_KEY.to_string(), fan_in.clone());
             }

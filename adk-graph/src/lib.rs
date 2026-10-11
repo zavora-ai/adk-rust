@@ -72,6 +72,8 @@
 pub mod agent;
 pub mod checkpoint;
 pub mod child;
+#[cfg(feature = "conformance")]
+pub mod conformance;
 pub mod deferred;
 pub mod edge;
 pub mod error;
@@ -114,7 +116,7 @@ pub use functional::{
 
 // Re-exports
 pub use agent::{GraphAgent, GraphAgentBuilder};
-pub use checkpoint::{Checkpointer, MemoryCheckpointer};
+pub use checkpoint::{Checkpointer, Durability, MemoryCheckpointer, RetentionPolicy};
 pub use deferred::{DeferredNodeConfig, FanInTracker, MergeStrategy};
 pub use edge::{END, Edge, EdgeTarget, Router, START};
 pub use error::{GraphError, InterruptedExecution, Result};
@@ -122,7 +124,9 @@ pub use executor::PregelExecutor;
 pub use graph::{CompiledGraph, StateGraph};
 pub use interrupt::{GraphToolConfirmationPause, Interrupt, interrupt, interrupt_with_data};
 pub use node::{AgentNode, ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput};
-pub use state::{Channel, Checkpoint, Reducer, State, StateSchema, StateSchemaBuilder};
+pub use state::{
+    Channel, Checkpoint, PendingWrite, Reducer, State, StateSchema, StateSchemaBuilder,
+};
 pub use stream::{StreamEvent, StreamMode};
 pub use timeout::{OnTimeout, ProgressHandle, TimeoutPolicy, execute_with_timeout};
 
@@ -143,7 +147,7 @@ pub use time_travel::{StepInfo, TimeTravelHandle};
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::agent::{GraphAgent, GraphAgentBuilder};
-    pub use crate::checkpoint::{Checkpointer, MemoryCheckpointer};
+    pub use crate::checkpoint::{Checkpointer, Durability, MemoryCheckpointer};
     pub use crate::deferred::{DeferredNodeConfig, FanInTracker, MergeStrategy};
     pub use crate::edge::{END, Edge, EdgeTarget, Router, START};
     pub use crate::error::{GraphError, InterruptedExecution, Result};

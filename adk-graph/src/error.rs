@@ -55,6 +55,24 @@ pub enum GraphError {
     #[error("Checkpoint error: {0}")]
     CheckpointError(String),
 
+    /// A checkpoint was refused because its thread already holds a checkpoint with an
+    /// equal or higher version.
+    ///
+    /// Raised when two writers continue one thread: the writer that falls behind is
+    /// refused instead of interleaving its checkpoints with the other's.
+    #[error(
+        "checkpoint version {version} for thread '{thread_id}' conflicts with stored version {head}. \
+         Another writer advanced the thread; reload its newest checkpoint and continue from version {head} + 1"
+    )]
+    CheckpointConflict {
+        /// The thread the checkpoint belongs to.
+        thread_id: String,
+        /// The version the writer tried to store.
+        version: u64,
+        /// The highest version already stored for the thread.
+        head: u64,
+    },
+
     /// A node wrote a channel the state schema does not declare.
     ///
     /// Only raised when channel enforcement is on. An undeclared channel
@@ -152,6 +170,9 @@ impl From<GraphError> for adk_core::AdkError {
             GraphError::FanInTimedOut { .. } => (ErrorCategory::Timeout, "graph.fan_in_timed_out"),
             GraphError::SerializationError(_) => (ErrorCategory::Internal, "graph.serialization"),
             GraphError::CheckpointError(_) => (ErrorCategory::Internal, "graph.checkpoint"),
+            GraphError::CheckpointConflict { .. } => {
+                (ErrorCategory::InvalidInput, "graph.checkpoint.conflict")
+            }
             GraphError::SubgraphChannelMismatch { .. } => {
                 (ErrorCategory::InvalidInput, "graph.subgraph_channel_mismatch")
             }

@@ -18,7 +18,7 @@ adk-core.workspace = true
 async-trait.workspace = true
 async-stream.workspace = true
 futures.workspace = true
-tokio = { workspace = true, features = ["sync", "time", "fs", "io-util", "macros"] }
+tokio = { workspace = true, features = ["sync", "time", "fs", "io-util", "macros", "rt"] }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
@@ -53,6 +53,8 @@ redis-cache = ["node-cache", "dep:fred"]
 delta-checkpoint = ["dep:similar"]
 time-travel = []
 functional = ["dep:tokio-util"]
+# The Checkpointer conformance suite (`adk_graph::conformance`) for backend tests.
+conformance = []
 
 # Action node feature flags
 action = ["dep:adk-action", "dep:regex"]
@@ -69,9 +71,11 @@ action-full = ["action", "action-trigger", "action-http", "action-db", "action-c
 full = ["sqlite", "action-full"]
 
 [dev-dependencies]
+# Path-only self dependency, so the crate's own tests run the conformance suite.
+adk-graph = { path = ".", features = ["conformance"] }
 # Internal dev-deps are path-only (no version) so cargo strips them from the
 # published manifest — they can never block or reorder a crates.io publish.
-tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util"] }
 proptest = "1.5"
 adk-action = { path = "../adk-action" }
 # For `SimpleToolContext` when testing a graph exposed as a tool.

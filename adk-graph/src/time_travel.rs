@@ -275,13 +275,16 @@ impl<'g> TimeTravelHandle<'g> {
             ))
         })?;
 
-        // Clone the checkpoint under the new thread_id
+        // Clone the checkpoint under the new thread_id, after its newest.
+        let version =
+            self.checkpointer.load(new_thread_id).await?.map_or(1, |newest| newest.version + 1);
         let forked = crate::state::Checkpoint::new(
             new_thread_id,
             checkpoint.state,
             checkpoint.step,
             checkpoint.pending_nodes,
-        );
+        )
+        .with_version(version);
 
         // Save the forked checkpoint
         self.checkpointer.save(&forked).await?;
@@ -429,7 +432,8 @@ mod tests {
         for step in 0..count {
             let mut state = State::new();
             state.insert("count".to_string(), json!(step));
-            let cp = Checkpoint::new(thread_id, state, step, vec!["increment".to_string()]);
+            let cp = Checkpoint::new(thread_id, state, step, vec!["increment".to_string()])
+                .with_version(step as u64 + 1);
             checkpointer.save(&cp).await.unwrap();
         }
     }
@@ -525,7 +529,8 @@ mod tests {
         // Seed a checkpoint at step 0 with count=5
         let mut state = State::new();
         state.insert("count".to_string(), json!(5));
-        let cp = Checkpoint::new("thread_1", state, 0, vec!["increment".to_string()]);
+        let cp =
+            Checkpoint::new("thread_1", state, 0, vec!["increment".to_string()]).with_version(1);
         checkpointer.save(&cp).await.unwrap();
 
         let handle = graph.time_travel("thread_1").unwrap();
@@ -563,7 +568,7 @@ mod tests {
         // Modify the forked thread by adding another checkpoint
         let mut new_state = State::new();
         new_state.insert("count".to_string(), json!(100));
-        let new_cp = Checkpoint::new("forked", new_state, 3, vec![]);
+        let new_cp = Checkpoint::new("forked", new_state, 3, vec![]).with_version(2);
         checkpointer.save(&new_cp).await.unwrap();
 
         // Verify original thread is unchanged

@@ -638,19 +638,20 @@ impl<C: Checkpointer> DeltaCheckpointer<C> {
         step == 0 || (step as u32).is_multiple_of(self.config.full_snapshot_interval)
     }
 
-    /// Reconstruct full state from a list of checkpoints starting from a full
-    /// snapshot and replaying deltas forward up to (and including) the target step.
+    /// Reconstruct full state from a list of checkpoints, ascending by version,
+    /// starting from a full snapshot and replaying deltas forward up to (and
+    /// including) the target version.
     fn reconstruct_state(
         checkpoints: &[Checkpoint],
-        target_step: usize,
+        target_version: u64,
     ) -> crate::error::Result<State> {
-        // Find the nearest full snapshot at or before target_step
+        // Find the nearest full snapshot at or before the target
         let full_snapshot_idx = checkpoints
             .iter()
             .enumerate()
             .rev()
             .find(|(_, cp)| {
-                cp.step <= target_step
+                cp.version <= target_version
                     && cp.metadata.get(META_CHECKPOINT_TYPE).and_then(|v| v.as_str())
                         == Some(TYPE_FULL)
             })
@@ -667,7 +668,7 @@ impl<C: Checkpointer> DeltaCheckpointer<C> {
 
         // Replay deltas forward from the full snapshot to the target step
         for cp in &checkpoints[full_idx + 1..] {
-            if cp.step > target_step {
+            if cp.version > target_version {
                 break;
             }
 
@@ -721,16 +722,13 @@ impl<C: Checkpointer> Checkpointer for DeltaCheckpointer<C> {
             // Load the previous checkpoint to compute delta
             let all_checkpoints = self.inner.list(&checkpoint.thread_id).await?;
 
-            // Find the previous checkpoint (the one with the highest step < current step)
-            let previous = all_checkpoints
-                .iter()
-                .filter(|cp| cp.step < checkpoint.step)
-                .max_by_key(|cp| cp.step);
+            // The previous checkpoint is the thread's newest.
+            let previous = all_checkpoints.last();
 
             match previous {
                 Some(prev_cp) => {
                     // Reconstruct the previous state (it might itself be a delta)
-                    let prev_state = Self::reconstruct_state(&all_checkpoints, prev_cp.step)?;
+                    let prev_state = Self::reconstruct_state(&all_checkpoints, prev_cp.version)?;
 
                     // Compute delta from previous state to current state
                     let delta =
@@ -781,10 +779,9 @@ impl<C: Checkpointer> Checkpointer for DeltaCheckpointer<C> {
 
         // Get the latest checkpoint
         let latest = all_checkpoints.last().unwrap();
-        let target_step = latest.step;
 
         // Reconstruct the full state
-        let full_state = Self::reconstruct_state(&all_checkpoints, target_step)?;
+        let full_state = Self::reconstruct_state(&all_checkpoints, latest.version)?;
 
         // Return the latest checkpoint with reconstructed state
         let mut result = latest.clone();
@@ -801,7 +798,7 @@ impl<C: Checkpointer> Checkpointer for DeltaCheckpointer<C> {
         match checkpoint {
             Some(cp) => {
                 let all_checkpoints = self.inner.list(&cp.thread_id).await?;
-                let full_state = Self::reconstruct_state(&all_checkpoints, cp.step)?;
+                let full_state = Self::reconstruct_state(&all_checkpoints, cp.version)?;
 
                 let mut result = cp;
                 result.state = full_state;
@@ -826,6 +823,46 @@ impl<C: Checkpointer> Checkpointer for DeltaCheckpointer<C> {
     /// Delegates directly to the inner checkpointer.
     async fn delete(&self, thread_id: &str) -> crate::error::Result<()> {
         self.inner.delete(thread_id).await
+    }
+
+    /// Removes what the policy discards, except the checkpoints a retained delta
+    /// is reconstructed from.
+    ///
+    /// Every checkpoint from the newest full snapshot at or before the oldest
+    /// retained checkpoint onward is kept, so each retained checkpoint still loads.
+    async fn prune(
+        &self,
+        thread_id: &str,
+        policy: &crate::checkpoint::RetentionPolicy,
+    ) -> crate::error::Result<usize> {
+        let all_checkpoints = self.inner.list(thread_id).await?;
+        let expired = policy.expired(&all_checkpoints);
+        let Some(oldest_kept) = all_checkpoints
+            .iter()
+            .filter(|cp| !expired.contains(&cp.checkpoint_id))
+            .map(|cp| cp.version)
+            .min()
+        else {
+            return Ok(0);
+        };
+        let base = all_checkpoints
+            .iter()
+            .filter(|cp| {
+                cp.version <= oldest_kept
+                    && cp.metadata.get(META_CHECKPOINT_TYPE).and_then(|v| v.as_str())
+                        != Some(TYPE_DELTA)
+            })
+            .map(|cp| cp.version)
+            .max()
+            .unwrap_or(0);
+        let removable: Vec<&Checkpoint> =
+            all_checkpoints.iter().filter(|cp| cp.version < base).collect();
+        if removable.is_empty() {
+            return Ok(0);
+        }
+        // The inner store applies a count limit that selects exactly these.
+        let keep = all_checkpoints.len() - removable.len();
+        self.inner.prune(thread_id, &crate::checkpoint::RetentionPolicy::keep_last(keep)).await
     }
 }
 
@@ -1247,7 +1284,7 @@ mod tests {
         let dc = DeltaCheckpointer::new(inner, DeltaConfig { full_snapshot_interval: 5 });
 
         let state = make_state(&[("x", 1)]);
-        let cp = Checkpoint::new("t1", state.clone(), 0, vec![]);
+        let cp = Checkpoint::new("t1", state.clone(), 0, vec![]).with_version(1);
         dc.save(&cp).await.unwrap();
 
         // Load should return the full state
@@ -1266,12 +1303,12 @@ mod tests {
 
         // Step 0: full snapshot
         let state0 = make_state(&[("x", 1), ("y", 2)]);
-        let cp0 = Checkpoint::new("t1", state0, 0, vec![]);
+        let cp0 = Checkpoint::new("t1", state0, 0, vec![]).with_version(1);
         dc.save(&cp0).await.unwrap();
 
         // Step 1: should be delta
         let state1 = make_state(&[("x", 1), ("y", 3), ("z", 4)]);
-        let cp1 = Checkpoint::new("t1", state1.clone(), 1, vec![]);
+        let cp1 = Checkpoint::new("t1", state1.clone(), 1, vec![]).with_version(2);
         dc.save(&cp1).await.unwrap();
 
         // Load should reconstruct the full state at step 1
@@ -1288,7 +1325,7 @@ mod tests {
         // Steps 0, 1, 2, 3
         for step in 0..=3 {
             let state = make_state(&[("counter", step as i64)]);
-            let cp = Checkpoint::new("t1", state, step, vec![]);
+            let cp = Checkpoint::new("t1", state, step, vec![]).with_version(step as u64 + 1);
             dc.save(&cp).await.unwrap();
         }
 
@@ -1315,17 +1352,17 @@ mod tests {
 
         // Step 0: full
         let state0 = make_state(&[("a", 1)]);
-        let cp0 = Checkpoint::new("t1", state0, 0, vec![]);
+        let cp0 = Checkpoint::new("t1", state0, 0, vec![]).with_version(1);
         dc.save(&cp0).await.unwrap();
 
         // Step 1: delta
         let state1 = make_state(&[("a", 1), ("b", 2)]);
-        let cp1 = Checkpoint::new("t1", state1.clone(), 1, vec![]);
+        let cp1 = Checkpoint::new("t1", state1.clone(), 1, vec![]).with_version(2);
         let id1 = dc.save(&cp1).await.unwrap();
 
         // Step 2: delta
         let state2 = make_state(&[("a", 1), ("b", 2), ("c", 3)]);
-        let cp2 = Checkpoint::new("t1", state2.clone(), 2, vec![]);
+        let cp2 = Checkpoint::new("t1", state2.clone(), 2, vec![]).with_version(3);
         let id2 = dc.save(&cp2).await.unwrap();
 
         // Load by ID for step 1
@@ -1347,7 +1384,8 @@ mod tests {
             (0..5).map(|i| make_state(&[("step", i), ("data", i * 10)])).collect();
 
         for (step, state) in states.iter().enumerate() {
-            let cp = Checkpoint::new("t1", state.clone(), step, vec![]);
+            let cp =
+                Checkpoint::new("t1", state.clone(), step, vec![]).with_version(step as u64 + 1);
             dc.save(&cp).await.unwrap();
         }
 
@@ -1363,7 +1401,7 @@ mod tests {
         let dc = DeltaCheckpointer::new(inner, DeltaConfig::default());
 
         let state = make_state(&[("x", 1)]);
-        let cp = Checkpoint::new("t1", state, 0, vec![]);
+        let cp = Checkpoint::new("t1", state, 0, vec![]).with_version(1);
         dc.save(&cp).await.unwrap();
 
         dc.delete("t1").await.unwrap();
@@ -1378,12 +1416,12 @@ mod tests {
 
         // Step 0: full with keys a, b, c
         let state0 = make_state(&[("a", 1), ("b", 2), ("c", 3)]);
-        let cp0 = Checkpoint::new("t1", state0, 0, vec![]);
+        let cp0 = Checkpoint::new("t1", state0, 0, vec![]).with_version(1);
         dc.save(&cp0).await.unwrap();
 
         // Step 1: remove key b, modify c
         let state1 = make_state(&[("a", 1), ("c", 99)]);
-        let cp1 = Checkpoint::new("t1", state1.clone(), 1, vec![]);
+        let cp1 = Checkpoint::new("t1", state1.clone(), 1, vec![]).with_version(2);
         dc.save(&cp1).await.unwrap();
 
         // Load should reconstruct correctly
@@ -1401,7 +1439,8 @@ mod tests {
         let states: Vec<State> = (0..6).map(|i| make_state(&[("val", i * 100)])).collect();
 
         for (step, state) in states.iter().enumerate() {
-            let cp = Checkpoint::new("t1", state.clone(), step, vec![]);
+            let cp =
+                Checkpoint::new("t1", state.clone(), step, vec![]).with_version(step as u64 + 1);
             dc.save(&cp).await.unwrap();
         }
 

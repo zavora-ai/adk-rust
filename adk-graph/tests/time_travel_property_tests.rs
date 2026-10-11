@@ -71,7 +71,8 @@ proptest! {
                     state,
                     step,
                     vec!["node_a".to_string()],
-                );
+                )
+                .with_version(step as u64 + 1);
                 checkpointer.save(&cp).await.unwrap();
             }
 
@@ -110,7 +111,8 @@ proptest! {
                     mutated_state,
                     fork_point + 1 + i,
                     vec!["mutated_node".to_string()],
-                );
+                )
+                .with_version(i as u64 + 2);
                 checkpointer.save(&mutated_cp).await.unwrap();
             }
 
@@ -175,7 +177,8 @@ proptest! {
                     state,
                     step,
                     vec![format!("node_{step}")],
-                );
+                )
+                .with_version(step as u64 + 1);
                 checkpointer.save(&cp).await.unwrap();
             }
 
@@ -214,7 +217,8 @@ proptest! {
                     state,
                     fork_point + 1 + i,
                     vec!["forked_node".to_string()],
-                );
+                )
+                .with_version(i as u64 + 2);
                 checkpointer.save(&cp).await.unwrap();
             }
 

@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Graph state - a map of channel names to values
@@ -226,7 +226,7 @@ impl StateSchemaBuilder {
 }
 
 /// Checkpoint data structure for persistence
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Checkpoint {
     /// Thread identifier
     pub thread_id: String,
@@ -265,6 +265,54 @@ pub struct Checkpoint {
     /// child must re-run.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub child_ledger: HashMap<String, Value>,
+    /// The checkpoint's revision within its thread.
+    ///
+    /// A [`Checkpointer`](crate::checkpoint::Checkpointer) stores a checkpoint only
+    /// when its version is greater than every version already stored for the thread,
+    /// so two writers on one thread cannot interleave: the one that falls behind is
+    /// refused with [`GraphError::CheckpointConflict`](crate::error::GraphError::CheckpointConflict).
+    /// The newest checkpoint is the one with the highest version. Versions start at 1.
+    #[serde(default)]
+    pub version: u64,
+    /// Outputs of the nodes that finished in a super-step that did not complete,
+    /// keyed by node name.
+    ///
+    /// When one node of a parallel super-step fails, the nodes that succeeded keep
+    /// their writes here, and a resumed run applies them instead of running those
+    /// nodes again. Cleared once the super-step completes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pending_writes: BTreeMap<String, PendingWrite>,
+}
+
+/// What one node of an unfinished super-step produced.
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::state::PendingWrite;
+/// use serde_json::json;
+///
+/// let write = PendingWrite::new([("summary".to_string(), json!("done"))].into_iter().collect());
+/// assert!(write.goto.is_none());
+/// ```
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PendingWrite {
+    /// The channel updates the node returned.
+    #[serde(default)]
+    pub updates: HashMap<String, Value>,
+    /// Successors the node named in place of its edges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goto: Option<Vec<String>>,
+    /// Nodes of the parent graph the node asked to run next.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goto_parent: Option<Vec<String>>,
+}
+
+impl PendingWrite {
+    /// Creates a pending write holding a node's channel updates.
+    pub fn new(updates: HashMap<String, Value>) -> Self {
+        Self { updates, goto: None, goto_parent: None }
+    }
 }
 
 impl Checkpoint {
@@ -277,11 +325,34 @@ impl Checkpoint {
             step,
             pending_nodes,
             metadata: HashMap::new(),
-            created_at: chrono::Utc::now(),
+            // Whole microseconds, the finest precision every backend stores, so a
+            // loaded checkpoint equals the one saved.
+            created_at: chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 6),
             cleared_interrupt: None,
             attempts: HashMap::new(),
             child_ledger: HashMap::new(),
+            version: 1,
+            pending_writes: BTreeMap::new(),
         }
+    }
+
+    /// Sets the checkpoint's revision within its thread.
+    ///
+    /// A writer that continues a thread whose newest checkpoint has version `n`
+    /// saves version `n + 1`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::state::{Checkpoint, State};
+    ///
+    /// let first = Checkpoint::new("thread", State::new(), 0, vec!["a".into()]);
+    /// let next = Checkpoint::new("thread", State::new(), 1, vec![]).with_version(first.version + 1);
+    /// assert_eq!(next.version, 2);
+    /// ```
+    pub fn with_version(mut self, version: u64) -> Self {
+        self.version = version;
+        self
     }
 
     /// Record the node whose static interrupt produced this checkpoint.

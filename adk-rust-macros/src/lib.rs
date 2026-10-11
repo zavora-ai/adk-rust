@@ -521,7 +521,6 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 initial_state: adk_graph::state::State,
                 execution_config: adk_graph::node::ExecutionConfig,
             ) -> adk_graph::error::Result<adk_graph::state::State> {
-                use adk_graph::checkpoint::Checkpointer;
                 use adk_graph::functional::ExecutionLog;
                 use adk_graph::state::Checkpoint;
                 use adk_graph::stream::StreamEvent;
@@ -568,7 +567,7 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 )
                 .with_metadata("phase", serde_json::Value::String("pre_execution".to_string()))
                 .with_metadata("execution_log", pre_log);
-                self.checkpointer.save(&pre_checkpoint).await?;
+                ctx.save_checkpoint(pre_checkpoint).await?;
 
                 // Emit workflow start event
                 let _ = event_tx.send(StreamEvent::node_start(#fn_name_str, 0));
@@ -595,7 +594,7 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
                             serde_json::to_value(&*execution_log.read().await)
                                 .unwrap_or(serde_json::Value::Null),
                         );
-                        self.checkpointer.save(&final_checkpoint).await?;
+                        ctx.save_checkpoint(final_checkpoint).await?;
 
                         // Emit workflow end event
                         let _ = event_tx.send(StreamEvent::node_end(#fn_name_str, step, duration));
@@ -618,7 +617,7 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
                             serde_json::to_value(&*execution_log.read().await)
                                 .unwrap_or(serde_json::Value::Null),
                         );
-                        let _ = self.checkpointer.save(&fail_checkpoint).await;
+                        let _ = ctx.save_checkpoint(fail_checkpoint).await;
 
                         // Emit error event
                         let _ = event_tx.send(StreamEvent::error(&e.to_string(), Some(#fn_name_str)));
