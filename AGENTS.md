@@ -592,8 +592,9 @@ Five mechanisms for controlling tool execution, composable in any combination:
 1. **`ToolPolicy`** — run-wide allow / deny / require-approval decision per call, set with
    `Runner::builder().tool_policy(...)` or `RunConfig::tool_policy`. `DeclarativePolicy` matches
    rules in order on a tool-name glob, the tool's declared `ToolEffect`, and JSON-pointer argument
-   predicates (`equals`, `in_set`, `at_most`, `starts_with`, `domain_in`); a tool no rule permits
-   is **denied by default**.
+   predicates (`equals`, `in_set`, `at_most`, `starts_with`, `domain_in`), and the acting agent
+   (`for_agent` glob on its `AgentId`, `for_tenant`, `for_class`); a tool no rule permits is
+   **denied by default**.
 
 ```rust
 let policy = DeclarativePolicy::builder()
@@ -682,6 +683,14 @@ Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`
     (`after_tool_call`).
 
 A hook or callback that returns a value short-circuits the remaining callbacks of its kind.
+
+Every run has an acting agent (`ActingContext`, `ReadonlyContext::acting_context()`): the
+principal from `Runner::builder().identity_source(...)` / `.agent_principal(...)` or
+`RunConfig::acting_context`, else `urn:adk:agent:{app}/{agent}` acting for the run's user.
+`ToolPolicyRequest::acting`, `ToolConfirmationRequest::acting`, `SpendKey::agent`, and
+`adk_auth::AuditEvent::agent_id` carry it; `AgentTool` delegation appends the caller to the
+delegate's `delegation_chain`. Context wrappers must forward `acting_context()`. See
+`docs/official_docs/security/agent-identity.md`.
 
 See `docs/official_docs/security/tool-authorization.md` for full documentation with CLI and web server examples.
 

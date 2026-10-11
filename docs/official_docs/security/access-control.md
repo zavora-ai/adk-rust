@@ -343,8 +343,14 @@ an `AuditSink`. See [Audit Log](audit-log.md).
 
 ```json
 {"timestamp":"2025-01-01T10:30:00Z","user":"bob","session_id":"sess-123","event_type":"tool_access","resource":"search","outcome":"allowed"}
-{"timestamp":"2025-01-01T10:30:01Z","user":"bob","session_id":"sess-123","event_type":"tool_access","resource":"code_exec","outcome":"denied"}
+{"timestamp":"2025-01-01T10:30:01Z","user":"bob","session_id":"sess-123","event_type":"tool_access","resource":"code_exec","outcome":"denied","tenant_id":"acme","agent_id":"spiffe://acme.example/agent/billing","on_behalf_of":{"kind":"human","id":"bob"}}
 ```
+
+`ProtectedTool` and `ScopeGuard` record the calling agent on every decision:
+`AuditEvent::with_acting_context` sets `agent_id`, `on_behalf_of`, and, when unset, `tenant_id`
+from the tool context's acting context. `AuditFilter::agent_id` selects one agent's records, and
+the PostgreSQL and OTLP sinks store both fields (`migrate()` adds the PostgreSQL columns to an
+existing table). See [Agent Identity](agent-identity.md).
 
 ### Custom Audit Sink
 

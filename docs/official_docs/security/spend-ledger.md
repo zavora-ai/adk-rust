@@ -42,7 +42,9 @@ let ledger = InMemorySpendLedger::new(
         )
         // 5 USD per day for one agent
         .limit(
-            SpendKey::org("support-app").with_agent("triage").per(SpendPeriod::Day),
+            SpendKey::org("support-app")
+                .with_agent("urn:adk:agent:support-app/triage")
+                .per(SpendPeriod::Day),
             5_000_000,
         ),
 );
@@ -82,7 +84,8 @@ ledger.migrate().await?;
 
 With a ledger on the run config, every model call made on behalf of the run reserves before
 it is sent and commits once it completes, through `adk_core::ModelCallScope`. The key is the
-runner's app name, the calling agent, and the vendor. The reservation precedes the response,
+runner's app name, the calling agent's `AgentId` (see [Agent Identity](agent-identity.md);
+`urn:adk:agent:{app}/{agent}` unless configured), and the vendor. The reservation precedes the response,
 so it names the vendor read from the model id (`gemini-*` is `gemini`, `claude-*` is
 `anthropic`, `gpt-*`, `o1`, `o3`, and `o4` are `openai`, `deepseek-*` is `deepseek`,
 `grok-*` is `xai`, Mistral model families are `mistral`; unrecognized ids are `unknown`).
@@ -209,7 +212,7 @@ minute and do not go through the `Llm` trait.
 ## Payment spend
 
 The payment tools reserve each checkout total at completion under the key
-`app / agent / merchant_id`, commit it when the checkout completes, and release it when the
+`app / agent id / merchant_id`, commit it when the checkout completes, and release it when the
 checkout fails. See [Payments and Commerce](payments.md#payment-policies).
 
 ## Error codes

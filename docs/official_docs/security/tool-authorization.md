@@ -27,7 +27,10 @@ callback rewrites. It returns one of:
 `DeclarativePolicy` matches rules in order. A rule names a tool glob (`*` and `?`), may require
 the effect the tool declares (`read_only_tools()`, or `with_effect(ToolEffect::Idempotent)` — see
 [Tool Effects](../tools/tool-effects.md)), and may add argument predicates addressed by JSON
-pointer. The first matching rule decides; a call no rule matches is **denied by default**.
+pointer. A rule may also be restricted to the acting agent: `for_agent(glob)` matches its
+`AgentId`, `for_tenant(tenant)` and `for_class(class)` match its principal (see
+[Agent Identity](agent-identity.md)); such a rule never matches a call without an acting context.
+The first matching rule decides; a call no rule matches is **denied by default**.
 
 | Predicate | Holds when |
 |-----------|------------|
@@ -64,7 +67,21 @@ let runner = Runner::builder()
 The runner installs its policy on every run that does not carry one in its `RunConfig`. Implement
 `ToolPolicy` directly for decisions that need outside data; `ToolPolicyRequest` carries the tool
 name, final arguments, declared `ToolEffect` (`Tool::effect()`), agent name, app, user, session,
-and invocation ID.
+invocation ID, and the `ActingContext` (`acting`: the agent's principal, the subject it acts for,
+and its delegation chain). A call held for approval records the same acting context on its
+`ToolConfirmationRequest::acting`.
+
+```rust
+use adk_core::{DeclarativePolicy, PolicyRule};
+
+let policy = DeclarativePolicy::builder()
+    // A quarantined agent may call nothing.
+    .rule(PolicyRule::deny("*", "agent under review").for_agent("spiffe://acme.example/agent/legacy-*"))
+    // Only release bots of the acme tenant deploy.
+    .rule(PolicyRule::allow("deploy").for_tenant("acme").for_class("release-bot"))
+    .allow_read_only()
+    .build();
+```
 
 ## Built-in Tools
 
@@ -956,6 +973,7 @@ administrator. See [Audit Log](audit-log.md#what-the-runtime-records).
 - [Audit Log](audit-log.md) — Signed records of every governed decision
 
 - [Access Control](access-control.md) — RBAC, SSO, audit logging
+- [Agent Identity](agent-identity.md) — the acting agent behind every decision
 - [Callbacks](../callbacks/callbacks.md) — All callback types and lifecycle
 - [Graph Agents](../agents/graph-agents.md) — Checkpoint-based interrupts
 - [Guardrails](guardrails.md) — Input/output validation
