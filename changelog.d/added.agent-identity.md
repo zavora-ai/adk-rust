@@ -1,11 +1,12 @@
-- **Agent identity** (`adk-core`, `adk-runner`, `adk-agent`, `adk-tool`, `adk-graph`,
-  `adk-realtime`, `adk-auth`, `adk-server`): every run has an acting agent. `AgentId`,
-  `AgentPrincipal`, `SubjectRef`, and `ActingContext` describe it;
-  `ReadonlyContext::acting_context()` exposes it on every runtime context and
-  `NodeContext::acting_context()` on graph nodes. Configure it with
+- **Agent identity through every run** (`adk-core`, `adk-runner`, `adk-agent`, `adk-tool`,
+  `adk-graph`, `adk-realtime`): every run has an acting agent, an
+  `adk_core::principal::ActingContext`. `ReadonlyContext::acting_context()` exposes it on every
+  runtime context and `NodeContext::acting_context()` on graph nodes. Configure it with
   `Runner::builder().identity_source(...)` or `.agent_principal(...)`, `RunConfig::acting_context`,
   or `AgentTool::agent_principal`; otherwise each agent acts as `urn:adk:agent:{app}/{agent}`
-  for the run's user. `AgentTool` delegation appends the caller to the delegate's chain.
+  (`AgentPrincipal::derived`, `ActingContext::derived`) for the run's user. `AgentTool`
+  delegation appends the caller to the delegate's chain (`ActingContext::delegate`).
+  `PrincipalError` converts into `AdkError` with code `identity.agent_id.invalid`.
 - **Identity-keyed policy** (`adk-core`): `PolicyRule::for_agent`, `for_tenant`, and `for_class`
   restrict a rule to the acting agent.
 - **Identity sources and credential brokers** (`adk-core`, `adk-auth`): `IdentitySource` with
