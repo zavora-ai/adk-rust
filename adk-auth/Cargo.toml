@@ -23,6 +23,8 @@ gcp-secrets = ["dep:google-cloud-secretmanager-v1", "dep:google-cloud-gax"]
 # Enterprise audit sinks
 postgres-audit = ["dep:sqlx"]
 otlp-audit = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
+# Signed, Merkle-hashed audit log with Ed25519 checkpoints and offline verification
+signed-audit = ["dep:aws-lc-rs", "base64", "dep:ryu-js", "serde_json/float_roundtrip", "tokio/rt"]
 
 [dependencies]
 adk-core.workspace = true
@@ -39,6 +41,10 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 hmac = "0.12"
 axum = { version = "0.8", optional = true }
+
+# Signed audit log (optional)
+aws-lc-rs = { version = "1.18", optional = true }
+ryu-js = { version = "1.0", optional = true }
 
 # SSO dependencies (optional)
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"], optional = true }

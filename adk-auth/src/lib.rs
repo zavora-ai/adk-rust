@@ -19,6 +19,9 @@
 //! - `aws-secrets` - Enable AWS Secrets Manager provider
 //! - `azure-keyvault` - Enable Azure Key Vault provider
 //! - `gcp-secrets` - Enable GCP Secret Manager provider
+//! - `postgres-audit` - PostgreSQL audit sink
+//! - `otlp-audit` - OpenTelemetry audit sink
+//! - `signed-audit` - Signed, Merkle-hashed audit log ([`signed_audit`])
 //!
 //! ## Quick Start
 //!
@@ -65,6 +68,8 @@ pub mod secrets;
 pub mod audit_otlp;
 #[cfg(feature = "postgres-audit")]
 pub mod audit_postgres;
+#[cfg(feature = "signed-audit")]
+pub mod signed_audit;
 
 pub use access_control::{AccessControl, AccessControlBuilder};
 pub use audit::{
