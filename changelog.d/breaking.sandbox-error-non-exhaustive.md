@@ -1,0 +1,1 @@
+- `adk-sandbox`: `SandboxError` is `#[non_exhaustive]`. Its `workspace` variants exist only with that feature, so a match outside the crate needs a wildcard arm. `adk-code` now maps those variants to an error result, and builds again when `adk-sandbox`'s `workspace` feature is enabled alongside it.

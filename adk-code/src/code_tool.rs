@@ -136,6 +136,10 @@ fn code_error_to_json(err: &CodeError) -> Value {
                     "status": "error",
                     "stderr": msg,
                 }),
+                other => json!({
+                    "status": "error",
+                    "stderr": other.to_string(),
+                }),
             }
         }
         CodeError::InvalidCode(msg) => json!({
