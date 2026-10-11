@@ -125,11 +125,39 @@ pub struct ContactAddress {
 }
 
 /// W3C `PaymentCurrencyAmount` projected through AP2.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Equality compares the currency and the decimal value, so `12`, `12.0`, and
+/// `1.2e1` are the same amount however a client or model serialized it.
+///
+/// # Example
+///
+/// ```
+/// use adk_payments::protocol::ap2::PaymentCurrencyAmount;
+///
+/// let cart: PaymentCurrencyAmount =
+///     serde_json::from_value(serde_json::json!({"currency": "USD", "value": 12.0})).unwrap();
+/// let mandate: PaymentCurrencyAmount =
+///     serde_json::from_value(serde_json::json!({"currency": "USD", "value": 12})).unwrap();
+/// assert_eq!(cart, mandate);
+/// assert_ne!(cart, PaymentCurrencyAmount::new("USD", 12.01));
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PaymentCurrencyAmount {
     pub currency: String,
     pub value: Number,
+}
+
+impl PartialEq for PaymentCurrencyAmount {
+    fn eq(&self, other: &Self) -> bool {
+        // JSON does not distinguish `12` from `12.0`, and providers re-serialize tool
+        // arguments through doubles, so compare the parsed decimal, not the token.
+        self.currency == other.currency
+            && match (self.to_exact_money(), other.to_exact_money()) {
+                (Ok(left), Ok(right)) => left == right,
+                _ => self.value == other.value,
+            }
+    }
 }
 
 impl PaymentCurrencyAmount {

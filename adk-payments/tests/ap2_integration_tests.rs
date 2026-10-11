@@ -916,3 +916,36 @@ async fn ap2_cart_amounts_are_normalised_to_one_scale() {
         "rejected carts must not reach the checkout backend"
     );
 }
+
+/// Gemini re-serializes tool arguments through doubles, so a mandate total of `120.0`
+/// arrives as `120`; the amount is unchanged and the payment proceeds.
+#[tokio::test]
+async fn ap2_payment_total_matches_the_cart_by_value_not_json_token() {
+    let harness = MultiActorHarness::new(MultiActorHarnessConfig::ap2_defaults()).await;
+    let backend = harness.backend.clone();
+    let adapter = Ap2Adapter::new(backend.clone(), backend.clone(), backend.clone(), backend)
+        .allow_unverified_authorizations();
+
+    let (merchant, shopper) = ap2_contexts(&harness, "token-001", CommerceMode::HumanPresent);
+    adapter.submit_cart_mandate(merchant, make_cart_mandate("token-cart")).await.unwrap();
+    let mut payment = make_payment_mandate("token-cart", Some("user-signed".to_string()));
+    payment.payment_mandate_contents.payment_details_total.amount.value =
+        serde_json::Number::from(120);
+    adapter.submit_payment_mandate(shopper, payment).await.unwrap();
+    assert_eq!(execute_count(&harness, "token-001").await, 1);
+
+    let (merchant, shopper) = ap2_contexts(&harness, "token-002", CommerceMode::HumanPresent);
+    adapter.submit_cart_mandate(merchant, make_cart_mandate("token-cart-2")).await.unwrap();
+    let mut payment = make_payment_mandate("token-cart-2", Some("user-signed".to_string()));
+    payment.payment_mandate_contents.payment_details_total.amount.value =
+        serde_json::Number::from_f64(120.01).unwrap();
+    let error = adapter.submit_payment_mandate(shopper, payment).await.unwrap_err();
+    assert_ap2_error(
+        error,
+        Ap2Error::PaymentMandateMismatch {
+            payment_mandate_id: "pm-token-cart-2".to_string(),
+            field: "payment_details_total".to_string(),
+        },
+    );
+    assert_eq!(execute_count(&harness, "token-002").await, 0);
+}
