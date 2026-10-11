@@ -786,6 +786,14 @@ pub fn request_input_token_bound(request: &LlmRequest) -> Option<u64> {
 }
 
 /// The output cap a request sets, if any.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "azure-ai",
+    feature = "bedrock",
+    feature = "gemini",
+    feature = "ollama",
+    feature = "openai"
+))]
 pub(crate) fn request_output_cap(request: &LlmRequest) -> Option<u64> {
     request
         .config
