@@ -13,6 +13,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 - **InMemorySessionService** - Simple in-memory session storage
 - **SqliteSessionService** - SQLite-backed persistence (`sqlite` feature)
 - **Durable stores** - `SpendLedger`, `ActionLedger`, and `ApprovalStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each behind its backend's feature and proven by the `adk-core` conformance suites
+- **Durable runtime stores** - `LeaseStore`, `DurableRunStore`, `ScheduleStore`, and `GovernanceStateStore` for SQLite and PostgreSQL
 - **PostgresSessionService** - PostgreSQL-backed persistence (`postgres` feature)
 - **RedisSessionService** - Redis-backed persistence (`redis` feature)
 - **MongoSessionService** - MongoDB-backed persistence (`mongodb` feature)
@@ -348,6 +349,34 @@ let ledger = SqliteSpendLedger::new("sqlite://spend.db?mode=rwc")
     .await?
     .with_limits(SpendLimits::new().limit(SpendKey::org("my-app").per(SpendPeriod::Day), 50_000_000));
 ledger.migrate().await?;
+```
+
+## Durable Runtime Stores
+
+| Backend | Feature | Lease store | Run store | Schedule store | Governance state store |
+|---------|---------|-------------|-----------|----------------|------------------------|
+| SQLite | `sqlite` | `SqliteLeaseStore` | `SqliteRunStore` | `SqliteScheduleStore` | `SqliteGovernanceStateStore` |
+| PostgreSQL | `postgres` | `PostgresLeaseStore` | `PostgresRunStore` | `PostgresScheduleStore` | `PostgresGovernanceStateStore` |
+
+Each type has `new(url)`, `from_pool` over the pool a session service uses, and
+`migrate()`; the lease, run, and governance stores add `with_clock`. PostgreSQL claims runs
+with `SELECT ... FOR UPDATE SKIP LOCKED`, SQLite under `BEGIN IMMEDIATE`, and every worker
+write is fenced on the run's lease epoch. Every type passes the `adk-core` conformance
+suites; see the
+[Durable Runtime guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/core/durable-runtime.md).
+
+```rust
+use std::time::Duration;
+use adk_core::{DurableRunStore, NewRun, RunOutcome};
+use adk_session::PostgresRunStore;
+use serde_json::json;
+
+let runs = PostgresRunStore::new("postgres://localhost/app").await?;
+runs.migrate().await?;
+runs.enqueue(NewRun::new("default", "my-app", "user-1", "assistant", json!({"text": "hi"}))).await?;
+if let Some(claimed) = runs.claim("default", "worker-1", Duration::from_secs(30)).await? {
+    runs.finish(&claimed.record.run_id, claimed.epoch, RunOutcome::Completed(json!("done"))).await?;
+}
 ```
 
 ## Rename: DatabaseSessionService → SqliteSessionService

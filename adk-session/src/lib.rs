@@ -38,12 +38,26 @@
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 /// SQL-backed approval stores for calls held for confirmation.
 pub mod approval;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+mod durable_sql;
 /// Event types and the [`Events`] trait for accessing session event history.
 pub mod event;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+/// SQL-backed governance state stores for a kill switch shared by every replica.
+pub mod governance_state;
 /// In-memory session backend for testing and lightweight use cases.
 pub mod inmemory;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+/// SQL-backed lease stores with fencing epochs.
+pub mod lease;
 /// Schema migration utilities for database-backed session stores.
 pub mod migration;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+/// SQL-backed durable run queues.
+pub mod run_store;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+/// SQL-backed schedule stores.
+pub mod schedule;
 /// Session service trait and request/response types.
 pub mod service;
 /// The [`Session`] trait and state key prefix constants.
@@ -117,6 +131,14 @@ pub use approval::PostgresApprovalStore;
 pub use approval::SqliteApprovalStore;
 #[cfg(feature = "firestore")]
 pub use firestore_stores::{FirestoreActionLedger, FirestoreApprovalStore, FirestoreSpendLedger};
+#[cfg(feature = "postgres")]
+pub use governance_state::PostgresGovernanceStateStore;
+#[cfg(feature = "sqlite")]
+pub use governance_state::SqliteGovernanceStateStore;
+#[cfg(feature = "postgres")]
+pub use lease::PostgresLeaseStore;
+#[cfg(feature = "sqlite")]
+pub use lease::SqliteLeaseStore;
 #[cfg(feature = "mongodb")]
 pub use mongodb_stores::{MongoActionLedger, MongoApprovalStore, MongoSpendLedger};
 #[cfg(feature = "neo4j")]
@@ -125,6 +147,14 @@ pub use neo4j_stores::{Neo4jActionLedger, Neo4jApprovalStore, Neo4jSpendLedger};
 pub use postgres_action_ledger::PostgresActionLedger;
 #[cfg(feature = "redis")]
 pub use redis_stores::{RedisActionLedger, RedisApprovalStore, RedisSpendLedger};
+#[cfg(feature = "postgres")]
+pub use run_store::PostgresRunStore;
+#[cfg(feature = "sqlite")]
+pub use run_store::SqliteRunStore;
+#[cfg(feature = "postgres")]
+pub use schedule::PostgresScheduleStore;
+#[cfg(feature = "sqlite")]
+pub use schedule::SqliteScheduleStore;
 #[cfg(feature = "postgres")]
 pub use spend::PostgresSpendLedger;
 #[cfg(feature = "sqlite")]

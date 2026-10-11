@@ -283,6 +283,7 @@ jobs:
         --run-ignored all
         --test store_conformance_sqlite
         --test store_conformance_postgres
+        --test run_store_multiprocess_postgres
         --test store_conformance_redis
         --test store_conformance_mongodb
         --test store_conformance_neo4j

@@ -181,8 +181,8 @@ scope's epoch (0 when it has no state); a moved epoch fails with `governance.con
 | Backend | `LeaseStore` | `DurableRunStore` | `ScheduleStore` | `GovernanceStateStore` |
 |---------|--------------|-------------------|-----------------|------------------------|
 | In memory (`adk-core`) | `InMemoryLeaseStore` | `InMemoryRunStore` | `InMemoryScheduleStore` | `InMemoryGovernanceStateStore` |
-| SQLite | Planned | Planned | Planned | Planned |
-| PostgreSQL | Planned | Planned | Planned | Planned |
+| SQLite (`adk-session`, `sqlite`) | `SqliteLeaseStore` | `SqliteRunStore` | `SqliteScheduleStore` | `SqliteGovernanceStateStore` |
+| PostgreSQL (`adk-session`, `postgres`) | `PostgresLeaseStore` | `PostgresRunStore` | `PostgresScheduleStore` | `PostgresGovernanceStateStore` |
 | Redis | Planned | Planned | Planned | Planned |
 | MongoDB | Planned | Planned | Planned | Planned |
 | Neo4j | Planned | Planned | Planned | Planned |
@@ -197,6 +197,53 @@ The atomic primitive each guarantee needs:
 | Single claim winner | `SELECT ... FOR UPDATE SKIP LOCKED` (PostgreSQL), `BEGIN IMMEDIATE` (SQLite) | One Lua script | `findOneAndUpdate` | Transaction that writes the new epoch |
 | Fenced worker writes | `UPDATE ... WHERE lease_epoch = $epoch` | Lua epoch compare | `updateOne` filtered on the epoch | Transaction that checks the epoch |
 | Schedule advance, governance set | `UPDATE ... WHERE revision = $expected` | Lua compare | Filtered `updateOne` | Transaction that checks the revision |
+
+### SQL stores
+
+The SQLite and PostgreSQL stores share one schema shape and, where the dialects agree, one
+statement text. Each has `new(url)`, `from_pool` over the pool a session service uses, and
+`migrate()`, which applies versioned steps and, on PostgreSQL, holds an advisory lock so
+replicas can migrate at startup. Timestamps are stored as microseconds.
+
+| Store | Table | Primitive |
+|-------|-------|-----------|
+| `*LeaseStore` | `adk_leases` | `acquire` is one `INSERT ... ON CONFLICT (resource) DO UPDATE ... WHERE released OR expires_at_us <= now OR owner = $owner RETURNING epoch`; `renew` and `release` are `UPDATE ... WHERE epoch = $epoch` |
+| `*RunStore` | `adk_runs` | Unique index on `(queue, idempotency_key)`; PostgreSQL claims with `SELECT ... FOR UPDATE OF r SKIP LOCKED` and serializes enqueues per concurrency key with `pg_advisory_xact_lock`, SQLite runs both under `BEGIN IMMEDIATE`; fenced writes are `UPDATE ... WHERE run_id = $1 AND lease_epoch = $2 AND state = 'running'` |
+| `*ScheduleStore` | `adk_schedules` | `advance` is `UPDATE ... WHERE id = $1 AND revision = $2`; `due` reads the `(paused, next_fire_at_us)` index |
+| `*GovernanceStateStore` | `adk_governance_state` | `INSERT ... ON CONFLICT DO NOTHING` from epoch 0, `UPDATE ... WHERE epoch = $expected` otherwise |
+
+`prune` deletes finished runs in batches of 500, so one call never holds a long lock.
+
+```rust
+use std::time::Duration;
+
+use adk_core::{AdkError, DurableRunStore, LeaseStore, NewRun};
+use adk_session::{PostgresLeaseStore, PostgresRunStore, PostgresSessionService};
+use serde_json::json;
+use sqlx::postgres::PgPoolOptions;
+
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    // One pool serves the session service and every durable store.
+    let pool = PgPoolOptions::new()
+        .max_connections(20)
+        .connect("postgres://localhost/app")
+        .await
+        .map_err(|e| AdkError::session(e.to_string()))?;
+    let sessions = PostgresSessionService::from_pool(pool.clone());
+    sessions.migrate().await?;
+    let leases = PostgresLeaseStore::from_pool(pool.clone());
+    leases.migrate().await?;
+    let runs = PostgresRunStore::from_pool(pool);
+    runs.migrate().await?;
+
+    if let Some(leader) = leases.acquire("scheduler", "replica-1", Duration::from_secs(30)).await? {
+        runs.enqueue(NewRun::new("default", "my-app", "user-1", "assistant", json!({}))).await?;
+        leases.release(&leader).await?;
+    }
+    Ok(())
+}
+```
 
 ## Conformance suites
 
@@ -240,6 +287,13 @@ for a harness whose `is_durable` returns `false`.
 | Backend | Command |
 |---------|---------|
 | In memory | `cargo nextest run -p adk-core --test store_conformance` |
+| SQLite | `cargo nextest run -p adk-session --features sqlite --test store_conformance_sqlite` |
+| PostgreSQL | `DATABASE_URL=postgres://... cargo nextest run -p adk-session --features postgres --run-ignored only --test store_conformance_postgres --test run_store_multiprocess_postgres` |
+
+`run_store_multiprocess_postgres` starts three OS processes that claim from one queue of
+200 runs at once and checks that each run is claimed and finished exactly once. The SQLite
+suites run on every pull request; the PostgreSQL suites run in the nightly `durable-stores`
+job.
 
 ## Related
 
