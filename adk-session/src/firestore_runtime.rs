@@ -52,10 +52,11 @@
 //!
 //! No transaction runs a query. A claim finds candidates with a plain query on
 //! `claim_key`, then re-reads and claims each one in its own transaction, so two claims
-//! never take the same run at the same epoch. Concurrency keys keep their unfinished
-//! holders in one document, read by `get` inside the transactions that change it: an
-//! enqueue appends to it, a run leaves it in the transaction that finishes or cancels
-//! it, and only its first holder is claimable while queued. A worker write reads the
+//! never take the same run at the same epoch. A candidate whose transaction keeps losing
+//! to concurrent claimers for two seconds is revisited after the others. Concurrency keys
+//! keep their unfinished holders in one document, read by `get` inside the transactions
+//! that change it: an enqueue appends to it, a run leaves it in the transaction that
+//! finishes or cancels it, and only its first holder is claimable while queued. A worker write reads the
 //! run's epoch in the transaction that writes it, so a stale epoch is refused with
 //! `run_store.stale_epoch`.
 
@@ -74,11 +75,13 @@ use adk_core::run_store::{
 use adk_core::schedule::{
     Schedule, ScheduleStore, invalid_schedule_error, schedule_not_found_error,
 };
-use adk_core::{AdkError, Clock, Result, SystemClock};
+use adk_core::{AdkError, Clock, ErrorCategory, Result, SystemClock};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use firestore::errors::{BackoffError, FirestoreError};
-use firestore::{FirestoreDb, FirestoreQueryDirection, FirestoreWritePrecondition};
+use firestore::{
+    FirestoreDb, FirestoreQueryDirection, FirestoreTransactionOptions, FirestoreWritePrecondition,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -105,6 +108,11 @@ const GOVERNANCE: &str = "adk_governance";
 
 /// Candidates a claim reads per query page.
 const CLAIM_PAGE: u32 = 64;
+/// How long one candidate's claim retries a contended transaction before the claim moves
+/// on to the next candidate and comes back to it later.
+const CLAIM_CONTENTION_BUDGET: chrono::TimeDelta = chrono::TimeDelta::seconds(2);
+/// How long a claim keeps revisiting contended candidates before it fails.
+const CLAIM_DEADLINE: Duration = Duration::from_secs(120);
 /// Finished runs a prune deletes per transaction.
 const PRUNE_BATCH: u32 = 100;
 /// Firestore document IDs are at most 1,500 bytes; a schedule's is the hex of its ID.
@@ -684,7 +692,7 @@ impl FirestoreRunStore {
                         Ok(Some(ClaimedRun { record, epoch }))
                     })
                 },
-                transaction_options(),
+                FirestoreTransactionOptions::new().with_max_elapsed_time(CLAIM_CONTENTION_BUDGET),
             )
             .await
             .map_err(|e| transaction_error(e, |m| storage_error(RUN_STORAGE, m)))
@@ -829,6 +837,10 @@ impl DurableRunStore for FirestoreRunStore {
         let prefix = queue_id(queue);
         let end = format!("{prefix}:{};", sortable(now.timestamp_micros()));
         let mut after: Option<String> = None;
+        let started = std::time::Instant::now();
+        // A candidate whose transaction kept losing to other claimers is revisited after the
+        // rest, so `None` means no candidate was claimable rather than that all were busy.
+        let mut contended: Option<AdkError> = None;
         loop {
             // Candidates are read outside any transaction, so a claim never holds a query
             // range; each candidate is then re-read and claimed in its own transaction.
@@ -861,12 +873,21 @@ impl DurableRunStore for FirestoreRunStore {
                 if doc.queue != queue {
                     continue;
                 }
-                if let Some(claimed) = self.claim_one(&doc.run_id, worker, ttl).await? {
-                    return Ok(Some(claimed));
+                match self.claim_one(&doc.run_id, worker, ttl).await {
+                    Ok(Some(claimed)) => return Ok(Some(claimed)),
+                    Ok(None) => {}
+                    Err(error) if error.category == ErrorCategory::Unavailable => {
+                        contended = Some(error);
+                    }
+                    Err(error) => return Err(error),
                 }
             }
             if page_len < CLAIM_PAGE as usize {
-                return Ok(None);
+                match contended.take() {
+                    None => return Ok(None),
+                    Some(error) if started.elapsed() >= CLAIM_DEADLINE => return Err(error),
+                    Some(_) => after = None,
+                }
             }
         }
     }
