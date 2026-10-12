@@ -609,7 +609,19 @@ each finishes in seconds. Gates sharing one server run one at a time (nextest te
 Pass counts per backend and gate. SQLite runs on every pull request (feature-coverage shard 2);
 the server backends run in the nightly `durable-stores` job against service containers.
 
-{{MATRIX}}
+| Backend | `crash_mid_payment` | `one_firing_per_schedule` | `stalled_worker` | `kill_switch` |
+|---------|---------------------|---------------------------|------------------|---------------|
+| SQLite | 5/5 | 5/5 | 5/5 | 5/5 |
+| PostgreSQL 17 | 5/5 | 5/5 | 5/5 | 5/5 |
+| Redis 7 | 5/5 | 5/5 | 5/5 | 5/5 |
+| MongoDB 7 (replica set) | 2/2 | 2/2 | 2/2 | 2/2 |
+| Neo4j 5 | 2/2 | 2/2 | 2/2 | 2/2 |
+| Firestore emulator | 2/2 | 2/2 | 2/2 | 2/2 |
+
+Counts are two `durable-stores` runs plus, for SQLite, PostgreSQL, and Redis, three local runs
+on macOS. On the Firestore emulator the schedule gate takes about 40 s instead of 5 s: the
+emulator holds contended transactions on lock waits, so three schedulers advance a schedule
+more slowly. Every occurrence still fires exactly once.
 
 ### Running the gates
 
