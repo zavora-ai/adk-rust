@@ -13,6 +13,7 @@ Outbound, `WebhookDelivery` sends signed notifications with retries and a dead-l
 | Inbound queues | `QueueSource`, `QueueIngress`, `InMemoryQueueSource` | `adk-core` |
 | Outbound webhooks | `webhook_delivery::WebhookDelivery` | `adk-core` (`webhook-delivery`) |
 | AWP event subscriptions | `InMemoryEventSubscriptionService` delivers through `WebhookDelivery` | `adk-awp` |
+| Approval notifications | `WebhookApprovalNotifier` delivers through `WebhookDelivery` | `adk-server` (`approvals`) |
 | Ambient triggers | `StandardWebhookVerifier` for `WebhookTrigger` | `adk-agent` (`ambient`) |
 
 ## Standard Webhooks

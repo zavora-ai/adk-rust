@@ -179,15 +179,19 @@ approvers see `argsRedacted`.
 `WebhookApprovalNotifier` posts each `ApprovalNotification` as JSON in the
 [Standard Webhooks](https://www.standardwebhooks.com/) format: `webhook-id` (the
 notification ID, `{request id}:{version}`, stable across retries), `webhook-timestamp`, and
-`webhook-signature` (`v1,` and the base64 HMAC-SHA256 of `{id}.{timestamp}.{body}`).
+`webhook-signature` (`v1,` and the base64 HMAC-SHA256 of `{id}.{timestamp}.{body}`). It
+signs and sends through the shared `adk_core::webhook_delivery::WebhookDelivery`: retries with
+exponential backoff and jitter in the background, dead-lettering after the last attempt, and an
+egress policy that allows HTTPS to public addresses only (`with_delivery` changes it). See
+[Wake-ups and Webhooks](../core/wake-ups.md).
 
 ```rust,ignore
 let notifier = WebhookApprovalNotifier::new("https://hooks.example.com/approvals", "whsec_...")?;
 let service = StoreApprovalService::new(store).with_notifier(Arc::new(notifier));
 ```
 
-Notification is best effort: a failed delivery is logged and the decision stands, because the
-store holds the request's state.
+Notification is best effort: a delivery that fails every attempt is dead-lettered and the
+decision stands, because the store holds the request's state.
 
 ## Backends
 

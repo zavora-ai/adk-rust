@@ -471,13 +471,14 @@ async fn revoke_delegation(
 // ---------------------------------------------------------------------------
 
 /// Delivers [`ApprovalNotification`]s as signed webhooks in the Standard Webhooks
-/// format.
+/// format, through the shared [`WebhookDelivery`](adk_core::webhook_delivery::WebhookDelivery).
 ///
 /// Each delivery is a `POST` of the notification as JSON with `webhook-id` (the
 /// notification ID, stable across retries), `webhook-timestamp` (Unix seconds), and
-/// `webhook-signature` (`v1,` and the base64 HMAC-SHA256 of
-/// `{webhook-id}.{webhook-timestamp}.{body}` under the secret). Receivers verify it with
-/// any Standard Webhooks library and drop repeated IDs.
+/// `webhook-signature` ([`adk_core::webhook`]). Deliveries run in the background with
+/// retries, exponential backoff, and jitter, so a slow receiver never holds up a decision;
+/// the last failure is dead-lettered. The default egress policy allows HTTPS to public
+/// addresses only; [`with_delivery`](Self::with_delivery) changes it.
 ///
 /// # Example
 ///
@@ -492,14 +493,16 @@ async fn revoke_delegation(
 /// ```
 #[derive(Clone)]
 pub struct WebhookApprovalNotifier {
-    url: String,
-    key: Vec<u8>,
-    client: reqwest::Client,
+    endpoint: adk_core::webhook_delivery::WebhookEndpoint,
+    secret: adk_core::webhook::WebhookSecret,
+    delivery: Arc<adk_core::webhook_delivery::WebhookDelivery>,
 }
 
 impl std::fmt::Debug for WebhookApprovalNotifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WebhookApprovalNotifier").field("url", &self.url).finish_non_exhaustive()
+        f.debug_struct("WebhookApprovalNotifier")
+            .field("url", &self.endpoint.url)
+            .finish_non_exhaustive()
     }
 }
 
@@ -510,76 +513,57 @@ impl WebhookApprovalNotifier {
     ///
     /// Returns `approval.webhook_secret` when the secret is not base64.
     pub fn new(url: impl Into<String>, secret: &str) -> Result<Self, AdkError> {
-        use base64::Engine;
-        let encoded = secret.strip_prefix("whsec_").unwrap_or(secret);
-        let key = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|e| {
+        let secret = adk_core::webhook::WebhookSecret::from_base64(secret).map_err(|e| {
             AdkError::new(
                 ErrorComponent::Server,
                 ErrorCategory::InvalidInput,
                 "approval.webhook_secret",
-                format!("the webhook secret is not base64 ({e}); pass the whsec_ secret"),
+                format!("{e}"),
             )
         })?;
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        Ok(Self { url: url.into(), key, client })
+        Ok(Self {
+            endpoint: adk_core::webhook_delivery::WebhookEndpoint::new(url, secret.clone()),
+            secret,
+            delivery: Arc::new(adk_core::webhook_delivery::WebhookDelivery::new()),
+        })
+    }
+
+    /// Delivers through `delivery`, for a custom retry policy, dead-letter sink, or egress
+    /// policy (for example `EgressPolicy::allow_private_networks()` for an in-cluster receiver).
+    pub fn with_delivery(mut self, delivery: adk_core::webhook_delivery::WebhookDelivery) -> Self {
+        self.delivery = Arc::new(delivery);
+        self
     }
 
     /// The `webhook-signature` header for `body` sent as `id` at `timestamp`.
     pub fn signature(&self, id: &str, timestamp: i64, body: &str) -> String {
-        use base64::Engine;
-        use hmac::{Hmac, Mac};
-        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&self.key)
-            .expect("HMAC accepts keys of any length");
-        mac.update(format!("{id}.{timestamp}.{body}").as_bytes());
-        format!(
-            "v1,{}",
-            base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
-        )
+        self.secret.signature(id, timestamp, body.as_bytes())
     }
 }
 
 #[async_trait::async_trait]
 impl ApprovalNotifier for WebhookApprovalNotifier {
     async fn notify(&self, notification: &ApprovalNotification) -> adk_core::Result<()> {
-        let body = serde_json::to_string(notification).map_err(|e| {
-            AdkError::new(
-                ErrorComponent::Server,
-                ErrorCategory::Internal,
-                "approval.webhook_encode",
-                format!("could not encode the approval notification: {e}"),
-            )
-        })?;
-        let timestamp = Utc::now().timestamp();
-        let response = self
-            .client
-            .post(&self.url)
-            .header("content-type", "application/json")
-            .header("webhook-id", &notification.id)
-            .header("webhook-timestamp", timestamp.to_string())
-            .header("webhook-signature", self.signature(&notification.id, timestamp, &body))
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| {
-                AdkError::new(
-                    ErrorComponent::Server,
-                    ErrorCategory::Unavailable,
-                    "approval.webhook_delivery",
-                    format!("approval webhook delivery failed: {e}"),
-                )
-            })?;
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(AdkError::new(
-                ErrorComponent::Server,
-                ErrorCategory::Unavailable,
-                "approval.webhook_delivery",
-                format!("approval webhook answered {}", response.status()),
-            ))
-        }
+        let message =
+            adk_core::webhook_delivery::WebhookMessage::json(notification.id.clone(), notification)
+                .map_err(|e| {
+                    AdkError::new(
+                        ErrorComponent::Server,
+                        ErrorCategory::Internal,
+                        "approval.webhook_encode",
+                        format!("could not encode the approval notification: {e}"),
+                    )
+                })?;
+        let delivery = Arc::clone(&self.delivery);
+        let endpoint = self.endpoint.clone();
+        tokio::spawn(async move {
+            let report = delivery.deliver(&endpoint, &message).await;
+            tracing::debug!(
+                webhook.id = %message.id,
+                delivered = report.is_delivered(),
+                "approval notification delivery finished"
+            );
+        });
+        Ok(())
     }
 }

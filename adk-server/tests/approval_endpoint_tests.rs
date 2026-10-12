@@ -205,19 +205,31 @@ async fn delegations_and_cancellation_go_through_the_endpoints() {
 
 #[tokio::test]
 async fn webhook_signatures_follow_standard_webhooks() {
-    use base64::Engine;
-    use hmac::{Hmac, Mac};
+    use adk_core::ManualClock;
+    use adk_core::webhook::{WebhookError, WebhookHeaders, WebhookSecret, WebhookVerifier};
+
     let secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
     let notifier = WebhookApprovalNotifier::new("https://hooks.invalid/approvals", secret).unwrap();
-    let key = base64::engine::general_purpose::STANDARD
-        .decode(secret.trim_start_matches("whsec_"))
-        .unwrap();
-    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&key).unwrap();
-    mac.update(b"apr_1:2.1760000000.{\"a\":1}");
-    let expected = format!(
-        "v1,{}",
-        base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
-    );
-    assert_eq!(notifier.signature("apr_1:2", 1_760_000_000, "{\"a\":1}"), expected);
+    let (id, timestamp, body) = ("apr_1:2", 1_760_000_000, "{\"a\":1}");
+    let signature = notifier.signature(id, timestamp, body);
+    let headers =
+        WebhookHeaders { id, timestamp: timestamp.to_string().into(), signature: &signature };
+    let clock = Arc::new(ManualClock::new(chrono::DateTime::from_timestamp(timestamp, 0).unwrap()));
+
+    let verifier =
+        WebhookVerifier::new(WebhookSecret::from_base64(secret).unwrap()).with_clock(clock.clone());
+    let verified = verifier.verify(&headers, body.as_bytes()).unwrap();
+    assert_eq!(verified.id, id);
+    assert!(matches!(
+        verifier.verify(&headers, b"{\"a\":2}"),
+        Err(WebhookError::SignatureMismatch)
+    ));
+
+    let other = WebhookSecret::from_bytes(vec![7u8; 32]).unwrap();
+    let wrong_key = WebhookVerifier::new(other).with_clock(clock);
+    assert!(matches!(
+        wrong_key.verify(&headers, body.as_bytes()),
+        Err(WebhookError::SignatureMismatch)
+    ));
     assert!(WebhookApprovalNotifier::new("https://x.invalid", "not base64!").is_err());
 }
