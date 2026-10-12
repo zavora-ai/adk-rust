@@ -63,11 +63,8 @@ impl ReadonlyContext for IdentifiedContext {
         &self.content
     }
     fn acting_context(&self) -> ActingContext {
-        ActingContext::new(
-            AgentPrincipal::new(AgentId::new(AGENT).unwrap()).with_tenant("acme"),
-            "inv-1",
-        )
-        .on_behalf_of(SubjectRef::human("alice"))
+        ActingContext::new(AgentPrincipal::new(AgentId::new(AGENT).unwrap()).with_tenant("acme"))
+            .on_behalf_of(SubjectRef::human("alice"))
     }
 }
 
@@ -156,8 +153,9 @@ async fn scope_guard_audit_carries_the_agent_id_on_denial() {
 
 #[test]
 fn identity_fields_serialize_and_filter() {
-    let event = AuditEvent::tool_access("alice", "pay", AuditOutcome::Allowed)
-        .with_acting_context(&ActingContext::derived("finance", "treasurer", "alice", "inv"));
+    let event = AuditEvent::tool_access("alice", "pay", AuditOutcome::Allowed).with_acting_context(
+        &ActingContext::derived("finance", "treasurer", "alice", adk_core::SubjectKind::Human),
+    );
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["agent_id"], "urn:adk:agent:finance/treasurer");
     assert_eq!(json["on_behalf_of"], json!({ "kind": "human", "id": "alice" }));

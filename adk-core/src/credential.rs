@@ -133,12 +133,16 @@ impl AgentCredential {
     }
 }
 
-/// Says who the running agent is, and proves it.
+/// Says who the running agents are, and proves it.
 ///
-/// The runner asks [`current`](Self::current) at the start of every run, so a source
-/// backed by a rotating workload identity (SPIFFE Workload API, a cloud metadata
-/// server) is read fresh each time. The principal's [`AgentId`] must stay the same
-/// across redeploys; the deployment belongs in [`AgentPrincipal::instance`].
+/// The runner reads the source at the start of every run, so a source backed by a
+/// rotating workload identity (SPIFFE Workload API, a cloud metadata server) is read
+/// fresh each time. The root agent acts as [`principal_for`](Self::principal_for) its
+/// name, falling back to [`current`](Self::current); every other agent in the tree acts
+/// as `principal_for` its name, falling back to
+/// [`AgentPrincipal::derived`](crate::AgentPrincipal::derived). A principal's
+/// [`AgentId`] must stay the same across redeploys; the deployment belongs in
+/// [`AgentPrincipal::instance`].
 ///
 /// # Example
 ///
@@ -156,8 +160,18 @@ impl AgentCredential {
 /// ```
 #[async_trait]
 pub trait IdentitySource: fmt::Debug + Send + Sync {
-    /// The principal the agent runs as.
+    /// The principal the workload runs as; the root agent's unless
+    /// [`principal_for`](Self::principal_for) maps it.
     async fn current(&self) -> Result<AgentPrincipal>;
+
+    /// The principal of the agent named `agent_name`, when the source maps it.
+    ///
+    /// The default maps no agent, so only the root agent acts as
+    /// [`current`](Self::current).
+    async fn principal_for(&self, agent_name: &str) -> Result<Option<AgentPrincipal>> {
+        let _ = agent_name;
+        Ok(None)
+    }
 
     /// A credential proving the principal's identity.
     ///
@@ -175,17 +189,43 @@ pub trait IdentitySource: fmt::Debug + Send + Sync {
     }
 }
 
-/// An [`IdentitySource`] with a fixed principal and, optionally, a fixed credential.
+/// An [`IdentitySource`] with a fixed principal, optional fixed principals for named
+/// agents, and, optionally, a fixed credential.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{AgentId, AgentPrincipal, IdentitySource, StaticIdentitySource};
+///
+/// # futures::executor::block_on(async {
+/// let source = StaticIdentitySource::new(AgentPrincipal::new(AgentId::new("spiffe://acme/ops")?))
+///     .with_agent("auditor", AgentPrincipal::new(AgentId::new("spiffe://acme/auditor")?));
+/// assert_eq!(
+///     source.principal_for("auditor").await?.unwrap().id.as_str(),
+///     "spiffe://acme/auditor"
+/// );
+/// assert!(source.principal_for("writer").await?.is_none());
+/// # Ok::<(), adk_core::AdkError>(())
+/// # }).unwrap();
+/// ```
 #[derive(Debug, Clone)]
 pub struct StaticIdentitySource {
     principal: AgentPrincipal,
+    agents: std::collections::BTreeMap<String, AgentPrincipal>,
     credential: Option<AgentCredential>,
 }
 
 impl StaticIdentitySource {
-    /// A source that always reports `principal`.
+    /// A source whose root agent acts as `principal`.
     pub fn new(principal: AgentPrincipal) -> Self {
-        Self { principal, credential: None }
+        Self { principal, agents: std::collections::BTreeMap::new(), credential: None }
+    }
+
+    /// Maps the agent named `agent_name` to `principal`.
+    #[must_use]
+    pub fn with_agent(mut self, agent_name: impl Into<String>, principal: AgentPrincipal) -> Self {
+        self.agents.insert(agent_name.into(), principal);
+        self
     }
 
     /// Sets the credential the source hands out.
@@ -200,6 +240,10 @@ impl StaticIdentitySource {
 impl IdentitySource for StaticIdentitySource {
     async fn current(&self) -> Result<AgentPrincipal> {
         Ok(self.principal.clone())
+    }
+
+    async fn principal_for(&self, agent_name: &str) -> Result<Option<AgentPrincipal>> {
+        Ok(self.agents.get(agent_name).cloned())
     }
 
     async fn credential(&self) -> Result<AgentCredential> {

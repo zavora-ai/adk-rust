@@ -1299,12 +1299,7 @@ impl<'a> ToolGate<'a> {
         invocation_id: &'a str,
         scope: ApprovalScope,
     ) -> Self {
-        let acting = run_config.acting_context_for(
-            &scope.app_name,
-            agent_name,
-            &scope.user_id,
-            invocation_id,
-        );
+        let acting = run_config.acting_context_for(&scope.app_name, agent_name, &scope.user_id);
         Self {
             run_config,
             agent_name,
@@ -1355,7 +1350,8 @@ impl<'a> ToolGate<'a> {
         let Some(trail) = &self.run_config.audit else {
             return Ok(());
         };
-        let actor = self.actor.clone().unwrap_or_else(|| AuditActor::from(&self.acting));
+        let actor =
+            self.actor.clone().unwrap_or_else(|| AuditActor::new(&self.acting, self.invocation_id));
         trail
             .record(
                 draft.actor(actor).ext("sessionId", Value::String(self.scope.session_id.clone())),

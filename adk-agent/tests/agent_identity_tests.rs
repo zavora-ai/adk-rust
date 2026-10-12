@@ -109,6 +109,10 @@ impl RecordingPolicy {
     fn acting(&self) -> Vec<ActingContext> {
         self.seen.lock().unwrap().iter().map(|request| request.acting.clone().unwrap()).collect()
     }
+
+    fn invocations(&self) -> Vec<String> {
+        self.seen.lock().unwrap().iter().map(|request| request.invocation_id.clone()).collect()
+    }
 }
 
 #[async_trait]
@@ -218,7 +222,7 @@ async fn policy_decisions_tool_context_and_spend_carry_the_configured_agent_id()
     assert_eq!(decided.len(), 1);
     assert_eq!(decided[0].agent, principal("replica-a"));
     assert_eq!(decided[0].on_behalf_of, Some(SubjectRef::human("alice")));
-    assert!(decided[0].invocation_id.starts_with("inv-"), "{:?}", decided[0]);
+    assert!(policy.invocations()[0].starts_with("inv-"), "{:?}", policy.invocations());
     assert_eq!(*seen.lock().unwrap(), decided, "the tool sees the context the policy decided on");
     // Two model calls at one cent each.
     assert_eq!(spent(&ledger, AGENT_ID).await, 20_000);
@@ -443,7 +447,278 @@ async fn agent_tool_delegation_extends_the_chain() {
     );
     assert_eq!(researcher_call.delegation_chain, vec![SubjectRef::agent(&planner_call.agent.id)]);
     assert_eq!(researcher_call.on_behalf_of, Some(SubjectRef::human("alice")));
-    assert_ne!(researcher_call.invocation_id, planner_call.invocation_id);
-    assert!(!researcher_call.invocation_id.is_empty());
+    let invocations = policy.invocations();
+    assert_ne!(invocations[1], invocations[0]);
+    assert!(!invocations[1].is_empty());
     assert_eq!(seen.lock().unwrap().as_slice(), &decided[1..]);
+}
+
+// --- Identity invariants: session subject, per-agent principals, one invocation id ---
+
+async fn alice_session() -> Arc<InMemorySessionService> {
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: APP.to_string(),
+            user_id: "alice".to_string(),
+            session_id: Some("s1".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    sessions
+}
+
+fn lookup_agent(name: &str, seen: Arc<Mutex<Vec<ActingContext>>>) -> Arc<dyn adk_core::Agent> {
+    Arc::new(
+        LlmAgentBuilder::new(name)
+            .model(ScriptedModel::new(vec![call("lookup", json!({}), &format!("c-{name}"))]))
+            .tool(Arc::new(LookupTool { seen }))
+            .build()
+            .unwrap(),
+    )
+}
+
+async fn run_alice(runner: &Runner, config: Option<RunConfig>) -> Vec<Result<adk_core::Event>> {
+    runner
+        .run_with_config(
+            UserId::new("alice").unwrap(),
+            SessionId::new("s1").unwrap(),
+            Content::new("user").with_text("go"),
+            config,
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+}
+
+fn audit_agents(recorder: &adk_core::audit_log::InMemoryAuditRecorder) -> Vec<String> {
+    recorder
+        .records()
+        .iter()
+        .filter_map(|record| record.actor.agent.as_ref().map(ToString::to_string))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_run_acting_for_another_subject_is_refused_and_audited() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorder = adk_core::audit_log::InMemoryAuditRecorder::new();
+    let runner = Runner::builder()
+        .app_name(APP)
+        .agent(lookup_agent("billing", seen.clone()))
+        .session_service(alice_session().await as Arc<dyn SessionService>)
+        .tool_policy(Arc::new(DeclarativePolicy::builder().allow("*").build()))
+        .audit_log(Arc::new(recorder.clone()))
+        .build()
+        .unwrap();
+
+    // alice's session, configured to act for bob.
+    let config = RunConfig::builder().on_behalf_of(SubjectRef::human("bob")).build();
+    let events = run_alice(&runner, Some(config)).await;
+
+    assert_eq!(events.len(), 1, "{events:?}");
+    let error = events[0].as_ref().unwrap_err();
+    assert_eq!(error.code, adk_core::SUBJECT_MISMATCH_CODE);
+    assert_eq!(error.category, adk_core::ErrorCategory::Forbidden);
+    assert!(seen.lock().unwrap().is_empty(), "no tool ran");
+    let records = recorder.records();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].kind, adk_core::audit_log::AuditRecordKind::Access);
+    assert_eq!(records[0].decision, Some(adk_core::audit_log::AuditDecision::Denied));
+    assert_eq!(records[0].actor.on_behalf_of, Some(SubjectRef::human("bob")));
+    assert_eq!(records[0].ext["sessionSubject"], json!({ "kind": "human", "id": "alice" }));
+
+    // The same id as a different kind is a different subject.
+    let config = RunConfig::builder().on_behalf_of(SubjectRef::service("alice")).build();
+    let events = run_alice(&runner, Some(config)).await;
+    assert_eq!(events[0].as_ref().unwrap_err().code, adk_core::SUBJECT_MISMATCH_CODE);
+}
+
+#[tokio::test]
+async fn a_subject_delegation_policy_allows_acting_for_another_subject() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let policy = RecordingPolicy::new(DeclarativePolicy::builder().allow("*").build());
+    let runner = Runner::builder()
+        .app_name(APP)
+        .agent(lookup_agent("billing", seen.clone()))
+        .session_service(alice_session().await as Arc<dyn SessionService>)
+        .tool_policy(policy.clone())
+        .subject_delegation(Arc::new(
+            adk_core::StaticSubjectDelegation::new()
+                .allow(SubjectRef::human("alice"), SubjectRef::human("bob")),
+        ))
+        .build()
+        .unwrap();
+
+    let config = RunConfig::builder().on_behalf_of(SubjectRef::human("bob")).build();
+    let events = run_alice(&runner, Some(config)).await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+
+    let decided = policy.acting();
+    assert_eq!(
+        decided,
+        vec![
+            ActingContext::new(AgentPrincipal::derived(APP, "billing"))
+                .on_behalf_of(SubjectRef::human("bob"))
+                .delegated_by(SubjectRef::human("alice"))
+        ]
+    );
+    assert_eq!(*seen.lock().unwrap(), decided);
+}
+
+#[tokio::test]
+async fn sequential_sub_agents_act_as_themselves_in_policy_and_audit() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let pipeline = adk_agent::SequentialAgent::new(
+        "pipeline",
+        vec![lookup_agent("drafter", seen.clone()), lookup_agent("reviewer", seen.clone())],
+    );
+    let policy = RecordingPolicy::new(DeclarativePolicy::builder().allow("*").build());
+    let recorder = adk_core::audit_log::InMemoryAuditRecorder::new();
+    let runner = Runner::builder()
+        .app_name(APP)
+        .agent(Arc::new(pipeline))
+        .session_service(alice_session().await as Arc<dyn SessionService>)
+        .tool_policy(policy.clone())
+        .audit_log(Arc::new(recorder.clone()))
+        .build()
+        .unwrap();
+
+    let events = run_alice(&runner, None).await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+
+    let ids = ["urn:adk:agent:acme/drafter", "urn:adk:agent:acme/reviewer"];
+    let decided: Vec<_> =
+        policy.acting().iter().map(|acting| acting.agent.id.to_string()).collect();
+    assert_eq!(decided, ids);
+    assert_eq!(audit_agents(&recorder), ids);
+    assert!(
+        policy
+            .acting()
+            .iter()
+            .all(|acting| acting.on_behalf_of == Some(SubjectRef::human("alice"))),
+        "every sub-agent acts for the session's user"
+    );
+}
+
+#[tokio::test]
+async fn an_identity_source_principal_applies_to_the_root_unless_it_maps_sub_agents() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let pipeline = adk_agent::SequentialAgent::new(
+        "pipeline",
+        vec![lookup_agent("drafter", seen.clone()), lookup_agent("reviewer", seen.clone())],
+    );
+    let reviewer = AgentPrincipal::new(AgentId::new("spiffe://acme.test/agent/reviewer").unwrap());
+    let source =
+        StaticIdentitySource::new(principal("replica-a")).with_agent("reviewer", reviewer.clone());
+    let policy = RecordingPolicy::new(DeclarativePolicy::builder().allow("*").build());
+    let recorder = adk_core::audit_log::InMemoryAuditRecorder::new();
+    let runner = Runner::builder()
+        .app_name(APP)
+        .agent(Arc::new(pipeline))
+        .session_service(alice_session().await as Arc<dyn SessionService>)
+        .tool_policy(policy.clone())
+        .audit_log(Arc::new(recorder.clone()))
+        .identity_source(Arc::new(source))
+        .build()
+        .unwrap();
+
+    let events = run_alice(&runner, None).await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+
+    // The source's own principal is the root's (`pipeline`), not the drafter's.
+    let ids = ["urn:adk:agent:acme/drafter", "spiffe://acme.test/agent/reviewer"];
+    let decided: Vec<_> =
+        policy.acting().iter().map(|acting| acting.agent.id.to_string()).collect();
+    assert_eq!(decided, ids);
+    assert_eq!(audit_agents(&recorder), ids);
+    assert_eq!(policy.acting()[1].agent, reviewer);
+}
+
+#[tokio::test]
+async fn a_transfer_target_acts_as_its_own_principal() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let router = LlmAgentBuilder::new("router")
+        .model(ScriptedModel::new(vec![call(
+            "transfer_to_agent",
+            json!({ "agent_name": "billing" }),
+            "c-transfer",
+        )]))
+        .sub_agent(lookup_agent("billing", seen.clone()))
+        .build()
+        .unwrap();
+    let billing = AgentPrincipal::new(AgentId::new(AGENT_ID).unwrap());
+    let source =
+        StaticIdentitySource::new(principal("replica-a")).with_agent("billing", billing.clone());
+    let policy = RecordingPolicy::new(DeclarativePolicy::builder().allow("*").build());
+    let runner = Runner::builder()
+        .app_name(APP)
+        .agent(Arc::new(router))
+        .session_service(alice_session().await as Arc<dyn SessionService>)
+        .tool_policy(policy.clone())
+        .identity_source(Arc::new(source))
+        .build()
+        .unwrap();
+
+    let events = run_alice(&runner, None).await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert_eq!(
+        seen.lock().unwrap().iter().map(|acting| acting.agent.clone()).collect::<Vec<_>>(),
+        [billing]
+    );
+}
+
+#[tokio::test]
+async fn the_invocation_id_has_one_source() {
+    /// Records the invocation id the tool context reports.
+    struct InvocationTool {
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Tool for InvocationTool {
+        fn name(&self) -> &str {
+            "lookup"
+        }
+
+        fn description(&self) -> &str {
+            "Reports its invocation."
+        }
+
+        async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+            self.seen.lock().unwrap().push(ctx.invocation_id().to_string());
+            Ok(json!({}))
+        }
+    }
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let agent = LlmAgentBuilder::new("billing")
+        .model(ScriptedModel::new(vec![call("lookup", json!({}), "c1")]))
+        .tool(Arc::new(InvocationTool { seen: seen.clone() }))
+        .build()
+        .unwrap();
+    let policy = RecordingPolicy::new(DeclarativePolicy::builder().allow("*").build());
+    let recorder = adk_core::audit_log::InMemoryAuditRecorder::new();
+    let runner = Runner::builder()
+        .app_name(APP)
+        .agent(Arc::new(agent))
+        .session_service(alice_session().await as Arc<dyn SessionService>)
+        .tool_policy(policy.clone())
+        .audit_log(Arc::new(recorder.clone()))
+        .build()
+        .unwrap();
+    let events = run_alice(&runner, None).await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+
+    // The execution identity's id is the one the policy, the tool, and the audit see.
+    let invocation = policy.invocations()[0].clone();
+    assert!(invocation.starts_with("inv-"), "{invocation}");
+    assert_eq!(*seen.lock().unwrap(), vec![invocation.clone()]);
+    let records = recorder.records();
+    assert_eq!(records[0].actor.invocation_id.as_deref(), Some(invocation.as_str()));
+    // The acting context itself carries no invocation id to drift from it.
+    let acting = serde_json::to_value(&policy.acting()[0]).unwrap();
+    assert!(acting.get("invocationId").is_none(), "{acting}");
 }

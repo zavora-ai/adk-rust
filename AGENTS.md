@@ -691,12 +691,19 @@ Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`
 
 A hook or callback that returns a value short-circuits the remaining callbacks of its kind.
 
-Every run has an acting agent (`ActingContext`, `ReadonlyContext::acting_context()`): the
-principal from `Runner::builder().identity_source(...)` / `.agent_principal(...)` or
-`RunConfig::acting_context`, else `urn:adk:agent:{app}/{agent}` acting for the run's user.
-`ToolPolicyRequest::acting`, `ToolConfirmationRequest::acting`, `SpendKey::agent`, and
-`adk_auth::AuditEvent::agent_id` carry it; `AgentTool` delegation appends the caller to the
-delegate's `delegation_chain`. Context wrappers must forward `acting_context()`. See
+Every run has an acting agent (`ActingContext`, `ReadonlyContext::acting_context()`), resolved
+for the agent that is executing — root, transfer target, or workflow/team sub-agent — from
+`RunConfig::acting` (`ActingConfig::principals` by agent name), the runner's
+`identity_source(...)` (root: `principal_for` or `current`; others: `principal_for`), else
+`urn:adk:agent:{app}/{agent}`. The subject is always the session's user as
+`ActingConfig::subject_kind` (`Human` by default, `Service` for scheduler, webhook, and queue
+runs); a run asking to act for anyone else fails with `identity.subject_mismatch` unless the
+runner's `subject_delegation(...)` policy allows it. `ActingContext` carries no invocation id —
+the execution identity's is the only one. `ToolPolicyRequest::acting`,
+`ToolConfirmationRequest::acting`, `SpendKey::agent`, and `adk_auth::AuditEvent::agent_id` carry
+it; `AgentTool` delegation appends the caller to the delegate's `delegation_chain`. Context
+wrappers must forward `acting_context()`. `DurableWorker` honours a run's stored principal only
+for agent ids in `DurableWorkerConfig::allowed_principals`. See
 `docs/official_docs/security/agent-identity.md`.
 
 See `docs/official_docs/security/tool-authorization.md` for full documentation with CLI and web server examples.

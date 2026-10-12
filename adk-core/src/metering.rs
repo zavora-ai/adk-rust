@@ -428,15 +428,15 @@ impl ModelCallScope {
     /// [`llm_spend_estimate`](RunConfig::llm_spend_estimate). Spend is attributed to
     /// `org` (the runner passes its app name) and the [`AgentId`](crate::AgentId) the
     /// agent named `agent_name` acts as
-    /// ([`RunConfig::acting_context_for`]: the configured principal, or
-    /// `urn:adk:agent:{org}/{agent_name}`).
+    /// ([`ActingConfig::principal_for`](crate::ActingConfig::principal_for): the
+    /// configured principal, or `urn:adk:agent:{org}/{agent_name}`).
     pub fn for_run(config: &RunConfig, org: &str, agent_name: &str) -> Self {
         Self {
             budget: config.budget_tracker.clone(),
             spend: config.spend_ledger.clone().map(|ledger| SpendScope {
                 ledger,
                 org: org.to_string(),
-                agent: Some(config.acting_context_for(org, agent_name, "", "").agent.id.into()),
+                agent: Some(config.acting.principal_for(org, agent_name).id.into()),
                 estimate: config.llm_spend_estimate.unwrap_or_default(),
             }),
         }

@@ -86,6 +86,7 @@ pub struct RunnerConfigBuilder<A, G, S> {
     audit_recorder: Option<Arc<dyn AuditRecorder>>,
     audit_failure_mode: AuditFailureMode,
     identity_source: Option<Arc<dyn adk_core::IdentitySource>>,
+    subject_delegation: Option<Arc<dyn adk_core::SubjectDelegationPolicy>>,
     _marker: PhantomData<(A, G, S)>,
 }
 
@@ -121,6 +122,7 @@ impl RunnerConfigBuilder<NoAppName, NoAgent, NoSessionService> {
             audit_recorder: None,
             audit_failure_mode: AuditFailureMode::Block,
             identity_source: None,
+            subject_delegation: None,
             _marker: PhantomData,
         }
     }
@@ -168,6 +170,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             audit_recorder: self.audit_recorder,
             audit_failure_mode: self.audit_failure_mode,
             identity_source: self.identity_source,
+            subject_delegation: self.subject_delegation,
             _marker: PhantomData,
         }
     }
@@ -203,6 +206,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             audit_recorder: self.audit_recorder,
             audit_failure_mode: self.audit_failure_mode,
             identity_source: self.identity_source,
+            subject_delegation: self.subject_delegation,
             _marker: PhantomData,
         }
     }
@@ -241,6 +245,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             audit_recorder: self.audit_recorder,
             audit_failure_mode: self.audit_failure_mode,
             identity_source: self.identity_source,
+            subject_delegation: self.subject_delegation,
             _marker: PhantomData,
         }
     }
@@ -485,13 +490,15 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self
     }
 
-    /// Sets where each run's agent principal comes from.
+    /// Sets where each run's agent principals come from.
     ///
-    /// The runner asks the source for the current principal at the start of every run
-    /// and installs it on the run's [`RunConfig::acting_context`] when the run carries
-    /// none. Without a source, each agent acts as
-    /// `urn:adk:agent:{app_name}/{agent_name}`. A run whose source fails ends with the
-    /// source's error before any agent runs.
+    /// The runner reads the source at the start of every run: the root agent acts as
+    /// [`principal_for`](adk_core::IdentitySource::principal_for) its name, falling back
+    /// to [`current`](adk_core::IdentitySource::current), and every other agent in the
+    /// tree acts as `principal_for` its name, falling back to
+    /// `urn:adk:agent:{app_name}/{agent_name}`. A principal the run's
+    /// [`RunConfig::acting`] names for an agent takes precedence. A run whose source fails
+    /// ends with the source's error before any agent runs.
     ///
     /// # Example
     ///
@@ -514,12 +521,40 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self
     }
 
-    /// Sets a fixed principal every run's agents act as.
+    /// Sets a fixed principal the root agent acts as.
     ///
     /// Shorthand for [`identity_source`](Self::identity_source) with a
-    /// [`StaticIdentitySource`](adk_core::StaticIdentitySource).
+    /// [`StaticIdentitySource`](adk_core::StaticIdentitySource); sub-agents act as their
+    /// derived ids.
     pub fn agent_principal(self, principal: adk_core::AgentPrincipal) -> Self {
         self.identity_source(Arc::new(adk_core::StaticIdentitySource::new(principal)))
+    }
+
+    /// Sets which runs may act for a subject other than their session's user.
+    ///
+    /// Without a policy, a run whose [`RunConfig::acting`] asks to act for anyone but the
+    /// session's user is refused with `identity.subject_mismatch` before any agent runs.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::{StaticSubjectDelegation, SubjectRef};
+    ///
+    /// let runner = Runner::builder()
+    ///     .app_name("crm")
+    ///     .agent(agent)
+    ///     .session_service(sessions)
+    ///     .subject_delegation(Arc::new(
+    ///         StaticSubjectDelegation::new().allow_any(SubjectRef::service("crm-sync")),
+    ///     ))
+    ///     .build()?;
+    /// ```
+    pub fn subject_delegation(
+        mut self,
+        policy: Arc<dyn adk_core::SubjectDelegationPolicy>,
+    ) -> Self {
+        self.subject_delegation = Some(policy);
+        self
     }
 
     /// Set the context compaction configuration for token-budget overflow handling (optional).
@@ -574,6 +609,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
                 AuditTrail::new(recorder).with_failure_mode(self.audit_failure_mode)
             }),
             identity_source: self.identity_source,
+            subject_delegation: self.subject_delegation,
         }
     }
 
@@ -618,6 +654,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
                 AuditTrail::new(recorder).with_failure_mode(self.audit_failure_mode)
             }),
             identity_source: self.identity_source,
+            subject_delegation: self.subject_delegation,
         };
         Runner::new(config)
     }

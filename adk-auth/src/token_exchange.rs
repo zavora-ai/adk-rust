@@ -318,7 +318,7 @@ mod tests {
     }
 
     fn acting() -> ActingContext {
-        ActingContext::new(AgentPrincipal::new(agent()), "inv-1")
+        ActingContext::new(AgentPrincipal::new(agent()))
     }
 
     #[tokio::test]
@@ -400,10 +400,8 @@ mod tests {
     #[tokio::test]
     async fn a_credential_for_another_agent_is_not_exchanged() {
         let server = MockServer::start().await;
-        let other = ActingContext::new(
-            AgentPrincipal::new(AgentId::new("urn:adk:agent:other").unwrap()),
-            "inv",
-        );
+        let other =
+            ActingContext::new(AgentPrincipal::new(AgentId::new("urn:adk:agent:other").unwrap()));
         let error = broker(&server)
             .token_for(&other, &resource_indicator("https://a.example.com/").unwrap(), &[])
             .await

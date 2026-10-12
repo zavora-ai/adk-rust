@@ -1,5 +1,5 @@
-//! Graph nodes see the run's acting context: function nodes through
-//! `NodeContext::acting_context`, agent nodes through their invocation context.
+//! Graph nodes see the run's identity: function nodes through `NodeContext::acting`,
+//! agent nodes through their invocation context.
 
 use adk_core::{
     ActingContext, Agent, AgentId, AgentPrincipal, EventStream, InvocationContext, Result,
@@ -37,9 +37,7 @@ impl Agent for RecordingAgent {
 async fn nodes_see_the_configured_acting_context() {
     let principal = AgentPrincipal::new(AgentId::new("spiffe://acme.test/agent/pipeline").unwrap())
         .with_tenant("acme");
-    let run_config = RunConfig::builder()
-        .acting_context(ActingContext::new(principal.clone(), "inv-graph"))
-        .build();
+    let run_config = RunConfig::builder().agent_principal("reviewer", principal.clone()).build();
 
     let function_seen = Arc::new(Mutex::new(Vec::new()));
     let agent_seen = Arc::new(Mutex::new(Vec::new()));
@@ -51,7 +49,7 @@ async fn nodes_see_the_configured_acting_context() {
         .add_node_fn("prepare", move |ctx| {
             let recorder = recorder.clone();
             async move {
-                recorder.lock().unwrap().push(ctx.acting_context().cloned());
+                recorder.lock().unwrap().push(ctx.acting().cloned());
                 Ok(NodeOutput::new())
             }
         })
@@ -73,7 +71,10 @@ async fn nodes_see_the_configured_acting_context() {
 
     let function_seen = function_seen.lock().unwrap();
     assert_eq!(function_seen.len(), 1);
-    assert_eq!(function_seen[0].as_ref().map(|acting| &acting.agent), Some(&principal));
+    assert_eq!(
+        function_seen[0].as_ref().and_then(|acting| acting.principals.get("reviewer")),
+        Some(&principal)
+    );
     let agent_seen = agent_seen.lock().unwrap();
     assert_eq!(agent_seen.len(), 1);
     assert_eq!(agent_seen[0].agent, principal, "the agent node acts as the configured principal");

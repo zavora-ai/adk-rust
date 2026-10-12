@@ -2799,6 +2799,8 @@ impl Agent for LlmAgent {
     )]
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<adk_core::EventStream> {
         adk_telemetry::info!("Starting agent execution");
+        // Under a workflow or team parent, the agent still acts as itself.
+        let ctx = crate::acting_agent_context::ActingAgentContext::scope(ctx, &self.name);
         let ctx = Self::apply_input_guardrails(ctx, self.input_guardrails.clone()).await?;
 
         let agent_name = self.name.clone();

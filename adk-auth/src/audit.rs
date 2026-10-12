@@ -275,7 +275,8 @@ impl AuditEvent {
     /// use adk_auth::{AuditEvent, AuditOutcome};
     /// use adk_core::{ActingContext, SubjectRef};
     ///
-    /// let acting = ActingContext::derived("shop", "cashier", "alice", "inv-1");
+    /// let acting =
+    ///     ActingContext::derived("shop", "cashier", "alice", adk_core::SubjectKind::Human);
     /// let event = AuditEvent::tool_access("alice", "refund", AuditOutcome::Allowed)
     ///     .with_acting_context(&acting);
     /// assert_eq!(event.agent_id.as_deref(), Some("urn:adk:agent:shop/cashier"));

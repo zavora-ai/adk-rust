@@ -181,6 +181,10 @@ async fn run(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
         return Ok(Verdict::Fail(format!("run ended {:?}: {:?}", record.state, record.error)));
     }
     let model_calls = model.calls();
+    // A webhook run acts for its user as a service, not a person.
+    let subject = record.principal.as_ref().and_then(|principal| principal.on_behalf_of.clone());
+    let service_subject =
+        subject.as_ref().is_some_and(|subject| subject.kind == adk_core::SubjectKind::Service);
 
     // The exact captured delivery replayed, then a sender retry re-signed under the same id.
     let (replay_status, replayed) = post(&client, &url, &delivery, &body).await?;
@@ -191,10 +195,11 @@ async fn run(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
     let runs = store.list(RunFilter::default()).await?;
     let claimed = runs.first().map_or(0, |run| run.attempt);
     let evidence = format!(
-        "replicated freeze 503; 202 run {} completed by DurableWorker ({} model calls, file_ticket ×{}); replay {replay_status} duplicate={} retry {retry_status} same_run={}; runs={} attempts={} model calls after replay={}; forged 401",
+        "replicated freeze 503; 202 run {} completed by DurableWorker ({} model calls, file_ticket ×{}) acting for {}; replay {replay_status} duplicate={} retry {retry_status} same_run={}; runs={} attempts={} model calls after replay={}; forged 401",
         &run_id[..8.min(run_id.len())],
         model_calls,
         tickets.executions(),
+        subject.map_or_else(|| "nobody".to_string(), |subject| subject.to_string()),
         replayed["duplicate"],
         retried["runId"] == accepted["runId"],
         runs.len(),
@@ -206,7 +211,7 @@ async fn run(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
         && replayed["runId"] == accepted["runId"]
         && retried["runId"] == accepted["runId"]
         && replayed["state"] == "completed";
-    if !replay_ok || runs.len() != 1 || claimed != 1 || model.calls() != model_calls {
+    if !replay_ok || !service_subject || runs.len() != 1 || claimed != 1 || model.calls() != model_calls {
         return Ok(Verdict::Fail(evidence));
     }
     if tickets.executions() != 1 {

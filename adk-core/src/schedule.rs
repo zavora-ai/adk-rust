@@ -122,6 +122,10 @@ pub enum MissedFirePolicy {
 /// .with_next_fire_at(at);
 /// let run = schedule.run_for(at);
 /// assert_eq!(run.idempotency_key.as_deref(), Some("schedule:nightly-report:2026-10-15T09:00:00Z"));
+/// assert_eq!(
+///     run.principal.unwrap().on_behalf_of,
+///     Some(adk_core::SubjectRef::service("system"))
+/// );
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,8 +171,10 @@ impl Schedule {
     }
 
     /// Returns the run to enqueue for `fire_time`, keyed by [`firing_idempotency_key`].
+    ///
+    /// The run acts for its user as a service ([`NewRun::with_service_subject`]).
     pub fn run_for(&self, fire_time: DateTime<Utc>) -> NewRun {
-        let mut run = self.run.clone();
+        let mut run = self.run.clone().with_service_subject();
         run.idempotency_key = Some(firing_idempotency_key(&self.id, fire_time));
         run
     }

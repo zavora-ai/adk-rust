@@ -1472,7 +1472,7 @@ mod runner_tests {
                     )
                     .build(),
             ))
-            .agent_principal(principal)
+            .agent_principal("realtime", principal)
             .build();
         let runner = governed_runner(Arc::clone(&counts), Arc::clone(&executions), config).await;
 

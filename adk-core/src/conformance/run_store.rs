@@ -129,7 +129,6 @@ pub async fn enqueue_claim_finish_round_trip<H: RunStoreHarness + ?Sized>(harnes
     let principal = ActingContext::new(
         AgentPrincipal::new(AgentId::new("urn:adk:agent:conformance/ü").expect("valid id"))
             .with_tenant("tenant:1"),
-        "inv-1",
     )
     .on_behalf_of(SubjectRef::human("alice@example.com"));
     let run = new_run(&queue)

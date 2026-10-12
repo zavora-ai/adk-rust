@@ -70,7 +70,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::principal::{ActingContext, SubjectRef};
+use crate::principal::{ActingContext, SubjectKind, SubjectRef};
 use crate::{
     AdkError, ApprovalScope, ApprovalStore, Clock, DurableRunStore, ErrorCategory, ErrorComponent,
     ErrorDetails, Result, SystemClock, ToolApproval, ToolConfirmationRequest,
@@ -687,10 +687,18 @@ impl ApprovalRequest {
     }
 
     /// Whether `subject` is the requester or the acting agent or its principal.
+    ///
+    /// A human and a service with the same id are the same party: a run a scheduler
+    /// started for `alice` acts for `service:alice`, and `human:alice` may not approve it.
     pub fn is_self(&self, subject: &SubjectRef) -> bool {
-        self.requester.as_ref() == Some(subject)
+        let same_party = |other: &SubjectRef| {
+            other.id == subject.id
+                && (other.kind == subject.kind
+                    || (other.kind != SubjectKind::Agent && subject.kind != SubjectKind::Agent))
+        };
+        self.requester.as_ref().is_some_and(same_party)
             || self.acting.as_ref().is_some_and(|acting| {
-                acting.on_behalf_of.as_ref() == Some(subject)
+                acting.on_behalf_of.as_ref().is_some_and(same_party)
                     || SubjectRef::agent(&acting.agent.id) == *subject
             })
     }
@@ -2187,6 +2195,28 @@ mod option_duration_secs {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_person_and_a_service_with_one_id_are_the_same_party() {
+        let call = ToolConfirmationRequest::new("pay", json!({}));
+        let request = ApprovalRequest::new(
+            "req-1",
+            ApprovalScope::new("ap", "controller", "s"),
+            &call,
+            ApprovalPolicy::new([ApproverSelector::group("finance")]),
+        )
+        .with_acting(
+            ActingContext::new(crate::AgentPrincipal::derived("ap", "clerk"))
+                .on_behalf_of(SubjectRef::service("controller")),
+        );
+        assert!(request.is_self(&SubjectRef::human("controller")));
+        assert!(request.is_self(&SubjectRef::service("controller")));
+        assert!(!request.is_self(&SubjectRef::human("cfo")));
+        assert!(!request.is_self(&SubjectRef::new(SubjectKind::Agent, "controller")));
+        assert!(
+            request.is_self(&SubjectRef::agent(&crate::AgentPrincipal::derived("ap", "clerk").id))
+        );
+    }
 
     #[test]
     fn policies_serialize_in_camel_case_with_whole_seconds() {

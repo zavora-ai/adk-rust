@@ -12,9 +12,34 @@ attributed to the agent that made it — across redeploys, replicas, and delegat
 | `AgentId` | A URI such as `spiffe://example.org/agent/billing` or `urn:adk:agent:billing`; non-empty, at most 512 bytes, no control characters. Stable across redeploys |
 | `AgentPrincipal` | The `id`, plus optional `tenant`, `class` (template or blueprint), `instance` (deployment or replica), `sponsor`, and free-form `attributes` |
 | `SubjectRef` | A `SubjectKind` (`Human`, `Service`, `Agent`) and an id |
-| `ActingContext` | The `agent` principal, `on_behalf_of`, the `delegation_chain` (outermost first), and the `invocation_id` |
+| `ActingContext` | The `agent` principal, `on_behalf_of`, and the `delegation_chain` (outermost first) |
+| `ActingConfig` | A run's identity configuration: `principals` by agent name, `on_behalf_of`, `subject_kind`, and `delegation_chain` (`RunConfig::acting`) |
 
 All of them serialize in camelCase.
+
+## Identity model
+
+Three identities describe a run. Each answers one question, and each value has exactly one
+source.
+
+| Identity | Answers | Fields | Source |
+|----------|---------|--------|--------|
+| `AdkIdentity` | Whose data | `app_name`, `user_id`, `session_id` | The session the run continues |
+| `ExecutionIdentity` | Which execution | `AdkIdentity`, `invocation_id`, `branch`, `agent_name` | The runner, per invocation |
+| `ActingContext` | Who acts, for whom, through whom | `agent`, `on_behalf_of`, `delegation_chain` | `RunConfig::acting`, resolved for the executing agent |
+
+The runtime keeps these invariants:
+
+| Invariant | Rule | Enforced by |
+|-----------|------|-------------|
+| The session user is the subject | `on_behalf_of` is the session's `user_id` as the run's `subject_kind`. A run configured to act for another subject fails at its start with `identity.subject_mismatch` (`Forbidden`) and an `access` audit record, unless the runner's `SubjectDelegationPolicy` allows it; the session's subject then heads the delegation chain | `Runner`, before any agent runs |
+| The subject kind is explicit | `SubjectKind::Human` for interactive runs; `SubjectKind::Service` for runs created by `DurableScheduler`, `WebhookIngress`, and `QueueIngress` (`NewRun::with_service_subject`) | `ActingConfig::subject_kind`, the stored principal of a durable run |
+| Each agent acts as itself | The executing agent — root, transfer target, workflow or team sub-agent — acts as its entry in `ActingConfig::principals`, else its derived id. A runner-level principal applies to the root agent only; an identity source names other agents through `principal_for` | `Runner`, `LlmAgent`, `CodeActAgent` |
+| One invocation id | `ActingContext` holds none; the invocation is `ReadonlyContext::invocation_id()`. Audit records pair the two with `AuditActor::new(&acting, invocation_id)` | The type |
+| A stored principal is a claim | `DurableWorker` acts as its own principal unless the run's stored agent id is in `DurableWorkerConfig::allowed_principals` (empty by default), and refuses any other stored agent id with `identity.principal_not_allowed` | `DurableWorker` |
+
+> **Note:** Contexts recorded before the invocation id moved to the execution identity carry an
+> `invocationId` field; it is ignored when they are read.
 
 ## The default identity
 
@@ -27,13 +52,14 @@ The same app and agent names always derive the same id, so a restarted process k
 
 | Where | Setter | Scope |
 |-------|--------|-------|
-| Runner | `Runner::builder().agent_principal(principal)` | Every run of the runner |
-| Runner | `Runner::builder().identity_source(source)` | Every run; the source is asked at the start of each run |
-| One run | `RunConfig::builder().agent_principal(principal)` or `.acting_context(acting)` | That run; overrides the runner |
+| Runner | `Runner::builder().agent_principal(principal)` | The root agent of every run |
+| Runner | `Runner::builder().identity_source(source)` | Every run; the root agent acts as `principal_for(root)` or `current()`, every other agent as `principal_for(name)` when the source maps it |
+| One run | `RunConfig::builder().agent_principal(agent_name, principal)` or `.acting(config)` | The named agent in that run; overrides the runner |
 
-A configured principal applies to every agent in the run, including transfer targets. The
-run's user fills `on_behalf_of` unless the configured context names a subject. A run whose
-identity source fails ends with the source's error before any agent runs.
+An agent with no configured principal acts as its derived id, so the sub-agents of a
+`SequentialAgent`, `ParallelAgent`, `LoopAgent`, or team are told apart in policy decisions,
+spend, and audit records. `StaticIdentitySource::with_agent(name, principal)` maps further
+agents. A run whose identity source fails ends with the source's error before any agent runs.
 
 ```rust
 use std::sync::Arc;
@@ -59,6 +85,61 @@ let runner = Runner::builder()
     .build()?;
 ```
 
+## Acting for another subject
+
+A run acts for its session's user. A service that works for a person — a CRM sync acting for
+the account owner, an assistant acting for its principal — asks for the person with
+`RunConfig::builder().on_behalf_of(subject)`, and the runner allows it only through its
+`SubjectDelegationPolicy`:
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{RunConfig, StaticSubjectDelegation, SubjectKind, SubjectRef};
+use adk_runner::Runner;
+
+let runner = Runner::builder()
+    .app_name("crm")
+    .agent(agent)
+    .session_service(session_service)
+    .subject_delegation(Arc::new(
+        StaticSubjectDelegation::new().allow_any(SubjectRef::service("crm-sync")),
+    ))
+    .build()?;
+
+// A session of the `crm-sync` service, acting for bob.
+let config = RunConfig::builder()
+    .subject_kind(SubjectKind::Service)
+    .on_behalf_of(SubjectRef::human("bob"))
+    .build();
+```
+
+The run's agents act for `human:bob` with `service:crm-sync` at the head of the delegation
+chain. Implement `SubjectDelegationPolicy` to decide per request — over a token exchange or a
+directory lookup. Without a policy, or when it answers `false`, the run fails with
+`identity.subject_mismatch` before any agent runs, and the refusal is audited.
+
+## Durable runs
+
+A `DurableWorker` runs an agent as the runner's own principal for the root agent, on behalf of
+the run's user. A `RunRecord::principal` was written by whoever enqueued the run, so the worker
+treats it as a claim:
+
+| Stored principal | Worker |
+|------------------|--------|
+| None | Acts as its own principal, for the user as `Human` |
+| Agent id is the worker's own, or the derived id of the target | Acts as its own principal |
+| Agent id is in `DurableWorkerConfig::allowed_principals` (`with_allowed_principal`) | Acts as the stored principal |
+| Any other agent id | Fails the run with `identity.principal_not_allowed` and an `access` audit record |
+| Subject is the run's user | Acts for the user as the stored subject's kind |
+| Subject is anyone else | The runner's `SubjectDelegationPolicy` decides; a delegation chain headed by the run's user gives the user's kind |
+
+`DurableScheduler`, `WebhookIngress`, and `QueueIngress` store the derived principal of the
+target acting for the run's user as a `Service`, so their audit records name a service.
+
+Self-approval checks compare ids across the `Human` and `Service` kinds: a person may not
+approve a call made by a scheduled run acting for the same id as a service.
+
 > **Note:** Put the deployment or replica in `instance`, never in the id. A redeploy that
 > keeps the `AgentId` keeps its policy rules, spend history, and audit trail.
 
@@ -66,7 +147,7 @@ let runner = Runner::builder()
 
 `ReadonlyContext::acting_context()` returns the context on every runtime context: invocation,
 callback, and tool contexts, workflow wrappers, graph agent nodes, and realtime tools. Graph
-function nodes read the configured context through `NodeContext::acting_context()`.
+function nodes read the run's `ActingConfig` through `NodeContext::acting()`.
 
 ```rust
 use std::sync::Arc;
@@ -123,13 +204,15 @@ A rule restricted to an agent, tenant, or class does not match a call with no ac
 
 ## Identity sources
 
-`IdentitySource` reports the principal (`current()`) and, optionally, a credential proving it
-(`credential()` returns an `AgentCredential` of kind `JwtSvid`, `X509`, or `Opaque`, with its
-expiry). `StaticIdentitySource` holds a fixed principal and credential.
+`IdentitySource` reports the root agent's principal (`current()`), the principal of other named
+agents (`principal_for(agent_name)`, mapping none by default), and, optionally, a credential
+proving the identity (`credential()` returns an `AgentCredential` of kind `JwtSvid`, `X509`, or
+`Opaque`, with its expiry). `StaticIdentitySource` holds a fixed principal, fixed principals for
+named agents (`with_agent`), and a credential.
 
-The SPIFFE Workload API and cloud metadata servers are extension points: implement the
-two-method trait over the client you deploy with, and return the same `AgentId` from every
-replica.
+The SPIFFE Workload API and cloud metadata servers are extension points: implement the trait
+over the client you deploy with (`current()` is the only required method), and return the same
+`AgentId` from every replica.
 
 ## Credential brokers
 
@@ -175,6 +258,8 @@ let broker = SecretCredentialBroker::new(secret_provider)
 | Code | Category | Meaning |
 |------|----------|---------|
 | `identity.agent_id.invalid` | `InvalidInput` | The id is empty, longer than 512 bytes, or contains a control character |
+| `identity.subject_mismatch` | `Forbidden` | The run asks to act for a subject other than its session's user, and no `SubjectDelegationPolicy` allows it |
+| `identity.principal_not_allowed` | `Forbidden` | A durable run's stored principal names an agent the worker may not act as |
 | `identity.credential.unavailable` | `Unsupported` | The identity source issues no credential |
 | `identity.credential.subject_mismatch` | `Internal` | The configured credential identifies a different agent |
 | `identity.credential.expired` | `Unauthorized` | The configured credential has expired |

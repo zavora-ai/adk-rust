@@ -54,7 +54,8 @@ type BindingKey = (AgentId, Url);
 /// }
 ///
 /// # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-/// let acting = ActingContext::derived("shop", "cashier", "alice", "inv-1");
+/// let acting =
+///     ActingContext::derived("shop", "cashier", "alice", adk_core::SubjectKind::Human);
 /// let crm = resource_indicator("https://crm.example.com/api")?;
 /// let broker = SecretCredentialBroker::new(Arc::new(Vault))
 ///     .bind(acting.agent.id.clone(), crm.clone(), "cashier-crm-key", vec!["crm.read".into()]);
@@ -200,7 +201,7 @@ mod tests {
     }
 
     fn acting(id: &str) -> ActingContext {
-        ActingContext::new(AgentPrincipal::new(AgentId::new(id).unwrap()), "inv")
+        ActingContext::new(AgentPrincipal::new(AgentId::new(id).unwrap()))
     }
 
     fn url(s: &str) -> Url {

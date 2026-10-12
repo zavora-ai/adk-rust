@@ -17,6 +17,9 @@
 //! run answers `200 OK` with that run, so a sender's retry never creates a second run.
 //! Bodies are `{"runId", "state", "duplicate"}` in camelCase.
 //!
+//! Every run a hook creates acts for its user as a service
+//! ([`NewRun::with_service_subject`]), so its audit records name a service, not a person.
+//!
 //! The run executes when a [`DurableWorker`](crate::background::DurableWorker) (feature
 //! `background`) claims it from the same [`DurableRunStore`] — the worker that runs every
 //! other durable run, under the runner's budget, policy, and kill switch. With a
@@ -258,7 +261,7 @@ impl WebhookHook {
         };
         run.idempotency_key = Some(Self::idempotency_key(&self.name, &delivery.webhook.id));
         run.validate().map_err(|error| error.message)?;
-        Ok(run)
+        Ok(run.with_service_subject())
     }
 }
 

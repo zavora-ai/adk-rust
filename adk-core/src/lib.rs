@@ -17,7 +17,7 @@
 //! - [`ToolConfirmationPolicy`] / [`ToolConfirmationRequest`] - Human-in-the-loop tool authorization
 //! - [`ToolPolicy`] / [`DeclarativePolicy`] / [`authorize_tool_call`] - The governed tool execution path
 //! - [`GovernanceControl`] - Organisation-wide kill switch
-//! - [`AgentId`] / [`AgentPrincipal`] / [`ActingContext`] - Agent identity
+//! - [`AgentId`] / [`AgentPrincipal`] / [`ActingContext`] / [`ActingConfig`] - Agent identity
 //! - [`LeaseStore`] / [`DurableRunStore`] / [`ScheduleStore`] / [`GovernanceStateStore`] -
 //!   Durable runtime contracts: fenced leases, the run queue, schedules, and freeze state
 //!
@@ -77,6 +77,9 @@
 //! - `app:` - Application state (application-wide)
 //! - `temp:` - Temporary data (cleared each turn)
 
+/// How a run's agents act: the identity model, the run-level acting configuration,
+/// delegation, and subject delegation policies.
+pub mod acting;
 /// Durable record of non-idempotent tool calls.
 pub mod action_ledger;
 /// Core agent trait and event stream type.
@@ -128,8 +131,6 @@ pub mod model;
 pub mod policy;
 /// Agent identity: agent identifiers, principals, and acting contexts.
 pub mod principal;
-// Identity defaults, delegation, and error conversion for the `principal` types.
-mod acting;
 pub mod queue_source;
 /// HTTP request context extracted by auth middleware.
 pub mod request_context;
@@ -158,6 +159,10 @@ pub mod webhook;
 #[cfg(feature = "webhook-delivery")]
 pub mod webhook_delivery;
 
+pub use acting::{
+    ActingConfig, PRINCIPAL_NOT_ALLOWED_CODE, SUBJECT_MISMATCH_CODE, StaticSubjectDelegation,
+    SubjectDelegationPolicy, SubjectDelegationRequest, subject_mismatch_error,
+};
 pub use action_ledger::{
     ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, OUTCOME_UNKNOWN_STATUS,
     is_outcome_unknown, json_digest, outcome_unknown_response,

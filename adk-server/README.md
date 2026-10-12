@@ -325,6 +325,13 @@ is recovered by another worker once its lease expires and resumes from its check
 [Durable Runtime](../docs/official_docs/core/durable-runtime.md#crash-resume)). Finished runs
 are pruned after `DurableWorkerConfig::retain_finished` (24 hours by default).
 
+**Whose identity a run uses.** The worker acts as the runner's own principal, for the run's
+user. A run's stored principal is honoured only for agent ids listed with
+`DurableWorkerConfig::with_allowed_principal` (none by default); any other fails the run with
+`identity.principal_not_allowed`, recorded on the audit trail. Runs from the scheduler, webhook
+hooks, and queue ingress act for their user as a service (see
+[Agent Identity](../docs/official_docs/security/agent-identity.md#durable-runs)).
+
 ### Webhook Wake-ups (feature: `webhook-ingress`)
 
 `ServerBuilder::with_webhook_ingress` serves `POST /hooks/{name}`. Each `WebhookHook` verifies

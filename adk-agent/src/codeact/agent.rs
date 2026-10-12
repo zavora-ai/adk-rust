@@ -1883,6 +1883,8 @@ impl Agent for CodeActAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_core::Result<EventStream> {
+        // Under a workflow or team parent, the agent still acts as itself.
+        let ctx = crate::acting_agent_context::ActingAgentContext::scope(ctx, self.name());
         // Input guardrails run first; a block aborts the run, a transform
         // (e.g. PII redaction) rewrites the user content downstream.
         let ctx = self.apply_input_guardrails(ctx).await?;

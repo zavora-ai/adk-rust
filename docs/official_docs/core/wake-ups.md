@@ -237,6 +237,11 @@ A wake-up adds no execution path of its own: the worker that claims the run exec
 the runner's `RunConfig`, so budgets, spend caps, tool policy, and approvals apply exactly as
 they do to a run started through `POST /api/runs`.
 
+Every run a hook or queue ingress creates acts for its user as a service
+(`NewRun::with_service_subject`): its policy requests, approvals, and audit records name
+`service:<user>` rather than a person. See
+[Agent Identity](../security/agent-identity.md#durable-runs).
+
 ## Outbound webhooks
 
 `WebhookDelivery` (feature `webhook-delivery` on `adk-core`) sends one signed message to one

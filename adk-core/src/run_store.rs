@@ -280,8 +280,52 @@ impl NewRun {
     }
 
     /// Sets the agent identity the run acts under.
+    ///
+    /// A worker honours a stored principal only when it may act as the principal's agent
+    /// and the principal's subject is the run's user (or a delegation rule allows it);
+    /// see `DurableWorker` in `adk-server`.
     pub fn with_principal(mut self, principal: ActingContext) -> Self {
         self.principal = Some(principal);
+        self
+    }
+
+    /// Marks the run as created by a service rather than a person: it acts for its
+    /// `user_id` as a [`SubjectKind::Service`](crate::SubjectKind::Service).
+    ///
+    /// A run with no principal gets the derived principal of its target acting for the
+    /// service; a principal that names no subject gains the service as its subject; a
+    /// principal that names one is kept. Schedulers, webhook ingress, and queue ingress
+    /// mark the runs they create.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{AgentPrincipal, NewRun, SubjectRef};
+    /// use serde_json::json;
+    ///
+    /// let run = NewRun::new("default", "ops", "nightly-close", "closer", json!({}))
+    ///     .with_service_subject();
+    /// let principal = run.principal.unwrap();
+    /// assert_eq!(principal.agent, AgentPrincipal::derived("ops", "closer"));
+    /// assert_eq!(principal.on_behalf_of, Some(SubjectRef::service("nightly-close")));
+    /// ```
+    #[must_use]
+    pub fn with_service_subject(mut self) -> Self {
+        let subject = crate::SubjectRef::service(&self.user_id);
+        match &mut self.principal {
+            Some(principal) => {
+                principal.on_behalf_of.get_or_insert(subject);
+            }
+            None => {
+                self.principal = Some(
+                    ActingContext::new(crate::AgentPrincipal::derived(
+                        &self.app_name,
+                        &self.target,
+                    ))
+                    .on_behalf_of(subject),
+                );
+            }
+        }
         self
     }
 

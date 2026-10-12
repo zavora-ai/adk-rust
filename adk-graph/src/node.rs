@@ -191,15 +191,15 @@ impl NodeContext {
         self.run_config.clone()
     }
 
-    /// The acting context configured for the run executing this node.
+    /// Who the run executing this node acts as, and for whom.
     ///
-    /// `Some` when the graph runs with a [`RunConfig`](adk_core::RunConfig) that carries
-    /// one, such as a graph agent under a runner with an identity source, or a call to
+    /// `Some` when the graph runs with a [`RunConfig`](adk_core::RunConfig), such as a
+    /// graph agent under a runner, or a call to
     /// [`CompiledGraph::invoke_with_run_config`](crate::CompiledGraph::invoke_with_run_config).
-    /// Agent nodes give their agents the full context through
+    /// Agent nodes give their agents the resolved context through
     /// [`ReadonlyContext::acting_context`](adk_core::ReadonlyContext::acting_context).
-    pub fn acting_context(&self) -> Option<&adk_core::ActingContext> {
-        self.run_config.as_ref().and_then(|config| config.acting_context.as_ref())
+    pub fn acting(&self) -> Option<&adk_core::ActingConfig> {
+        self.run_config.as_ref().map(|config| &config.acting)
     }
 
     pub(crate) fn child_invoker(&self) -> Option<std::sync::Arc<crate::child::ChildInvoker>> {
@@ -986,12 +986,7 @@ impl adk_core::ReadonlyContext for GraphInvocationContext {
     }
 
     fn acting_context(&self) -> adk_core::ActingContext {
-        self.run_config.acting_context_for(
-            &self.app_name,
-            self.agent.name(),
-            &self.user_id,
-            &self.invocation_id,
-        )
+        self.run_config.acting_context_for(&self.app_name, self.agent.name(), &self.user_id)
     }
 }
 

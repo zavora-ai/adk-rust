@@ -383,10 +383,8 @@ impl McpHttpClientBuilder {
     /// use adk_core::{ActingContext, AgentId, AgentPrincipal};
     /// use adk_tool::mcp::McpHttpClientBuilder;
     ///
-    /// let acting = ActingContext::new(
-    ///     AgentPrincipal::new(AgentId::new("spiffe://example.org/agent/billing")?),
-    ///     "mcp-connection",
-    /// );
+    /// let acting =
+    ///     ActingContext::new(AgentPrincipal::new(AgentId::new("spiffe://example.org/agent/billing")?));
     /// let toolset = McpHttpClientBuilder::new("https://mcp.example.com/v1")
     ///     .with_credential_broker(broker, acting, vec!["tools.read".into()])
     ///     .connect()

@@ -85,7 +85,7 @@ impl SimpleToolContext {
     ///
     /// let principal = AgentPrincipal::new(AgentId::new("urn:adk:agent:billing")?);
     /// let ctx = SimpleToolContext::new("billing")
-    ///     .with_acting_context(ActingContext::new(principal, "inv-1"));
+    ///     .with_acting_context(ActingContext::new(principal));
     /// assert_eq!(ctx.acting_context().agent.id.as_str(), "urn:adk:agent:billing");
     /// # Ok::<(), adk_core::AdkError>(())
     /// ```
@@ -131,7 +131,7 @@ impl ReadonlyContext for SimpleToolContext {
                 &self.caller_name,
                 &self.caller_name,
                 "anonymous",
-                &self.invocation_id,
+                adk_core::SubjectKind::Human,
             )
         })
     }

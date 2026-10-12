@@ -70,6 +70,7 @@
 //!     .build()?;
 //! ```
 
+mod acting_agent_context;
 #[cfg(feature = "ambient")]
 pub mod ambient;
 

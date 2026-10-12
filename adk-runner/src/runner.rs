@@ -110,12 +110,14 @@ impl InFlightCalls {
         use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind};
         for call in &self.0 {
             let mut draft = AuditRecordDraft::new(AuditRecordKind::ToolCall, call.name.as_str())
-                .actor(AuditActor::from(&run_config.acting_context_for(
-                    identity.app_name.as_ref(),
-                    &call.author,
-                    identity.user_id.as_ref(),
+                .actor(AuditActor::new(
+                    &run_config.acting_context_for(
+                        identity.app_name.as_ref(),
+                        &call.author,
+                        identity.user_id.as_ref(),
+                    ),
                     &call.invocation_id,
-                )))
+                ))
                 .args_digest(trail.digest(&call.args))
                 .outcome(outcome(call))
                 .ext("cause", serde_json::Value::String(cause.to_string()))
@@ -340,12 +342,17 @@ pub struct RunnerConfig {
     /// Installed on each run's [`RunConfig::audit`] when the run carries none, and
     /// attached to the runner's kill switch so freezes and unfreezes are recorded.
     pub audit: Option<adk_core::audit_log::AuditTrail>,
-    /// Optional source of the principal each run's agents act as.
+    /// Optional source of the principals each run's agents act as.
     ///
-    /// Read at the start of every run and installed on the run's
-    /// [`RunConfig::acting_context`] when the run carries none. Without one, each agent
-    /// acts as `urn:adk:agent:{app_name}/{agent_name}`.
+    /// Read at the start of every run: the root agent acts as the source's principal for
+    /// it, and every other agent as the source's principal for it when the source maps
+    /// one. A principal the run's [`RunConfig::acting`] names for an agent takes
+    /// precedence. Without one, each agent acts as
+    /// `urn:adk:agent:{app_name}/{agent_name}`.
     pub identity_source: Option<Arc<dyn adk_core::IdentitySource>>,
+    /// Optional policy allowing runs to act for a subject other than their session's
+    /// user. Without one, such runs are refused with `identity.subject_mismatch`.
+    pub subject_delegation: Option<Arc<dyn adk_core::SubjectDelegationPolicy>>,
 }
 
 /// Agent execution runtime.
@@ -393,6 +400,7 @@ pub struct Runner {
     /// Audit trail installed on runs that carry none.
     audit: Option<adk_core::audit_log::AuditTrail>,
     identity_source: Option<Arc<dyn adk_core::IdentitySource>>,
+    subject_delegation: Option<Arc<dyn adk_core::SubjectDelegationPolicy>>,
     /// Serializes externally triggered invocations per session. The weak values prevent the
     /// per-trigger session policy from retaining one lock forever for every completed event.
     pub(crate) external_session_locks: Arc<
@@ -488,6 +496,7 @@ impl Runner {
             durable_runs: config.durable_runs,
             audit: config.audit,
             identity_source: config.identity_source,
+            subject_delegation: config.subject_delegation,
             external_session_locks: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -497,6 +506,46 @@ impl Runner {
     /// The executable root owned by this runner.
     pub(crate) fn root_agent(&self) -> Arc<dyn Agent> {
         Arc::clone(&self.root_agent)
+    }
+
+    /// The name of the runner's root agent.
+    pub fn root_agent_name(&self) -> &str {
+        self.root_agent.name()
+    }
+
+    /// The audit trail installed on runs that carry none, if any.
+    pub fn audit_trail(&self) -> Option<&adk_core::audit_log::AuditTrail> {
+        self.audit.as_ref().or(self.run_config.audit.as_ref())
+    }
+
+    /// The principal the agent named `agent_name` acts as when a run names none for it.
+    ///
+    /// The identity source's principal for the agent; for the root agent, falling back
+    /// to the source's current principal; otherwise
+    /// [`AgentPrincipal::derived`](adk_core::AgentPrincipal::derived).
+    ///
+    /// # Errors
+    ///
+    /// Returns the identity source's error.
+    pub async fn default_principal(&self, agent_name: &str) -> Result<adk_core::AgentPrincipal> {
+        if let Some(source) = &self.identity_source {
+            if let Some(principal) = source.principal_for(agent_name).await? {
+                return Ok(principal);
+            }
+            if agent_name == self.root_agent.name() {
+                return source.current().await;
+            }
+        }
+        Ok(adk_core::AgentPrincipal::derived(&self.app_name, agent_name))
+    }
+
+    fn acting_resolver(&self) -> crate::acting::ActingResolver {
+        crate::acting::ActingResolver {
+            app_name: self.app_name.clone(),
+            root: Arc::clone(&self.root_agent),
+            source: self.identity_source.clone(),
+            delegation: self.subject_delegation.clone(),
+        }
     }
 
     /// Sets what a call to an unpriced model commits in the run's
@@ -686,8 +735,7 @@ impl Runner {
         }
         // Agents, compaction, sampling and routing read the estimate from the config.
         run_config.llm_spend_estimate.get_or_insert(self.llm_spend_estimate);
-        let identity_source =
-            if run_config.acting_context.is_none() { self.identity_source.clone() } else { None };
+        let acting_resolver = self.acting_resolver();
         let compaction_config = self.compaction_config.clone();
         let context_cache_config = self.context_cache_config.clone();
         let cache_capable = self.cache_capable.clone();
@@ -745,19 +793,15 @@ impl Runner {
             }
 
             // Read per run, so a rotating workload identity is current; the agent id is
-            // stable across redeploys while the instance may change.
-            if let Some(source) = identity_source {
-                match source.current().await {
-                    Ok(principal) => {
-                        run_config.acting_context =
-                            Some(adk_core::ActingContext::new(principal, stream_invocation_id.clone()));
-                    }
-                    Err(error) => {
-                        tracing::warn!(error = %error, "identity source failed; the run does not start");
-                        yield Err(error);
-                        return;
-                    }
-                }
+            // stable across redeploys while the instance may change. The subject is pinned
+            // to the session's user before any agent runs.
+            if let Err(error) = acting_resolver
+                .resolve(&mut run_config, user_id.as_ref(), session_id.as_ref(), &stream_invocation_id)
+                .await
+            {
+                tracing::warn!(error = %error, "run identity refused; the run does not start");
+                yield Err(error);
+                return;
             }
 
             // Use the effective token (combines global + per-session)
@@ -1949,6 +1993,26 @@ impl Runner {
     ///
     /// Returns the session or ledger error.
     pub async fn recover_unanswered_calls(&self, user_id: &str, session_id: &str) -> Result<usize> {
+        self.recover_unanswered_calls_with_config(user_id, session_id, None).await
+    }
+
+    /// [`recover_unanswered_calls`](Self::recover_unanswered_calls), recording the
+    /// recovered calls under the identity `run_config` resolves to rather than the
+    /// runner's configured one.
+    ///
+    /// A durable worker passes the config it continues the run with, so the recovery
+    /// records name the same subject as the run's other records.
+    ///
+    /// # Errors
+    ///
+    /// Returns the session or ledger error, or `identity.subject_mismatch` when
+    /// `run_config` asks to act for a subject the runner does not allow.
+    pub async fn recover_unanswered_calls_with_config(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        run_config: Option<RunConfig>,
+    ) -> Result<usize> {
         let identity = adk_core::AdkIdentity::new(
             AppName::try_from(self.app_name.clone())?,
             UserId::try_from(user_id)?,
@@ -1973,13 +2037,14 @@ impl Runner {
         // Recorded before the calls are answered, so a refused write leaves them for the
         // next recovery rather than resolved without a record.
         if let Some(trail) = self.audit.as_ref().or(self.run_config.audit.as_ref()) {
-            let mut run_config = self.run_config.clone();
-            if run_config.acting_context.is_none()
-                && let Some(source) = &self.identity_source
-            {
-                run_config.acting_context =
-                    Some(adk_core::ActingContext::new(source.current().await?, String::new()));
+            let mut run_config = run_config.unwrap_or_else(|| self.run_config.clone());
+            if run_config.audit.is_none() {
+                run_config.audit = Some(trail.clone());
             }
+            let invocation = in_flight.0.first().map(|call| call.invocation_id.clone());
+            self.acting_resolver()
+                .resolve(&mut run_config, user_id, session_id, invocation.as_deref().unwrap_or(""))
+                .await?;
             in_flight
                 .audit_calls(trail, &run_config, &identity, "recovered", |call| {
                     use adk_core::audit_log::AuditRecordOutcome;

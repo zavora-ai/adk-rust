@@ -28,6 +28,25 @@
 //! was sent less than `lease_ttl` ago. When it is not, the fence never returns, the
 //! execution is dropped, and no further session event, tool call, or store write happens.
 //!
+//! # Identity
+//!
+//! An agent run acts as the runner's own principal for its root agent (its identity
+//! source, or the derived `urn:adk:agent:{app}/{agent}`), on behalf of the run's user.
+//! A principal stored on the run ([`RunRecord::principal`]) is a claim made by whoever
+//! enqueued it, so the worker honours it only within these rules, and otherwise fails the
+//! run without retry and records the refusal on the audit trail:
+//!
+//! | Stored principal | Worker |
+//! |------------------|--------|
+//! | None | Acts as its own principal, for the run's user as a human |
+//! | Agent id is the worker's own or the derived id of the target | Acts as its own principal |
+//! | Agent id is in [`DurableWorkerConfig::allowed_principals`] | Acts as the stored principal |
+//! | Any other agent id | Refused with `identity.principal_not_allowed` |
+//! | Subject is the run's user | Acts for the user as the stored subject's kind (a scheduled, webhook, or queue run is a service) |
+//! | Subject is anyone else | Passed to the runner, which refuses it with `identity.subject_mismatch` unless its `SubjectDelegationPolicy` allows it; a delegation chain headed by the run's user gives the user's subject kind |
+//!
+//! The allowlist is empty by default.
+//!
 //! # Crash resume
 //!
 //! A run recovered after its lease expired resumes rather than restarting:
@@ -42,14 +61,18 @@
 //! ledger record. A run whose original user turn never reached the session (the worker
 //! stopped before the checkpoint was recorded) starts again from its input.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use adk_core::audit_log::{
+    AuditActor, AuditDecision, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome, AuditTrail,
+};
 use adk_core::{
-    AdkError, BeforeModelResult, CallbackContext, ClaimedRun, Content, DurableRunStore,
-    GovernanceControl, InvocationHooks, LlmRequest, LlmResponse, Part, RunCheckpointRef,
+    ActingConfig, AdkError, AgentId, AgentPrincipal, BeforeModelResult, CallbackContext,
+    ClaimedRun, Content, DurableRunStore, ErrorCategory, ErrorComponent, GovernanceControl,
+    InvocationHooks, LlmRequest, LlmResponse, PRINCIPAL_NOT_ALLOWED_CODE, Part, RunCheckpointRef,
     RunOutcome, RunRecord, SessionId, UserId,
     run_store::{RUN_NOT_FOUND_CODE, RUN_STALE_EPOCH_CODE},
 };
@@ -99,6 +122,10 @@ pub struct DurableWorkerConfig {
     /// waits until woken. A run resumed past this deadline with the call still held
     /// fails with `approval expired`.
     pub approval_timeout: Option<Duration>,
+    /// Agent ids a run's stored principal may name for the worker to act as it. Empty by
+    /// default: a stored principal other than the worker's own or the derived one is
+    /// refused. See [Identity](self#identity).
+    pub allowed_principals: BTreeSet<AgentId>,
 }
 
 impl Default for DurableWorkerConfig {
@@ -112,6 +139,7 @@ impl Default for DurableWorkerConfig {
             run_timeout: None,
             retain_finished: Some(Duration::from_secs(24 * 60 * 60)),
             approval_timeout: None,
+            allowed_principals: BTreeSet::new(),
         }
     }
 }
@@ -159,6 +187,12 @@ impl DurableWorkerConfig {
         self
     }
 
+    /// Lets a run's stored principal name `agent_id` for the worker to act as it.
+    pub fn with_allowed_principal(mut self, agent_id: AgentId) -> Self {
+        self.allowed_principals.insert(agent_id);
+        self
+    }
+
     /// Sets how long finished runs are kept before the worker loop prunes them.
     pub fn with_retain_finished(mut self, retain: Option<Duration>) -> Self {
         self.retain_finished = retain;
@@ -195,6 +229,7 @@ pub struct DurableWorker {
     agents: BTreeMap<String, Arc<Runner>>,
     workflows: Option<Arc<dyn WorkflowExecutor>>,
     governance: Option<GovernanceControl>,
+    audit: Option<AuditTrail>,
     config: DurableWorkerConfig,
     /// Makes every in-flight attempt heartbeat now, so a cancel requested in this
     /// process is seen without waiting a heartbeat interval.
@@ -245,6 +280,7 @@ impl DurableWorker {
             agents: BTreeMap::new(),
             workflows: None,
             governance: None,
+            audit: None,
             config: DurableWorkerConfig::default(),
             heartbeat_now: Arc::new(Notify::new()),
         }
@@ -265,6 +301,13 @@ impl DurableWorker {
     /// Claims nothing while `control` refuses work (frozen, or a stale fail-closed mirror).
     pub fn with_governance(mut self, control: GovernanceControl) -> Self {
         self.governance = Some(control);
+        self
+    }
+
+    /// Records refused run identities on `trail`; without one, an agent run's refusal is
+    /// recorded on its runner's audit trail.
+    pub fn with_audit(mut self, trail: AuditTrail) -> Self {
+        self.audit = Some(trail);
         self
     }
 
@@ -521,7 +564,21 @@ impl DurableWorker {
         cancel: &CancellationToken,
     ) -> Result<Result<Attempt, Failure>, Stop> {
         if let Some(runner) = self.agents.get(&record.target) {
-            return self.run_agent(runner, record, epoch, lease, cancel).await;
+            let root = runner.root_agent_name();
+            let own = match runner.default_principal(root).await {
+                Ok(principal) => principal,
+                Err(error) => return Ok(Err(error.into())),
+            };
+            let mut acting = runner.run_config().acting.clone();
+            let defaults = [
+                own.id,
+                AgentPrincipal::derived(runner.app_name(), root).id,
+                AgentPrincipal::derived(&record.app_name, &record.target).id,
+            ];
+            if let Err(error) = self.admit_principal(record, &defaults, root, true, &mut acting) {
+                return Ok(Err(self.refuse(record, error, runner.audit_trail()).await));
+            }
+            return self.run_agent(runner, record, acting, epoch, lease, cancel).await;
         }
         let Some(workflows) = self.workflows.as_ref().filter(|w| w.has_workflow(&record.target))
         else {
@@ -533,6 +590,13 @@ impl DurableWorker {
                 retryable: false,
             }));
         };
+        let defaults = [AgentPrincipal::derived(&record.app_name, &record.target).id];
+        let mut acting = ActingConfig::default();
+        if let Err(error) =
+            self.admit_principal(record, &defaults, &record.target, false, &mut acting)
+        {
+            return Ok(Err(self.refuse(record, error, None).await));
+        }
         let (thread_id, checkpoint_id) = match &record.checkpoint {
             Some(RunCheckpointRef::Graph { thread_id, checkpoint_id }) => {
                 (thread_id.clone(), checkpoint_id.clone())
@@ -569,6 +633,89 @@ impl DurableWorker {
             .map_err(|error| Failure { error, retryable: true }))
     }
 
+    /// Applies the run's stored principal to `acting` under the rules in
+    /// [Identity](self#identity).
+    ///
+    /// `defaults` are the agent ids the worker acts as anyway; `root` is the agent an
+    /// allowed principal applies to. A subject other than the run's user is left on
+    /// `acting` for the runner's delegation policy when `delegable`, and refused otherwise.
+    fn admit_principal(
+        &self,
+        record: &RunRecord,
+        defaults: &[AgentId],
+        root: &str,
+        delegable: bool,
+        acting: &mut ActingConfig,
+    ) -> Result<(), AdkError> {
+        let Some(stored) = &record.principal else {
+            return Ok(());
+        };
+        if !defaults.contains(&stored.agent.id) {
+            if !self.config.allowed_principals.contains(&stored.agent.id) {
+                return Err(AdkError::new(
+                    ErrorComponent::Server,
+                    ErrorCategory::Forbidden,
+                    PRINCIPAL_NOT_ALLOWED_CODE,
+                    format!(
+                        "run '{}' asks to act as agent '{}', which worker '{}' may not act as; \
+                         add the id with DurableWorkerConfig::with_allowed_principal, or \
+                         enqueue the run without a principal",
+                        record.run_id, stored.agent.id, self.config.worker_id
+                    ),
+                ));
+            }
+            acting.principals.insert(root.to_string(), stored.agent.clone());
+        }
+        match &stored.on_behalf_of {
+            Some(subject) if subject.id == record.user_id => acting.subject_kind = subject.kind,
+            Some(subject) if delegable => {
+                // A delegated principal names the session's subject at the head of its
+                // chain, as the runner records it; its kind is the run's subject kind.
+                if let Some(head) =
+                    stored.delegation_chain.first().filter(|head| head.id == record.user_id)
+                {
+                    acting.subject_kind = head.kind;
+                }
+                acting.on_behalf_of = Some(subject.clone());
+            }
+            Some(subject) => {
+                let session = adk_core::SubjectRef::new(subject.kind, record.user_id.clone());
+                return Err(adk_core::subject_mismatch_error(&session, subject));
+            }
+            None => {}
+        }
+        acting.delegation_chain.clone_from(&stored.delegation_chain);
+        Ok(())
+    }
+
+    /// Records a refused run identity and returns the run's non-retryable failure.
+    async fn refuse(
+        &self,
+        record: &RunRecord,
+        error: AdkError,
+        runner_trail: Option<&AuditTrail>,
+    ) -> Failure {
+        tracing::warn!(run.id = %record.run_id, error = %error, "run identity refused");
+        if let Some(trail) = self.audit.as_ref().or(runner_trail) {
+            let actor = record
+                .principal
+                .as_ref()
+                .map(|principal| AuditActor::new(principal, ""))
+                .unwrap_or_default();
+            let draft = AuditRecordDraft::new(AuditRecordKind::Access, error.code)
+                .actor(actor)
+                .decision(AuditDecision::Denied)
+                .outcome(AuditRecordOutcome::NotRun)
+                .ext("runId", Value::String(record.run_id.clone()))
+                .ext("userId", Value::String(record.user_id.clone()))
+                .ext("workerId", Value::String(self.config.worker_id.clone()));
+            if let Err(audit_error) = trail.record(draft).await {
+                tracing::warn!(run.id = %record.run_id, error = %audit_error, "could not record the refused run");
+            }
+        }
+        Failure { error: error.to_string(), retryable: false }
+    }
+
     async fn checkpoint(
         &self,
         run_id: &str,
@@ -588,6 +735,7 @@ impl DurableWorker {
         &self,
         runner: &Arc<Runner>,
         record: &RunRecord,
+        acting: ActingConfig,
         epoch: u64,
         lease: &Arc<LeaseState>,
         cancel: &CancellationToken,
@@ -604,6 +752,12 @@ impl DurableWorker {
             (_, Some(session_id)) => session_id.clone(),
             _ => format!("run-{}", record.run_id),
         };
+        let mut config = runner.run_config().clone();
+        config.acting = acting;
+        config.invocation_hooks.push(Arc::new(LeaseFence(Arc::clone(lease))));
+        // Approval requests for calls this run holds carry its id, so their decision
+        // wakes exactly this run.
+        config.durable_run_id = Some(record.run_id.clone());
         let resume_from = match &record.checkpoint {
             Some(
                 RunCheckpointRef::Session { invocation_id, .. }
@@ -620,7 +774,9 @@ impl DurableWorker {
             if let Some(answer) = completed_answer(&events, &invocation_id) {
                 return Ok(Prepared::Done(answer));
             }
-            let answered = runner.recover_unanswered_calls(user_id, &session_id).await?;
+            let answered = runner
+                .recover_unanswered_calls_with_config(user_id, &session_id, Some(config.clone()))
+                .await?;
             let turn_persisted = events
                 .iter()
                 .any(|event| event.invocation_id == invocation_id && event.author == "user");
@@ -650,11 +806,6 @@ impl DurableWorker {
                     return Ok(Err(Failure { error: error.to_string(), retryable: false }));
                 }
             };
-        let mut config = runner.run_config().clone();
-        config.invocation_hooks.push(Arc::new(LeaseFence(Arc::clone(lease))));
-        // Approval requests for calls this run holds carry its id, so their decision
-        // wakes exactly this run.
-        config.durable_run_id = Some(record.run_id.clone());
         let invocation = match runner.start_with_config(user, session, content, Some(config)).await
         {
             Ok(invocation) => invocation,

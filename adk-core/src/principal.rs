@@ -5,7 +5,7 @@
 //! | [`AgentId`] | One agent, stable across redeploys and replicas |
 //! | [`SubjectRef`] | A human, a service, or an agent, by kind and identifier |
 //! | [`AgentPrincipal`] | An agent with its tenant, class, instance, sponsor, and attributes |
-//! | [`ActingContext`] | An agent acting in one invocation, on behalf of a subject, through a delegation chain |
+//! | [`ActingContext`] | An agent acting on behalf of a subject, through a delegation chain |
 //!
 //! Every type serializes with camelCase field names, so a principal recorded by one
 //! process (in a run record, an audit entry, or a governance state) reads back unchanged
@@ -19,7 +19,7 @@
 //! let agent = AgentPrincipal::new(AgentId::new("urn:adk:agent:billing")?)
 //!     .with_tenant("acme")
 //!     .with_sponsor(SubjectRef::human("alice@example.com"));
-//! let acting = ActingContext::new(agent, "inv-1")
+//! let acting = ActingContext::new(agent)
 //!     .on_behalf_of(SubjectRef::human("bob@example.com"));
 //!
 //! let json = serde_json::to_value(&acting)?;
@@ -170,11 +170,12 @@ impl From<AgentId> for String {
 ///
 /// assert_eq!(serde_json::to_value(SubjectKind::Service).unwrap(), "service");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum SubjectKind {
-    /// A person.
+    /// A person. The default: an interactive run acts for a person.
+    #[default]
     Human,
     /// A non-agent workload, such as a backend service or a scheduler.
     Service,
@@ -305,7 +306,12 @@ impl AgentPrincipal {
     }
 }
 
-/// An agent acting in one invocation.
+/// An agent acting for a subject, through a delegation chain.
+///
+/// The context names no invocation: the invocation an agent acts in is the execution
+/// identity's ([`ReadonlyContext::invocation_id`](crate::ReadonlyContext::invocation_id)),
+/// so there is one source for it. Audit records pair the two with
+/// [`AuditActor::new`](crate::audit_log::AuditActor::new).
 ///
 /// `delegation_chain` lists the subjects that handed the work down, outermost first:
 /// a human who asked an orchestrator agent, which delegated to this agent, reads
@@ -317,13 +323,10 @@ impl AgentPrincipal {
 /// use adk_core::principal::{ActingContext, AgentId, AgentPrincipal, SubjectRef};
 ///
 /// let orchestrator = AgentId::new("urn:adk:agent:orchestrator")?;
-/// let acting = ActingContext::new(
-///     AgentPrincipal::new(AgentId::new("urn:adk:agent:billing")?),
-///     "inv-42",
-/// )
-/// .on_behalf_of(SubjectRef::human("bob@example.com"))
-/// .delegated_by(SubjectRef::human("bob@example.com"))
-/// .delegated_by(SubjectRef::agent(&orchestrator));
+/// let acting = ActingContext::new(AgentPrincipal::new(AgentId::new("urn:adk:agent:billing")?))
+///     .on_behalf_of(SubjectRef::human("bob@example.com"))
+///     .delegated_by(SubjectRef::human("bob@example.com"))
+///     .delegated_by(SubjectRef::agent(&orchestrator));
 /// assert_eq!(acting.delegation_chain.len(), 2);
 /// # Ok::<(), adk_core::principal::PrincipalError>(())
 /// ```
@@ -338,19 +341,12 @@ pub struct ActingContext {
     /// The subjects that delegated the work, outermost first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delegation_chain: Vec<SubjectRef>,
-    /// The invocation the agent acts in.
-    pub invocation_id: String,
 }
 
 impl ActingContext {
-    /// Creates a context for `agent` acting in `invocation_id`.
-    pub fn new(agent: AgentPrincipal, invocation_id: impl Into<String>) -> Self {
-        Self {
-            agent,
-            on_behalf_of: None,
-            delegation_chain: Vec::new(),
-            invocation_id: invocation_id.into(),
-        }
+    /// Creates a context for `agent` acting for no subject.
+    pub fn new(agent: AgentPrincipal) -> Self {
+        Self { agent, on_behalf_of: None, delegation_chain: Vec::new() }
     }
 
     /// Sets the subject the agent acts for.
@@ -404,7 +400,6 @@ mod tests {
                 .with_instance("r1")
                 .with_sponsor(SubjectRef::human("alice"))
                 .with_attribute("tier", "gold"),
-            "inv-1",
         )
         .on_behalf_of(SubjectRef::service("crm"))
         .delegated_by(SubjectRef::human("alice"));
@@ -422,19 +417,30 @@ mod tests {
                     "attributes": {"tier": "gold"}
                 },
                 "onBehalfOf": {"kind": "service", "id": "crm"},
-                "delegationChain": [{"kind": "human", "id": "alice"}],
-                "invocationId": "inv-1"
+                "delegationChain": [{"kind": "human", "id": "alice"}]
             })
         );
         let back: ActingContext = serde_json::from_value(value).unwrap();
         assert_eq!(back, acting);
 
-        let minimal = ActingContext::new(
-            AgentPrincipal::new(AgentId::new("urn:adk:agent:a").unwrap()),
-            "inv-2",
-        );
+        let minimal =
+            ActingContext::new(AgentPrincipal::new(AgentId::new("urn:adk:agent:a").unwrap()));
         let back: ActingContext =
             serde_json::from_value(serde_json::to_value(&minimal).unwrap()).unwrap();
         assert_eq!(back, minimal);
+    }
+
+    #[test]
+    fn contexts_recorded_with_an_invocation_id_still_read() {
+        // Records written before the invocation id moved to the execution identity.
+        let back: ActingContext = serde_json::from_value(json!({
+            "agent": {"id": "urn:adk:agent:a"},
+            "invocationId": "inv-old"
+        }))
+        .unwrap();
+        assert_eq!(
+            back,
+            ActingContext::new(AgentPrincipal::new(AgentId::new("urn:adk:agent:a").unwrap()))
+        );
     }
 }

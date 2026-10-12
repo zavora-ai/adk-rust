@@ -29,9 +29,10 @@ use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-/// Replies with the text of the user turn it received.
+/// Replies with the text of the user turn it received, and records who it acted as.
 struct EchoAgent {
     runs: Arc<AtomicUsize>,
+    acting: std::sync::Mutex<Vec<adk_core::ActingContext>>,
 }
 
 #[async_trait]
@@ -47,6 +48,7 @@ impl Agent for EchoAgent {
     }
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> AdkResult<EventStream> {
         self.runs.fetch_add(1, Ordering::SeqCst);
+        self.acting.lock().unwrap().push(ctx.acting_context());
         let text = ctx
             .user_content()
             .parts
@@ -84,7 +86,10 @@ fn fixture_with_governance(
 ) -> Fixture {
     let store = Arc::new(InMemoryRunStore::new());
     let sessions = Arc::new(InMemorySessionService::new());
-    let agent = Arc::new(EchoAgent { runs: Arc::new(AtomicUsize::new(0)) });
+    let agent = Arc::new(EchoAgent {
+        runs: Arc::new(AtomicUsize::new(0)),
+        acting: std::sync::Mutex::new(Vec::new()),
+    });
     let config = ServerConfig::new(
         Arc::new(SingleAgentLoader::new(agent.clone() as Arc<dyn Agent>)),
         sessions.clone() as Arc<dyn SessionService>,
@@ -436,4 +441,41 @@ async fn a_queue_message_is_run_by_the_durable_worker_once() {
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].state, RunState::Completed);
     assert_eq!(fixture.agent.runs.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn webhook_and_queue_runs_act_for_a_service() {
+    use adk_core::queue_source::{InMemoryQueueSource, QueueIngress};
+    use adk_core::{AgentPrincipal, SubjectRef};
+
+    let fixture = fixture();
+    let signer = WebhookSigner::new(secret("current-key"));
+    let (status, body, _) =
+        send(&fixture.app, signed_request("/hooks/github", &signer, "msg_1", &issue(42))).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let record = fixture.store.get(body["runId"].as_str().unwrap()).await.unwrap().unwrap();
+    let principal = record.principal.expect("the hook records the run's identity");
+    assert_eq!(principal.agent, AgentPrincipal::derived("triage", "triage_agent"));
+    assert_eq!(principal.on_behalf_of, Some(SubjectRef::service("webhook:github")));
+
+    let source = Arc::new(InMemoryQueueSource::new("issues"));
+    let ingress = QueueIngress::new(source.clone(), fixture.store.clone(), |message| {
+        Ok(NewRun::new("default", "triage", "queue", "triage_agent", message.body_json()?))
+    })
+    .with_pull_wait(Duration::ZERO);
+    source.publish("m-1", br#"{"text": "issue #7"}"#.to_vec());
+    ingress.poll_once().await.unwrap();
+
+    assert_eq!(run_queued(&fixture).await, 2);
+    let acting = fixture.agent.acting.lock().unwrap().clone();
+    let subjects: Vec<_> = acting.iter().map(|acting| acting.on_behalf_of.clone()).collect();
+    assert_eq!(
+        subjects,
+        [Some(SubjectRef::service("webhook:github")), Some(SubjectRef::service("queue"))]
+    );
+    assert!(
+        acting
+            .iter()
+            .all(|acting| acting.agent == AgentPrincipal::derived("triage", "triage_agent"))
+    );
 }

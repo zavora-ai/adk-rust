@@ -156,12 +156,9 @@ impl ReadonlyContext for SentinelContext {
 }
 
 fn sentinel_acting() -> adk_core::ActingContext {
-    adk_core::ActingContext::new(
-        adk_core::AgentPrincipal::new(
-            adk_core::AgentId::new(SENTINEL_AGENT_ID).expect("valid sentinel agent id"),
-        ),
-        "sentinel-invocation",
-    )
+    adk_core::ActingContext::new(adk_core::AgentPrincipal::new(
+        adk_core::AgentId::new(SENTINEL_AGENT_ID).expect("valid sentinel agent id"),
+    ))
 }
 
 #[async_trait]
@@ -369,4 +366,31 @@ async fn sentinel_reports_non_default_capabilities() {
     assert!(ctx.artifacts().is_some());
     assert!(ctx.memory().is_some());
     let _ = Event::new("sentinel-invocation");
+}
+
+#[tokio::test]
+async fn acting_agent_context_preserves_capabilities_and_names_its_agent() {
+    use crate::acting_agent_context::ActingAgentContext;
+
+    let parent = sentinel().await;
+    let same = ActingAgentContext::scope(parent.clone(), parent.agent_name());
+    assert!(Arc::ptr_eq(&same, &parent), "a context naming the agent is used as is");
+
+    let wrapped = ActingAgentContext::scope(sentinel().await, "sub-agent");
+    assert!(wrapped.is_cancelled(), "ActingAgentContext: cancellation was dropped");
+    assert_eq!(wrapped.user_scopes(), vec![SENTINEL_SCOPE.to_string()]);
+    assert!(wrapped.request_metadata().contains_key(SENTINEL_METADATA_KEY));
+    let secret = wrapped.get_secret(SENTINEL_SECRET_NAME).await.unwrap();
+    assert_eq!(secret.as_deref(), Some(SENTINEL_SECRET_VALUE));
+    assert!(wrapped.shared_state().is_some(), "ActingAgentContext: shared state was dropped");
+    assert!(wrapped.artifacts().is_some(), "ActingAgentContext: artifacts were dropped");
+    assert!(wrapped.memory().is_some(), "ActingAgentContext: memory was dropped");
+    assert_eq!(wrapped.agent_name(), parent.agent_name(), "the execution identity is unchanged");
+
+    // The subject and chain are the parent's; the principal is the sub-agent's own.
+    let expected = adk_core::ActingContext {
+        agent: adk_core::AgentPrincipal::derived("sentinel-app", "sub-agent"),
+        ..sentinel_acting()
+    };
+    assert_eq!(wrapped.acting_context(), expected);
 }

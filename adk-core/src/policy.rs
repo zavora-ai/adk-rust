@@ -139,11 +139,11 @@ impl ToolPolicyRequest {
     /// # Example
     ///
     /// ```rust
-    /// use adk_core::{ActingContext, ToolPolicyRequest};
+    /// use adk_core::{ActingContext, SubjectKind, ToolPolicyRequest};
     /// use serde_json::json;
     ///
     /// let request = ToolPolicyRequest::new("search", json!({}))
-    ///     .with_acting_context(ActingContext::derived("app", "researcher", "alice", "inv-1"));
+    ///     .with_acting_context(ActingContext::derived("app", "researcher", "alice", SubjectKind::Human));
     /// assert_eq!(request.agent_id().unwrap().as_str(), "urn:adk:agent:app/researcher");
     /// ```
     #[must_use]
@@ -517,13 +517,13 @@ impl PolicyRule {
     /// # Example
     ///
     /// ```rust
-    /// use adk_core::{ActingContext, PolicyRule, ToolPolicyRequest};
+    /// use adk_core::{ActingContext, PolicyRule, SubjectKind, ToolPolicyRequest};
     /// use serde_json::json;
     ///
     /// let rule = PolicyRule::allow("refund").for_agent("urn:adk:agent:shop/support-*");
     /// let call = |agent: &str| {
     ///     ToolPolicyRequest::new("refund", json!({}))
-    ///         .with_acting_context(ActingContext::derived("shop", agent, "u", "inv"))
+    ///         .with_acting_context(ActingContext::derived("shop", agent, "u", SubjectKind::Human))
     /// };
     /// assert!(rule.matches(&call("support-eu")));
     /// assert!(!rule.matches(&call("marketing")));
@@ -837,7 +837,7 @@ mod tests {
             .build();
         let call = |tool: &str, principal: AgentPrincipal| {
             ToolPolicyRequest::new(tool, json!({}))
-                .with_acting_context(ActingContext::new(principal, "inv"))
+                .with_acting_context(ActingContext::new(principal))
         };
 
         assert_eq!(

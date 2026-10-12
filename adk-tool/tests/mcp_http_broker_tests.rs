@@ -98,10 +98,9 @@ impl CredentialBroker for MockBroker {
 }
 
 fn acting() -> ActingContext {
-    ActingContext::new(
-        AgentPrincipal::new(AgentId::new("spiffe://example.test/agent/researcher").unwrap()),
-        "mcp-connection",
-    )
+    ActingContext::new(AgentPrincipal::new(
+        AgentId::new("spiffe://example.test/agent/researcher").unwrap(),
+    ))
 }
 
 fn ctx() -> Arc<dyn ReadonlyContext> {

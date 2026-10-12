@@ -55,10 +55,9 @@ fn call(name: &str, id: &str, args: Value) -> Part {
 
 fn recovered(name: &str, id: &str, args: &Value, outcome: AuditRecordOutcome) -> AuditRecordDraft {
     let principal = AgentPrincipal::new(AgentId::new(AGENT_ID).unwrap());
-    let acting =
-        ActingContext::new(principal, "inv-1").on_behalf_of(SubjectRef::human("controller"));
+    let acting = ActingContext::new(principal).on_behalf_of(SubjectRef::human("controller"));
     AuditRecordDraft::new(AuditRecordKind::ToolCall, name)
-        .actor(AuditActor::from(&acting))
+        .actor(AuditActor::new(&acting, "inv-1"))
         .args_digest(adk_core::json_digest(args))
         .outcome(outcome)
         .ext("cause", json!("recovered"))

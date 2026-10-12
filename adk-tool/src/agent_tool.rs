@@ -590,8 +590,12 @@ impl Tool for AgentTool {
             derived.tenant = caller.agent.tenant.clone();
             derived
         });
-        // The child's invocation id is assigned with its context; `acting_context_for` fills it.
-        parent_run_config.acting_context = Some(caller.delegate(delegate, String::new()));
+        // The delegate acts for the caller's subject, with the caller appended to the chain;
+        // the subject was admitted when the caller's run started.
+        let delegated = caller.delegate(delegate);
+        parent_run_config.acting.principals.insert(self.agent.name().to_string(), delegated.agent);
+        parent_run_config.acting.on_behalf_of = delegated.on_behalf_of;
+        parent_run_config.acting.delegation_chain = delegated.delegation_chain;
         let child_depth = ctx.delegation_depth().saturating_add(1);
         let max_depth = self.runtime.max_delegation_depth.or(ctx.max_delegation_depth());
         if max_depth.is_some_and(|max| child_depth > max) {
@@ -925,12 +929,7 @@ impl ReadonlyContext for AgentToolInvocationContext {
     }
 
     fn acting_context(&self) -> adk_core::ActingContext {
-        self.run_config.acting_context_for(
-            self.app_name(),
-            self.agent_name(),
-            self.user_id(),
-            &self.invocation_id,
-        )
+        self.run_config.acting_context_for(self.app_name(), self.agent_name(), self.user_id())
     }
 }
 

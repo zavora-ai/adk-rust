@@ -41,6 +41,7 @@
 //! - Artifact handling
 //! - Plugin hooks for every model and tool call (with the `plugins` feature)
 
+mod acting;
 mod agent_invoker;
 pub mod builder;
 mod cache;

@@ -180,7 +180,7 @@ spend, a model call commits on every turn, and a refused reservation ends the ru
 | `seq` | writer | Position, from 0 with no gaps |
 | `ts` | writer | Append time, from the configured `Clock` |
 | `prevHash` | writer | Leaf hash of the previous record; absent for `seq` 0 |
-| `actor` | caller | Agent id, tenant, instance, `onBehalfOf`, delegation chain, invocation id — `AuditActor::from(&ActingContext)` |
+| `actor` | caller | Agent id, tenant, instance, `onBehalfOf`, delegation chain, invocation id — `AuditActor::new(&ActingContext, invocation_id)` |
 | `kind` | caller | `tool_call`, `approval`, `governance`, `payment`, `access`, `authentication`, `configuration`, `key_rotated`, or any other name |
 | `action` | caller | Tool name or operation |
 | `argsDigest` | caller | `sha256:<hex>` of the canonical arguments (`json_sha256`) |

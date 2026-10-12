@@ -5,11 +5,12 @@
 
 use adk_agent::{LlmAgent, LlmAgentBuilder};
 use adk_auth::signed_audit::{AuditExport, AuditLog, AuditSigner, Ed25519Signer, NoteVerifier};
+use adk_core::ActingConfig;
 use adk_core::audit_log::{
     AuditActor, AuditDecision, AuditFailureMode, AuditRecordDraft, AuditRecordKind,
     AuditRecordOutcome, AuditRecorder, InMemoryAuditLogStore, InMemoryAuditRecorder,
 };
-use adk_core::principal::{ActingContext, AgentId, AgentPrincipal, SubjectRef};
+use adk_core::principal::{AgentId, AgentPrincipal, SubjectKind, SubjectRef};
 use adk_core::{
     AdkError, Content, DeclarativePolicy, Event, InMemoryActionLedger, Llm, LlmRequest,
     LlmResponse, LlmResponseStream, Part, Result, RunConfig, SessionId, Tool, ToolApproval,
@@ -337,11 +338,14 @@ async fn records_name_the_configured_agent_and_the_subject_it_acts_for() {
         );
     }
 
-    // A run's own acting context names its subject and delegation chain.
-    let acting = ActingContext::new(AgentPrincipal::new(AgentId::new(AGENT).unwrap()), "")
-        .on_behalf_of(SubjectRef::service("payroll"))
-        .delegated_by(SubjectRef::human("ops-lead"));
-    let config = RunConfig::builder().acting_context(acting).build();
+    // A run's own acting config names its principal, subject kind, and delegation chain.
+    let acting = ActingConfig {
+        delegation_chain: vec![SubjectRef::human("ops-lead")],
+        ..ActingConfig::default()
+    }
+    .with_principal("teller", AgentPrincipal::new(AgentId::new(AGENT).unwrap()))
+    .with_subject_kind(SubjectKind::Service);
+    let config = RunConfig::builder().acting(acting).build();
     let events = run(&runner, Some(config)).await;
     assert!(events.iter().all(Result::is_ok), "{events:?}");
     let delegated = recorder.records()[records.len()..].to_vec();
@@ -352,7 +356,7 @@ async fn records_name_the_configured_agent_and_the_subject_it_acts_for() {
         delegated[0].actor,
         AuditActor {
             agent: Some(AgentId::new(AGENT).unwrap()),
-            on_behalf_of: Some(SubjectRef::service("payroll")),
+            on_behalf_of: Some(SubjectRef::service("alice")),
             delegation_chain: vec![SubjectRef::human("ops-lead")],
             invocation_id: invocation,
             ..AuditActor::default()

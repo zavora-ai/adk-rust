@@ -95,17 +95,18 @@ pub trait ReadonlyContext: Send + Sync {
 
     /// Returns who the running agent is and on whose behalf it acts.
     ///
-    /// The runtime's contexts answer from the run's
-    /// [`RunConfig::acting_context`], and wrapper contexts must forward this to the
-    /// context they wrap. The default is the identity ADK-Rust derives when none is
-    /// configured: [`ActingContext::derived`](crate::ActingContext::derived) from the app
-    /// name, agent name, user, and invocation.
+    /// The runtime's contexts answer from the run's [`RunConfig::acting`] for the agent
+    /// that is executing, and wrapper contexts must forward this to the context they
+    /// wrap. The default is the identity ADK-Rust derives when none is configured:
+    /// [`ActingContext::derived`](crate::ActingContext::derived) from the app name, the
+    /// agent name, and the user as a human. The invocation the agent acts in is
+    /// [`invocation_id`](Self::invocation_id).
     fn acting_context(&self) -> crate::ActingContext {
         crate::ActingContext::derived(
             self.app_name(),
             self.agent_name(),
             self.user_id(),
-            self.invocation_id(),
+            crate::SubjectKind::Human,
         )
     }
 
@@ -1280,14 +1281,17 @@ pub struct RunConfig {
     pub audit: Option<crate::audit_log::AuditTrail>,
     /// Who the run's agents act as, and for whom.
     ///
-    /// `None` uses the identity ADK-Rust derives for each agent:
-    /// `urn:adk:agent:{app}/{agent}`, acting for the run's user. When set, its principal
-    /// applies to every agent in the run, including transfer targets; an agent tool
-    /// delegating to another agent sets the delegate's context, with the delegating
-    /// agent appended to the delegation chain. The runner sets this from its
-    /// [`IdentitySource`](crate::IdentitySource) at the start of each run when it is `None`.
+    /// Each agent acts as its entry in [`ActingConfig::principals`](crate::ActingConfig),
+    /// or as `urn:adk:agent:{app}/{agent}`, on behalf of the session's user as
+    /// [`ActingConfig::subject_kind`](crate::ActingConfig). At the start of each run the
+    /// runner adds the principals its [`IdentitySource`](crate::IdentitySource) gives the
+    /// root agent and the agents it maps, and refuses a run whose
+    /// [`on_behalf_of`](crate::ActingConfig::on_behalf_of) names a subject other than the
+    /// session's user unless a [`SubjectDelegationPolicy`](crate::SubjectDelegationPolicy)
+    /// allows it. An agent tool delegating to another agent sets the delegate's principal
+    /// and appends the delegating agent to the delegation chain.
     /// See [`acting_context_for`](Self::acting_context_for).
-    pub acting_context: Option<crate::ActingContext>,
+    pub acting: crate::ActingConfig,
 }
 
 impl Default for RunConfig {
@@ -1321,7 +1325,7 @@ impl Default for RunConfig {
             spend_ledger: None,
             llm_spend_estimate: None,
             audit: None,
-            acting_context: None,
+            acting: crate::ActingConfig::default(),
         }
     }
 }
@@ -1358,27 +1362,28 @@ impl RunConfig {
         self.governance.iter().try_for_each(crate::GovernanceControl::check)
     }
 
-    /// The acting context of `agent_name` running in `invocation_id` for `user_id`.
+    /// The acting context of the agent named `agent_name` running for `user_id`.
     ///
-    /// The configured [`acting_context`](Self::acting_context), with its invocation set to
-    /// `invocation_id` and, when it names no subject, acting for `user_id`; otherwise
-    /// [`ActingContext::derived`](crate::ActingContext::derived).
+    /// See [`ActingConfig::acting_context_for`](crate::ActingConfig::acting_context_for).
     ///
     /// # Example
     ///
     /// ```rust
     /// use adk_core::{AgentId, AgentPrincipal, RunConfig, SubjectRef};
     ///
-    /// let derived = RunConfig::default().acting_context_for("shop", "cashier", "alice", "inv-1");
+    /// let derived = RunConfig::default().acting_context_for("shop", "cashier", "alice");
     /// assert_eq!(derived.agent.id.as_str(), "urn:adk:agent:shop/cashier");
     ///
     /// let config = RunConfig::builder()
-    ///     .agent_principal(AgentPrincipal::new(AgentId::new("spiffe://shop/cashier")?))
+    ///     .agent_principal("cashier", AgentPrincipal::new(AgentId::new("spiffe://shop/cashier")?))
     ///     .build();
-    /// let configured = config.acting_context_for("shop", "cashier", "alice", "inv-1");
+    /// let configured = config.acting_context_for("shop", "cashier", "alice");
     /// assert_eq!(configured.agent.id.as_str(), "spiffe://shop/cashier");
     /// assert_eq!(configured.on_behalf_of, Some(SubjectRef::human("alice")));
-    /// assert_eq!(configured.invocation_id, "inv-1");
+    /// assert_eq!(
+    ///     config.acting_context_for("shop", "stocker", "alice").agent.id.as_str(),
+    ///     "urn:adk:agent:shop/stocker"
+    /// );
     /// # Ok::<(), adk_core::AdkError>(())
     /// ```
     pub fn acting_context_for(
@@ -1386,19 +1391,8 @@ impl RunConfig {
         app_name: &str,
         agent_name: &str,
         user_id: &str,
-        invocation_id: &str,
     ) -> crate::ActingContext {
-        match &self.acting_context {
-            Some(configured) => {
-                let mut acting = configured.clone();
-                acting.invocation_id = invocation_id.to_string();
-                if acting.on_behalf_of.is_none() && !user_id.is_empty() {
-                    acting.on_behalf_of = Some(crate::SubjectRef::human(user_id));
-                }
-                acting
-            }
-            None => crate::ActingContext::derived(app_name, agent_name, user_id, invocation_id),
-        }
+        self.acting.acting_context_for(app_name, agent_name, user_id)
     }
 }
 
@@ -1628,17 +1622,33 @@ impl RunConfigBuilder {
         self
     }
 
-    /// Sets who the run's agents act as, and for whom. See [`RunConfig::acting_context`].
-    pub fn acting_context(mut self, acting: crate::ActingContext) -> Self {
-        self.config.acting_context = Some(acting);
+    /// Sets who the run's agents act as, and for whom. See [`RunConfig::acting`].
+    pub fn acting(mut self, acting: crate::ActingConfig) -> Self {
+        self.config.acting = acting;
         self
     }
 
-    /// Sets the principal every agent in the run acts as, acting for the run's user.
-    ///
-    /// See [`RunConfig::acting_context`].
-    pub fn agent_principal(mut self, principal: crate::AgentPrincipal) -> Self {
-        self.config.acting_context = Some(crate::ActingContext::new(principal, ""));
+    /// Sets the principal the agent named `agent_name` acts as. See [`RunConfig::acting`].
+    pub fn agent_principal(
+        mut self,
+        agent_name: impl Into<String>,
+        principal: crate::AgentPrincipal,
+    ) -> Self {
+        self.config.acting.principals.insert(agent_name.into(), principal);
+        self
+    }
+
+    /// Sets what kind of subject the session's user is. See [`RunConfig::acting`].
+    pub fn subject_kind(mut self, kind: crate::SubjectKind) -> Self {
+        self.config.acting.subject_kind = kind;
+        self
+    }
+
+    /// Asks the run to act for `subject`; the runner refuses the run unless `subject` is
+    /// the session's user or a [`SubjectDelegationPolicy`](crate::SubjectDelegationPolicy)
+    /// allows it. See [`RunConfig::acting`].
+    pub fn on_behalf_of(mut self, subject: crate::SubjectRef) -> Self {
+        self.config.acting.on_behalf_of = Some(subject);
         self
     }
 

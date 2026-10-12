@@ -33,14 +33,18 @@ that reads the time, and the conformance suites drive a `ManualClock`.
 ## Agent identity
 
 The `principal` module identifies the agent a run acts as. A `NewRun` carries an optional
-`ActingContext`, and the run record keeps it.
+`ActingContext`, and the run record keeps it. A worker treats it as a claim: it acts as a stored
+agent id only when `DurableWorkerConfig::allowed_principals` lists it, and only for the run's
+user unless a delegation rule allows another subject. `NewRun::with_service_subject` marks a run
+created by a scheduler, webhook, or queue as acting for a service. See
+[Agent Identity](../security/agent-identity.md#durable-runs).
 
 | Type | Identifies |
 |------|------------|
 | `AgentId` | One agent, stable across redeploys: a URI such as `spiffe://example.org/agent/billing` or `urn:adk:agent:billing`; non-empty, at most 512 bytes, no control characters |
 | `SubjectRef` | A human, a service, or an agent (`SubjectKind`) by identifier |
 | `AgentPrincipal` | An agent with its tenant, class (template), instance (replica), sponsor, and attributes |
-| `ActingContext` | An agent acting in one invocation, on behalf of a subject, through a delegation chain (outermost first) |
+| `ActingContext` | An agent acting on behalf of a subject, through a delegation chain (outermost first); the invocation is the execution identity's |
 
 ```rust
 use adk_core::principal::{ActingContext, AgentId, AgentPrincipal, SubjectRef};
@@ -49,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = AgentPrincipal::new(AgentId::new("urn:adk:agent:billing")?)
         .with_tenant("acme")
         .with_sponsor(SubjectRef::human("alice@example.com"));
-    let acting = ActingContext::new(agent, "inv-1")
+    let acting = ActingContext::new(agent)
         .on_behalf_of(SubjectRef::human("bob@example.com"));
     assert_eq!(serde_json::to_value(&acting)?["onBehalfOf"]["kind"], "human");
     Ok(())

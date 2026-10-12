@@ -271,15 +271,29 @@ impl AuditActor {
     }
 }
 
-impl From<&ActingContext> for AuditActor {
-    fn from(context: &ActingContext) -> Self {
+impl AuditActor {
+    /// The actor for `context` acting in `invocation_id`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::audit_log::AuditActor;
+    /// use adk_core::{ActingContext, SubjectKind};
+    ///
+    /// let acting = ActingContext::derived("shop", "cashier", "alice", SubjectKind::Human);
+    /// let actor = AuditActor::new(&acting, "inv-1");
+    /// assert_eq!(actor.invocation_id.as_deref(), Some("inv-1"));
+    /// assert_eq!(actor.agent, Some(acting.agent.id));
+    /// ```
+    pub fn new(context: &ActingContext, invocation_id: impl Into<String>) -> Self {
+        let invocation_id = invocation_id.into();
         Self {
             agent: Some(context.agent.id.clone()),
             tenant: context.agent.tenant.clone(),
             instance: context.agent.instance.clone(),
             on_behalf_of: context.on_behalf_of.clone(),
             delegation_chain: context.delegation_chain.clone(),
-            invocation_id: Some(context.invocation_id.clone()),
+            invocation_id: (!invocation_id.is_empty()).then_some(invocation_id),
         }
     }
 }
@@ -982,7 +996,10 @@ impl AuditActor {
         user_id: &str,
         invocation_id: &str,
     ) -> Self {
-        Self::from(&ActingContext::derived(app_name, agent_name, user_id, invocation_id))
+        Self::new(
+            &ActingContext::derived(app_name, agent_name, user_id, crate::SubjectKind::Human),
+            invocation_id,
+        )
     }
 
     /// The actor of the agent running in `ctx`: its
@@ -996,7 +1013,7 @@ impl AuditActor {
     /// let actor = AuditActor::for_context(tool_ctx.as_ref());
     /// ```
     pub fn for_context(ctx: &dyn crate::ReadonlyContext) -> Self {
-        Self::from(&ctx.acting_context())
+        Self::new(&ctx.acting_context(), ctx.invocation_id())
     }
 }
 

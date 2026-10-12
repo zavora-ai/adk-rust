@@ -458,7 +458,9 @@ implementation that takes a `Clock` through `with_clock`:
 | `GovernanceStateStore` | `InMemoryGovernanceStateStore` | Freeze state per organisation, tenant, and agent |
 
 `AgentId`, `AgentPrincipal`, and `ActingContext` (module `principal`) identify the agent a
-run acts as. `schedule::plan_fires` computes fire times; cron specs need the `cron` feature.
+run acts as; `ActingConfig` (module `acting`, on `RunConfig::acting`) resolves it per agent and
+pins the subject to the session's user, and `NewRun::with_service_subject` marks a scheduled,
+webhook, or queue run as acting for a service. `schedule::plan_fires` computes fire times; cron specs need the `cron` feature.
 
 ```rust
 use std::time::Duration;

@@ -723,12 +723,7 @@ impl ReadonlyContext for InvocationContext {
     }
 
     fn acting_context(&self) -> adk_core::ActingContext {
-        self.run_config.acting_context_for(
-            self.app_name(),
-            self.agent_name(),
-            self.user_id(),
-            self.invocation_id(),
-        )
+        self.run_config.acting_context_for(self.app_name(), self.agent_name(), self.user_id())
     }
 
     fn state(&self) -> Option<&dyn adk_core::State> {

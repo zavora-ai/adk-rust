@@ -85,7 +85,6 @@ fn request(amount: u64, call_id: &str) -> ToolConfirmationRequest {
                 )
                 .with_tenant("conformance")
                 .with_instance("replica-1"),
-                format!("inv-{call_id}"),
             )
             .on_behalf_of(SubjectRef::human("alice")),
         )),

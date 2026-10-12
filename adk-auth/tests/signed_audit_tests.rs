@@ -39,12 +39,12 @@ fn acting() -> ActingContext {
     let agent = AgentPrincipal::new(AgentId::new("urn:adk:agent:billing").unwrap())
         .with_tenant("acme")
         .with_instance(LOG_ID);
-    ActingContext::new(agent, "inv-1").on_behalf_of(SubjectRef::human("alice"))
+    ActingContext::new(agent).on_behalf_of(SubjectRef::human("alice"))
 }
 
 fn draft(n: u64) -> AuditRecordDraft {
     AuditRecordDraft::new(AuditRecordKind::ToolCall, "transfer")
-        .actor(AuditActor::from(&acting()))
+        .actor(AuditActor::new(&acting(), "inv-1"))
         .args_digest(
             adk_auth::signed_audit::json_sha256(&json!({ "amount": n, "to": "acct-1" })).unwrap(),
         )

@@ -11,7 +11,7 @@
 //! |------|--------|
 //! | Governance | While the [`GovernanceControl`] refuses work (frozen, or stale under a replicated mirror), nothing is pulled; a freeze that lands mid-batch nacks the rest |
 //! | Back-pressure | With `max_pending`, a batch is never larger than the room left under that many unfinished runs from this source, and nothing is pulled while there is none |
-//! | Map | The mapper turns the message into a [`NewRun`]; a mapping error nacks the message |
+//! | Map | The mapper turns the message into a [`NewRun`]; a mapping error nacks the message. The run acts for its user as a service ([`NewRun::with_service_subject`]) |
 //! | Enqueue | The run's idempotency key is `queue:{source}:{message id}`, so a redelivered or duplicated message returns the existing run instead of creating a second one |
 //! | Ack | Only after the enqueue succeeded (created or existing). A failed enqueue, or one [`OnConflict::Reject`](crate::OnConflict::Reject) refused, nacks the message for redelivery after `retry_after` |
 //!
@@ -510,7 +510,7 @@ impl QueueIngress {
     }
 
     async fn enqueue(&self, message: &QueueMessage) -> Result<Enqueued> {
-        let mut run = (self.mapper)(message)?;
+        let mut run = (self.mapper)(message)?.with_service_subject();
         if let Some(governance) = &self.governance {
             governance.check()?;
         }
