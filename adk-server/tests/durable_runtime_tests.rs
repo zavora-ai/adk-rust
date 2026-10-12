@@ -748,7 +748,7 @@ async fn three_scheduler_replicas_fire_each_occurrence_once() {
     let replicas: Vec<DurableScheduler> = (0..3)
         .map(|_| {
             DurableScheduler::new(Arc::clone(&schedules), Arc::clone(&runs))
-                .with_clock(clock.clone() as Arc<dyn adk_core::Clock>)
+                .with_clock(clock.clone() as Arc<dyn Clock>)
         })
         .collect();
 
@@ -829,11 +829,15 @@ async fn a_freeze_reaches_every_replica_and_no_schedule_fires_while_frozen() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
+    // One clock for every replica: on the wall clock, a replica that ticks after the
+    // next 20 ms occurrence passed would rightly fire that occurrence too.
+    let clock = Arc::new(adk_core::ManualClock::new(Utc::now()));
     let schedulers: Vec<DurableScheduler> = controls
         .iter()
         .map(|control| {
             DurableScheduler::new(Arc::clone(&schedules), Arc::clone(&runs))
                 .with_governance(control.clone())
+                .with_clock(clock.clone() as Arc<dyn Clock>)
         })
         .collect();
 
@@ -849,7 +853,7 @@ async fn a_freeze_reaches_every_replica_and_no_schedule_fires_while_frozen() {
         }
     }
 
-    let now = Utc::now();
+    let now = clock.now();
     schedules
         .upsert(
             Schedule::new(
@@ -866,7 +870,7 @@ async fn a_freeze_reaches_every_replica_and_no_schedule_fires_while_frozen() {
         for scheduler in &schedulers {
             assert!(scheduler.tick().await.unwrap().frozen);
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        clock.advance(Duration::from_millis(20));
     }
     assert!(
         runs.list(RunFilter::default()).await.unwrap().is_empty(),
