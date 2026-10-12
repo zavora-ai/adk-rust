@@ -1,5 +1,5 @@
 //! The MongoDB spend ledger, action ledger, approval store, lease store, run store,
-//! schedule store, and governance state store pass the shared conformance suites against
+//! schedule store, governance state store, and audit log store pass the shared conformance suites against
 //! a live server, and the run store drains a contended queue claiming each run once.
 //!
 //! Run with a server at `MONGODB_URL` (default `mongodb://localhost:27017`). A replica set
@@ -243,5 +243,23 @@ async fn run_losing_reject_never_answers_existing_for_a_withdrawn_run() {
         }
         let stored = first.list(RunFilter::default().queue(&queue)).await.expect("list");
         assert_eq!(stored.len(), 1, "no withdrawn or second run remains");
+    }
+}
+
+#[async_trait]
+impl adk_core::conformance::AuditLogStoreHarness for Mongo {
+    async fn open(&self) -> Arc<dyn adk_core::audit_log::AuditLogStore> {
+        let store = adk_session::MongoAuditLogStore::new(&url(), DATABASE)
+            .await
+            .expect("connect to mongodb");
+        store.migrate().await.expect("set up the audit log store");
+        Arc::new(store)
+    }
+}
+
+mod audit_log {
+    adk_core::audit_log_store_conformance_tests! {
+        #[ignore = "requires a MongoDB server at MONGODB_URL"]
+        harness = super::Mongo,
     }
 }

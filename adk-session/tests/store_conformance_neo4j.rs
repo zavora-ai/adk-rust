@@ -1,5 +1,5 @@
 //! The Neo4j spend ledger, action ledger, approval store, lease store, run store,
-//! schedule store, and governance state store pass the shared conformance suites, and the
+//! schedule store, governance state store, and audit log store pass the shared conformance suites, and the
 //! run store drains one queue under contention with every run claimed exactly once.
 //!
 //! Run with a server at `NEO4J_URI` (default `bolt://localhost:7687`), authenticating as
@@ -182,4 +182,22 @@ async fn runs_contention_claims_each_run_once() {
     let first = run_store(clock.clone()).await;
     let second = run_store(clock).await;
     run_contention::claimers_drain_a_queue_exactly_once(first, second).await;
+}
+
+struct Audit;
+
+#[async_trait]
+impl adk_core::conformance::AuditLogStoreHarness for Audit {
+    async fn open(&self) -> Arc<dyn adk_core::audit_log::AuditLogStore> {
+        let store = adk_session::Neo4jAuditLogStore::from_graph(graph().await);
+        store.migrate().await.expect("migrate audit log schema");
+        Arc::new(store)
+    }
+}
+
+mod audit_log {
+    adk_core::audit_log_store_conformance_tests! {
+        #[ignore = "requires a Neo4j server at NEO4J_URI"]
+        harness = super::Audit,
+    }
 }

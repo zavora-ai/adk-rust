@@ -174,3 +174,20 @@ async fn run_claimers_drain_a_queue_exactly_once() {
     first.migrate().await.expect("load scripts");
     run_contention::claimers_drain_a_queue_exactly_once(Arc::new(first), Arc::new(second)).await;
 }
+
+#[async_trait]
+impl adk_core::conformance::AuditLogStoreHarness for Redis {
+    async fn open(&self) -> Arc<dyn adk_core::audit_log::AuditLogStore> {
+        let store =
+            adk_session::RedisAuditLogStore::new(&redis_url()).await.expect("connect to redis");
+        store.migrate().await.expect("set up the audit log store");
+        Arc::new(store)
+    }
+}
+
+mod audit_log {
+    adk_core::audit_log_store_conformance_tests! {
+        #[ignore = "requires a Redis server at REDIS_URL"]
+        harness = super::Redis,
+    }
+}

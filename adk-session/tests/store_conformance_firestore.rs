@@ -185,3 +185,21 @@ async fn run_claims_under_contention_are_exclusive() {
     // other backends; 16 claimers still contend for every run.
     run_contention::claimers_drain_runs_exactly_once(first, second, 16, 16).await;
 }
+
+struct Audit;
+
+#[async_trait]
+impl adk_core::conformance::AuditLogStoreHarness for Audit {
+    async fn open(&self) -> Arc<dyn adk_core::audit_log::AuditLogStore> {
+        let store = adk_session::FirestoreAuditLogStore::from_db(emulator_db().await);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
+mod audit_log {
+    adk_core::audit_log_store_conformance_tests!(
+        #[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+        harness = super::Audit,
+    );
+}

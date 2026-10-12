@@ -85,6 +85,9 @@ pub mod encryption_key;
 /// Google Cloud Firestore session backend.
 pub mod firestore;
 #[cfg(feature = "firestore")]
+/// Firestore-backed audit log store for signed, Merkle-hashed audit logs.
+pub mod firestore_audit_log;
+#[cfg(feature = "firestore")]
 /// Firestore-backed lease, run, schedule, and governance state stores.
 pub mod firestore_runtime;
 #[cfg(feature = "firestore")]
@@ -94,6 +97,9 @@ pub mod firestore_stores;
 /// MongoDB session backend.
 pub mod mongodb;
 #[cfg(feature = "mongodb")]
+/// MongoDB-backed audit log store for signed, Merkle-hashed audit logs.
+pub mod mongodb_audit_log;
+#[cfg(feature = "mongodb")]
 /// MongoDB-backed lease, run, schedule, and governance state stores.
 pub mod mongodb_runtime;
 #[cfg(feature = "mongodb")]
@@ -102,6 +108,9 @@ pub mod mongodb_stores;
 #[cfg(feature = "neo4j")]
 /// Neo4j graph database session backend.
 pub mod neo4j;
+#[cfg(feature = "neo4j")]
+/// Neo4j-backed audit log store for signed, Merkle-hashed audit logs.
+pub mod neo4j_audit_log;
 #[cfg(feature = "neo4j")]
 /// Neo4j-backed lease, run, schedule, and governance state stores.
 pub mod neo4j_runtime;
@@ -117,6 +126,9 @@ pub mod postgres_action_ledger;
 #[cfg(feature = "redis")]
 /// Redis session backend with TTL support.
 pub mod redis;
+#[cfg(feature = "redis")]
+/// Redis-backed audit log store for signed, Merkle-hashed audit logs.
+pub mod redis_audit_log;
 #[cfg(feature = "redis")]
 /// Redis-backed lease, run, schedule, and governance state stores.
 pub mod redis_runtime;
@@ -154,6 +166,8 @@ pub use audit_log::PostgresAuditLogStore;
 #[cfg(feature = "sqlite")]
 pub use audit_log::SqliteAuditLogStore;
 #[cfg(feature = "firestore")]
+pub use firestore_audit_log::FirestoreAuditLogStore;
+#[cfg(feature = "firestore")]
 pub use firestore_runtime::{
     FirestoreGovernanceStateStore, FirestoreLeaseStore, FirestoreRunStore, FirestoreScheduleStore,
 };
@@ -168,11 +182,15 @@ pub use lease::PostgresLeaseStore;
 #[cfg(feature = "sqlite")]
 pub use lease::SqliteLeaseStore;
 #[cfg(feature = "mongodb")]
+pub use mongodb_audit_log::MongoAuditLogStore;
+#[cfg(feature = "mongodb")]
 pub use mongodb_runtime::{
     MongoGovernanceStateStore, MongoLeaseStore, MongoRunStore, MongoScheduleStore,
 };
 #[cfg(feature = "mongodb")]
 pub use mongodb_stores::{MongoActionLedger, MongoApprovalStore, MongoSpendLedger};
+#[cfg(feature = "neo4j")]
+pub use neo4j_audit_log::Neo4jAuditLogStore;
 #[cfg(feature = "neo4j")]
 pub use neo4j_runtime::{
     Neo4jGovernanceStateStore, Neo4jLeaseStore, Neo4jRunStore, Neo4jScheduleStore,
@@ -181,6 +199,8 @@ pub use neo4j_runtime::{
 pub use neo4j_stores::{Neo4jActionLedger, Neo4jApprovalStore, Neo4jSpendLedger};
 #[cfg(feature = "postgres")]
 pub use postgres_action_ledger::PostgresActionLedger;
+#[cfg(feature = "redis")]
+pub use redis_audit_log::RedisAuditLogStore;
 #[cfg(feature = "redis")]
 pub use redis_runtime::{
     RedisGovernanceStateStore, RedisLeaseStore, RedisRunStore, RedisScheduleStore,
