@@ -497,6 +497,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-durability-gates"
+version = "0.0.0"
+dependencies = [
+ "adk-agent",
+ "adk-core",
+ "adk-runner",
+ "adk-server",
+ "adk-session",
+ "async-trait",
+ "chrono",
+ "futures",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid 1.25.0",
+]
+
+[[package]]
 name = "adk-enterprise"
 version = "3.0.0"
 dependencies = [

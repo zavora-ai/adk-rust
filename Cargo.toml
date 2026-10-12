@@ -53,6 +53,9 @@ members = [
     # Repo-internal task runner (publish = false, never published)
     "xtask",
 
+    # Multi-process durability gates on every durable backend (publish = false)
+    "adk-durability-gates",
+
     # Local LLM inference (now publishable - mistralrs on crates.io)
     "adk-mistralrs",
 

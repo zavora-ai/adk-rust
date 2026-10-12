@@ -32,3 +32,37 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 [[profile.default.overrides]]
 filter = "binary(store_conformance_firestore)"
 slow-timeout = { period = "60s", terminate-after = 4 }
+
+# The durability gates on one server share its stores (schedules are global to a
+# store), so they run one at a time per backend; different backends run in parallel.
+# Each gate starts several processes and waits out leases and staleness limits.
+[test-groups]
+durability-gates-postgres = { max-threads = 1 }
+durability-gates-redis = { max-threads = 1 }
+durability-gates-mongodb = { max-threads = 1 }
+durability-gates-neo4j = { max-threads = 1 }
+durability-gates-firestore = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "package(adk-durability-gates) and test(/^postgres::/)"
+test-group = "durability-gates-postgres"
+
+[[profile.default.overrides]]
+filter = "package(adk-durability-gates) and test(/^redis::/)"
+test-group = "durability-gates-redis"
+
+[[profile.default.overrides]]
+filter = "package(adk-durability-gates) and test(/^mongodb::/)"
+test-group = "durability-gates-mongodb"
+
+[[profile.default.overrides]]
+filter = "package(adk-durability-gates) and test(/^neo4j::/)"
+test-group = "durability-gates-neo4j"
+
+[[profile.default.overrides]]
+filter = "package(adk-durability-gates) and test(/^firestore::/)"
+test-group = "durability-gates-firestore"
+
+[[profile.default.overrides]]
+filter = "package(adk-durability-gates)"
+slow-timeout = { period = "60s", terminate-after = 3 }

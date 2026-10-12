@@ -8,8 +8,9 @@ name: CI Nightly
 #     (ci.yml) never builds (realtime `full`, audio ONNX backends, GPU features).
 #   • supply-chain — `cargo audit` (enforcing) + `cargo deny` (advisory) over the
 #     workspace dependency graph.
-#   • durable-stores — the store and graph checkpointer conformance suites against
-#     live PostgreSQL, Redis, MongoDB, Neo4j, and the Firestore emulator.
+#   • durable-stores — the store and graph checkpointer conformance suites and the
+#     multi-process durability gates against live PostgreSQL, Redis, MongoDB, Neo4j,
+#     and the Firestore emulator.
 #   • integration-tests — the `#[ignore]`d integration tests that hit real
 #     provider APIs, gated on the relevant secrets being configured.
 #
@@ -208,8 +209,10 @@ jobs:
   # ── Durable stores: conformance suites on live backends ────────
   # Every SpendLedger, ActionLedger, and ApprovalStore backend in adk-session runs the
   # adk-core conformance suites. SQLite runs on every PR (feature-coverage shard 5); the
-  # server-backed suites are #[ignore]d and run here against service containers. Needs
-  # no secrets.
+  # server-backed suites are #[ignore]d and run here against service containers. The
+  # multi-process durability gates (adk-durability-gates) run here on every server
+  # backend; their SQLite gates run on every PR in the workspace test job. Needs no
+  # secrets.
   durable-stores:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -311,13 +314,15 @@ jobs:
         --test store_conformance_firestore
         --test spend_ledger_postgres
 
-    - name: Run the multi-process durable worker crash gates
+    # The Phase 2 gates — crash mid-payment, one firing per schedule, stalled worker,
+    # kill switch — with separate worker, scheduler, and replica processes on every
+    # backend. Gates on one server run one at a time (`.config/nextest.toml` groups).
+    - name: Run the multi-process durability gates on every backend
       if: ${{ !cancelled() }}
       run: >-
-        cargo nextest run -p adk-server
-        --features background
-        --run-ignored all
-        --test durable_multiprocess
+        cargo nextest run -p adk-durability-gates
+        --features all-backends
+        --run-ignored all --no-fail-fast
 
     - name: Run MongoDB store suites on a standalone server
       if: ${{ !cancelled() }}

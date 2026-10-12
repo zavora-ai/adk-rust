@@ -299,10 +299,10 @@ let registry = WorkflowRegistry::new().register_durable("settle", move |input, r
 });
 ```
 
-**Across processes.** `adk-server/tests/durable_multiprocess.rs` runs the gate with separate
-OS processes on SQLite files (PR tier) and PostgreSQL (`#[ignore]`, nightly `durable-stores`):
-the process running the charge is killed with SIGKILL mid-call, and a second process completes
-the run with one charge, answered `outcome_unknown` from the durable action ledger.
+**Across processes.** The `crash_mid_payment` gate in `adk-durability-gates` runs this with
+separate OS processes on every backend: the process running the charge is killed with SIGKILL
+mid-call, and a second process completes the run with one charge, answered `outcome_unknown`
+from the durable action ledger. See [Verified guarantees](#verified-guarantees).
 
 **Known limits.**
 
@@ -585,6 +585,48 @@ PostgreSQL, and tasks in one process on the in-memory stores.
 ```bash
 cargo run --manifest-path examples/durable_company/Cargo.toml -- --provider openai --store sqlite
 ```
+
+## Verified guarantees
+
+The `adk-durability-gates` workspace crate (unpublished) checks the runtime's guarantees end to
+end with separate OS processes that share nothing but one backend. Every process opens the run
+store, session service, action ledger, schedule store, and governance state store on that
+backend.
+
+| Gate | Processes | Pass condition |
+|------|-----------|----------------|
+| `crash_mid_payment` | two workers | the worker running a non-idempotent charge is SIGKILLed mid-call; the other claims the run only after the lease expired, at the next epoch; exactly one charge; the run completes with the call answered `outcome_unknown` |
+| `one_firing_per_schedule` | three schedulers | an interval, a per-second cron, and five one-shot schedules race for four seconds; every occurrence before each schedule's cursor has exactly one run, no run is for a time that is no occurrence, and the processes' own counts of created runs sum to the runs stored |
+| `stalled_worker` | two workers | the worker holding a charged run is SIGSTOPped at its heartbeat past the lease; the other recovers the run and holds it; after SIGCONT the paused worker's heartbeat is refused with `run_store.stale_epoch`, it writes nothing that succeeds, and the charge happened once |
+| `kill_switch` | three replicas and a writer | a freeze written by the test process reaches every replica within three poll intervals (300 ms); no model or tool call starts after a replica froze; no run is claimed and no schedule fires or advances while frozen; after unfreezing the missed occurrence fires once; a replica cut off from the governance store goes stale at its 1 s limit and claims nothing while its peers keep working |
+
+The gates use a 2 s run lease, a 100 ms governance poll interval, and a 1 s staleness limit, so
+each finishes in seconds. Gates sharing one server run one at a time (nextest test groups in
+`.config/nextest.toml`).
+
+### Results
+
+Pass counts per backend and gate. SQLite runs on every pull request (feature-coverage shard 2);
+the server backends run in the nightly `durable-stores` job against service containers.
+
+{{MATRIX}}
+
+### Running the gates
+
+```bash
+# SQLite
+cargo nextest run -p adk-durability-gates --features sqlite
+
+# Every backend, with each server reachable at the variables the nightly job sets
+DATABASE_URL=postgres://postgres@localhost:5432/postgres \
+REDIS_URL=redis://localhost:6379 \
+MONGODB_URL='mongodb://localhost:27017/?directConnection=true' \
+NEO4J_URI=bolt://localhost:7687 NEO4J_USER=neo4j NEO4J_PASSWORD=<password> \
+FIRESTORE_EMULATOR_HOST=localhost:8080 \
+  cargo nextest run -p adk-durability-gates --features all-backends --run-ignored all
+```
+
+MongoDB runs as a single-node replica set, so the run store takes its transactional path.
 
 ## Related
 

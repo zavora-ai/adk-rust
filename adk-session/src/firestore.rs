@@ -101,6 +101,29 @@ impl FirestoreSessionService {
         Ok(Self { core: SessionCore { store: FirestoreStore { db, root_collection } } })
     }
 
+    /// Uses an existing client, such as one the durable stores share or one from
+    /// [`connect_firestore_emulator`](crate::firestore_stores::connect_firestore_emulator).
+    ///
+    /// `root_collection` defaults to `"adk_sessions"` when `None`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_session::FirestoreSessionService;
+    /// use adk_session::firestore_stores::connect_firestore_emulator;
+    ///
+    /// # async fn example() -> adk_core::Result<()> {
+    /// let db = connect_firestore_emulator("demo-project").await?;
+    /// let sessions = FirestoreSessionService::from_db(db, None);
+    /// assert_eq!(sessions.root_collection(), "adk_sessions");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_db(db: FirestoreDb, root_collection: Option<String>) -> Self {
+        let root_collection = root_collection.unwrap_or_else(|| DEFAULT_ROOT_COLLECTION.to_string());
+        Self { core: SessionCore { store: FirestoreStore { db, root_collection } } }
+    }
+
     /// Returns a reference to the underlying `FirestoreDb`.
     pub fn db(&self) -> &FirestoreDb {
         &self.core.store.db

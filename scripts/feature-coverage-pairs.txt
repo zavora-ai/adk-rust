@@ -35,6 +35,9 @@
 # The background run store and its persistence are behind `background`; nothing compiled
 # them when durable run records were added.
 2 adk-server background
+# The multi-process durability gates on SQLite (crash, schedules, stalled worker, kill
+# switch); the server backends run nightly. Shares the `background` build above.
+2 adk-durability-gates sqlite
 # Approval inbox endpoints and the signed approval webhook notifier.
 2 adk-server approvals
 # Agent Engine dispatch surface; its wire-fixture and dispatch tests need the feature.
