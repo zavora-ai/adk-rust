@@ -559,7 +559,8 @@ suites run on every pull request; the PostgreSQL suites run in the nightly `dura
 job.
 
 Each backend file also runs a contention case beyond the suites: 24 claimers, half on each of
-two handles, drain one queue of 48 runs, and every run is claimed exactly once. The nightly
+two handles, drain one queue of 48 runs (16 claimers and 16 runs on the Firestore emulator),
+and every run is claimed exactly once. The nightly
 `durable-stores` job runs all of them against live servers and the Firestore emulator.
 
 ## Related

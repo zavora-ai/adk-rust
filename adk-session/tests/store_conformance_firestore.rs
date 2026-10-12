@@ -181,5 +181,7 @@ async fn run_claims_under_contention_are_exclusive() {
     let first: Arc<dyn DurableRunStore> = Arc::new(FirestoreRunStore::from_db(emulator_db().await));
     let second: Arc<dyn DurableRunStore> =
         Arc::new(FirestoreRunStore::from_db(emulator_db().await));
-    run_contention::claimers_drain_a_queue_exactly_once(first, second).await;
+    // The emulator serializes transactions slowly, so the queue is smaller than on the
+    // other backends; 16 claimers still contend for every run.
+    run_contention::claimers_drain_runs_exactly_once(first, second, 16, 16).await;
 }

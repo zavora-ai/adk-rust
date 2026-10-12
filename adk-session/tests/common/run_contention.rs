@@ -12,16 +12,27 @@ pub const RUNS: usize = 48;
 /// Concurrent claimers, split evenly across the two handles.
 pub const CLAIMERS: usize = 24;
 
-/// Enqueues [`RUNS`] runs on one queue, then lets [`CLAIMERS`] concurrent workers, half
-/// on each handle, claim and complete runs until the queue is empty. Every run must be
-/// claimed exactly once, at epoch 1, and end `Completed`.
+/// Runs [`claimers_drain_runs_exactly_once`] with [`RUNS`] runs and [`CLAIMERS`] claimers.
+#[allow(dead_code, reason = "each test binary includes this module and calls one of the two")]
 pub async fn claimers_drain_a_queue_exactly_once(
     first: Arc<dyn DurableRunStore>,
     second: Arc<dyn DurableRunStore>,
 ) {
+    claimers_drain_runs_exactly_once(first, second, RUNS, CLAIMERS).await;
+}
+
+/// Enqueues `runs` runs on one queue, then lets `claimers` concurrent workers, half on
+/// each handle, claim and complete runs until the queue is empty. Every run must be
+/// claimed exactly once, at epoch 1, and end `Completed`.
+pub async fn claimers_drain_runs_exactly_once(
+    first: Arc<dyn DurableRunStore>,
+    second: Arc<dyn DurableRunStore>,
+    runs: usize,
+    claimers: usize,
+) {
     let queue = format!("contention:queue/ü/{}", uuid::Uuid::new_v4());
     let mut enqueued = Vec::new();
-    for i in 0..RUNS {
+    for i in 0..runs {
         let run = NewRun::new(&queue, "contention-app", "user", "agent", json!({ "i": i }));
         match first.enqueue(run).await.expect("enqueue") {
             Enqueued::Created(record) => enqueued.push(record.run_id),
@@ -29,7 +40,7 @@ pub async fn claimers_drain_a_queue_exactly_once(
         }
     }
 
-    let tasks: Vec<_> = (0..CLAIMERS)
+    let tasks: Vec<_> = (0..claimers)
         .map(|i| {
             let store = if i % 2 == 0 { first.clone() } else { second.clone() };
             let queue = queue.clone();
@@ -68,5 +79,5 @@ pub async fn claimers_drain_a_queue_exactly_once(
         .list(RunFilter::default().queue(&queue).states([RunState::Completed]))
         .await
         .expect("list");
-    assert_eq!(finished.len(), RUNS, "every run completed");
+    assert_eq!(finished.len(), runs, "every run completed");
 }
