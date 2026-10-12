@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use crate::types::unknown::tagged_with_unknown;
 use crate::types::{
     CompactionMetadata, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
     MessageDeltaEvent, MessageStartEvent, MessageStopEvent,
@@ -20,9 +22,10 @@ pub struct ApiError {
 /// This enum represents all possible events that can occur when streaming
 /// messages from the Anthropic API. Events are delivered in a specific order:
 /// message_start, then potentially multiple content_block events, and finally
-/// message_stop.
+/// message_stop. An event whose type this client does not know arrives as
+/// [`MessageStreamEvent::Unknown`] instead of failing the stream.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type")]
+#[serde(remote = "Self", tag = "type")]
 pub enum MessageStreamEvent {
     /// A periodic ping event to keep the connection alive.
     #[serde(rename = "ping")]
@@ -82,12 +85,51 @@ pub enum MessageStreamEvent {
         /// The error details.
         error: ApiError,
     },
+
+    /// An event type this client does not know, kept as the raw JSON `data`
+    /// payload the API sent. It serializes back to that JSON unchanged.
+    #[serde(skip)]
+    Unknown(Value),
 }
+
+tagged_with_unknown!(
+    MessageStreamEvent,
+    "message stream event",
+    [
+        "ping",
+        "message_start",
+        "message_delta",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_stop",
+        "tool_input_start",
+        "tool_input_delta",
+        "compaction",
+        "stream_error",
+    ]
+);
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::{from_value, json};
+
+    #[test]
+    fn unknown_event_type_round_trips_as_raw_json() {
+        let raw = json!({"type": "future_event", "payload": {"important": "data"}});
+        let event: MessageStreamEvent = from_value(raw.clone()).unwrap();
+        assert_eq!(event, MessageStreamEvent::Unknown(raw.clone()));
+        assert_eq!(serde_json::to_value(&event).unwrap(), raw);
+    }
+
+    #[test]
+    fn known_types_match_every_typed_variant() {
+        let error = MessageStreamEvent::deserialize(json!({"type": "__probe__"})).unwrap_err();
+        let mut known: Vec<&str> = MessageStreamEvent::KNOWN_TYPES.to_vec();
+        known.sort_unstable();
+        assert_eq!(crate::types::unknown::expected_variants(&error.to_string()), known);
+    }
 
     #[test]
     fn message_stream_event_deserialization_message_start() {

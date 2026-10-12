@@ -1,13 +1,16 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use crate::types::unknown::tagged_with_unknown;
 use crate::types::{CitationsDelta, InputJsonDelta, SignatureDelta, TextDelta, ThinkingDelta};
 
 /// A raw content block delta, representing a streaming update to a content block.
 ///
 /// This type is used for streaming responses from the API, where content blocks
-/// are updated incrementally.
+/// are updated incrementally. A delta whose `type` this client does not know
+/// deserializes to [`ContentBlockDelta::Unknown`] instead of failing the stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(remote = "Self", tag = "type")]
 pub enum ContentBlockDelta {
     /// A text delta.
     #[serde(rename = "text_delta")]
@@ -28,7 +31,18 @@ pub enum ContentBlockDelta {
     /// A signature delta.
     #[serde(rename = "signature_delta")]
     SignatureDelta(SignatureDelta),
+
+    /// A delta type this client does not know, kept as the raw JSON the API
+    /// sent, `type` field included. It serializes back to that JSON unchanged.
+    #[serde(skip)]
+    Unknown(Value),
 }
+
+tagged_with_unknown!(
+    ContentBlockDelta,
+    "content block delta",
+    ["text_delta", "input_json_delta", "citations_delta", "thinking_delta", "signature_delta"]
+);
 
 impl ContentBlockDelta {
     /// Create a new `ContentBlockDelta` from a text delta.
@@ -61,6 +75,28 @@ impl ContentBlockDelta {
 mod tests {
     use super::*;
     use serde_json::{from_value, json, to_value};
+
+    #[test]
+    fn unknown_delta_type_round_trips_as_raw_json() {
+        let raw = json!({"type": "future_delta", "payload": "x"});
+        let delta: ContentBlockDelta = from_value(raw.clone()).unwrap();
+        assert_eq!(delta, ContentBlockDelta::Unknown(raw.clone()));
+        assert_eq!(to_value(&delta).unwrap(), raw);
+    }
+
+    #[test]
+    fn malformed_known_delta_keeps_its_specific_error() {
+        let error = from_value::<ContentBlockDelta>(json!({"type": "text_delta"})).unwrap_err();
+        assert!(error.to_string().contains("missing field `text`"), "{error}");
+    }
+
+    #[test]
+    fn known_types_match_every_typed_variant() {
+        let error = ContentBlockDelta::deserialize(json!({"type": "__probe__"})).unwrap_err();
+        let mut known: Vec<&str> = ContentBlockDelta::KNOWN_TYPES.to_vec();
+        known.sort_unstable();
+        assert_eq!(crate::types::unknown::expected_variants(&error.to_string()), known);
+    }
 
     #[test]
     fn text_delta_serialization() {

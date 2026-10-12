@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 
 /// Reasons why the model stopped generating a response.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// A reason this client does not know deserializes to
+/// [`StopReason::Unknown`] instead of failing the message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     /// The model reached the end of a generated turn
@@ -29,45 +33,37 @@ pub enum StopReason {
 
     /// The model's context window was exceeded
     ModelContextWindowExceeded,
+
+    /// A stop reason this client does not know, as the API sent it.
+    #[serde(untagged)]
+    Unknown(String),
 }
 
-impl fmt::Display for StopReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl StopReason {
+    /// Returns the wire value, such as `end_turn`.
+    pub fn as_str(&self) -> &str {
         match self {
-            StopReason::EndTurn => write!(f, "end_turn"),
-            StopReason::MaxTokens => write!(f, "max_tokens"),
-            StopReason::StopSequence => write!(f, "stop_sequence"),
-            StopReason::ToolUse => write!(f, "tool_use"),
-            StopReason::PauseTurn => write!(f, "pause_turn"),
-            StopReason::Refusal => write!(f, "refusal"),
-            StopReason::PauseRun => write!(f, "pause_run"),
-            StopReason::ModelContextWindowExceeded => {
-                write!(f, "model_context_window_exceeded")
-            }
+            StopReason::EndTurn => "end_turn",
+            StopReason::MaxTokens => "max_tokens",
+            StopReason::StopSequence => "stop_sequence",
+            StopReason::ToolUse => "tool_use",
+            StopReason::PauseTurn => "pause_turn",
+            StopReason::Refusal => "refusal",
+            StopReason::PauseRun => "pause_run",
+            StopReason::ModelContextWindowExceeded => "model_context_window_exceeded",
+            StopReason::Unknown(value) => value,
         }
     }
 }
 
-/// Error returned when parsing an invalid stop reason string.
-///
-/// This error contains the invalid string value that could not be parsed
-/// into a valid `StopReason` variant.
-#[derive(Debug)]
-pub struct StopReasonParseError {
-    /// The invalid string value that could not be parsed.
-    pub invalid_value: String,
-}
-
-impl fmt::Display for StopReasonParseError {
+impl fmt::Display for StopReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Unknown stop reason: {}", self.invalid_value)
+        f.write_str(self.as_str())
     }
 }
 
-impl std::error::Error for StopReasonParseError {}
-
 impl FromStr for StopReason {
-    type Err = StopReasonParseError;
+    type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -79,7 +75,7 @@ impl FromStr for StopReason {
             "refusal" => Ok(StopReason::Refusal),
             "pause_run" => Ok(StopReason::PauseRun),
             "model_context_window_exceeded" => Ok(StopReason::ModelContextWindowExceeded),
-            _ => Err(StopReasonParseError { invalid_value: s.to_string() }),
+            other => Ok(StopReason::Unknown(other.to_string())),
         }
     }
 }
@@ -108,6 +104,33 @@ mod tests {
         let json = r#""stop_sequence""#;
         let reason: StopReason = serde_json::from_str(json).unwrap();
         assert_eq!(reason, StopReason::StopSequence);
+    }
+
+    #[test]
+    fn unknown_reason_round_trips() {
+        let reason: StopReason = serde_json::from_str(r#""future_reason""#).unwrap();
+        assert_eq!(reason, StopReason::Unknown("future_reason".to_string()));
+        assert_eq!(serde_json::to_string(&reason).unwrap(), r#""future_reason""#);
+        assert_eq!(reason.to_string(), "future_reason");
+        assert_eq!("future_reason".parse::<StopReason>(), Ok(reason));
+    }
+
+    #[test]
+    fn as_str_matches_serde_for_known_reasons() {
+        for reason in [
+            StopReason::EndTurn,
+            StopReason::MaxTokens,
+            StopReason::StopSequence,
+            StopReason::ToolUse,
+            StopReason::PauseTurn,
+            StopReason::Refusal,
+            StopReason::PauseRun,
+            StopReason::ModelContextWindowExceeded,
+        ] {
+            let wire = serde_json::to_value(&reason).unwrap();
+            assert_eq!(wire, reason.as_str());
+            assert_eq!(reason.as_str().parse::<StopReason>(), Ok(reason));
+        }
     }
 
     #[test]

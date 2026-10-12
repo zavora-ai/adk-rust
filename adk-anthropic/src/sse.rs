@@ -58,8 +58,8 @@ struct SseState {
 /// - Terminal errors: after a transport error, an inactivity timeout, or a
 ///   buffer overflow the stream yields that error once and then ends.
 /// - Graceful error recovery: an event type this client does not know is logged
-///   at `debug` level and surfaced as [`MessageStreamEvent::Ping`], so a new
-///   server-side event type never fails the stream
+///   at `debug` level and surfaced as [`MessageStreamEvent::Unknown`] with its
+///   JSON payload, so a new server-side event type never fails the stream
 /// - UTF-8 validation with partial byte handling
 pub fn process_sse<S>(byte_stream: S) -> impl Stream<Item = Result<MessageStreamEvent>>
 where
@@ -438,11 +438,19 @@ fn parse_event_type(
         }
 
         _ => {
-            // New server-side event types must not fail the stream: log them and
-            // surface the keep-alive no-op that every consumer already ignores.
-            if event_type.starts_with("event:") {
-                debug!(sse.event_type = %event_type.trim(), "ignoring unknown sse event type");
-                Some((Ok(MessageStreamEvent::Ping), rest))
+            // A new server-side event type must not fail the stream; it reaches the
+            // consumer with its payload intact.
+            if let Some(name) = event_type.strip_prefix("event:") {
+                let name = name.trim();
+                debug!(sse.event_type = %name, "unknown sse event type");
+                let mut payload = serde_json::from_str::<serde_json::Value>(event_data)
+                    .unwrap_or_else(|_| serde_json::Value::String(event_data.to_string()));
+                if let Some(object) = payload.as_object_mut() {
+                    object
+                        .entry("type")
+                        .or_insert_with(|| serde_json::Value::String(name.to_string()));
+                }
+                Some((Ok(MessageStreamEvent::Unknown(payload)), rest))
             } else {
                 // Malformed event type format
                 Some((
@@ -516,8 +524,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_event_type_is_ignored_and_stream_continues() {
-        let data = b"event: brand_new_event\ndata: {\"type\":\"brand_new_event\"}\n\n\
+    async fn unknown_event_type_keeps_its_payload_and_stream_continues() {
+        let data = b"event: brand_new_event\ndata: {\"type\":\"brand_new_event\",\"detail\":7}\n\n\
+event: untyped_event\ndata: {\"detail\":8}\n\n\
 event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
         let stream = Box::pin(stream::once(async { Ok(Bytes::from(&data[..])) }));
 
@@ -526,7 +535,12 @@ event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
         assert_eq!(
             events.into_iter().collect::<Result<Vec<_>>>().unwrap(),
             vec![
-                MessageStreamEvent::Ping,
+                MessageStreamEvent::Unknown(
+                    serde_json::json!({"type": "brand_new_event", "detail": 7})
+                ),
+                MessageStreamEvent::Unknown(
+                    serde_json::json!({"type": "untyped_event", "detail": 8})
+                ),
                 MessageStreamEvent::MessageStop(MessageStopEvent::new()),
             ]
         );

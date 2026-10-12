@@ -158,7 +158,8 @@ let client = Anthropic::new(None)?
 | Stalled stream | The stream yields `Error::Timeout` and ends after 30 seconds without data |
 | Total stream bound | Opt in with `with_stream_timeout(Some(duration))` |
 | Mid-stream `error` event | `AccumulatingStream` yields it as `Err` (`overloaded_error` → `Error::ServiceUnavailable`, `rate_limit_error` → `Error::RateLimit`) and sends the error, not the partial message, through its channel |
-| Unknown SSE event type | Logged at `debug` and surfaced as `MessageStreamEvent::Ping` |
+| Unknown SSE event type | Logged at `debug` and surfaced as `MessageStreamEvent::Unknown` with its JSON payload |
+| Unknown content block, delta, or stop reason | Deserialized to `ContentBlock::Unknown`, `ContentBlockDelta::Unknown`, or `StopReason::Unknown` with the raw value; the message still parses |
 | Request validation | Text is capped at 1 MB per message and 100 KB for the system prompt; base64 images at 5 MB and PDFs at 32 MB each; base64 media plus text at 32 MB per request |
 
 ```rust

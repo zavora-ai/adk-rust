@@ -1259,6 +1259,7 @@ mod tests {
             ContentBlockDelta::ThinkingDelta(_) => true,
             ContentBlockDelta::InputJsonDelta(_) => true,
             ContentBlockDelta::CitationsDelta(_) => false, // also a no-op
+            ContentBlockDelta::Unknown(_) => false,
         };
 
         assert!(!produces_response, "SignatureDelta events must not produce user-visible content");

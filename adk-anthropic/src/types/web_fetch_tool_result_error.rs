@@ -7,7 +7,6 @@ use std::fmt;
 /// Codes this crate does not know are kept verbatim in [`WebFetchErrorCode::Unknown`],
 /// so a result replayed to the API carries the code the API sent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum WebFetchErrorCode {
     /// The input provided to the web fetch tool is invalid, such as a malformed URL.
     InvalidToolInput,

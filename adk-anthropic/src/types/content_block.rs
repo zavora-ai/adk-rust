@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use crate::types::unknown::tagged_with_unknown;
 use crate::types::{
     CodeExecutionResultBlock, CodeExecutionToolResultBlock, DocumentBlock, ImageBlock,
     ProgrammaticToolUseBlock, RedactedThinkingBlock, ServerToolUseBlock, TextBlock, ThinkingBlock,
@@ -9,9 +11,10 @@ use crate::types::{
 /// A block of content in a message.
 ///
 /// This enum represents the different types of content blocks that can be included
-/// in a message's content.
+/// in a message's content. A block whose `type` this client does not know
+/// deserializes to [`ContentBlock::Unknown`] instead of failing the message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type")]
+#[serde(remote = "Self", tag = "type")]
 pub enum ContentBlock {
     /// A block of text content
     #[serde(rename = "text")]
@@ -72,7 +75,34 @@ pub enum ContentBlock {
     /// A server-side text editor code execution result
     #[serde(rename = "text_editor_code_execution_tool_result")]
     TextEditorCodeExecutionToolResult(CodeExecutionToolResultBlock),
+
+    /// A block type this client does not know, kept as the raw JSON the API
+    /// sent, `type` field included. It serializes back to that JSON unchanged.
+    #[serde(skip)]
+    Unknown(Value),
 }
+
+tagged_with_unknown!(
+    ContentBlock,
+    "content block",
+    [
+        "text",
+        "image",
+        "tool_use",
+        "server_tool_use",
+        "web_search_tool_result",
+        "web_fetch_tool_result",
+        "tool_result",
+        "document",
+        "thinking",
+        "redacted_thinking",
+        "code_execution_result",
+        "programmatic_tool_use",
+        "code_execution_tool_result",
+        "bash_code_execution_tool_result",
+        "text_editor_code_execution_tool_result",
+    ]
+);
 
 impl ContentBlock {
     /// Returns true if this block is a text block
@@ -123,6 +153,20 @@ impl ContentBlock {
     /// Returns true if this block is a redacted thinking block
     pub fn is_redacted_thinking(&self) -> bool {
         matches!(self, ContentBlock::RedactedThinking(_))
+    }
+
+    /// Returns true if this block's type is one this client does not know
+    pub fn is_unknown(&self) -> bool {
+        matches!(self, ContentBlock::Unknown(_))
+    }
+
+    /// Returns the raw JSON of a block whose type this client does not know,
+    /// or None otherwise.
+    pub fn as_unknown(&self) -> Option<&Value> {
+        match self {
+            ContentBlock::Unknown(value) => Some(value),
+            _ => None,
+        }
     }
 
     /// Returns a reference to the inner TextBlock if this is a Text variant,
@@ -320,6 +364,34 @@ impl From<ProgrammaticToolUseBlock> for ContentBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn unknown_block_type_round_trips_as_raw_json() {
+        let raw = json!({"type": "future_block", "payload": {"nested": [1, 2]}});
+        let block: ContentBlock = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(block, ContentBlock::Unknown(raw.clone()));
+        assert_eq!(serde_json::to_value(&block).unwrap(), raw);
+    }
+
+    #[test]
+    fn malformed_known_block_keeps_its_specific_error() {
+        let error = serde_json::from_value::<ContentBlock>(json!({"type": "text"})).unwrap_err();
+        assert!(error.to_string().contains("missing field `text`"), "{error}");
+    }
+
+    #[test]
+    fn block_without_type_is_rejected() {
+        assert!(serde_json::from_value::<ContentBlock>(json!({"text": "hi"})).is_err());
+    }
+
+    #[test]
+    fn known_types_match_every_typed_variant() {
+        let error = ContentBlock::deserialize(json!({"type": "__probe__"})).unwrap_err();
+        let mut known: Vec<&str> = ContentBlock::KNOWN_TYPES.to_vec();
+        known.sort_unstable();
+        assert_eq!(crate::types::unknown::expected_variants(&error.to_string()), known);
+    }
 
     /// Blocks from a dynamic-filtering response carry `caller`, and replaying the
     /// assistant turn has to send them back exactly as received.

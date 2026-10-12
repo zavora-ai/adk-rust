@@ -80,7 +80,7 @@ impl AccumulatingStream {
             MessageStreamEvent::MessageDelta(delta_event) => {
                 if let Some(ref mut msg) = self.message {
                     if delta_event.delta.stop_reason.is_some() {
-                        msg.stop_reason = delta_event.delta.stop_reason;
+                        msg.stop_reason = delta_event.delta.stop_reason.clone();
                     }
                     if delta_event.delta.stop_sequence.is_some() {
                         msg.stop_sequence = delta_event.delta.stop_sequence.clone();
@@ -108,6 +108,8 @@ impl AccumulatingStream {
             MessageStreamEvent::CompactionEvent(_) => {}
             // Handled in `poll_next`, which turns it into an `Err` item.
             MessageStreamEvent::StreamError { .. } => {}
+            // Reaches the consumer unchanged; the message has nothing to accumulate.
+            MessageStreamEvent::Unknown(_) => {}
         }
     }
 
@@ -118,7 +120,7 @@ impl AccumulatingStream {
             .ok_or_else(|| Error::streaming("stream ended without a message start event", None))?;
         let mut blocks = Vec::new();
         for builder in std::mem::take(&mut self.content_blocks) {
-            if let Some(block) = builder.build(msg.stop_reason)? {
+            if let Some(block) = builder.build(msg.stop_reason.as_ref())? {
                 blocks.push(block);
             }
         }
@@ -208,7 +210,7 @@ impl ToolInput {
 
     /// Returns `None` when `max_tokens` cut the streamed JSON off, so the
     /// incomplete block is dropped rather than replayed.
-    fn resolve(self, stop_reason: Option<StopReason>) -> Option<Value> {
+    fn resolve(self, stop_reason: Option<&StopReason>) -> Option<Value> {
         if !self.saw_delta {
             return Some(self.initial);
         }
@@ -217,7 +219,7 @@ impl ToolInput {
         }
         match serde_json::from_str::<Value>(&self.json) {
             Ok(value) => Some(value),
-            Err(_) if stop_reason == Some(StopReason::MaxTokens) => None,
+            Err(_) if stop_reason == Some(&StopReason::MaxTokens) => None,
             Err(_) => Some(Value::String(self.json)),
         }
     }
@@ -295,7 +297,7 @@ impl ContentBlockBuilder {
         }
     }
 
-    fn build(self, stop_reason: Option<StopReason>) -> Result<Option<ContentBlock>, Error> {
+    fn build(self, stop_reason: Option<&StopReason>) -> Result<Option<ContentBlock>, Error> {
         match self {
             ContentBlockBuilder::Empty => Ok(None),
             ContentBlockBuilder::Text { text, citations, cache_control } => {

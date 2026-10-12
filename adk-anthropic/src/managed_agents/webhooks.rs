@@ -58,7 +58,6 @@ pub struct WebhookEventData {
 
 /// Error returned when webhook signature verification fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum WebhookVerifyError {
     /// The signing secret is not a base64 key, optionally `whsec_`-prefixed.
     InvalidSecret(String),

@@ -11,7 +11,6 @@ use crate::{Error, Result};
 const MAX_FALLBACK_MODELS: usize = 3;
 
 /// One explicitly selected server-side fallback model.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FallbackModel {
     /// Model identifier used for this fallback attempt.
@@ -68,7 +67,6 @@ impl FallbackModel {
 }
 
 /// Server-side fallback routing requested from the Claude API.
-#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum ServerFallbacks {
     /// Let Anthropic select the recommended model for the refusal category.
@@ -234,7 +232,6 @@ impl ServerFallbackRequest {
 }
 
 /// One endpoint in a server-side fallback handoff marker.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FallbackRoute {
     /// Model identifier reported by the API.
@@ -248,7 +245,6 @@ enum FallbackBlockType {
 }
 
 /// A response content block marking a fallback between models.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FallbackContentBlock {
     #[serde(rename = "type")]
@@ -260,7 +256,6 @@ pub struct FallbackContentBlock {
 }
 
 /// Content returned by a server-side fallback request.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ServerFallbackContentBlock {
@@ -276,7 +271,6 @@ pub enum ServerFallbackContentBlock {
 }
 
 /// Details attached to a classifier refusal.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefusalDetails {
     /// Detail discriminator, currently `"refusal"`.
@@ -300,7 +294,6 @@ pub struct RefusalDetails {
 }
 
 /// Usage returned by a server-side fallback request.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerFallbackUsage {
     /// Standard token and server-tool usage.
@@ -321,7 +314,6 @@ impl ServerFallbackUsage {
 }
 
 /// Message returned from a server-side fallback request.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerFallbackMessage {
     /// Unique message identifier.
@@ -362,7 +354,6 @@ impl ServerFallbackMessage {
 }
 
 /// Start of a fallback-aware streaming message.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerFallbackMessageStartEvent {
     /// Message metadata and initial content.
@@ -370,7 +361,6 @@ pub struct ServerFallbackMessageStartEvent {
 }
 
 /// Start of a fallback-aware streaming content block.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerFallbackContentBlockStartEvent {
     /// Content block that is starting.
@@ -380,7 +370,6 @@ pub struct ServerFallbackContentBlockStartEvent {
 }
 
 /// Final message metadata in a fallback-aware stream.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerFallbackMessageDelta {
     /// Reason generation stopped.
@@ -398,7 +387,6 @@ pub struct ServerFallbackMessageDelta {
 }
 
 /// Usage in a fallback-aware final streaming delta.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerFallbackDeltaUsage {
     /// Standard cumulative streaming usage.
@@ -410,7 +398,6 @@ pub struct ServerFallbackDeltaUsage {
 }
 
 /// Final message-delta event for a fallback-aware stream.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerFallbackMessageDeltaEvent {
     /// Stop metadata for the completed message.
@@ -420,7 +407,6 @@ pub struct ServerFallbackMessageDeltaEvent {
 }
 
 /// Streaming events returned from a server-side fallback request.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ServerFallbackStreamEvent {

@@ -17,6 +17,8 @@ pub(super) fn preserve(message: &Message) -> Option<Part> {
             ContentBlock::ServerToolUse(_)
             | ContentBlock::WebSearchToolResult(_)
             | ContentBlock::RedactedThinking(_) => true,
+            // A block type newer than this client is replayed as the API sent it.
+            ContentBlock::Unknown(_) => true,
             ContentBlock::Text(text) => {
                 text.citations.as_ref().is_some_and(|items| !items.is_empty())
             }

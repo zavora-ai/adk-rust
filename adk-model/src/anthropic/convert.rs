@@ -316,6 +316,13 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
                     parts.push(Part::ServerToolResponse { server_tool_response: val });
                 }
             }
+            // No ADK part represents it; `history::preserve` keeps it for replay.
+            ContentBlock::Unknown(raw) => {
+                tracing::warn!(
+                    anthropic.block_type = raw["type"].as_str().unwrap_or_default(),
+                    "skipping an anthropic content block type this client does not know"
+                );
+            }
             _ => {}
         }
     }
@@ -344,12 +351,20 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
     });
 
     let finish_reason = message.stop_reason.as_ref().map(|sr| match sr {
-        StopReason::EndTurn => FinishReason::Stop,
+        StopReason::EndTurn
+        | StopReason::StopSequence
+        | StopReason::ToolUse
+        | StopReason::PauseTurn
+        | StopReason::PauseRun => FinishReason::Stop,
         StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => FinishReason::MaxTokens,
         StopReason::Refusal => FinishReason::Safety,
-        StopReason::StopSequence => FinishReason::Stop,
-        StopReason::ToolUse => FinishReason::Stop,
-        _ => FinishReason::Stop,
+        StopReason::Unknown(reason) => {
+            tracing::warn!(
+                anthropic.stop_reason = %reason,
+                "anthropic returned a stop reason this client does not know"
+            );
+            FinishReason::Other
+        }
     });
     let paused = matches!(message.stop_reason, Some(StopReason::PauseTurn));
     let tool_call_turn = matches!(message.stop_reason, Some(StopReason::ToolUse))

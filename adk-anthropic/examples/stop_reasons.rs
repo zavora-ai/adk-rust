@@ -163,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Production-grade stop reason dispatcher.
 fn handle_response(response: &adk_anthropic::Message) -> String {
-    match response.stop_reason {
+    match &response.stop_reason {
         Some(StopReason::EndTurn) => {
             // Normal completion — extract text
             response
@@ -212,6 +212,9 @@ fn handle_response(response: &adk_anthropic::Message) -> String {
                     .map(|t| t.text.as_str())
                     .collect::<String>()
             )
+        }
+        Some(StopReason::Unknown(reason)) => {
+            format!("[UNKNOWN STOP REASON {reason} — newer than this client]")
         }
         None => "[NO STOP REASON — streaming in progress?]".to_string(),
     }

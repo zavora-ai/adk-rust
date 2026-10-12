@@ -73,6 +73,7 @@ mod tool_text_editor_20250429;
 mod tool_text_editor_20250728;
 mod tool_union_param;
 mod tool_use_block;
+mod unknown;
 mod url_image_source;
 mod url_pdf_source;
 mod usage;

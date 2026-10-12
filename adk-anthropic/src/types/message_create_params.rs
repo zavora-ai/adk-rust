@@ -697,6 +697,7 @@ impl ContentSize {
             | ContentBlock::BashCodeExecutionToolResult(_)
             | ContentBlock::TextEditorCodeExecutionToolResult(_)
             | ContentBlock::RedactedThinking(_) => {}
+            ContentBlock::Unknown(value) => self.text += json_text_len(value),
         }
         Ok(())
     }
