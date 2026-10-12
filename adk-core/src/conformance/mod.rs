@@ -436,6 +436,11 @@ macro_rules! audit_log_store_conformance_tests {
         }
         $(#[$attr])*
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_logs_sort_by_bytes() {
+            $crate::conformance::audit_log_store::logs_sort_by_bytes(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn audit_log_hash_at_returns_leaves_and_nodes() {
             $crate::conformance::audit_log_store::hash_at_returns_leaves_and_nodes(&$harness).await;
         }

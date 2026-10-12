@@ -85,7 +85,8 @@ fn parse_hash(text: &str, column: &str) -> Result<AuditHash> {
 macro_rules! sql_audit_log_store {
     (
         $(#[$doc:meta])*
-        $name:ident, $pool:ty, begin = $begin:expr, lock = $lock:expr, migrate = $migrate:expr
+        $name:ident, $pool:ty, begin = $begin:expr, lock = $lock:expr, migrate = $migrate:expr,
+        collate = $collate:literal
     ) => {
         $(#[$doc])*
         #[derive(Debug, Clone)]
@@ -360,7 +361,7 @@ macro_rules! sql_audit_log_store {
             }
 
             async fn logs(&self) -> Result<Vec<String>> {
-                let rows = sqlx::query("SELECT log_id FROM adk_audit_logs ORDER BY log_id")
+                let rows = sqlx::query(concat!("SELECT log_id FROM adk_audit_logs ORDER BY log_id", $collate))
                     .fetch_all(&self.pool)
                     .await
                     .map_err(|e| store_error(format!("audit log read failed: {e}")))?;
@@ -425,7 +426,8 @@ sql_audit_log_store! {
             )
             .await
         }
-    }
+    },
+    collate = ""
 }
 
 #[cfg(feature = "postgres")]
@@ -452,5 +454,7 @@ sql_audit_log_store! {
         async move {
             crate::migration::run_pg_migrations_locked(&pool, REGISTRY_TABLE, MIGRATIONS).await
         }
-    }
+    },
+    // Byte order, so `logs()` sorts as Rust does whatever the database locale.
+    collate = " COLLATE \"C\""
 }

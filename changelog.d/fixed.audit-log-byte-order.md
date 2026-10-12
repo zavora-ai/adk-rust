@@ -1,0 +1,1 @@
+- `adk-session`: `PostgresAuditLogStore::logs()` orders log ids by byte (`COLLATE "C"`), as the `AuditLogStore` contract and the other stores do, instead of by the database's locale collation. The audit-log conformance suite gains `logs_sort_by_bytes`, which fails on any backend that sorts by locale.

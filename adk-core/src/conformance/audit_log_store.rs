@@ -7,6 +7,7 @@
 //! | [`append_refuses_invalid_batches`] | Empty, non-contiguous, pruned-entry, and out-of-range-node batches are `audit_log.invalid_batch` |
 //! | [`concurrent_appends_have_one_winner`] | Two handles appending at the same position: exactly one succeeds |
 //! | [`logs_are_independent`] | Two `log_id`s keep separate sequences, hashes, and checkpoints |
+//! | [`logs_sort_by_bytes`] | `logs()` orders ids by their UTF-8 bytes, whatever the backend's locale |
 //! | [`hash_at_returns_leaves_and_nodes`] | Level 0 returns leaf hashes, higher levels the stored nodes, absent ones `None` |
 //! | [`reads_past_the_end_fail`] | `read` past the log's size is `audit_log.out_of_range` |
 //! | [`checkpoints_never_fork`] | Checkpoints list by size, never exceed the log, refuse a second root, and accept a re-signed note |
@@ -188,6 +189,23 @@ pub async fn logs_are_independent(harness: &impl AuditLogStoreHarness) {
     let mut sorted = logs.clone();
     sorted.sort();
     assert_eq!(logs, sorted);
+}
+
+/// `logs()` orders ids by their UTF-8 bytes, as `Vec<String>::sort` does, so a backend whose
+/// default collation is locale-aware (ICU, glibc) must order by bytes explicitly.
+pub async fn logs_sort_by_bytes(harness: &impl AuditLogStoreHarness) {
+    let store = harness.open().await;
+    let base = unique("audit-order");
+    let ids: Vec<String> =
+        ["a-1", "B-2", "_c", ":é/x", "b"].iter().map(|suffix| format!("{base}{suffix}")).collect();
+    for id in &ids {
+        store.append(batch(id, 0..1, vec![])).await.unwrap();
+    }
+    let ours: Vec<String> =
+        store.logs().await.unwrap().into_iter().filter(|id| id.starts_with(&base)).collect();
+    let mut expected = ids.clone();
+    expected.sort();
+    assert_eq!(ours, expected);
 }
 
 /// Level 0 returns leaf hashes, higher levels the stored nodes, absent ones `None`.
