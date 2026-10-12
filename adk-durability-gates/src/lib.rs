@@ -2,16 +2,16 @@
 //!
 //! The gates in `tests/gates.rs` start the `adk-durability-gate` binary as separate OS
 //! processes — workers, schedulers, and replicas — that share nothing but one backend.
-//! Each gate is parameterised by a [`Backend`], which opens every durable store the
+//! Each gate is parameterised by a `Backend`, which opens every durable store the
 //! runtime needs on that backend:
 //!
 //! | Store | Used by |
 //! |-------|---------|
-//! | [`DurableRunStore`] | runs, fenced leases, recovery |
-//! | [`SessionService`] | agent session history |
-//! | [`ActionLedger`] | non-idempotent tool calls |
-//! | [`ScheduleStore`] | cron and timer schedules |
-//! | [`GovernanceStateStore`] | the replicated kill switch |
+//! | `adk_core::DurableRunStore` | runs, fenced leases, recovery |
+//! | `adk_session::SessionService` | agent session history |
+//! | `adk_core::ActionLedger` | non-idempotent tool calls |
+//! | `adk_core::ScheduleStore` | cron and timer schedules |
+//! | `adk_core::GovernanceStateStore` | the replicated kill switch |
 //!
 //! SQLite runs on every pull request. The server-backed gates need their server and
 //! run in the nightly `durable-stores` job (see `tests/gates.rs`). Without a backend
