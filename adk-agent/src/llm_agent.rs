@@ -2347,13 +2347,13 @@ impl ToolExecutor<'_> {
                 // that exists answers the call; a ledger that cannot be read or written
                 // fails the call closed.
                 let ledgered = match crate::tool_ledger::begin_ledgered_call(
-                    self.ctx.run_config(),
+                    self.ctx.as_ref(),
                     effect,
                     tool_ctx.idempotency_key(),
                     &name,
                     &final_args,
                 )
-                .await
+                .await?
                 {
                     Ok(ledgered) => ledgered,
                     Err(answer) => {
@@ -2481,6 +2481,15 @@ impl ToolExecutor<'_> {
                 }
 
                 let outcome_unknown = interrupted && effect == ToolEffect::NonIdempotent;
+                if outcome_unknown {
+                    crate::tool_ledger::record_outcome_unknown(
+                        self.ctx.as_ref(),
+                        &name,
+                        &final_args,
+                        "interrupted",
+                    )
+                    .await?;
+                }
                 // A call that ended mid-flight keeps its begun record, so a replay is answered
                 // with an unknown outcome instead of executing again.
                 if let Some(ledgered) = ledgered

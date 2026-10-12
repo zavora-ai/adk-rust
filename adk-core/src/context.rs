@@ -1211,6 +1211,17 @@ pub struct RunConfig {
     /// runner writes here at the start of each run, or
     /// [`LlmSpendEstimate::default`](crate::LlmSpendEstimate::default) outside a runner.
     pub llm_spend_estimate: Option<crate::LlmSpendEstimate>,
+    /// Where the run writes audit records, and what happens when a record cannot be
+    /// written.
+    ///
+    /// When set, the governed path records every tool decision (allowed, denied, held
+    /// for approval) and every approval decision it applies, payment tools record each
+    /// payment, and agents record calls answered with an unknown outcome. Records carry
+    /// argument digests, never arguments. Under
+    /// [`AuditFailureMode::Block`](crate::audit_log::AuditFailureMode::Block) an action
+    /// whose record cannot be written does not happen. See
+    /// [`AuditTrail`](crate::audit_log::AuditTrail).
+    pub audit: Option<crate::audit_log::AuditTrail>,
 }
 
 impl Default for RunConfig {
@@ -1243,6 +1254,7 @@ impl Default for RunConfig {
             tool_confirmation_timeout: crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
             spend_ledger: None,
             llm_spend_estimate: None,
+            audit: None,
         }
     }
 }
@@ -1489,6 +1501,12 @@ impl RunConfigBuilder {
     /// See [`RunConfig::spend_ledger`].
     pub fn spend_ledger(mut self, ledger: Arc<dyn crate::SpendLedger>) -> Self {
         self.config.spend_ledger = Some(ledger);
+        self
+    }
+
+    /// Records the run's governed actions through `audit`. See [`RunConfig::audit`].
+    pub fn audit(mut self, audit: crate::audit_log::AuditTrail) -> Self {
+        self.config.audit = Some(audit);
         self
     }
 

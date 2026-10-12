@@ -8,9 +8,16 @@
 //!   runs are asked to cancel through the run store.
 //! - `POST /api/admin/unfreeze` — lifts the freeze.
 //! - `GET /api/admin/governance` — reports the current state.
+//!
+//! When the control has an audit trail attached
+//! ([`GovernanceControl::attach_audit`]), both changes are recorded with the calling
+//! user as the actor. A freeze takes effect even when its record fails, and answers
+//! `503`; an unfreeze that cannot be recorded under `AuditFailureMode::Block` is refused
+//! with `503` and execution stays frozen.
 
 use std::sync::Arc;
 
+use adk_core::audit_log::AuditActor;
 use adk_core::principal::SubjectRef;
 use adk_core::{DurableRunStore, GovernanceControl, RequestContext, RunFilter, RunState};
 use axum::{
@@ -84,8 +91,13 @@ pub struct GovernanceStatus {
     pub error: Option<String>,
 }
 
-fn issued_by(caller: Option<&RequestContext>) -> Option<SubjectRef> {
-    caller.map(|caller| SubjectRef::human(caller.user_id.clone()))
+/// The audit actor for an administrator's request: the authenticated user, who is also
+/// the issuer written to the shared store.
+fn admin_actor(caller: Option<&RequestContext>) -> AuditActor {
+    AuditActor {
+        on_behalf_of: caller.map(|caller| SubjectRef::human(caller.user_id.clone())),
+        ..AuditActor::default()
+    }
 }
 
 /// `POST /api/admin/freeze`
@@ -103,7 +115,7 @@ pub async fn freeze(
         governance.reason = %reason,
         "governance freeze requested"
     );
-    let written = controller.control.freeze_replicated(reason, issued_by(caller.as_ref())).await;
+    let written = controller.control.freeze_recorded(reason, admin_actor(caller.as_ref())).await;
 
     let mut cancelled = 0;
     for store in &controller.run_stores {
@@ -147,7 +159,7 @@ pub async fn unfreeze(
         caller.user_id = caller.as_ref().map(|c| c.user_id.as_str()).unwrap_or("anonymous"),
         "governance unfreeze requested"
     );
-    match controller.control.unfreeze_replicated(issued_by(caller.as_ref())).await {
+    match controller.control.unfreeze_recorded(admin_actor(caller.as_ref())).await {
         Ok(_) => Json(controller.status()).into_response(),
         Err(error) => {
             let mut status = controller.status();

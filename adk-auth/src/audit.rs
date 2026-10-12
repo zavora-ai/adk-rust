@@ -439,15 +439,9 @@ impl<T: AuditSink + ?Sized> AuditSink for std::sync::Arc<T> {
 /// What a guarded tool does when its audit sink fails to record an access decision.
 ///
 /// [`ProtectedTool`](crate::ProtectedTool), [`ScopedTool`](crate::ScopedTool), and the
-/// guards that build them default to [`Block`](Self::Block).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AuditFailureMode {
-    /// Refuse the call: an action whose decision cannot be recorded does not run.
-    #[default]
-    Block,
-    /// Log the failure and apply the access decision without a record.
-    Warn,
-}
+/// guards that build them default to [`Block`](AuditFailureMode::Block). The same type
+/// governs the runtime's [`AuditTrail`](adk_core::audit_log::AuditTrail).
+pub use adk_core::audit_log::AuditFailureMode;
 
 /// Records one access decision, refusing the call when the sink fails in `Block` mode.
 pub(crate) async fn record_decision(

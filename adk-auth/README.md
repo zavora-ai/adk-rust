@@ -238,8 +238,11 @@ logs the failure and continues instead. `FileAuditSink::with_chaining` and
 
 `signed_audit::AuditLog` writes RFC 8785 records into an RFC 9162 Merkle tree per replica,
 signs C2SP checkpoints with Ed25519 (Go `sumdb/note` compatible), rotates keys with a
-dual-signed checkpoint, and publishes checkpoints to optional anchors. It is an `AuditSink`.
-Records live in an `AuditLogStore` (in memory, `adk-session` SQLite or PostgreSQL), and
+dual-signed checkpoint, and publishes checkpoints to optional anchors. It is an `AuditSink`
+and an `AuditRecorder`, so `Runner::builder().audit_log(log)` records every governed tool
+decision, approval, kill-switch change, payment, and unknown outcome of a run in it.
+Records live in an `AuditLogStore` (in memory, or `adk-session` SQLite, PostgreSQL, Redis,
+MongoDB, Neo4j, or Firestore), and
 `signed_audit::verify` or `adk-rust audit verify` detects flipped bytes, deletions,
 reorders, truncation, and forks. See the
 [Audit Log guide](../docs/official_docs/security/audit-log.md).

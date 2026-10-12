@@ -6,7 +6,8 @@
 
 use std::sync::Arc;
 
-use adk_core::{ActionLedger, ActionOutcome, ActionRecord, RunConfig, ToolEffect};
+use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome};
+use adk_core::{ActionLedger, ActionOutcome, ActionRecord, InvocationContext, ToolEffect};
 use serde_json::Value;
 
 /// A call begun in the action ledger, completed once the tool finishes.
@@ -17,21 +18,26 @@ pub(crate) struct LedgeredCall {
 
 /// Consults the action ledger before a call executes.
 ///
-/// Returns `Ok(None)` when the call is not ledgered (no ledger configured, or an
-/// effect other than [`ToolEffect::NonIdempotent`]), and `Ok(Some(_))` once the
-/// call has been begun under `key`. Returns `Err(response)` when the call must not
-/// execute: the ledger already holds a record for `key`, or cannot be read or
+/// Returns `Ok(Ok(None))` when the call is not ledgered (no ledger configured, or an
+/// effect other than [`ToolEffect::NonIdempotent`]), and `Ok(Ok(Some(_)))` once the
+/// call has been begun under `key`. Returns `Ok(Err(response))` when the call must
+/// not execute: the ledger already holds a record for `key`, or cannot be read or
 /// written. `response` is the function response that answers the call.
+///
+/// # Errors
+///
+/// Returns `audit.record_failed`, which ends the run, when an outcome-unknown answer
+/// cannot be audited under [`AuditFailureMode::Block`](adk_core::audit_log::AuditFailureMode::Block).
 pub(crate) async fn begin_ledgered_call(
-    run_config: &RunConfig,
+    ctx: &dyn InvocationContext,
     effect: ToolEffect,
     key: String,
     name: &str,
     args: &Value,
-) -> Result<Option<LedgeredCall>, Value> {
-    let ledger = match &run_config.action_ledger {
+) -> adk_core::Result<Result<Option<LedgeredCall>, Value>> {
+    let ledger = match &ctx.run_config().action_ledger {
         Some(ledger) if effect == ToolEffect::NonIdempotent => ledger.clone(),
-        _ => return Ok(None),
+        _ => return Ok(Ok(None)),
     };
     let answer = match ledger.get(&key).await {
         Ok(Some(record)) => match record.outcome {
@@ -45,12 +51,15 @@ pub(crate) async fn begin_ledgered_call(
                 "error": error,
                 "detail": format!("this call to '{name}' already failed; it was not executed again"),
             }),
-            _ => adk_core::outcome_unknown_response(format!(
-                "an earlier attempt of this call to '{name}' began but recorded no outcome, so it may have taken effect; it was not executed again"
-            )),
+            _ => {
+                record_outcome_unknown(ctx, name, args, "began_without_outcome").await?;
+                adk_core::outcome_unknown_response(format!(
+                    "an earlier attempt of this call to '{name}' began but recorded no outcome, so it may have taken effect; it was not executed again"
+                ))
+            }
         },
         Ok(None) => match ledger.begin(&ActionRecord::new(key.clone(), name, args, effect)).await {
-            Ok(()) => return Ok(Some(LedgeredCall { ledger, key })),
+            Ok(()) => return Ok(Ok(Some(LedgeredCall { ledger, key }))),
             Err(error) => serde_json::json!({
                 "error": format!("tool '{name}' was not executed: the action ledger could not record the call: {error}")
             }),
@@ -65,7 +74,33 @@ pub(crate) async fn begin_ledgered_call(
         response = %answer,
         "non-idempotent call answered by the action ledger without executing"
     );
-    Err(answer)
+    Ok(Err(answer))
+}
+
+/// Records, through the run's [`RunConfig::audit`](adk_core::RunConfig::audit), a call
+/// answered with an unknown outcome. `cause` is `interrupted` for a call that ended
+/// mid-flight and `began_without_outcome` for a replay of one.
+///
+/// # Errors
+///
+/// Returns `audit.record_failed` when the record cannot be written under
+/// [`AuditFailureMode::Block`](adk_core::audit_log::AuditFailureMode::Block).
+pub(crate) async fn record_outcome_unknown(
+    ctx: &dyn InvocationContext,
+    name: &str,
+    args: &Value,
+    cause: &str,
+) -> adk_core::Result<()> {
+    let Some(trail) = &ctx.run_config().audit else {
+        return Ok(());
+    };
+    let draft = AuditRecordDraft::new(AuditRecordKind::ToolCall, name)
+        .actor(AuditActor::for_context(ctx))
+        .args_digest(trail.digest(args))
+        .outcome(AuditRecordOutcome::OutcomeUnknown)
+        .ext("cause", Value::String(cause.to_string()))
+        .ext("sessionId", Value::String(ctx.session_id().to_string()));
+    trail.record(draft).await
 }
 
 impl LedgeredCall {

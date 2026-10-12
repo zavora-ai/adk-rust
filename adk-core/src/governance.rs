@@ -36,6 +36,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::approval::{ApprovalDelegation, ApprovalRequest, ApprovalRequestQuery};
+use crate::audit_log::{
+    AuditActor, AuditDecision, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome, AuditTrail,
+};
 use crate::governance_state::{GovernanceScope, GovernanceState, GovernanceStateStore};
 use crate::principal::SubjectRef;
 use crate::{
@@ -102,6 +105,7 @@ struct ControlState {
     /// The reason of a freeze read from the mirrored store, while one is in force.
     replicated: std::sync::RwLock<Option<String>>,
     mirror: Option<Mirror>,
+    audit: std::sync::RwLock<Option<AuditTrail>>,
 }
 
 /// Error code returned while a mirrored control has not read its store within `max_staleness`.
@@ -326,18 +330,133 @@ impl GovernanceControl {
     }
 
     /// Freezes execution everywhere this control is attached, in this process only.
+    ///
+    /// With an [attached audit trail](Self::attach_audit), the freeze is recorded in the
+    /// background; use [`freeze_recorded`](Self::freeze_recorded) to wait for the record.
     pub fn freeze(&self, reason: impl Into<String>) {
         let reason = reason.into();
+        self.set_frozen(reason.clone());
+        self.record_in_background(governance_draft("governance.freeze", Some(reason)));
+    }
+
+    /// Lifts a local freeze. A freeze read from a mirrored store stays in force.
+    ///
+    /// With an [attached audit trail](Self::attach_audit), the change is recorded in the
+    /// background; use [`unfreeze_recorded`](Self::unfreeze_recorded) to lift the
+    /// freeze only once it is recorded.
+    pub fn unfreeze(&self) {
+        self.clear_frozen();
+        self.record_in_background(governance_draft("governance.unfreeze", None));
+    }
+
+    /// Records freezes and unfreezes of this control, and of every clone, through `audit`.
+    pub fn attach_audit(&self, audit: AuditTrail) {
+        *self.inner.audit.write().unwrap_or_else(|e| e.into_inner()) = Some(audit);
+    }
+
+    /// The attached audit trail, if any.
+    pub fn audit(&self) -> Option<AuditTrail> {
+        self.inner.audit.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Freezes execution, then records the freeze as done by `actor`.
+    ///
+    /// A mirrored control freezes every replica, as
+    /// [`freeze_replicated`](Self::freeze_replicated) does, with `actor`'s subject as the
+    /// issuer. The freeze takes effect whether or not the record is written.
+    ///
+    /// # Errors
+    ///
+    /// Returns the replicated store's error, as `freeze_replicated` does (this replica
+    /// is frozen regardless), and `audit.record_failed` when the attached trail is in
+    /// [`Block`](crate::audit_log::AuditFailureMode::Block) mode and the record cannot be
+    /// written; execution stays frozen.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::GovernanceControl;
+    /// use adk_core::audit_log::{AuditActor, AuditTrail, InMemoryAuditRecorder};
+    /// use adk_core::principal::SubjectRef;
+    ///
+    /// # futures::executor::block_on(async {
+    /// let recorder = InMemoryAuditRecorder::new();
+    /// let control = GovernanceControl::new();
+    /// control.attach_audit(AuditTrail::new(Arc::new(recorder.clone())));
+    ///
+    /// let admin = AuditActor::subject(SubjectRef::human("oncall"));
+    /// control.freeze_recorded("incident 4012", admin.clone()).await?;
+    /// control.unfreeze_recorded(admin).await?;
+    /// assert_eq!(recorder.records().len(), 2);
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// # }).unwrap();
+    /// ```
+    pub async fn freeze_recorded(
+        &self,
+        reason: impl Into<String>,
+        actor: AuditActor,
+    ) -> Result<()> {
+        let reason = reason.into();
+        let replicated = self.replicate_freeze(reason.clone(), actor.on_behalf_of.clone()).await;
+        if let Some(trail) = self.audit() {
+            let draft = governance_draft("governance.freeze", Some(reason))
+                .actor(actor)
+                .ext("replicated", Value::Bool(self.is_mirrored() && replicated.is_ok()));
+            trail.record(draft).await?;
+        }
+        replicated.map(drop)
+    }
+
+    /// Records the unfreeze as done by `actor`, then lifts the freeze; on every replica
+    /// for a mirrored control, as [`unfreeze_replicated`](Self::unfreeze_replicated) does.
+    ///
+    /// # Errors
+    ///
+    /// Returns the replicated store's error, as `unfreeze_replicated` does, and
+    /// `audit.record_failed` when the attached trail is in
+    /// [`Block`](crate::audit_log::AuditFailureMode::Block) mode and the record cannot be
+    /// written; execution stays frozen.
+    pub async fn unfreeze_recorded(&self, actor: AuditActor) -> Result<()> {
+        let issued_by = actor.on_behalf_of.clone();
+        if let Some(trail) = self.audit() {
+            let draft = governance_draft("governance.unfreeze", None)
+                .actor(actor)
+                .ext("replicated", Value::Bool(self.is_mirrored()));
+            trail.record(draft).await?;
+        }
+        self.replicate_unfreeze(issued_by).await.map(drop)
+    }
+
+    fn set_frozen(&self, reason: String) {
         tracing::warn!(governance.reason = %reason, "execution frozen");
         *self.inner.reason.write().unwrap_or_else(|e| e.into_inner()) = Some(reason);
         self.inner.frozen.store(true, Ordering::SeqCst);
     }
 
-    /// Lifts a local freeze. A freeze read from a mirrored store stays in force.
-    pub fn unfreeze(&self) {
+    fn clear_frozen(&self) {
         self.inner.frozen.store(false, Ordering::SeqCst);
         *self.inner.reason.write().unwrap_or_else(|e| e.into_inner()) = None;
         tracing::info!("execution unfrozen");
+    }
+
+    /// Records `draft` without waiting, when a trail is attached and a runtime is running.
+    fn record_in_background(&self, draft: AuditRecordDraft) {
+        let Some(trail) = self.audit() else {
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    // A failure is logged by the trail; the change has already happened.
+                    let _ = trail.record(draft).await;
+                });
+            }
+            Err(_) => tracing::warn!(
+                audit.action = %draft.action,
+                "no async runtime to record the governance change; use the *_recorded methods"
+            ),
+        }
     }
 
     /// Whether execution is frozen, locally or by a mirrored store.
@@ -510,15 +629,26 @@ impl GovernanceControl {
         issued_by: Option<SubjectRef>,
     ) -> Result<Option<GovernanceState>> {
         let reason = reason.into();
+        let result = self.replicate_freeze(reason.clone(), issued_by).await;
+        self.record_in_background(governance_draft("governance.freeze", Some(reason)));
+        result
+    }
+
+    /// [`freeze_replicated`](Self::freeze_replicated) without an audit record.
+    async fn replicate_freeze(
+        &self,
+        reason: String,
+        issued_by: Option<SubjectRef>,
+    ) -> Result<Option<GovernanceState>> {
         let Some(mirror) = &self.inner.mirror else {
-            self.freeze(reason);
+            self.set_frozen(reason);
             return Ok(None);
         };
         match self.write_replicated(mirror, true, Some(reason.clone()), issued_by).await {
             Ok(state) => Ok(state),
             Err(error) => {
                 tracing::error!(error = %error, "could not write the replicated freeze; freezing this replica locally");
-                self.freeze(reason);
+                self.set_frozen(reason);
                 Err(error)
             }
         }
@@ -538,12 +668,22 @@ impl GovernanceControl {
         &self,
         issued_by: Option<SubjectRef>,
     ) -> Result<Option<GovernanceState>> {
+        let state = self.replicate_unfreeze(issued_by).await?;
+        self.record_in_background(governance_draft("governance.unfreeze", None));
+        Ok(state)
+    }
+
+    /// [`unfreeze_replicated`](Self::unfreeze_replicated) without an audit record.
+    async fn replicate_unfreeze(
+        &self,
+        issued_by: Option<SubjectRef>,
+    ) -> Result<Option<GovernanceState>> {
         let Some(mirror) = &self.inner.mirror else {
-            self.unfreeze();
+            self.clear_frozen();
             return Ok(None);
         };
         let state = self.write_replicated(mirror, false, None, issued_by).await?;
-        self.unfreeze();
+        self.clear_frozen();
         Ok(state)
     }
 
@@ -586,6 +726,16 @@ impl GovernanceControl {
         }
         Err(last_error
             .unwrap_or_else(|| crate::governance_state::governance_conflict_error(&scope, 0, 0)))
+    }
+}
+
+/// A governance record for `action` with the freeze reason, if any.
+fn governance_draft(action: &str, reason: Option<String>) -> AuditRecordDraft {
+    let draft = AuditRecordDraft::new(AuditRecordKind::Governance, action)
+        .outcome(AuditRecordOutcome::Succeeded);
+    match reason {
+        Some(reason) => draft.ext("reason", Value::String(reason)),
+        None => draft,
     }
 }
 
@@ -1132,6 +1282,7 @@ pub struct ToolGate<'a> {
     scope: ApprovalScope,
     screen: Option<&'a dyn ToolCallScreen>,
     abandon: Option<tokio::sync::watch::Receiver<bool>>,
+    actor: Option<AuditActor>,
 }
 
 impl<'a> ToolGate<'a> {
@@ -1142,7 +1293,15 @@ impl<'a> ToolGate<'a> {
         invocation_id: &'a str,
         scope: ApprovalScope,
     ) -> Self {
-        Self { run_config, agent_name, invocation_id, scope, screen: None, abandon: None }
+        Self {
+            run_config,
+            agent_name,
+            invocation_id,
+            scope,
+            screen: None,
+            abandon: None,
+            actor: None,
+        }
     }
 
     /// A gate reading the run config and identity of `ctx`.
@@ -1153,6 +1312,37 @@ impl<'a> ToolGate<'a> {
             ctx.invocation_id(),
             ApprovalScope::new(ctx.app_name(), ctx.user_id(), ctx.session_id()),
         )
+        .with_actor(AuditActor::for_context(ctx))
+    }
+
+    /// Sets who the audit records of this gate's calls name as acting.
+    ///
+    /// Without one, the actor is [`AuditActor::for_invocation`] of the gate's app,
+    /// agent, user, and invocation.
+    #[must_use]
+    pub fn with_actor(mut self, actor: AuditActor) -> Self {
+        self.actor = Some(actor);
+        self
+    }
+
+    /// Records one governed decision through the run's [`RunConfig::audit`], if any.
+    async fn record(&self, draft: AuditRecordDraft) -> Result<()> {
+        let Some(trail) = &self.run_config.audit else {
+            return Ok(());
+        };
+        let actor = self.actor.clone().unwrap_or_else(|| {
+            AuditActor::for_invocation(
+                &self.scope.app_name,
+                self.agent_name,
+                &self.scope.user_id,
+                self.invocation_id,
+            )
+        });
+        trail
+            .record(
+                draft.actor(actor).ext("sessionId", Value::String(self.scope.session_id.clone())),
+            )
+            .await
     }
 
     /// Screens every call's final arguments with `screen`.
@@ -1253,10 +1443,19 @@ pub async fn authorize_tool_call(
     call: GovernedCall,
 ) -> Result<ToolAuthorization> {
     let config = gate.run_config;
-    config.check_governance()?;
     let GovernedCall { tool_name, function_call_id, mut args, effect, requires_confirmation } =
         call;
+    let audited =
+        AuditedCall { gate, tool_name: &tool_name, function_call_id: &function_call_id, effect };
+    if let Err(frozen) = config.check_governance() {
+        audited.decision(&args, AuditDecision::Denied, Some(POLICY_REF_GOVERNANCE), None).await?;
+        return Err(frozen);
+    }
 
+    let policy_ref = config.tool_policy.as_ref().map(|policy| match policy.policy_ref() {
+        Some(name) => format!("{POLICY_REF_TOOL_POLICY}:{name}"),
+        None => POLICY_REF_TOOL_POLICY.to_string(),
+    });
     let mut decision = evaluate_policy(gate, &tool_name, &args, effect).await;
     if !matches!(decision, PolicyDecision::Deny { .. })
         && let Some(screen) = gate.screen
@@ -1270,7 +1469,13 @@ pub async fn authorize_tool_call(
                     args = screened;
                 }
             }
-            Err(reason) => return Ok(ToolAuthorization::Refuse { reason, confirmation: None }),
+            Err(reason) => {
+                // The screen's reason can quote the arguments, so it stays out of the record.
+                audited
+                    .decision(&args, AuditDecision::Denied, Some(POLICY_REF_GUARDRAIL), None)
+                    .await?;
+                return Ok(ToolAuthorization::Refuse { reason, confirmation: None });
+            }
         }
     }
 
@@ -1279,6 +1484,9 @@ pub async fn authorize_tool_call(
         PolicyDecision::RequireApproval { reason } => Some(reason),
         PolicyDecision::Deny { reason } => {
             tracing::info!(tool.name = %tool_name, policy.reason = %reason, "tool call denied by policy");
+            audited
+                .decision(&args, AuditDecision::Denied, policy_ref.as_deref(), Some(&reason))
+                .await?;
             return Ok(ToolAuthorization::Refuse {
                 reason: format!("Tool '{tool_name}' denied by policy: {reason}"),
                 confirmation: None,
@@ -1287,15 +1495,24 @@ pub async fn authorize_tool_call(
     };
 
     if !requires_confirmation && approval_reason.is_none() {
+        audited.decision(&args, AuditDecision::Allowed, policy_ref.as_deref(), None).await?;
         return Ok(ToolAuthorization::Execute { args, confirmation: None });
     }
 
     let request = ToolConfirmationRequest {
         tool_name: tool_name.clone(),
-        function_call_id: Some(function_call_id),
+        function_call_id: Some(function_call_id.clone()),
         args: args.clone(),
     };
-    let Some(approval) = resolve_confirmation(gate, &request).await? else {
+    let Some((approval, source)) = resolve_confirmation(gate, &request).await? else {
+        let held_by = if approval_reason.is_some() {
+            policy_ref.as_deref()
+        } else {
+            Some(POLICY_REF_CONFIRMATION)
+        };
+        audited
+            .decision(&args, AuditDecision::ApprovalRequired, held_by, approval_reason.as_deref())
+            .await?;
         if let Some(store) = &config.approval_store {
             store.record_pending(&gate.scope, &request).await?;
         }
@@ -1321,27 +1538,49 @@ pub async fn authorize_tool_call(
     };
     match approval.decision {
         ToolConfirmationDecision::Approve => {
+            let edited = approval.edited_args.filter(|edited| *edited != args);
+            audited.approval(&args, AuditDecision::Approved, source, edited.as_ref()).await?;
             // A freeze can land while a person is deciding.
-            config.check_governance()?;
-            match approval.edited_args {
-                Some(edited) if edited != args => {
-                    authorize_edited_args(gate, &tool_name, effect, edited).await
+            if let Err(frozen) = config.check_governance() {
+                audited
+                    .decision(&args, AuditDecision::Denied, Some(POLICY_REF_GOVERNANCE), None)
+                    .await?;
+                return Err(frozen);
+            }
+            match edited {
+                Some(edited) => authorize_edited_args(&audited, edited).await,
+                None => {
+                    audited
+                        .decision(
+                            &args,
+                            AuditDecision::Allowed,
+                            Some(POLICY_REF_CONFIRMATION),
+                            None,
+                        )
+                        .await?;
+                    Ok(ToolAuthorization::Execute {
+                        args,
+                        confirmation: Some(ToolConfirmationDecision::Approve),
+                    })
                 }
-                _ => Ok(ToolAuthorization::Execute {
-                    args,
-                    confirmation: Some(ToolConfirmationDecision::Approve),
-                }),
             }
         }
-        ToolConfirmationDecision::Deny => Ok(ToolAuthorization::Refuse {
-            reason: match approval.message {
-                Some(message) => {
-                    format!("Tool '{tool_name}' was not run; the approver declined it: {message}")
-                }
-                None => format!("Tool '{tool_name}' execution denied by confirmation policy"),
-            },
-            confirmation: Some(ToolConfirmationDecision::Deny),
-        }),
+        ToolConfirmationDecision::Deny => {
+            // The approver's message is free text, so it stays out of the record.
+            audited.approval(&args, AuditDecision::Rejected, source, None).await?;
+            audited
+                .decision(&args, AuditDecision::Denied, Some(POLICY_REF_CONFIRMATION), None)
+                .await?;
+            Ok(ToolAuthorization::Refuse {
+                reason: match approval.message {
+                    Some(message) => format!(
+                        "Tool '{tool_name}' was not run; the approver declined it: {message}"
+                    ),
+                    None => format!("Tool '{tool_name}' execution denied by confirmation policy"),
+                },
+                confirmation: Some(ToolConfirmationDecision::Deny),
+            })
+        }
     }
 }
 
@@ -1352,11 +1591,14 @@ pub async fn authorize_tool_call(
 /// exactly these arguments. A policy denial of the edit, or of a screen's rewrite of
 /// it, refuses the call.
 async fn authorize_edited_args(
-    gate: &ToolGate<'_>,
-    tool_name: &str,
-    effect: ToolEffect,
+    audited: &AuditedCall<'_, '_>,
     edited: Value,
 ) -> Result<ToolAuthorization> {
+    let (gate, tool_name, effect) = (audited.gate, audited.tool_name, audited.effect);
+    let policy_ref = gate.run_config.tool_policy.as_ref().map(|policy| match policy.policy_ref() {
+        Some(name) => format!("{POLICY_REF_TOOL_POLICY}:{name}"),
+        None => POLICY_REF_TOOL_POLICY.to_string(),
+    });
     let mut decision = evaluate_policy(gate, tool_name, &edited, effect).await;
     let mut args = edited;
     if !matches!(decision, PolicyDecision::Deny { .. })
@@ -1371,6 +1613,9 @@ async fn authorize_edited_args(
                 }
             }
             Err(reason) => {
+                audited
+                    .decision(&args, AuditDecision::Denied, Some(POLICY_REF_GUARDRAIL), None)
+                    .await?;
                 return Ok(ToolAuthorization::Refuse {
                     reason,
                     confirmation: Some(ToolConfirmationDecision::Approve),
@@ -1380,6 +1625,9 @@ async fn authorize_edited_args(
     }
     if let PolicyDecision::Deny { reason } = decision {
         tracing::info!(tool.name = %tool_name, policy.reason = %reason, "edited tool call denied by policy");
+        audited
+            .decision(&args, AuditDecision::Denied, policy_ref.as_deref(), Some(&reason))
+            .await?;
         return Ok(ToolAuthorization::Refuse {
             reason: format!(
                 "Tool '{tool_name}' with the approver's edited arguments denied by policy: {reason}"
@@ -1388,7 +1636,81 @@ async fn authorize_edited_args(
         });
     }
     tracing::info!(tool.name = %tool_name, "executing tool call with the approver's edited arguments");
+    audited.decision(&args, AuditDecision::Allowed, Some(POLICY_REF_CONFIRMATION), None).await?;
     Ok(ToolAuthorization::Execute { args, confirmation: Some(ToolConfirmationDecision::Approve) })
+}
+
+/// `policy_ref` of a decision made by the kill switch.
+const POLICY_REF_GOVERNANCE: &str = "governance";
+/// `policy_ref` of a decision made by the run's [`ToolPolicy`](crate::ToolPolicy), followed
+/// by `:<name>` when the policy names itself.
+const POLICY_REF_TOOL_POLICY: &str = "tool_policy";
+/// `policy_ref` of a refusal by the agent's tool screen.
+const POLICY_REF_GUARDRAIL: &str = "guardrail";
+/// `policy_ref` of a call decided by its confirmation.
+const POLICY_REF_CONFIRMATION: &str = "confirmation";
+
+/// One call on its way through [`authorize_tool_call`], for its audit records.
+struct AuditedCall<'g, 'a> {
+    gate: &'g ToolGate<'a>,
+    tool_name: &'g str,
+    function_call_id: &'g str,
+    effect: ToolEffect,
+}
+
+impl AuditedCall<'_, '_> {
+    fn draft(&self, kind: AuditRecordKind, args: &Value) -> Option<AuditRecordDraft> {
+        let trail = self.gate.run_config.audit.as_ref()?;
+        Some(
+            AuditRecordDraft::new(kind, self.tool_name)
+                .args_digest(trail.digest(args))
+                .ext("functionCallId", Value::String(self.function_call_id.to_string()))
+                .ext("effect", serde_json::to_value(self.effect).unwrap_or(Value::Null)),
+        )
+    }
+
+    /// Records the governed path's decision for the call.
+    async fn decision(
+        &self,
+        args: &Value,
+        decision: AuditDecision,
+        policy_ref: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        let Some(mut draft) = self.draft(AuditRecordKind::ToolCall, args) else {
+            return Ok(());
+        };
+        draft = draft.decision(decision);
+        if decision != AuditDecision::Allowed {
+            draft = draft.outcome(AuditRecordOutcome::NotRun);
+        }
+        if let Some(policy_ref) = policy_ref {
+            draft = draft.policy_ref(policy_ref);
+        }
+        if let Some(reason) = reason {
+            draft = draft.ext("reason", Value::String(reason.to_string()));
+        }
+        self.gate.record(draft).await
+    }
+
+    /// Records the approval decision the call was given, where it came from, and the
+    /// digest of arguments the approver substituted.
+    async fn approval(
+        &self,
+        args: &Value,
+        decision: AuditDecision,
+        source: &str,
+        edited: Option<&Value>,
+    ) -> Result<()> {
+        let Some(mut draft) = self.draft(AuditRecordKind::Approval, args) else {
+            return Ok(());
+        };
+        draft = draft.decision(decision).ext("source", Value::String(source.to_string()));
+        if let (Some(edited), Some(trail)) = (edited, &self.gate.run_config.audit) {
+            draft = draft.ext("editedArgsDigest", Value::String(trail.digest(edited)));
+        }
+        self.gate.record(draft).await
+    }
 }
 
 async fn evaluate_policy(
@@ -1417,7 +1739,7 @@ async fn evaluate_policy(
 async fn resolve_confirmation(
     gate: &ToolGate<'_>,
     request: &ToolConfirmationRequest,
-) -> Result<Option<ToolApproval>> {
+) -> Result<Option<(ToolApproval, &'static str)>> {
     let config = gate.run_config;
     let fingerprint = request.fingerprint();
     let bare = |decision: ToolConfirmationDecision| match decision {
@@ -1434,13 +1756,13 @@ async fn resolve_confirmation(
                 function_call.id = %call_id,
                 "confirmation decision does not match this call's arguments, treating as unconfirmed"
             ),
-            _ => return Ok(Some(bare(*decision))),
+            _ => return Ok(Some((bare(*decision), "call_id"))),
         }
     }
 
     if let Some(approval) = config.tool_approvals.get(&fingerprint) {
         if approval.is_live(Utc::now()) {
-            return Ok(Some(approval.clone()));
+            return Ok(Some((approval.clone(), "fingerprint")));
         }
         tracing::debug!(tool.name = %request.tool_name, "approval for this call has expired");
     }
@@ -1448,7 +1770,7 @@ async fn resolve_confirmation(
     if let Some(store) = &config.approval_store
         && let Some(approval) = store.take_approval(&gate.scope, &fingerprint).await?
     {
-        return Ok(Some(approval));
+        return Ok(Some((approval, "approval_store")));
     }
 
     let Some(handler) = config.tool_confirmation_handler.as_ref() else {
@@ -1478,7 +1800,7 @@ async fn resolve_confirmation(
         None => decide.await,
     };
     match decided {
-        Ok(Ok(decision)) => Ok(Some(bare(decision))),
+        Ok(Ok(decision)) => Ok(Some((bare(decision), "handler"))),
         Ok(Err(error)) => Err(error),
         Err(_) => {
             tracing::warn!(
@@ -1486,7 +1808,7 @@ async fn resolve_confirmation(
                 timeout_secs = timeout.as_secs(),
                 "confirmation handler did not decide in time, denying the call"
             );
-            Ok(Some(ToolApproval::deny()))
+            Ok(Some((ToolApproval::deny(), "handler_timeout")))
         }
     }
 }

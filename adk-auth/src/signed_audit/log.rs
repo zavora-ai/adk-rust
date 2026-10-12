@@ -679,6 +679,25 @@ fn draft_from_event(event: AuditEvent) -> AuditRecordDraft {
     draft
 }
 
+/// The runtime's audit hook: the runner's `audit_log` setting and
+/// [`AuditTrail`](adk_core::audit_log::AuditTrail) record governed actions here.
+///
+/// Digests are [`json_sha256`]; a value with an integer outside ±2^53, which RFC 8785
+/// cannot canonicalize, is digested as `sha256-json:<hex>` over its compact JSON text.
+#[async_trait]
+impl adk_core::audit_log::AuditRecorder for AuditLog {
+    fn digest(&self, value: &serde_json::Value) -> String {
+        json_sha256(value).unwrap_or_else(|_| {
+            let text = serde_json::to_string(value).unwrap_or_default();
+            format!("sha256-json:{}", AuditHash(Sha256::digest(text.as_bytes()).into()))
+        })
+    }
+
+    async fn record(&self, draft: AuditRecordDraft) -> Result<()> {
+        self.append(draft).await.map(drop)
+    }
+}
+
 #[async_trait]
 impl AuditSink for AuditLog {
     async fn log(&self, event: AuditEvent) -> std::result::Result<(), crate::AuthError> {

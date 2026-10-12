@@ -26,6 +26,7 @@ use crate::kernel::commands::{
 };
 use crate::kernel::service::MerchantCheckoutService;
 use crate::kernel::{GovernedCheckoutService, PaymentApproval, PaymentApprover, PaymentCaller};
+use adk_core::audit_log::AuditActor;
 
 use super::{caller_identity, calling_agent};
 
@@ -211,6 +212,9 @@ pub(super) fn tool_caller(
         );
     if let Some(ledger) = ctx.run_config().and_then(|config| config.spend_ledger.clone()) {
         caller = caller.with_spend_ledger(ledger);
+    }
+    if let Some(trail) = ctx.run_config().and_then(|config| config.audit.clone()) {
+        caller = caller.with_audit(trail, AuditActor::for_context(ctx.as_ref()));
     }
     caller
 }

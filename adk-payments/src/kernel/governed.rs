@@ -2,6 +2,9 @@ use std::future::Future;
 use std::sync::Arc;
 
 use adk_auth::AuditOutcome;
+use adk_core::audit_log::{
+    AuditActor, AuditDecision, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome, AuditTrail,
+};
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Result, SpendLedger};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -71,6 +74,7 @@ pub struct PaymentCaller {
     agent: Option<String>,
     spend_ledger: Option<Arc<dyn SpendLedger>>,
     approver: Option<Arc<dyn PaymentApprover>>,
+    audit: Option<(AuditTrail, AuditActor)>,
 }
 
 impl PaymentCaller {
@@ -108,6 +112,71 @@ impl PaymentCaller {
         self.approver = Some(approver);
         self
     }
+
+    /// Records every governed decision for this caller in `trail`, naming `actor` as
+    /// acting, ahead of and alongside any [`PaymentAuditor`] of the service.
+    ///
+    /// An allowed payment whose record cannot be written does not run when the trail is
+    /// in [`AuditFailureMode::Block`](adk_core::audit_log::AuditFailureMode::Block). The
+    /// payment tools set this from the run's `RunConfig::audit`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_core::audit_log::{AuditActor, AuditTrail, InMemoryAuditRecorder};
+    /// use adk_payments::kernel::PaymentCaller;
+    ///
+    /// let trail = AuditTrail::new(Arc::new(InMemoryAuditRecorder::new()));
+    /// let actor = AuditActor::for_invocation("store", "shopper", "alice", "inv-1");
+    /// let caller = PaymentCaller::new().with_audit(trail, actor);
+    /// # let _ = caller;
+    /// ```
+    #[must_use]
+    pub fn with_audit(mut self, trail: AuditTrail, actor: AuditActor) -> Self {
+        self.audit = Some((trail, actor));
+        self
+    }
+}
+
+const fn operation_action(operation: PaymentOperation) -> &'static str {
+    match operation {
+        PaymentOperation::CreateCheckout => "payment.create_checkout",
+        PaymentOperation::CompleteCheckout => "payment.complete_checkout",
+        PaymentOperation::ExecutePayment => "payment.execute_payment",
+    }
+}
+
+/// The caller's audit record for `operation` on `record`: the cart's digest, the
+/// merchant, the total, and the guardrails that spoke. Cart lines stay out of the record.
+fn payment_draft(
+    trail: &AuditTrail,
+    actor: &AuditActor,
+    operation: PaymentOperation,
+    record: &TransactionRecord,
+    protocol: &ProtocolDescriptor,
+    findings: &[PaymentPolicyFinding],
+) -> AuditRecordDraft {
+    let cart = serde_json::to_value(&record.cart).unwrap_or(Value::Null);
+    let guardrails: Vec<Value> =
+        findings.iter().map(|finding| Value::String(finding.guardrail.clone())).collect();
+    let mut draft = AuditRecordDraft::new(AuditRecordKind::Payment, operation_action(operation))
+        .actor(actor.clone())
+        .args_digest(trail.digest(&cart))
+        .policy_ref("payment_policy")
+        .ext("transactionId", Value::String(record.transaction_id.as_str().to_string()))
+        .ext("merchantId", Value::String(record.merchant_of_record.merchant_id.clone()))
+        .ext("currency", Value::String(record.cart.total.currency.clone()))
+        .ext("amountMinor", Value::from(record.cart.total.amount_minor))
+        .ext("scale", Value::from(record.cart.total.scale))
+        .ext("protocol", Value::String(protocol.name.clone()));
+    if !guardrails.is_empty() {
+        draft = draft.ext("guardrails", Value::Array(guardrails));
+    }
+    if let Some(identity) = &record.session_identity {
+        draft = draft.ext("sessionId", Value::String(identity.session_id.to_string()));
+    }
+    draft
 }
 
 fn policy_error(code: &'static str, summary: &str, findings: &[PaymentPolicyFinding]) -> AdkError {
@@ -206,9 +275,26 @@ impl PaymentGovernor {
             context = context.with_agent(agent);
         }
 
+        let caller_record = |decision: AuditDecision, findings: &[PaymentPolicyFinding]| {
+            caller.audit.as_ref().map(|(trail, actor)| {
+                let draft = payment_draft(trail, actor, operation, record, protocol, findings)
+                    .decision(decision);
+                let draft = if matches!(decision, AuditDecision::Allowed | AuditDecision::Approved)
+                {
+                    draft
+                } else {
+                    draft.outcome(AuditRecordOutcome::NotRun)
+                };
+                (trail.clone(), draft)
+            })
+        };
         let escalated = match self.policies.evaluate(record, protocol, &context).await {
             PaymentPolicyDecision::Allow => false,
             PaymentPolicyDecision::Deny { findings } => {
+                // The payment is refused either way, so a failed write is logged by the trail.
+                if let Some((trail, draft)) = caller_record(AuditDecision::Denied, &findings) {
+                    let _ = trail.record(draft).await;
+                }
                 self.audit_refusal(operation, record, protocol, caller).await;
                 return Err(policy_error(
                     PAYMENT_POLICY_DENIED_CODE,
@@ -220,6 +306,11 @@ impl PaymentGovernor {
                 let approval = match &caller.approver {
                     Some(approver) => approver.approve(record, &findings).await,
                     None => Ok(PaymentApproval::Pending),
+                };
+                let refused_as = match &approval {
+                    Ok(PaymentApproval::Denied) => AuditDecision::Rejected,
+                    Ok(PaymentApproval::Pending) => AuditDecision::ApprovalRequired,
+                    Ok(PaymentApproval::Approved) | Err(_) => AuditDecision::Denied,
                 };
                 let refusal = match approval {
                     Ok(PaymentApproval::Approved) => None,
@@ -237,12 +328,28 @@ impl PaymentGovernor {
                 };
                 if let Some(error) = refusal {
                     context.release_holds().await;
+                    if let Some((trail, draft)) = caller_record(refused_as, &findings) {
+                        let _ = trail.record(draft).await;
+                    }
                     self.audit_refusal(operation, record, protocol, caller).await;
+                    return Err(error);
+                }
+                if let Some((trail, draft)) = caller_record(AuditDecision::Approved, &findings)
+                    && let Err(error) = trail.record(draft).await
+                {
+                    context.release_holds().await;
                     return Err(error);
                 }
                 true
             }
         };
+        if !escalated
+            && let Some((trail, draft)) = caller_record(AuditDecision::Allowed, &[])
+            && let Err(error) = trail.record(draft).await
+        {
+            context.release_holds().await;
+            return Err(error);
+        }
 
         // An unrecorded decision must not move money: the audit write precedes the call.
         if let Some(auditor) = &self.auditor {
@@ -263,7 +370,21 @@ impl PaymentGovernor {
             }
         }
 
-        match run().await {
+        let result = run().await;
+        // The operation has already happened, so the outcome record cannot refuse it.
+        if let Some((trail, actor)) = &caller.audit {
+            let outcome = if result.is_ok() {
+                AuditRecordOutcome::Succeeded
+            } else {
+                AuditRecordOutcome::Failed
+            };
+            let draft =
+                payment_draft(trail, actor, operation, record, protocol, &[]).outcome(outcome);
+            if let Err(error) = trail.recorder().record(draft).await {
+                tracing::error!(error = %error, "payment outcome could not be audited");
+            }
+        }
+        match result {
             Ok(result) => {
                 match settle(&result) {
                     Settlement::Commit(actual) => context.commit_holds(actual).await,

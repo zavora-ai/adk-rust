@@ -985,7 +985,7 @@ async fn run_authorized_tool(
     // answer is raised into the script, so the code sees that the call did not run.
     let effect = tool.effect();
     let ledgered = match crate::tool_ledger::begin_ledgered_call(
-        invocation_ctx.run_config(),
+        invocation_ctx.as_ref(),
         effect,
         tool_ctx.idempotency_key(),
         &name,
@@ -993,8 +993,9 @@ async fn run_authorized_tool(
     )
     .await
     {
-        Ok(ledgered) => ledgered,
-        Err(answer) => return Ok(ToolRun::Finished(Err(render_value(&answer)))),
+        Ok(Ok(ledgered)) => ledgered,
+        Ok(Err(answer)) => return Ok(ToolRun::Finished(Err(render_value(&answer)))),
+        Err(error) => return Ok(ToolRun::Abort(error)),
     };
 
     // Only a call that cannot repeat a side effect is retried, and only after a
@@ -1061,6 +1062,17 @@ async fn run_authorized_tool(
     }
 
     let outcome_unknown = interrupted && effect == ToolEffect::NonIdempotent;
+    if outcome_unknown
+        && let Err(error) = crate::tool_ledger::record_outcome_unknown(
+            invocation_ctx.as_ref(),
+            &name,
+            &args,
+            "interrupted",
+        )
+        .await
+    {
+        return Ok(ToolRun::Abort(error));
+    }
     // A call that ended mid-flight keeps its begun record, so a replay is answered
     // with an unknown outcome instead of executing again.
     if let Some(ledgered) = ledgered

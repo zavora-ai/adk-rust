@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "artifacts")]
 use adk_artifact::ArtifactService;
+use adk_core::audit_log::{AuditFailureMode, AuditRecorder, AuditTrail};
 use adk_core::{
     ActionLedger, Agent, ApprovalStore, CacheCapable, ContextCacheConfig, GovernanceControl,
     Memory, Result, RunBudget, RunConfig, SpendLedger, ToolPolicy,
@@ -82,6 +83,8 @@ pub struct RunnerConfigBuilder<A, G, S> {
     approval_store: Option<Arc<dyn ApprovalStore>>,
     spend_ledger: Option<Arc<dyn SpendLedger>>,
     durable_runs: Option<Arc<dyn adk_core::DurableRunStore>>,
+    audit_recorder: Option<Arc<dyn AuditRecorder>>,
+    audit_failure_mode: AuditFailureMode,
     _marker: PhantomData<(A, G, S)>,
 }
 
@@ -114,6 +117,8 @@ impl RunnerConfigBuilder<NoAppName, NoAgent, NoSessionService> {
             approval_store: None,
             spend_ledger: None,
             durable_runs: None,
+            audit_recorder: None,
+            audit_failure_mode: AuditFailureMode::Block,
             _marker: PhantomData,
         }
     }
@@ -158,6 +163,8 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             approval_store: self.approval_store,
             spend_ledger: self.spend_ledger,
             durable_runs: self.durable_runs,
+            audit_recorder: self.audit_recorder,
+            audit_failure_mode: self.audit_failure_mode,
             _marker: PhantomData,
         }
     }
@@ -190,6 +197,8 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             approval_store: self.approval_store,
             spend_ledger: self.spend_ledger,
             durable_runs: self.durable_runs,
+            audit_recorder: self.audit_recorder,
+            audit_failure_mode: self.audit_failure_mode,
             _marker: PhantomData,
         }
     }
@@ -225,6 +234,8 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             approval_store: self.approval_store,
             spend_ledger: self.spend_ledger,
             durable_runs: self.durable_runs,
+            audit_recorder: self.audit_recorder,
+            audit_failure_mode: self.audit_failure_mode,
             _marker: PhantomData,
         }
     }
@@ -432,6 +443,43 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self
     }
 
+    /// Record the runner's governed actions in `recorder` (optional).
+    ///
+    /// Every run records each tool decision (allowed, denied, held for approval), each
+    /// approval decision, each payment made through the payment tools, and each call
+    /// answered with an unknown outcome; the runner's kill switch records freezes and
+    /// unfreezes. Records name the acting agent and the subject it acts for, and carry
+    /// argument digests, never arguments. An action whose record cannot be written does
+    /// not happen; see [`audit_failure_mode`](Self::audit_failure_mode).
+    ///
+    /// The runner installs the trail on each run's [`RunConfig::audit`] when the run does
+    /// not carry one.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_auth::signed_audit::{AuditLog, Ed25519Signer};
+    ///
+    /// let log = AuditLog::builder(store, "replica-1", signer).open().await?;
+    /// let runner = Runner::builder()
+    ///     .app_name("ops")
+    ///     .agent(agent)
+    ///     .session_service(sessions)
+    ///     .audit_log(Arc::new(log))
+    ///     .build()?;
+    /// ```
+    pub fn audit_log(mut self, recorder: Arc<dyn AuditRecorder>) -> Self {
+        self.audit_recorder = Some(recorder);
+        self
+    }
+
+    /// Set what happens when the [`audit_log`](Self::audit_log) cannot record an action
+    /// (optional). The default, [`AuditFailureMode::Block`], refuses the action.
+    pub fn audit_failure_mode(mut self, mode: AuditFailureMode) -> Self {
+        self.audit_failure_mode = mode;
+        self
+    }
+
     /// Set the context compaction configuration for token-budget overflow handling (optional).
     ///
     /// When configured, the runner applies the given [`CompactionStrategy`](crate::compaction::CompactionStrategy)
@@ -480,6 +528,9 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             approval_store: self.approval_store,
             spend_ledger: self.spend_ledger,
             durable_runs: self.durable_runs,
+            audit: self.audit_recorder.map(|recorder| {
+                AuditTrail::new(recorder).with_failure_mode(self.audit_failure_mode)
+            }),
         }
     }
 
@@ -520,6 +571,9 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             approval_store: self.approval_store,
             spend_ledger: self.spend_ledger,
             durable_runs: self.durable_runs,
+            audit: self.audit_recorder.map(|recorder| {
+                AuditTrail::new(recorder).with_failure_mode(self.audit_failure_mode)
+            }),
         };
         Runner::new(config)
     }

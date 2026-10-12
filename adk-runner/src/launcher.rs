@@ -139,6 +139,7 @@ impl Launcher {
                 approval_store: None,
                 spend_ledger: None,
                 durable_runs: None,
+                audit: None,
             })?;
 
             let mut stream = runner

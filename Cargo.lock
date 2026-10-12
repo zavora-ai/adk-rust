@@ -96,6 +96,7 @@ dependencies = [
 name = "adk-agent"
 version = "3.0.0"
 dependencies = [
+ "adk-auth",
  "adk-core",
  "adk-devtools",
  "adk-guardrail",

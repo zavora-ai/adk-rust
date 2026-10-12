@@ -48,6 +48,7 @@ fn preserve_streamed_content(accumulated: &mut HashMap<String, Content>, event: 
 struct InFlightCall {
     id: Option<String>,
     name: String,
+    args: serde_json::Value,
     author: String,
     branch: String,
     invocation_id: String,
@@ -68,9 +69,10 @@ impl InFlightCalls {
         };
         for part in &content.parts {
             match part {
-                Part::FunctionCall { name, id, .. } => self.0.push(InFlightCall {
+                Part::FunctionCall { name, args, id, .. } => self.0.push(InFlightCall {
                     id: id.clone(),
                     name: name.clone(),
+                    args: args.clone(),
                     author: event.author.clone(),
                     branch: event.branch.clone(),
                     invocation_id: event.invocation_id.clone(),
@@ -88,6 +90,37 @@ impl InFlightCalls {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Records every call still in flight as having an unknown outcome.
+    async fn audit_interrupted(
+        &self,
+        trail: &adk_core::audit_log::AuditTrail,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+    ) {
+        use adk_core::audit_log::{
+            AuditActor, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome,
+        };
+        for call in &self.0 {
+            let mut draft = AuditRecordDraft::new(AuditRecordKind::ToolCall, call.name.as_str())
+                .actor(AuditActor::for_invocation(
+                    app_name,
+                    &call.author,
+                    user_id,
+                    &call.invocation_id,
+                ))
+                .args_digest(trail.digest(&call.args))
+                .outcome(AuditRecordOutcome::OutcomeUnknown)
+                .ext("cause", serde_json::Value::String("cancelled".to_string()))
+                .ext("sessionId", serde_json::Value::String(session_id.to_string()));
+            if let Some(id) = &call.id {
+                draft = draft.ext("functionCallId", serde_json::Value::String(id.clone()));
+            }
+            // The run is already over, so a failed write is logged by the trail.
+            let _ = trail.record(draft).await;
         }
     }
 
@@ -298,6 +331,11 @@ pub struct RunnerConfig {
     /// unfinished durable runs, so the worker that owns one stops it on its next
     /// heartbeat, whichever replica it runs on.
     pub durable_runs: Option<Arc<dyn adk_core::DurableRunStore>>,
+    /// Optional audit trail for governed actions.
+    ///
+    /// Installed on each run's [`RunConfig::audit`] when the run carries none, and
+    /// attached to the runner's kill switch so freezes and unfreezes are recorded.
+    pub audit: Option<adk_core::audit_log::AuditTrail>,
 }
 
 /// Agent execution runtime.
@@ -342,6 +380,8 @@ pub struct Runner {
     approval_store: Option<Arc<dyn adk_core::ApprovalStore>>,
     spend_ledger: Option<Arc<dyn adk_core::SpendLedger>>,
     durable_runs: Option<Arc<dyn adk_core::DurableRunStore>>,
+    /// Audit trail installed on runs that carry none.
+    audit: Option<adk_core::audit_log::AuditTrail>,
     /// Serializes externally triggered invocations per session. The weak values prevent the
     /// per-trigger session policy from retaining one lock forever for every completed event.
     pub(crate) external_session_locks: Arc<
@@ -400,6 +440,11 @@ impl Runner {
             })
         });
 
+        let governance = config.governance.unwrap_or_default();
+        if let Some(audit) = &config.audit {
+            governance.attach_audit(audit.clone());
+        }
+
         Ok(Self {
             app_name: config.app_name,
             root_agent: config.agent,
@@ -425,11 +470,12 @@ impl Runner {
             active_runs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             tool_policy: config.tool_policy,
-            governance: config.governance.unwrap_or_default(),
+            governance,
             action_ledger: config.action_ledger,
             approval_store: config.approval_store,
             spend_ledger: config.spend_ledger,
             durable_runs: config.durable_runs,
+            audit: config.audit,
             external_session_locks: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -602,6 +648,9 @@ impl Runner {
         }
         if run_config.spend_ledger.is_none() {
             run_config.spend_ledger = self.spend_ledger.clone();
+        }
+        if run_config.audit.is_none() {
+            run_config.audit = self.audit.clone();
         }
         if !run_config.governance.iter().any(|control| control.same_as(&self.governance)) {
             run_config.governance.push(self.governance.clone());
@@ -1581,6 +1630,11 @@ impl Runner {
             if cancelled {
                 // Stops the interrupted tool before its calls are answered.
                 drop(agent_stream);
+                if let Some(trail) = &run_config.audit {
+                    in_flight
+                        .audit_interrupted(trail, &app_name, user_id.as_ref(), session_id.as_ref())
+                        .await;
+                }
                 for event in in_flight.answer_interrupted() {
                     ctx.mutable_session().append_event(event.clone());
                     if let Err(error) = session_service

@@ -590,3 +590,86 @@ async fn an_audit_write_failure_blocks_a_governed_completion() {
     assert_eq!(spent(&ledger, SpendKey::org("store")).await, 0);
     ledger.reserve(&SpendKey::org("store"), 100_000_000).await.expect("the hold was released");
 }
+
+// ---------------------------------------------------------------------------
+// The run's audit trail
+// ---------------------------------------------------------------------------
+
+/// Fails every write, as an unreachable audit store does.
+struct BrokenRecorder;
+
+#[async_trait]
+impl adk_core::audit_log::AuditRecorder for BrokenRecorder {
+    fn digest(&self, value: &Value) -> String {
+        adk_core::json_digest(value)
+    }
+
+    async fn record(&self, _draft: adk_core::audit_log::AuditRecordDraft) -> Result<()> {
+        Err(AdkError::session("audit store unreachable"))
+    }
+}
+
+fn audited_run(recorder: Arc<dyn adk_core::audit_log::AuditRecorder>) -> RunConfig {
+    RunConfig::builder().audit(adk_core::audit_log::AuditTrail::new(recorder)).build()
+}
+
+#[tokio::test]
+async fn the_payment_tools_record_each_decision_and_outcome_in_the_run_audit_trail() {
+    use adk_core::audit_log::{AuditDecision, AuditRecordKind, AuditRecordOutcome};
+
+    let shop = Shop::new(
+        MemoryKernel::default(),
+        PaymentPolicySet::new().with(MerchantAllowlistGuardrail::new(["merchant-1"])),
+    );
+    let recorder = adk_core::audit_log::InMemoryAuditRecorder::new();
+    let caller = Caller::new(audited_run(Arc::new(recorder.clone())));
+
+    shop.buy(&caller, usd(2_000)).await.unwrap();
+    shop.create(&caller, "merchant-2", usd(500)).await.unwrap_err();
+
+    let records = recorder.records();
+    let summary: Vec<_> =
+        records.iter().map(|r| (r.action.as_str(), r.decision, r.outcome)).collect();
+    assert_eq!(
+        summary,
+        vec![
+            ("payment.create_checkout", Some(AuditDecision::Allowed), None),
+            ("payment.create_checkout", None, Some(AuditRecordOutcome::Succeeded)),
+            ("payment.complete_checkout", Some(AuditDecision::Allowed), None),
+            ("payment.complete_checkout", None, Some(AuditRecordOutcome::Succeeded)),
+            (
+                "payment.create_checkout",
+                Some(AuditDecision::Denied),
+                Some(AuditRecordOutcome::NotRun)
+            ),
+        ]
+    );
+    for record in &records {
+        assert_eq!(record.kind, AuditRecordKind::Payment);
+        assert_eq!(record.policy_ref.as_deref(), Some("payment_policy"));
+        assert_eq!(
+            record.actor.agent.as_ref().map(|id| id.as_str()),
+            Some("urn:adk:agent:store/shopper")
+        );
+        assert_eq!(
+            record.actor.on_behalf_of,
+            Some(adk_core::principal::SubjectRef::human("alice"))
+        );
+        let digest = record.args_digest.as_deref().unwrap_or_default();
+        assert!(digest.starts_with("fnv1a128:"), "the cart is digested: {digest}");
+        assert!(!serde_json::to_string(&record.ext).unwrap().contains("Widget"));
+    }
+    assert_eq!(records[2].ext["amountMinor"], json!(2_000));
+    assert_eq!(records[4].ext["guardrails"], json!(["merchant_allowlist"]));
+}
+
+#[tokio::test]
+async fn an_unrecordable_payment_never_reaches_the_backend() {
+    let shop = Shop::new(MemoryKernel::default(), PaymentPolicySet::new());
+    let caller = Caller::new(audited_run(Arc::new(BrokenRecorder)));
+
+    let error = shop.create(&caller, "merchant-1", usd(500)).await.unwrap_err();
+
+    assert_eq!(error.code, "audit.record_failed", "{error}");
+    assert!(shop.kernel.records.lock().unwrap().is_empty(), "the backend must not be reached");
+}

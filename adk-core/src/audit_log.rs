@@ -17,9 +17,15 @@
 //! `audit_log.seq_conflict` instead of forking the log. Pruning drops record bodies
 //! and keeps their hashes, so signed checkpoints and proofs stay verifiable.
 //!
-//! [`InMemoryAuditLogStore`](crate::audit_log::InMemoryAuditLogStore) is the reference implementation; `adk-session` ships SQLite
-//! and PostgreSQL ones. Every backend passes the same conformance suite
-//! (`adk_core::audit_log_store_conformance_tests!`, `conformance` feature).
+//! [`InMemoryAuditLogStore`](crate::audit_log::InMemoryAuditLogStore) is the reference implementation; `adk-session` ships SQLite,
+//! PostgreSQL, Redis, MongoDB, Neo4j, and Firestore ones. Every backend passes the same
+//! conformance suite (`adk_core::audit_log_store_conformance_tests!`, `conformance` feature).
+//!
+//! The runtime writes records through an [`AuditRecorder`](crate::audit_log::AuditRecorder)
+//! wrapped in an [`AuditTrail`](crate::audit_log::AuditTrail), set on
+//! [`RunConfig::audit`](crate::RunConfig::audit): the governed path records every tool and
+//! approval decision, the kill switch its freezes, payment tools their payments, and agents
+//! every call answered with an unknown outcome.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -802,6 +808,258 @@ impl AuditLogStore for InMemoryAuditLogStore {
         let mut ids: Vec<String> = self.logs.read().await.keys().cloned().collect();
         ids.sort();
         Ok(ids)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime recording
+// ---------------------------------------------------------------------------
+
+/// What the runtime does when its [`AuditRecorder`] cannot record an action.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::audit_log::AuditFailureMode;
+///
+/// assert_eq!(AuditFailureMode::default(), AuditFailureMode::Block);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AuditFailureMode {
+    /// Refuse the action: an action whose record cannot be written does not happen.
+    #[default]
+    Block,
+    /// Log the failure and continue without a record.
+    Warn,
+}
+
+/// Where the runtime writes audit records: governed tool decisions, approval decisions,
+/// kill-switch changes, payments, and calls whose outcome is unknown.
+///
+/// `adk_auth::signed_audit::AuditLog` implements it with a signed, Merkle-hashed log;
+/// [`InMemoryAuditRecorder`] keeps drafts in memory for tests. The trait carries no
+/// cryptography, so `adk-core` stays free of it: the recorder also computes the argument
+/// digests that records carry in place of arguments.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_core::audit_log::{AuditRecordDraft, AuditRecordKind, AuditRecorder, InMemoryAuditRecorder};
+///
+/// # futures::executor::block_on(async {
+/// let recorder = InMemoryAuditRecorder::new();
+/// let digest = recorder.digest(&serde_json::json!({ "amount": 5 }));
+/// recorder
+///     .record(AuditRecordDraft::new(AuditRecordKind::ToolCall, "transfer").args_digest(digest))
+///     .await?;
+/// assert_eq!(recorder.records().len(), 1);
+/// # Ok::<(), adk_core::AdkError>(())
+/// # }).unwrap();
+/// ```
+#[async_trait]
+pub trait AuditRecorder: Send + Sync {
+    /// Digest of `value`'s canonical JSON, such as `sha256:<hex>`, for
+    /// [`AuditRecord::args_digest`].
+    fn digest(&self, value: &serde_json::Value) -> String;
+
+    /// Appends one record.
+    ///
+    /// # Errors
+    ///
+    /// Returns the recorder's error when the record cannot be written.
+    async fn record(&self, draft: AuditRecordDraft) -> Result<()>;
+}
+
+/// An [`AuditRecorder`] with the [`AuditFailureMode`] that governs it.
+///
+/// Set on [`RunConfig::audit`](crate::RunConfig::audit) (usually through the runner
+/// builder's `audit_log`), attached to a [`GovernanceControl`](crate::GovernanceControl),
+/// or given to a payment caller. Clones share the recorder.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_core::audit_log::{AuditFailureMode, AuditTrail, InMemoryAuditRecorder};
+///
+/// let trail = AuditTrail::new(Arc::new(InMemoryAuditRecorder::new()))
+///     .with_failure_mode(AuditFailureMode::Warn);
+/// assert_eq!(trail.failure_mode(), AuditFailureMode::Warn);
+/// ```
+#[derive(Clone)]
+pub struct AuditTrail {
+    recorder: Arc<dyn AuditRecorder>,
+    failure_mode: AuditFailureMode,
+}
+
+impl fmt::Debug for AuditTrail {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuditTrail").field("failure_mode", &self.failure_mode).finish()
+    }
+}
+
+impl AuditTrail {
+    /// Records through `recorder`, refusing actions it cannot record
+    /// ([`AuditFailureMode::Block`]).
+    pub fn new(recorder: Arc<dyn AuditRecorder>) -> Self {
+        Self { recorder, failure_mode: AuditFailureMode::Block }
+    }
+
+    /// Sets what happens when the recorder fails.
+    #[must_use]
+    pub fn with_failure_mode(mut self, mode: AuditFailureMode) -> Self {
+        self.failure_mode = mode;
+        self
+    }
+
+    /// The failure mode.
+    pub fn failure_mode(&self) -> AuditFailureMode {
+        self.failure_mode
+    }
+
+    /// The recorder.
+    pub fn recorder(&self) -> &Arc<dyn AuditRecorder> {
+        &self.recorder
+    }
+
+    /// Digest of `value` by the recorder.
+    pub fn digest(&self, value: &serde_json::Value) -> String {
+        self.recorder.digest(value)
+    }
+
+    /// Records `draft`, applying the failure mode.
+    ///
+    /// # Errors
+    ///
+    /// Under [`AuditFailureMode::Block`], `audit.record_failed` when the recorder fails;
+    /// the caller refuses the action. Under [`AuditFailureMode::Warn`], never.
+    pub async fn record(&self, draft: AuditRecordDraft) -> Result<()> {
+        let action = draft.action.clone();
+        let Err(error) = self.recorder.record(draft).await else {
+            return Ok(());
+        };
+        match self.failure_mode {
+            AuditFailureMode::Block => {
+                tracing::error!(audit.action = %action, error = %error, "audit record failed; refusing the action");
+                Err(AdkError::new(
+                    ErrorComponent::Auth,
+                    ErrorCategory::Unavailable,
+                    "audit.record_failed",
+                    format!(
+                        "'{action}' refused: its audit record could not be written ({error}). \
+                         Restore the audit log, or set AuditFailureMode::Warn to continue \
+                         without a record"
+                    ),
+                ))
+            }
+            AuditFailureMode::Warn => {
+                tracing::warn!(audit.action = %action, error = %error, "audit record failed; continuing without a record");
+                Ok(())
+            }
+        }
+    }
+}
+
+impl AuditActor {
+    /// The actor for an agent of `app_name` running in `invocation_id` for `user_id`,
+    /// when the run configures no acting context: the agent id is
+    /// `urn:adk:agent:<app>/<agent>` and the subject is `user_id` as a human.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::audit_log::AuditActor;
+    /// use adk_core::principal::SubjectRef;
+    ///
+    /// let actor = AuditActor::for_invocation("shop", "cashier", "alice", "inv-1");
+    /// assert_eq!(actor.agent.unwrap().as_str(), "urn:adk:agent:shop/cashier");
+    /// assert_eq!(actor.on_behalf_of, Some(SubjectRef::human("alice")));
+    /// ```
+    pub fn for_invocation(
+        app_name: &str,
+        agent_name: &str,
+        user_id: &str,
+        invocation_id: &str,
+    ) -> Self {
+        // Integration point (#799): the same identity as `ActingContext::derived`, which
+        // replaces this body once agent identity is merged.
+        let encode = |value: &str| -> String {
+            if value.is_empty() {
+                return "_".to_string();
+            }
+            let mut out = String::with_capacity(value.len());
+            for byte in value.bytes() {
+                if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+                    out.push(byte as char);
+                } else {
+                    out.push_str(&format!("%{byte:02X}"));
+                }
+            }
+            out
+        };
+        let mut id = format!("urn:adk:agent:{}/{}", encode(app_name), encode(agent_name));
+        id.truncate(crate::principal::MAX_AGENT_ID_LEN);
+        Self {
+            agent: AgentId::new(id).ok(),
+            on_behalf_of: (!user_id.is_empty()).then(|| SubjectRef::human(user_id)),
+            invocation_id: Some(invocation_id.to_string()),
+            ..Self::default()
+        }
+    }
+
+    /// The actor of the agent running in `ctx`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let actor = AuditActor::for_context(tool_ctx.as_ref());
+    /// ```
+    pub fn for_context(ctx: &dyn crate::ReadonlyContext) -> Self {
+        // Integration point (#799): `AuditActor::from(&ctx.acting_context())`.
+        Self::for_invocation(ctx.app_name(), ctx.agent_name(), ctx.user_id(), ctx.invocation_id())
+    }
+}
+
+/// An [`AuditRecorder`] that keeps drafts in memory, for tests.
+///
+/// Its digest is the non-cryptographic [`json_digest`](crate::json_digest); a
+/// production recorder uses SHA-256.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::audit_log::InMemoryAuditRecorder;
+///
+/// let recorder = InMemoryAuditRecorder::new();
+/// assert!(recorder.records().is_empty());
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryAuditRecorder {
+    records: Arc<std::sync::Mutex<Vec<AuditRecordDraft>>>,
+}
+
+impl InMemoryAuditRecorder {
+    /// Creates an empty recorder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The drafts recorded so far, in order.
+    pub fn records(&self) -> Vec<AuditRecordDraft> {
+        self.records.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+#[async_trait]
+impl AuditRecorder for InMemoryAuditRecorder {
+    fn digest(&self, value: &serde_json::Value) -> String {
+        crate::json_digest(value)
+    }
+
+    async fn record(&self, draft: AuditRecordDraft) -> Result<()> {
+        self.records.lock().unwrap_or_else(|e| e.into_inner()).push(draft);
+        Ok(())
     }
 }
 

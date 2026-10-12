@@ -201,6 +201,12 @@ impl ToolPolicyRequest {
 pub trait ToolPolicy: std::fmt::Debug + Send + Sync {
     /// Decides one call.
     async fn evaluate(&self, request: &ToolPolicyRequest) -> PolicyDecision;
+
+    /// A name or version for audit records, which cite the policy as
+    /// `tool_policy:<name>`. The default is `None`, cited as `tool_policy`.
+    fn policy_ref(&self) -> Option<String> {
+        None
+    }
 }
 
 /// A predicate over one argument, addressed by a JSON pointer (RFC 6901).
@@ -506,6 +512,7 @@ impl PolicyRule {
 pub struct DeclarativePolicy {
     rules: Vec<PolicyRule>,
     default_decision: Option<PolicyDecision>,
+    name: Option<String>,
 }
 
 impl DeclarativePolicy {
@@ -538,6 +545,10 @@ impl ToolPolicy for DeclarativePolicy {
     async fn evaluate(&self, request: &ToolPolicyRequest) -> PolicyDecision {
         self.decide(request)
     }
+
+    fn policy_ref(&self) -> Option<String> {
+        self.name.clone()
+    }
 }
 
 /// Builder for [`DeclarativePolicy`].
@@ -545,6 +556,7 @@ impl ToolPolicy for DeclarativePolicy {
 pub struct DeclarativePolicyBuilder {
     rules: Vec<PolicyRule>,
     default_decision: Option<PolicyDecision>,
+    name: Option<String>,
 }
 
 impl DeclarativePolicyBuilder {
@@ -593,9 +605,21 @@ impl DeclarativePolicyBuilder {
         self
     }
 
+    /// Names the policy, such as `payments-v3`, so audit records cite it as
+    /// `tool_policy:payments-v3`.
+    #[must_use]
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
     /// Builds the policy.
     pub fn build(self) -> DeclarativePolicy {
-        DeclarativePolicy { rules: self.rules, default_decision: self.default_decision }
+        DeclarativePolicy {
+            rules: self.rules,
+            default_decision: self.default_decision,
+            name: self.name,
+        }
     }
 }
 

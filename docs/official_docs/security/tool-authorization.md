@@ -942,7 +942,18 @@ scheduling. See [Server](../deployment/server.md#kill-switch).
 Realtime tool calls go through the same governed path — see
 [Realtime Tools](../realtime/tools.md#the-governed-path).
 
+## Audit Records
+
+`Runner::builder().audit_log(recorder)` makes the governed path record each decision before
+it takes effect: a call allowed, denied (by the policy, a guardrail, a confirmation, or the
+kill switch), or held for approval, and each approval decision with its source. A call whose
+record cannot be written is not executed under the default `AuditFailureMode::Block`.
+`freeze_recorded` and `unfreeze_recorded` record kill-switch changes with the acting
+administrator. See [Audit Log](audit-log.md#what-the-runtime-records).
+
 ## Related
+
+- [Audit Log](audit-log.md) — Signed records of every governed decision
 
 - [Access Control](access-control.md) — RBAC, SSO, audit logging
 - [Callbacks](../callbacks/callbacks.md) — All callback types and lifecycle

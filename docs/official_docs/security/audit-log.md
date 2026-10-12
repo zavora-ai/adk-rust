@@ -79,6 +79,90 @@ The adapter maps the event type to the record kind, the event's user to
 `actor.onBehalfOf`, and the outcome to `decision` or `outcome`; the remaining event fields
 become `ext` entries.
 
+## What the runtime records
+
+Give the runner an audit log and every run records its governed actions — no tool, callback,
+or plugin needs to write a record itself:
+
+```rust
+use std::sync::Arc;
+
+use adk_auth::signed_audit::AuditLog;
+use adk_core::audit_log::AuditFailureMode;
+use adk_core::{Agent, DeclarativePolicy, Result};
+use adk_runner::Runner;
+use adk_session::SessionService;
+
+fn audited_runner(
+    agent: Arc<dyn Agent>,
+    sessions: Arc<dyn SessionService>,
+    log: Arc<AuditLog>,
+) -> Result<Runner> {
+    Runner::builder()
+        .app_name("bank")
+        .agent(agent)
+        .session_service(sessions)
+        .tool_policy(Arc::new(
+            DeclarativePolicy::builder()
+                .name("bank-v1")
+                .allow("search")
+                .require_approval("transfer", "transfers need a person")
+                .build(),
+        ))
+        .audit_log(log)
+        .audit_failure_mode(AuditFailureMode::Block)
+        .build()
+}
+```
+
+`audit_log` takes any `AuditRecorder`; `AuditLog` is one, and `InMemoryAuditRecorder` keeps
+drafts in memory for tests. The runner installs the trail on each run's `RunConfig::audit`
+(set it there to audit a single run) and attaches it to the runner's kill switch.
+
+| Event | Where | `kind` | `action` | `decision` / `outcome` | `policyRef` |
+|-------|-------|--------|----------|------------------------|-------------|
+| Tool call allowed | Governed path, before `execute` | `tool_call` | Tool name | `allowed` | `tool_policy[:<name>]`, `confirmation`, or absent with no policy |
+| Tool call denied | Governed path | `tool_call` | Tool name | `denied` / `not_run` | `tool_policy[:<name>]`, `guardrail`, `governance` (frozen), `confirmation` |
+| Tool call held for approval | Governed path | `tool_call` | Tool name | `approval_required` / `not_run` | `tool_policy[:<name>]` or `confirmation` |
+| Approval decision applied | Governed path, before the call's decision | `approval` | Tool name | `approved` or `rejected` | — |
+| Freeze, unfreeze | `GovernanceControl` | `governance` | `governance.freeze`, `governance.unfreeze` | — / `succeeded` | — |
+| Payment decision | Payment tools (ACP checkout, AP2 mandate) | `payment` | `payment.create_checkout`, `payment.complete_checkout`, `payment.execute_payment` | `allowed`, `approved`, `denied`, `approval_required`, `rejected` | `payment_policy` |
+| Payment outcome | Payment tools, after the backend returns | `payment` | As above | `succeeded` or `failed` | `payment_policy` |
+| Outcome unknown | Agents (timeout, panic, replay of a begun call), runner (cancelled run) | `tool_call` | Tool name | `outcome_unknown` | — |
+
+Every record names the acting agent and the subject it acts for in `actor`: the agent id
+`urn:adk:agent:<app>/<agent>`, `onBehalfOf` the session's user, and the invocation id.
+Records never carry arguments: `argsDigest` is `sha256:<hex>` of the call's final arguments
+(the cart for a payment). `ext` holds the call ID, the tool's declared effect, the session
+ID, the policy's reason for a denial or hold, an approval's `source` (`call_id`,
+`fingerprint`, `approval_store`, `handler`, `handler_timeout`), an unknown outcome's `cause`
+(`interrupted`, `began_without_outcome`, `cancelled`), and a payment's transaction ID,
+merchant, total, and the guardrails that spoke. A guardrail screen's refusal text can quote
+the arguments, so it stays out of the record.
+
+`DeclarativePolicyBuilder::name` names a policy, and a custom `ToolPolicy` names itself by
+overriding `policy_ref`; records then cite it as `tool_policy:<name>`.
+
+### Failure mode
+
+| `AuditFailureMode` | A record cannot be written |
+|--------------------|----------------------------|
+| `Block` (default) | The action does not happen: the governed call is not executed and the run ends with `audit.record_failed`; an allowed payment is refused before the backend is reached; `unfreeze_recorded` leaves execution frozen |
+| `Warn` | The failure is logged and the action proceeds without a record |
+
+A record that follows an action that already happened cannot refuse it: a freeze holds even
+when its record fails, and a payment's outcome record, a refusal's record, and a cancelled
+run's outcome-unknown records are logged on failure.
+
+`GovernanceControl::freeze_recorded` and `unfreeze_recorded` take the acting administrator
+and wait for the record; the `POST /api/admin/freeze` and `unfreeze` endpoints use them with
+the authenticated user, and an unrecordable unfreeze answers `503`. `freeze` and `unfreeze`
+record in the background.
+
+Spend-ledger commits are not recorded: the spend ledger is itself the durable record of
+spend, a model call commits on every turn, and a refused reservation ends the run with
+`ResourceExhausted` before any action happens.
+
 ## Records
 
 | Field | Set by | Meaning |
@@ -147,6 +231,19 @@ complete-subtree hashes, and signed checkpoints. It never computes hashes itself
 | In memory | `adk_core::audit_log::InMemoryAuditLogStore` | `adk-core` |
 | SQLite | `adk_session::SqliteAuditLogStore` | `sqlite` |
 | PostgreSQL | `adk_session::PostgresAuditLogStore` | `postgres` |
+| Redis | `adk_session::RedisAuditLogStore` | `redis` |
+| MongoDB | `adk_session::MongoAuditLogStore` | `mongodb` |
+| Neo4j | `adk_session::Neo4jAuditLogStore` | `neo4j` |
+| Firestore | `adk_session::FirestoreAuditLogStore` | `firestore` |
+
+| Backend | How two writers on one `log_id` are serialized |
+|---------|------------------------------------------------|
+| SQLite | `BEGIN IMMEDIATE` takes the write lock before the size is read |
+| PostgreSQL | `SELECT ... FOR UPDATE` on the log's size row |
+| Redis | One Lua script compares the first `seq` with the size and writes entries, nodes, and size together |
+| MongoDB | A conditional update on the log document claims the size and parks the batch; a writer that finds a parked batch completes it first |
+| Neo4j | A transaction write-locks the log node before it reads the size |
+| Firestore | A read-write transaction reads the log document and creates entries with an `Exists(false)` precondition |
 
 Give every replica its own `log_id`; no shared sequencer is needed. `append` is a
 compare-and-swap on the log size, so a second writer on one `log_id` gets
