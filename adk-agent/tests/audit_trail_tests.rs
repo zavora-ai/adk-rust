@@ -9,7 +9,7 @@ use adk_core::audit_log::{
     AuditActor, AuditDecision, AuditFailureMode, AuditRecordDraft, AuditRecordKind,
     AuditRecordOutcome, AuditRecorder, InMemoryAuditLogStore, InMemoryAuditRecorder,
 };
-use adk_core::principal::{AgentId, SubjectRef};
+use adk_core::principal::{ActingContext, AgentId, AgentPrincipal, SubjectRef};
 use adk_core::{
     AdkError, Content, DeclarativePolicy, Event, InMemoryActionLedger, Llm, LlmRequest,
     LlmResponse, LlmResponseStream, Part, Result, RunConfig, SessionId, Tool, ToolApproval,
@@ -270,6 +270,7 @@ async fn one_run_records_each_decision_in_order_then_the_approval_that_resumes_t
         tool_name: "transfer".into(),
         function_call_id: Some("c3".into()),
         args: transfer_args.clone(),
+        acting: None,
     };
     let config =
         RunConfig::builder().tool_approval(request.fingerprint(), ToolApproval::approve()).build();
@@ -290,6 +291,72 @@ async fn one_run_records_each_decision_in_order_then_the_approval_that_resumes_t
                 .decision(AuditDecision::Allowed)
                 .policy_ref("confirmation"),
         ]
+    );
+}
+
+#[tokio::test]
+async fn records_name_the_configured_agent_and_the_subject_it_acts_for() {
+    const AGENT: &str = "spiffe://bank.example/agent/teller";
+    let search_args = json!({ "q": "balance" });
+    let delete_args = json!({ "path": "/ledger" });
+    let model = ScriptedModel::new(vec![
+        calls(&[("search", search_args.clone(), "c1"), ("delete_file", delete_args.clone(), "c2")]),
+        LlmResponse {
+            content: Some(Content::new("model").with_text("done")),
+            turn_complete: true,
+            ..Default::default()
+        },
+        calls(&[("search", search_args.clone(), "c3")]),
+    ]);
+    let (search, _) = RecordingTool::new("search");
+    let (delete, _) = RecordingTool::new("delete_file");
+    let recorder = InMemoryAuditRecorder::new();
+    let agent = bank_agent(model, vec![search, delete]);
+    let audit = recorder.clone();
+    let principal = AgentPrincipal::new(AgentId::new(AGENT).unwrap()).with_tenant("acme");
+    let runner = runner(agent, move |builder| {
+        builder.tool_policy(bank_policy()).audit_log(Arc::new(audit)).agent_principal(principal)
+    })
+    .await;
+
+    // The runner's principal, acting for the run's user.
+    let events = run(&runner, None).await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    let records = recorder.records();
+    assert_eq!(records.len(), 2, "{records:?}");
+    for record in &records {
+        assert_eq!(
+            record.actor,
+            AuditActor {
+                agent: Some(AgentId::new(AGENT).unwrap()),
+                tenant: Some("acme".to_string()),
+                on_behalf_of: Some(SubjectRef::human("alice")),
+                invocation_id: records[0].actor.invocation_id.clone(),
+                ..AuditActor::default()
+            }
+        );
+    }
+
+    // A run's own acting context names its subject and delegation chain.
+    let acting = ActingContext::new(AgentPrincipal::new(AgentId::new(AGENT).unwrap()), "")
+        .on_behalf_of(SubjectRef::service("payroll"))
+        .delegated_by(SubjectRef::human("ops-lead"));
+    let config = RunConfig::builder().acting_context(acting).build();
+    let events = run(&runner, Some(config)).await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    let delegated = recorder.records()[records.len()..].to_vec();
+    assert_eq!(delegated.len(), 1, "{delegated:?}");
+    let invocation = delegated[0].actor.invocation_id.clone();
+    assert!(invocation.as_deref().is_some_and(|id| id.starts_with("inv-")), "{invocation:?}");
+    assert_eq!(
+        delegated[0].actor,
+        AuditActor {
+            agent: Some(AgentId::new(AGENT).unwrap()),
+            on_behalf_of: Some(SubjectRef::service("payroll")),
+            delegation_chain: vec![SubjectRef::human("ops-lead")],
+            invocation_id: invocation,
+            ..AuditActor::default()
+        }
     );
 }
 

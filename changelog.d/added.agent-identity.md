@@ -22,6 +22,10 @@
   `McpHttpClientBuilder::with_credential_broker`, `RemoteA2aAgentBuilder::credential_broker`, and
   `A2aClient::with_credential` / `A2aV1Client::with_credential` attach a bearer only to requests
   inside the token's audience.
+- **Runtime audit records carry the acting agent** (`adk-core`, `adk-runner`): every
+  `AuditRecordDraft` the runtime writes names the run's acting context — the configured agent id,
+  tenant, instance, `on_behalf_of` subject, and delegation chain — through
+  `AuditActor::for_context` and `ToolGate::with_acting_context`.
 - **Audit identity** (`adk-auth`): `AuditEvent::agent_id` and `on_behalf_of`, set by
   `with_acting_context` in `ProtectedTool` and `ScopeGuard`, filterable with
   `AuditFilter::agent_id`, and stored by the PostgreSQL and OTLP sinks.

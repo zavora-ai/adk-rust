@@ -2324,6 +2324,7 @@ mod tests {
             tool_name: "pay".into(),
             function_call_id: Some("c1".into()),
             args: json!({ "to": "acct-secret", "amount": 5 }),
+            acting: None,
         };
         let scope = ApprovalScope::new("app", "u", "s");
         let request = |id: &str| {

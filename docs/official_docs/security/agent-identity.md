@@ -115,6 +115,7 @@ An `AgentTool` runs its agent as a delegate. The delegate acts for the caller's 
 | `ApprovalRequest::acting` | The request an `ApprovalService` opens for a held call; the requester defaults to the agent's `on_behalf_of` subject, and self-approval checks cover the acting agent |
 | `SpendKey::agent` | Model spend (`LlmSpendRecorder`) and payment spend are keyed by the `AgentId` |
 | `CommerceActor` | Payment tools report the `AgentId` as `actor_id` and the principal's tenant |
+| `AuditRecordDraft::actor` | Every runtime audit record — tool and approval decisions, payments, unknown outcomes — names the agent id, tenant, instance, `on_behalf_of` subject, and delegation chain (`AuditActor::for_context`) |
 | `adk_auth::AuditEvent` | `agent_id`, `on_behalf_of`, and `tenant_id` from `with_acting_context`; `ProtectedTool` and `ScopeGuard` set them; `AuditFilter::agent_id` filters on them |
 | Tracing | Policy decisions log `agent.id` |
 
