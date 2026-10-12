@@ -38,4 +38,6 @@ pub use event_source::{EventSource, TriggerEvent};
 pub use file_watch_trigger::FileWatchTrigger;
 pub use runner_bridge::{RunnerTriggerConfig, TriggerSessionPolicy};
 pub use watermark::{FileTickWatermark, TickWatermark};
-pub use webhook_trigger::{WebhookRequest, WebhookTrigger, WebhookVerifier};
+pub use webhook_trigger::{
+    StandardWebhookVerifier, WebhookRequest, WebhookTrigger, WebhookVerifier,
+};

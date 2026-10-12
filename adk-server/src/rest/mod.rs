@@ -560,6 +560,8 @@ pub struct ServerBuilder {
     background_state: Option<crate::background::BackgroundState>,
     #[cfg(feature = "background")]
     cron_state: Option<crate::background::CronState>,
+    #[cfg(feature = "webhook-ingress")]
+    webhook_ingress: Option<crate::webhooks::WebhookIngress>,
 }
 
 impl ServerBuilder {
@@ -580,6 +582,8 @@ impl ServerBuilder {
             background_state: None,
             #[cfg(feature = "background")]
             cron_state: None,
+            #[cfg(feature = "webhook-ingress")]
+            webhook_ingress: None,
         }
     }
 
@@ -712,6 +716,29 @@ impl ServerBuilder {
     #[cfg(feature = "background")]
     pub fn with_cron_jobs(mut self, state: crate::background::CronState) -> Self {
         self.cron_state = Some(state);
+        self
+    }
+
+    /// Mount `POST /hooks/{name}`: each signed delivery enqueues a durable run.
+    ///
+    /// The route is served at the root, outside `/api` and without the auth middleware:
+    /// the Standard Webhooks signature is the authentication. When `ingress` has no kill
+    /// switch of its own, [`ServerConfig::governance`] is installed, so a freeze refuses
+    /// deliveries with `503`. Runs execute when a worker claims them from the ingress's
+    /// run store.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_server::webhooks::{WebhookHook, WebhookIngress};
+    ///
+    /// let ingress = WebhookIngress::new(run_store.clone())
+    ///     .with_hook(WebhookHook::new("billing", verifier, "billing", "invoice_agent"));
+    /// let app = ServerBuilder::new(config).with_webhook_ingress(ingress).build();
+    /// ```
+    #[cfg(feature = "webhook-ingress")]
+    pub fn with_webhook_ingress(mut self, ingress: crate::webhooks::WebhookIngress) -> Self {
+        self.webhook_ingress = Some(ingress);
         self
     }
 
@@ -1021,6 +1048,16 @@ impl ServerBuilder {
             .route("/ui/{*path}", get(web_ui::serve_ui_assets));
 
         let mut app = Router::new().nest("/api", api_router).merge(ui_router);
+
+        #[cfg(feature = "webhook-ingress")]
+        if let Some(ingress) = self.webhook_ingress {
+            let ingress = if ingress.has_governance() {
+                ingress
+            } else {
+                ingress.with_governance(config.governance.clone())
+            };
+            app = app.merge(crate::webhooks::webhook_ingress_router(ingress));
+        }
 
         // Merge custom root routes
         for custom_routes in self.root_routes {

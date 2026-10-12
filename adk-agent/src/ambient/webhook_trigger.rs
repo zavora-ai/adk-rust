@@ -40,6 +40,60 @@ pub trait WebhookVerifier: Send + Sync + std::fmt::Debug {
     fn verify(&self, request: &WebhookRequest<'_>) -> std::result::Result<String, String>;
 }
 
+/// Verifies [Standard Webhooks](adk_core::webhook) signatures and refuses replays.
+///
+/// Checks the `webhook-timestamp` against the tolerance, the `webhook-signature` against
+/// every configured secret, and remembers each accepted `webhook-id` for twice the
+/// tolerance, so a captured delivery cannot be replayed while its timestamp is still
+/// fresh. Every accepted request speaks for `principal`.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_agent::ambient::{StandardWebhookVerifier, WebhookTrigger};
+/// use adk_core::webhook::{WebhookSecret, WebhookVerifier};
+///
+/// let secret = WebhookSecret::from_base64("whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw")?;
+/// let trigger = WebhookTrigger::new(8080, "/hooks/ci")
+///     .with_verifier(Arc::new(StandardWebhookVerifier::new("ci", WebhookVerifier::new(secret))));
+/// # let _ = trigger;
+/// # Ok::<(), adk_core::webhook::WebhookError>(())
+/// ```
+#[derive(Debug)]
+pub struct StandardWebhookVerifier {
+    principal: String,
+    verifier: adk_core::webhook::WebhookVerifier,
+    replays: adk_core::webhook::InMemoryWebhookReplayGuard,
+}
+
+impl StandardWebhookVerifier {
+    /// Creates a verifier whose accepted requests speak for `principal`.
+    pub fn new(principal: impl Into<String>, verifier: adk_core::webhook::WebhookVerifier) -> Self {
+        Self {
+            principal: principal.into(),
+            verifier,
+            replays: adk_core::webhook::InMemoryWebhookReplayGuard::new(),
+        }
+    }
+}
+
+impl WebhookVerifier for StandardWebhookVerifier {
+    fn verify(&self, request: &WebhookRequest<'_>) -> std::result::Result<String, String> {
+        let headers = adk_core::webhook::WebhookHeaders::from_lookup(|name| request.header(name))
+            .map_err(|error| error.to_string())?;
+        let verified =
+            self.verifier.verify(&headers, request.body()).map_err(|error| error.to_string())?;
+        let window = adk_core::webhook::replay_window(self.verifier.tolerance());
+        let keep_until = chrono::Utc::now()
+            + chrono::Duration::from_std(window).unwrap_or(chrono::Duration::MAX);
+        if !self.replays.record(&verified.id, keep_until) {
+            return Err(adk_core::webhook::WebhookError::Replayed(verified.id).to_string());
+        }
+        Ok(self.principal.clone())
+    }
+}
+
 /// An inbound webhook request, as presented to a [`WebhookVerifier`].
 pub struct WebhookRequest<'a> {
     headers: &'a axum::http::HeaderMap,

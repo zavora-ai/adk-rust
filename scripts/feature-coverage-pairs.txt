@@ -42,6 +42,8 @@
 2 adk-server vertex-remote-engine
 # 11 clippy failures had accumulated unseen behind `a2a-v1`.
 2 adk-server a2a-v1
+# Signed inbound webhooks: `POST /hooks/{name}` and its idempotent run-store enqueue.
+2 adk-server webhook-ingress
 2 adk-cli vertex-agent-registry
 2 adk-cli vertex-skill-registry
 # The `deploy agent-engine` subcommand: arg-parse and mock create-contract tests.

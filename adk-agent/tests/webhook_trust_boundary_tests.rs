@@ -219,3 +219,39 @@ async fn dropping_the_stream_releases_the_port() {
 
     assert!(rebound.is_ok(), "the port was still held after the consumer was dropped");
 }
+
+// ── Standard Webhooks ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn standard_webhook_signatures_are_verified_and_replays_refused() {
+    use adk_agent::ambient::StandardWebhookVerifier;
+    use adk_core::webhook::{WebhookSecret, WebhookSigner};
+
+    let secret = WebhookSecret::from_bytes(b"ambient-secret-ambient-secret-32".to_vec()).unwrap();
+    let verifier =
+        StandardWebhookVerifier::new("ci", adk_core::webhook::WebhookVerifier::new(secret.clone()));
+    let port = free_port().await;
+    let trigger = WebhookTrigger::new(port, "/hook").with_verifier(Arc::new(verifier));
+    let mut events = trigger.subscribe().await.unwrap();
+
+    let body = r#"{"build":"green"}"#;
+    let signed = WebhookSigner::new(secret).sign_now("msg_1", body.as_bytes());
+    let pairs = signed.header_pairs();
+    let headers: Vec<(&str, &str)> =
+        pairs.iter().map(|(name, value)| (*name, value.as_str())).collect();
+
+    assert_eq!(post(port, "/hook", body, &headers).await, 200);
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(event.payload["build"], "green");
+
+    assert_eq!(post(port, "/hook", body, &headers).await, 401, "a replay is refused");
+    assert_eq!(
+        post(port, "/hook", r#"{"build":"red"}"#, &headers).await,
+        401,
+        "a tampered body is refused"
+    );
+    assert_eq!(post(port, "/hook", body, &[]).await, 401, "an unsigned request is refused");
+}

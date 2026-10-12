@@ -124,6 +124,15 @@ application can apply its own:
 | GET | `/awp/events/subscriptions` | List subscriptions |
 | DELETE | `/awp/events/subscriptions/{id}` | Delete subscription |
 
+## Event delivery
+
+`InMemoryEventSubscriptionService` delivers every matching event over HTTP through
+`adk_core::webhook_delivery::WebhookDelivery`: Standard Webhooks signatures keyed with the
+subscription secret's bytes, the event id as the `webhook-id`, retries with exponential backoff
+and jitter, dead-lettering after the last attempt, and an egress guard that refuses loopback,
+private, and link-local destinations. `with_delivery` sets the retry policy, dead-letter sink,
+or egress policy.
+
 ## Components
 
 ### AwpStateBuilder

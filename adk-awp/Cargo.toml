@@ -16,7 +16,7 @@ include = ["src/**/*", "Cargo.toml", "README.md"]
 
 [dependencies]
 awp-types = { workspace = true }
-adk-core = { workspace = true }
+adk-core = { workspace = true, features = ["webhook-delivery"] }
 axum = { version = "0.8", features = ["macros"] }
 tokio = { workspace = true, features = ["sync", "time", "fs", "rt"] }
 async-trait = { workspace = true }

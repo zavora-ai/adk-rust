@@ -1,5 +1,17 @@
-//! AWP event subscription system with HMAC-SHA256 webhook delivery.
+//! AWP event subscription system with signed webhook delivery.
+//!
+//! [`InMemoryEventSubscriptionService`] delivers every matching event over HTTP through
+//! [`WebhookDelivery`]: [Standard Webhooks](adk_core::webhook) signatures keyed with the
+//! subscription's secret bytes, the event id as the stable `webhook-id`, retries with
+//! exponential backoff and jitter, a dead-letter sink, and an egress guard that refuses
+//! internal destinations.
 
+use std::sync::Arc;
+
+use adk_core::webhook::WebhookSecret;
+use adk_core::webhook_delivery::{
+    DeliveryReport, EgressPolicy, WebhookDelivery, WebhookEndpoint, WebhookMessage,
+};
 use async_trait::async_trait;
 use awp_types::AwpError;
 use chrono::{DateTime, Utc};
@@ -69,15 +81,23 @@ impl std::fmt::Debug for EventSubscription {
 impl EventSubscription {
     /// Validates the bounded subscription fields accepted by the built-in service.
     ///
-    /// Callback URLs require HTTPS. The in-memory implementation does not
-    /// perform HTTP delivery, but enforcing the boundary here prevents an
-    /// invalid or insecure destination from becoming durable configuration.
+    /// Callback URLs require HTTPS and must not name a loopback, private, or
+    /// link-local address; see [`EgressPolicy`].
     ///
     /// # Errors
     ///
     /// Returns [`AwpError::InvalidRequest`] when a field is missing, oversized,
     /// insecure, or malformed.
     pub fn validate(&self) -> Result<(), AwpError> {
+        self.validate_with(&EgressPolicy::default())
+    }
+
+    /// Validates the subscription against the destinations `egress` allows.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`validate`](Self::validate).
+    pub fn validate_with(&self, egress: &EgressPolicy) -> Result<(), AwpError> {
         if self.subscriber.trim().is_empty() || self.subscriber.len() > 256 {
             return Err(AwpError::InvalidRequest(
                 "subscriber must contain 1 to 256 bytes".to_string(),
@@ -91,11 +111,16 @@ impl EventSubscription {
         let callback = self.callback_url.parse::<http::Uri>().map_err(|_| {
             AwpError::InvalidRequest("callbackUrl must be a valid absolute HTTPS URL".to_string())
         })?;
-        if callback.scheme_str() != Some("https") || callback.authority().is_none() {
+        let scheme_allowed = callback.scheme_str() == Some("https")
+            || (egress.allow_http && callback.scheme_str() == Some("http"));
+        if !scheme_allowed || callback.authority().is_none() {
             return Err(AwpError::InvalidRequest(
                 "callbackUrl must be a valid absolute HTTPS URL".to_string(),
             ));
         }
+        egress
+            .check_url(&self.callback_url)
+            .map_err(|reason| AwpError::InvalidRequest(format!("callbackUrl refused: {reason}")))?;
         if self.event_types.len() > 64 {
             return Err(AwpError::InvalidRequest(
                 "eventTypes must not contain more than 64 entries".to_string(),
@@ -139,19 +164,89 @@ pub trait EventSubscriptionService: Send + Sync {
     async fn deliver(&self, event: AwpEvent) -> Result<(), AwpError>;
 }
 
-/// In-memory event subscription service backed by [`DashMap`].
+/// In-memory event subscription service backed by [`DashMap`] that delivers over HTTP.
 ///
-/// Delivery is logged but not sent over the network. Production applications
-/// implement [`EventSubscriptionService`] with their HTTP client, destination
-/// policy, retry queue, and durable subscription store.
+/// [`deliver`](EventSubscriptionService::deliver) starts one background delivery per
+/// matching subscription and returns at once, so a health transition never waits on a
+/// slow subscriber. [`deliver_and_wait`](Self::deliver_and_wait) waits for the reports.
+/// Receivers verify deliveries with Standard Webhooks, using the subscription secret's
+/// bytes as the key (its `whsec_` form is `WebhookSecret::from_bytes(secret).to_whsec()`).
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_awp::InMemoryEventSubscriptionService;
+/// use adk_core::webhook_delivery::{InMemoryDeadLetterSink, RetryPolicy, WebhookDelivery};
+///
+/// let dead_letters = Arc::new(InMemoryDeadLetterSink::new());
+/// let service = InMemoryEventSubscriptionService::new().with_delivery(
+///     WebhookDelivery::new()
+///         .with_retry_policy(RetryPolicy::default().with_max_attempts(8))
+///         .with_dead_letter_sink(dead_letters),
+/// );
+/// # let _ = service;
+/// ```
 pub struct InMemoryEventSubscriptionService {
     subscriptions: DashMap<Uuid, EventSubscription>,
+    delivery: Arc<WebhookDelivery>,
 }
 
 impl InMemoryEventSubscriptionService {
-    /// Create a new empty event subscription service.
+    /// Create a new empty event subscription service with the default [`WebhookDelivery`].
     pub fn new() -> Self {
-        Self { subscriptions: DashMap::new() }
+        Self { subscriptions: DashMap::new(), delivery: Arc::new(WebhookDelivery::new()) }
+    }
+
+    /// Delivers through `delivery`, for a custom retry policy, dead-letter sink, or egress policy.
+    pub fn with_delivery(mut self, delivery: WebhookDelivery) -> Self {
+        self.delivery = Arc::new(delivery);
+        self
+    }
+
+    /// The signed messages for `event`, one per matching subscription.
+    fn deliveries(
+        &self,
+        event: &AwpEvent,
+    ) -> Result<Vec<(Uuid, WebhookEndpoint, WebhookMessage)>, AwpError> {
+        let message = WebhookMessage::json(event.id.to_string(), event)
+            .map_err(|e| AwpError::InternalError(format!("event serialization failed: {e}")))?;
+        let mut deliveries = Vec::new();
+        for entry in self.subscriptions.iter() {
+            let sub = entry.value();
+            if !sub.event_types.is_empty()
+                && !sub.event_types.iter().any(|t| t == &event.event_type || t == "*")
+            {
+                continue;
+            }
+            let Ok(secret) = WebhookSecret::from_bytes(sub.secret.as_bytes().to_vec()) else {
+                tracing::warn!(subscription.id = %sub.id, "subscription has no signing secret; skipped");
+                continue;
+            };
+            deliveries.push((
+                sub.id,
+                WebhookEndpoint::new(&sub.callback_url, secret),
+                message.clone(),
+            ));
+        }
+        Ok(deliveries)
+    }
+
+    /// Delivers `event` to every matching subscription and waits for each report.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AwpError::InternalError`] when the event cannot be serialized.
+    pub async fn deliver_and_wait(
+        &self,
+        event: AwpEvent,
+    ) -> Result<Vec<(Uuid, DeliveryReport)>, AwpError> {
+        let deliveries = self.deliveries(&event)?;
+        let mut reports = Vec::with_capacity(deliveries.len());
+        for (id, endpoint, message) in deliveries {
+            reports.push((id, self.delivery.deliver(&endpoint, &message).await));
+        }
+        Ok(reports)
     }
 }
 
@@ -164,7 +259,7 @@ impl Default for InMemoryEventSubscriptionService {
 #[async_trait]
 impl EventSubscriptionService for InMemoryEventSubscriptionService {
     async fn create(&self, subscription: EventSubscription) -> Result<Uuid, AwpError> {
-        subscription.validate()?;
+        subscription.validate_with(&self.delivery.egress_policy())?;
         let id = subscription.id;
         self.subscriptions.insert(id, subscription);
         Ok(id)
@@ -184,35 +279,28 @@ impl EventSubscriptionService for InMemoryEventSubscriptionService {
     }
 
     async fn deliver(&self, event: AwpEvent) -> Result<(), AwpError> {
-        let payload = serde_json::to_vec(&event)
-            .map_err(|e| AwpError::InternalError(format!("event serialization failed: {e}")))?;
-
-        for entry in self.subscriptions.iter() {
-            let sub = entry.value();
-            // Check if subscription matches this event type
-            if !sub.event_types.is_empty()
-                && !sub.event_types.iter().any(|t| t == &event.event_type || t == "*")
-            {
-                continue;
-            }
-
-            let signature = sign_payload(&payload, &sub.secret);
-            tracing::info!(
-                subscriber = %sub.subscriber,
-                callback_url = %sub.callback_url,
-                event_type = %event.event_type,
-                signature = %signature,
-                "would deliver webhook (in-memory mode)"
-            );
+        for (subscription_id, endpoint, message) in self.deliveries(&event)? {
+            let delivery = Arc::clone(&self.delivery);
+            let event_type = event.event_type.clone();
+            tokio::spawn(async move {
+                let report = delivery.deliver(&endpoint, &message).await;
+                tracing::debug!(
+                    subscription.id = %subscription_id,
+                    event.r#type = %event_type,
+                    delivered = report.is_delivered(),
+                    "awp event delivery finished"
+                );
+            });
         }
-
         Ok(())
     }
 }
 
 /// Compute HMAC-SHA256 of a payload with the given secret.
 ///
-/// Returns the signature in `sha256={hex_digest}` format.
+/// Returns the signature in `sha256={hex_digest}` format. Deliveries from
+/// [`InMemoryEventSubscriptionService`] carry Standard Webhooks signatures instead;
+/// this helper remains for receivers of the older format.
 pub fn sign_payload(payload: &[u8], secret: &str) -> String {
     let mut mac =
         HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
@@ -398,5 +486,108 @@ mod tests {
         let parsed: EventSubscription = serde_json::from_str(&json).unwrap();
         assert_eq!(sub.id, parsed.id);
         assert_eq!(sub.subscriber, parsed.subscriber);
+    }
+
+    #[test]
+    fn test_subscription_validation_rejects_internal_destinations() {
+        for url in
+            ["https://169.254.169.254/latest", "https://127.0.0.1/hook", "https://localhost/hook"]
+        {
+            let mut subscription = sample_subscription(vec![]);
+            subscription.callback_url = url.to_string();
+            assert!(subscription.validate().is_err(), "{url}");
+        }
+    }
+
+    type Captured = Arc<std::sync::Mutex<Vec<(axum::http::HeaderMap, bytes::Bytes)>>>;
+
+    /// A local receiver that answers every delivery with `status`.
+    async fn receiver(status: u16) -> (String, Captured) {
+        let captured: Captured = Arc::default();
+        let log = captured.clone();
+        let app = axum::Router::new().route(
+            "/hook",
+            axum::routing::post(move |headers: axum::http::HeaderMap, body: bytes::Bytes| {
+                let log = log.clone();
+                async move {
+                    log.lock().unwrap().push((headers, body));
+                    axum::http::StatusCode::from_u16(status).unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/hook", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, captured)
+    }
+
+    fn local_service(max_attempts: u32) -> InMemoryEventSubscriptionService {
+        use adk_core::webhook_delivery::RetryPolicy;
+        InMemoryEventSubscriptionService::new().with_delivery(
+            WebhookDelivery::new()
+                .with_retry_policy(
+                    RetryPolicy::default()
+                        .with_max_attempts(max_attempts)
+                        .with_initial_backoff(std::time::Duration::from_millis(5))
+                        .with_max_backoff(std::time::Duration::from_millis(20)),
+                )
+                .with_egress_policy(EgressPolicy::allow_private_networks()),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_events_are_delivered_with_standard_webhooks_signatures() {
+        use adk_core::webhook::{WebhookHeaders, WebhookVerifier};
+        let (url, captured) = receiver(200).await;
+        let svc = local_service(3);
+        let mut sub = sample_subscription(vec!["health.changed".to_string()]);
+        sub.callback_url = url;
+        svc.create(sub.clone()).await.unwrap();
+        let event = sample_event();
+
+        let reports = svc.deliver_and_wait(event.clone()).await.unwrap();
+        assert_eq!(reports, vec![(sub.id, DeliveryReport::Delivered { attempts: 1, status: 200 })]);
+
+        let (headers, body) = captured.lock().unwrap()[0].clone();
+        assert_eq!(headers["webhook-id"], event.id.to_string());
+        let parsed =
+            WebhookHeaders::from_lookup(|name| headers.get(name).and_then(|v| v.to_str().ok()))
+                .unwrap();
+        let verifier =
+            WebhookVerifier::new(WebhookSecret::from_bytes(sub.secret.into_bytes()).unwrap());
+        verifier.verify(&parsed, &body).expect("signed with the subscription secret");
+        let delivered: AwpEvent = serde_json::from_slice(&body).unwrap();
+        assert_eq!(delivered.id, event.id);
+    }
+
+    #[tokio::test]
+    async fn test_failing_subscribers_are_retried_then_dead_lettered() {
+        let (url, captured) = receiver(503).await;
+        let svc = local_service(2);
+        let mut sub = sample_subscription(vec![]);
+        sub.callback_url = url;
+        svc.create(sub).await.unwrap();
+        let reports = svc.deliver_and_wait(sample_event()).await.unwrap();
+        assert!(
+            matches!(&reports[0].1, DeliveryReport::DeadLettered(letter) if letter.attempts == 2)
+        );
+        assert_eq!(captured.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_deliver_returns_before_the_delivery_finishes() {
+        let (url, captured) = receiver(200).await;
+        let svc = local_service(1);
+        let mut sub = sample_subscription(vec![]);
+        sub.callback_url = url;
+        svc.create(sub).await.unwrap();
+        svc.deliver(sample_event()).await.unwrap();
+        for _ in 0..100 {
+            if !captured.lock().unwrap().is_empty() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the background delivery never arrived");
     }
 }

@@ -73,7 +73,7 @@ pub mod yaml_agent;
 #[cfg(feature = "agent-registry")]
 pub mod registry;
 
-#[cfg(feature = "openai-webhooks")]
+#[cfg(any(feature = "openai-webhooks", feature = "webhook-ingress"))]
 pub mod webhooks;
 
 #[cfg(feature = "background")]

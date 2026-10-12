@@ -479,6 +479,17 @@ async fn main() -> adk_core::Result<()> {
 }
 ```
 
+## Wake-ups and Webhooks
+
+| Module | Feature | Provides |
+|--------|---------|----------|
+| `webhook` | `webhooks` | Standard Webhooks `WebhookSigner` / `WebhookVerifier` (timestamp tolerance, several secrets for rotation), `WebhookReplayGuard` |
+| `webhook_delivery` | `webhook-delivery` | `WebhookDelivery`: signed outbound POSTs with exponential backoff and jitter, a `DeadLetterSink`, and an `EgressPolicy` that refuses internal destinations at resolve time |
+| `queue_source` | — | `QueueSource` (pull, ack, nack), `InMemoryQueueSource`, and `QueueIngress`, which enqueues each message as a durable run keyed by its message id and acks only after the enqueue succeeds |
+
+`queue_source_conformance_tests!` (feature `conformance`) checks any `QueueSource`. See
+[Wake-ups and Webhooks](../docs/official_docs/core/wake-ups.md).
+
 ## Run Budgets
 
 `RunBudget` states limits on model calls, total tokens, cost (micro-USD), wall

@@ -69,6 +69,8 @@ agent-registry = []
 a2a-interceptors = []
 # Enable OpenAI webhook handler for background task completion events
 openai-webhooks = ["dep:hmac", "dep:sha2", "dep:hex"]
+# Signed inbound webhooks (`POST /hooks/{name}`) that enqueue durable runs
+webhook-ingress = ["adk-core/webhooks"]
 # Enable background run endpoints and cron job management
 background = ["adk-core/cron"]
 # Approval inbox endpoints, the approval ticker, and the signed approval webhook notifier

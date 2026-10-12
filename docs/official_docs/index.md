@@ -15,6 +15,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Runner](core/runner.md) - Agent execution runtime and configuration
 - [Plugins](core/plugins.md) - Lifecycle hooks for tool/model interception and middleware
 - [Durable Runtime](core/durable-runtime.md) - Leases with fencing, the durable run queue, schedules, governance state, and agent identity
+- [Wake-ups and Webhooks](core/wake-ups.md) - Signed inbound webhooks and queue messages that enqueue durable runs, and signed outbound delivery
 
 ## Models
 

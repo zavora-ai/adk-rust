@@ -14,6 +14,7 @@
 //! | [`DurableRunStore`](crate::DurableRunStore) | [`RunStoreHarness`](crate::conformance::RunStoreHarness) | [`run_store_conformance_tests!`](crate::run_store_conformance_tests) | [`run_store`](crate::conformance::run_store) |
 //! | [`ScheduleStore`](crate::ScheduleStore) | [`ScheduleStoreHarness`](crate::conformance::ScheduleStoreHarness) | [`schedule_store_conformance_tests!`](crate::schedule_store_conformance_tests) | [`schedule_store`](crate::conformance::schedule_store) |
 //! | [`GovernanceStateStore`](crate::GovernanceStateStore) | [`GovernanceStateStoreHarness`](crate::conformance::GovernanceStateStoreHarness) | [`governance_state_store_conformance_tests!`](crate::governance_state_store_conformance_tests) | [`governance_state_store`](crate::conformance::governance_state_store) |
+//! | [`QueueSource`](crate::QueueSource) | [`QueueSourceHarness`](crate::conformance::QueueSourceHarness) | [`queue_source_conformance_tests!`](crate::queue_source_conformance_tests) | [`queue_source`](crate::conformance::queue_source) |
 //! | [`AuditLogStore`](crate::audit_log::AuditLogStore) | [`AuditLogStoreHarness`](crate::conformance::AuditLogStoreHarness) | [`audit_log_store_conformance_tests!`](crate::audit_log_store_conformance_tests) | [`audit_log_store`](crate::conformance::audit_log_store) |
 //!
 //! The harnesses of time-dependent stores receive the [`Clock`](crate::Clock) to read,
@@ -66,6 +67,7 @@ pub mod approval_store;
 pub mod audit_log_store;
 pub mod governance_state_store;
 pub mod lease_store;
+pub mod queue_source;
 pub mod run_store;
 pub mod schedule_store;
 pub mod spend_ledger;
@@ -75,6 +77,7 @@ pub use approval_store::ApprovalStoreHarness;
 pub use audit_log_store::AuditLogStoreHarness;
 pub use governance_state_store::GovernanceStateStoreHarness;
 pub use lease_store::LeaseStoreHarness;
+pub use queue_source::QueueSourceHarness;
 pub use run_store::RunStoreHarness;
 pub use schedule_store::ScheduleStoreHarness;
 pub use spend_ledger::{SpendLedgerHarness, SpendLedgerSetup};
@@ -568,6 +571,41 @@ macro_rules! audit_log_store_conformance_tests {
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn audit_log_logs_survive_a_restart() {
             $crate::conformance::audit_log_store::logs_survive_a_restart(&$harness).await;
+        }
+    };
+}
+
+/// Generates one test per [`queue_source`] case for a [`QueueSourceHarness`].
+///
+/// See the [module documentation](crate::conformance) for an example.
+#[macro_export]
+macro_rules! queue_source_conformance_tests {
+    ($(#[$attr:meta])* harness = $harness:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn queue_pull_leases_and_ack_removes() {
+            $crate::conformance::queue_source::pull_leases_and_ack_removes(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn queue_nack_redelivers_with_a_new_receipt() {
+            $crate::conformance::queue_source::nack_redelivers_with_a_new_receipt(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn queue_lapsed_lease_redelivers() {
+            $crate::conformance::queue_source::lapsed_lease_redelivers(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn queue_pull_respects_the_batch_size() {
+            $crate::conformance::queue_source::pull_respects_the_batch_size(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn queue_duplicate_publishes_are_both_delivered() {
+            $crate::conformance::queue_source::duplicate_publishes_are_both_delivered(&$harness)
+                .await;
         }
     };
 }

@@ -54,6 +54,7 @@ codeact = []
 team-tools = ["dep:adk-tool"]
 record-payloads = []
 ambient = [
+    "adk-core/webhooks",
     "dep:cron",
     "dep:notify",
     "dep:axum",

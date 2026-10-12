@@ -26,6 +26,10 @@ url = { version = "2.5", features = ["serde"] }
 rustls = { workspace = true, optional = true }
 cron = { version = "0.15", optional = true }
 chrono-tz = { version = "0.10", optional = true }
+hmac = { version = "0.12", optional = true }
+sha2 = { workspace = true, optional = true }
+base64 = { version = "0.22", optional = true }
+reqwest = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -34,11 +38,15 @@ rustls = ["dep:rustls"]
 conformance = ["tokio/rt"]
 # Cron schedule evaluation in IANA time zones (`adk_core::schedule::plan_fires`).
 cron = ["dep:cron", "dep:chrono-tz"]
+# Standard Webhooks signing and verification (`adk_core::webhook`).
+webhooks = ["dep:hmac", "dep:sha2", "dep:base64"]
+# Signed outbound webhook delivery with retries and an egress guard (`adk_core::webhook_delivery`).
+webhook-delivery = ["webhooks", "dep:reqwest", "tokio/net"]
 
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suites.
-adk-core = { path = ".", features = ["conformance", "cron"] }
+adk-core = { path = ".", features = ["conformance", "cron", "webhook-delivery"] }
 async-stream = { workspace = true }
 proptest = "1.5"
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util", "net", "io-util"] }

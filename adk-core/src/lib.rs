@@ -130,6 +130,8 @@ pub mod policy;
 pub mod principal;
 // Identity defaults, delegation, and error conversion for the `principal` types.
 mod acting;
+/// Queue wake-ups: broker messages become durable runs.
+pub mod queue_source;
 /// HTTP request context extracted by auth middleware.
 pub mod request_context;
 /// Durable runs: a queue of runs that workers claim under fenced leases.
@@ -152,6 +154,12 @@ pub mod tool;
 pub mod tool_concurrency;
 /// Content, Part, and multimodal data types.
 pub mod types;
+/// Standard Webhooks signing and verification.
+#[cfg(feature = "webhooks")]
+pub mod webhook;
+/// Signed outbound webhook delivery.
+#[cfg(feature = "webhook-delivery")]
+pub mod webhook_delivery;
 
 pub use action_ledger::{
     ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, OUTCOME_UNKNOWN_STATUS,
@@ -235,6 +243,9 @@ pub use policy::{
 };
 pub use principal::{
     ActingContext, AgentId, AgentPrincipal, PrincipalError, SubjectKind, SubjectRef,
+};
+pub use queue_source::{
+    InMemoryQueueSource, IngressReport, QueueIngress, QueueMessage, QueueSource,
 };
 pub use request_context::RequestContext;
 pub use run_store::{

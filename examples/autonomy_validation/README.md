@@ -48,6 +48,7 @@ retry is reported next to the result.
 | Scenario | Area | Passes when |
 |----------|------|-------------|
 | `agent_identity` | Agent identity | Two deployments (`replica-a`, `replica-b`) of a billing agent configured with `Runner::builder().agent_principal(...)` call `lookup_invoice` under a policy that allows only `spiffe://autonomy.test/agent/billing` in tenant `acme`: every policy decision carries that agent id, the call executes, and all model spend is recorded under the agent id rather than the derived `urn:adk:agent:autonomy-identity/billing` |
+| `webhook_wakeup` | Wake-ups | `POST /hooks/{name}` on an `adk-server` with `webhook-ingress`: a forged signature answers `401`; a Standard Webhooks delivery answers `202` and enqueues a run that a claim loop executes to completion (the agent calls `file_ticket` once); the captured delivery replayed and a sender retry re-signed under the same `webhook-id` both answer `200` with the same run; afterwards the store holds one run, one claim was made, and no further model call happened
 
 ## Providers
 

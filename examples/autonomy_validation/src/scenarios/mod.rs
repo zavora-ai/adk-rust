@@ -20,6 +20,7 @@ pub mod policy;
 pub mod providers;
 pub mod state;
 pub mod transfer;
+pub mod wakeup;
 
 use crate::common::{Config, Provider, Verdict};
 use governance::DenialForm;
@@ -52,6 +53,7 @@ pub const ALL: &[&str] = &[
     "approval_service",
     "audit_trail",
     "agent_identity",
+    "webhook_wakeup",
 ];
 
 /// Runs the named scenario once.
@@ -87,6 +89,7 @@ pub async fn run(name: &str, cfg: &Config, provider: Provider) -> Verdict {
         "approval_service" => approvals::approval_service(cfg, provider).await,
         "audit_trail" => audit::audit_trail(cfg, provider).await,
         "agent_identity" => identity::agent_identity(cfg, provider).await,
+        "webhook_wakeup" => wakeup::webhook_wakeup(cfg, provider).await,
         other => Verdict::Fail(format!("unknown scenario {other}")),
     }
 }

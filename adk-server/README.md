@@ -325,6 +325,24 @@ is recovered by another worker once its lease expires and resumes from its check
 [Durable Runtime](../docs/official_docs/core/durable-runtime.md#crash-resume)). Finished runs
 are pruned after `DurableWorkerConfig::retain_finished` (24 hours by default).
 
+### Webhook Wake-ups (feature: `webhook-ingress`)
+
+`ServerBuilder::with_webhook_ingress` serves `POST /hooks/{name}`. Each `WebhookHook` verifies
+Standard Webhooks signatures and maps the delivery to a `NewRun` in a `DurableRunStore`, keyed
+by the `webhook-id`:
+
+| Status | Meaning |
+|--------|---------|
+| `202` | New run enqueued: `{"runId", "state", "duplicate": false}` |
+| `200` | Redelivery of a `webhook-id` that already has a run; the same run is returned |
+| `401` | Signature missing, invalid, or outside the timestamp tolerance |
+| `409` | `OnConflict::Reject` and an unfinished run holds the hook's concurrency key |
+| `422` | Body is not JSON, or a key template names a missing field |
+| `429` | The hook's `max_pending` cap is reached (`Retry-After`) |
+| `503` | The kill switch is frozen or stale, or the run store is unreachable (`Retry-After`) |
+
+See [Wake-ups and Webhooks](../docs/official_docs/core/wake-ups.md).
+
 ## API Endpoints
 
 ### Health
