@@ -104,6 +104,44 @@ macro_rules! retry_transient {
     }};
 }
 
+/// A Neo4j store whose trait methods run on the caller's task. The public store
+/// implements each trait by running these through [`detached`].
+#[derive(Debug)]
+pub(crate) struct Inline<S>(pub(crate) S);
+
+impl<S> std::ops::Deref for Inline<S> {
+    type Target = S;
+
+    fn deref(&self) -> &S {
+        &self.0
+    }
+}
+
+/// Runs one store call to completion on its own task.
+///
+/// neo4rs connections are not cancellation-safe. A call dropped between sending a bolt
+/// message and reading its response returns the connection to the pool with that
+/// response unread; the pool's RESET check then reads it in place of its own, and every
+/// later response on the connection is one behind — a fenced write can fail with
+/// `unexpected response for RUN` or read another statement's result. Callers drop store
+/// calls routinely (the durable worker drops its in-flight heartbeat when an attempt
+/// ends), so every call finishes its exchange on a task of its own and a dropped caller
+/// only loses the result.
+pub(crate) async fn detached<T: Send + 'static>(
+    call: impl std::future::Future<Output = Result<T>> + Send + 'static,
+) -> Result<T> {
+    match tokio::spawn(call).await {
+        Ok(result) => result,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(error) => Err(AdkError::new(
+            adk_core::ErrorComponent::Session,
+            adk_core::ErrorCategory::Unavailable,
+            "session.neo4j.call_aborted",
+            format!("the neo4j store call was aborted before it finished: {error}"),
+        )),
+    }
+}
+
 /// Reads every row of `query` inside `txn`.
 pub(crate) async fn rows(
     txn: &mut Txn,
@@ -231,6 +269,7 @@ RETURN coalesce(sum(e.committed_micro_usd), 0) AS spent";
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct Neo4jSpendLedger {
     graph: Graph,
     limits: SpendLimits,
@@ -419,7 +458,7 @@ impl Neo4jSpendLedger {
 }
 
 #[async_trait]
-impl SpendLedger for Neo4jSpendLedger {
+impl SpendLedger for Inline<Neo4jSpendLedger> {
     async fn reserve(&self, key: &SpendKey, amount_micro_usd: u64) -> Result<ReservationId> {
         let amount = stored_amount(amount_micro_usd)?;
         retry_transient!(spend_unavailable, self.try_reserve(key, amount, amount_micro_usd))
@@ -462,6 +501,31 @@ impl SpendLedger for Neo4jSpendLedger {
             None => 0,
         };
         Ok(u64::try_from(spent).unwrap_or(0))
+    }
+}
+
+#[async_trait]
+impl SpendLedger for Neo4jSpendLedger {
+    async fn reserve(&self, key: &SpendKey, amount_micro_usd: u64) -> Result<ReservationId> {
+        let inline = Inline(self.clone());
+        let key = key.clone();
+        detached(async move { inline.reserve(&key, amount_micro_usd).await }).await
+    }
+
+    async fn commit(&self, id: ReservationId, actual_micro_usd: u64) -> Result<()> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.commit(id, actual_micro_usd).await }).await
+    }
+
+    async fn release(&self, id: ReservationId) -> Result<()> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.release(id).await }).await
+    }
+
+    async fn spent(&self, key: &SpendKey, period: SpendPeriod) -> Result<u64> {
+        let inline = Inline(self.clone());
+        let key = key.clone();
+        detached(async move { inline.spent(&key, period).await }).await
     }
 }
 
@@ -515,6 +579,7 @@ fn parse_time(text: &str, field: &str) -> Result<DateTime<Utc>> {
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct Neo4jActionLedger {
     graph: Graph,
 }
@@ -582,7 +647,7 @@ impl Neo4jActionLedger {
 }
 
 #[async_trait]
-impl ActionLedger for Neo4jActionLedger {
+impl ActionLedger for Inline<Neo4jActionLedger> {
     async fn begin(&self, record: &ActionRecord) -> Result<()> {
         let statement = query(
             "CREATE (:AdkAction {key: $key, tool_name: $tool_name, args_digest: $args_digest, \
@@ -645,6 +710,27 @@ impl ActionLedger for Neo4jActionLedger {
                 .map(|time| parse_time(&time, "completed_at"))
                 .transpose()?,
         }))
+    }
+}
+
+#[async_trait]
+impl ActionLedger for Neo4jActionLedger {
+    async fn begin(&self, record: &ActionRecord) -> Result<()> {
+        let inline = Inline(self.clone());
+        let record = record.clone();
+        detached(async move { inline.begin(&record).await }).await
+    }
+
+    async fn complete(&self, key: &str, outcome: ActionOutcome) -> Result<()> {
+        let inline = Inline(self.clone());
+        let key = key.to_owned();
+        detached(async move { inline.complete(&key, outcome).await }).await
+    }
+
+    async fn get(&self, key: &str) -> Result<Option<ActionRecord>> {
+        let inline = Inline(self.clone());
+        let key = key.to_owned();
+        detached(async move { inline.get(&key).await }).await
     }
 }
 
@@ -780,6 +866,7 @@ const SET_REQUEST: &str = "r.app = $app, r.state = $state, r.open = $open, \
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct Neo4jApprovalStore {
     graph: Graph,
 }
@@ -966,7 +1053,7 @@ impl Neo4jApprovalStore {
 }
 
 #[async_trait]
-impl ApprovalStore for Neo4jApprovalStore {
+impl ApprovalStore for Inline<Neo4jApprovalStore> {
     async fn record_pending(
         &self,
         scope: &ApprovalScope,
@@ -1200,6 +1287,116 @@ impl ApprovalStore for Neo4jApprovalStore {
         .await
         .map_err(|e| approval_error(format!("delete failed: {e}")))?;
         Ok(found.first().and_then(|row| row.get::<i64>("deleted").ok()).unwrap_or(0) > 0)
+    }
+}
+
+#[async_trait]
+impl ApprovalStore for Neo4jApprovalStore {
+    async fn record_pending(
+        &self,
+        scope: &ApprovalScope,
+        request: &ToolConfirmationRequest,
+    ) -> Result<()> {
+        let inline = Inline(self.clone());
+        let scope = scope.clone();
+        let request = request.clone();
+        detached(async move { inline.record_pending(&scope, &request).await }).await
+    }
+
+    async fn pending(&self, scope: &ApprovalScope) -> Result<Vec<PendingApproval>> {
+        let inline = Inline(self.clone());
+        let scope = scope.clone();
+        detached(async move { inline.pending(&scope).await }).await
+    }
+
+    async fn decide(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        approval: ToolApproval,
+    ) -> Result<()> {
+        let inline = Inline(self.clone());
+        let scope = scope.clone();
+        let fingerprint = fingerprint.to_owned();
+        detached(async move { inline.decide(&scope, &fingerprint, approval).await }).await
+    }
+
+    async fn take_decision(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> Result<Option<ToolConfirmationDecision>> {
+        let inline = Inline(self.clone());
+        let scope = scope.clone();
+        let fingerprint = fingerprint.to_owned();
+        detached(async move { inline.take_decision(&scope, &fingerprint).await }).await
+    }
+
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> Result<Option<ToolApproval>> {
+        let inline = Inline(self.clone());
+        let scope = scope.clone();
+        let fingerprint = fingerprint.to_owned();
+        detached(async move { inline.take_approval(&scope, &fingerprint).await }).await
+    }
+
+    async fn has_decision(&self, scope: &ApprovalScope, fingerprint: &str) -> Result<bool> {
+        let inline = Inline(self.clone());
+        let scope = scope.clone();
+        let fingerprint = fingerprint.to_owned();
+        detached(async move { inline.has_decision(&scope, &fingerprint).await }).await
+    }
+
+    async fn create_request(&self, request: &ApprovalRequest) -> Result<ApprovalRequest> {
+        let inline = Inline(self.clone());
+        let request = request.clone();
+        detached(async move { inline.create_request(&request).await }).await
+    }
+
+    async fn get_request(&self, id: &str) -> Result<Option<ApprovalRequest>> {
+        let inline = Inline(self.clone());
+        let id = id.to_owned();
+        detached(async move { inline.get_request(&id).await }).await
+    }
+
+    async fn replace_request(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: u64,
+    ) -> Result<bool> {
+        let inline = Inline(self.clone());
+        let request = request.clone();
+        detached(async move { inline.replace_request(&request, expected_version).await }).await
+    }
+
+    async fn list_requests(
+        &self,
+        query_spec: &ApprovalRequestQuery,
+    ) -> Result<Vec<ApprovalRequest>> {
+        let inline = Inline(self.clone());
+        let query_spec = query_spec.clone();
+        detached(async move { inline.list_requests(&query_spec).await }).await
+    }
+
+    async fn put_delegation(&self, delegation: &ApprovalDelegation) -> Result<()> {
+        let inline = Inline(self.clone());
+        let delegation = delegation.clone();
+        detached(async move { inline.put_delegation(&delegation).await }).await
+    }
+
+    async fn delegations_to(&self, to: &SubjectRef) -> Result<Vec<ApprovalDelegation>> {
+        let inline = Inline(self.clone());
+        let to = to.clone();
+        detached(async move { inline.delegations_to(&to).await }).await
+    }
+
+    async fn delete_delegation(&self, id: &str) -> Result<bool> {
+        let inline = Inline(self.clone());
+        let id = id.to_owned();
+        detached(async move { inline.delete_delegation(&id).await }).await
     }
 }
 

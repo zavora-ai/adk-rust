@@ -22,6 +22,7 @@
 //! service.migrate().await?;
 //! ```
 
+use crate::neo4j_stores::{Inline, detached};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -41,6 +42,7 @@ use uuid::Uuid;
 /// and user-state nodes. Each state key is a node property holding the value
 /// as a JSON string, since Neo4j has no native JSON type, so an append writes
 /// only its own keys and concurrent appends keep each other's writes.
+#[derive(Clone)]
 pub struct Neo4jSessionService {
     graph: Graph,
 }
@@ -460,7 +462,7 @@ fn row_to_event(row: &neo4rs::Row) -> Option<Event> {
 }
 
 #[async_trait]
-impl SessionService for Neo4jSessionService {
+impl SessionService for Inline<Neo4jSessionService> {
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
         let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -881,6 +883,52 @@ impl SessionService for Neo4jSessionService {
             .await
             .map_err(|e| adk_core::AdkError::session(format!("health check failed: {e}")))?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl SessionService for Neo4jSessionService {
+    async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.create(req).await }).await
+    }
+
+    async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.get(req).await }).await
+    }
+
+    async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.list(req).await }).await
+    }
+
+    async fn delete(&self, req: DeleteRequest) -> Result<()> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.delete(req).await }).await
+    }
+
+    async fn append_event(&self, session_id: &str, event: Event) -> Result<()> {
+        let inline = Inline(self.clone());
+        let session_id = session_id.to_owned();
+        detached(async move { inline.append_event(&session_id, event).await }).await
+    }
+
+    async fn append_event_for_identity(&self, req: AppendEventRequest) -> Result<()> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.append_event_for_identity(req).await }).await
+    }
+
+    async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        let inline = Inline(self.clone());
+        let app_name = app_name.to_owned();
+        let user_id = user_id.to_owned();
+        detached(async move { inline.delete_all_sessions(&app_name, &user_id).await }).await
+    }
+
+    async fn health_check(&self) -> Result<()> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.health_check().await }).await
     }
 }
 

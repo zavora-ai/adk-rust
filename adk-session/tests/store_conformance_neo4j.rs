@@ -201,3 +201,43 @@ mod audit_log {
         harness = super::Audit,
     }
 }
+
+/// Callers drop store futures mid-query: the durable worker drops its in-flight heartbeat
+/// when an attempt ends. A dropped call must not hand a pooled connection back halfway
+/// through a bolt exchange, or the next call on it reads the stale response
+/// (`unexpected response for RUN`) and a fenced write fails or is misread.
+#[ignore = "requires a Neo4j server at NEO4J_URI"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn calls_dropped_mid_query_leave_the_pool_usable() {
+    use std::time::Duration;
+
+    use adk_core::{NewRun, RunOutcome, RunState};
+
+    let store = Neo4jRunStore::from_graph(graph().await);
+    store.migrate().await.expect("migrate run store schema");
+    let queue = format!("dropped-{}", uuid::Uuid::new_v4());
+    let ttl = Duration::from_secs(30);
+    store
+        .enqueue(NewRun::new(&queue, "app", "user", "agent", serde_json::json!({})))
+        .await
+        .expect("enqueue");
+    let claimed = store.claim(&queue, "worker", ttl).await.expect("claim").expect("claimable");
+    let run_id = claimed.record.run_id.clone();
+
+    for i in 0..300u64 {
+        // Drops the heartbeat at a different point of its exchange each time.
+        let cut = Duration::from_micros((i % 40) * 75);
+        let _ = tokio::time::timeout(cut, store.heartbeat(&run_id, claimed.epoch, ttl)).await;
+        let record = store
+            .get(&run_id)
+            .await
+            .unwrap_or_else(|error| panic!("read after dropped call {i} failed: {error}"))
+            .expect("run exists");
+        assert_eq!((record.run_id.as_str(), record.state), (run_id.as_str(), RunState::Running));
+    }
+    let finished = store
+        .finish(&run_id, claimed.epoch, RunOutcome::Completed(serde_json::json!("ok")))
+        .await
+        .expect("a fenced write after dropped calls");
+    assert_eq!(finished.state, RunState::Completed);
+}

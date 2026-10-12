@@ -43,6 +43,7 @@
 //! before the error is returned. Call `migrate` once per database to create the
 //! constraints and indexes.
 
+use crate::neo4j_stores::{Inline, detached};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -288,6 +289,7 @@ async fn lock_lease(
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct Neo4jLeaseStore {
     graph: Graph,
     clock: Arc<dyn Clock>,
@@ -417,7 +419,7 @@ impl Neo4jLeaseStore {
 }
 
 #[async_trait]
-impl LeaseStore for Neo4jLeaseStore {
+impl LeaseStore for Inline<Neo4jLeaseStore> {
     async fn acquire(&self, resource: &str, owner: &str, ttl: Duration) -> Result<Option<Lease>> {
         deadline(self.clock.now(), ttl, "lease.invalid_ttl")?;
         retry(lease_error, || self.try_acquire(resource, owner, ttl)).await
@@ -441,6 +443,34 @@ impl LeaseStore for Neo4jLeaseStore {
         };
         let slot = lease_slot(row).map_err(|failure| failure.into_adk(lease_error))?;
         slot.filter(|slot| slot.live(now_us)).map(|slot| slot.lease(resource)).transpose()
+    }
+}
+
+#[async_trait]
+impl LeaseStore for Neo4jLeaseStore {
+    async fn acquire(&self, resource: &str, owner: &str, ttl: Duration) -> Result<Option<Lease>> {
+        let inline = Inline(self.clone());
+        let resource = resource.to_owned();
+        let owner = owner.to_owned();
+        detached(async move { inline.acquire(&resource, &owner, ttl).await }).await
+    }
+
+    async fn renew(&self, lease: &Lease, ttl: Duration) -> Result<Lease> {
+        let inline = Inline(self.clone());
+        let lease = lease.clone();
+        detached(async move { inline.renew(&lease, ttl).await }).await
+    }
+
+    async fn release(&self, lease: &Lease) -> Result<()> {
+        let inline = Inline(self.clone());
+        let lease = lease.clone();
+        detached(async move { inline.release(&lease).await }).await
+    }
+
+    async fn current(&self, resource: &str) -> Result<Option<Lease>> {
+        let inline = Inline(self.clone());
+        let resource = resource.to_owned();
+        detached(async move { inline.current(&resource).await }).await
     }
 }
 
@@ -566,6 +596,7 @@ type RunChange<'a, T> =
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct Neo4jRunStore {
     graph: Graph,
     clock: Arc<dyn Clock>,
@@ -784,7 +815,7 @@ impl Neo4jRunStore {
 }
 
 #[async_trait]
-impl DurableRunStore for Neo4jRunStore {
+impl DurableRunStore for Inline<Neo4jRunStore> {
     async fn enqueue(&self, run: NewRun) -> Result<Enqueued> {
         run.validate()?;
         retry(run_error, || self.try_enqueue(&run)).await
@@ -929,6 +960,78 @@ impl DurableRunStore for Neo4jRunStore {
     }
 }
 
+#[async_trait]
+impl DurableRunStore for Neo4jRunStore {
+    async fn enqueue(&self, run: NewRun) -> Result<Enqueued> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.enqueue(run).await }).await
+    }
+
+    async fn claim(&self, queue: &str, worker: &str, ttl: Duration) -> Result<Option<ClaimedRun>> {
+        let inline = Inline(self.clone());
+        let queue = queue.to_owned();
+        let worker = worker.to_owned();
+        detached(async move { inline.claim(&queue, &worker, ttl).await }).await
+    }
+
+    async fn heartbeat(&self, run_id: &str, epoch: u64, ttl: Duration) -> Result<bool> {
+        let inline = Inline(self.clone());
+        let run_id = run_id.to_owned();
+        detached(async move { inline.heartbeat(&run_id, epoch, ttl).await }).await
+    }
+
+    async fn set_checkpoint(
+        &self,
+        run_id: &str,
+        epoch: u64,
+        checkpoint: RunCheckpointRef,
+    ) -> Result<()> {
+        let inline = Inline(self.clone());
+        let run_id = run_id.to_owned();
+        detached(async move { inline.set_checkpoint(&run_id, epoch, checkpoint).await }).await
+    }
+
+    async fn wait(&self, run_id: &str, epoch: u64, until: Option<DateTime<Utc>>) -> Result<()> {
+        let inline = Inline(self.clone());
+        let run_id = run_id.to_owned();
+        detached(async move { inline.wait(&run_id, epoch, until).await }).await
+    }
+
+    async fn wake(&self, run_id: &str) -> Result<()> {
+        let inline = Inline(self.clone());
+        let run_id = run_id.to_owned();
+        detached(async move { inline.wake(&run_id).await }).await
+    }
+
+    async fn finish(&self, run_id: &str, epoch: u64, outcome: RunOutcome) -> Result<RunRecord> {
+        let inline = Inline(self.clone());
+        let run_id = run_id.to_owned();
+        detached(async move { inline.finish(&run_id, epoch, outcome).await }).await
+    }
+
+    async fn request_cancel(&self, run_id: &str) -> Result<()> {
+        let inline = Inline(self.clone());
+        let run_id = run_id.to_owned();
+        detached(async move { inline.request_cancel(&run_id).await }).await
+    }
+
+    async fn get(&self, run_id: &str) -> Result<Option<RunRecord>> {
+        let inline = Inline(self.clone());
+        let run_id = run_id.to_owned();
+        detached(async move { inline.get(&run_id).await }).await
+    }
+
+    async fn list(&self, filter: RunFilter) -> Result<Vec<RunRecord>> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.list(filter).await }).await
+    }
+
+    async fn prune(&self, finished_before: DateTime<Utc>) -> Result<u64> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.prune(finished_before).await }).await
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Schedules
 // ---------------------------------------------------------------------------
@@ -995,6 +1098,7 @@ async fn lock_schedule(txn: &mut Txn, id: &str) -> std::result::Result<Option<Sc
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct Neo4jScheduleStore {
     graph: Graph,
 }
@@ -1109,7 +1213,7 @@ impl Neo4jScheduleStore {
 }
 
 #[async_trait]
-impl ScheduleStore for Neo4jScheduleStore {
+impl ScheduleStore for Inline<Neo4jScheduleStore> {
     async fn upsert(&self, schedule: Schedule) -> Result<Schedule> {
         schedule.validate()?;
         retry(schedule_error, || self.try_upsert(&schedule)).await
@@ -1182,6 +1286,53 @@ impl ScheduleStore for Neo4jScheduleStore {
     }
 }
 
+#[async_trait]
+impl ScheduleStore for Neo4jScheduleStore {
+    async fn upsert(&self, schedule: Schedule) -> Result<Schedule> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.upsert(schedule).await }).await
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<Schedule>> {
+        let inline = Inline(self.clone());
+        let id = id.to_owned();
+        detached(async move { inline.get(&id).await }).await
+    }
+
+    async fn list(&self) -> Result<Vec<Schedule>> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.list().await }).await
+    }
+
+    async fn delete(&self, id: &str) -> Result<()> {
+        let inline = Inline(self.clone());
+        let id = id.to_owned();
+        detached(async move { inline.delete(&id).await }).await
+    }
+
+    async fn set_paused(&self, id: &str, paused: bool) -> Result<Schedule> {
+        let inline = Inline(self.clone());
+        let id = id.to_owned();
+        detached(async move { inline.set_paused(&id, paused).await }).await
+    }
+
+    async fn due(&self, now: DateTime<Utc>, limit: usize) -> Result<Vec<Schedule>> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.due(now, limit).await }).await
+    }
+
+    async fn advance(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        next_fire_at: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let inline = Inline(self.clone());
+        let id = id.to_owned();
+        detached(async move { inline.advance(&id, expected_revision, next_fire_at).await }).await
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Governance state
 // ---------------------------------------------------------------------------
@@ -1212,6 +1363,7 @@ fn governance_from(row: &Row) -> std::result::Result<Option<GovernanceState>, Fa
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct Neo4jGovernanceStateStore {
     graph: Graph,
     clock: Arc<dyn Clock>,
@@ -1341,7 +1493,7 @@ impl Neo4jGovernanceStateStore {
 }
 
 #[async_trait]
-impl GovernanceStateStore for Neo4jGovernanceStateStore {
+impl GovernanceStateStore for Inline<Neo4jGovernanceStateStore> {
     async fn get(&self, scope: &GovernanceScope) -> Result<Option<GovernanceState>> {
         let found = self
             .read_states(
@@ -1372,6 +1524,33 @@ impl GovernanceStateStore for Neo4jGovernanceStateStore {
              RETURN g.state AS state ORDER BY g.order_key",
         ))
         .await
+    }
+}
+
+#[async_trait]
+impl GovernanceStateStore for Neo4jGovernanceStateStore {
+    async fn get(&self, scope: &GovernanceScope) -> Result<Option<GovernanceState>> {
+        let inline = Inline(self.clone());
+        let scope = scope.clone();
+        detached(async move { inline.get(&scope).await }).await
+    }
+
+    async fn set(
+        &self,
+        scope: GovernanceScope,
+        expected_epoch: u64,
+        frozen: bool,
+        reason: Option<String>,
+        issued_by: Option<SubjectRef>,
+    ) -> Result<GovernanceState> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.set(scope, expected_epoch, frozen, reason, issued_by).await })
+            .await
+    }
+
+    async fn list(&self) -> Result<Vec<GovernanceState>> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.list().await }).await
     }
 }
 

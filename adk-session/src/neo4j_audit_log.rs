@@ -30,6 +30,7 @@
 //! Call [`migrate`](Neo4jAuditLogStore::migrate) once per database to create the
 //! constraints.
 
+use crate::neo4j_stores::{Inline, detached};
 use std::ops::Range;
 
 use adk_core::audit_log::{
@@ -383,7 +384,7 @@ const CHECKPOINT_COLUMNS: &str = "c.log_id AS log_id, c.size AS size, c.root_has
      c.note AS note, c.created_at_us AS created_at_us";
 
 #[async_trait]
-impl AuditLogStore for Neo4jAuditLogStore {
+impl AuditLogStore for Inline<Neo4jAuditLogStore> {
     async fn append(&self, batch: AuditAppend) -> Result<Range<u64>> {
         retry_transient!(self.try_append(&batch))
     }
@@ -516,5 +517,59 @@ impl AuditLogStore for Neo4jAuditLogStore {
         // Sorted here so the order never depends on the server's collation.
         ids.sort();
         Ok(ids)
+    }
+}
+
+#[async_trait]
+impl AuditLogStore for Neo4jAuditLogStore {
+    async fn append(&self, batch: AuditAppend) -> Result<Range<u64>> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.append(batch).await }).await
+    }
+
+    async fn size(&self, log_id: &str) -> Result<u64> {
+        let inline = Inline(self.clone());
+        let log_id = log_id.to_owned();
+        detached(async move { inline.size(&log_id).await }).await
+    }
+
+    async fn read(&self, log_id: &str, range: Range<u64>) -> Result<Vec<AuditLogEntry>> {
+        let inline = Inline(self.clone());
+        let log_id = log_id.to_owned();
+        detached(async move { inline.read(&log_id, range).await }).await
+    }
+
+    async fn hash_at(&self, log_id: &str, level: u8, index: u64) -> Result<Option<AuditHash>> {
+        let inline = Inline(self.clone());
+        let log_id = log_id.to_owned();
+        detached(async move { inline.hash_at(&log_id, level, index).await }).await
+    }
+
+    async fn put_checkpoint(&self, checkpoint: AuditCheckpoint) -> Result<()> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.put_checkpoint(checkpoint).await }).await
+    }
+
+    async fn latest_checkpoint(&self, log_id: &str) -> Result<Option<AuditCheckpoint>> {
+        let inline = Inline(self.clone());
+        let log_id = log_id.to_owned();
+        detached(async move { inline.latest_checkpoint(&log_id).await }).await
+    }
+
+    async fn checkpoints(&self, log_id: &str) -> Result<Vec<AuditCheckpoint>> {
+        let inline = Inline(self.clone());
+        let log_id = log_id.to_owned();
+        detached(async move { inline.checkpoints(&log_id).await }).await
+    }
+
+    async fn prune(&self, log_id: &str, before_seq: u64) -> Result<u64> {
+        let inline = Inline(self.clone());
+        let log_id = log_id.to_owned();
+        detached(async move { inline.prune(&log_id, before_seq).await }).await
+    }
+
+    async fn logs(&self) -> Result<Vec<String>> {
+        let inline = Inline(self.clone());
+        detached(async move { inline.logs().await }).await
     }
 }
