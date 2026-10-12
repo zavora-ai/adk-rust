@@ -96,6 +96,30 @@ fn app(config: ServerConfig, runs: Arc<dyn DurableRunStore>) -> anyhow::Result<a
 The route is mounted at the root, outside `/api` and without the auth middleware: the signature
 is the authentication.
 
+Woken runs are executed by the same `DurableWorker` that runs every other durable run. Share
+one `DurableRunStore` between the ingress and the background runs (feature `background`), and
+the server's embedded worker claims them:
+
+```rust
+use std::sync::Arc;
+
+use adk_core::run_store::{DurableRunStore, InMemoryRunStore};
+use adk_runner::Runner;
+use adk_server::background::BackgroundState;
+use adk_server::webhooks::{WebhookHook, WebhookIngress};
+use adk_server::{ServerBuilder, ServerConfig};
+
+fn app(config: ServerConfig, runner: Arc<Runner>, hook: WebhookHook) -> axum::Router {
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    ServerBuilder::new(config)
+        .with_background_runs(
+            BackgroundState::new().with_run_store(runs.clone()).with_agent("triage_agent", runner),
+        )
+        .with_webhook_ingress(WebhookIngress::new(runs).with_hook(hook))
+        .build()
+}
+```
+
 ### What the endpoint does
 
 | Step | Refusal | Status |
@@ -204,6 +228,7 @@ broker in CI, so adapters are separate optional crates rather than features of `
 |---------|-----------------|---------------|----------------|
 | Kill switch frozen | `503`, nothing enqueued | Nothing pulled; mid-batch messages nacked | Refused at start like any run |
 | Replicated control stale | `503` (`governance.stale`) | Nothing pulled | Refused at start |
+| Freeze written by another replica | `503` once this replica's mirror reads it (within the poll interval) | Nothing pulled | The worker claims nothing |
 | Too much pending work | `429` past `max_pending` | Pulls shrink, then stop, at `max_pending` | — |
 | Run budget, spend ledger, tool policy | — | — | Applied by the runner that executes the run |
 
@@ -271,8 +296,10 @@ the delivery's egress policy refuses are rejected when they are created.
 ## Live validation
 
 `examples/autonomy_validation` scenario `webhook_wakeup` runs against OpenAI and Anthropic: a
-forged signature answers `401`; a signed delivery answers `202`, and the woken agent calls its
-tool once and completes; replaying the captured delivery, and a sender retry re-signed under the
+forged signature answers `401`; a freeze written by another replica through a shared
+governance store answers `503` and enqueues nothing; after the unfreeze a signed delivery answers
+`202`, and the server's embedded `DurableWorker` runs the woken agent, which calls its tool once
+and completes; replaying the captured delivery, and a sender retry re-signed under the
 same `webhook-id`, both answer `200` with the same run, and no second run, claim, or model call
 follows.
 

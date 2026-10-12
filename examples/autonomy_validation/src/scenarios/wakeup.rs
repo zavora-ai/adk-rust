@@ -2,23 +2,25 @@
 //! starts nothing.
 //!
 //! The server's `POST /hooks/{name}` verifies the Standard Webhooks signature and
-//! enqueues a durable run keyed by the `webhook-id`. A minimal claim loop stands in for
-//! the durable worker (integration point: the server's embedded worker over the same
-//! `DurableRunStore`).
+//! enqueues a durable run keyed by the `webhook-id`; the server's embedded
+//! `DurableWorker` (from `with_background_runs`) claims and runs it over the same
+//! `DurableRunStore`. The kill switch is a `GovernanceControl` mirrored from a shared
+//! governance store, so a freeze written by another replica refuses deliveries here.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::run_store::{DurableRunStore, InMemoryRunStore, RunFilter, RunOutcome, RunState};
+use adk_core::run_store::{DurableRunStore, InMemoryRunStore, RunFilter, RunState};
 use adk_core::webhook::{SignedWebhook, WebhookSecret, WebhookSigner, WebhookVerifier};
-use adk_core::{Agent, Content, Llm, SingleAgentLoader, Tool};
+use adk_core::governance::GovernanceMirrorConfig;
+use adk_core::governance_state::InMemoryGovernanceStateStore;
+use adk_core::{Agent, GovernanceControl, Llm, SingleAgentLoader, Tool};
 use adk_runner::Runner;
+use adk_server::background::{BackgroundState, DurableWorkerConfig};
 use adk_server::webhooks::{WebhookHook, WebhookIngress};
 use adk_server::{ServerBuilder, ServerConfig};
-use adk_session::{CreateRequest, InMemorySessionService, SessionService};
-use futures::StreamExt;
+use adk_session::{InMemorySessionService, SessionService};
 use serde_json::{Value, json};
 
 use crate::common::{Config, CountingTool, Provider, Verdict, fail};
@@ -26,58 +28,16 @@ use crate::common::{Config, CountingTool, Provider, Verdict, fail};
 const APP: &str = "autonomy-wakeup";
 const RUN_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Claims every queued run and executes it through `runner`; aborted when the scenario ends.
-async fn claim_loop(
-    store: Arc<InMemoryRunStore>,
-    sessions: Arc<InMemorySessionService>,
-    runner: Arc<Runner>,
-    claims: Arc<std::sync::atomic::AtomicUsize>,
-) {
-    loop {
-        let claimed = match store.claim("default", "validation-worker", Duration::from_secs(120)).await {
-            Ok(Some(claimed)) => claimed,
-            Ok(None) => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
-            }
-            Err(error) => {
-                tracing::error!(error = %error, "claim failed");
-                return;
-            }
-        };
-        claims.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let record = claimed.record;
-        let session_id = record.session_id.clone().unwrap_or_else(|| record.run_id.clone());
-        let outcome = async {
-            sessions
-                .create(CreateRequest {
-                    app_name: record.app_name.clone(),
-                    user_id: record.user_id.clone(),
-                    session_id: Some(session_id.clone()),
-                    state: HashMap::new(),
-                })
-                .await?;
-            let text = record.input["text"].as_str().unwrap_or_default().to_string();
-            let mut stream = runner
-                .run_str(&record.user_id, &session_id, Content::new("user").with_text(text))
-                .await?;
-            let mut answer = String::new();
-            while let Some(event) = stream.next().await {
-                if let Some(content) = event?.llm_response.content {
-                    answer.extend(content.parts.iter().filter_map(|part| part.text()));
-                }
-            }
-            Ok::<_, adk_core::AdkError>(answer)
+/// Whether `condition` holds within two seconds; the mirror polls every 100 ms.
+async fn converges(condition: impl Fn() -> bool) -> bool {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(2) {
+        if condition() {
+            return true;
         }
-        .await;
-        let outcome = match outcome {
-            Ok(answer) => RunOutcome::Completed(json!({"text": answer})),
-            Err(error) => RunOutcome::Failed { error: error.to_string(), retryable: false },
-        };
-        if let Err(error) = store.finish(&record.run_id, claimed.epoch, outcome).await {
-            tracing::error!(error = %error, "finish failed");
-        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    false
 }
 
 async fn post(client: &reqwest::Client, url: &str, signed: &SignedWebhook, body: &[u8]) -> anyhow::Result<(u16, Value)> {
@@ -131,6 +91,15 @@ async fn run(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
             .build()?,
     );
 
+    // A kill switch mirrored from a shared store, as every replica of a deployment holds.
+    let governance_store = Arc::new(InMemoryGovernanceStateStore::new());
+    let mirror_config = GovernanceMirrorConfig::default().with_poll_interval(Duration::from_millis(100));
+    let governance = GovernanceControl::mirrored(governance_store.clone(), mirror_config.clone());
+    governance.refresh().await?;
+    let mirror = governance.spawn_mirror();
+    let other_replica = GovernanceControl::mirrored(governance_store, mirror_config);
+    other_replica.refresh().await?;
+
     // The receiver's secret; the sender signs with the same bytes.
     let secret = WebhookSecret::from_bytes(b"autonomy-validation-webhook-key!".to_vec())?;
     let ingress = WebhookIngress::new(store.clone() as Arc<dyn DurableRunStore>).with_hook(
@@ -138,17 +107,26 @@ async fn run(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
             .with_input_template(json!({"text": "New issue #{{/payload/issue/number}}: {{/payload/issue/title}}"}))
             .with_concurrency_key("repo:{{/payload/repository}}", adk_core::OnConflict::Enqueue),
     );
+    // The embedded DurableWorker runs woken runs exactly as it runs `POST /api/runs` ones.
+    let background = BackgroundState::new()
+        .with_run_store(store.clone() as Arc<dyn DurableRunStore>)
+        .with_agent("triage_agent", runner)
+        .with_worker_config(DurableWorkerConfig::default().with_poll_interval(Duration::from_millis(100)));
     let config = ServerConfig::new(
         Arc::new(SingleAgentLoader::new(agent)),
         sessions.clone() as Arc<dyn SessionService>,
-    );
-    let app = ServerBuilder::new(config).with_webhook_ingress(ingress).build();
+    )
+    .with_governance(governance.clone());
+    let app = ServerBuilder::new(config)
+        .with_background_runs(background)
+        .with_webhook_ingress(ingress)
+        .build();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let url = format!("http://{}/hooks/issues", listener.local_addr()?);
     let server = tokio::spawn(async move { axum::serve(listener, app).await });
-    let claims = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let worker = tokio::spawn(claim_loop(store.clone(), sessions, runner, claims.clone()));
-    let _guard = AbortOnDrop(vec![server.abort_handle(), worker.abort_handle()]);
+    let mut aborts = vec![server.abort_handle()];
+    aborts.extend(mirror.map(|task| task.abort_handle()));
+    let _guard = AbortOnDrop(aborts);
 
     let client = reqwest::Client::new();
     let body = serde_json::to_vec(&json!({"issue": {"number": 4242, "title": "Checkout times out"}, "repository": "shop"}))?;
@@ -163,8 +141,27 @@ async fn run(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
         return Ok(Verdict::Fail(format!("a forged signature answered {forged_status}, not 401")));
     }
 
+    // Another replica freezes through the shared store. Once this replica's mirror reads
+    // it (within the poll interval), deliveries are refused with 503.
+    other_replica.freeze_replicated("validation freeze", None).await?;
+    if !converges(|| governance.check().is_err()).await {
+        return Ok(Verdict::Fail("the mirror never observed the replicated freeze".to_string()));
+    }
+    let (frozen_status, frozen) = post(&client, &url, &delivery, &body).await?;
+    if frozen_status != 503 || !store.list(RunFilter::default()).await?.is_empty() {
+        return Ok(Verdict::Fail(format!("a replicated freeze answered {frozen_status}: {frozen}")));
+    }
+    other_replica.unfreeze_replicated(None).await?;
+    if !converges(|| governance.check().is_ok()).await {
+        return Ok(Verdict::Fail("the mirror never observed the unfreeze".to_string()));
+    }
+    let (unfrozen, _) = post(&client, &url, &delivery, &body).await?;
+    if unfrozen != 202 {
+        return Ok(Verdict::Fail(format!("after the unfreeze the delivery answered {unfrozen}")));
+    }
+    // The 202 above created the run; this is the sender's first retry and returns it.
     let (status, accepted) = post(&client, &url, &delivery, &body).await?;
-    if status != 202 {
+    if status != 200 || accepted["duplicate"] != true {
         return Ok(Verdict::Fail(format!("the signed delivery answered {status}: {accepted}")));
     }
     let run_id = accepted["runId"].as_str().unwrap_or_default().to_string();
@@ -192,9 +189,9 @@ async fn run(cfg: &Config, provider: Provider) -> anyhow::Result<Verdict> {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let runs = store.list(RunFilter::default()).await?;
-    let claimed = claims.load(std::sync::atomic::Ordering::SeqCst);
+    let claimed = runs.first().map_or(0, |run| run.attempt);
     let evidence = format!(
-        "202 run {} completed ({} model calls, file_ticket ×{}); replay {replay_status} duplicate={} retry {retry_status} same_run={}; runs={} claims={} model calls after replay={}; forged 401",
+        "replicated freeze 503; 202 run {} completed by DurableWorker ({} model calls, file_ticket ×{}); replay {replay_status} duplicate={} retry {retry_status} same_run={}; runs={} attempts={} model calls after replay={}; forged 401",
         &run_id[..8.min(run_id.len())],
         model_calls,
         tickets.executions(),

@@ -341,6 +341,10 @@ by the `webhook-id`:
 | `429` | The hook's `max_pending` cap is reached (`Retry-After`) |
 | `503` | The kill switch is frozen or stale, or the run store is unreachable (`Retry-After`) |
 
+Share the run store with `BackgroundState::with_run_store` and the embedded `DurableWorker` runs
+woken runs like any other. With a mirrored `GovernanceControl` as `ServerConfig::governance`, a
+freeze written by any replica refuses deliveries on every replica.
+
 See [Wake-ups and Webhooks](../docs/official_docs/core/wake-ups.md).
 
 ## API Endpoints

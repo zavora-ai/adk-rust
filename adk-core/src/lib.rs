@@ -130,7 +130,6 @@ pub mod policy;
 pub mod principal;
 // Identity defaults, delegation, and error conversion for the `principal` types.
 mod acting;
-/// Queue wake-ups: broker messages become durable runs.
 pub mod queue_source;
 /// HTTP request context extracted by auth middleware.
 pub mod request_context;
@@ -154,10 +153,8 @@ pub mod tool;
 pub mod tool_concurrency;
 /// Content, Part, and multimodal data types.
 pub mod types;
-/// Standard Webhooks signing and verification.
 #[cfg(feature = "webhooks")]
 pub mod webhook;
-/// Signed outbound webhook delivery.
 #[cfg(feature = "webhook-delivery")]
 pub mod webhook_delivery;
 

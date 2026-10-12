@@ -17,8 +17,11 @@
 //! run answers `200 OK` with that run, so a sender's retry never creates a second run.
 //! Bodies are `{"runId", "state", "duplicate"}` in camelCase.
 //!
-//! The run executes when a worker claims it from the same [`DurableRunStore`], under
-//! the runner's budget, policy, and kill switch like any other run.
+//! The run executes when a [`DurableWorker`](crate::background::DurableWorker) (feature
+//! `background`) claims it from the same [`DurableRunStore`] — the worker that runs every
+//! other durable run, under the runner's budget, policy, and kill switch. With a
+//! [`GovernanceControl::mirrored`] control, a freeze written by any replica, or a mirror
+//! that has gone stale, refuses deliveries on every replica.
 //!
 //! # Example
 //!

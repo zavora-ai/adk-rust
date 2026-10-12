@@ -1,19 +1,16 @@
 //! `POST /hooks/{name}`: signed deliveries enqueue durable runs exactly once.
 //!
-//! The durable worker is not part of this crate yet, so [`run_queued`] stands in for
-//! it: a minimal claim loop that runs each claimed agent run through a `Runner` and
-//! finishes it. Integration point: replace it with the server's embedded worker over
-//! the same `DurableRunStore`.
+//! Woken runs are executed by the same `DurableWorker` that runs every other durable
+//! run, over the same `DurableRunStore`.
 
-#![cfg(feature = "webhook-ingress")]
+#![cfg(all(feature = "webhook-ingress", feature = "background"))]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use adk_core::run_store::{
-    DurableRunStore, InMemoryRunStore, NewRun, OnConflict, RunFilter, RunOutcome, RunState,
+    DurableRunStore, InMemoryRunStore, NewRun, OnConflict, RunFilter, RunState,
 };
 use adk_core::webhook::{WebhookSecret, WebhookSigner, WebhookVerifier};
 use adk_core::{
@@ -21,14 +18,14 @@ use adk_core::{
     Result as AdkResult, SingleAgentLoader,
 };
 use adk_runner::Runner;
+use adk_server::background::DurableWorker;
 use adk_server::webhooks::{WebhookHook, WebhookIngress};
 use adk_server::{ServerBuilder, ServerConfig};
-use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use adk_session::{InMemorySessionService, SessionService};
 use async_trait::async_trait;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use futures::StreamExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -78,8 +75,14 @@ struct Fixture {
 }
 
 fn fixture_with(hook: impl FnOnce(WebhookHook) -> WebhookHook) -> Fixture {
+    fixture_with_governance(GovernanceControl::new(), hook)
+}
+
+fn fixture_with_governance(
+    governance: GovernanceControl,
+    hook: impl FnOnce(WebhookHook) -> WebhookHook,
+) -> Fixture {
     let store = Arc::new(InMemoryRunStore::new());
-    let governance = GovernanceControl::new();
     let sessions = Arc::new(InMemorySessionService::new());
     let agent = Arc::new(EchoAgent { runs: Arc::new(AtomicUsize::new(0)) });
     let config = ServerConfig::new(
@@ -129,46 +132,23 @@ fn issue(number: u64) -> Value {
     json!({"issue": {"number": number}, "repository": {"id": 99}})
 }
 
-/// Stand-in for the durable worker: claims and runs every queued run once.
-async fn run_queued(fixture: &Fixture) -> usize {
+fn worker(fixture: &Fixture) -> DurableWorker {
     let runner = Runner::builder()
         .app_name("triage")
         .agent(fixture.agent.clone() as Arc<dyn Agent>)
         .session_service(fixture.sessions.clone() as Arc<dyn SessionService>)
         .build()
         .unwrap();
+    DurableWorker::new(fixture.store.clone() as Arc<dyn DurableRunStore>)
+        .with_agent("triage_agent", Arc::new(runner))
+        .with_governance(fixture.governance.clone())
+}
+
+/// Runs every claimable run through the durable worker and returns how many it ran.
+async fn run_queued(fixture: &Fixture) -> usize {
+    let worker = worker(fixture);
     let mut finished = 0;
-    while let Some(claimed) =
-        fixture.store.claim("default", "test-worker", Duration::from_secs(30)).await.unwrap()
-    {
-        let record = &claimed.record;
-        let session_id = record.session_id.clone().unwrap_or_else(|| record.run_id.clone());
-        fixture
-            .sessions
-            .create(CreateRequest {
-                app_name: record.app_name.clone(),
-                user_id: record.user_id.clone(),
-                session_id: Some(session_id.clone()),
-                state: HashMap::new(),
-            })
-            .await
-            .unwrap();
-        let text = record.input["text"].as_str().unwrap_or_default().to_string();
-        let mut stream = runner
-            .run_str(&record.user_id, &session_id, Content::new("user").with_text(text))
-            .await
-            .unwrap();
-        let mut answer = String::new();
-        while let Some(event) = stream.next().await {
-            if let Some(content) = event.unwrap().llm_response.content {
-                answer.extend(content.parts.iter().filter_map(|part| part.text()));
-            }
-        }
-        fixture
-            .store
-            .finish(&record.run_id, claimed.epoch, RunOutcome::Completed(json!({"text": answer})))
-            .await
-            .unwrap();
+    while worker.run_next().await.unwrap().is_some() {
         finished += 1;
     }
     finished
@@ -205,7 +185,10 @@ async fn a_signed_webhook_wakes_one_run_that_completes() {
     assert_eq!(run_queued(&fixture).await, 1);
     let done = fixture.store.get(&run_id).await.unwrap().unwrap();
     assert_eq!(done.state, RunState::Completed);
-    assert_eq!(done.result, Some(json!({"text": "handled: issue #42"})));
+    assert_eq!(
+        done.result.as_ref().map(|result| result["text"].clone()),
+        Some(json!("handled: issue #42"))
+    );
     assert_eq!(fixture.agent.runs.load(Ordering::SeqCst), 1);
 }
 
@@ -380,4 +363,77 @@ async fn a_custom_mapper_keeps_the_webhook_id_as_idempotency_key() {
         (record.idempotency_key.as_deref(), record.session_id.as_deref()),
         (Some("hook:github:msg_9"), Some("issue-5"))
     );
+}
+
+fn mirrored_fixture(
+    store: Arc<adk_core::governance_state::InMemoryGovernanceStateStore>,
+) -> Fixture {
+    let control = GovernanceControl::mirrored(
+        store,
+        adk_core::governance::GovernanceMirrorConfig::default()
+            .with_max_staleness(Duration::from_secs(60)),
+    );
+    let mut fixture = fixture_with_governance(control.clone(), |hook| hook);
+    fixture.governance = control;
+    fixture
+}
+
+#[tokio::test]
+async fn a_replicated_freeze_on_another_replica_refuses_deliveries() {
+    let states = Arc::new(adk_core::governance_state::InMemoryGovernanceStateStore::new());
+    let fixture = mirrored_fixture(states.clone());
+    let signer = WebhookSigner::new(secret("current-key"));
+
+    // A mirrored control is stale until its first read, so it fails closed.
+    let (status, body, _) =
+        send(&fixture.app, signed_request("/hooks/github", &signer, "msg_1", &issue(1))).await;
+    assert_eq!(
+        (status, body["error"].clone()),
+        (StatusCode::SERVICE_UNAVAILABLE, json!("governance.stale"))
+    );
+
+    // Another replica freezes through the shared store; this one reads it.
+    let other = GovernanceControl::mirrored(
+        states,
+        adk_core::governance::GovernanceMirrorConfig::default(),
+    );
+    other.freeze_replicated("incident 12", None).await.unwrap();
+    fixture.governance.refresh().await.unwrap();
+    let (status, body, _) =
+        send(&fixture.app, signed_request("/hooks/github", &signer, "msg_1", &issue(1))).await;
+    assert_eq!(
+        (status, body["error"].clone()),
+        (StatusCode::SERVICE_UNAVAILABLE, json!("governance.frozen"))
+    );
+    assert!(fixture.store.list(RunFilter::default()).await.unwrap().is_empty());
+
+    other.unfreeze_replicated(None).await.unwrap();
+    fixture.governance.refresh().await.unwrap();
+    let (status, _, _) =
+        send(&fixture.app, signed_request("/hooks/github", &signer, "msg_1", &issue(1))).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(run_queued(&fixture).await, 1);
+}
+
+#[tokio::test]
+async fn a_queue_message_is_run_by_the_durable_worker_once() {
+    use adk_core::queue_source::{InMemoryQueueSource, QueueIngress};
+    let fixture = fixture();
+    let source = Arc::new(InMemoryQueueSource::new("issues"));
+    let ingress = QueueIngress::new(source.clone(), fixture.store.clone(), |message| {
+        Ok(NewRun::new("default", "triage", "queue", "triage_agent", message.body_json()?))
+    })
+    .with_governance(fixture.governance.clone())
+    .with_pull_wait(Duration::ZERO);
+
+    source.publish("m-1", br#"{"text": "issue #7"}"#.to_vec());
+    source.publish("m-1", br#"{"text": "issue #7"}"#.to_vec());
+    let report = ingress.poll_once().await.unwrap();
+    assert_eq!((report.created.len(), report.existing, source.unacked()), (1, 1, 0));
+
+    assert_eq!(run_queued(&fixture).await, 1);
+    let runs = fixture.store.list(RunFilter::default()).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].state, RunState::Completed);
+    assert_eq!(fixture.agent.runs.load(Ordering::SeqCst), 1);
 }
