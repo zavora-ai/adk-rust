@@ -12,7 +12,7 @@ adk-agent = { path = "../../adk-agent", features = ["guardrails", "codeact"] }
 adk-codeact-monty = { path = "../../adk-codeact-monty" }
 adk-anthropic = { path = "../../adk-anthropic" }
 adk-artifact = { path = "../../adk-artifact" }
-adk-auth = { path = "../../adk-auth" }
+adk-auth = { path = "../../adk-auth", features = ["signed-audit"] }
 adk-core = { path = "../../adk-core" }
 adk-eval = { path = "../../adk-eval" }
 adk-graph = { path = "../../adk-graph", features = ["functional", "sqlite"] }

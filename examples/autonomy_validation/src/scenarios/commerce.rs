@@ -122,6 +122,8 @@ impl TransactionStore for MemoryMerchant {
 struct Buyer {
     app: String,
     agent: String,
+    user: String,
+    invocation: String,
     call_id: String,
     run_config: RunConfig,
     actions: Mutex<EventActions>,
@@ -131,13 +133,13 @@ struct Buyer {
 #[async_trait]
 impl ReadonlyContext for Buyer {
     fn invocation_id(&self) -> &str {
-        "inv-checkout"
+        &self.invocation
     }
     fn agent_name(&self) -> &str {
         &self.agent
     }
     fn user_id(&self) -> &str {
-        "user-budget"
+        &self.user
     }
     fn app_name(&self) -> &str {
         &self.app
@@ -214,6 +216,40 @@ pub async fn buy(
     call_id: &str,
     cents: i64,
 ) -> AdkResult<Value> {
+    let buyer = Buyer {
+        app: app.to_string(),
+        agent: agent.to_string(),
+        user: "user-budget".to_string(),
+        invocation: "inv-checkout".to_string(),
+        call_id: call_id.to_string(),
+        run_config,
+        actions: Mutex::new(EventActions::default()),
+        content: Content::new("user"),
+    };
+    checkout(merchant, buyer, cents).await
+}
+
+/// [`buy`] from inside a tool call: the checkout runs as `ctx`'s agent, user, and
+/// invocation, under its run configuration.
+pub async fn buy_from(
+    merchant: &Arc<MemoryMerchant>,
+    ctx: &dyn ToolContext,
+    cents: i64,
+) -> AdkResult<Value> {
+    let buyer = Buyer {
+        app: ctx.app_name().to_string(),
+        agent: ctx.agent_name().to_string(),
+        user: ctx.user_id().to_string(),
+        invocation: ctx.invocation_id().to_string(),
+        call_id: ctx.function_call_id().to_string(),
+        run_config: ctx.run_config().cloned().unwrap_or_default(),
+        actions: Mutex::new(EventActions::default()),
+        content: Content::new("user"),
+    };
+    checkout(merchant, buyer, cents).await
+}
+
+async fn checkout(merchant: &Arc<MemoryMerchant>, buyer: Buyer, cents: i64) -> AdkResult<Value> {
     let tools = PaymentToolsetBuilder::new(merchant.clone(), merchant.clone()).build().tools();
     let tool = |name: &str| -> AdkResult<Arc<dyn Tool>> {
         tools
@@ -222,14 +258,7 @@ pub async fn buy(
             .cloned()
             .ok_or_else(|| AdkError::tool(format!("payment tool {name} missing")))
     };
-    let buyer = Arc::new(Buyer {
-        app: app.to_string(),
-        agent: agent.to_string(),
-        call_id: call_id.to_string(),
-        run_config,
-        actions: Mutex::new(EventActions::default()),
-        content: Content::new("user"),
-    });
+    let buyer = Arc::new(buyer);
     let created = tool("payments_checkout_create")?
         .execute(
             buyer.clone(),
