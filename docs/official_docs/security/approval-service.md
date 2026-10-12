@@ -30,7 +30,10 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
 3. Approvers decide through `ApprovalService::decide` or the server endpoints.
 4. The decision that resolves the request is written to the store: an approval (with any
    edited arguments) or a denial carrying the reason. The request's `run_id` is woken with
-   `DurableRunStore::wake`.
+   `DurableRunStore::wake` when the service has a run store
+   (`StoreApprovalService::with_run_store`). `adk-server`'s `DurableWorker` sets
+   `RunConfig::durable_run_id` to the claimed run's ID, so a run it parks on a held call is
+   the run its approval wakes.
 5. The next run resumes the held call under its original call ID, and the governed path takes
    the decision. An edited call passes the `ToolPolicy` and the agent's tool screen again before
    it executes; a policy denial of the edit refuses the call.

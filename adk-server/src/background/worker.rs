@@ -652,6 +652,9 @@ impl DurableWorker {
             };
         let mut config = runner.run_config().clone();
         config.invocation_hooks.push(Arc::new(LeaseFence(Arc::clone(lease))));
+        // Approval requests for calls this run holds carry its id, so their decision
+        // wakes exactly this run.
+        config.durable_run_id = Some(record.run_id.clone());
         let invocation = match runner.start_with_config(user, session, content, Some(config)).await
         {
             Ok(invocation) => invocation,
