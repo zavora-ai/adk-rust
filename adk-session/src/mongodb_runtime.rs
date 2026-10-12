@@ -2,7 +2,8 @@
 //! [`GovernanceStateStore`](adk_core::GovernanceStateStore).
 //!
 //! Every store works on a standalone `mongod` as well as on a replica set or sharded
-//! cluster: none of them needs a multi-document transaction. Each guarantee rests on a
+//! cluster. Run enqueues use a multi-document transaction where the server supports one
+//! (see [Enqueue paths](#enqueue-paths)); every other guarantee rests on a
 //! single-document atomic write — a filtered `findOneAndUpdate`, a revision-filtered
 //! replace, or a unique index.
 //!
@@ -32,9 +33,18 @@
 //! | Schedule `upsert`, `advance`, `set_paused` | Replace filtered on `revision`; an insert for revision 1 |
 //! | Governance `set` | `insertOne` for epoch 0, `updateOne` filtered on `epoch` otherwise |
 //!
-//! # Race windows
+//! # Enqueue paths
 //!
-//! Without transactions, a keyed run is inserted before it is admitted to its key, so:
+//! | Server | Enqueue | Guarantee |
+//! |--------|---------|-----------|
+//! | Replica set (one node is enough) or sharded cluster | One multi-document transaction: idempotency check, key holders' policy, insert, and admission to the key commit together | No window: a caller never receives a run that is later withdrawn, and a key never admits a second run under `Reject` |
+//! | Standalone `mongod` (fallback) | Single-document steps: insert, then admission to the key | Weaker; see below |
+//!
+//! [`MongoRunStore::supports_transactions`] picks the path from the server's `hello`
+//! reply, or from [`MongoRunStore::with_transactions`].
+//!
+//! On the standalone fallback a keyed run is inserted before it is admitted to its key,
+//! which leaves two windows:
 //!
 //! - A `Reject` enqueue that loses the admission check deletes the run it inserted. A
 //!   concurrent enqueue with the same idempotency key can receive that run as
@@ -60,8 +70,9 @@ use adk_core::{Clock, Result, SystemClock};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use mongodb::bson::{Bson, Document, doc};
+use mongodb::error::{TRANSIENT_TRANSACTION_ERROR, UNKNOWN_TRANSACTION_COMMIT_RESULT};
 use mongodb::options::{IndexOptions, ReturnDocument};
-use mongodb::{Collection, Database, IndexModel};
+use mongodb::{ClientSession, Collection, Database, IndexModel};
 
 use crate::durable_common::{
     GOVERNANCE_STORAGE, LEASE_STORAGE, RUN_STORAGE, SCHEDULE_STORAGE, deadline, hex,
@@ -377,6 +388,29 @@ impl LeaseStore for MongoLeaseStore {
 pub struct MongoRunStore {
     db: Database,
     clock: Arc<dyn Clock>,
+    /// Set by `with_transactions`; otherwise detected from the server's `hello` reply.
+    transactions: Option<bool>,
+    detected: Arc<tokio::sync::OnceCell<bool>>,
+}
+
+/// Why a transactional enqueue attempt stopped.
+enum TxFailure {
+    Mongo(mongodb::error::Error),
+    Store(adk_core::AdkError),
+    /// A document changed under the attempt; the transaction is retried.
+    Retry,
+}
+
+impl From<mongodb::error::Error> for TxFailure {
+    fn from(error: mongodb::error::Error) -> Self {
+        Self::Mongo(error)
+    }
+}
+
+impl From<adk_core::AdkError> for TxFailure {
+    fn from(error: adk_core::AdkError) -> Self {
+        Self::Store(error)
+    }
 }
 
 fn run_document(record: &RunRecord, seq: i64) -> Result<Document> {
@@ -433,7 +467,12 @@ impl MongoRunStore {
 
     /// Uses an existing database handle, such as one shared with other stores.
     pub fn from_database(db: Database) -> Self {
-        Self { db, clock: Arc::new(SystemClock) }
+        Self {
+            db,
+            clock: Arc::new(SystemClock),
+            transactions: None,
+            detected: Arc::new(tokio::sync::OnceCell::new()),
+        }
     }
 
     /// Sets the clock that decides delays, waits, and lease expiry.
@@ -442,8 +481,53 @@ impl MongoRunStore {
         self
     }
 
+    /// Forces the enqueue path: `true` runs every enqueue in a multi-document
+    /// transaction (needs a replica set or a sharded cluster), `false` uses the
+    /// single-document fallback. Without it the store asks the server with `hello`.
+    pub fn with_transactions(mut self, enabled: bool) -> Self {
+        self.transactions = Some(enabled);
+        self
+    }
+
+    /// Whether enqueues run in a multi-document transaction: the
+    /// [`with_transactions`](Self::with_transactions) setting, or detected once from
+    /// `hello` — a replica set member (`setName`) or a `mongos` router supports
+    /// transactions, a standalone server does not.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_session::MongoRunStore;
+    ///
+    /// # async fn demo() -> adk_core::Result<()> {
+    /// let store = MongoRunStore::new("mongodb://localhost:27017/?replicaSet=rs0", "adk").await?;
+    /// assert!(store.supports_transactions().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `session.run_store.storage` when the server cannot be asked.
+    pub async fn supports_transactions(&self) -> Result<bool> {
+        if let Some(enabled) = self.transactions {
+            return Ok(enabled);
+        }
+        self.detected
+            .get_or_try_init(|| async {
+                let hello = self
+                    .db
+                    .run_command(doc! { "hello": 1 })
+                    .await
+                    .map_err(|e| storage(format!("mongodb hello failed: {e}")))?;
+                Ok(hello.contains_key("setName") || hello.get_str("msg") == Ok("isdbgrid"))
+            })
+            .await
+            .copied()
+    }
+
     /// Creates the unique idempotency index and the indexes claims, listings, and
-    /// pruning read through.
+    /// pruning read through, and detects whether the server supports transactions.
     ///
     /// # Errors
     ///
@@ -476,7 +560,8 @@ impl MongoRunStore {
         )
         .await?;
         create_index(&runs, doc! { "finished_us": 1 }, named("adk_runs_finished"), RUN_STORAGE)
-            .await
+            .await?;
+        self.supports_transactions().await.map(drop)
     }
 
     fn runs(&self) -> Collection<Document> {
@@ -748,6 +833,157 @@ impl MongoRunStore {
             .transpose()
     }
 
+    /// Enqueues in one multi-document transaction: the idempotency check, the key
+    /// holders' policy, the insert, and the run's admission to its key commit together,
+    /// so no caller sees a run that is later withdrawn and a key never admits a second
+    /// run under `Reject`.
+    async fn enqueue_in_transaction(&self, run: NewRun, now: DateTime<Utc>) -> Result<Enqueued> {
+        let record = RunRecord::queued(uuid::Uuid::new_v4().to_string(), run, now);
+        // Ordering only: taken outside the transaction so enqueues do not all conflict on
+        // the counter document.
+        let seq = self.next_seq().await?;
+        let mut session = self
+            .db
+            .client()
+            .start_session()
+            .await
+            .map_err(|e| storage(format!("mongodb session failed: {e}")))?;
+        for attempt in 0..MAX_CAS_ATTEMPTS {
+            if attempt > 0 {
+                tokio::time::sleep(crate::mongodb_stores::claim_backoff(attempt)).await;
+            }
+            session
+                .start_transaction()
+                .await
+                .map_err(|e| storage(format!("mongodb transaction failed: {e}")))?;
+            let (enqueued, writes) = match self.enqueue_body(&mut session, &record, seq, now).await
+            {
+                Ok(outcome) => outcome,
+                Err(failure) => {
+                    let _ = session.abort_transaction().await;
+                    match failure {
+                        TxFailure::Retry => continue,
+                        TxFailure::Store(error) => return Err(error),
+                        // A concurrent enqueue of the same key or holders won; the next
+                        // attempt reads its committed result.
+                        TxFailure::Mongo(error)
+                            if is_duplicate_key(&error)
+                                || error.contains_label(TRANSIENT_TRANSACTION_ERROR) =>
+                        {
+                            continue;
+                        }
+                        TxFailure::Mongo(error) => {
+                            return Err(storage(format!("run enqueue failed: {error}")));
+                        }
+                    }
+                }
+            };
+            if !writes {
+                let _ = session.abort_transaction().await;
+                return Ok(enqueued);
+            }
+            let mut unknown = 0;
+            loop {
+                match session.commit_transaction().await {
+                    Ok(()) => return Ok(enqueued),
+                    Err(error)
+                        if unknown < 3
+                            && error.contains_label(UNKNOWN_TRANSACTION_COMMIT_RESULT) =>
+                    {
+                        unknown += 1;
+                    }
+                    Err(error) if error.contains_label(TRANSIENT_TRANSACTION_ERROR) => break,
+                    Err(error) => {
+                        return Err(storage(format!("run enqueue commit failed: {error}")));
+                    }
+                }
+            }
+        }
+        Err(storage(format!(
+            "enqueue into queue '{}' lost {MAX_CAS_ATTEMPTS} transactions to concurrent writes",
+            record.queue
+        )))
+    }
+
+    /// One transactional enqueue attempt; returns the outcome and whether it wrote.
+    async fn enqueue_body(
+        &self,
+        session: &mut ClientSession,
+        record: &RunRecord,
+        seq: i64,
+        now: DateTime<Utc>,
+    ) -> std::result::Result<(Enqueued, bool), TxFailure> {
+        if let Some(key) = &record.idempotency_key
+            && let Some(existing) = self
+                .runs()
+                .find_one(doc! { "queue": &record.queue, "idempotency_key": key })
+                .session(&mut *session)
+                .await?
+        {
+            return Ok((Enqueued::Existing(parse_run(&existing)?.0), false));
+        }
+        let mut holders: Vec<String> = Vec::new();
+        if let Some(key) = &record.concurrency_key {
+            let gate = self
+                .gates()
+                .find_one(doc! { "_id": gate_id(&record.queue, key) })
+                .session(&mut *session)
+                .await?;
+            let listed = gate.as_ref().and_then(|gate| string_array(gate, "holders"));
+            // Runs a fallback-path `Interrupt` left to cancel are cancelled here too.
+            let pending = gate.as_ref().and_then(|gate| string_array(gate, "pending_cancel"));
+            let interrupt = record.on_conflict == OnConflict::Interrupt;
+            for run_id in listed.unwrap_or_default() {
+                let Some(document) =
+                    self.runs().find_one(doc! { "_id": &run_id }).session(&mut *session).await?
+                else {
+                    continue;
+                };
+                let (mut holder, holder_seq) = parse_run(&document)?;
+                if holder.state.is_terminal() {
+                    continue;
+                }
+                if record.on_conflict == OnConflict::Reject {
+                    return Ok((Enqueued::Rejected { blocking_run_id: run_id }, false));
+                }
+                let cancel = interrupt || pending.as_ref().is_some_and(|ids| ids.contains(&run_id));
+                if cancel {
+                    let expected = holder.revision;
+                    if apply_cancel(&mut holder, now) {
+                        let replaced = self
+                            .runs()
+                            .replace_one(
+                                doc! { "_id": &run_id, "revision": to_i64(expected, RUN_STORAGE)? },
+                                run_document(&holder, holder_seq)?,
+                            )
+                            .session(&mut *session)
+                            .await?;
+                        if replaced.matched_count == 0 {
+                            return Err(TxFailure::Retry);
+                        }
+                    }
+                    if holder.state.is_terminal() {
+                        continue;
+                    }
+                }
+                holders.push(run_id);
+            }
+        }
+        self.runs().insert_one(run_document(record, seq)?).session(&mut *session).await?;
+        if let Some(key) = &record.concurrency_key {
+            holders.push(record.run_id.clone());
+            self.gates()
+                .update_one(
+                    doc! { "_id": gate_id(&record.queue, key) },
+                    doc! { "$set": { "holders": holders }, "$unset": { "pending_cancel": "" } },
+                )
+                .upsert(true)
+                .session(&mut *session)
+                .await?;
+        }
+        Ok((Enqueued::Created(record.clone()), true))
+    }
+
     /// Tries to claim one candidate; returns the claim, or `None` to move on.
     async fn try_claim(
         &self,
@@ -796,6 +1032,9 @@ impl DurableRunStore for MongoRunStore {
     async fn enqueue(&self, run: NewRun) -> Result<Enqueued> {
         run.validate()?;
         let now = self.now();
+        if self.supports_transactions().await? {
+            return self.enqueue_in_transaction(run, now).await;
+        }
         if let Some(key) = &run.idempotency_key
             && let Some(existing) = self.find_existing(&run.queue, key).await?
         {

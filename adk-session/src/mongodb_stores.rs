@@ -125,7 +125,7 @@ fn scope_filter(filter: &mut Document, key: &SpendKey) {
 }
 
 /// Small randomized pause between claim attempts, growing with the attempt number.
-fn claim_backoff(attempt: u32) -> Duration {
+pub(crate) fn claim_backoff(attempt: u32) -> Duration {
     let jitter = u64::from(uuid::Uuid::new_v4().as_bytes()[0]) % 5;
     Duration::from_millis(u64::from(attempt.min(20)) + jitter)
 }

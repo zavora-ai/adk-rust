@@ -2,9 +2,11 @@
 //! schedule store, and governance state store pass the shared conformance suites against
 //! a live server, and the run store drains a contended queue claiming each run once.
 //!
-//! Run with a server at `MONGODB_URL` (default `mongodb://localhost:27017`); a standalone
-//! server is enough. The suites use the `adk_store_conformance` database, and every case
-//! writes under fresh identifiers:
+//! Run with a server at `MONGODB_URL` (default `mongodb://localhost:27017`). A replica set
+//! (one node is enough) exercises the run store's transactional enqueue; a standalone
+//! server exercises its fallback. `MONGODB_REQUIRE_TRANSACTIONS=1` fails the
+//! transactional case on a standalone server instead of skipping it. The suites use the
+//! `adk_store_conformance` database, and every case writes under fresh identifiers:
 //!
 //! ```bash
 //! MONGODB_URL=mongodb://localhost:27017 \
@@ -183,4 +185,63 @@ async fn run_claimers_drain_a_contended_queue_exactly_once() {
     let first = Arc::new(run_store(clock.clone()).await);
     let second = Arc::new(run_store(clock).await);
     run_contention::claimers_drain_a_queue_exactly_once(first, second).await;
+}
+
+/// Whether the transactional enqueue path is under test: skips on a standalone server
+/// unless `MONGODB_REQUIRE_TRANSACTIONS=1`, which turns a standalone server into a failure.
+async fn transactional(store: &MongoRunStore) -> bool {
+    let supported = store.supports_transactions().await.expect("detect transactions");
+    if !supported && std::env::var("MONGODB_REQUIRE_TRANSACTIONS").as_deref() == Ok("1") {
+        panic!("MONGODB_REQUIRE_TRANSACTIONS=1 but the server at MONGODB_URL is standalone");
+    }
+    supported
+}
+
+/// On the transactional path, concurrent `Reject` enqueues of one concurrency key admit
+/// exactly one run, and every `Existing` answer names a run that still exists — a losing
+/// `Reject` never surfaces a run it then withdraws.
+#[ignore = "requires a MongoDB replica set at MONGODB_URL"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn run_losing_reject_never_answers_existing_for_a_withdrawn_run() {
+    use adk_core::run_store::{Enqueued, NewRun, OnConflict, RunFilter};
+
+    let clock: Arc<dyn Clock> = Arc::new(adk_core::SystemClock);
+    let first = Arc::new(run_store(clock.clone()).await);
+    let second = Arc::new(run_store(clock).await);
+    if !transactional(&first).await {
+        return;
+    }
+    for round in 0..4 {
+        let queue = format!("conformance:reject/ü/{}", uuid::Uuid::new_v4());
+        let shared_key = format!("idem-{round}");
+        let tasks: Vec<_> = (0..24)
+            .map(|i| {
+                let store = if i % 2 == 0 { first.clone() } else { second.clone() };
+                // Half share one idempotency key, so a loser's run could be answered as
+                // `Existing` to them; the rest each bring their own key.
+                let key = if i % 2 == 0 { shared_key.clone() } else { format!("own-{i}") };
+                let run =
+                    NewRun::new(&queue, "app", "user", "agent", serde_json::json!({ "i": i }))
+                        .with_idempotency_key(key)
+                        .with_concurrency_key("thread", OnConflict::Reject);
+                tokio::spawn(async move { store.enqueue(run).await.expect("enqueue") })
+            })
+            .collect();
+        let mut created = Vec::new();
+        let mut answered = Vec::new();
+        for task in tasks {
+            match task.await.expect("enqueue completes") {
+                Enqueued::Created(record) => created.push(record.run_id),
+                Enqueued::Existing(record) => answered.push(record.run_id),
+                Enqueued::Rejected { blocking_run_id } => answered.push(blocking_run_id),
+            }
+        }
+        assert_eq!(created.len(), 1, "one run is admitted to the key: {created:?}");
+        for run_id in &answered {
+            assert_eq!(run_id, &created[0], "every other caller is answered with the admitted run");
+            assert!(first.get(run_id).await.expect("get").is_some(), "{run_id} still exists");
+        }
+        let stored = first.list(RunFilter::default().queue(&queue)).await.expect("list");
+        assert_eq!(stored.len(), 1, "no withdrawn or second run remains");
+    }
 }

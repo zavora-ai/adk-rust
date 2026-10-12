@@ -228,9 +228,11 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 20
-      mongodb:
+      # Standalone server: the run store's single-document fallback path. The primary
+      # MongoDB (a single-node replica set, started below) covers the transactional path.
+      mongodb-standalone:
         image: mongo:7
-        ports: ["27017:27017"]
+        ports: ["27018:27017"]
         options: >-
           --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
           --health-interval 5s --health-timeout 5s --health-retries 20
@@ -246,7 +248,8 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       REDIS_URL: redis://localhost:6379
-      MONGODB_URL: mongodb://localhost:27017
+      MONGODB_URL: mongodb://localhost:27017/?directConnection=true
+      MONGODB_REQUIRE_TRANSACTIONS: "1"
       NEO4J_URI: bolt://localhost:7687
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: conformance-pass
@@ -266,6 +269,24 @@ jobs:
         tool: cargo-nextest
 
     # The emulator needs a start command, which service containers cannot pass.
+    # Service containers cannot pass `--replSet`, so the replica set starts here.
+    - name: Start MongoDB as a single-node replica set
+      timeout-minutes: 5
+      run: |
+        docker run -d --name mongo-rs -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+        for _ in $(seq 60); do
+          docker exec mongo-rs mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && break
+          sleep 2
+        done
+        docker exec mongo-rs mongosh --quiet --eval \
+          'rs.initiate({_id: "rs0", members: [{_id: 0, host: "localhost:27017"}]})'
+        for _ in $(seq 60); do
+          docker exec mongo-rs mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true && exit 0
+          sleep 2
+        done
+        docker logs mongo-rs
+        exit 1
+
     - name: Start the Firestore emulator
       timeout-minutes: 10
       run: |
@@ -297,6 +318,17 @@ jobs:
         --features background
         --run-ignored all
         --test durable_multiprocess
+
+    - name: Run MongoDB store suites on a standalone server
+      if: ${{ !cancelled() }}
+      env:
+        MONGODB_URL: mongodb://localhost:27018
+        MONGODB_REQUIRE_TRANSACTIONS: "0"
+      run: >-
+        cargo nextest run -p adk-session
+        --features sqlite,postgres,redis,mongodb,neo4j,firestore
+        --run-ignored all --no-fail-fast
+        --test store_conformance_mongodb
 
     - name: Run graph checkpointer conformance suites
       if: ${{ !cancelled() }}
