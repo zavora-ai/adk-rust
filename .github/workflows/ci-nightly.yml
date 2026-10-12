@@ -280,7 +280,7 @@ jobs:
       run: >-
         cargo nextest run -p adk-session
         --features sqlite,postgres,redis,mongodb,neo4j,firestore
-        --run-ignored all
+        --run-ignored all --no-fail-fast
         --test store_conformance_sqlite
         --test store_conformance_postgres
         --test run_store_multiprocess_postgres
