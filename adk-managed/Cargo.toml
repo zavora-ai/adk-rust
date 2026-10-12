@@ -44,7 +44,15 @@ default = []
 sandbox = ["dep:adk-sandbox"]
 memory = ["dep:adk-memory"]
 full = ["sandbox", "memory"]
+# Model providers `DefaultModelResolver` can construct.
+gemini = ["adk-model/gemini"]
+openai = ["adk-model/openai"]
+anthropic = ["adk-model/anthropic"]
+ollama = ["adk-model/ollama"]
+all-providers = ["gemini", "openai", "anthropic", "ollama"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util"] }
 proptest = "1.5"
+# Path-only, so the publish order is not constrained by a dev-dependency.
+adk-session = { path = "../adk-session", features = ["sqlite", "postgres"] }

@@ -16,14 +16,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use serde::Deserialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use adk_managed::parking::ToolParkingLot;
+use adk_managed::resolver::{ModelResolver, ResolverResult};
 use adk_managed::session_loop::SessionLoop;
 use adk_managed::testing::{ScriptedLlm, ScriptedTurn};
-use adk_managed::types::{ContentBlock, SessionEvent, UserEvent};
+use adk_managed::types::{ContentBlock, ManagedAgentDef, ModelRef, SessionEvent, UserEvent};
+use adk_managed::{DefaultManagedAgentRuntime, ManagedAgentRuntime, ManagedOwner};
 
 use adk_core::{Agent, Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream};
 use adk_session::service::SessionService;
@@ -71,7 +73,6 @@ fn build_stub_session_service() -> Arc<dyn SessionService> {
 struct Fixture {
     name: String,
     description: String,
-    #[allow(dead_code)]
     agent_def: serde_json::Value,
     scripted_model: ScriptedModel,
     scenario: Vec<ScenarioEvent>,
@@ -175,92 +176,53 @@ fn event_type_string(event: &SessionEvent) -> &'static str {
     }
 }
 
-/// Run a fixture in scripted mode using the session loop.
+/// Resolves every model reference to one scripted model.
+struct ScriptedResolver(Arc<ScriptedLlm>);
+
+#[async_trait]
+impl ModelResolver for ScriptedResolver {
+    async fn resolve(&self, _model: &ModelRef) -> ResolverResult<Arc<dyn Llm>> {
+        Ok(self.0.clone() as Arc<dyn Llm>)
+    }
+}
+
+/// Run a fixture in scripted mode through the full runtime.
 ///
-/// This exercises the full runtime pipeline:
-/// - Session loop processes user events
-/// - ScriptedLlm provides deterministic responses (via the stub runner for now)
-/// - Events are broadcast and collected
-/// - Exact sequence is asserted
+/// The fixture's agent definition is built by `DefaultManagedAgentRuntime` over a
+/// `ScriptedLlm` serving the fixture's turns, so tools, permission policy, custom tool
+/// parking, and confirmations run exactly as they do against a provider. Each scenario
+/// event is sent once the previous one's turn has ended with `status.idle`.
 async fn run_fixture_scripted(fixture: &Fixture) -> Vec<String> {
-    let (event_tx, event_rx) = mpsc::channel(64);
-    let (broadcast_tx, mut broadcast_rx) = broadcast::channel(256);
-    let cancel = CancellationToken::new();
-    let parking = Arc::new(ToolParkingLot::new(Duration::from_secs(30)));
-
-    let session_id = format!("fixture_{}", fixture.name);
-
-    // The ScriptedLlm is created but the session loop currently uses a stub
-    // runner. The ScriptedLlm will be wired when the Runner integration is
-    // complete. For now, validate the event pattern from the stub.
-    let _scripted_llm = ScriptedLlm::new("fixture-model", fixture.scripted_model.turns.clone());
-
-    let session_service = build_stub_session_service();
-
-    // Seed the session in the service — the Runner requires it to exist.
-    session_service
-        .create(adk_session::service::CreateRequest {
-            app_name: "managed".to_string(),
-            user_id: "managed_user".to_string(),
-            session_id: Some(session_id.clone()),
-            state: std::collections::HashMap::new(),
-        })
-        .await
-        .expect("failed to seed session for fixture test");
-
-    let session_loop = SessionLoop::new(
-        session_id,
-        event_rx,
-        broadcast_tx,
-        parking.clone(),
-        cancel.clone(),
-        build_stub_agent(),
-        session_service,
+    let llm = Arc::new(ScriptedLlm::new("fixture-model", fixture.scripted_model.turns.clone()));
+    let runtime = DefaultManagedAgentRuntime::new(
+        Arc::new(ScriptedResolver(llm)),
+        Arc::new(adk_session::InMemorySessionService::new()),
     );
+    let def: ManagedAgentDef = serde_json::from_value(fixture.agent_def.clone())
+        .unwrap_or_else(|e| panic!("fixture {} agent_def does not parse: {e}", fixture.name));
+    let agent = runtime.create(def).await.expect("create agent");
+    let owner = ManagedOwner::new("fixtures", "fixture-user").unwrap();
+    let session = runtime.start_session(&agent, &owner, None).await.expect("start session");
+    let mut stream = runtime.stream_events(&session, None).await.expect("stream");
 
-    let loop_handle = tokio::spawn(session_loop.run());
-
-    // Send scenario events.
+    let mut event_types = Vec::new();
     for scenario_event in &fixture.scenario {
-        let user_event = scenario_to_user_event(scenario_event);
-
-        // For interrupts, send and let the loop handle it.
-        match &user_event {
-            UserEvent::Interrupt {} => {
-                // Give the loop time to process any pending message first.
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                event_tx.send(user_event).await.unwrap();
-            }
-            UserEvent::CustomToolResult { custom_tool_use_id, content } => {
-                // Deliver custom tool results directly to parking lot.
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                event_tx
-                    .send(UserEvent::CustomToolResult {
-                        custom_tool_use_id: custom_tool_use_id.clone(),
-                        content: content.clone(),
-                    })
-                    .await
-                    .unwrap();
-            }
-            _ => {
-                event_tx.send(user_event).await.unwrap();
+        runtime
+            .send_event(&session, scenario_to_user_event(scenario_event))
+            .await
+            .unwrap_or_else(|e| panic!("fixture {}: send failed: {e}", fixture.name));
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(10), stream.next())
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("fixture {}: no status.idle; saw {event_types:?}", fixture.name)
+                })
+                .expect("stream ended");
+            event_types.push(event_type_string(&event).to_string());
+            if matches!(event, SessionEvent::StatusIdle { .. }) {
+                break;
             }
         }
-
-        // Allow time for the loop to process.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-
-    // Close the channel to signal loop termination.
-    drop(event_tx);
-
-    // Wait for the loop to exit.
-    let _ = tokio::time::timeout(Duration::from_secs(5), loop_handle).await;
-
-    // Collect all broadcast events.
-    let mut event_types = Vec::new();
-    while let Ok(event) = broadcast_rx.try_recv() {
-        event_types.push(event_type_string(&event).to_string());
     }
 
     event_types
@@ -286,6 +248,20 @@ async fn test_f1_hello() {
 }
 
 #[tokio::test]
+async fn test_f3_custom_tool() {
+    let fixture = load_fixture("f3_custom_tool.json");
+    let actual = run_fixture_scripted(&fixture).await;
+    assert_exact_sequence(&fixture.name, &actual, &fixture.assertions.exact_sequence);
+}
+
+#[tokio::test]
+async fn test_f4_confirmation() {
+    let fixture = load_fixture("f4_confirmation.json");
+    let actual = run_fixture_scripted(&fixture).await;
+    assert_exact_sequence(&fixture.name, &actual, &fixture.assertions.exact_sequence);
+}
+
+#[tokio::test]
 async fn test_f5_resume() {
     let fixture = load_fixture("f5_resume.json");
     let actual = run_fixture_scripted(&fixture).await;
@@ -304,11 +280,7 @@ async fn test_f7_interrupt() {
     let fixture = load_fixture("f7_interrupt.json");
     let actual = run_fixture_scripted(&fixture).await;
 
-    // For interrupt, the expected sequence depends on timing.
-    // The message may or may not be processed before the interrupt arrives.
-    // With our stub runner (instant echo), the message is processed first,
-    // then the interrupt causes the loop to exit.
-    // The exact sequence from the fixture should match.
+    // The interrupt is sent after the message's turn ended, so it only stops the loop.
     assert_exact_sequence(&fixture.name, &actual, &fixture.assertions.exact_sequence);
 }
 
@@ -369,13 +341,11 @@ async fn test_seq_monotonicity_in_fixture_run() {
     let (event_tx, event_rx) = mpsc::channel(64);
     let (broadcast_tx, mut broadcast_rx) = broadcast::channel(256);
     let cancel = CancellationToken::new();
-    let parking = Arc::new(ToolParkingLot::new(Duration::from_secs(30)));
 
     let session_loop = SessionLoop::new(
         "seq_test".to_string(),
         event_rx,
         broadcast_tx,
-        parking,
         cancel.clone(),
         build_stub_agent(),
         build_stub_session_service(),

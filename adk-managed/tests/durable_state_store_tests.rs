@@ -1,14 +1,19 @@
-//! Tests for the first managed state store that survives process loss.
+//! Tests for the managed state stores that survive process loss.
 //!
 //! `InMemoryManagedStateStore` reports `ProcessLocal` and loses everything when the
-//! process stops. These tests pin that a file-backed store reports `CrashDurable`
-//! and that a second store, sharing only the directory, reads what the first wrote.
+//! process stops. These tests pin that the file store and the session-service store report
+//! what they guarantee, and that a second store, sharing only the backing storage, reads
+//! what the first wrote.
 
 use adk_managed::checkpoint::RunState;
+use std::sync::Arc;
+
 use adk_managed::state_store::{
     Durability, FileManagedStateStore, InMemoryManagedStateStore, ManagedSessionState,
-    ManagedStateStore,
+    ManagedStateStore, PendingAction, PendingKind, SessionRecord, SessionServiceStateStore,
 };
+use adk_managed::types::{ContentBlock, ManagedAgentDef, ModelRef, SessionEvent};
+use adk_session::SqliteSessionService;
 
 fn temp_root(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("adk-managed-{}-{name}", std::process::id()))
@@ -17,7 +22,7 @@ fn temp_root(name: &str) -> std::path::PathBuf {
 fn a_state(seq: u64) -> ManagedSessionState {
     let mut run_state = RunState::initial();
     run_state.seq = seq;
-    ManagedSessionState { events: Vec::new(), run_state }
+    ManagedSessionState::new(Vec::new(), run_state)
 }
 
 #[tokio::test]
@@ -132,5 +137,140 @@ async fn a_partial_write_cannot_be_read_as_a_snapshot() {
         "a .tmp file is not a session"
     );
 
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A snapshot with events, a record, and a pending action, so every field round-trips.
+fn a_full_state(events: u64) -> ManagedSessionState {
+    let mut state = a_state(events);
+    state.events = (0..events)
+        .map(|seq| SessionEvent::Message {
+            content: vec![ContentBlock::Text { text: format!("event {seq}") }],
+            seq,
+        })
+        .collect();
+    state.record = Some(SessionRecord::new(
+        "app",
+        "user",
+        ManagedAgentDef::new("agent", ModelRef::Shorthand("gpt-5.4-mini".into())),
+    ));
+    state.pending = vec![PendingAction {
+        id: "call-1".into(),
+        kind: PendingKind::CustomTool,
+        tool_name: "deploy".into(),
+        function_call_id: Some("call-1".into()),
+        decision_key: "custom_tool_result:call-1".into(),
+        input: serde_json::json!({ "target": "prod" }),
+        expires_at: None,
+        resolution: None,
+    }];
+    state.durable_run_id = Some("run-1".into());
+    state
+}
+
+/// Every field that matters for rebuilding a session, comparable.
+fn summary(
+    state: &ManagedSessionState,
+) -> (u64, usize, Option<String>, Vec<PendingAction>, Option<String>) {
+    (
+        state.run_state.seq,
+        state.events.len(),
+        state.record.as_ref().map(|record| record.agent.name.clone()),
+        state.pending.clone(),
+        state.durable_run_id.clone(),
+    )
+}
+
+async fn sqlite_sessions(path: &std::path::Path) -> Arc<dyn adk_session::SessionService> {
+    let url = format!("sqlite://{}?mode=rwc", path.display());
+    let service = SqliteSessionService::new(&url).await.expect("open sqlite sessions");
+    service.migrate().await.expect("migrate sqlite sessions");
+    Arc::new(service)
+}
+
+#[tokio::test]
+async fn the_session_service_store_reports_the_guarantee_it_was_given() {
+    let service = Arc::new(adk_session::InMemorySessionService::new());
+    let store = SessionServiceStateStore::new(service.clone(), Durability::ProcessLocal);
+    assert_eq!(store.durability(), Durability::ProcessLocal);
+    let store = SessionServiceStateStore::new(service, Durability::CrashDurable);
+    assert_eq!(store.durability(), Durability::CrashDurable);
+}
+
+#[tokio::test]
+async fn the_session_service_store_survives_reopening_its_database() {
+    let root = temp_root("session-service");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let db = root.join("sessions.db");
+
+    let first = SessionServiceStateStore::new(sqlite_sessions(&db).await, Durability::CrashDurable);
+    first.save("session-a", a_full_state(3)).await.unwrap();
+    // A later save writes only the events added since; the snapshot still reads whole.
+    first.save("session-a", a_full_state(5)).await.unwrap();
+    first.save("session-b", a_full_state(1)).await.unwrap();
+    drop(first);
+
+    let second =
+        SessionServiceStateStore::new(sqlite_sessions(&db).await, Durability::CrashDurable);
+    let loaded = second.load("session-a").await.unwrap().expect("the snapshot survived");
+    assert_eq!(summary(&loaded), summary(&a_full_state(5)));
+    match &loaded.events[4] {
+        SessionEvent::Message { seq, .. } => assert_eq!(*seq, 4, "events load in order"),
+        other => panic!("unexpected event {other:?}"),
+    }
+    assert_eq!(second.session_ids().await.unwrap(), vec!["session-a", "session-b"]);
+
+    second.delete("session-a").await.unwrap();
+    assert!(second.load("session-a").await.unwrap().is_none());
+    second.delete("session-a").await.unwrap();
+    assert_eq!(second.session_ids().await.unwrap(), vec!["session-b"]);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn every_store_round_trips_the_whole_snapshot() {
+    let root = temp_root("round-trip");
+    let _ = std::fs::remove_dir_all(&root);
+    let stores: Vec<Arc<dyn ManagedStateStore>> = vec![
+        Arc::new(InMemoryManagedStateStore::new()),
+        Arc::new(FileManagedStateStore::new(root.join("files"))),
+        Arc::new(SessionServiceStateStore::new(
+            Arc::new(adk_session::InMemorySessionService::new()),
+            Durability::ProcessLocal,
+        )),
+    ];
+    for store in stores {
+        store.save("session-a", a_full_state(2)).await.unwrap();
+        let loaded = store.load("session-a").await.unwrap().expect("saved state loads");
+        assert_eq!(summary(&loaded), summary(&a_full_state(2)), "{store:?}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn a_stored_record_drops_the_compatible_api_key() {
+    use adk_managed::types::{ModelConfig, Provider};
+    let agent = ManagedAgentDef::new(
+        "agent",
+        ModelRef::Structured {
+            provider: Provider::OpenaiCompatible,
+            model: ModelConfig::Compatible {
+                model: "m".into(),
+                base_url: "https://llm.example/v1".into(),
+                api_key: "sk-do-not-store".into(),
+            },
+            speed: None,
+        },
+    );
+    let mut state = a_state(0);
+    state.record = Some(SessionRecord::new("app", "user", agent));
+    let root = temp_root("secret");
+    let _ = std::fs::remove_dir_all(&root);
+    let store = FileManagedStateStore::new(&root);
+    store.save("session-a", state).await.unwrap();
+    let written = std::fs::read_to_string(root.join("session-a.json")).unwrap();
+    assert!(!written.contains("sk-do-not-store"));
     let _ = std::fs::remove_dir_all(&root);
 }

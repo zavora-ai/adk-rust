@@ -3,7 +3,7 @@
   "description": "Agent invokes an MCP tool. Validates the status.running → agent.mcp_tool_use → agent.message → status.idle pattern.",
   "agent_def": {
     "name": "mcp-agent",
-    "model": "gemini-2.5-flash",
+    "model": "gemini-3.7-flash",
     "system": "You are an assistant with access to a file reader MCP tool.",
     "mcp_servers": [
       {

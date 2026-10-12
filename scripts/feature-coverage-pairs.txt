@@ -64,6 +64,8 @@
 # EnforcedLimits field kept its old name at a call site for two releases.
 3 adk-managed memory
 3 adk-managed full
+# `DefaultModelResolver` constructs each provider only under its feature.
+3 adk-managed all-providers
 # The Monty Python executors and the Agent Engine sandbox client are both gated.
 3 adk-code embedded-python
 3 adk-code vertex-sandbox

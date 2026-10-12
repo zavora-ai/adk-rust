@@ -1,27 +1,22 @@
 //! Checkpoint management for resumable sessions.
 //!
-//! Checkpoints are held in memory. They support replay and resume **within a process**; they
-//! do not survive process loss, so a new process cannot resume a session started by another.
-//! "Atomic" below means a single assignment under a lock, not a transaction with a persistent
-//! store.
-//!
-//! The [`CheckpointManager`] provides atomic checkpoint persistence so that
-//! a crash cannot leave an event emitted but un-checkpointed (or vice versa).
-//! For the initial implementation, storage is in-memory (`Vec<SessionEvent>`).
-//! The real integration with `SessionService` for persistent storage is a
-//! platform concern.
+//! A [`CheckpointManager`] holds a session's event log, run state, pending tool calls and
+//! session record, and writes them to its [`ManagedStateStore`] on
+//! [`flush`](CheckpointManager::flush). The session loop flushes after every event, before
+//! broadcasting it. Whether a flushed snapshot survives process loss is the store's
+//! [`Durability`](crate::Durability).
 //!
 //! # Responsibilities
 //!
-//! 1. **Atomicity guarantee**: event + state saved together in one operation
-//! 2. **Load/resume interface**: retrieve all events and last run state
-//! 3. **Event log maintenance**: ordered log for replay
+//! 1. **Atomicity**: an event and the run state after it are recorded in one call
+//! 2. **Load/resume**: [`restore`](CheckpointManager::restore) rebuilds a manager from a store
+//! 3. **Event log**: an ordered log for replay
 
 use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
 
-use crate::state_store::{ManagedSessionState, ManagedStateStore};
+use crate::state_store::{ManagedSessionState, ManagedStateStore, PendingAction, SessionRecord};
 use crate::types::{RuntimeError, SessionEvent, SessionStatus};
 
 /// Run-state persisted with each checkpoint.
@@ -90,6 +85,12 @@ pub struct CheckpointManager {
     run_state: RunState,
     /// Where [`CheckpointManager::flush`] writes, when a store is configured.
     store: Option<Arc<dyn ManagedStateStore>>,
+    /// The owner and agent definition the session is rebuilt from.
+    record: Option<SessionRecord>,
+    /// Tool calls waiting on the client.
+    pending: Vec<PendingAction>,
+    /// The durable run parked on `pending`.
+    durable_run_id: Option<String>,
 }
 
 impl CheckpointManager {
@@ -98,7 +99,15 @@ impl CheckpointManager {
     /// Initializes with an empty event log and the initial run state
     /// (seq=0, no pending tools, queued status).
     pub fn new(session_id: String) -> Self {
-        Self { session_id, events: Vec::new(), run_state: RunState::initial(), store: None }
+        Self {
+            session_id,
+            events: Vec::new(),
+            run_state: RunState::initial(),
+            store: None,
+            record: None,
+            pending: Vec::new(),
+            durable_run_id: None,
+        }
     }
 
     /// Writes flushed checkpoints to `store`.
@@ -141,15 +150,7 @@ impl CheckpointManager {
             return Ok(());
         };
 
-        store
-            .save(
-                &self.session_id,
-                ManagedSessionState {
-                    events: self.events.clone(),
-                    run_state: self.run_state.clone(),
-                },
-            )
-            .await
+        store.save(&self.session_id, self.snapshot()).await
     }
 
     /// Rebuilds a manager for `session_id` from `store`.
@@ -165,13 +166,20 @@ impl CheckpointManager {
         session_id: String,
         store: Arc<dyn ManagedStateStore>,
     ) -> Result<Self, RuntimeError> {
-        let restored = store.load(&session_id).await?;
-        let (events, run_state) = match restored {
-            Some(state) => (state.events, state.run_state),
-            None => (Vec::new(), RunState::initial()),
-        };
+        let restored = store
+            .load(&session_id)
+            .await?
+            .unwrap_or_else(|| ManagedSessionState::new(Vec::new(), RunState::initial()));
 
-        Ok(Self { session_id, events, run_state, store: Some(store) })
+        Ok(Self {
+            session_id,
+            events: restored.events,
+            run_state: restored.run_state,
+            store: Some(store),
+            record: restored.record,
+            pending: restored.pending,
+            durable_run_id: restored.durable_run_id,
+        })
     }
 
     /// Records an event and the updated run state together.
@@ -207,6 +215,55 @@ impl CheckpointManager {
     /// Get the session ID this manager is checkpointing for.
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// The whole state this manager holds, as [`flush`](Self::flush) writes it.
+    pub fn snapshot(&self) -> ManagedSessionState {
+        ManagedSessionState {
+            events: self.events.clone(),
+            run_state: self.run_state.clone(),
+            record: self.record.clone(),
+            pending: self.pending.clone(),
+            durable_run_id: self.durable_run_id.clone(),
+        }
+    }
+
+    /// Replaces everything this manager holds with `state`, keeping its store.
+    pub fn replace(&mut self, state: ManagedSessionState) {
+        self.events = state.events;
+        self.run_state = state.run_state;
+        self.record = state.record;
+        self.pending = state.pending;
+        self.durable_run_id = state.durable_run_id;
+    }
+
+    /// The owner and agent definition the session is rebuilt from.
+    pub fn record(&self) -> Option<&SessionRecord> {
+        self.record.as_ref()
+    }
+
+    /// Sets the owner and agent definition the session is rebuilt from.
+    pub fn set_record(&mut self, record: SessionRecord) {
+        self.record = Some(record);
+    }
+
+    /// Tool calls waiting on the client.
+    pub fn pending(&self) -> &[PendingAction] {
+        &self.pending
+    }
+
+    /// The durable run parked on the pending calls, if any.
+    pub fn durable_run_id(&self) -> Option<&str> {
+        self.durable_run_id.as_deref()
+    }
+
+    /// Replaces the pending calls and the run parked on them.
+    ///
+    /// The run state's `pending_tool_ids` follow the pending calls.
+    pub fn set_pending(&mut self, pending: Vec<PendingAction>, durable_run_id: Option<String>) {
+        self.run_state.pending_tool_ids = pending.iter().map(|action| action.id.clone()).collect();
+        self.pending = pending;
+        self.durable_run_id = durable_run_id;
     }
 }
 

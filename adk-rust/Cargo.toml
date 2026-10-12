@@ -147,7 +147,8 @@ awp = ["dep:adk-awp"]
 acp = ["dep:adk-acp"]
 computer-use = ["dep:adk-computer-use", "graph", "auth", "mcp"]
 
-# Managed agent runtime (feature-gated, experimental)
+# Managed agent runtime (feature-gated, experimental). The provider features below also
+# let its `DefaultModelResolver` construct that provider's models.
 managed-runtime = ["dep:adk-managed"]
 
 # Enterprise client SDK (feature-gated, experimental)
@@ -157,16 +158,16 @@ enterprise-client = ["dep:adk-enterprise"]
 a2a = ["server", "adk-server/a2a-v1"]
 
 # Model provider features (forwarded to adk-model)
-gemini = ["models", "adk-model/gemini"]
+gemini = ["models", "adk-model/gemini", "adk-managed?/gemini"]
 gemini-vertex = ["gemini", "adk-model/gemini-vertex"]
 gemini-interactions = ["gemini", "adk-model/gemini-interactions"]
-openai = ["models", "adk-model/openai"]
+openai = ["models", "adk-model/openai", "adk-managed?/openai"]
 openrouter = ["models", "adk-model/openrouter"]
 opencode = ["models", "adk-model/opencode"]
-anthropic = ["models", "adk-model/anthropic"]
+anthropic = ["models", "adk-model/anthropic", "adk-managed?/anthropic"]
 deepseek = ["models", "adk-model/deepseek"]
 groq = ["models", "adk-model/groq"]
-ollama = ["models", "adk-model/ollama"]
+ollama = ["models", "adk-model/ollama", "adk-managed?/ollama"]
 fireworks = ["models", "adk-model/fireworks"]
 together = ["models", "adk-model/together"]
 mistral = ["models", "adk-model/mistral"]

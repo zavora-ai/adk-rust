@@ -9,8 +9,9 @@
 //!
 //! The loop composes:
 //! - [`SequenceCounter`] — assigns monotonically increasing `seq` to each event
-//! - [`ToolParkingLot`] — parks on `custom_tool_use` until client delivers a result
-//! - [`CheckpointManager`] — atomic checkpoint after each event
+//! - [`CheckpointManager`] — records each event and flushes it to the state store
+//! - [`ManagedStores`] — the durable run each turn executes under, and the decision store
+//!   client answers are recorded in
 //! - `tokio::broadcast` — fan-out to stream subscribers
 //! - [`Runner`] — drives the agent through the real LLM
 //! - [`SessionUsageTracker`] — tracks per-turn and cumulative token usage
@@ -18,73 +19,92 @@
 //! # Control Flow
 //!
 //! ```text
-//! Dequeue UserEvent → emit status.running → invoke Runner
-//!   → for each output event: classify, map, assign seq, checkpoint, broadcast
-//!   → if custom tool call: park, wait for result, resume
-//!   → track usage → emit status.idle → loop
+//! user.message → enqueue a run on the session's queue → claim it
+//!   → emit status.running → invoke Runner → map each output event
+//!   → no pending action: finish the run, emit status.idle (end_turn)
+//!   → custom tool call or held confirmation: park the run (Waiting until the
+//!     action's expiry), emit status.idle (requires_action)
+//! user.custom_tool_result / user.tool_confirmation
+//!   → record the answer in the decision store → wake the run → claim it
+//!   → append custom tool results to the conversation → continue the turn
 //! ```
+//!
+//! The loop never blocks on the client: while a turn waits, the loop keeps reading its
+//! channel, and the wait lives in the run store rather than in this task. A parked
+//! session polls its queue every [`DurableConfig::poll_interval`], so an answer recorded
+//! by another runtime instance, or the action's expiry, resumes it.
 //!
 //! # Interrupt and Pause
 //!
 //! - **Interrupt**: A [`CancellationToken`] signals the loop to stop at the next
-//!   boundary. On interrupt, the loop emits `status.idle` and exits.
+//!   boundary. On interrupt, the loop cancels the session's run, emits `status.idle`, and
+//!   exits.
 //! - **Pause/Resume**: A pause flag + [`Notify`] allow the loop to park until
 //!   resumed.
 
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
+use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, RwLock, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 #[cfg(feature = "memory")]
 use adk_core::Memory;
-use adk_core::{Agent, Content, Event, Part};
+use adk_core::{
+    Agent, ClaimedRun, Content, Event, FunctionResponseData, NewRun, OnConflict, Part,
+    RunCheckpointRef, RunConfig, RunOutcome, RunState as DurableRunState, SessionId, ToolApproval,
+    UserId,
+};
 use adk_runner::Runner;
 use adk_session::service::SessionService;
 
+use crate::agent_builder::is_custom_tool_pending;
 use crate::checkpoint::{CheckpointManager, RunState};
-use crate::event_mapping::{RunnerOutput, custom_tool_use_id, map_runner_output, requires_parking};
-use crate::parking::ToolParkingLot;
+use crate::durable::{DurableConfig, ManagedStores, custom_result_key, decision_scope};
+use crate::event_mapping::{RunnerOutput, map_runner_output};
 use crate::sequence::SequenceCounter;
+use crate::state_store::{PendingAction, PendingKind};
 use crate::types::{
-    ContentBlock, RuntimeError, SessionEvent, SessionStatus, StopReason, UserEvent,
+    ConfirmationResult, ContentBlock, RuntimeError, SessionEvent, SessionStatus, StopReason,
+    UserEvent,
 };
 use crate::usage::{SessionUsageTracker, UsageReport};
+
+/// The most runs one drain claims, so a run that keeps becoming claimable cannot spin.
+const MAX_CLAIMS_PER_DRAIN: usize = 64;
 
 /// Supervised session loop — one per active session.
 ///
 /// Runs as a background `tokio::spawn`ed task. Receives user events via an
-/// mpsc channel, processes each turn through the real Runner, and broadcasts
-/// session events via a `tokio::broadcast` channel.
+/// mpsc channel, processes each turn through the real Runner under a durable run, and
+/// broadcasts session events via a `tokio::broadcast` channel.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use std::sync::Arc;
-/// use std::time::Duration;
-/// use tokio::sync::{broadcast, mpsc, Mutex, Notify};
+/// use tokio::sync::{broadcast, mpsc};
 /// use tokio_util::sync::CancellationToken;
 /// use adk_managed::session_loop::SessionLoop;
-/// use adk_managed::parking::ToolParkingLot;
 ///
 /// let (event_tx, event_rx) = mpsc::channel(64);
 /// let (broadcast_tx, _) = broadcast::channel(256);
 /// let cancel = CancellationToken::new();
-/// let parking = Arc::new(ToolParkingLot::new(Duration::from_secs(300)));
 ///
-/// let loop_handle = SessionLoop::new(
+/// let session_loop = SessionLoop::new(
 ///     "session_001".to_string(),
 ///     event_rx,
 ///     broadcast_tx,
-///     parking,
 ///     cancel.clone(),
 ///     agent,
 ///     session_service,
 /// );
 ///
-/// let handle = tokio::spawn(loop_handle.run());
+/// let handle = tokio::spawn(session_loop.run());
 /// // Send events via event_tx...
 /// ```
 pub struct SessionLoop {
@@ -96,9 +116,7 @@ pub struct SessionLoop {
     event_tx: broadcast::Sender<SessionEvent>,
     /// Monotonic sequence counter.
     seq: SequenceCounter,
-    /// Custom tool parking lot.
-    parking: Arc<ToolParkingLot>,
-    /// Checkpoint manager for durable state (shared with ActiveSession for replay).
+    /// Checkpoint manager for session state (shared with ActiveSession for replay).
     checkpoint: Arc<RwLock<CheckpointManager>>,
     /// Cancellation token for interrupt handling.
     cancel_token: CancellationToken,
@@ -110,14 +128,12 @@ pub struct SessionLoop {
     ///
     /// Defaults to the historical `managed` / `managed_user` constants so an existing loop
     /// keeps working, and is replaced by [`SessionLoop::with_owner`] when the runtime knows
-    /// who the session belongs to. Hardcoding the constants is what put every managed session
-    /// in one namespace.
+    /// who the session belongs to.
     owner: (String, String),
     /// Current session status.
     ///
     /// Shared with the public session handle when the runtime installs its own via
-    /// [`SessionLoop::with_shared_status`]. Without that, the handle reported `Queued` for
-    /// the whole life of a session because the loop wrote to a field the handle never read.
+    /// [`SessionLoop::with_shared_status`].
     status: Arc<RwLock<SessionStatus>>,
     /// The agent driving this session.
     agent: Arc<dyn Agent>,
@@ -128,17 +144,45 @@ pub struct SessionLoop {
     memory: Option<Arc<dyn Memory>>,
     /// Accumulated usage tracking across all turns.
     usage_tracker: SessionUsageTracker,
+    /// Names of the client-executed tools; `None` classifies tools by name.
+    custom_tools: Option<BTreeSet<String>>,
+    /// Where runs, state, and client answers are kept.
+    stores: ManagedStores,
+    /// How runs are claimed, heartbeated, and parked.
+    durable: DurableConfig,
+}
+
+/// What one turn of the agent produced besides session events.
+#[derive(Default)]
+struct TurnOutput {
+    usage: UsageReport,
+    /// Custom tool calls the model issued, by call ID, not yet reported to the client.
+    custom_calls: HashMap<String, (String, Value)>,
+    pending: Vec<PendingAction>,
+}
+
+/// How one turn ended.
+enum TurnEnd {
+    /// The model finished; the run is complete.
+    Done(String),
+    /// The turn could not start; the run is already finished.
+    Failed,
+    /// The turn waits on the client for these actions.
+    Parked(Vec<String>),
+    /// The session was interrupted.
+    Interrupted,
+    /// Another worker holds the run now; nothing more is written.
+    LeaseLost,
 }
 
 impl SessionLoop {
-    /// Create a new session loop.
+    /// Create a new session loop over in-memory [`ManagedStores`].
     ///
     /// # Arguments
     ///
     /// * `session_id` - The session this loop operates on.
     /// * `event_rx` - Receiver for incoming user events.
     /// * `event_tx` - Broadcast sender for outgoing session events.
-    /// * `parking` - Shared parking lot for custom tool calls.
     /// * `cancel_token` - Token to signal interrupt/shutdown.
     /// * `agent` - The built agent to drive through the Runner.
     /// * `session_service` - Session persistence for the Runner.
@@ -146,7 +190,6 @@ impl SessionLoop {
         session_id: String,
         event_rx: mpsc::Receiver<UserEvent>,
         event_tx: broadcast::Sender<SessionEvent>,
-        parking: Arc<ToolParkingLot>,
         cancel_token: CancellationToken,
         agent: Arc<dyn Agent>,
         session_service: Arc<dyn SessionService>,
@@ -157,7 +200,6 @@ impl SessionLoop {
             event_rx,
             event_tx,
             seq: SequenceCounter::default(),
-            parking,
             checkpoint,
             cancel_token,
             pause_flag: Arc::new(Mutex::new(false)),
@@ -169,6 +211,9 @@ impl SessionLoop {
             #[cfg(feature = "memory")]
             memory: None,
             usage_tracker: SessionUsageTracker::new(),
+            custom_tools: None,
+            stores: ManagedStores::in_memory(),
+            durable: DurableConfig::default(),
         }
     }
 
@@ -183,7 +228,6 @@ impl SessionLoop {
         session_id: String,
         event_rx: mpsc::Receiver<UserEvent>,
         event_tx: broadcast::Sender<SessionEvent>,
-        parking: Arc<ToolParkingLot>,
         cancel_token: CancellationToken,
         pause_flag: Arc<Mutex<bool>>,
         pause_notify: Arc<Notify>,
@@ -192,23 +236,13 @@ impl SessionLoop {
         session_service: Arc<dyn SessionService>,
         memory: Option<Arc<dyn Memory>>,
     ) -> Self {
-        Self {
-            session_id,
-            event_rx,
-            event_tx,
-            seq: SequenceCounter::default(),
-            parking,
-            checkpoint,
-            cancel_token,
-            pause_flag,
-            pause_notify,
-            owner: ("managed".to_string(), "managed_user".to_string()),
-            status: Arc::new(RwLock::new(SessionStatus::Queued)),
-            agent,
-            session_service,
-            memory,
-            usage_tracker: SessionUsageTracker::new(),
-        }
+        let mut session_loop =
+            Self::new(session_id, event_rx, event_tx, cancel_token, agent, session_service);
+        session_loop.pause_flag = pause_flag;
+        session_loop.pause_notify = pause_notify;
+        session_loop.checkpoint = checkpoint;
+        session_loop.memory = memory;
+        session_loop
     }
 
     /// Create a session loop with custom pause controls (for external pause/resume).
@@ -220,7 +254,6 @@ impl SessionLoop {
         session_id: String,
         event_rx: mpsc::Receiver<UserEvent>,
         event_tx: broadcast::Sender<SessionEvent>,
-        parking: Arc<ToolParkingLot>,
         cancel_token: CancellationToken,
         pause_flag: Arc<Mutex<bool>>,
         pause_notify: Arc<Notify>,
@@ -228,28 +261,15 @@ impl SessionLoop {
         agent: Arc<dyn Agent>,
         session_service: Arc<dyn SessionService>,
     ) -> Self {
-        Self {
-            session_id,
-            event_rx,
-            event_tx,
-            seq: SequenceCounter::default(),
-            parking,
-            checkpoint,
-            cancel_token,
-            pause_flag,
-            pause_notify,
-            owner: ("managed".to_string(), "managed_user".to_string()),
-            status: Arc::new(RwLock::new(SessionStatus::Queued)),
-            agent,
-            session_service,
-            usage_tracker: SessionUsageTracker::new(),
-        }
+        let mut session_loop =
+            Self::new(session_id, event_rx, event_tx, cancel_token, agent, session_service);
+        session_loop.pause_flag = pause_flag;
+        session_loop.pause_notify = pause_notify;
+        session_loop.checkpoint = checkpoint;
+        session_loop
     }
 
     /// Makes this loop's Runner calls under `owner`.
-    ///
-    /// Without this the loop used the constants `managed` / `managed_user`, so every managed
-    /// session shared one logical namespace and no session could be attributed to a caller.
     ///
     /// # Example
     ///
@@ -264,11 +284,6 @@ impl SessionLoop {
 
     /// Reports status into the handle the caller already holds.
     ///
-    /// The runtime's `ActiveSession` owns the status a caller observes through
-    /// `ManagedAgentRuntime::status`. Installing it here is what makes normal
-    /// queued → running → idle transitions visible; without it the loop wrote to its own
-    /// field and the public handle stayed `Queued` through an entire session.
-    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -277,6 +292,36 @@ impl SessionLoop {
     /// ```
     pub fn with_shared_status(mut self, status: Arc<RwLock<SessionStatus>>) -> Self {
         self.status = status;
+        self
+    }
+
+    /// Keeps runs, state, and client answers in `stores`.
+    ///
+    /// The checkpoint manager writes to `stores.state` unless it already has a store.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let session_loop = SessionLoop::new(/* ... */).with_stores(ManagedStores::in_memory());
+    /// ```
+    pub fn with_stores(mut self, stores: ManagedStores) -> Self {
+        self.stores = stores;
+        self
+    }
+
+    /// Claims, heartbeats, and parks runs as `config` says.
+    pub fn with_durable_config(mut self, config: DurableConfig) -> Self {
+        self.durable = config;
+        self
+    }
+
+    /// Treats exactly the tools named in `names` as client-executed custom tools.
+    ///
+    /// Without it, a tool that is not a built-in (`bash`, `filesystem`, `web_search`,
+    /// `web_fetch`, `code_execution`) and not an MCP tool (`mcp_` prefix or `::`) is
+    /// treated as custom.
+    pub fn with_custom_tools(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.custom_tools = Some(names.into_iter().collect());
         self
     }
 
@@ -294,125 +339,50 @@ impl SessionLoop {
     ///
     /// This is the main loop body, designed to be `tokio::spawn`ed. It runs
     /// until the input channel is closed or the cancellation token is triggered.
+    /// Closing the channel leaves a parked run parked, so another runtime instance can
+    /// resume it; an interrupt cancels it.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// Returns `Ok(())` on graceful shutdown, or `Err(RuntimeError)` if an
-    /// unrecoverable error occurs.
+    /// Returns `Err(RuntimeError)` if an unrecoverable error occurs.
     pub async fn run(mut self) -> Result<(), RuntimeError> {
         info!(session_id = %self.session_id, "session loop started");
+        self.prepare().await;
+
+        let mut tick = tokio::time::interval(self.durable.poll_interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
-            // Check for interrupt before waiting for the next event.
             if self.cancel_token.is_cancelled() {
                 debug!(session_id = %self.session_id, "interrupt detected, shutting down");
-                self.emit_idle(Some(StopReason::EndTurn), None).await;
+                self.stop_interrupted().await;
                 break;
             }
 
-            // Check for pause.
             self.check_pause().await;
 
-            // Wait for next event or cancellation.
-            let event = tokio::select! {
+            let holds_run = self.checkpoint.read().await.durable_run_id().is_some();
+            let cancel = self.cancel_token.clone();
+            tokio::select! {
                 biased;
-                _ = self.cancel_token.cancelled() => {
+                _ = cancel.cancelled() => {
                     debug!(session_id = %self.session_id, "interrupted while waiting for event");
-                    self.emit_idle(Some(StopReason::EndTurn), None).await;
+                    self.stop_interrupted().await;
                     break;
                 }
-                ev = self.event_rx.recv() => {
-                    match ev {
-                        Some(event) => event,
-                        None => {
-                            debug!(session_id = %self.session_id, "event channel closed, shutting down");
-                            break;
-                        }
+                event = self.event_rx.recv() => match event {
+                    Some(UserEvent::Interrupt {}) => {
+                        debug!(session_id = %self.session_id, "user.interrupt received");
+                        self.stop_interrupted().await;
+                        break;
                     }
-                }
-            };
-
-            // Dispatch based on event type.
-            match event {
-                UserEvent::Message { content } => {
-                    self.process_turn(content).await?;
-                }
-                UserEvent::Interrupt {} => {
-                    debug!(session_id = %self.session_id, "user.interrupt received");
-                    self.emit_idle(Some(StopReason::EndTurn), None).await;
-                    break;
-                }
-                UserEvent::CustomToolResult { custom_tool_use_id, content } => {
-                    debug!(
-                        session_id = %self.session_id,
-                        tool_use_id = %custom_tool_use_id,
-                        "delivering custom tool result"
-                    );
-                    if let Err(e) = self.parking.deliver(&custom_tool_use_id, content).await {
-                        warn!(
-                            session_id = %self.session_id,
-                            error = %e,
-                            "failed to deliver custom tool result"
-                        );
+                    Some(event) => self.handle(event).await,
+                    None => {
+                        debug!(session_id = %self.session_id, "event channel closed, shutting down");
+                        break;
                     }
-                }
-                UserEvent::ToolConfirmation { tool_use_id, result, deny_message } => {
-                    debug!(
-                        session_id = %self.session_id,
-                        tool_use_id = %tool_use_id,
-                        result = ?result,
-                        "tool confirmation received, delivering to parking lot"
-                    );
-                    // Tool confirmation decisions are delivered via the parking lot.
-                    // The session loop parks on tool_use_id when a confirmation is
-                    // required (emitted as RequiresAction). The client sends back
-                    // Allow/Deny which we convert to a ContentBlock result.
-                    let content = match result {
-                        crate::types::ConfirmationResult::Allow => {
-                            vec![ContentBlock::Text {
-                                text: serde_json::json!({
-                                    "confirmation": "approved",
-                                    "tool_use_id": tool_use_id
-                                })
-                                .to_string(),
-                            }]
-                        }
-                        crate::types::ConfirmationResult::Deny => {
-                            let message = deny_message
-                                .unwrap_or_else(|| "Tool execution denied by user".to_string());
-                            vec![ContentBlock::Text {
-                                text: serde_json::json!({
-                                    "confirmation": "denied",
-                                    "tool_use_id": tool_use_id,
-                                    "reason": message
-                                })
-                                .to_string(),
-                            }]
-                        }
-                    };
-                    if let Err(e) = self.parking.deliver(&tool_use_id, content).await {
-                        warn!(
-                            session_id = %self.session_id,
-                            error = %e,
-                            "failed to deliver tool confirmation"
-                        );
-                    }
-                }
-                UserEvent::ToolResult { tool_use_id, .. } => {
-                    debug!(
-                        session_id = %self.session_id,
-                        tool_use_id = %tool_use_id,
-                        "tool result received (self-hosted only, not yet wired)"
-                    );
-                }
-                UserEvent::DefineOutcome { criteria } => {
-                    debug!(
-                        session_id = %self.session_id,
-                        criteria = %criteria,
-                        "outcome criteria defined"
-                    );
-                    // Stored for future use — outcome evaluation is a later task.
-                }
+                },
+                _ = tick.tick(), if holds_run => self.poll().await,
             }
         }
 
@@ -420,83 +390,633 @@ impl SessionLoop {
         Ok(())
     }
 
-    /// Process a single turn: emit status.running, invoke Runner, emit events, emit status.idle.
-    async fn process_turn(&mut self, content: Vec<ContentBlock>) -> Result<(), RuntimeError> {
-        // 1. Emit status.running
+    /// Restores the sequence position, attaches the state store, and resumes a run left
+    /// claimable by a previous host.
+    async fn prepare(&mut self) {
+        let holds_run = {
+            let mut checkpoint = self.checkpoint.write().await;
+            if checkpoint.store().is_none() {
+                let manager =
+                    std::mem::replace(&mut *checkpoint, CheckpointManager::new(String::new()));
+                *checkpoint = manager.with_store(Arc::clone(&self.stores.state));
+            }
+            self.seq = SequenceCounter::new(checkpoint.run_state().seq);
+            checkpoint.durable_run_id().is_some()
+        };
+        if holds_run {
+            self.drain(None).await;
+        }
+    }
+
+    /// Dispatches one user event other than an interrupt.
+    async fn handle(&mut self, event: UserEvent) {
+        match event {
+            UserEvent::Message { content } => self.on_message(content).await,
+            UserEvent::CustomToolResult { custom_tool_use_id, content } => {
+                let response = custom_tool_response(&content);
+                self.on_answer(
+                    &custom_tool_use_id,
+                    PendingKind::CustomTool,
+                    Answer::Result(response),
+                )
+                .await;
+            }
+            UserEvent::ToolConfirmation { tool_use_id, result, deny_message } => {
+                let approval = match result {
+                    ConfirmationResult::Allow => ToolApproval::approve(),
+                    ConfirmationResult::Deny => ToolApproval::deny().with_message(
+                        deny_message.unwrap_or_else(|| "denied by the user".to_string()),
+                    ),
+                };
+                self.on_answer(&tool_use_id, PendingKind::Confirmation, Answer::Decision(approval))
+                    .await;
+            }
+            UserEvent::ToolResult { tool_use_id, .. } => {
+                debug!(
+                    session_id = %self.session_id,
+                    tool_use_id = %tool_use_id,
+                    "tool result received (self-hosted only, not yet wired)"
+                );
+            }
+            UserEvent::DefineOutcome { criteria } => {
+                debug!(session_id = %self.session_id, criteria = %criteria, "outcome criteria defined");
+            }
+            UserEvent::Interrupt {} => {}
+        }
+    }
+
+    /// Queues a turn for `content` on the session's run queue and runs it.
+    async fn on_message(&mut self, content: Vec<ContentBlock>) {
+        let waiting: Vec<String> =
+            self.checkpoint.read().await.pending().iter().map(|action| action.id.clone()).collect();
+        if !waiting.is_empty() {
+            self.emit_error(
+                "requires_action",
+                format!(
+                    "the session waits on the client for {waiting:?}; send \
+                     user.custom_tool_result or user.tool_confirmation for each before a new \
+                     message"
+                ),
+            )
+            .await;
+            return;
+        }
+
+        let run = NewRun::new(
+            self.durable.queue(&self.session_id),
+            self.owner.0.clone(),
+            self.owner.1.clone(),
+            self.agent.name(),
+            json!({ "kind": "message", "content": content }),
+        )
+        .with_session_id(self.session_id.clone())
+        .with_concurrency_key(self.session_id.clone(), OnConflict::Enqueue);
+        match self.stores.runs.enqueue(run).await {
+            Ok(enqueued) => {
+                let run_id = enqueued.record().map(|record| record.run_id.clone());
+                self.drain(run_id).await;
+            }
+            Err(error) => {
+                self.emit_error("durable_store", format!("could not queue the turn: {error}")).await
+            }
+        }
+    }
+
+    /// Records the client's answer to a pending action and resumes the turn waiting on it.
+    async fn on_answer(&mut self, id: &str, kind: PendingKind, answer: Answer) {
+        let (action, run_id) = {
+            let checkpoint = self.checkpoint.read().await;
+            let action = checkpoint
+                .pending()
+                .iter()
+                .find(|action| action.id == id && action.kind == kind)
+                .cloned();
+            (action, checkpoint.durable_run_id().map(str::to_string))
+        };
+        let Some(action) = action else {
+            self.emit_error(
+                "unknown_tool_use",
+                format!("the session is not waiting on {kind:?} '{id}'"),
+            )
+            .await;
+            return;
+        };
+        if kind == PendingKind::Confirmation && self.stores.approval_service.is_some() {
+            self.emit_error(
+                "approval_service",
+                format!(
+                    "'{id}' is decided through the runtime's approval service; decide its \
+                     request there instead of sending user.tool_confirmation"
+                ),
+            )
+            .await;
+            return;
+        }
+
+        let approval = match answer {
+            Answer::Result(response) => ToolApproval::approve().with_message(response.to_string()),
+            Answer::Decision(approval) => approval,
+        };
+        let scope = decision_scope(&self.owner.0, &self.owner.1, &self.session_id);
+        if let Err(error) =
+            self.stores.decisions.decide(&scope, &action.decision_key, approval).await
+        {
+            self.emit_error(
+                "durable_store",
+                format!("could not record the answer to '{id}': {error}"),
+            )
+            .await;
+            return;
+        }
+        if let Some(run_id) = run_id
+            && let Err(error) = self.stores.runs.wake(&run_id).await
+        {
+            // The answer is recorded, so the run takes it when it is next claimed.
+            warn!(session_id = %self.session_id, run.id = %run_id, error = %error, "could not wake the parked run");
+        }
+        self.drain(None).await;
+    }
+
+    /// Resumes the session's run if it became claimable, and lets go of a run another
+    /// runtime instance has finished.
+    async fn poll(&mut self) {
+        self.drain(None).await;
+        let Some(run_id) = self.checkpoint.read().await.durable_run_id().map(str::to_string) else {
+            return;
+        };
+        let finished = match self.stores.runs.get(&run_id).await {
+            Ok(Some(record)) => record.state.is_terminal(),
+            Ok(None) => true,
+            Err(_) => false,
+        };
+        if finished {
+            self.refresh_from_store().await;
+            let mut checkpoint = self.checkpoint.write().await;
+            if checkpoint.durable_run_id() == Some(run_id.as_str()) {
+                checkpoint.set_pending(Vec::new(), None);
+            }
+        }
+    }
+
+    /// Claims and executes this session's claimable runs.
+    ///
+    /// With a `target`, keeps polling while that run is still queued behind a run of this
+    /// session held by another runtime instance.
+    async fn drain(&mut self, target: Option<String>) {
+        let queue = self.durable.queue(&self.session_id);
+        for _ in 0..MAX_CLAIMS_PER_DRAIN {
+            if self.cancel_token.is_cancelled() {
+                return;
+            }
+            let claimed = match self
+                .stores
+                .runs
+                .claim(&queue, &self.durable.worker_id, self.durable.lease_ttl)
+                .await
+            {
+                Ok(claimed) => claimed,
+                Err(error) => {
+                    self.emit_error(
+                        "durable_store",
+                        format!("could not claim the session's run: {error}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            if let Some(claimed) = claimed {
+                self.execute(claimed).await;
+                continue;
+            }
+            let Some(target) = target.as_deref() else { return };
+            match self.stores.runs.get(target).await {
+                Ok(Some(record)) if record.state == DurableRunState::Queued => {
+                    tokio::select! {
+                        _ = self.cancel_token.cancelled() => return,
+                        _ = tokio::time::sleep(self.durable.poll_interval) => {}
+                    }
+                }
+                _ => return,
+            }
+        }
+    }
+
+    /// Executes one claimed run: a new turn, a recovered turn, or a parked turn.
+    async fn execute(&mut self, claimed: ClaimedRun) {
+        self.refresh_from_store().await;
+        {
+            let mut checkpoint = self.checkpoint.write().await;
+            let pending = checkpoint.pending().to_vec();
+            checkpoint.set_pending(pending, Some(claimed.record.run_id.clone()));
+        }
+        match claimed.record.checkpoint.clone() {
+            Some(RunCheckpointRef::AwaitingApproval { .. }) => self.resume_parked(claimed).await,
+            Some(RunCheckpointRef::Session { invocation_id: Some(invocation_id), .. }) => {
+                self.recover(claimed, &invocation_id).await;
+            }
+            _ => match message_content(&claimed.record.input) {
+                Some(content) => {
+                    let content = self.build_user_content(&content);
+                    self.run_turn(claimed, content).await;
+                }
+                None => {
+                    let error =
+                        format!("run input is not a managed turn: {}", claimed.record.input);
+                    self.finish(&claimed, RunOutcome::Failed { error, retryable: false }).await;
+                }
+            },
+        }
+    }
+
+    /// Resumes a turn whose worker stopped mid-run: unanswered calls are answered from the
+    /// action ledger and the turn continues without repeating the user's message.
+    async fn recover(&mut self, claimed: ClaimedRun, invocation_id: &str) {
+        info!(session_id = %self.session_id, run.id = %claimed.record.run_id, "recovering an interrupted turn");
+        let runner = match self.build_runner() {
+            Ok(runner) => runner,
+            Err(error) => {
+                let error = error.to_string();
+                self.finish(&claimed, RunOutcome::Failed { error, retryable: true }).await;
+                return;
+            }
+        };
+        if let Err(error) = runner.recover_unanswered_calls(&self.owner.1, &self.session_id).await {
+            warn!(session_id = %self.session_id, error = %error, "could not answer interrupted calls");
+        }
+        let turn_persisted = match self.conversation_events().await {
+            Ok(events) => events
+                .iter()
+                .any(|event| event.invocation_id == invocation_id && event.author == "user"),
+            Err(_) => false,
+        };
+        let content = match (turn_persisted, message_content(&claimed.record.input)) {
+            (false, Some(content)) => self.build_user_content(&content),
+            _ => Content::new("user").with_text(""),
+        };
+        self.run_turn(claimed, content).await;
+    }
+
+    /// Resumes a parked turn once every action it waits on is answered or expired, and
+    /// parks it again otherwise.
+    async fn resume_parked(&mut self, claimed: ClaimedRun) {
+        let scope = decision_scope(&self.owner.0, &self.owner.1, &self.session_id);
+        let now = Utc::now();
+        let mut pending = self.checkpoint.read().await.pending().to_vec();
+        let mut waiting = Vec::new();
+        for action in &mut pending {
+            let expired = action.expires_at.is_some_and(|at| at <= now);
+            match action.kind {
+                PendingKind::CustomTool if action.resolution.is_some() => {}
+                PendingKind::CustomTool => {
+                    match self.stores.decisions.take_approval(&scope, &action.decision_key).await {
+                        Ok(Some(approval)) => {
+                            action.resolution = Some(
+                                approval
+                                    .message
+                                    .as_deref()
+                                    .and_then(|message| serde_json::from_str(message).ok())
+                                    .unwrap_or(Value::Null),
+                            );
+                        }
+                        Ok(None) if expired => {
+                            action.resolution = Some(json!({
+                                "error": format!(
+                                    "the client did not return a result for custom tool '{}' \
+                                     before it expired at {}",
+                                    action.tool_name,
+                                    action.expires_at.map(|at| at.to_rfc3339()).unwrap_or_default()
+                                ),
+                                "status": "expired",
+                            }));
+                        }
+                        Ok(None) => waiting.push(action.expires_at),
+                        Err(error) => {
+                            warn!(session_id = %self.session_id, error = %error, "could not read a custom tool result");
+                            waiting.push(action.expires_at);
+                        }
+                    }
+                }
+                PendingKind::Confirmation => {
+                    let decided = self
+                        .stores
+                        .decisions
+                        .has_decision(&scope, &action.decision_key)
+                        .await
+                        .unwrap_or(false);
+                    if decided {
+                        continue;
+                    }
+                    if expired {
+                        let denial = ToolApproval::deny().with_message(format!(
+                            "the confirmation for '{}' expired before the client decided",
+                            action.tool_name
+                        ));
+                        if let Err(error) =
+                            self.stores.decisions.decide(&scope, &action.decision_key, denial).await
+                        {
+                            warn!(session_id = %self.session_id, error = %error, "could not record an expired confirmation");
+                            waiting.push(action.expires_at);
+                        }
+                    } else {
+                        waiting.push(action.expires_at);
+                    }
+                }
+            }
+        }
+
+        // Results taken from the decision store are consumed there, so they are written to
+        // the snapshot before anything else can fail.
+        let run_id = claimed.record.run_id.clone();
+        self.checkpoint.write().await.set_pending(pending.clone(), Some(run_id.clone()));
+        self.flush().await;
+        if !waiting.is_empty() {
+            let until = waiting.into_iter().flatten().min();
+            if let Err(error) = self.stores.runs.wait(&run_id, claimed.epoch, until).await {
+                warn!(session_id = %self.session_id, run.id = %run_id, error = %error, "could not park the turn again");
+            }
+            return;
+        }
+
+        if let Err(error) = self.append_custom_results(&pending).await {
+            self.emit_error(
+                "session_store",
+                format!("could not add custom tool results to the conversation: {error}"),
+            )
+            .await;
+            // Parked again briefly: the results are in the snapshot, so the next claim
+            // retries the append.
+            let retry = chrono::Duration::from_std(self.durable.poll_interval)
+                .ok()
+                .and_then(|interval| Utc::now().checked_add_signed(interval));
+            if let Err(error) = self.stores.runs.wait(&run_id, claimed.epoch, retry).await {
+                warn!(session_id = %self.session_id, run.id = %run_id, error = %error, "could not park the turn again");
+            }
+            return;
+        }
+        self.checkpoint.write().await.set_pending(Vec::new(), Some(run_id));
+        self.flush().await;
+        // An empty turn adds nothing to the conversation: the agent resumes held calls that
+        // have decisions and the model continues from the results.
+        self.run_turn(claimed, Content::new("user").with_text("")).await;
+    }
+
+    /// Appends the client's custom tool results to the conversation, once.
+    ///
+    /// A result supersedes its call's pending response in the history the model sees.
+    async fn append_custom_results(&self, pending: &[PendingAction]) -> adk_core::Result<()> {
+        let events = self.conversation_events().await?;
+        let answered: BTreeSet<String> = events
+            .iter()
+            .flat_map(|event| event.llm_response.content.iter().flat_map(|c| c.parts.iter()))
+            .filter_map(|part| match part {
+                Part::FunctionResponse { function_response, id: Some(id), .. }
+                    if !adk_core::is_confirmation_pending(&function_response.response) =>
+                {
+                    Some(id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let parts: Vec<Part> = pending
+            .iter()
+            .filter(|action| action.kind == PendingKind::CustomTool)
+            .filter(|action| {
+                action.function_call_id.as_ref().is_none_or(|id| !answered.contains(id))
+            })
+            .filter_map(|action| {
+                action.resolution.clone().map(|response| Part::FunctionResponse {
+                    function_response: FunctionResponseData::new(
+                        action.tool_name.clone(),
+                        response,
+                    ),
+                    id: action.function_call_id.clone(),
+                    annotations: None,
+                })
+            })
+            .collect();
+        if parts.is_empty() {
+            return Ok(());
+        }
+        let mut event = Event::new(format!("managed-result-{}", uuid::Uuid::new_v4()));
+        event.author = "user".to_string();
+        event.llm_response.content = Some(Content { role: "user".to_string(), parts });
+        self.session_service
+            .append_event_for_identity(adk_session::AppendEventRequest {
+                identity: self.identity()?,
+                event,
+            })
+            .await
+    }
+
+    /// Runs one turn of the agent under `claimed` and finishes or parks the run.
+    async fn run_turn(&mut self, claimed: ClaimedRun, content: Content) {
         *self.status.write().await = SessionStatus::Running;
         let running_event = SessionEvent::StatusRunning { seq: self.seq.next() };
         self.emit_event(running_event).await;
 
-        // 2. Check interrupt before processing.
-        if self.check_interrupt() {
-            self.emit_idle(Some(StopReason::EndTurn), None).await;
-            return Ok(());
-        }
-
-        // 3. Build user Content from ContentBlocks
-        let user_content = self.build_user_content(&content);
-
-        // 4. Build and invoke the Runner
-        let runner = self.build_runner()?;
-
-        let event_stream = runner
-            .run_str(&self.owner.1, &self.session_id, user_content)
-            .await
-            .map_err(|e| RuntimeError::internal(format!("runner invocation failed: {e}")))?;
-
-        // 5. Consume event stream, mapping each event to SessionEvents
-        let mut turn_usage = UsageReport::default();
-        let mut custom_tool_ids = Vec::new();
-
-        futures::pin_mut!(event_stream);
-
-        while let Some(event_result) = event_stream.next().await {
-            // Check interrupt between events
-            if self.check_interrupt() {
-                self.emit_idle(Some(StopReason::EndTurn), None).await;
-                return Ok(());
+        let (end, usage) = self.drive(&claimed, content).await;
+        let stop_reason = match end {
+            TurnEnd::LeaseLost => {
+                // Another worker recovered the run; it reports the turn's outcome.
+                *self.status.write().await = SessionStatus::Idle;
+                return;
             }
-
-            match event_result {
-                Ok(event) => {
-                    self.process_runner_event(&event, &mut turn_usage, &mut custom_tool_ids).await;
-                }
-                Err(e) => {
-                    warn!(
-                        session_id = %self.session_id,
-                        error = %e,
-                        "runner event stream error"
-                    );
-                    let error_event = SessionEvent::Error {
-                        code: "runner_error".to_string(),
-                        message: e.to_string(),
-                        seq: self.seq.next(),
-                    };
-                    self.emit_event(error_event).await;
-                }
+            TurnEnd::Interrupted => {
+                self.finish(&claimed, RunOutcome::Cancelled).await;
+                StopReason::EndTurn
             }
-        }
-
-        // 6. Track usage
-        // 6. Track usage
-        let turn_usage_report = if !turn_usage.is_empty() {
-            self.usage_tracker.record_turn(turn_usage.clone());
-            Some(turn_usage)
-        } else {
+            TurnEnd::Failed => StopReason::EndTurn,
+            TurnEnd::Done(invocation_id) => {
+                let result = json!({ "sessionId": self.session_id, "invocationId": invocation_id });
+                self.finish(&claimed, RunOutcome::Completed(result)).await;
+                StopReason::EndTurn
+            }
+            TurnEnd::Parked(ids) => StopReason::RequiresAction { event_ids: ids },
+        };
+        let usage = if usage.is_empty() {
             None
-        };
-
-        // 7. Determine stop reason
-        let stop_reason = if custom_tool_ids.is_empty() {
-            Some(StopReason::EndTurn)
         } else {
-            Some(StopReason::RequiresAction { event_ids: custom_tool_ids })
+            self.usage_tracker.record_turn(usage.clone());
+            Some(usage)
         };
+        self.emit_idle(Some(stop_reason), usage).await;
+    }
 
-        // 8. Emit status.idle with usage from this turn
-        self.emit_idle(stop_reason, turn_usage_report).await;
+    /// Drives the Runner for one turn under a heartbeat, and parks the run when the turn
+    /// waits on the client.
+    async fn drive(&mut self, claimed: &ClaimedRun, content: Content) -> (TurnEnd, UsageReport) {
+        let mut turn = TurnOutput::default();
+        if self.cancel_token.is_cancelled() {
+            return (TurnEnd::Interrupted, turn.usage);
+        }
+        let run_id = claimed.record.run_id.clone();
+        let epoch = claimed.epoch;
 
-        Ok(())
+        let started = async {
+            let runner = self.build_runner()?;
+            let user = UserId::try_from(self.owner.1.as_str())
+                .map_err(|e| RuntimeError::invalid_request(e.to_string()))?;
+            let session = SessionId::try_from(self.session_id.as_str())
+                .map_err(|e| RuntimeError::invalid_request(e.to_string()))?;
+            runner
+                .start_with_config(user, session, content, Some(self.run_config(&run_id)))
+                .await
+                .map_err(|e| RuntimeError::internal(format!("runner invocation failed: {e}")))
+        };
+        let invocation = match started.await {
+            Ok(invocation) => invocation,
+            Err(error) => {
+                self.emit_error("runner_error", error.to_string()).await;
+                self.finish(
+                    claimed,
+                    RunOutcome::Failed { error: error.to_string(), retryable: false },
+                )
+                .await;
+                return (TurnEnd::Failed, turn.usage);
+            }
+        };
+        let invocation_id = invocation.invocation_id().to_string();
+        let checkpoint = RunCheckpointRef::Session {
+            session_id: self.session_id.clone(),
+            invocation_id: Some(invocation_id.clone()),
+        };
+        if self.stores.runs.set_checkpoint(&run_id, epoch, checkpoint).await.is_err() {
+            return (TurnEnd::LeaseLost, turn.usage);
+        }
+
+        let turn_cancel = self.cancel_token.child_token();
+        let lease_lost = Arc::new(AtomicBool::new(false));
+        let heartbeat = tokio::spawn(heartbeat(
+            Arc::clone(&self.stores.runs),
+            run_id.clone(),
+            epoch,
+            self.durable.lease_ttl,
+            turn_cancel.clone(),
+            Arc::clone(&lease_lost),
+        ));
+
+        let mut events = invocation.into_events();
+        loop {
+            let next = tokio::select! {
+                biased;
+                _ = turn_cancel.cancelled() => break,
+                next = events.next() => next,
+            };
+            let Some(next) = next else { break };
+            match next {
+                Ok(event) => self.process_runner_event(&event, &mut turn).await,
+                Err(error) => {
+                    warn!(session_id = %self.session_id, error = %error, "runner event stream error");
+                    self.emit_error("runner_error", error.to_string()).await;
+                }
+            }
+        }
+        drop(events);
+        heartbeat.abort();
+
+        if lease_lost.load(Ordering::SeqCst) {
+            return (TurnEnd::LeaseLost, turn.usage);
+        }
+        if self.cancel_token.is_cancelled() || turn_cancel.is_cancelled() {
+            return (TurnEnd::Interrupted, turn.usage);
+        }
+        if turn.pending.is_empty() {
+            return (TurnEnd::Done(invocation_id), turn.usage);
+        }
+
+        let ids: Vec<String> = turn.pending.iter().map(|action| action.id.clone()).collect();
+        let until = turn.pending.iter().filter_map(|action| action.expires_at).min();
+        let fingerprints = turn.pending.iter().map(|action| action.decision_key.clone()).collect();
+        self.checkpoint
+            .write()
+            .await
+            .set_pending(std::mem::take(&mut turn.pending), Some(run_id.clone()));
+        self.flush().await;
+        let parked = async {
+            self.stores
+                .runs
+                .set_checkpoint(
+                    &run_id,
+                    epoch,
+                    RunCheckpointRef::AwaitingApproval {
+                        session_id: self.session_id.clone(),
+                        invocation_id: Some(invocation_id),
+                        fingerprints,
+                        expires_at: until,
+                    },
+                )
+                .await?;
+            self.stores.runs.wait(&run_id, epoch, until).await
+        };
+        if let Err(error) = parked.await {
+            warn!(session_id = %self.session_id, run.id = %run_id, error = %error, "could not park the turn");
+            return (TurnEnd::LeaseLost, turn.usage);
+        }
+        debug!(session_id = %self.session_id, run.id = %run_id, pending = ?ids, "turn parked on the client");
+        (TurnEnd::Parked(ids), turn.usage)
+    }
+
+    /// The run configuration of one turn under `run_id`.
+    fn run_config(&self, run_id: &str) -> RunConfig {
+        // Session events carry complete content, so the agent yields one event per model
+        // response rather than provider deltas.
+        let mut builder = RunConfig::builder()
+            .streaming_mode(adk_core::StreamingMode::None)
+            .durable_run_id(run_id);
+        if let Some(service) = &self.stores.approval_service {
+            builder = builder.approval_service(Arc::clone(service));
+        }
+        builder.approval_store(Arc::clone(&self.stores.decisions)).build()
+    }
+
+    /// Ends the attempt of `claimed` with `outcome` and releases the session's run.
+    async fn finish(&mut self, claimed: &ClaimedRun, outcome: RunOutcome) {
+        let run_id = &claimed.record.run_id;
+        if let Err(error) = self.stores.runs.finish(run_id, claimed.epoch, outcome).await {
+            warn!(session_id = %self.session_id, run.id = %run_id, error = %error, "could not finish the run");
+        }
+        let mut checkpoint = self.checkpoint.write().await;
+        if checkpoint.durable_run_id() == Some(run_id.as_str()) {
+            let pending = checkpoint.pending().to_vec();
+            checkpoint.set_pending(pending, None);
+        }
+        drop(checkpoint);
+        self.flush().await;
+    }
+
+    /// Stops after an interrupt: cancels the session's run and reports the session idle.
+    async fn stop_interrupted(&mut self) {
+        let run_id = {
+            let mut checkpoint = self.checkpoint.write().await;
+            let run_id = checkpoint.durable_run_id().map(str::to_string);
+            checkpoint.set_pending(Vec::new(), None);
+            run_id
+        };
+        if let Some(run_id) = run_id
+            && let Err(error) = self.stores.runs.request_cancel(&run_id).await
+        {
+            warn!(session_id = %self.session_id, run.id = %run_id, error = %error, "could not cancel the session's run");
+        }
+        self.emit_idle(Some(StopReason::EndTurn), None).await;
+    }
+
+    /// Replaces local state with the stored snapshot when another runtime instance has
+    /// advanced the session since this one last wrote it.
+    async fn refresh_from_store(&mut self) {
+        let mut checkpoint = self.checkpoint.write().await;
+        let Some(store) = checkpoint.store().cloned() else { return };
+        match store.load(&self.session_id).await {
+            Ok(Some(stored)) if stored.run_state.seq > checkpoint.run_state().seq => {
+                debug!(session_id = %self.session_id, "session advanced elsewhere; reloading");
+                self.seq = SequenceCounter::new(stored.run_state.seq);
+                *self.status.write().await = stored.run_state.status;
+                checkpoint.replace(stored);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!(session_id = %self.session_id, error = %error, "could not read stored session state")
+            }
+        }
     }
 
     /// Build a Runner instance for this turn.
@@ -516,6 +1036,19 @@ impl SessionLoop {
         builder.build().map_err(|e| RuntimeError::internal(format!("failed to build runner: {e}")))
     }
 
+    fn identity(&self) -> adk_core::Result<adk_core::AdkIdentity> {
+        Ok(adk_core::AdkIdentity::new(
+            adk_core::AppName::try_from(self.owner.0.as_str())?,
+            UserId::try_from(self.owner.1.as_str())?,
+            SessionId::try_from(self.session_id.as_str())?,
+        ))
+    }
+
+    /// The conversation's events as the session service holds them.
+    async fn conversation_events(&self) -> adk_core::Result<Vec<Event>> {
+        Ok(self.session_service.get_for_identity(&self.identity()?).await?.events().all())
+    }
+
     /// Convert managed ContentBlocks into an adk-core Content for the Runner.
     fn build_user_content(&self, blocks: &[ContentBlock]) -> Content {
         let mut parts = Vec::new();
@@ -525,7 +1058,6 @@ impl SessionLoop {
                     parts.push(Part::Text { text: text.clone() });
                 }
                 ContentBlock::Image { source } => {
-                    // Convert image block to inline data or file reference
                     if let Some(url) = source.get("url").and_then(|v| v.as_str()) {
                         parts.push(Part::FileData {
                             mime_type: source
@@ -551,17 +1083,11 @@ impl SessionLoop {
         Content { role: "user".to_string(), parts }
     }
 
-    /// Process a single Runner event, mapping it to SessionEvents and tracking usage.
-    async fn process_runner_event(
-        &mut self,
-        event: &Event,
-        turn_usage: &mut UsageReport,
-        custom_tool_ids: &mut Vec<String>,
-    ) {
-        // Extract usage metadata from the LLM response
+    /// Maps one Runner event to session events and records what the turn waits on.
+    async fn process_runner_event(&mut self, event: &Event, turn: &mut TurnOutput) {
         if let Some(ref usage_meta) = event.llm_response.usage_metadata {
             let report = UsageReport::from_usage_metadata(usage_meta);
-            turn_usage.accumulate(&report);
+            turn.usage.accumulate(&report);
         }
 
         // Skip partial streaming chunks — we only emit complete events
@@ -569,87 +1095,136 @@ impl SessionLoop {
             return;
         }
 
-        // Extract content from the LLM response
-        if let Some(ref content) = event.llm_response.content {
-            for part in &content.parts {
-                match part {
-                    Part::Text { text } => {
-                        if text.is_empty() {
+        // A held call: the client must allow or deny it. The event's text is a notice to
+        // the caller, not model output.
+        if let Some(request) = &event.actions.tool_confirmation {
+            let id = request
+                .function_call_id
+                .clone()
+                .unwrap_or_else(|| format!("tu_{}", uuid::Uuid::new_v4()));
+            if let Some((name, input)) = turn.custom_calls.get(&id).cloned() {
+                // A custom tool held for confirmation was not reported yet.
+                let output = RunnerOutput::BuiltinToolCall { tool_use_id: id.clone(), name, input };
+                let session_event = map_runner_output(output, self.seq.next());
+                self.emit_event(session_event).await;
+            }
+            let expires_at = if self.stores.approval_service.is_some() {
+                // The approval service applies its own expiry policy.
+                None
+            } else {
+                self.expiry()
+            };
+            turn.pending.push(PendingAction {
+                id,
+                kind: PendingKind::Confirmation,
+                tool_name: request.tool_name.clone(),
+                function_call_id: request.function_call_id.clone(),
+                decision_key: request.fingerprint(),
+                input: request.args.clone(),
+                expires_at,
+                resolution: None,
+            });
+            return;
+        }
+
+        let Some(ref content) = event.llm_response.content else { return };
+        // Providers that stream deliver a response's text as many parts; adjacent text
+        // parts are one message.
+        let mut text = String::new();
+        for part in &content.parts {
+            if let Part::Text { text: piece } = part {
+                text.push_str(piece);
+                continue;
+            }
+            if !text.is_empty() {
+                let output = RunnerOutput::TextContent { text: std::mem::take(&mut text) };
+                let session_event = map_runner_output(output, self.seq.next());
+                self.emit_event(session_event).await;
+            }
+            match part {
+                Part::FunctionCall { name, args, id, .. } => {
+                    let tool_use_id =
+                        id.clone().unwrap_or_else(|| format!("tu_{}", uuid::Uuid::new_v4()));
+                    let output = match self.classify_tool(name) {
+                        ToolKind::Custom => {
+                            // Reported when the tool asks the client for its result, so a
+                            // call held for confirmation is not reported as awaiting one.
+                            turn.custom_calls.insert(tool_use_id, (name.clone(), args.clone()));
                             continue;
                         }
-                        let output = RunnerOutput::TextContent { text: text.clone() };
-                        let session_event = map_runner_output(output, self.seq.next());
-                        self.emit_event(session_event).await;
-                    }
-                    Part::FunctionCall { name, args, id, .. } => {
-                        let tool_use_id =
-                            id.clone().unwrap_or_else(|| format!("tu_{}", uuid::Uuid::new_v4()));
-
-                        // Classify the tool call
-                        let tool_kind = self.classify_tool(name);
-
-                        let output = match tool_kind {
-                            ToolKind::Custom => {
-                                let ctu_id = format!("ctu_{}", uuid::Uuid::new_v4());
-                                custom_tool_ids.push(ctu_id.clone());
-                                RunnerOutput::CustomToolCall {
-                                    custom_tool_use_id: ctu_id,
-                                    name: name.clone(),
-                                    input: args.clone(),
-                                }
-                            }
-                            ToolKind::Builtin => RunnerOutput::BuiltinToolCall {
-                                tool_use_id,
-                                name: name.clone(),
-                                input: args.clone(),
-                            },
-                            ToolKind::Mcp => RunnerOutput::McpToolCall {
-                                tool_use_id,
-                                name: name.clone(),
-                                input: args.clone(),
-                            },
-                        };
-
-                        let session_event = map_runner_output(output.clone(), self.seq.next());
-                        self.emit_event(session_event).await;
-
-                        // If custom tool, park and wait for client result
-                        if requires_parking(&output)
-                            && let Some(ctu_id) = custom_tool_use_id(&output)
-                        {
-                            let ctu_id_owned = ctu_id.to_string();
-                            debug!(
-                                session_id = %self.session_id,
-                                custom_tool_use_id = %ctu_id_owned,
-                                "parking for custom tool result"
-                            );
-                            match self.parking.park(&ctu_id_owned).await {
-                                Ok(_result_blocks) => {
-                                    debug!(
-                                        session_id = %self.session_id,
-                                        custom_tool_use_id = %ctu_id_owned,
-                                        "custom tool result delivered"
-                                    );
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        session_id = %self.session_id,
-                                        error = %e,
-                                        "custom tool park failed or timed out"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    // Skip FunctionResponse, Thinking, and other part types
-                    _ => {}
+                        ToolKind::Builtin => RunnerOutput::BuiltinToolCall {
+                            tool_use_id,
+                            name: name.clone(),
+                            input: args.clone(),
+                        },
+                        ToolKind::Mcp => RunnerOutput::McpToolCall {
+                            tool_use_id,
+                            name: name.clone(),
+                            input: args.clone(),
+                        },
+                    };
+                    let session_event = map_runner_output(output, self.seq.next());
+                    self.emit_event(session_event).await;
                 }
+                Part::FunctionResponse { function_response, id, .. }
+                    if is_custom_tool_pending(&function_response.response) =>
+                {
+                    let custom_tool_use_id =
+                        id.clone().unwrap_or_else(|| format!("ctu_{}", uuid::Uuid::new_v4()));
+                    let input = id
+                        .as_ref()
+                        .and_then(|id| turn.custom_calls.get(id))
+                        .map(|(_, args)| args.clone())
+                        .unwrap_or(Value::Null);
+                    let output = RunnerOutput::CustomToolCall {
+                        custom_tool_use_id: custom_tool_use_id.clone(),
+                        name: function_response.name.clone(),
+                        input: input.clone(),
+                    };
+                    let session_event = map_runner_output(output, self.seq.next());
+                    self.emit_event(session_event).await;
+                    turn.pending.push(PendingAction {
+                        decision_key: custom_result_key(&custom_tool_use_id),
+                        id: custom_tool_use_id,
+                        kind: PendingKind::CustomTool,
+                        tool_name: function_response.name.clone(),
+                        function_call_id: id.clone(),
+                        input,
+                        expires_at: self.expiry(),
+                        resolution: None,
+                    });
+                }
+                _ => {}
             }
         }
+        if !text.is_empty() {
+            let output = RunnerOutput::TextContent { text };
+            let session_event = map_runner_output(output, self.seq.next());
+            self.emit_event(session_event).await;
+        }
+    }
+
+    /// When an action created now expires.
+    fn expiry(&self) -> Option<DateTime<Utc>> {
+        self.durable
+            .pending_expiry
+            .and_then(|expiry| chrono::Duration::from_std(expiry).ok())
+            .and_then(|expiry| Utc::now().checked_add_signed(expiry))
     }
 
     /// Classify a tool call by name to determine which RunnerOutput variant to use.
     fn classify_tool(&self, name: &str) -> ToolKind {
+        if let Some(custom) = &self.custom_tools {
+            if custom.contains(name) {
+                return ToolKind::Custom;
+            }
+            return if name.starts_with("mcp_") || name.contains("::") {
+                ToolKind::Mcp
+            } else {
+                ToolKind::Builtin
+            };
+        }
+
         // Known built-in tools execute server-side
         const BUILTIN_TOOLS: &[&str] =
             &["bash", "filesystem", "web_search", "web_fetch", "code_execution"];
@@ -664,32 +1239,52 @@ impl SessionLoop {
         }
     }
 
-    /// Emit a session event: assign to checkpoint and broadcast.
+    /// Writes the current snapshot to the state store.
+    async fn flush(&self) {
+        if let Err(error) = self.checkpoint.read().await.flush().await {
+            warn!(session_id = %self.session_id, error = %error, "could not write session state");
+        }
+    }
+
+    /// Emit a session event: checkpoint it, write it to the state store, then broadcast.
     async fn emit_event(&mut self, event: SessionEvent) {
-        // Checkpoint atomically via the shared manager.
-        let run_state = RunState {
-            seq: self.seq.current(),
-            pending_tool_ids: Vec::new(),
-            status: *self.status.read().await,
-        };
-        self.checkpoint.write().await.checkpoint(event.clone(), run_state);
+        let status = *self.status.read().await;
+        {
+            let mut checkpoint = self.checkpoint.write().await;
+            let run_state = RunState {
+                seq: self.seq.current(),
+                pending_tool_ids: checkpoint.pending().iter().map(|a| a.id.clone()).collect(),
+                status,
+            };
+            checkpoint.checkpoint(event.clone(), run_state);
+            // Written before the broadcast, so a subscriber never sees an event the store
+            // does not hold.
+            if let Err(error) = checkpoint.flush().await {
+                warn!(session_id = %self.session_id, error = %error, "could not write session state");
+            }
+        }
 
         // Broadcast to subscribers (ignore if no receivers).
         let _ = self.event_tx.send(event);
     }
 
-    /// Emit a `status.idle` event and update internal status.
-    async fn emit_idle(&mut self, stop_reason: Option<StopReason>, usage: Option<UsageReport>) {
-        *self.status.write().await = SessionStatus::Idle;
-        let idle_event = SessionEvent::StatusIdle { seq: self.seq.next(), stop_reason, usage };
-        self.emit_event(idle_event).await;
+    /// Emits an `error` event.
+    async fn emit_error(&mut self, code: &str, message: String) {
+        let event = SessionEvent::Error { code: code.to_string(), message, seq: self.seq.next() };
+        self.emit_event(event).await;
     }
 
-    /// Check if the cancellation token has been triggered.
-    ///
-    /// Returns `true` if interrupted.
-    fn check_interrupt(&self) -> bool {
-        self.cancel_token.is_cancelled()
+    /// Emit a `status.idle` event and update internal status.
+    async fn emit_idle(&mut self, stop_reason: Option<StopReason>, usage: Option<UsageReport>) {
+        {
+            let mut status = self.status.write().await;
+            // Archiving is terminal; the turn it stopped does not make the session idle.
+            if *status != SessionStatus::Archived {
+                *status = SessionStatus::Idle;
+            }
+        }
+        let idle_event = SessionEvent::StatusIdle { seq: self.seq.next(), stop_reason, usage };
+        self.emit_event(idle_event).await;
     }
 
     /// Check and handle pause state. If paused, blocks until resumed.
@@ -701,6 +1296,71 @@ impl SessionLoop {
             }
             debug!(session_id = %self.session_id, "session loop paused, waiting for resume");
             self.pause_notify.notified().await;
+        }
+    }
+}
+
+/// A client's answer to a pending action.
+enum Answer {
+    /// A custom tool's result, as the model will see it.
+    Result(Value),
+    /// A confirmation decision.
+    Decision(ToolApproval),
+}
+
+/// The function response a custom tool result's content becomes.
+///
+/// Text blocks become `{"result": "<text>"}`; anything else keeps its blocks.
+fn custom_tool_response(content: &[ContentBlock]) -> Value {
+    let texts: Option<Vec<&str>> = content
+        .iter()
+        .map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            ContentBlock::Image { .. } | ContentBlock::File { .. } => None,
+        })
+        .collect();
+    match texts {
+        Some(texts) => json!({ "result": texts.join("\n") }),
+        None => json!({ "content": content }),
+    }
+}
+
+/// The user content of a managed turn's run input.
+fn message_content(input: &Value) -> Option<Vec<ContentBlock>> {
+    (input.get("kind").and_then(Value::as_str) == Some("message"))
+        .then(|| input.get("content").cloned())
+        .flatten()
+        .and_then(|content| serde_json::from_value(content).ok())
+}
+
+/// Renews the lease every third of `ttl` until the turn ends.
+///
+/// A heartbeat that reports a cancellation request, or that finds the run held by another
+/// worker, cancels the turn; the latter also marks the lease lost so the turn writes
+/// nothing more.
+async fn heartbeat(
+    runs: Arc<dyn adk_core::DurableRunStore>,
+    run_id: String,
+    epoch: u64,
+    ttl: std::time::Duration,
+    turn_cancel: CancellationToken,
+    lease_lost: Arc<AtomicBool>,
+) {
+    let period = (ttl / 3).max(std::time::Duration::from_millis(10));
+    loop {
+        tokio::time::sleep(period).await;
+        match runs.heartbeat(&run_id, epoch, ttl).await {
+            Ok(false) => {}
+            Ok(true) => {
+                turn_cancel.cancel();
+                return;
+            }
+            Err(error) if error.code == adk_core::run_store::RUN_STALE_EPOCH_CODE => {
+                lease_lost.store(true, Ordering::SeqCst);
+                turn_cancel.cancel();
+                return;
+            }
+            Err(error) => warn!(run.id = %run_id, error = %error, "heartbeat failed"),
         }
     }
 }
@@ -769,7 +1429,6 @@ mod tests {
         let (event_tx, event_rx) = mpsc::channel(64);
         let (broadcast_tx, broadcast_rx) = broadcast::channel(256);
         let cancel = CancellationToken::new();
-        let parking = Arc::new(ToolParkingLot::new(Duration::from_secs(5)));
         let agent = build_test_agent(TestLlm::new("Hello from the agent"));
         let session_service: Arc<dyn SessionService> =
             Arc::new(adk_session::InMemorySessionService::new());
@@ -778,7 +1437,6 @@ mod tests {
             "test_session".to_string(),
             event_rx,
             broadcast_tx,
-            parking,
             cancel.clone(),
             agent,
             session_service,
@@ -958,7 +1616,6 @@ mod tests {
         let (event_tx, event_rx) = mpsc::channel(64);
         let (broadcast_tx, mut broadcast_rx) = broadcast::channel(256);
         let cancel = CancellationToken::new();
-        let parking = Arc::new(ToolParkingLot::new(Duration::from_secs(5)));
         let pause_flag = Arc::new(Mutex::new(false));
         let pause_notify = Arc::new(Notify::new());
         let agent = build_test_agent(TestLlm::new("resumed response"));
@@ -970,7 +1627,6 @@ mod tests {
             "pause_test".to_string(),
             event_rx,
             broadcast_tx,
-            parking,
             cancel.clone(),
             Arc::clone(&pause_flag),
             Arc::clone(&pause_notify),
@@ -984,7 +1640,6 @@ mod tests {
             "pause_test".to_string(),
             event_rx,
             broadcast_tx,
-            parking,
             cancel.clone(),
             Arc::clone(&pause_flag),
             Arc::clone(&pause_notify),
@@ -1037,7 +1692,6 @@ mod tests {
         let (event_tx, event_rx) = mpsc::channel(64);
         let (broadcast_tx, _broadcast_rx) = broadcast::channel(256);
         let cancel = CancellationToken::new();
-        let parking = Arc::new(ToolParkingLot::new(Duration::from_secs(5)));
         let agent = build_test_agent(TestLlm::new("test"));
         let session_service: Arc<dyn SessionService> =
             Arc::new(adk_session::InMemorySessionService::new());
@@ -1046,7 +1700,6 @@ mod tests {
             "close_test".to_string(),
             event_rx,
             broadcast_tx,
-            parking,
             cancel,
             agent,
             session_service,
@@ -1062,59 +1715,82 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// A model whose response arrives as several text parts, as streamed responses do.
+    struct SplitTextLlm;
+
+    #[async_trait]
+    impl Llm for SplitTextLlm {
+        fn name(&self) -> &str {
+            "split"
+        }
+
+        async fn generate_content(
+            &self,
+            _request: LlmRequest,
+            _stream: bool,
+        ) -> adk_core::Result<LlmResponseStream> {
+            let content = Content {
+                role: "model".to_string(),
+                parts: vec![
+                    Part::Text { text: "Order 42 ".to_string() },
+                    Part::Text { text: "shipped".to_string() },
+                ],
+            };
+            let s = stream! {
+                yield Ok(LlmResponse {
+                    content: Some(content),
+                    partial: false,
+                    turn_complete: true,
+                    finish_reason: Some(FinishReason::Stop),
+                    ..Default::default()
+                });
+            };
+            Ok(Box::pin(s))
+        }
+    }
+
     #[tokio::test]
-    async fn test_custom_tool_result_delivery() {
-        let (event_tx, event_rx) = mpsc::channel(64);
-        let (broadcast_tx, _broadcast_rx) = broadcast::channel(256);
-        let cancel = CancellationToken::new();
-        let parking = Arc::new(ToolParkingLot::new(Duration::from_secs(5)));
-        let parking_clone = Arc::clone(&parking);
-        let agent = build_test_agent(TestLlm::new("test"));
-        let session_service: Arc<dyn SessionService> =
-            Arc::new(adk_session::InMemorySessionService::new());
-
-        let session_loop = SessionLoop::new(
-            "parking_test".to_string(),
-            event_rx,
-            broadcast_tx,
-            parking_clone,
-            cancel,
-            agent,
-            session_service,
-        );
-
-        let handle = tokio::spawn(session_loop.run());
-
-        // Park a tool call from another task.
-        let parking_for_park = Arc::clone(&parking);
-        let park_handle = tokio::spawn(async move { parking_for_park.park("ctu_test_001").await });
-
-        // Give the park a moment to register.
-        tokio::time::sleep(Duration::from_millis(10)).await;
-
-        // Send custom tool result via the session loop.
-        event_tx
-            .send(UserEvent::CustomToolResult {
-                custom_tool_use_id: "ctu_test_001".to_string(),
-                content: vec![ContentBlock::Text { text: "tool output".to_string() }],
+    async fn adjacent_text_parts_are_one_message() {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (broadcast_tx, mut broadcast_rx) = broadcast::channel(16);
+        let sessions = Arc::new(adk_session::InMemorySessionService::new());
+        sessions
+            .create(adk_session::CreateRequest {
+                app_name: "managed".to_string(),
+                user_id: "managed_user".to_string(),
+                session_id: Some("split_text".to_string()),
+                state: Default::default(),
             })
             .await
             .unwrap();
-
-        // The parked task should receive the result.
-        let result = tokio::time::timeout(Duration::from_secs(2), park_handle)
+        let session_loop = SessionLoop::new(
+            "split_text".to_string(),
+            event_rx,
+            broadcast_tx,
+            CancellationToken::new(),
+            build_test_agent(SplitTextLlm),
+            sessions,
+        );
+        let handle = tokio::spawn(session_loop.run());
+        event_tx
+            .send(UserEvent::Message { content: vec![ContentBlock::Text { text: "hi".into() }] })
             .await
-            .expect("park timed out")
-            .unwrap()
             .unwrap();
 
-        assert_eq!(result.len(), 1);
-        match &result[0] {
-            ContentBlock::Text { text } => assert_eq!(text, "tool output"),
-            _ => panic!("expected Text"),
+        let mut messages = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), broadcast_rx.recv()).await {
+                Ok(Ok(SessionEvent::Message { content, .. })) => messages.push(content),
+                Ok(Ok(SessionEvent::StatusIdle { .. })) => break,
+                Ok(Ok(_)) => {}
+                other => panic!("no status.idle: {other:?}"),
+            }
         }
-
-        // Clean up.
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(
+            matches!(&messages[0][..], [ContentBlock::Text { text }] if text == "Order 42 shipped"),
+            "{messages:?}"
+        );
         drop(event_tx);
         handle.await.unwrap().unwrap();
     }
@@ -1124,7 +1800,6 @@ mod tests {
         let (event_tx, event_rx) = mpsc::channel(64);
         let (broadcast_tx, _) = broadcast::channel(256);
         let cancel = CancellationToken::new();
-        let parking = Arc::new(ToolParkingLot::new(Duration::from_secs(5)));
         let agent = build_test_agent(TestLlm::new("test"));
         let session_service: Arc<dyn SessionService> =
             Arc::new(adk_session::InMemorySessionService::new());
@@ -1133,7 +1808,6 @@ mod tests {
             "classify_test".to_string(),
             event_rx,
             broadcast_tx,
-            parking,
             cancel,
             agent,
             session_service,

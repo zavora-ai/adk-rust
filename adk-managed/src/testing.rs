@@ -2,7 +2,7 @@
 //!
 //! This module provides deterministic test doubles for the managed agent runtime
 //! pipeline. These are **not mocks** — they implement the real traits and exercise
-//! the full runtime pipeline (parking, checkpoints, replay, event mapping). Only
+//! the full runtime pipeline (durable runs, checkpoints, replay, event mapping). Only
 //! the LLM provider API call is replaced with pre-scripted deterministic responses.
 //!
 //! # Architecture
@@ -11,7 +11,7 @@
 //! ScriptedLlm (deterministic responses)
 //!   │
 //!   ▼
-//! Full runtime pipeline (SessionLoop, CheckpointManager, ToolParkingLot, etc.)
+//! Full runtime pipeline (SessionLoop, CheckpointManager, durable runs, etc.)
 //!   │
 //!   ▼
 //! SessionEvent stream (byte-identical assertions possible)
@@ -98,7 +98,7 @@ pub struct ScriptedToolCall {
 ///
 /// `ScriptedLlm` implements the real [`Llm`] trait and exercises the full
 /// runtime pipeline. Only the provider API call is replaced — everything else
-/// (session loop, checkpoints, parking, event mapping) runs exactly as it would
+/// (session loop, checkpoints, durable runs, event mapping) runs exactly as it would
 /// with a real provider.
 ///
 /// This is explicitly **NOT a mock**. It:

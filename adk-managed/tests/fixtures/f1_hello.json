@@ -3,7 +3,7 @@
   "description": "Basic message flow: user sends a message, agent responds, session goes idle. Validates the fundamental status.running → agent.message → status.idle pattern.",
   "agent_def": {
     "name": "hello-agent",
-    "model": "gemini-2.5-flash",
+    "model": "gemini-3.7-flash",
     "system": "You are a helpful assistant. Respond concisely."
   },
   "scripted_model": {

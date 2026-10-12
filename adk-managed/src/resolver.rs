@@ -8,6 +8,9 @@
 //!   `gpt-*` → OpenAI, `claude-*` → Anthropic, etc.)
 //! - **Structured** refs use the explicit `provider` field directly
 //! - **OpenAI-compatible** refs construct a client with the given `base_url` + `api_key`
+//!
+//! Each provider's client is built only when its feature (`gemini`, `openai`, `anthropic`,
+//! `ollama`) is enabled.
 
 use std::sync::Arc;
 
@@ -88,33 +91,164 @@ pub fn infer_provider(name: &str) -> ResolverResult<Provider> {
     }
 }
 
-/// Default model resolver that uses prefix-based provider inference for
-/// shorthand names and explicit provider fields for structured refs.
+/// Default model resolver: infers the provider from a shorthand name or takes it from a
+/// structured reference, then constructs that provider's client.
 ///
-/// # Construction Behavior
+/// | Provider | Feature | Credentials |
+/// |----------|---------|-------------|
+/// | Gemini | `gemini` | `GOOGLE_API_KEY` or `GEMINI_API_KEY`; Vertex AI through `GOOGLE_GENAI_USE_VERTEXAI` |
+/// | OpenAI | `openai` | `OPENAI_API_KEY` |
+/// | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
+/// | Ollama | `ollama` | none; `OLLAMA_HOST` overrides the host |
+/// | OpenAI-compatible | `openai` | the reference's `api_key` |
 ///
-/// The `DefaultModelResolver` currently returns a [`ResolverError::ConstructionFailed`]
-/// for all resolved providers because actual model construction requires API keys
-/// and network access. The important logic here is the *resolution* — mapping a
-/// `ModelRef` to the correct provider. The platform layer is responsible for
-/// injecting a custom `ModelResolver` that can actually construct models with
-/// credentials.
+/// [`with_api_key`](Self::with_api_key) sets a key instead of reading the environment.
+/// A provider whose feature is not built resolves to
+/// [`ResolverError::ConstructionFailed`] naming the feature to enable. Construction makes
+/// no network call, so a wrong key surfaces on the first model call.
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use adk_managed::resolver::DefaultModelResolver;
+/// use adk_managed::types::Provider;
 ///
-/// let resolver = DefaultModelResolver::new();
-/// // In production, use a resolver that has access to credentials.
+/// let resolver = DefaultModelResolver::new().with_api_key(Provider::Openai, "sk-test");
+/// # let _ = resolver;
 /// ```
 #[derive(Debug, Clone, Default)]
-pub struct DefaultModelResolver;
+pub struct DefaultModelResolver {
+    api_keys: std::collections::HashMap<ProviderKey, String>,
+}
+
+/// `Provider` as a map key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ProviderKey {
+    Gemini,
+    Openai,
+    Anthropic,
+    Ollama,
+    OpenaiCompatible,
+}
+
+impl From<Provider> for ProviderKey {
+    fn from(provider: Provider) -> Self {
+        match provider {
+            Provider::Gemini => Self::Gemini,
+            Provider::Openai => Self::Openai,
+            Provider::Anthropic => Self::Anthropic,
+            Provider::Ollama => Self::Ollama,
+            Provider::OpenaiCompatible => Self::OpenaiCompatible,
+        }
+    }
+}
 
 impl DefaultModelResolver {
-    /// Create a new `DefaultModelResolver`.
+    /// A resolver that reads API keys from the environment.
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Uses `api_key` for `provider` instead of the environment.
+    ///
+    /// For [`Provider::OpenaiCompatible`] the key applies when the reference's own
+    /// `api_key` is empty, as it is in a session rebuilt from stored state.
+    #[must_use]
+    pub fn with_api_key(mut self, provider: Provider, api_key: impl Into<String>) -> Self {
+        self.api_keys.insert(provider.into(), api_key.into());
+        self
+    }
+
+    /// The configured key for `provider`, else the first non-empty `env` variable.
+    #[allow(dead_code)] // unused when no provider feature that needs a key is built
+    fn api_key(&self, provider: Provider, env: &[&str]) -> Option<String> {
+        self.api_keys.get(&provider.into()).cloned().or_else(|| {
+            env.iter()
+                .filter_map(|name| std::env::var(name).ok())
+                .find(|value| !value.trim().is_empty())
+        })
+    }
+
+    fn construct(&self, provider: Provider, model: &str) -> ResolverResult<Arc<dyn Llm>> {
+        let failed = |reason: String| ResolverError::ConstructionFailed { provider, reason };
+        #[allow(unused_variables)]
+        let missing_key = |env: &str| {
+            failed(format!(
+                "no API key for model {model}: set {env} or call \
+                 DefaultModelResolver::with_api_key(Provider::{provider:?}, ..)"
+            ))
+        };
+        #[allow(unused_variables)]
+        let not_built = |feature: &str| {
+            failed(format!(
+                "model {model} needs the `{feature}` feature of adk-managed (or of adk-rust \
+                 with `managed-runtime`); it is not built"
+            ))
+        };
+        match provider {
+            Provider::Gemini => {
+                #[cfg(feature = "gemini")]
+                {
+                    let model = match self.api_key(provider, &[]) {
+                        Some(key) => adk_model::GeminiModel::new(key, model),
+                        None => adk_model::GeminiModel::from_env(model),
+                    }
+                    .map_err(|e| failed(e.to_string()))?;
+                    Ok(Arc::new(model))
+                }
+                #[cfg(not(feature = "gemini"))]
+                Err(not_built("gemini"))
+            }
+            Provider::Openai => {
+                #[cfg(feature = "openai")]
+                {
+                    let key = self
+                        .api_key(provider, &["OPENAI_API_KEY"])
+                        .ok_or_else(|| missing_key("OPENAI_API_KEY"))?;
+                    let client =
+                        adk_model::OpenAIClient::new(adk_model::OpenAIConfig::new(key, model))
+                            .map_err(|e| failed(e.to_string()))?;
+                    Ok(Arc::new(client))
+                }
+                #[cfg(not(feature = "openai"))]
+                Err(not_built("openai"))
+            }
+            Provider::Anthropic => {
+                #[cfg(feature = "anthropic")]
+                {
+                    let key = self
+                        .api_key(provider, &["ANTHROPIC_API_KEY"])
+                        .ok_or_else(|| missing_key("ANTHROPIC_API_KEY"))?;
+                    let client = adk_model::anthropic::AnthropicClient::new(
+                        adk_model::anthropic::AnthropicConfig::new(key, model),
+                    )
+                    .map_err(|e| failed(e.to_string()))?;
+                    Ok(Arc::new(client))
+                }
+                #[cfg(not(feature = "anthropic"))]
+                Err(not_built("anthropic"))
+            }
+            Provider::Ollama => {
+                #[cfg(feature = "ollama")]
+                {
+                    let config = match std::env::var("OLLAMA_HOST") {
+                        Ok(host) if !host.trim().is_empty() => {
+                            adk_model::OllamaConfig::with_host(host, model)
+                        }
+                        _ => adk_model::OllamaConfig::new(model),
+                    };
+                    let client =
+                        adk_model::OllamaModel::new(config).map_err(|e| failed(e.to_string()))?;
+                    Ok(Arc::new(client))
+                }
+                #[cfg(not(feature = "ollama"))]
+                Err(not_built("ollama"))
+            }
+            Provider::OpenaiCompatible => Err(failed(format!(
+                "model {model} is OpenAI-compatible; use the structured reference with \
+                 `base_url` and `api_key`"
+            ))),
+        }
     }
 }
 
@@ -122,47 +256,49 @@ impl DefaultModelResolver {
 impl ModelResolver for DefaultModelResolver {
     async fn resolve(&self, model_ref: &ModelRef) -> ResolverResult<Arc<dyn Llm>> {
         match model_ref {
-            ModelRef::Shorthand(name) => {
-                let provider = infer_provider(name)?;
-                // In a real implementation, this would construct the appropriate
-                // provider client using API keys from the environment or a
-                // credential provider. For now, we return an error indicating
-                // that actual construction is not yet wired up.
-                Err(ResolverError::ConstructionFailed {
-                    provider,
-                    reason: format!(
-                        "DefaultModelResolver cannot construct real models. \
-                         Use a platform-provided resolver with credentials. \
-                         Resolved provider: {provider:?}, model: {name}"
-                    ),
-                })
+            ModelRef::Shorthand(name) => self.construct(infer_provider(name)?, name),
+            ModelRef::Structured { provider, model: ModelConfig::Name(name), .. } => {
+                self.construct(*provider, name)
             }
-            ModelRef::Structured { provider, model, .. } => {
-                let model_name = match model {
-                    ModelConfig::Name(name) => name.clone(),
-                    ModelConfig::Compatible { model, base_url, .. } => {
-                        // For OpenAI-compatible, we have all we need to construct
-                        // a client (model + base_url + api_key), but actual
-                        // construction is deferred to a credentialed resolver.
-                        return Err(ResolverError::ConstructionFailed {
+            ModelRef::Structured {
+                provider,
+                model: ModelConfig::Compatible { model, base_url, api_key },
+                ..
+            } => {
+                #[cfg(feature = "openai")]
+                {
+                    let key = if api_key.is_empty() {
+                        self.api_keys.get(&ProviderKey::OpenaiCompatible).cloned().ok_or_else(
+                            || ResolverError::ConstructionFailed {
+                                provider: *provider,
+                                reason: format!(
+                                    "model {model} at {base_url} has no API key: stored sessions \
+                                     drop it, so call DefaultModelResolver::with_api_key(\
+                                     Provider::OpenaiCompatible, ..)"
+                                ),
+                            },
+                        )?
+                    } else {
+                        api_key.clone()
+                    };
+                    let client = adk_model::OpenAIClient::compatible(key, base_url, model)
+                        .map_err(|e| ResolverError::ConstructionFailed {
                             provider: *provider,
-                            reason: format!(
-                                "DefaultModelResolver cannot construct OpenAI-compatible \
-                                 client. Model: {model}, base_url: {base_url}. \
-                                 Use a platform-provided resolver with credentials."
-                            ),
-                        });
-                    }
-                };
-
-                Err(ResolverError::ConstructionFailed {
-                    provider: *provider,
-                    reason: format!(
-                        "DefaultModelResolver cannot construct real models. \
-                         Use a platform-provided resolver with credentials. \
-                         Provider: {provider:?}, model: {model_name}"
-                    ),
-                })
+                            reason: e.to_string(),
+                        })?;
+                    Ok(Arc::new(client))
+                }
+                #[cfg(not(feature = "openai"))]
+                {
+                    let _ = api_key;
+                    Err(ResolverError::ConstructionFailed {
+                        provider: *provider,
+                        reason: format!(
+                            "model {model} at {base_url} needs the `openai` feature of \
+                             adk-managed; it is not built"
+                        ),
+                    })
+                }
             }
         }
     }
@@ -234,131 +370,116 @@ mod tests {
 
     // --- DefaultModelResolver tests ---
 
-    #[tokio::test]
-    async fn test_resolver_shorthand_gemini_infers_provider() {
-        let resolver = DefaultModelResolver::new();
-        let model_ref = ModelRef::Shorthand("gemini-2.5-flash".to_string());
-        let result = resolver.resolve(&model_ref).await;
-
-        // We expect ConstructionFailed (not UnknownProvider) because the
-        // provider was successfully inferred but construction is stubbed.
-        let err = result.err().expect("expected an error");
-        match err {
-            ResolverError::ConstructionFailed { provider, reason } => {
-                assert_eq!(provider, Provider::Gemini);
-                assert!(reason.contains("gemini-2.5-flash"));
-            }
-            e => panic!("expected ConstructionFailed, got: {e}"),
+    /// The provider a resolution failed for, or `None` when it succeeded.
+    async fn resolve_provider(model_ref: ModelRef) -> Result<String, Provider> {
+        let resolver = DefaultModelResolver::new()
+            .with_api_key(Provider::Gemini, "test-key")
+            .with_api_key(Provider::Openai, "test-key")
+            .with_api_key(Provider::Anthropic, "test-key");
+        match resolver.resolve(&model_ref).await {
+            Ok(llm) => Ok(llm.name().to_string()),
+            Err(ResolverError::ConstructionFailed { provider, .. }) => Err(provider),
+            Err(other) => panic!("unexpected error: {other}"),
         }
     }
 
     #[tokio::test]
-    async fn test_resolver_shorthand_openai_infers_provider() {
-        let resolver = DefaultModelResolver::new();
-        let model_ref = ModelRef::Shorthand("gpt-4.1".to_string());
-        let result = resolver.resolve(&model_ref).await;
-
-        let err = result.err().expect("expected an error");
-        match err {
-            ResolverError::ConstructionFailed { provider, .. } => {
-                assert_eq!(provider, Provider::Openai);
+    async fn shorthand_models_resolve_for_each_built_provider() {
+        for (name, provider, built) in [
+            ("gemini-3.7-flash", Provider::Gemini, cfg!(feature = "gemini")),
+            ("gpt-5.4-mini", Provider::Openai, cfg!(feature = "openai")),
+            ("claude-haiku-5-5", Provider::Anthropic, cfg!(feature = "anthropic")),
+            ("llama-4", Provider::Ollama, cfg!(feature = "ollama")),
+        ] {
+            let resolved = resolve_provider(ModelRef::Shorthand(name.to_string())).await;
+            if built {
+                assert!(resolved.is_ok(), "{name} must resolve when its feature is built");
+            } else {
+                assert_eq!(resolved, Err(provider), "{name} reports the provider it needs");
             }
-            e => panic!("expected ConstructionFailed, got: {e}"),
         }
     }
 
     #[tokio::test]
-    async fn test_resolver_shorthand_anthropic_infers_provider() {
+    async fn an_unbuilt_provider_names_its_feature() {
         let resolver = DefaultModelResolver::new();
-        let model_ref = ModelRef::Shorthand("claude-3.5-sonnet".to_string());
-        let result = resolver.resolve(&model_ref).await;
-
-        let err = result.err().expect("expected an error");
-        match err {
-            ResolverError::ConstructionFailed { provider, .. } => {
-                assert_eq!(provider, Provider::Anthropic);
+        let missing = [
+            ("gemini-3.7-flash", "gemini", cfg!(feature = "gemini")),
+            ("gpt-5.4-mini", "openai", cfg!(feature = "openai")),
+            ("claude-haiku-5-5", "anthropic", cfg!(feature = "anthropic")),
+            ("llama-4", "ollama", cfg!(feature = "ollama")),
+        ];
+        for (name, feature, built) in missing {
+            if built {
+                continue;
             }
-            e => panic!("expected ConstructionFailed, got: {e}"),
+            match resolver.resolve(&ModelRef::Shorthand(name.to_string())).await {
+                Err(ResolverError::ConstructionFailed { reason, .. }) => {
+                    assert!(reason.contains(&format!("`{feature}`")), "{reason}");
+                }
+                Err(other) => panic!("unexpected error: {other}"),
+                Ok(_) => panic!("{name} resolved without its feature"),
+            }
+        }
+    }
+
+    #[cfg(feature = "openai")]
+    #[tokio::test]
+    async fn a_missing_key_says_where_to_set_it() {
+        if std::env::var("OPENAI_API_KEY").is_ok() {
+            return;
+        }
+        let result = DefaultModelResolver::new()
+            .resolve(&ModelRef::Shorthand("gpt-5.4-mini".to_string()))
+            .await;
+        match result {
+            Err(ResolverError::ConstructionFailed { reason, .. }) => {
+                assert!(reason.contains("OPENAI_API_KEY"), "{reason}");
+            }
+            Err(other) => panic!("unexpected error: {other}"),
+            Ok(_) => panic!("resolved without a key"),
         }
     }
 
     #[tokio::test]
-    async fn test_resolver_shorthand_unknown_returns_unknown_provider() {
-        let resolver = DefaultModelResolver::new();
-        let model_ref = ModelRef::Shorthand("totally-unknown-model".to_string());
-        let result = resolver.resolve(&model_ref).await;
-
-        let err = result.err().expect("expected an error");
-        match err {
-            ResolverError::UnknownProvider { name } => {
-                assert_eq!(name, "totally-unknown-model");
-            }
-            e => panic!("expected UnknownProvider, got: {e}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_resolver_structured_uses_provider_field() {
-        let resolver = DefaultModelResolver::new();
-        let model_ref = ModelRef::Structured {
+    async fn structured_refs_use_their_provider_field() {
+        let resolved = resolve_provider(ModelRef::Structured {
             provider: Provider::Anthropic,
-            model: ModelConfig::Name("claude-3.5-sonnet".to_string()),
-            speed: None,
-        };
-        let result = resolver.resolve(&model_ref).await;
-
-        let err = result.err().expect("expected an error");
-        match err {
-            ResolverError::ConstructionFailed { provider, reason } => {
-                assert_eq!(provider, Provider::Anthropic);
-                assert!(reason.contains("claude-3.5-sonnet"));
-            }
-            e => panic!("expected ConstructionFailed, got: {e}"),
+            model: ModelConfig::Name("claude-haiku-5-5".to_string()),
+            speed: Some("fast".to_string()),
+        })
+        .await;
+        assert_eq!(resolved.is_ok(), cfg!(feature = "anthropic"));
+        if !cfg!(feature = "anthropic") {
+            assert_eq!(resolved, Err(Provider::Anthropic));
         }
     }
 
     #[tokio::test]
-    async fn test_resolver_structured_openai_compatible() {
-        let resolver = DefaultModelResolver::new();
-        let model_ref = ModelRef::Structured {
+    async fn openai_compatible_refs_resolve_with_their_endpoint() {
+        let model_ref = |api_key: &str| ModelRef::Structured {
             provider: Provider::OpenaiCompatible,
             model: ModelConfig::Compatible {
-                model: "deepseek-chat".to_string(),
+                model: "deepseek-v4-flash".to_string(),
                 base_url: "https://api.deepseek.com/v1".to_string(),
-                api_key: "sk-test-key".to_string(),
+                api_key: api_key.to_string(),
             },
             speed: None,
         };
-        let result = resolver.resolve(&model_ref).await;
-
-        let err = result.err().expect("expected an error");
-        match err {
-            ResolverError::ConstructionFailed { provider, reason } => {
-                assert_eq!(provider, Provider::OpenaiCompatible);
-                assert!(reason.contains("deepseek-chat"));
-                assert!(reason.contains("https://api.deepseek.com/v1"));
-            }
-            e => panic!("expected ConstructionFailed, got: {e}"),
+        let resolver = DefaultModelResolver::new();
+        assert_eq!(resolver.resolve(&model_ref("sk-test")).await.is_ok(), cfg!(feature = "openai"));
+        if cfg!(feature = "openai") {
+            // A rebuilt session has no stored key; the resolver supplies it.
+            assert!(resolver.resolve(&model_ref("")).await.is_err());
+            let keyed = resolver.with_api_key(Provider::OpenaiCompatible, "sk-test");
+            assert!(keyed.resolve(&model_ref("")).await.is_ok());
         }
     }
 
     #[tokio::test]
-    async fn test_resolver_structured_with_speed_hint() {
-        let resolver = DefaultModelResolver::new();
-        let model_ref = ModelRef::Structured {
-            provider: Provider::Gemini,
-            model: ModelConfig::Name("gemini-2.5-flash".to_string()),
-            speed: Some("fast".to_string()),
-        };
-        let result = resolver.resolve(&model_ref).await;
-
-        // Speed hint doesn't affect provider resolution
-        let err = result.err().expect("expected an error");
-        match err {
-            ResolverError::ConstructionFailed { provider, .. } => {
-                assert_eq!(provider, Provider::Gemini);
-            }
-            e => panic!("expected ConstructionFailed, got: {e}"),
-        }
+    async fn an_unknown_shorthand_is_an_unknown_provider() {
+        let result =
+            DefaultModelResolver::new().resolve(&ModelRef::Shorthand("mystery".into())).await;
+        assert!(matches!(result, Err(ResolverError::UnknownProvider { .. })));
     }
 }

@@ -1,20 +1,19 @@
 {
   "name": "F-4: Tool Confirmation",
-  "description": "Agent invokes a tool requiring confirmation. Loop parks until user approves, then tool executes. Validates the confirmation flow.",
+  "description": "Agent invokes a tool requiring confirmation. The turn ends with requires_action until the user approves, then a resumed turn executes the held call and continues. Validates the confirmation flow.",
   "agent_def": {
     "name": "confirmation-agent",
-    "model": "gemini-2.5-flash",
-    "system": "You have access to a delete_file tool that requires confirmation.",
+    "model": "gemini-3.7-flash",
+    "system": "You have access to a bash tool that requires confirmation.",
     "tools": [
       {
-        "type": "builtin",
-        "name": "delete_file"
+        "type": "bash"
       }
     ],
     "permission_policy": {
       "default": "auto_approve",
       "tools": {
-        "delete_file": "prompt"
+        "bash": "prompt"
       }
     }
   },
@@ -24,14 +23,16 @@
         "text": null,
         "tool_calls": [
           {
-            "name": "delete_file",
-            "input": {"path": "/tmp/old_data.csv"},
+            "name": "bash",
+            "input": {
+              "command": "echo deleted"
+            },
             "id": "tu_delete_001"
           }
         ]
       },
       {
-        "text": "Done. The file /tmp/old_data.csv has been deleted.",
+        "text": "Done. The command ran after your approval.",
         "tool_calls": []
       }
     ]
@@ -39,7 +40,12 @@
   "scenario": [
     {
       "type": "user.message",
-      "content": [{"type": "text", "text": "Delete /tmp/old_data.csv"}]
+      "content": [
+        {
+          "type": "text",
+          "text": "Run the cleanup command"
+        }
+      ]
     },
     {
       "type": "user.tool_confirmation",
@@ -48,8 +54,20 @@
     }
   ],
   "assertions": {
-    "exact_sequence": ["status.running", "agent.tool_use", "agent.message", "status.idle"],
-    "must_contain": ["agent.tool_use", "agent.message"],
-    "must_end_with": ["status.idle"]
+    "exact_sequence": [
+      "status.running",
+      "agent.tool_use",
+      "status.idle",
+      "status.running",
+      "agent.message",
+      "status.idle"
+    ],
+    "must_contain": [
+      "agent.tool_use",
+      "agent.message"
+    ],
+    "must_end_with": [
+      "status.idle"
+    ]
   }
 }

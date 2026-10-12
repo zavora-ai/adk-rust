@@ -360,7 +360,7 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-auth` | Access control | Role-based permissions, declarative scope-based security, SSO/OAuth, audit logging |
 | `adk-sandbox` | Sandboxed code execution | Process/WASM backends, OS-level sandbox profiles (Seatbelt on macOS, bubblewrap on Linux; Windows AppContainer not implemented) |
 | `adk-telemetry` | Observability | OpenTelemetry tracing, structured logging, and Google Cloud export |
-| `adk-managed` | Managed agent runtime (Experimental) | Provider-neutral agent execution, in-process checkpointing and event replay (state does not survive process loss) |
+| `adk-managed` | Managed agent runtime (Experimental) | Provider-neutral agent execution, event replay, custom tool calls and confirmations parked on durable runs; sessions survive process loss with durable stores |
 | `adk-enterprise` | Enterprise client SDK (Experimental) | HTTP/SSE client for managed agent service, zero runtime deps |
 | `adk-plugin` | Lifecycle hooks | `EnhancedPlugin` trait, tool and model interception, priority pipeline, shared `PluginContext` |
 | `adk-retry-reflect` | Retry and reflect plugin | Intercepts tool failures, injects reflection prompts, exponential backoff, circuit breaker |

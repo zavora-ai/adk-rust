@@ -3,7 +3,7 @@
   "description": "Client connects with from_seq, receives historical events first then live events. Validates event replay completeness.",
   "agent_def": {
     "name": "replay-agent",
-    "model": "gemini-2.5-flash",
+    "model": "gemini-3.7-flash",
     "system": "You are a helpful assistant."
   },
   "scripted_model": {

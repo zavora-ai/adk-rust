@@ -2,8 +2,8 @@
 //!
 //! [`DefaultManagedAgentRuntime`] composes existing ADK crates (`Runner`,
 //! `SessionService`, optional sandbox and memory) behind the unified lifecycle
-//! trait. It manages active sessions as supervised background tasks with
-//! durable checkpointing, event streaming, and custom tool parking.
+//! trait. It manages active sessions as supervised background tasks, runs every turn under
+//! a durable run, and checkpoints session state after every event.
 //!
 //! # Architecture
 //!
@@ -14,23 +14,35 @@
 //! - **Swappable platform**: Different platforms can host the same runtime
 //! - **Provider-neutral**: Identical event sequences regardless of model provider
 //!
+//! # Sessions across processes
+//!
+//! A session's state, runs, and client answers live in the runtime's [`ManagedStores`].
+//! Every method that names a session this instance does not host rebuilds it from the
+//! state store — its agent definition, owner, event log, sequence position, and pending
+//! actions — and hosts it from then on. Two instances over the same durable stores, or a
+//! process and its restart, therefore serve the same sessions. Call
+//! [`DefaultManagedAgentRuntime::recover`] at startup to host every stored session that
+//! has a run in progress, so expiries are enforced without waiting for a client.
+//!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use std::sync::Arc;
 //! use adk_managed::default_runtime::DefaultManagedAgentRuntime;
 //! use adk_managed::resolver::DefaultModelResolver;
+//! use adk_managed::{Durability, ManagedStores};
 //! use adk_session::InMemorySessionService;
 //!
-//! let resolver = Arc::new(DefaultModelResolver::new());
-//! let sessions = Arc::new(InMemorySessionService::new());
-//!
-//! let runtime = DefaultManagedAgentRuntime::new(resolver, sessions);
+//! let runtime = DefaultManagedAgentRuntime::new(
+//!     Arc::new(DefaultModelResolver::new()),
+//!     Arc::new(InMemorySessionService::new()),
+//! )
+//! .with_stores(ManagedStores::in_memory());
+//! assert_eq!(runtime.durability(), Durability::ProcessLocal);
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -47,14 +59,17 @@ use adk_session::service::{CreateRequest, SessionService};
 
 use crate::agent_builder::{BuildError, build_agent};
 use crate::checkpoint::CheckpointManager;
-use crate::parking::ToolParkingLot;
+use crate::durable::{DurableConfig, ManagedStores};
 use crate::replay::create_event_stream;
 use crate::resolver::ModelResolver;
 use crate::runtime::{
     AgentHandle, EnvironmentConfig, ManagedAgentRuntime, ManagedOwner, SessionHandle,
 };
 use crate::session_loop::SessionLoop;
-use crate::types::{ManagedAgentDef, RuntimeError, SessionEvent, SessionStatus, UserEvent};
+use crate::state_store::{Durability, ManagedStateStore, PendingKind, SessionRecord};
+use crate::types::{
+    ManagedAgentDef, RuntimeError, SessionEvent, SessionStatus, ToolConfig, UserEvent,
+};
 
 // ─── ActiveSession ───────────────────────────────────────────────────────────
 
@@ -73,7 +88,7 @@ pub(crate) struct PersistedIdentity {
     pub(crate) session_id: String,
 }
 
-/// Internal state for an active (or recently active) session.
+/// Internal state for a session this runtime instance hosts.
 ///
 /// Each session spawns a background task running the [`SessionLoop`](crate::session_loop::SessionLoop).
 /// This struct holds the communication handles and control primitives needed
@@ -95,11 +110,8 @@ pub(crate) struct ActiveSession {
     /// Current session status (shared with the session loop).
     pub(crate) status: Arc<RwLock<SessionStatus>>,
     /// The identity this session's conversation is persisted under.
-    ///
-    /// Recorded at creation so deletion removes exactly what creation wrote, rather than
-    /// re-deriving an identity and risking a mismatch that silently leaves data behind.
     pub(crate) persisted_as: PersistedIdentity,
-    /// Checkpoint manager for durable state.
+    /// Checkpoint manager for the session's state.
     pub(crate) checkpoint: Arc<RwLock<CheckpointManager>>,
 }
 
@@ -107,17 +119,9 @@ pub(crate) struct ActiveSession {
 
 /// Default implementation of the managed agent runtime.
 ///
-/// Composed from a [`ModelResolver`] + a pluggable [`SessionService`] +
-/// optional sandbox factory and memory service. Has no platform dependencies —
-/// the platform injects its own implementations of these traits.
-///
-/// # Fields
-///
-/// - `model_resolver` — resolves [`ModelRef`](crate::types::ModelRef) into `Arc<dyn Llm>`
-/// - `session_service` — persistent session storage backend
-/// - `sandbox_factory` — optional sandbox for built-in tool execution
-/// - `memory` — optional cross-session memory service
-/// - `sessions` — active session registry
+/// Composed from a [`ModelResolver`] + a pluggable [`SessionService`] + the
+/// [`ManagedStores`] sessions park and resume on + optional sandbox and memory. Has no
+/// platform dependencies — the platform injects its own implementations of these traits.
 ///
 /// # Example
 ///
@@ -127,76 +131,55 @@ pub(crate) struct ActiveSession {
 /// use adk_managed::resolver::DefaultModelResolver;
 /// use adk_session::InMemorySessionService;
 ///
-/// // Minimal runtime with defaults
+/// // Minimal runtime with in-memory stores
 /// let runtime = DefaultManagedAgentRuntime::new(
 ///     Arc::new(DefaultModelResolver::new()),
 ///     Arc::new(InMemorySessionService::new()),
 /// );
 ///
-/// // With sandbox and memory (feature-gated)
-/// let runtime = DefaultManagedAgentRuntime::new(
-///     Arc::new(DefaultModelResolver::new()),
-///     Arc::new(InMemorySessionService::new()),
-/// )
-/// .with_sandbox(my_sandbox)
-/// .with_memory(my_memory_service);
+/// // Durable stores, shared by every instance that may host the same sessions
+/// let runtime = DefaultManagedAgentRuntime::new(resolver, sessions)
+///     .with_stores(ManagedStores::new(state_store, run_store, approval_store));
 /// ```
 pub struct DefaultManagedAgentRuntime {
     /// Resolves ModelRef → `Arc<dyn Llm>`.
     model_resolver: Arc<dyn ModelResolver>,
     /// Persistent session storage.
     session_service: Arc<dyn SessionService>,
+    /// Session state, runs, and client answers.
+    stores: ManagedStores,
+    /// How sessions claim, heartbeat, and park their runs.
+    durable: DurableConfig,
     /// Optional sandbox backend for isolated built-in tool execution.
-    ///
-    /// When set, built-in tools (bash, code_execution, etc.) execute inside
-    /// this sandbox. When `None`, built-in tools execute in-process.
     #[cfg(feature = "sandbox")]
     sandbox: Option<Arc<dyn SandboxBackend>>,
     /// Optional memory service for cross-session persistent memory.
-    ///
-    /// Passed to the Runner's `memory_service` field so agents can search
-    /// and store semantic memories across sessions.
     #[cfg(feature = "memory")]
     memory: Option<Arc<dyn Memory>>,
     /// Registered agents keyed by agent handle ID.
     agents: Arc<RwLock<HashMap<String, RegisteredAgent>>>,
-    /// Active session registry keyed by session ID.
+    /// Hosted session registry keyed by session ID.
     sessions: Arc<RwLock<HashMap<String, ActiveSession>>>,
 }
 
 /// Internal state for a registered agent.
-#[allow(dead_code)] // `def` is retained for future session creation
 struct RegisteredAgent {
     /// The built agent instance.
     agent: Arc<dyn Agent>,
-    /// The original definition (retained for session creation).
+    /// The original definition, stored with each session so it can be rebuilt.
     def: ManagedAgentDef,
 }
 
 impl DefaultManagedAgentRuntime {
-    /// Create a new `DefaultManagedAgentRuntime` with injected services.
+    /// Create a new `DefaultManagedAgentRuntime` with injected services and in-memory
+    /// [`ManagedStores`].
     ///
     /// # Arguments
     ///
     /// * `model_resolver` - Resolves `ModelRef` declarations into callable LLM instances.
-    /// * `session_service` - Persistent storage backend for sessions and checkpoints.
+    /// * `session_service` - Persistent storage backend for conversations.
     ///
-    /// Use `.with_sandbox()` and `.with_memory()` builder methods to inject
-    /// optional sandbox and memory services (feature-gated).
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use std::sync::Arc;
-    /// use adk_managed::default_runtime::DefaultManagedAgentRuntime;
-    /// use adk_managed::resolver::DefaultModelResolver;
-    /// use adk_session::InMemorySessionService;
-    ///
-    /// let runtime = DefaultManagedAgentRuntime::new(
-    ///     Arc::new(DefaultModelResolver::new()),
-    ///     Arc::new(InMemorySessionService::new()),
-    /// );
-    /// ```
+    /// Use [`with_stores`](Self::with_stores) for stores that survive the process.
     pub fn new(
         model_resolver: Arc<dyn ModelResolver>,
         session_service: Arc<dyn SessionService>,
@@ -204,6 +187,8 @@ impl DefaultManagedAgentRuntime {
         Self {
             model_resolver,
             session_service,
+            stores: ManagedStores::in_memory(),
+            durable: DurableConfig::default(),
             #[cfg(feature = "sandbox")]
             sandbox: None,
             #[cfg(feature = "memory")]
@@ -211,6 +196,61 @@ impl DefaultManagedAgentRuntime {
             agents: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Keeps session state, runs, and client answers in `stores`.
+    ///
+    /// Every runtime instance that may host the same sessions must use the same stores and
+    /// the same session service.
+    #[must_use]
+    pub fn with_stores(mut self, stores: ManagedStores) -> Self {
+        self.stores = stores;
+        self
+    }
+
+    /// Keeps session state in `store`, leaving the other stores as they are.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_managed::{DefaultManagedAgentRuntime, Durability, FileManagedStateStore};
+    /// use adk_managed::resolver::DefaultModelResolver;
+    /// use adk_session::InMemorySessionService;
+    ///
+    /// let runtime = DefaultManagedAgentRuntime::new(
+    ///     Arc::new(DefaultModelResolver::new()),
+    ///     Arc::new(InMemorySessionService::new()),
+    /// )
+    /// .with_state_store(Arc::new(FileManagedStateStore::new("/tmp/adk-managed-doc")));
+    /// assert_eq!(runtime.durability(), Durability::CrashDurable);
+    /// ```
+    #[must_use]
+    pub fn with_state_store(mut self, store: Arc<dyn ManagedStateStore>) -> Self {
+        self.stores.state = store;
+        self
+    }
+
+    /// Claims, heartbeats, and parks runs as `config` says, including how long a turn
+    /// waits on the client.
+    #[must_use]
+    pub fn with_durable_config(mut self, config: DurableConfig) -> Self {
+        self.durable = config;
+        self
+    }
+
+    /// What the state store guarantees after process loss.
+    ///
+    /// Resume after a restart also needs the run store, decision store, and session
+    /// service to be durable; their traits do not report it, so this reports the state
+    /// store's guarantee.
+    pub fn durability(&self) -> Durability {
+        self.stores.state.durability()
+    }
+
+    /// The stores sessions are kept in.
+    pub fn stores(&self) -> &ManagedStores {
+        &self.stores
     }
 
     /// Set the sandbox backend for isolated built-in tool execution.
@@ -254,18 +294,223 @@ impl DefaultManagedAgentRuntime {
     pub(crate) fn sessions(&self) -> &Arc<RwLock<HashMap<String, ActiveSession>>> {
         &self.sessions
     }
+
+    /// Hosts every stored session that has a run in progress or parked, and returns their
+    /// IDs.
+    ///
+    /// Call it once at startup: a hosted session polls its run queue, so a parked turn
+    /// resumes when its answer arrives through another instance and expires on time even
+    /// when no client contacts this one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the state store cannot be listed or a session cannot
+    /// be rebuilt.
+    pub async fn recover(&self) -> Result<Vec<String>, RuntimeError> {
+        let mut recovered = Vec::new();
+        for session_id in self.stores.state.session_ids().await? {
+            let Some(state) = self.stores.state.load(&session_id).await? else { continue };
+            if state.durable_run_id.is_none() || state.record.is_none() {
+                continue;
+            }
+            self.host(&session_id).await?;
+            recovered.push(session_id);
+        }
+        Ok(recovered)
+    }
+
+    /// Builds the runnable agent for `def`.
+    async fn build(&self, def: &ManagedAgentDef) -> Result<Arc<dyn Agent>, RuntimeError> {
+        let model = self.model_resolver.resolve(&def.model).await.map_err(|e| {
+            RuntimeError::ProviderError {
+                provider: format!("{:?}", def.model),
+                message: e.to_string(),
+            }
+        })?;
+        #[cfg(feature = "sandbox")]
+        let built = build_agent(def, model, self.sandbox.clone());
+        #[cfg(not(feature = "sandbox"))]
+        let built = build_agent(def, model);
+        built.map_err(|e| match e {
+            BuildError::InvalidDef(msg) => RuntimeError::invalid_request(msg),
+            BuildError::BuildFailed(msg) => RuntimeError::internal(msg),
+        })
+    }
+
+    /// Hosts `session_id`, rebuilding it from the state store when this instance does not
+    /// host it yet.
+    async fn host(&self, session_id: &str) -> Result<(), RuntimeError> {
+        if self.sessions.read().await.contains_key(session_id) {
+            return Ok(());
+        }
+        let checkpoint =
+            CheckpointManager::restore(session_id.to_string(), Arc::clone(&self.stores.state))
+                .await?;
+        let Some(record) = checkpoint.record().cloned() else {
+            return Err(RuntimeError::NotFound { session_id: session_id.to_string() });
+        };
+        let agent = self.build(&record.agent).await?;
+        let status = checkpoint.run_state().status;
+
+        let mut sessions = self.sessions.write().await;
+        if sessions.contains_key(session_id) {
+            return Ok(());
+        }
+        info!(session_id = %session_id, "hosting a stored session");
+        let active = self.spawn_session(session_id, agent, &record, checkpoint, status);
+        sessions.insert(session_id.to_string(), active);
+        Ok(())
+    }
+
+    /// Spawns the session loop for `session_id` and returns the handle to it.
+    fn spawn_session(
+        &self,
+        session_id: &str,
+        agent: Arc<dyn Agent>,
+        record: &SessionRecord,
+        checkpoint: CheckpointManager,
+        status: SessionStatus,
+    ) -> ActiveSession {
+        let (event_tx, event_rx) = mpsc::channel(DEFAULT_EVENT_CHANNEL_CAPACITY);
+        let (broadcast_tx, _) = broadcast::channel(DEFAULT_BROADCAST_CHANNEL_CAPACITY);
+        let cancel_token = CancellationToken::new();
+        let pause_flag = Arc::new(Mutex::new(false));
+        let pause_notify = Arc::new(Notify::new());
+        let checkpoint = Arc::new(RwLock::new(checkpoint));
+        let status = Arc::new(RwLock::new(status));
+        let custom_tools: BTreeSet<String> = record
+            .agent
+            .tools
+            .iter()
+            .filter_map(|tool| match tool {
+                ToolConfig::Custom { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+
+        #[cfg(feature = "memory")]
+        let session_loop = SessionLoop::with_pause_controls(
+            session_id.to_string(),
+            event_rx,
+            broadcast_tx.clone(),
+            cancel_token.clone(),
+            Arc::clone(&pause_flag),
+            Arc::clone(&pause_notify),
+            Arc::clone(&checkpoint),
+            Arc::clone(&agent),
+            Arc::clone(&self.session_service),
+            self.memory.clone(),
+        );
+        #[cfg(not(feature = "memory"))]
+        let session_loop = SessionLoop::with_pause_controls(
+            session_id.to_string(),
+            event_rx,
+            broadcast_tx.clone(),
+            cancel_token.clone(),
+            Arc::clone(&pause_flag),
+            Arc::clone(&pause_notify),
+            Arc::clone(&checkpoint),
+            Arc::clone(&agent),
+            Arc::clone(&self.session_service),
+        );
+        let session_loop = session_loop
+            .with_shared_status(Arc::clone(&status))
+            .with_owner(record.app_name.as_str(), record.user_id.as_str())
+            .with_stores(self.stores.clone())
+            .with_durable_config(self.durable.clone())
+            .with_custom_tools(custom_tools);
+        tokio::spawn(session_loop.run());
+
+        ActiveSession {
+            agent,
+            event_tx,
+            broadcast_tx,
+            cancel_token,
+            pause_flag,
+            pause_notify,
+            status,
+            persisted_as: PersistedIdentity {
+                app_name: record.app_name.clone(),
+                user_id: record.user_id.clone(),
+                session_id: session_id.to_string(),
+            },
+            checkpoint,
+        }
+    }
+
+    /// Refuses an event the session cannot take now, with the reason.
+    async fn check_event(
+        &self,
+        active: &ActiveSession,
+        event: &UserEvent,
+    ) -> Result<(), RuntimeError> {
+        let (id, kind) = match event {
+            UserEvent::Message { .. } => {
+                let pending: Vec<String> = active
+                    .checkpoint
+                    .read()
+                    .await
+                    .pending()
+                    .iter()
+                    .map(|action| action.id.clone())
+                    .collect();
+                if pending.is_empty() {
+                    return Ok(());
+                }
+                return Err(RuntimeError::conflict(format!(
+                    "session {} waits on the client for {pending:?}; send \
+                     user.custom_tool_result or user.tool_confirmation for each first",
+                    active.persisted_as.session_id
+                )));
+            }
+            UserEvent::CustomToolResult { custom_tool_use_id, .. } => {
+                (custom_tool_use_id.as_str(), PendingKind::CustomTool)
+            }
+            UserEvent::ToolConfirmation { tool_use_id, .. } => {
+                if self.stores.approval_service.is_some() {
+                    return Err(RuntimeError::invalid_param(
+                        "this runtime decides confirmations through its approval service; \
+                         decide the approval request there",
+                        "tool_use_id",
+                    ));
+                }
+                (tool_use_id.as_str(), PendingKind::Confirmation)
+            }
+            _ => return Ok(()),
+        };
+        let waits_on = |actions: &[crate::state_store::PendingAction]| {
+            actions.iter().any(|action| action.id == id && action.kind == kind)
+        };
+        if waits_on(active.checkpoint.read().await.pending()) {
+            return Ok(());
+        }
+        // Another instance may have parked the turn since this one last wrote the session.
+        let stored = self.stores.state.load(&active.persisted_as.session_id).await?;
+        if stored.as_ref().is_some_and(|state| waits_on(&state.pending)) {
+            return Ok(());
+        }
+        let param = match kind {
+            PendingKind::CustomTool => "custom_tool_use_id",
+            PendingKind::Confirmation => "tool_use_id",
+        };
+        Err(RuntimeError::invalid_param(
+            format!(
+                "session {} is not waiting on '{id}'; answer one of the IDs in the last \
+                 status.idle requires_action",
+                active.persisted_as.session_id
+            ),
+            param,
+        ))
+    }
 }
 
-// ─── Channel and timeout defaults ────────────────────────────────────────────
+// ─── Channel defaults ────────────────────────────────────────────────────────
 
 /// Default capacity for the user event mpsc channel.
 const DEFAULT_EVENT_CHANNEL_CAPACITY: usize = 64;
 
 /// Default capacity for the session event broadcast channel.
 const DEFAULT_BROADCAST_CHANNEL_CAPACITY: usize = 256;
-
-/// Default timeout for custom tool parking (5 minutes).
-const DEFAULT_PARKING_TIMEOUT: Duration = Duration::from_secs(300);
 
 // ─── ManagedAgentRuntime implementation ──────────────────────────────────────
 
@@ -276,54 +521,28 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
     /// Resolves the `ModelRef` into an `Arc<dyn Llm>`, builds a runnable agent,
     /// stores it in the internal registry, and returns an opaque handle.
     async fn create(&self, def: ManagedAgentDef) -> Result<AgentHandle, RuntimeError> {
-        // 1. Resolve model
-        let model = self.model_resolver.resolve(&def.model).await.map_err(|e| {
-            RuntimeError::ProviderError {
-                provider: format!("{:?}", def.model),
-                message: e.to_string(),
-            }
-        })?;
-
-        // 2. Build agent from definition
-        #[cfg(feature = "sandbox")]
-        let agent = build_agent(&def, model, self.sandbox.clone()).map_err(|e| match e {
-            BuildError::InvalidDef(msg) => RuntimeError::invalid_request(msg),
-            BuildError::BuildFailed(msg) => RuntimeError::internal(msg),
-        })?;
-        #[cfg(not(feature = "sandbox"))]
-        let agent = build_agent(&def, model).map_err(|e| match e {
-            BuildError::InvalidDef(msg) => RuntimeError::invalid_request(msg),
-            BuildError::BuildFailed(msg) => RuntimeError::internal(msg),
-        })?;
-
-        // 3. Generate handle ID
+        let agent = self.build(&def).await?;
         let handle_id = uuid::Uuid::new_v4().to_string();
 
         info!(agent_handle = %handle_id, agent_name = %def.name, "agent created");
 
-        // 4. Store in registry
-        let registered = RegisteredAgent { agent, def };
-        self.agents.write().await.insert(handle_id.clone(), registered);
+        self.agents.write().await.insert(handle_id.clone(), RegisteredAgent { agent, def });
 
         Ok(AgentHandle(handle_id))
     }
 
     /// Start a new session for the given agent.
     ///
-    /// Creates internal communication channels, spawns the session loop as a
-    /// background task, and stores the active session handle. Initial status
-    /// is `Queued`.
+    /// Seeds the conversation, records the session in the state store, spawns the session
+    /// loop, and returns its handle. Initial status is `Queued`.
     async fn start_session(
         &self,
         agent: &AgentHandle,
         owner: &ManagedOwner,
         env: Option<EnvironmentConfig>,
     ) -> Result<SessionHandle, RuntimeError> {
-        // Environment configuration was accepted and discarded — the parameter was named
-        // `_env`. Applying `env_vars` or `working_dir` to an in-process session loop would
-        // mutate process-global state shared with every other session, so the runtime refuses
-        // rather than pretending. A sandboxed execution boundary is what would make this
-        // honourable.
+        // Applying `env_vars` or `working_dir` to an in-process session loop would mutate
+        // process-global state shared with every other session, so the runtime refuses.
         if let Some(env) = &env
             && (!env.env_vars.is_empty() || env.working_dir.is_some())
         {
@@ -337,105 +556,38 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
             });
         }
 
-        // 1. Look up agent from registry
-        let agents = self.agents.read().await;
-        let registered = agents
-            .get(&agent.0)
-            .ok_or_else(|| RuntimeError::NotFound { session_id: agent.0.clone() })?;
-        let agent_arc = Arc::clone(&registered.agent);
-        drop(agents);
-
-        // 2. Generate session ID
-        let session_id = uuid::Uuid::new_v4().to_string();
-
-        // 3. Create mpsc channel for user events
-        let (event_tx, event_rx) = mpsc::channel(DEFAULT_EVENT_CHANNEL_CAPACITY);
-
-        // 4. Create broadcast channel for session events
-        let (broadcast_tx, _) = broadcast::channel(DEFAULT_BROADCAST_CHANNEL_CAPACITY);
-
-        // 5. Create control primitives
-        let cancel_token = CancellationToken::new();
-        let pause_flag = Arc::new(Mutex::new(false));
-        let pause_notify = Arc::new(Notify::new());
-
-        // 6. Create ToolParkingLot and CheckpointManager
-        let parking = Arc::new(ToolParkingLot::new(DEFAULT_PARKING_TIMEOUT));
-        let checkpoint = Arc::new(RwLock::new(CheckpointManager::new(session_id.clone())));
-
-        // 7. Seed the session in the SessionService.
-        //    The Runner's run() calls session_service.get() which requires the
-        //    session to exist. We create it here with the same triple
-        //    (owner app, owner user, session_id) that
-        //    build_runner/run_str use in the session loop.
-        let persisted_as = PersistedIdentity {
-            app_name: owner.app_name().to_string(),
-            user_id: owner.user_id().to_string(),
-            session_id: session_id.clone(),
+        let (agent_arc, def) = {
+            let agents = self.agents.read().await;
+            let registered = agents
+                .get(&agent.0)
+                .ok_or_else(|| RuntimeError::NotFound { session_id: agent.0.clone() })?;
+            (Arc::clone(&registered.agent), registered.def.clone())
         };
 
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        // The Runner reads the session under the owner's identity, so it must exist first.
         self.session_service
             .create(CreateRequest {
-                app_name: persisted_as.app_name.clone(),
-                user_id: persisted_as.user_id.clone(),
+                app_name: owner.app_name().to_string(),
+                user_id: owner.user_id().to_string(),
                 session_id: Some(session_id.clone()),
                 state: std::collections::HashMap::new(),
             })
             .await
             .map_err(|e| RuntimeError::internal(format!("failed to seed session: {e}")))?;
 
-        // 8. Spawn SessionLoop as background task, sharing the status the caller observes
-        //    so normal queued → running → idle transitions are visible through
-        //    `ManagedAgentRuntime::status`.
-        let status = Arc::new(RwLock::new(SessionStatus::Queued));
+        // Recorded before the loop starts, so another instance can rebuild the session from
+        // its first event on.
+        let record = SessionRecord::new(owner.app_name(), owner.user_id(), def);
+        let mut checkpoint =
+            CheckpointManager::new(session_id.clone()).with_store(Arc::clone(&self.stores.state));
+        checkpoint.set_record(record.clone());
+        checkpoint.flush().await?;
 
-        #[cfg(feature = "memory")]
-        let session_loop = SessionLoop::with_pause_controls(
-            session_id.clone(),
-            event_rx,
-            broadcast_tx.clone(),
-            Arc::clone(&parking),
-            cancel_token.clone(),
-            Arc::clone(&pause_flag),
-            Arc::clone(&pause_notify),
-            Arc::clone(&checkpoint),
-            Arc::clone(&agent_arc),
-            Arc::clone(&self.session_service),
-            self.memory.clone(),
-        )
-        .with_shared_status(Arc::clone(&status))
-        .with_owner(owner.app_name(), owner.user_id());
-        #[cfg(not(feature = "memory"))]
-        let session_loop = SessionLoop::with_pause_controls(
-            session_id.clone(),
-            event_rx,
-            broadcast_tx.clone(),
-            Arc::clone(&parking),
-            cancel_token.clone(),
-            Arc::clone(&pause_flag),
-            Arc::clone(&pause_notify),
-            Arc::clone(&checkpoint),
-            Arc::clone(&agent_arc),
-            Arc::clone(&self.session_service),
-        )
-        .with_shared_status(Arc::clone(&status))
-        .with_owner(owner.app_name(), owner.user_id());
-        tokio::spawn(session_loop.run());
-
-        // 10. Create and store ActiveSession
-        let active_session = ActiveSession {
-            agent: agent_arc,
-            persisted_as,
-            event_tx,
-            broadcast_tx,
-            cancel_token,
-            pause_flag,
-            pause_notify,
-            status,
-            checkpoint,
-        };
-
-        self.sessions.write().await.insert(session_id.clone(), active_session);
+        let active =
+            self.spawn_session(&session_id, agent_arc, &record, checkpoint, SessionStatus::Queued);
+        self.sessions.write().await.insert(session_id.clone(), active);
 
         info!(session_id = %session_id, "session started");
 
@@ -444,17 +596,20 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
 
     /// Send a user event to the session.
     ///
-    /// Dispatches the event to the session loop's input channel.
+    /// Refuses a message while the session waits on the client, and an answer to an ID the
+    /// session is not waiting on, then dispatches the event to the session loop.
     async fn send_event(
         &self,
         session: &SessionHandle,
         event: UserEvent,
     ) -> Result<(), RuntimeError> {
+        self.host(&session.0).await?;
         let sessions = self.sessions.read().await;
         let active = sessions
             .get(&session.0)
             .ok_or_else(|| RuntimeError::NotFound { session_id: session.0.clone() })?;
 
+        self.check_event(active, &event).await?;
         active
             .event_tx
             .send(event)
@@ -473,23 +628,20 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
         session: &SessionHandle,
         from_seq: Option<u64>,
     ) -> Result<BoxStream<'static, SessionEvent>, RuntimeError> {
+        self.host(&session.0).await?;
         let sessions = self.sessions.read().await;
         let active = sessions
             .get(&session.0)
             .ok_or_else(|| RuntimeError::NotFound { session_id: session.0.clone() })?;
 
-        // Subscribe to broadcast channel
         let broadcast_rx = active.broadcast_tx.subscribe();
-
-        // Read checkpoint for replay
         let checkpoint = active.checkpoint.read().await;
-        let stream = create_event_stream(&checkpoint, broadcast_rx, from_seq);
-
-        Ok(stream)
+        Ok(create_event_stream(&checkpoint, broadcast_rx, from_seq))
     }
 
-    /// Interrupt the session at the next safe boundary.
+    /// Interrupt the session at the next safe boundary, cancelling its run.
     async fn interrupt(&self, session: &SessionHandle) -> Result<(), RuntimeError> {
+        self.host(&session.0).await?;
         let sessions = self.sessions.read().await;
         let active = sessions
             .get(&session.0)
@@ -501,8 +653,9 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
         Ok(())
     }
 
-    /// Pause the session, checkpointing current state.
+    /// Pause the session.
     async fn pause(&self, session: &SessionHandle) -> Result<(), RuntimeError> {
+        self.host(&session.0).await?;
         let sessions = self.sessions.read().await;
         let active = sessions
             .get(&session.0)
@@ -515,8 +668,9 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
         Ok(())
     }
 
-    /// Resume a paused session.
+    /// Resume a paused session, or host a session stored by another instance.
     async fn resume(&self, session: &SessionHandle) -> Result<(), RuntimeError> {
+        self.host(&session.0).await?;
         let sessions = self.sessions.read().await;
         let active = sessions
             .get(&session.0)
@@ -532,6 +686,7 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
 
     /// Query the current status of a session.
     async fn status(&self, session: &SessionHandle) -> Result<SessionStatus, RuntimeError> {
+        self.host(&session.0).await?;
         let sessions = self.sessions.read().await;
         let active = sessions
             .get(&session.0)
@@ -542,6 +697,7 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
 
     /// Archive a session (terminal state).
     async fn archive(&self, session: &SessionHandle) -> Result<(), RuntimeError> {
+        self.host(&session.0).await?;
         let sessions = self.sessions.read().await;
         let active = sessions
             .get(&session.0)
@@ -556,7 +712,8 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
 
     /// Delete a session and its associated data.
     async fn delete_session(&self, session: &SessionHandle) -> Result<(), RuntimeError> {
-        // First archive (set terminal state and cancel loop)
+        // A session only another instance hosted is deleted too.
+        let _ = self.host(&session.0).await;
         {
             let sessions = self.sessions.read().await;
             if let Some(active) = sessions.get(&session.0) {
@@ -565,16 +722,18 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
             }
         }
 
-        // Remove from sessions map
         let removed = self.sessions.write().await.remove(&session.0);
         let Some(removed) = removed else {
             return Err(RuntimeError::NotFound { session_id: session.0.clone() });
         };
+        if let Some(run_id) = removed.checkpoint.read().await.durable_run_id()
+            && let Err(error) = self.stores.runs.request_cancel(run_id).await
+        {
+            debug!(session_id = %session.0, error = %error, "could not cancel the session's run");
+        }
 
-        // Deleting the handle is the control plane only. `start_session` seeded a persistent
-        // session and the Runner appended every turn to it, so stopping here reported
-        // deletion while the conversation stayed in the configured backend — surviving the
-        // process that "deleted" it. Delete under the identity creation used.
+        // Deleting the handle is the control plane only: the conversation and the stored
+        // session state are deleted under the identity creation used.
         let identity = removed.persisted_as;
         self.session_service
             .delete(adk_session::DeleteRequest {
@@ -584,7 +743,6 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
             })
             .await
             .map_err(|e| {
-                // The handle is already gone, so the caller must be told the data is not.
                 RuntimeError::internal(format!(
                     "session {} was removed from the runtime but its persisted conversation \
                      could not be deleted: {e}. The data remains under app {} / user {} and \
@@ -592,12 +750,13 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
                     identity.session_id, identity.app_name, identity.user_id
                 ))
             })?;
+        self.stores.state.delete(&identity.session_id).await?;
 
         debug!(
             session_id = %session.0,
             app_name = %identity.app_name,
             user_id = %identity.user_id,
-            "session deleted, including persisted conversation"
+            "session deleted, including persisted conversation and state"
         );
         Ok(())
     }

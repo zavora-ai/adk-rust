@@ -3,7 +3,7 @@
   "description": "Same agent definition produces identical event-type sequences regardless of provider. The PRIMARY correctness gate for provider neutrality.",
   "agent_def": {
     "name": "parity-agent",
-    "model": "gemini-2.5-flash",
+    "model": "gemini-3.7-flash",
     "system": "You are a helpful assistant with a search tool.",
     "tools": [
       {

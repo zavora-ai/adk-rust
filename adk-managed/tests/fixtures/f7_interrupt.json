@@ -3,7 +3,7 @@
   "description": "User sends an interrupt after a message. The message turn completes (instant with stub runner), then the interrupt causes the loop to exit with a final status.idle.",
   "agent_def": {
     "name": "interrupt-agent",
-    "model": "gemini-2.5-flash",
+    "model": "gemini-3.7-flash",
     "system": "You are a helpful assistant."
   },
   "scripted_model": {

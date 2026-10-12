@@ -1,9 +1,9 @@
 {
   "name": "F-3: Custom Tool (Park and Deliver)",
-  "description": "Agent invokes a custom tool, loop parks until client delivers result, then agent uses the result. Validates the park-deliver-resume flow.",
+  "description": "Agent invokes a custom tool; the turn ends with requires_action and its run parks until the client delivers the result, then a resumed turn continues from the result. Validates the park-deliver-resume flow.",
   "agent_def": {
     "name": "custom-tool-agent",
-    "model": "gemini-2.5-flash",
+    "model": "gemini-3.7-flash",
     "system": "You have access to a deploy tool. Use it when asked to deploy.",
     "tools": [
       {
@@ -50,7 +50,7 @@
     }
   ],
   "assertions": {
-    "exact_sequence": ["status.running", "agent.custom_tool_use", "agent.message", "status.idle"],
+    "exact_sequence": ["status.running", "agent.custom_tool_use", "status.idle", "status.running", "agent.message", "status.idle"],
     "must_contain": ["agent.custom_tool_use", "agent.message"],
     "must_end_with": ["status.idle"]
   }

@@ -5,7 +5,7 @@
 //!
 //! - Model (`Arc<dyn Llm>`) + system prompt → `LlmAgentBuilder`
 //! - Built-in tool declarations → in-process tool implementations
-//! - Custom tools → [`ManagedCustomTool`] wrappers (park via `ToolParkingLot`)
+//! - Custom tools → [`ManagedCustomTool`] wrappers (the turn waits on the client)
 //! - Permission policy → `ToolConfirmationPolicy`
 //! - Description → agent description
 //!
@@ -531,22 +531,21 @@ impl Tool for ManagedBuiltinTool {
 
 /// Wrapper for custom (client-executed) tools declared in a [`ManagedAgentDef`].
 ///
-/// When the Runner's agent calls `execute()`, this tool returns a pending status
-/// and signals `is_long_running() = true`. This causes the agent loop to break
-/// after the current turn, yielding control back to the session loop. The session
-/// loop then emits `agent.custom_tool_use` to notify the client and parks via
-/// the [`ToolParkingLot`](crate::parking::ToolParkingLot) until the client
-/// delivers a result through `user.custom_tool_result`.
+/// The client executes the tool, so `execute()` does not: it answers the call with a
+/// pending response and ends the agent's turn (`skip_summarization`), so the model is not
+/// asked to continue from a placeholder. The session loop then reports
+/// `agent.custom_tool_use`, ends the turn with `requires_action`, and parks the turn's
+/// durable run until the client sends `user.custom_tool_result`.
 ///
 /// # Multi-Turn Flow
 ///
-/// 1. LLM returns a function call for this custom tool
-/// 2. Agent calls `execute()` → returns pending status
-/// 3. `is_long_running() = true` breaks the agent loop
-/// 4. Session loop sees the custom tool call in emitted events
-/// 5. Session loop emits `agent.custom_tool_use`, sets `RequiresAction` stop reason
-/// 6. Session loop parks until client delivers via `user.custom_tool_result`
-/// 7. On next turn, the delivered result is available for the agent
+/// 1. The model calls this tool.
+/// 2. `execute()` answers with a pending response and ends the turn.
+/// 3. The session loop emits `agent.custom_tool_use` and `status.idle` with
+///    `requires_action`, and parks the run.
+/// 4. `user.custom_tool_result` records the result in the decision store and wakes the run.
+/// 5. The run resumes: the result replaces the pending response in the conversation, and
+///    the model continues from it.
 #[derive(Debug, Clone)]
 pub struct ManagedCustomTool {
     name: String,
@@ -567,6 +566,15 @@ impl ManagedCustomTool {
     }
 }
 
+/// The `awaiting` value that marks a custom tool call's pending response.
+pub(crate) const AWAITING_CLIENT_RESULT: &str = "client_result";
+
+/// Whether `response` is the pending response a [`ManagedCustomTool`] answers with.
+pub(crate) fn is_custom_tool_pending(response: &Value) -> bool {
+    adk_core::is_confirmation_pending(response)
+        && response.get("awaiting").and_then(Value::as_str) == Some(AWAITING_CLIENT_RESULT)
+}
+
 #[async_trait]
 impl Tool for ManagedCustomTool {
     fn name(&self) -> &str {
@@ -582,22 +590,22 @@ impl Tool for ManagedCustomTool {
     }
 
     fn is_long_running(&self) -> bool {
-        // Custom tools are client-executed. Returning true causes the agent
-        // loop to break after this turn, giving the session loop control to
-        // park and wait for the client to deliver the result.
+        // The result arrives later, from the client.
         true
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
-        // Return a structured pending response. The agent loop will break
-        // because is_long_running() = true. The session loop handles the
-        // actual parking/delivery flow.
-        Ok(serde_json::json!({
-            "status": "pending_client_execution",
-            "tool": self.name,
-            "message": "This tool requires client-side execution. The result will be provided by the client.",
-            "args_received": args
-        }))
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> adk_core::Result<Value> {
+        // A confirmation-pending response is superseded in place by the call's real
+        // response, so the client's result takes this response's slot in the history.
+        let mut response = adk_core::confirmation_pending_response(format!(
+            "custom tool '{}' is executed by the client; its result is pending",
+            self.name
+        ));
+        response["awaiting"] = Value::String(AWAITING_CLIENT_RESULT.to_string());
+        let mut actions = ctx.actions();
+        actions.skip_summarization = true;
+        ctx.set_actions(actions);
+        Ok(response)
     }
 }
 
@@ -927,7 +935,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_custom_tool_execute_returns_pending_status() {
+    async fn a_custom_tool_answers_pending_and_ends_the_turn() {
         let tool = ManagedCustomTool::new(
             "my_tool".to_string(),
             "A custom tool".to_string(),
@@ -935,11 +943,11 @@ mod tests {
         );
         let ctx = Arc::new(adk_tool::SimpleToolContext::new("test-caller"));
 
-        let result = tool.execute(ctx, serde_json::json!({"city": "Seattle"})).await.unwrap();
+        let result =
+            tool.execute(ctx.clone(), serde_json::json!({"city": "Seattle"})).await.unwrap();
 
-        assert_eq!(result["status"], "pending_client_execution");
-        assert_eq!(result["tool"], "my_tool");
-        assert_eq!(result["args_received"]["city"], "Seattle");
+        assert!(is_custom_tool_pending(&result), "{result}");
+        assert!(ctx.actions().skip_summarization, "the model must not answer a placeholder");
     }
 
     #[test]

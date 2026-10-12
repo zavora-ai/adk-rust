@@ -3,7 +3,7 @@
   "description": "Session is killed mid-execution and resumed from checkpoint. Validates that post-resume seq > pre-crash seq with no gaps or duplicates.",
   "agent_def": {
     "name": "resume-agent",
-    "model": "gemini-2.5-flash",
+    "model": "gemini-3.7-flash",
     "system": "You are a helpful assistant."
   },
   "scripted_model": {
