@@ -52,7 +52,7 @@ pub struct SchedulerTick {
 /// use adk_core::schedule::{MissedFirePolicy, Schedule, ScheduleSpec, ScheduleStore};
 /// use adk_server::background::DurableScheduler;
 ///
-/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+/// # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
 /// let schedules = Arc::new(InMemoryScheduleStore::new());
 /// let runs = Arc::new(InMemoryRunStore::new());
 /// let now = chrono::Utc::now();
