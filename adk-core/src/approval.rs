@@ -1461,6 +1461,7 @@ pub struct StoreApprovalService {
     notifiers: Vec<Arc<dyn ApprovalNotifier>>,
     run_store: Option<Arc<dyn DurableRunStore>>,
     router: Option<Arc<dyn ApprovalRouter>>,
+    audit: Option<crate::audit_log::AuditTrail>,
 }
 
 impl fmt::Debug for StoreApprovalService {
@@ -1471,6 +1472,7 @@ impl fmt::Debug for StoreApprovalService {
             .field("notifiers", &self.notifiers)
             .field("run_store", &self.run_store.is_some())
             .field("router", &self.router.is_some())
+            .field("audit", &self.audit)
             .finish()
     }
 }
@@ -1485,6 +1487,7 @@ impl StoreApprovalService {
             notifiers: Vec::new(),
             run_store: None,
             router: None,
+            audit: None,
         }
     }
 
@@ -1513,6 +1516,31 @@ impl StoreApprovalService {
     #[must_use]
     pub fn with_router(mut self, router: impl ApprovalRouter + 'static) -> Self {
         self.router = Some(Arc::new(router));
+        self
+    }
+
+    /// Records every approver's decision in `audit` before it takes effect.
+    ///
+    /// The record's actor is the approver, with the delegator they acted for in the
+    /// delegation chain; it carries the digest of the arguments shown to approvers and
+    /// of any edited arguments, never the arguments. Under
+    /// [`AuditFailureMode::Block`](crate::audit_log::AuditFailureMode::Block) a decision
+    /// whose record cannot be written is refused with `audit.record_failed`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
+    /// use adk_core::{InMemoryApprovalStore, StoreApprovalService};
+    ///
+    /// let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+    ///     .with_audit(AuditTrail::new(Arc::new(InMemoryAuditRecorder::new())));
+    /// # let _ = service;
+    /// ```
+    #[must_use]
+    pub fn with_audit(mut self, audit: crate::audit_log::AuditTrail) -> Self {
+        self.audit = Some(audit);
         self
     }
 
@@ -1880,6 +1908,33 @@ impl ApprovalService for StoreApprovalService {
             ));
         }
 
+        if let Some(trail) = &self.audit {
+            use crate::audit_log::{AuditActor, AuditDecision, AuditRecordDraft, AuditRecordKind};
+            let audited = match decision.kind {
+                ApprovalAction::Approve | ApprovalAction::Edit => AuditDecision::Approved,
+                ApprovalAction::Reject | ApprovalAction::Respond => AuditDecision::Rejected,
+            };
+            let mut actor = AuditActor::subject(decision.approver.clone());
+            actor.delegation_chain.extend(decision.via_delegation.clone());
+            let action = serde_json::to_value(decision.kind).unwrap_or(Value::Null);
+            let mut draft = AuditRecordDraft::new(AuditRecordKind::Approval, &request.tool_name)
+                .actor(actor)
+                .args_digest(trail.digest(&request.args_redacted))
+                .decision(audited)
+                .ext("source", Value::String("approval_service".to_string()))
+                .ext("approvalId", Value::String(id.to_string()))
+                .ext("approvalAction", action)
+                .ext("version", Value::from(expected_version + 1))
+                .ext("sessionId", Value::String(request.scope.session_id.clone()));
+            if let Some(acting) = &request.acting {
+                draft = draft.ext("actingAgent", Value::String(acting.agent.id.to_string()));
+            }
+            if let Some(edited) = &decision.edited_args {
+                draft = draft.ext("editedArgsDigest", Value::String(trail.digest(edited)));
+            }
+            trail.record(draft).await?;
+        }
+
         let mut next = request.clone();
         next.decisions.push(decision.clone());
         next.version = expected_version + 1;
@@ -2239,6 +2294,89 @@ mod tests {
             woken.map(|claim| claim.record.run_id),
             Some(run_id),
             "the decision woke the run"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_approver_decision_is_audited_before_it_takes_effect() {
+        use crate::audit_log::{
+            AuditActor, AuditDecision, AuditRecordDraft, AuditRecordKind, AuditRecorder,
+            AuditTrail, InMemoryAuditRecorder,
+        };
+        use crate::{ApprovalStore, InMemoryApprovalStore};
+
+        #[derive(Debug)]
+        struct Broken;
+        #[async_trait::async_trait]
+        impl AuditRecorder for Broken {
+            fn digest(&self, value: &Value) -> String {
+                crate::json_digest(value)
+            }
+            async fn record(&self, _draft: AuditRecordDraft) -> Result<()> {
+                Err(crate::AdkError::session("audit store down"))
+            }
+        }
+
+        let call = ToolConfirmationRequest {
+            tool_name: "pay".into(),
+            function_call_id: Some("c1".into()),
+            args: json!({ "to": "acct-secret", "amount": 5 }),
+        };
+        let scope = ApprovalScope::new("app", "u", "s");
+        let request = |id: &str| {
+            ApprovalRequest::new(
+                id,
+                scope.clone(),
+                &call,
+                ApprovalPolicy::new([ApproverSelector::human("ana")]),
+            )
+        };
+
+        let recorder = InMemoryAuditRecorder::new();
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let service = StoreApprovalService::new(store.clone())
+            .with_audit(AuditTrail::new(Arc::new(recorder.clone())));
+        let submitted = service.submit(request("req")).await.unwrap();
+        service
+            .decide(
+                &submitted.id,
+                submitted.version,
+                ApprovalDecision::approve(SubjectRef::human("ana")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            recorder.records(),
+            vec![
+                AuditRecordDraft::new(AuditRecordKind::Approval, "pay")
+                    .actor(AuditActor::subject(SubjectRef::human("ana")))
+                    .args_digest(recorder.digest(&submitted.args_redacted))
+                    .decision(AuditDecision::Approved)
+                    .ext("source", json!("approval_service"))
+                    .ext("approvalId", json!(submitted.id))
+                    .ext("approvalAction", json!("approve"))
+                    .ext("version", json!(submitted.version + 1))
+                    .ext("sessionId", json!("s"))
+            ]
+        );
+
+        let blocked_store = Arc::new(InMemoryApprovalStore::new());
+        let blocked = StoreApprovalService::new(blocked_store.clone())
+            .with_audit(AuditTrail::new(Arc::new(Broken)));
+        let submitted = blocked.submit(request("req-2")).await.unwrap();
+        let error = blocked
+            .decide(
+                &submitted.id,
+                submitted.version,
+                ApprovalDecision::approve(SubjectRef::human("ana")),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "audit.record_failed");
+        assert!(!blocked_store.has_decision(&scope, &call.fingerprint()).await.unwrap());
+        assert_eq!(
+            blocked.get(&submitted.id).await.unwrap().unwrap().state,
+            ApprovalState::Pending
         );
     }
 }

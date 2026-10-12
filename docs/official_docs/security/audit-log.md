@@ -125,6 +125,7 @@ drafts in memory for tests. The runner installs the trail on each run's `RunConf
 | Tool call denied | Governed path | `tool_call` | Tool name | `denied` / `not_run` | `tool_policy[:<name>]`, `guardrail`, `governance` (frozen), `confirmation` |
 | Tool call held for approval | Governed path | `tool_call` | Tool name | `approval_required` / `not_run` | `tool_policy[:<name>]` or `confirmation` |
 | Approval decision applied | Governed path, before the call's decision | `approval` | Tool name | `approved` or `rejected` | — |
+| Approver decision | `StoreApprovalService::with_audit`, before the decision is stored | `approval` | Tool name | `approved` (approve, edit) or `rejected` (reject, respond) | — |
 | Freeze, unfreeze | `GovernanceControl` | `governance` | `governance.freeze`, `governance.unfreeze` | — / `succeeded` | — |
 | Payment decision | Payment tools (ACP checkout, AP2 mandate) | `payment` | `payment.create_checkout`, `payment.complete_checkout`, `payment.execute_payment` | `allowed`, `approved`, `denied`, `approval_required`, `rejected` | `payment_policy` |
 | Payment outcome | Payment tools, after the backend returns | `payment` | As above | `succeeded` or `failed` | `payment_policy` |
@@ -154,8 +155,15 @@ A record that follows an action that already happened cannot refuse it: a freeze
 when its record fails, and a payment's outcome record, a refusal's record, and a cancelled
 run's outcome-unknown records are logged on failure.
 
+An approver's decision through the approval service names the approver as the actor, with
+the delegator they acted for in `delegationChain`, and carries `approvalId`,
+`approvalAction`, and the digest of any edited arguments; under `Block` a decision that
+cannot be recorded is refused. When the run later applies the stored decision, the governed
+path writes its own `approval` record with `source` `approval_store`.
+
 `GovernanceControl::freeze_recorded` and `unfreeze_recorded` take the acting administrator
-and wait for the record; the `POST /api/admin/freeze` and `unfreeze` endpoints use them with
+and wait for the record; on a mirrored control they write the shared governance store, as
+`freeze_replicated` and `unfreeze_replicated` do, with the administrator as the issuer; the `POST /api/admin/freeze` and `unfreeze` endpoints use them with
 the authenticated user, and an unrecordable unfreeze answers `503`. `freeze` and `unfreeze`
 record in the background.
 

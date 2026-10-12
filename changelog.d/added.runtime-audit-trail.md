@@ -8,9 +8,10 @@
   `AuditFailureMode::Block` (the default) an action whose record cannot be written does not
   happen (`audit.record_failed`). New: `AuditRecorder`, `AuditTrail`,
   `InMemoryAuditRecorder`, `AuditActor::for_invocation`, `GovernanceControl::attach_audit`,
-  `freeze_recorded`, `unfreeze_recorded`, `ToolPolicy::policy_ref`,
-  `DeclarativePolicyBuilder::name`, and `PaymentCaller::with_audit`; `signed_audit::AuditLog`
-  implements `AuditRecorder`. `AuditFailureMode` moves to `adk_core::audit_log` and is
+  `freeze_recorded`, `unfreeze_recorded` (replicated on a mirrored control),
+  `StoreApprovalService::with_audit` (each approver decision, refused when unrecordable),
+  `ToolPolicy::policy_ref`, `DeclarativePolicyBuilder::name`, and
+  `PaymentCaller::with_audit`; `signed_audit::AuditLog` implements `AuditRecorder`. `AuditFailureMode` moves to `adk_core::audit_log` and is
   re-exported from `adk-auth`.
 - **Audit log stores on every backend** (`adk-session`): `RedisAuditLogStore`,
   `MongoAuditLogStore`, `Neo4jAuditLogStore`, and `FirestoreAuditLogStore` pass
