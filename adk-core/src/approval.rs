@@ -2187,4 +2187,58 @@ mod tests {
             .escalate_after(Duration::from_secs(30), []);
         assert!(unordered.validate().is_err());
     }
+
+    #[tokio::test]
+    async fn resolving_a_request_wakes_its_waiting_run() {
+        use crate::{
+            ApprovalStore, DurableRunStore, InMemoryApprovalStore, InMemoryRunStore, NewRun,
+            RunState,
+        };
+
+        let runs = Arc::new(InMemoryRunStore::new());
+        let enqueued =
+            runs.enqueue(NewRun::new("q", "app", "u", "agent", json!({}))).await.unwrap();
+        let run_id = enqueued.record().unwrap().run_id.clone();
+        let claimed = runs.claim("q", "worker", Duration::from_secs(60)).await.unwrap().unwrap();
+        // The worker parks the run until the approval arrives.
+        runs.wait(&run_id, claimed.epoch, None).await.unwrap();
+        assert_eq!(runs.get(&run_id).await.unwrap().unwrap().state, RunState::Waiting);
+
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let service = StoreApprovalService::new(store.clone()).with_run_store(runs.clone());
+        let call = ToolConfirmationRequest {
+            tool_name: "pay".into(),
+            function_call_id: Some("c1".into()),
+            args: json!({ "amount": 5 }),
+        };
+        let scope = ApprovalScope::new("app", "u", "s");
+        let request = service
+            .submit(
+                ApprovalRequest::new(
+                    "req",
+                    scope.clone(),
+                    &call,
+                    ApprovalPolicy::new([ApproverSelector::human("ana")]),
+                )
+                .with_run_id(run_id.clone()),
+            )
+            .await
+            .unwrap();
+        service
+            .decide(
+                &request.id,
+                request.version,
+                ApprovalDecision::approve(SubjectRef::human("ana")),
+            )
+            .await
+            .unwrap();
+
+        assert!(store.has_decision(&scope, &call.fingerprint()).await.unwrap());
+        let woken = runs.claim("q", "worker", Duration::from_secs(60)).await.unwrap();
+        assert_eq!(
+            woken.map(|claim| claim.record.run_id),
+            Some(run_id),
+            "the decision woke the run"
+        );
+    }
 }
