@@ -93,36 +93,39 @@ impl InFlightCalls {
         }
     }
 
-    /// Records every call still in flight as having an unknown outcome.
-    async fn audit_interrupted(
+    /// Records every call still in flight with the outcome `outcome` assigns it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error the trail reports, which it does only in
+    /// [`AuditFailureMode::Block`](adk_core::audit_log::AuditFailureMode::Block).
+    async fn audit_calls(
         &self,
         trail: &adk_core::audit_log::AuditTrail,
         run_config: &RunConfig,
-        app_name: &str,
-        user_id: &str,
-        session_id: &str,
-    ) {
-        use adk_core::audit_log::{
-            AuditActor, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome,
-        };
+        identity: &adk_core::AdkIdentity,
+        cause: &str,
+        outcome: impl Fn(&InFlightCall) -> adk_core::audit_log::AuditRecordOutcome,
+    ) -> Result<()> {
+        use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind};
         for call in &self.0 {
             let mut draft = AuditRecordDraft::new(AuditRecordKind::ToolCall, call.name.as_str())
                 .actor(AuditActor::from(&run_config.acting_context_for(
-                    app_name,
+                    identity.app_name.as_ref(),
                     &call.author,
-                    user_id,
+                    identity.user_id.as_ref(),
                     &call.invocation_id,
                 )))
                 .args_digest(trail.digest(&call.args))
-                .outcome(AuditRecordOutcome::OutcomeUnknown)
-                .ext("cause", serde_json::Value::String("cancelled".to_string()))
-                .ext("sessionId", serde_json::Value::String(session_id.to_string()));
+                .outcome(outcome(call))
+                .ext("cause", serde_json::Value::String(cause.to_string()))
+                .ext("sessionId", serde_json::Value::String(identity.session_id.to_string()));
             if let Some(id) = &call.id {
                 draft = draft.ext("functionCallId", serde_json::Value::String(id.clone()));
             }
-            // The run is already over, so a failed write is logged by the trail.
-            let _ = trail.record(draft).await;
+            trail.record(draft).await?;
         }
+        Ok(())
     }
 
     /// Answers every call still in flight with an outcome-unknown response, one
@@ -1658,13 +1661,14 @@ impl Runner {
                 // Stops the interrupted tool before its calls are answered.
                 drop(agent_stream);
                 if let Some(trail) = &run_config.audit {
-                    in_flight
-                        .audit_interrupted(
+                    // The run is already over, so a failed write is logged by the trail.
+                    let _ = in_flight
+                        .audit_calls(
                             trail,
                             &run_config,
-                            &app_name,
-                            user_id.as_ref(),
-                            session_id.as_ref(),
+                            &identity,
+                            "cancelled",
+                            |_| adk_core::audit_log::AuditRecordOutcome::OutcomeUnknown,
                         )
                         .await;
                 }
@@ -1965,6 +1969,30 @@ impl Runner {
             let key =
                 format!("{}/{user_id}/{session_id}/{}/{id}", self.app_name, call.invocation_id);
             records.insert(id.clone(), ledger.get(&key).await?);
+        }
+        // Recorded before the calls are answered, so a refused write leaves them for the
+        // next recovery rather than resolved without a record.
+        if let Some(trail) = self.audit.as_ref().or(self.run_config.audit.as_ref()) {
+            let mut run_config = self.run_config.clone();
+            if run_config.acting_context.is_none()
+                && let Some(source) = &self.identity_source
+            {
+                run_config.acting_context =
+                    Some(adk_core::ActingContext::new(source.current().await?, String::new()));
+            }
+            in_flight
+                .audit_calls(trail, &run_config, &identity, "recovered", |call| {
+                    use adk_core::audit_log::AuditRecordOutcome;
+                    let record = call.id.as_ref().and_then(|id| records.get(id)).cloned();
+                    match record.flatten().and_then(|record| record.outcome) {
+                        Some(adk_core::ActionOutcome::Succeeded { .. }) => {
+                            AuditRecordOutcome::Succeeded
+                        }
+                        Some(adk_core::ActionOutcome::Failed { .. }) => AuditRecordOutcome::Failed,
+                        _ => AuditRecordOutcome::OutcomeUnknown,
+                    }
+                })
+                .await?;
         }
         let answered = in_flight.0.len();
         let events = in_flight.answer_with(|call| {
