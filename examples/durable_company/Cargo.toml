@@ -1,0 +1,28 @@
+[package]
+name = "durable-company"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "A small autonomous accounts-payable process run end to end on the durable runtime: cron, worker crash and resume, approval quorum, governed payment under a spend cap, kill switch, and a signed audit log"
+
+[workspace]
+
+[dependencies]
+adk-agent = { path = "../../adk-agent" }
+adk-auth = { path = "../../adk-auth", features = ["signed-audit"] }
+adk-core = { path = "../../adk-core", features = ["cron"] }
+adk-model = { path = "../../adk-model", default-features = false, features = ["openai", "anthropic"] }
+adk-payments = { path = "../../adk-payments" }
+adk-runner = { path = "../../adk-runner" }
+adk-server = { path = "../../adk-server", features = ["background"] }
+adk-session = { path = "../../adk-session", features = ["sqlite", "postgres"] }
+anyhow = "1.0"
+async-trait = "0.1"
+chrono = "0.4"
+dotenvy = "0.15"
+serde_json = "1.0"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres"] }
+tokio = { version = "1.40", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }

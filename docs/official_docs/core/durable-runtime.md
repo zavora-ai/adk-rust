@@ -563,6 +563,29 @@ two handles, drain one queue of 48 runs (16 claimers and 16 runs on the Firestor
 and every run is claimed exactly once. The nightly
 `durable-stores` job runs all of them against live servers and the Firestore emulator.
 
+## End-to-end example
+
+[`examples/durable_company`](https://github.com/zavora-ai/adk-rust/tree/main/examples/durable_company)
+runs one accounts-payable day against a real model, with every piece of this page and the
+governance features working together. Replicas are separate OS processes on SQLite and
+PostgreSQL, and tasks in one process on the in-memory stores.
+
+| Step | Exercises | Checked |
+|------|-----------|---------|
+| Cron fires | `DurableScheduler`, `ScheduleStore` | One run keyed `schedule:ap-daily:{fire time}`; the schedule advances |
+| Worker killed mid-tool | `DurableWorker`, fenced lease, SIGKILL | The run stays `Running` with a `Session` checkpoint |
+| Another process resumes | Lease expiry, `recover_unanswered_calls` | Claimed at attempt 2; the interrupted call is answered and audited `outcome_unknown` |
+| Payment over the threshold | `DeclarativePolicy` (`for_agent`, `at_most`), `AgentPrincipal` | The run parks `Waiting` on `AwaitingApproval` |
+| Quorum of two | `StoreApprovalService` | Self-approval refused; one approval keeps the run parked; the second wakes it |
+| Payment | Governed checkout (`adk-payments`), action ledger | Each invoice paid once |
+| Spend cap | `SpendLedger` daily org limit | A payment the policy allows is refused before the merchant |
+| Freeze | `GovernanceControl::mirrored`, `freeze_recorded` | No run is claimed and no schedule fires on any replica |
+| Audit | Signed audit log per process, `adk-rust audit export` / `verify` | Every log verifies; an edited record does not |
+
+```bash
+cargo run --manifest-path examples/durable_company/Cargo.toml -- --provider openai --store sqlite
+```
+
 ## Related
 
 - [Durable Stores](../security/durable-stores.md)
