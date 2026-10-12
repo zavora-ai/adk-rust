@@ -598,8 +598,11 @@ async fn one_firing_per_schedule(backend: Backend, dir: PathBuf) {
                 .collect()
         })
         .collect();
+    // Every process raced for firings. Tick counts vary by backend: the Firestore
+    // emulator holds contended transactions on lock waits of up to seconds.
     for (i, report) in reports.iter().enumerate() {
-        assert!(report["ticks"] >= 20, "scheduler-{i} barely ran: {report:?}");
+        let fired = report["enqueued"] + report["existing"] + report["lost"];
+        assert!(fired >= 1, "scheduler-{i} took no part in firing: {report:?}");
     }
     let created: usize = reports.iter().map(|report| report["enqueued"]).sum();
     assert_eq!(created, total, "the processes created each run once: {reports:?}");

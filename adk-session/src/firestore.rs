@@ -120,7 +120,8 @@ impl FirestoreSessionService {
     /// # }
     /// ```
     pub fn from_db(db: FirestoreDb, root_collection: Option<String>) -> Self {
-        let root_collection = root_collection.unwrap_or_else(|| DEFAULT_ROOT_COLLECTION.to_string());
+        let root_collection =
+            root_collection.unwrap_or_else(|| DEFAULT_ROOT_COLLECTION.to_string());
         Self { core: SessionCore { store: FirestoreStore { db, root_collection } } }
     }
 
