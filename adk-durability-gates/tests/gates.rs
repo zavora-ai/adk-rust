@@ -467,6 +467,8 @@ fn occurrences(
 async fn one_firing_per_schedule(backend: Backend, dir: PathBuf) {
     const INTERVAL: Duration = Duration::from_millis(250);
     const RACE: Duration = Duration::from_millis(4000);
+    const MIN_INTERVAL_FIRINGS: usize = 12;
+    const MIN_CRON_FIRINGS: usize = 3;
     let stores = backend.open().await;
     delete_gate_schedules(&stores).await;
 
@@ -527,7 +529,16 @@ async fn one_firing_per_schedule(backend: Backend, dir: PathBuf) {
         (!fired.is_empty()).then_some(())
     })
     .await;
+    // The race runs for at least RACE and until the recurring schedules fired enough
+    // contended occurrences; the Firestore emulator's lock waits make it slower there.
+    let cron_queue = format!("fired/{cron}");
     tokio::time::sleep(RACE).await;
+    eventually("enough contended firings", Duration::from_secs(120), || async {
+        let every = stores.runs.list(RunFilter::default().queue(&every_queue)).await.unwrap();
+        let cron = stores.runs.list(RunFilter::default().queue(&cron_queue)).await.unwrap();
+        (every.len() >= MIN_INTERVAL_FIRINGS && cron.len() >= MIN_CRON_FIRINGS).then_some(())
+    })
+    .await;
     for process in &mut processes {
         process.assert_alive();
     }
@@ -579,12 +590,6 @@ async fn one_firing_per_schedule(backend: Backend, dir: PathBuf) {
         }
         total += keys.len();
     }
-    let every_runs = stores.runs.list(RunFilter::default().queue(&every_queue)).await.unwrap();
-    assert!(every_runs.len() >= 12, "the interval schedule fired {} times", every_runs.len());
-    let cron_runs =
-        stores.runs.list(RunFilter::default().queue(format!("fired/{cron}"))).await.unwrap();
-    assert!(cron_runs.len() >= 3, "the cron schedule fired {} times", cron_runs.len());
-
     let reports: Vec<HashMap<String, usize>> = (0..3)
         .map(|i| {
             let line = read_lines(&dir.join(format!("scheduler-{i}.report")))
