@@ -86,6 +86,7 @@ vertex-remote-engine = [
 
 [dev-dependencies]
 adk-graph = { path = "../adk-graph" }
+adk-session = { path = "../adk-session", features = ["sqlite", "postgres"] }
 async-stream.workspace = true
 tracing-subscriber = "0.3"
 uuid = { version = "1.23", features = ["v4"] }

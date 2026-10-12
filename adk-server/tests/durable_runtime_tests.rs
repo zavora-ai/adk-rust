@@ -1127,3 +1127,159 @@ async fn run_creation_honours_idempotency_and_double_texting() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let _ = OnConflict::Interrupt;
 }
+
+// --- Parking on held tool calls ---
+
+/// Issues `transfer` until it has a real (not pending) response, then reports it.
+struct TransferModel;
+
+#[async_trait]
+impl Llm for TransferModel {
+    fn name(&self) -> &str {
+        "transfer-script"
+    }
+
+    async fn generate_content(&self, req: LlmRequest, _stream: bool) -> Result<LlmResponseStream> {
+        let answered = req.contents.iter().flat_map(|c| &c.parts).find_map(|part| match part {
+            Part::FunctionResponse { function_response, .. }
+                if function_response.name == "transfer"
+                    && !adk_core::is_confirmation_pending(&function_response.response) =>
+            {
+                Some(function_response.response.clone())
+            }
+            _ => None,
+        });
+        let content = match answered {
+            Some(response) => Content::new("model").with_text(format!("transfer: {response}")),
+            None => Content {
+                role: "model".to_string(),
+                parts: vec![Part::FunctionCall {
+                    name: "transfer".to_string(),
+                    args: json!({ "amountCents": 5000 }),
+                    id: Some("call-transfer-1".to_string()),
+                    thought_signature: None,
+                }],
+            },
+        };
+        let response =
+            LlmResponse { content: Some(content), turn_complete: true, ..Default::default() };
+        Ok(Box::pin(futures::stream::iter([Ok(response)])))
+    }
+}
+
+struct TransferTool {
+    executions: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Tool for TransferTool {
+    fn name(&self) -> &str {
+        "transfer"
+    }
+
+    fn description(&self) -> &str {
+        "moves money"
+    }
+
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        self.executions.fetch_add(1, Ordering::SeqCst);
+        Ok(json!({ "status": "sent" }))
+    }
+}
+
+/// A run that ends holding a tool call parks as `Waiting` instead of finishing; a wake
+/// after the decision resumes the same session and the approved call executes once.
+#[tokio::test]
+async fn a_held_call_parks_the_run_and_a_wake_resumes_it() {
+    use adk_core::{ApprovalScope, ApprovalStore, InMemoryApprovalStore, ToolApproval};
+
+    let sessions = Arc::new(InMemorySessionService::new());
+    let approvals = Arc::new(InMemoryApprovalStore::new());
+    let executions = Arc::new(AtomicUsize::new(0));
+    let agent = LlmAgentBuilder::new("ops")
+        .model(Arc::new(TransferModel) as Arc<dyn Llm>)
+        .tool(Arc::new(TransferTool { executions: Arc::clone(&executions) }))
+        .require_tool_confirmation("transfer")
+        .build()
+        .unwrap();
+    let runner = Arc::new(
+        Runner::builder()
+            .app_name("ops")
+            .agent(Arc::new(agent))
+            .session_service(Arc::clone(&sessions) as Arc<dyn SessionService>)
+            .approval_store(Arc::clone(&approvals) as Arc<dyn ApprovalStore>)
+            .action_ledger(Arc::new(InMemoryActionLedger::new()))
+            .build()
+            .unwrap(),
+    );
+    let state = BackgroundState::new().with_agent("ops", runner).with_worker_config(
+        worker_config("w").with_approval_timeout(Some(Duration::from_secs(600))),
+    );
+    let runs = Arc::clone(state.run_store());
+    let (status, submitted) = post_run(
+        &state,
+        json!({ "target": "ops", "input": "send 50 USD", "sessionId": "pay-1", "userId": "alice" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let run_id = submitted["runId"].as_str().unwrap().to_string();
+
+    let probe = Arc::clone(&runs);
+    let id = run_id.clone();
+    let parked = wait_for(Duration::from_secs(5), move || {
+        let runs = Arc::clone(&probe);
+        let id = id.clone();
+        Box::pin(async move {
+            runs.get(&id).await.ok().flatten().filter(|run| run.state == RunState::Waiting)
+        })
+    })
+    .await
+    .expect("the run parks instead of finishing");
+    let Some(RunCheckpointRef::AwaitingApproval { session_id, fingerprints, expires_at, .. }) =
+        parked.checkpoint.clone()
+    else {
+        panic!("parked without an approval checkpoint: {:?}", parked.checkpoint);
+    };
+    assert_eq!(session_id, "pay-1");
+    assert_eq!(fingerprints.len(), 1);
+    assert!(expires_at.is_some(), "the approval timeout sets the wait's end");
+    assert_eq!(parked.attempt, 1);
+    assert_eq!(executions.load(Ordering::SeqCst), 0, "nothing executes before the decision");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(runs.get(&run_id).await.unwrap().unwrap().state, RunState::Waiting, "stays parked");
+
+    let scope = ApprovalScope::new("ops", "alice", "pay-1");
+    approvals.decide(&scope, &fingerprints[0], ToolApproval::approve()).await.unwrap();
+    assert_eq!(state.wake_session_runs("ops", "alice", "pay-1").await.unwrap(), 1);
+
+    let finished = wait_terminal(&runs, &run_id).await;
+    state.shutdown_worker().await;
+    assert_eq!(finished.state, RunState::Completed, "{finished:?}");
+    assert_eq!(finished.attempt, 1, "a wake resumes the same attempt");
+    assert_eq!(
+        executions.load(Ordering::SeqCst),
+        1,
+        "the approved call executes once: {finished:?}"
+    );
+    assert_eq!(
+        finished.result.as_ref().unwrap()["text"],
+        format!("transfer: {}", json!({ "status": "sent" }))
+    );
+}
+
+/// `POST /runs/{id}/wake` reaches the store.
+#[tokio::test]
+async fn the_wake_route_wakes_a_run() {
+    let state = BackgroundState::new().with_embedded_worker(false);
+    let response = background_runs_router_with_state(state)
+        .oneshot(
+            Request::builder().method("POST").uri("/runs/absent/wake").body(Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

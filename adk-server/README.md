@@ -293,6 +293,7 @@ let app = ServerBuilder::new(config)
 | `/runs` | GET | List runs (`state`, `sessionId`, `limit`) |
 | `/runs/{id}` | GET | Read a run's status, attempts, checkpoint, and result |
 | `/runs/{id}` | DELETE | Cancel a run; a running run stops at its worker's next heartbeat, on whichever replica |
+| `/runs/{id}/wake` | POST | Make a run parked on a held tool call claimable now; the approval service calls it after a decision |
 | `/cron` | POST / GET | Create and list cron jobs |
 | `/cron/{id}` | GET / PATCH / DELETE | Read, pause or resume, and delete a cron job |
 

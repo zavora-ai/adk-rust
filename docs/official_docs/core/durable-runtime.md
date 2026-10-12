@@ -193,6 +193,7 @@ same store and queue shares the work.
 | `max_concurrent_runs` | 4 | Attempts executed at once |
 | `run_timeout` | `None` | Fails an attempt that runs longer (not retried) |
 | `retain_finished` | 24 h | Finished runs older than this are pruned by the claim loop |
+| `approval_timeout` | `None` | How long a run parked on a held tool call waits for a decision; `None` waits until woken |
 
 One attempt of a claimed run:
 
@@ -215,6 +216,8 @@ call, session write, or store write.
 | `WorkerHandle` method | Effect |
 |-----------------------|--------|
 | `shutdown().await` | Stops claiming and waits for in-flight attempts to write their outcome |
+| `wake()` | Tries a claim now instead of after `poll_interval` |
+| `heartbeat_now()` | Makes every in-flight attempt heartbeat now, so a cancellation requested in this process is seen at once |
 | `abort()` | Drops the loop and every in-flight attempt without writing, as a crash would; their leases expire and another worker recovers them |
 
 ```rust,ignore
@@ -231,6 +234,28 @@ let handle = worker.spawn();
 // ...
 handle.shutdown().await;
 ```
+
+## Parking on held tool calls
+
+An agent run that ends holding a tool call for approval (no decision available) parks
+instead of finishing:
+
+1. The worker records `RunCheckpointRef::AwaitingApproval { session_id, invocation_id,
+   fingerprints, expires_at }`. `fingerprints` are the held calls' decision keys
+   (`ToolConfirmationRequest::fingerprint`); `expires_at` is `now + approval_timeout` when one
+   is configured.
+2. It calls `DurableRunStore::wait(run_id, epoch, expires_at)`; the run is `Waiting` and holds
+   no lease.
+3. The approval service records the decision and wakes the run with
+   `BackgroundState::wake_run(run_id)`, `BackgroundState::wake_session_runs(app, user,
+   session)`, or `POST /runs/{run_id}/wake`. A wake that lands before the run parks is kept
+   (`wake_pending`).
+4. The next claim continues at the same attempt and resumes the same session with an empty user
+   turn; the agent dispatches the held call under its original call id through the governed
+   path, so the approved call executes once and a denied one is answered as denied.
+
+A run claimed again past `expires_at` with the same calls still held fails with
+`approval expired`.
 
 ## Crash resume
 
@@ -273,6 +298,11 @@ let registry = WorkflowRegistry::new().register_durable("settle", move |input, r
     }
 });
 ```
+
+**Across processes.** `adk-server/tests/durable_multiprocess.rs` runs the gate with separate
+OS processes on SQLite files (PR tier) and PostgreSQL (`#[ignore]`, nightly `durable-stores`):
+the process running the charge is killed with SIGKILL mid-call, and a second process completes
+the run with one charge, answered `outcome_unknown` from the durable action ledger.
 
 **Known limits.**
 

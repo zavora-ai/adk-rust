@@ -18,3 +18,9 @@
   `Runner::recover_unanswered_calls` answers function calls a stopped process left
   unanswered from the action ledger (`already_succeeded`, `already_failed`, or
   `outcome_unknown`) without executing them.
+- **Parking on held tool calls** (`adk-server`, `adk-core`): an agent run that ends holding a
+  tool call for approval is parked with `DurableRunStore::wait` under the new
+  `RunCheckpointRef::AwaitingApproval` checkpoint (held fingerprints and expiry,
+  `DurableWorkerConfig::approval_timeout`) instead of finishing. `BackgroundState::wake_run`,
+  `BackgroundState::wake_session_runs`, and `POST /runs/{run_id}/wake` resume it on the same
+  session, where the held call executes with its decision.

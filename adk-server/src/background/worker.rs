@@ -11,7 +11,12 @@
 //! 3. The target runs: an agent through its [`Runner`], or a workflow through the
 //!    [`WorkflowExecutor`]. The worker records where the run is checkpointed with
 //!    [`set_checkpoint`](DurableRunStore::set_checkpoint) before any progress is made.
-//! 4. [`finish`](DurableRunStore::finish) ends the attempt, fenced by the epoch.
+//! 4. [`finish`](DurableRunStore::finish) ends the attempt, fenced by the epoch. An agent
+//!    run that ends holding a tool call for approval is parked instead: the worker records
+//!    [`RunCheckpointRef::AwaitingApproval`] and calls
+//!    [`wait`](DurableRunStore::wait); a [`wake`](DurableRunStore::wake) after the
+//!    decision makes it claimable, and the claim resumes the same session so the held call
+//!    executes with its decision.
 //!
 //! # Fencing a stalled worker
 //!
@@ -90,6 +95,10 @@ pub struct DurableWorkerConfig {
     /// Finished runs older than this are pruned by the worker loop; `None` keeps them.
     /// Defaults to 24 hours.
     pub retain_finished: Option<Duration>,
+    /// How long an agent run parked on a held tool call waits for a decision; `None`
+    /// waits until woken. A run resumed past this deadline with the call still held
+    /// fails with `approval expired`.
+    pub approval_timeout: Option<Duration>,
 }
 
 impl Default for DurableWorkerConfig {
@@ -102,6 +111,7 @@ impl Default for DurableWorkerConfig {
             max_concurrent_runs: 4,
             run_timeout: None,
             retain_finished: Some(Duration::from_secs(24 * 60 * 60)),
+            approval_timeout: None,
         }
     }
 }
@@ -140,6 +150,12 @@ impl DurableWorkerConfig {
     /// Fails an attempt that runs longer than `timeout`.
     pub fn with_run_timeout(mut self, timeout: Duration) -> Self {
         self.run_timeout = Some(timeout);
+        self
+    }
+
+    /// Sets how long a run parked on a held tool call waits for a decision.
+    pub fn with_approval_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.approval_timeout = timeout;
         self
     }
 
@@ -199,6 +215,14 @@ impl std::fmt::Debug for DurableWorker {
 enum Stop {
     /// The lease is no longer held; another worker owns the run.
     LeaseLost,
+}
+
+/// How an attempt that ran to its end left the run.
+enum Attempt {
+    /// The run finished with a result.
+    Done(Value),
+    /// The run holds tool calls for approval and waits, until this time when set.
+    Parked(Option<chrono::DateTime<chrono::Utc>>),
 }
 
 /// A failed attempt.
@@ -418,7 +442,19 @@ impl DurableWorker {
                 return None;
             }
             Ok(_) if lease.cancel_requested.load(Ordering::SeqCst) => RunOutcome::Cancelled,
-            Ok(Ok(value)) => RunOutcome::Completed(value),
+            Ok(Ok(Attempt::Parked(until))) => {
+                return match self.runs.wait(&run_id, epoch, until).await {
+                    Ok(()) => {
+                        tracing::info!(parent: &span, wait.until = ?until, "run parked until its held tool calls are decided");
+                        self.runs.get(&run_id).await.ok().flatten()
+                    }
+                    Err(error) => {
+                        tracing::warn!(parent: &span, error = %error, "could not park the run; another worker owns it");
+                        None
+                    }
+                };
+            }
+            Ok(Ok(Attempt::Done(value))) => RunOutcome::Completed(value),
             Ok(Err(failure)) => {
                 RunOutcome::Failed { error: failure.error, retryable: failure.retryable }
             }
@@ -483,7 +519,7 @@ impl DurableWorker {
         epoch: u64,
         lease: &Arc<LeaseState>,
         cancel: &CancellationToken,
-    ) -> Result<Result<Value, Failure>, Stop> {
+    ) -> Result<Result<Attempt, Failure>, Stop> {
         if let Some(runner) = self.agents.get(&record.target) {
             return self.run_agent(runner, record, epoch, lease, cancel).await;
         }
@@ -529,6 +565,7 @@ impl DurableWorker {
         Ok(workflows
             .execute_durable(&record.target, input, context)
             .await
+            .map(Attempt::Done)
             .map_err(|error| Failure { error, retryable: true }))
     }
 
@@ -554,15 +591,24 @@ impl DurableWorker {
         epoch: u64,
         lease: &Arc<LeaseState>,
         cancel: &CancellationToken,
-    ) -> Result<Result<Value, Failure>, Stop> {
+    ) -> Result<Result<Attempt, Failure>, Stop> {
         let user_id = record.user_id.as_str();
         let session_id = match (&record.checkpoint, &record.session_id) {
-            (Some(RunCheckpointRef::Session { session_id, .. }), _) => session_id.clone(),
+            (
+                Some(
+                    RunCheckpointRef::Session { session_id, .. }
+                    | RunCheckpointRef::AwaitingApproval { session_id, .. },
+                ),
+                _,
+            ) => session_id.clone(),
             (_, Some(session_id)) => session_id.clone(),
             _ => format!("run-{}", record.run_id),
         };
         let resume_from = match &record.checkpoint {
-            Some(RunCheckpointRef::Session { invocation_id, .. }) => invocation_id.clone(),
+            Some(
+                RunCheckpointRef::Session { invocation_id, .. }
+                | RunCheckpointRef::AwaitingApproval { invocation_id, .. },
+            ) => invocation_id.clone(),
             _ => None,
         };
         let prepared = async {
@@ -590,7 +636,7 @@ impl DurableWorker {
         };
         let content = match prepared.await {
             Ok(Prepared::Done(text)) => {
-                return Ok(Ok(agent_result(&text, &session_id, None)));
+                return Ok(Ok(Attempt::Done(agent_result(&text, &session_id, None))));
             }
             Ok(Prepared::Continue) => Content::new("user").with_text(""),
             Ok(Prepared::Start) => input_content(&record.input),
@@ -655,8 +701,98 @@ impl DurableWorker {
                 Err(error) => return Ok(Err(error.into())),
             }
         }
-        Ok(Ok(agent_result(&text, &session_id, Some(&invocation_id))))
+        drop(events);
+
+        let held = match held_by_invocation(runner, user_id, &session_id, &invocation_id).await {
+            Ok(held) => held,
+            Err(error) => return Ok(Err(error.into())),
+        };
+        if held.is_empty() {
+            return Ok(Ok(Attempt::Done(agent_result(&text, &session_id, Some(&invocation_id)))));
+        }
+        let now = chrono::Utc::now();
+        let previous = match &record.checkpoint {
+            Some(RunCheckpointRef::AwaitingApproval { fingerprints, expires_at, .. })
+                if fingerprints.iter().any(|fingerprint| held.contains(fingerprint)) =>
+            {
+                Some(*expires_at)
+            }
+            _ => None,
+        };
+        if let Some(Some(expired)) = previous
+            && expired <= now
+        {
+            return Ok(Err(Failure {
+                error: format!(
+                    "approval expired at {expired} for held tool calls {held:?}; no decision was recorded"
+                ),
+                retryable: false,
+            }));
+        }
+        let until = previous.unwrap_or_else(|| {
+            self.config
+                .approval_timeout
+                .and_then(|timeout| chrono::Duration::from_std(timeout).ok())
+                .and_then(|timeout| now.checked_add_signed(timeout))
+        });
+        tracing::info!(
+            run.id = %record.run_id,
+            session.id = %session_id,
+            held.fingerprints = ?held,
+            "agent run holds tool calls for approval"
+        );
+        self.checkpoint(
+            &record.run_id,
+            epoch,
+            RunCheckpointRef::AwaitingApproval {
+                session_id,
+                invocation_id: Some(invocation_id),
+                fingerprints: held,
+                expires_at: until,
+            },
+        )
+        .await?;
+        Ok(Ok(Attempt::Parked(until)))
     }
+}
+
+/// The fingerprints of the tool calls `invocation_id` holds for approval: calls it
+/// surfaced as confirmation requests that no later response answers.
+async fn held_by_invocation(
+    runner: &Runner,
+    user_id: &str,
+    session_id: &str,
+    invocation_id: &str,
+) -> adk_core::Result<Vec<String>> {
+    let identity = adk_core::AdkIdentity::new(
+        adk_core::AppName::try_from(runner.app_name())?,
+        UserId::try_from(user_id)?,
+        SessionId::try_from(session_id)?,
+    );
+    let events = runner.session_service().get_for_identity(&identity).await?.events().all();
+    let mut surfaced: Vec<(&str, &str, Option<&str>)> = events
+        .iter()
+        .filter(|event| event.invocation_id == invocation_id)
+        .filter_map(|event| {
+            event.actions.tool_confirmation.as_ref().map(|request| {
+                (event.author.as_str(), event.branch.as_str(), request.function_call_id.as_deref())
+            })
+        })
+        .collect();
+    surfaced.dedup();
+    let mut held = Vec::new();
+    for (author, branch, _) in &surfaced {
+        for call in adk_core::held_tool_calls(&events, author, branch) {
+            let from_this_invocation = surfaced.iter().any(|(a, b, id)| {
+                a == author && b == branch && *id == call.request.function_call_id.as_deref()
+            });
+            let fingerprint = call.request.fingerprint();
+            if from_this_invocation && !held.contains(&fingerprint) {
+                held.push(fingerprint);
+            }
+        }
+    }
+    Ok(held)
 }
 
 enum Prepared {
@@ -831,6 +967,12 @@ async fn ensure_session(
 
 /// The final answer of `invocation_id`, when it is the last thing in the session.
 fn completed_answer(events: &[adk_core::Event], invocation_id: &str) -> Option<String> {
+    // An invocation that held tool calls ended on a notice, not an answer.
+    if events.iter().any(|event| {
+        event.invocation_id == invocation_id && event.actions.tool_confirmation.is_some()
+    }) {
+        return None;
+    }
     let last = events.iter().rev().find(|event| !event.llm_response.partial)?;
     if last.invocation_id != invocation_id || last.author == "user" || !last.is_final_response() {
         return None;

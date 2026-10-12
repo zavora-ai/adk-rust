@@ -15,6 +15,7 @@
 //! - `GET /runs` — List runs (`state`, `sessionId`, `limit` query parameters)
 //! - `GET /runs/{run_id}` — Get a run
 //! - `DELETE /runs/{run_id}` — Cancel a run; a running run stops at its worker's next heartbeat
+//! - `POST /runs/{run_id}/wake` — Make a run parked on a held tool call claimable now
 //!
 //! ## Cron jobs
 //!
@@ -640,6 +641,56 @@ impl BackgroundState {
         }
     }
 
+    /// Makes a parked run claimable now, for the approval service to call once it
+    /// records a decision for the run's held tool call.
+    ///
+    /// A waiting run is claimed again at once and resumes its session, so the agent
+    /// dispatches the held call through the governed path with the decision. A wake
+    /// that arrives while the run is still running is kept and applied when it parks.
+    ///
+    /// # Errors
+    ///
+    /// Returns `run_store.not_found` for an unknown run, or the store's error.
+    pub async fn wake_run(&self, run_id: &str) -> std::result::Result<(), AdkError> {
+        self.runs.wake(run_id).await?;
+        tracing::info!(run.id = %run_id, "run woken");
+        self.wake_worker();
+        Ok(())
+    }
+
+    /// Wakes every parked run of `app_name` continuing `session_id` for `user_id`, and
+    /// returns how many were woken; for an approval service that knows the decision's
+    /// session but not its run.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error.
+    pub async fn wake_session_runs(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+    ) -> std::result::Result<usize, AdkError> {
+        let waiting = self
+            .runs
+            .list(
+                RunFilter::default()
+                    .app_name(app_name)
+                    .user_id(user_id)
+                    .session_id(session_id)
+                    .states([RunState::Waiting]),
+            )
+            .await?;
+        for run in &waiting {
+            self.runs.wake(&run.run_id).await?;
+            tracing::info!(run.id = %run.run_id, "run woken");
+        }
+        if !waiting.is_empty() {
+            self.wake_worker();
+        }
+        Ok(waiting.len())
+    }
+
     /// Stops the embedded worker, letting in-flight attempts finish.
     pub async fn shutdown_worker(&self) {
         let handle = self.started.lock().unwrap_or_else(|e| e.into_inner()).take();
@@ -815,6 +866,22 @@ async fn cancel_run(State(state): State<BackgroundState>, Path(run_id): Path<Str
     }
 }
 
+/// POST /runs/{run_id}/wake — Make a parked run claimable now.
+async fn wake_run(State(state): State<BackgroundState>, Path(run_id): Path<String>) -> Response {
+    if let Err(error) = state.wake_run(&run_id).await {
+        return if error.is_not_found() {
+            problem(StatusCode::NOT_FOUND, "run not found")
+        } else {
+            store_error(&error)
+        };
+    }
+    match state.runs.get(&run_id).await {
+        Ok(Some(run)) => (StatusCode::OK, Json(RunStatusResponse::from(run))).into_response(),
+        Ok(None) => problem(StatusCode::NOT_FOUND, "run not found"),
+        Err(error) => store_error(&error),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -831,7 +898,8 @@ pub fn background_runs_router() -> Router {
 
 /// Create the background runs router with a pre-configured state.
 ///
-/// Mounts `POST /runs`, `GET /runs`, `GET /runs/{run_id}`, and `DELETE /runs/{run_id}`,
+/// Mounts `POST /runs`, `GET /runs`, `GET /runs/{run_id}`, `DELETE /runs/{run_id}`, and
+/// `POST /runs/{run_id}/wake`,
 /// and starts the embedded worker when a Tokio runtime is running.
 ///
 /// > **Important:** the router carries no authentication; see
@@ -841,5 +909,6 @@ pub fn background_runs_router_with_state(state: BackgroundState) -> Router {
     Router::new()
         .route("/runs", post(submit_run).get(list_runs))
         .route("/runs/{run_id}", get(get_run_status).delete(cancel_run))
+        .route("/runs/{run_id}/wake", post(wake_run))
         .with_state(state)
 }
