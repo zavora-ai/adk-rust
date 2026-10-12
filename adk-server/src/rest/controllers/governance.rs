@@ -3,53 +3,54 @@
 //! Mounted by [`ServerBuilder::enable_governance_endpoints`](crate::ServerBuilder::enable_governance_endpoints)
 //! behind the server's auth middleware:
 //!
-//! - `POST /api/admin/freeze` — freezes every runner the server builds and pauses background
-//!   and cron scheduling.
-//! - `POST /api/admin/unfreeze` — lifts both.
+//! - `POST /api/admin/freeze` — freezes execution; on a mirrored control the freeze is
+//!   written to the shared governance store and reaches every replica. Running durable
+//!   runs are asked to cancel through the run store.
+//! - `POST /api/admin/unfreeze` — lifts the freeze.
 //! - `GET /api/admin/governance` — reports the current state.
 
-use adk_core::{GovernanceControl, RequestContext};
-use axum::{Extension, Json, extract::State};
+use std::sync::Arc;
+
+use adk_core::principal::SubjectRef;
+use adk_core::{DurableRunStore, GovernanceControl, RequestContext, RunFilter, RunState};
+use axum::{
+    Extension, Json,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde::{Deserialize, Serialize};
 
 /// State for the governance admin endpoints.
 #[derive(Clone)]
 pub struct GovernanceController {
     control: GovernanceControl,
-    #[cfg(feature = "background")]
-    background: Vec<crate::background::BackgroundRunner>,
-    #[cfg(feature = "background")]
-    cron: Option<crate::background::cron::CronJobStore>,
+    run_stores: Vec<Arc<dyn DurableRunStore>>,
 }
 
 impl GovernanceController {
     /// Endpoints over `control`.
     pub fn new(control: GovernanceControl) -> Self {
-        Self {
-            control,
-            #[cfg(feature = "background")]
-            background: Vec::new(),
-            #[cfg(feature = "background")]
-            cron: None,
+        Self { control, run_stores: Vec::new() }
+    }
+
+    /// A freeze also requests cancellation of every running run in `store`.
+    pub fn with_run_store(mut self, store: Arc<dyn DurableRunStore>) -> Self {
+        if !self.run_stores.iter().any(|existing| Arc::ptr_eq(existing, &store)) {
+            self.run_stores.push(store);
         }
-    }
-
-    /// Also pauses `runner` while frozen.
-    #[cfg(feature = "background")]
-    pub fn with_background_runner(mut self, runner: crate::background::BackgroundRunner) -> Self {
-        self.background.push(runner);
-        self
-    }
-
-    /// Also pauses cron scheduling in `store` while frozen.
-    #[cfg(feature = "background")]
-    pub fn with_cron_store(mut self, store: crate::background::cron::CronJobStore) -> Self {
-        self.cron = Some(store);
         self
     }
 
     fn status(&self) -> GovernanceStatus {
-        GovernanceStatus { frozen: self.control.is_frozen(), reason: self.control.reason() }
+        GovernanceStatus {
+            frozen: self.control.is_frozen(),
+            reason: self.control.reason(),
+            mirrored: self.control.is_mirrored(),
+            stale: self.control.is_stale(),
+            cancelled_runs: None,
+            error: None,
+        }
     }
 }
 
@@ -71,49 +72,89 @@ pub struct GovernanceStatus {
     /// The freeze reason, while frozen.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Whether the control mirrors a shared governance store.
+    pub mirrored: bool,
+    /// Whether a mirrored control has gone past its staleness limit.
+    pub stale: bool,
+    /// Running durable runs asked to cancel by this freeze.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancelled_runs: Option<usize>,
+    /// Why the shared store could not be written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn issued_by(caller: Option<&RequestContext>) -> Option<SubjectRef> {
+    caller.map(|caller| SubjectRef::human(caller.user_id.clone()))
 }
 
 /// `POST /api/admin/freeze`
+///
+/// Responds `503` with the status when the shared store could not be written; this
+/// replica is frozen regardless.
 pub async fn freeze(
     State(controller): State<GovernanceController>,
     Extension(caller): Extension<Option<RequestContext>>,
     Json(request): Json<FreezeRequest>,
-) -> Json<GovernanceStatus> {
+) -> Response {
     let reason = request.reason.unwrap_or_else(|| "frozen by an administrator".to_string());
     tracing::warn!(
         caller.user_id = caller.as_ref().map(|c| c.user_id.as_str()).unwrap_or("anonymous"),
         governance.reason = %reason,
         "governance freeze requested"
     );
-    controller.control.freeze(reason);
-    #[cfg(feature = "background")]
-    {
-        controller.background.iter().for_each(crate::background::BackgroundRunner::pause);
-        if let Some(cron) = &controller.cron {
-            cron.pause_scheduling();
+    let written = controller.control.freeze_replicated(reason, issued_by(caller.as_ref())).await;
+
+    let mut cancelled = 0;
+    for store in &controller.run_stores {
+        let running = store.list(RunFilter::default().states([RunState::Running])).await;
+        match running {
+            Ok(runs) => {
+                for run in runs {
+                    match store.request_cancel(&run.run_id).await {
+                        Ok(()) => cancelled += 1,
+                        Err(error) => {
+                            tracing::error!(run.id = %run.run_id, error = %error, "could not request cancellation of a running run")
+                        }
+                    }
+                }
+            }
+            Err(error) => tracing::error!(error = %error, "could not list running runs to cancel"),
         }
     }
-    Json(controller.status())
+    tracing::warn!(runs.cancel_requested = cancelled, "governance freeze applied");
+
+    let mut status = controller.status();
+    status.cancelled_runs = Some(cancelled);
+    match written {
+        Ok(_) => Json(status).into_response(),
+        Err(error) => {
+            status.error = Some(error.to_string());
+            (StatusCode::SERVICE_UNAVAILABLE, Json(status)).into_response()
+        }
+    }
 }
 
 /// `POST /api/admin/unfreeze`
+///
+/// Responds `503` with the status when the shared store could not be written; the
+/// freeze then stays in force.
 pub async fn unfreeze(
     State(controller): State<GovernanceController>,
     Extension(caller): Extension<Option<RequestContext>>,
-) -> Json<GovernanceStatus> {
+) -> Response {
     tracing::warn!(
         caller.user_id = caller.as_ref().map(|c| c.user_id.as_str()).unwrap_or("anonymous"),
         "governance unfreeze requested"
     );
-    controller.control.unfreeze();
-    #[cfg(feature = "background")]
-    {
-        controller.background.iter().for_each(crate::background::BackgroundRunner::resume);
-        if let Some(cron) = &controller.cron {
-            cron.resume_scheduling();
+    match controller.control.unfreeze_replicated(issued_by(caller.as_ref())).await {
+        Ok(_) => Json(controller.status()).into_response(),
+        Err(error) => {
+            let mut status = controller.status();
+            status.error = Some(error.to_string());
+            (StatusCode::SERVICE_UNAVAILABLE, Json(status)).into_response()
         }
     }
-    Json(controller.status())
 }
 
 /// `GET /api/admin/governance`

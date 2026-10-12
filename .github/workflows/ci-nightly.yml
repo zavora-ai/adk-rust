@@ -290,6 +290,14 @@ jobs:
         --test store_conformance_firestore
         --test spend_ledger_postgres
 
+    - name: Run the multi-process durable worker crash gates
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run -p adk-server
+        --features background
+        --run-ignored all
+        --test durable_multiprocess
+
     - name: Run graph checkpointer conformance suites
       if: ${{ !cancelled() }}
       run: >-

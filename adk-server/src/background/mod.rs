@@ -1,23 +1,29 @@
 //! # Background Runs and Cron Scheduling
 //!
-//! This module provides REST endpoints for submitting workflows as background runs
-//! and managing cron-scheduled job execution.
+//! REST endpoints and runtime for durable background runs and schedules, gated behind
+//! the `background` feature.
 //!
-//! This module is gated behind the `background` feature flag.
+//! Runs live in a [`DurableRunStore`] and schedules in a [`ScheduleStore`](adk_core::ScheduleStore) — in memory by
+//! default, or a shared backend so several replicas serve one queue. A
+//! [`DurableWorker`] claims runs under fenced leases and executes them; a
+//! [`DurableScheduler`] on every replica enqueues each schedule's fire times exactly
+//! once. Both respect the governance kill switch.
 //!
-//! ## Background Runs
+//! ## Background runs
 //!
-//! - `POST /runs` — Submit a new background run
-//! - `GET /runs/{run_id}` — Get run status
-//! - `DELETE /runs/{run_id}` — Cancel a run
+//! - `POST /runs` — Enqueue a run of a workflow or an agent
+//! - `GET /runs` — List runs (`state`, `sessionId`, `limit` query parameters)
+//! - `GET /runs/{run_id}` — Get a run
+//! - `DELETE /runs/{run_id}` — Cancel a run; a running run stops at its worker's next heartbeat
+//! - `POST /runs/{run_id}/wake` — Make a run parked on a held tool call claimable now
 //!
-//! ## Cron Jobs
+//! ## Cron jobs
 //!
-//! - `POST /cron` — Create a cron job
-//! - `GET /cron` — List all cron jobs
-//! - `GET /cron/{job_id}` — Get cron job details
-//! - `PATCH /cron/{job_id}` — Pause/resume a cron job
-//! - `DELETE /cron/{job_id}` — Delete a cron job
+//! - `POST /cron` — Create a cron schedule
+//! - `GET /cron` — List schedules
+//! - `GET /cron/{job_id}` — Get a schedule
+//! - `PATCH /cron/{job_id}` — Pause or resume a schedule
+//! - `DELETE /cron/{job_id}` — Delete a schedule
 //!
 //! ## Usage
 //!
@@ -28,53 +34,56 @@
 //! > must sit behind an authentication layer, or anyone who reaches it can submit,
 //! > schedule, and cancel work.
 //!
-//! The routers can be used standalone or merged into an existing Axum application:
-//!
 //! ```rust,ignore
-//! use adk_server::background::{background_runs_router, cron_jobs_router};
+//! use std::sync::Arc;
+//! use adk_server::background::{BackgroundState, CronState, WorkflowRegistry, start_cron_scheduler};
 //!
-//! // Standalone usage
-//! let runs = background_runs_router();
-//! let cron = cron_jobs_router();
+//! // In memory, one process: the embedded worker starts with the server.
+//! let background = BackgroundState::new().with_executor(Arc::new(registry));
 //!
-//! // Merge into an existing app
-//! let app = axum::Router::new()
-//!     .merge(runs)
-//!     .merge(cron);
-//!
-//! // Or with shared state for coordinating runs and cron
-//! use adk_server::background::{BackgroundState, CronState, background_runs_router_with_state, cron_jobs_router_with_state};
-//!
-//! let bg_state = BackgroundState::new();
-//! let cron_state = CronState::new(bg_state.clone());
-//! let app = axum::Router::new()
-//!     .merge(background_runs_router_with_state(bg_state))
-//!     .merge(cron_jobs_router_with_state(cron_state));
+//! // Shared stores, several replicas: each replica runs a worker and a scheduler.
+//! let background = BackgroundState::new()
+//!     .with_run_store(run_store)
+//!     .with_executor(Arc::new(registry))
+//!     .with_agent("support", Arc::new(runner));
+//! let cron = CronState::new(background.clone()).with_schedule_store(schedule_store);
+//! start_cron_scheduler(cron.clone());
+//! let app = ServerBuilder::new(config)
+//!     .with_background_runs(background)
+//!     .with_cron_jobs(cron)
+//!     .build();
 //! ```
 
 pub mod cron;
+pub mod scheduler;
+pub mod worker;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::time::Duration;
 
+use adk_core::{
+    AdkError, DurableRunStore, Enqueued, GovernanceControl, InMemoryRunStore, NewRun, OnConflict,
+    RequestContext, RunCheckpointRef, RunFilter, RunRecord, RunState,
+};
+use adk_runner::Runner;
 use axum::{
-    Json, Router,
-    extract::{Path, State},
+    Extension, Json, Router,
+    extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 pub use cron::{
-    ConcurrencyPolicy, CreateCronJobRequest, CronJob, CronJobResponse, CronJobStatus, CronState,
+    ConcurrencyPolicy, CreateCronJobRequest, CronJobResponse, CronJobStatus, CronState,
     cron_jobs_router, cron_jobs_router_with_state, start_cron_scheduler, validate_cron_expression,
 };
+pub use scheduler::{DurableScheduler, SchedulerTick};
+pub use worker::{DurableWorker, DurableWorkerConfig, WorkerHandle};
 
 // ---------------------------------------------------------------------------
 // Data Types
@@ -83,523 +92,331 @@ pub use cron::{
 /// Workflow input state — a map of string keys to JSON values.
 pub type WorkflowState = HashMap<String, Value>;
 
-/// Run lifecycle status.
+/// Run lifecycle status as the REST API reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum RunStatus {
+    /// Waiting for a worker.
     Queued,
+    /// Claimed by a worker.
     Running,
+    /// Parked until a timer passes or the run is woken.
+    Waiting,
+    /// Finished with a result.
     Completed,
+    /// Finished with an error.
     Failed,
+    /// Cancelled before or during execution.
     Cancelled,
 }
 
-/// Persisted record for a background run.
-#[derive(Debug, Clone)]
-pub struct BackgroundRun {
-    pub run_id: String,
-    pub workflow_id: String,
-    pub status: RunStatus,
-    pub input: WorkflowState,
-    pub result: Option<Value>,
-    pub error: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub timeout: Option<Duration>,
-    pub max_retries: u32,
-    pub retry_count: u32,
-    pub cancel_token: CancellationToken,
+impl From<RunState> for RunStatus {
+    fn from(state: RunState) -> Self {
+        match state {
+            RunState::Queued => Self::Queued,
+            RunState::Running => Self::Running,
+            RunState::Waiting => Self::Waiting,
+            RunState::Completed => Self::Completed,
+            RunState::Failed => Self::Failed,
+            RunState::Cancelled => Self::Cancelled,
+            _ => Self::Failed,
+        }
+    }
 }
 
-/// POST /runs request body.
+/// `POST /runs` request body.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_server::background::SubmitRunRequest;
+///
+/// let request: SubmitRunRequest = serde_json::from_value(serde_json::json!({
+///     "target": "support",
+///     "input": { "text": "where is order 7?" },
+///     "sessionId": "thread-42",
+///     "concurrencyKey": "thread-42",
+///     "onConflict": "interrupt",
+///     "idempotencyKey": "webhook:evt_1"
+/// })).unwrap();
+/// assert_eq!(request.target.as_deref(), Some("support"));
+/// ```
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitRunRequest {
-    pub workflow_id: String,
-    pub input: WorkflowState,
+    /// The agent or workflow to run.
     #[serde(default)]
-    pub timeout_secs: Option<u64>,
+    pub target: Option<String>,
+    /// The workflow to run; an alias of `target` kept for existing clients.
+    #[serde(default)]
+    pub workflow_id: Option<String>,
+    /// The run's input: workflow state for a workflow, a string, `{"text": ...}`, or
+    /// `{"content": ...}` for an agent.
+    #[serde(default)]
+    pub input: Value,
+    /// Retries after the first attempt; `maxAttempts` is this plus one. Defaults to 0.
     #[serde(default)]
     pub max_retries: Option<u32>,
+    /// The session an agent run continues; defaults to `run-{runId}`.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// The user the run belongs to, when the request is not authenticated.
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// Enqueueing an existing key returns the existing run.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    /// Runs sharing a key run one at a time.
+    #[serde(default)]
+    pub concurrency_key: Option<String>,
+    /// What happens when an unfinished run holds `concurrencyKey` (double texting).
+    #[serde(default)]
+    pub on_conflict: Option<OnConflict>,
+    /// The run is not claimed before this time.
+    #[serde(default)]
+    pub not_before: Option<DateTime<Utc>>,
 }
 
-/// POST /runs response.
+/// `POST /runs` response.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitRunResponse {
+    /// The run identifier.
     pub run_id: String,
+    /// The run's status.
     pub status: RunStatus,
+    /// When the run was enqueued.
     pub created_at: String,
+    /// `true` when the idempotency key matched an existing run.
+    pub existing: bool,
 }
 
-/// GET /runs/{run_id} response.
+/// `GET /runs/{run_id}` response.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunStatusResponse {
+    /// The run identifier.
     pub run_id: String,
+    /// The agent or workflow the run executes.
+    pub target: String,
+    /// The run's status.
     pub status: RunStatus,
+    /// When the run was enqueued.
     pub created_at: String,
+    /// When the run last changed.
     pub updated_at: String,
+    /// The result of a completed run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
+    /// The error of the latest failed attempt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retry_count: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retries_remaining: Option<u32>,
-}
-
-// ---------------------------------------------------------------------------
-// In-Memory Run Store
-// ---------------------------------------------------------------------------
-
-/// How many finished runs a store keeps.
-///
-/// A finished run is kept so a caller can still read its result. Keeping every one
-/// forever grows the store for the lifetime of the deployment, so there is a bound
-/// by default rather than an opt-in policy — an unbounded default is a leak that
-/// only shows up in production.
-///
-/// Runs still in flight are never discarded, whatever the bound says.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunRetention {
-    /// How many finished runs to keep, newest first.
-    pub max_finished: Option<usize>,
-}
-
-impl Default for RunRetention {
-    fn default() -> Self {
-        // Enough to answer a client polling for a result, and small enough that a
-        // busy server does not accumulate indefinitely.
-        Self { max_finished: Some(1000) }
-    }
-}
-
-impl RunRetention {
-    /// Keeps the newest `count` finished runs.
-    pub fn keep_finished(count: usize) -> Self {
-        Self { max_finished: Some(count) }
-    }
-
-    /// Keeps every finished run. The store then grows without bound.
-    pub fn unlimited() -> Self {
-        Self { max_finished: None }
-    }
-}
-
-/// The part of a [`BackgroundRun`] that outlives the process.
-///
-/// The cancellation token is deliberately absent: it belongs to a running task,
-/// and a restored run has none until it is driven again.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PersistedRun {
-    /// The run's identifier.
-    pub run_id: String,
-    /// The workflow it runs.
-    pub workflow_id: String,
-    /// Its status when last written.
-    pub status: RunStatus,
-    /// The input it started from.
-    pub input: WorkflowState,
-    /// Its result, once finished.
-    pub result: Option<Value>,
-    /// Why it failed, if it did.
-    pub error: Option<String>,
-    /// When it was created.
-    pub created_at: DateTime<Utc>,
-    /// When it was last written.
-    pub updated_at: DateTime<Utc>,
-    /// How many attempts it has used.
+    /// Attempts started so far, counting recoveries.
+    pub attempt: u32,
+    /// The most attempts the run may take.
+    pub max_attempts: u32,
+    /// Retries used: `attempt - 1`.
     pub retry_count: u32,
+    /// Attempts left.
+    pub retries_remaining: u32,
+    /// Whether cancellation was requested while the run was running.
+    pub cancel_requested: bool,
+    /// The session an agent run continues.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Where the run's progress is checkpointed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint: Option<RunCheckpointRef>,
 }
 
-impl From<&BackgroundRun> for PersistedRun {
-    fn from(run: &BackgroundRun) -> Self {
+impl From<RunRecord> for RunStatusResponse {
+    fn from(run: RunRecord) -> Self {
         Self {
-            run_id: run.run_id.clone(),
-            workflow_id: run.workflow_id.clone(),
-            status: run.status,
-            input: run.input.clone(),
-            result: run.result.clone(),
-            error: run.error.clone(),
-            created_at: run.created_at,
-            updated_at: run.updated_at,
-            retry_count: run.retry_count,
+            target: run.target,
+            status: run.state.into(),
+            created_at: run.created_at.to_rfc3339(),
+            updated_at: run.updated_at.to_rfc3339(),
+            result: run.result,
+            error: run.error,
+            retry_count: run.attempt.saturating_sub(1),
+            retries_remaining: run.max_attempts.saturating_sub(run.attempt),
+            attempt: run.attempt,
+            max_attempts: run.max_attempts,
+            cancel_requested: run.cancel_requested,
+            session_id: run.session_id,
+            checkpoint: run.checkpoint,
+            run_id: run.run_id,
         }
-    }
-}
-
-/// Where background runs are recorded so a restart can still see them.
-///
-/// Without one, `RunStore` holds runs in memory alone: graph state survives a
-/// restart through a checkpointer, but the list of runs does not, so the server
-/// cannot report what was in flight.
-#[async_trait::async_trait]
-pub trait RunPersistence: Send + Sync {
-    /// Writes a run, replacing any record with the same id.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backing store cannot be written.
-    async fn upsert(&self, run: &PersistedRun) -> Result<(), String>;
-
-    /// Reads every recorded run.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backing store cannot be read.
-    async fn load_all(&self) -> Result<Vec<PersistedRun>, String>;
-
-    /// Removes recorded runs by id.
-    ///
-    /// Called when retention discards a finished run. Without this the record
-    /// outlives the run it describes and the store grows for the lifetime of the
-    /// deployment.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backing store cannot be written.
-    async fn remove(&self, run_ids: &[String]) -> Result<(), String>;
-}
-
-/// Records runs as one JSON file, for a single-node deployment.
-///
-/// Enough to survive a restart of one process. A deployment across several nodes
-/// needs a shared store, which is what the [`RunPersistence`] trait is for.
-pub struct FileRunPersistence {
-    path: std::path::PathBuf,
-    /// Serialises writers, so two concurrent updates cannot lose one another.
-    lock: tokio::sync::Mutex<()>,
-}
-
-impl FileRunPersistence {
-    /// Records runs in the file at `path`, creating it on the first write.
-    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
-        Self { path: path.into(), lock: tokio::sync::Mutex::new(()) }
-    }
-
-    fn write_unlocked(&self, runs: &[PersistedRun]) -> Result<(), String> {
-        let text = serde_json::to_string_pretty(runs).map_err(|e| e.to_string())?;
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        // Written beside the target and renamed, so a crash mid-write cannot leave
-        // a truncated file where the run list should be.
-        let temporary = self.path.with_extension("json.tmp");
-        std::fs::write(&temporary, text).map_err(|e| e.to_string())?;
-        std::fs::rename(&temporary, &self.path).map_err(|e| e.to_string())
-    }
-
-    fn read_unlocked(&self) -> Result<Vec<PersistedRun>, String> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(text) => serde_json::from_str(&text).map_err(|e| e.to_string()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(error.to_string()),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl RunPersistence for FileRunPersistence {
-    async fn upsert(&self, run: &PersistedRun) -> Result<(), String> {
-        let _guard = self.lock.lock().await;
-        let mut runs = self.read_unlocked()?;
-        match runs.iter_mut().find(|existing| existing.run_id == run.run_id) {
-            Some(existing) => *existing = run.clone(),
-            None => runs.push(run.clone()),
-        }
-        self.write_unlocked(&runs)
-    }
-
-    async fn load_all(&self) -> Result<Vec<PersistedRun>, String> {
-        let _guard = self.lock.lock().await;
-        self.read_unlocked()
-    }
-
-    async fn remove(&self, run_ids: &[String]) -> Result<(), String> {
-        if run_ids.is_empty() {
-            return Ok(());
-        }
-        let _guard = self.lock.lock().await;
-        let mut runs = self.read_unlocked()?;
-        runs.retain(|run| !run_ids.contains(&run.run_id));
-        self.write_unlocked(&runs)
-    }
-}
-
-/// Thread-safe store for background runs.
-///
-/// Runs are held in memory. Attach a [`RunPersistence`] with
-/// [`Self::with_persistence`] so a restart can still see them.
-#[derive(Clone, Default)]
-pub struct RunStore {
-    runs: Arc<RwLock<HashMap<String, BackgroundRun>>>,
-    /// Where runs are recorded, when the deployment asked for that.
-    persistence: Option<Arc<dyn RunPersistence>>,
-    /// How many finished runs to keep. Bounded by default.
-    retention: RunRetention,
-}
-
-impl std::fmt::Debug for RunStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RunStore")
-            .field("persistent", &self.persistence.is_some())
-            .finish_non_exhaustive()
-    }
-}
-
-impl RunStore {
-    /// Create a new empty run store.
-    pub fn new() -> Self {
-        Self {
-            runs: Arc::new(RwLock::new(HashMap::new())),
-            persistence: None,
-            retention: RunRetention::default(),
-        }
-    }
-
-    /// Insert a new run into the store.
-    /// Sets how many finished runs to keep. The default keeps 1000.
-    pub fn with_retention(mut self, retention: RunRetention) -> Self {
-        self.retention = retention;
-        self
-    }
-
-    /// Discards the oldest finished runs beyond the bound.
-    ///
-    /// A run still in flight is never discarded, so a busy server cannot lose one
-    /// by exceeding the bound.
-    async fn evict_finished(&self) {
-        let Some(max) = self.retention.max_finished else { return };
-        let mut runs = self.runs.write().await;
-        let mut finished: Vec<(String, chrono::DateTime<Utc>)> = runs
-            .values()
-            .filter(|run| {
-                matches!(
-                    run.status,
-                    RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled
-                )
-            })
-            .map(|run| (run.run_id.clone(), run.updated_at))
-            .collect();
-        if finished.len() <= max {
-            return;
-        }
-        // Oldest first, so the ones removed are the least likely to be read.
-        finished.sort_by_key(|(_, updated)| *updated);
-        let excess = finished.len() - max;
-        let discarded: Vec<String> =
-            finished.into_iter().take(excess).map(|(run_id, _)| run_id).collect();
-        for run_id in &discarded {
-            runs.remove(run_id);
-        }
-        drop(runs);
-
-        // The record has to go too, or the file grows for the lifetime of the
-        // deployment even though the map is bounded.
-        if let Some(backend) = &self.persistence
-            && let Err(error) = backend.remove(&discarded).await
-        {
-            tracing::warn!(error = %error, "could not discard run records");
-        }
-    }
-
-    /// Records runs through `persistence`, so a restart can still see them.
-    pub fn with_persistence(mut self, persistence: Arc<dyn RunPersistence>) -> Self {
-        self.persistence = Some(persistence);
-        self
-    }
-
-    /// Writes one run through to the backend, if there is one.
-    ///
-    /// A write failure is logged rather than returned: the run itself is already
-    /// recorded in memory, and losing the audit trail is not a reason to fail the
-    /// caller's request.
-    async fn persist(&self, run: &BackgroundRun) {
-        self.persist_record(&PersistedRun::from(run)).await;
-    }
-
-    /// Writes an already-taken record, so no lock is held across the write.
-    async fn persist_record(&self, record: &PersistedRun) {
-        if let Some(backend) = &self.persistence
-            && let Err(error) = backend.upsert(record).await
-        {
-            tracing::warn!(run.id = %record.run_id, error = %error, "could not record run");
-        }
-    }
-
-    /// Loads recorded runs at startup and reports what the restart interrupted.
-    ///
-    /// A run that was `Running` when the process stopped cannot still be running,
-    /// so it is restored as `Failed` with a reason. The graph state behind it is
-    /// untouched: a checkpointed thread can still be resumed by its id.
-    ///
-    /// Returns the ids that were interrupted.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backend cannot be read.
-    pub async fn restore(&self) -> Result<Vec<String>, String> {
-        let Some(backend) = &self.persistence else { return Ok(Vec::new()) };
-        let recorded = backend.load_all().await?;
-        let mut interrupted = Vec::new();
-        let mut runs = self.runs.write().await;
-
-        for record in recorded {
-            let was_running = matches!(record.status, RunStatus::Running | RunStatus::Queued);
-            let mut run = BackgroundRun {
-                run_id: record.run_id.clone(),
-                workflow_id: record.workflow_id,
-                status: record.status,
-                input: record.input,
-                result: record.result,
-                error: record.error,
-                created_at: record.created_at,
-                updated_at: record.updated_at,
-                timeout: None,
-                max_retries: 0,
-                retry_count: record.retry_count,
-                cancel_token: CancellationToken::new(),
-            };
-            if was_running {
-                run.status = RunStatus::Failed;
-                run.error = Some("the process stopped while this run was in flight".to_string());
-                interrupted.push(record.run_id.clone());
-            }
-            runs.insert(record.run_id, run);
-        }
-        Ok(interrupted)
-    }
-
-    pub async fn insert(&self, run: BackgroundRun) {
-        let run_for_record = run.clone();
-        self.runs.write().await.insert(run.run_id.clone(), run);
-        self.persist(&run_for_record).await;
-    }
-
-    /// Get a run by ID.
-    pub async fn get(&self, run_id: &str) -> Option<BackgroundRun> {
-        self.runs.read().await.get(run_id).cloned()
-    }
-
-    /// Update the status of a run.
-    pub async fn update_status(&self, run_id: &str, status: RunStatus) {
-        let record = {
-            let mut runs = self.runs.write().await;
-            let Some(run) = runs.get_mut(run_id) else { return };
-            run.status = status;
-            run.updated_at = Utc::now();
-            PersistedRun::from(&*run)
-        };
-        self.persist_record(&record).await;
-    }
-
-    /// Update a run with a result on completion.
-    pub async fn set_completed(&self, run_id: &str, result: Value) {
-        let record = {
-            let mut runs = self.runs.write().await;
-            let Some(run) = runs.get_mut(run_id) else { return };
-            run.status = RunStatus::Completed;
-            run.result = Some(result);
-            run.updated_at = Utc::now();
-            PersistedRun::from(&*run)
-        };
-        self.persist_record(&record).await;
-        self.evict_finished().await;
-    }
-
-    /// Update a run with an error on failure.
-    pub async fn set_failed(&self, run_id: &str, error: String) {
-        let record = {
-            let mut runs = self.runs.write().await;
-            let Some(run) = runs.get_mut(run_id) else { return };
-            run.status = RunStatus::Failed;
-            run.error = Some(error);
-            run.updated_at = Utc::now();
-            PersistedRun::from(&*run)
-        };
-        self.persist_record(&record).await;
-        self.evict_finished().await;
-    }
-
-    /// Increment the retry count and re-queue the run.
-    pub async fn retry(&self, run_id: &str) -> bool {
-        if let Some(run) = self.runs.write().await.get_mut(run_id)
-            && run.retry_count < run.max_retries
-        {
-            run.retry_count += 1;
-            run.status = RunStatus::Queued;
-            run.error = None;
-            run.updated_at = Utc::now();
-            return true;
-        }
-        false
     }
 }
 
 // ---------------------------------------------------------------------------
-// Background Runner
+// Workflow executors
 // ---------------------------------------------------------------------------
 
-/// Orchestrates background run execution with timeout, retry, and cancellation.
-///
-/// The `BackgroundRunner` spawns tokio tasks for each submitted run, enforces
-/// timeout policies, and retries a failed run from the beginning up to its retry
-/// budget. Retry is not checkpoint-aware: a retried run re-executes the workflow with
-/// the original input.
 /// Executes a registered workflow for a background run.
 ///
-/// A background run names a `workflow_id`; something has to turn that into work.
-/// Implement this to bridge to whatever executes workflows in your application —
-/// `adk-graph`, the functional API, or your own dispatcher.
+/// A background run names a target; something has to turn that into work. Implement
+/// this to bridge to whatever executes workflows in your application — `adk-graph`, the
+/// functional API, or your own dispatcher.
 ///
 /// # Errors
 ///
-/// Return `Err` to mark the run failed. A failure is what makes the configured retry
-/// budget meaningful, so surface real failures rather than encoding them as `Ok`.
+/// Return `Err` to fail the attempt. A failed attempt is retried while the run has
+/// attempts left, so surface real failures rather than encoding them as `Ok`.
 #[async_trait::async_trait]
 pub trait WorkflowExecutor: Send + Sync {
     /// Whether `workflow_id` can be executed.
     ///
     /// Checked before a run is queued, so an unknown workflow is rejected instead of
-    /// being accepted and then reported as complete.
+    /// being accepted and then failed.
     fn has_workflow(&self, workflow_id: &str) -> bool;
 
     /// Run `workflow_id` with `input`.
     ///
-    /// `cancel_token` fires when the run is cancelled or times out; implementations
-    /// should observe it and stop.
+    /// `cancel_token` fires when the run is cancelled; implementations should observe it
+    /// and stop.
     async fn execute(
         &self,
         workflow_id: &str,
         input: WorkflowState,
         cancel_token: CancellationToken,
     ) -> std::result::Result<Value, String>;
+
+    /// Run `workflow_id` as one attempt of a durable run.
+    ///
+    /// `run` carries the run's identity, its checkpoint thread, whether this attempt
+    /// resumes a stopped one, and the cancellation token. A graph workflow passes
+    /// `run.thread_id` to its executor so a resumed attempt continues from its
+    /// checkpointer, and may report checkpoints with
+    /// [`WorkflowRunContext::record_checkpoint`]. The default calls
+    /// [`execute`](Self::execute), which restarts the workflow from its input.
+    async fn execute_durable(
+        &self,
+        workflow_id: &str,
+        input: WorkflowState,
+        run: WorkflowRunContext,
+    ) -> std::result::Result<Value, String> {
+        self.execute(workflow_id, input, run.cancel).await
+    }
+}
+
+/// Records a workflow's checkpoints on its durable run, fenced by the claim's epoch.
+#[derive(Clone)]
+pub(crate) struct CheckpointSink {
+    pub(crate) runs: Arc<dyn DurableRunStore>,
+    pub(crate) run_id: String,
+    pub(crate) epoch: u64,
+}
+
+/// One attempt of a durable workflow run.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_server::background::WorkflowRunContext;
+/// use tokio_util::sync::CancellationToken;
+///
+/// let run = WorkflowRunContext::detached("run-1", CancellationToken::new());
+/// assert_eq!(run.thread_id, "run-1");
+/// assert!(!run.resumed);
+/// ```
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct WorkflowRunContext {
+    /// The run identifier.
+    pub run_id: String,
+    /// The attempt number, counting recoveries.
+    pub attempt: u32,
+    /// The checkpoint thread; a graph workflow uses it as its `thread_id`.
+    pub thread_id: String,
+    /// The last checkpoint the run reported, if any.
+    pub checkpoint_id: Option<String>,
+    /// Whether this attempt resumes one that stopped.
+    pub resumed: bool,
+    /// Fires when the run is cancelled.
+    pub cancel: CancellationToken,
+    pub(crate) sink: Option<CheckpointSink>,
+}
+
+impl std::fmt::Debug for WorkflowRunContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkflowRunContext")
+            .field("run_id", &self.run_id)
+            .field("attempt", &self.attempt)
+            .field("thread_id", &self.thread_id)
+            .field("checkpoint_id", &self.checkpoint_id)
+            .field("resumed", &self.resumed)
+            .finish_non_exhaustive()
+    }
+}
+
+impl WorkflowRunContext {
+    /// A context for a run with no durable store behind it, for tests and direct calls.
+    pub fn detached(run_id: impl Into<String>, cancel: CancellationToken) -> Self {
+        let run_id = run_id.into();
+        Self {
+            thread_id: run_id.clone(),
+            run_id,
+            attempt: 1,
+            checkpoint_id: None,
+            resumed: false,
+            cancel,
+            sink: None,
+        }
+    }
+
+    /// Records `checkpoint_id` on the run, so a recovering worker resumes from it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `run_store.stale_epoch` when another worker recovered the run; the
+    /// workflow must then stop without writing further results.
+    pub async fn record_checkpoint(
+        &self,
+        checkpoint_id: impl Into<String>,
+    ) -> std::result::Result<(), AdkError> {
+        let Some(sink) = &self.sink else { return Ok(()) };
+        sink.runs
+            .set_checkpoint(
+                &sink.run_id,
+                sink.epoch,
+                RunCheckpointRef::Graph {
+                    thread_id: self.thread_id.clone(),
+                    checkpoint_id: Some(checkpoint_id.into()),
+                },
+            )
+            .await
+    }
 }
 
 /// A `WorkflowExecutor` holding closures registered by name.
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use adk_server::background::WorkflowRegistry;
 /// use serde_json::json;
 ///
-/// let registry = WorkflowRegistry::new().register("greet", |input, _cancel| async move {
-///     Ok(json!({ "greeted": input.get("name").cloned() }))
-/// });
+/// let registry = WorkflowRegistry::new()
+///     .register("greet", |input, _cancel| async move {
+///         Ok(json!({ "greeted": input.get("name").cloned() }))
+///     })
+///     .register_durable("settle", |_input, run| async move {
+///         // A graph workflow would invoke its executor with `run.thread_id` here.
+///         Ok(json!({ "thread": run.thread_id, "resumed": run.resumed }))
+///     });
 /// ```
 #[derive(Default)]
 pub struct WorkflowRegistry {
-    workflows: std::collections::HashMap<String, Arc<BoxedWorkflow>>,
+    workflows: HashMap<String, Arc<BoxedWorkflow>>,
 }
 
 /// The boxed form of a registered workflow.
 type BoxedWorkflow = dyn Fn(
         WorkflowState,
-        CancellationToken,
+        WorkflowRunContext,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = std::result::Result<Value, String>> + Send>,
     > + Send
@@ -611,17 +428,26 @@ impl WorkflowRegistry {
         Self::default()
     }
 
-    /// Register `workflow_id`.
+    /// Registers `workflow_id`; a recovered run restarts it from its input.
     #[must_use]
-    pub fn register<F, Fut>(mut self, workflow_id: impl Into<String>, workflow: F) -> Self
+    pub fn register<F, Fut>(self, workflow_id: impl Into<String>, workflow: F) -> Self
     where
         F: Fn(WorkflowState, CancellationToken) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = std::result::Result<Value, String>> + Send + 'static,
     {
-        self.workflows.insert(
-            workflow_id.into(),
-            Arc::new(move |input, cancel| Box::pin(workflow(input, cancel))),
-        );
+        self.register_durable(workflow_id, move |input, run| workflow(input, run.cancel))
+    }
+
+    /// Registers `workflow_id` with the attempt's [`WorkflowRunContext`], so a recovered
+    /// run can resume from its checkpoint thread.
+    #[must_use]
+    pub fn register_durable<F, Fut>(mut self, workflow_id: impl Into<String>, workflow: F) -> Self
+    where
+        F: Fn(WorkflowState, WorkflowRunContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = std::result::Result<Value, String>> + Send + 'static,
+    {
+        self.workflows
+            .insert(workflow_id.into(), Arc::new(move |input, run| Box::pin(workflow(input, run))));
         self
     }
 }
@@ -638,216 +464,57 @@ impl WorkflowExecutor for WorkflowRegistry {
         input: WorkflowState,
         cancel_token: CancellationToken,
     ) -> std::result::Result<Value, String> {
+        let run = WorkflowRunContext::detached(uuid::Uuid::new_v4().to_string(), cancel_token);
+        self.execute_durable(workflow_id, input, run).await
+    }
+
+    async fn execute_durable(
+        &self,
+        workflow_id: &str,
+        input: WorkflowState,
+        run: WorkflowRunContext,
+    ) -> std::result::Result<Value, String> {
         match self.workflows.get(workflow_id) {
-            Some(workflow) => workflow(input, cancel_token).await,
+            Some(workflow) => workflow(input, run).await,
             None => Err(format!("workflow '{workflow_id}' is not registered")),
         }
     }
-}
-
-#[derive(Clone)]
-pub struct BackgroundRunner {
-    store: RunStore,
-    executor: Option<Arc<dyn WorkflowExecutor>>,
-    /// Shared by every clone, so pausing one pauses the runner the scheduler holds.
-    paused: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl std::fmt::Debug for BackgroundRunner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BackgroundRunner")
-            .field("store", &self.store)
-            .field("has_executor", &self.executor.is_some())
-            .field("paused", &self.is_paused())
-            .finish()
-    }
-}
-
-impl BackgroundRunner {
-    /// Create a new background runner backed by the given store.
-    ///
-    /// Without an executor a run cannot do any work, and is failed rather than
-    /// reported complete.
-    pub fn new(store: RunStore) -> Self {
-        Self { store, executor: None, paused: Arc::default() }
-    }
-
-    /// Stops starting runs: submissions are refused and a run due to start, including a
-    /// retry, is failed instead. Runs already executing are not interrupted.
-    pub fn pause(&self) {
-        self.paused.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    /// Starts runs again after [`pause`](Self::pause).
-    pub fn resume(&self) {
-        self.paused.store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    /// Whether starting runs is paused.
-    pub fn is_paused(&self) -> bool {
-        self.paused.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
-    /// The configured executor, if any.
-    pub fn executor(&self) -> Option<&Arc<dyn WorkflowExecutor>> {
-        self.executor.as_ref()
-    }
-
-    /// Attach the executor that resolves and runs workflows.
-    #[must_use]
-    pub fn with_executor(mut self, executor: Arc<dyn WorkflowExecutor>) -> Self {
-        self.executor = Some(executor);
-        self
-    }
-
-    /// Submit and execute a background run.
-    ///
-    /// This transitions the run from `queued` to `running`, executes the workflow
-    /// with timeout enforcement, and transitions to `completed`, `failed`, or
-    /// `cancelled` based on the outcome.
-    pub fn execute(&self, run_id: String) {
-        let store = self.store.clone();
-        let executor = self.executor.clone();
-        let runner = self.clone();
-        tokio::spawn(async move {
-            // Retrieve the run record
-            let run = match store.get(&run_id).await {
-                Some(r) => r,
-                None => return,
-            };
-            if runner.is_paused() {
-                store
-                    .set_failed(
-                        &run_id,
-                        "run scheduling is paused by the governance kill switch".into(),
-                    )
-                    .await;
-                return;
-            }
-
-            let cancel_token = run.cancel_token.clone();
-            let timeout_duration = run.timeout;
-
-            // Transition to running
-            store.update_status(&run_id, RunStatus::Running).await;
-
-            // Execute with timeout and cancellation
-            let result = Self::run_with_timeout(
-                executor.as_ref(),
-                &run.workflow_id,
-                run.input.clone(),
-                timeout_duration,
-                &cancel_token,
-            )
-            .await;
-
-            match result {
-                RunOutcome::Completed(value) => {
-                    store.set_completed(&run_id, value).await;
-                }
-                RunOutcome::Failed(error) => {
-                    // Attempt retry
-                    if store.retry(&run_id).await {
-                        // The retry shares this runner's pause flag.
-                        runner.execute(run_id.clone());
-                    } else {
-                        store.set_failed(&run_id, error).await;
-                    }
-                }
-                RunOutcome::Cancelled => {
-                    store.update_status(&run_id, RunStatus::Cancelled).await;
-                }
-                RunOutcome::TimedOut => {
-                    store.set_failed(&run_id, "run timed out".to_string()).await;
-                }
-            }
-        });
-    }
-
-    /// Execute the workflow with timeout enforcement and cancellation support.
-    async fn run_with_timeout(
-        executor: Option<&Arc<dyn WorkflowExecutor>>,
-        workflow_id: &str,
-        input: WorkflowState,
-        timeout_duration: Option<Duration>,
-        cancel_token: &CancellationToken,
-    ) -> RunOutcome {
-        let work = async {
-            if cancel_token.is_cancelled() {
-                return RunOutcome::Cancelled;
-            }
-            // Without an executor there is nothing to run. Reporting success here is
-            // what made a submitted run look complete while never executing.
-            let Some(executor) = executor else {
-                return RunOutcome::Failed(format!(
-                    "no workflow executor is configured, so workflow '{workflow_id}' cannot run"
-                ));
-            };
-            match executor.execute(workflow_id, input, cancel_token.clone()).await {
-                Ok(value) => RunOutcome::Completed(value),
-                Err(error) => RunOutcome::Failed(error),
-            }
-        };
-
-        match timeout_duration {
-            Some(duration) => {
-                tokio::select! {
-                    _ = cancel_token.cancelled() => RunOutcome::Cancelled,
-                    result = tokio::time::timeout(duration, work) => {
-                        match result {
-                            Ok(outcome) => outcome,
-                            Err(_) => RunOutcome::TimedOut,
-                        }
-                    }
-                }
-            }
-            None => {
-                tokio::select! {
-                    _ = cancel_token.cancelled() => RunOutcome::Cancelled,
-                    outcome = work => outcome,
-                }
-            }
-        }
-    }
-}
-
-/// Outcome of a background run execution.
-#[derive(Debug)]
-#[allow(dead_code)]
-enum RunOutcome {
-    Completed(Value),
-    Failed(String),
-    Cancelled,
-    TimedOut,
 }
 
 // ---------------------------------------------------------------------------
 // Shared Application State for Axum Handlers
 // ---------------------------------------------------------------------------
 
-/// Shared state for background run endpoints.
-#[derive(Debug, Clone)]
+/// Shared state for the background run endpoints, and the embedded worker.
+///
+/// Holds the run store (in memory by default), the targets runs execute, and the
+/// governance control. Unless disabled with
+/// [`with_embedded_worker(false)`](Self::with_embedded_worker), a [`DurableWorker`] over
+/// the same store and targets starts in this process the first time the server is built
+/// inside a Tokio runtime or a run is submitted.
+#[derive(Clone)]
 pub struct BackgroundState {
-    pub store: RunStore,
-    pub runner: BackgroundRunner,
+    runs: Arc<dyn DurableRunStore>,
+    executor: Option<Arc<dyn WorkflowExecutor>>,
+    agents: BTreeMap<String, Arc<Runner>>,
+    app_name: String,
+    /// Shared by every clone, so a control installed by the server builder reaches a
+    /// scheduler started earlier from a clone.
+    governance: Arc<std::sync::RwLock<Option<GovernanceControl>>>,
+    worker: DurableWorkerConfig,
+    embedded_worker: bool,
+    started: Arc<std::sync::Mutex<Option<WorkerHandle>>>,
 }
 
-impl BackgroundState {
-    /// Attach the executor that resolves and runs workflows.
-    ///
-    /// Without one, a submitted run has nothing to execute and is failed rather than
-    /// reported complete.
-    #[must_use]
-    pub fn with_executor(mut self, executor: Arc<dyn WorkflowExecutor>) -> Self {
-        self.runner = self.runner.with_executor(executor);
-        self
-    }
-
-    /// Create a new background state with a fresh store and runner.
-    pub fn new() -> Self {
-        let store = RunStore::new();
-        let runner = BackgroundRunner::new(store.clone());
-        Self { store, runner }
+impl std::fmt::Debug for BackgroundState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackgroundState")
+            .field("agents", &self.agents.keys().collect::<Vec<_>>())
+            .field("has_executor", &self.executor.is_some())
+            .field("app_name", &self.app_name)
+            .field("queue", &self.worker.queue)
+            .field("embedded_worker", &self.embedded_worker)
+            .finish_non_exhaustive()
     }
 }
 
@@ -857,157 +524,361 @@ impl Default for BackgroundState {
     }
 }
 
+impl BackgroundState {
+    /// A state over a fresh [`InMemoryRunStore`] with no targets.
+    pub fn new() -> Self {
+        Self {
+            runs: Arc::new(InMemoryRunStore::new()),
+            executor: None,
+            agents: BTreeMap::new(),
+            app_name: "background".to_string(),
+            governance: Arc::default(),
+            worker: DurableWorkerConfig::default(),
+            embedded_worker: true,
+            started: Arc::default(),
+        }
+    }
+
+    /// Uses `store` for runs; share one store across replicas.
+    #[must_use]
+    pub fn with_run_store(mut self, store: Arc<dyn DurableRunStore>) -> Self {
+        self.runs = store;
+        self
+    }
+
+    /// Attaches the executor that resolves and runs workflows.
+    #[must_use]
+    pub fn with_executor(mut self, executor: Arc<dyn WorkflowExecutor>) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
+    /// Runs whose target is `target` execute through `runner`, in the runner's app.
+    #[must_use]
+    pub fn with_agent(mut self, target: impl Into<String>, runner: Arc<Runner>) -> Self {
+        self.agents.insert(target.into(), runner);
+        self
+    }
+
+    /// Sets the app name workflow runs are recorded under. Defaults to `background`.
+    #[must_use]
+    pub fn with_app_name(mut self, app_name: impl Into<String>) -> Self {
+        self.app_name = app_name.into();
+        self
+    }
+
+    /// Refuses submissions, and stops the embedded worker claiming, while `control`
+    /// refuses work. [`ServerBuilder`](crate::ServerBuilder) installs
+    /// [`ServerConfig::governance`](crate::ServerConfig::governance) when none is set.
+    #[must_use]
+    pub fn with_governance(self, control: GovernanceControl) -> Self {
+        *self.governance.write().unwrap_or_else(|e| e.into_inner()) = Some(control);
+        self
+    }
+
+    /// Sets the embedded worker's configuration, including the queue runs are enqueued on.
+    #[must_use]
+    pub fn with_worker_config(mut self, config: DurableWorkerConfig) -> Self {
+        self.worker = config;
+        self
+    }
+
+    /// Whether this process runs a worker; disable it on API-only replicas.
+    #[must_use]
+    pub fn with_embedded_worker(mut self, enabled: bool) -> Self {
+        self.embedded_worker = enabled;
+        self
+    }
+
+    /// The run store.
+    pub fn run_store(&self) -> &Arc<dyn DurableRunStore> {
+        &self.runs
+    }
+
+    /// The governance control, if one is installed.
+    pub fn governance(&self) -> Option<GovernanceControl> {
+        self.governance.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Installs `control` unless one is already installed.
+    pub(crate) fn governance_or(&self, control: &GovernanceControl) {
+        let mut slot = self.governance.write().unwrap_or_else(|e| e.into_inner());
+        if slot.is_none() {
+            *slot = Some(control.clone());
+        }
+    }
+
+    /// A [`DurableWorker`] over this state's store, targets, governance, and configuration.
+    pub fn worker(&self) -> DurableWorker {
+        let mut worker =
+            DurableWorker::new(Arc::clone(&self.runs)).with_config(self.worker.clone());
+        for (target, runner) in &self.agents {
+            worker = worker.with_agent(target.clone(), Arc::clone(runner));
+        }
+        if let Some(executor) = &self.executor {
+            worker = worker.with_workflows(Arc::clone(executor));
+        }
+        if let Some(control) = self.governance() {
+            worker = worker.with_governance(control);
+        }
+        worker
+    }
+
+    /// Starts the embedded worker once, when enabled and a Tokio runtime is running.
+    pub fn ensure_worker_started(&self) {
+        if !self.embedded_worker || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let mut started = self.started.lock().unwrap_or_else(|e| e.into_inner());
+        if started.as_ref().is_none_or(WorkerHandle::is_finished) {
+            *started = Some(self.worker().spawn());
+        }
+    }
+
+    fn wake_worker(&self) {
+        if let Some(handle) = self.started.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            handle.wake();
+        }
+    }
+
+    /// Makes a parked run claimable now, for the approval service to call once it
+    /// records a decision for the run's held tool call.
+    ///
+    /// A waiting run is claimed again at once and resumes its session, so the agent
+    /// dispatches the held call through the governed path with the decision. A wake
+    /// that arrives while the run is still running is kept and applied when it parks.
+    ///
+    /// # Errors
+    ///
+    /// Returns `run_store.not_found` for an unknown run, or the store's error.
+    pub async fn wake_run(&self, run_id: &str) -> std::result::Result<(), AdkError> {
+        self.runs.wake(run_id).await?;
+        tracing::info!(run.id = %run_id, "run woken");
+        self.wake_worker();
+        Ok(())
+    }
+
+    /// Wakes every parked run of `app_name` continuing `session_id` for `user_id`, and
+    /// returns how many were woken; for an approval service that knows the decision's
+    /// session but not its run.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error.
+    pub async fn wake_session_runs(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+    ) -> std::result::Result<usize, AdkError> {
+        let waiting = self
+            .runs
+            .list(
+                RunFilter::default()
+                    .app_name(app_name)
+                    .user_id(user_id)
+                    .session_id(session_id)
+                    .states([RunState::Waiting]),
+            )
+            .await?;
+        for run in &waiting {
+            self.runs.wake(&run.run_id).await?;
+            tracing::info!(run.id = %run.run_id, "run woken");
+        }
+        if !waiting.is_empty() {
+            self.wake_worker();
+        }
+        Ok(waiting.len())
+    }
+
+    /// Stops the embedded worker, letting in-flight attempts finish.
+    pub async fn shutdown_worker(&self) {
+        let handle = self.started.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(handle) = handle {
+            handle.shutdown().await;
+        }
+    }
+
+    /// The app a run of `target` is recorded under: the agent's runner app, or this
+    /// state's app name for a workflow.
+    fn app_name_for(&self, target: &str) -> String {
+        self.agents
+            .get(target)
+            .map_or_else(|| self.app_name.clone(), |runner| runner.app_name().to_string())
+    }
+
+    fn knows_target(&self, target: &str) -> bool {
+        self.agents.contains_key(target)
+            || self.executor.as_ref().is_some_and(|executor| executor.has_workflow(target))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // REST Endpoint Handlers
 // ---------------------------------------------------------------------------
 
-/// POST /runs — Submit a new background run.
-async fn submit_run(
-    State(state): State<BackgroundState>,
-    Json(request): Json<SubmitRunRequest>,
-) -> impl IntoResponse {
-    if state.runner.is_paused() {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "run scheduling is paused by the governance kill switch"
-            })),
-        )
-            .into_response();
-    }
-
-    // Reject an unknown workflow before it is queued, rather than accepting it and
-    // reporting a status for work that can never run.
-    if let Some(executor) = state.runner.executor()
-        && !executor.has_workflow(&request.workflow_id)
-    {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!("unknown workflow '{}'", request.workflow_id)
-            })),
-        )
-            .into_response();
-    }
-
-    let run_id = uuid::Uuid::new_v4().to_string();
-    let now = Utc::now();
-
-    let run = BackgroundRun {
-        run_id: run_id.clone(),
-        workflow_id: request.workflow_id,
-        status: RunStatus::Queued,
-        input: request.input,
-        result: None,
-        error: None,
-        created_at: now,
-        updated_at: now,
-        timeout: request.timeout_secs.map(Duration::from_secs),
-        max_retries: request.max_retries.unwrap_or(0),
-        retry_count: 0,
-        cancel_token: CancellationToken::new(),
-    };
-
-    state.store.insert(run).await;
-
-    // Start execution
-    state.runner.execute(run_id.clone());
-
-    let response =
-        SubmitRunResponse { run_id, status: RunStatus::Queued, created_at: now.to_rfc3339() };
-
-    (StatusCode::CREATED, Json(response)).into_response()
+fn problem(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
 }
 
-/// GET /runs/{run_id} — Get run status.
+fn store_error(error: &AdkError) -> Response {
+    let status =
+        StatusCode::from_u16(error.http_status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    problem(status, error.to_string())
+}
+
+/// POST /runs — Enqueue a run.
+async fn submit_run(
+    State(state): State<BackgroundState>,
+    caller: Option<Extension<Option<RequestContext>>>,
+    Json(request): Json<SubmitRunRequest>,
+) -> Response {
+    if let Some(control) = state.governance()
+        && let Err(error) = control.check()
+    {
+        return problem(StatusCode::SERVICE_UNAVAILABLE, error.to_string());
+    }
+    let Some(target) = request.target.or(request.workflow_id) else {
+        return problem(StatusCode::BAD_REQUEST, "a run needs a `target` (or `workflowId`)");
+    };
+    // Rejected before it is queued, rather than accepted and then failed.
+    if !state.knows_target(&target) {
+        return problem(StatusCode::NOT_FOUND, format!("unknown agent or workflow '{target}'"));
+    }
+    let app_name = state.app_name_for(&target);
+    let authenticated = caller.and_then(|Extension(caller)| caller).map(|caller| caller.user_id);
+    let user_id = authenticated.or(request.user_id).unwrap_or_else(|| "anonymous".to_string());
+
+    let mut run = NewRun::new(state.worker.queue.clone(), app_name, user_id, target, request.input)
+        .with_max_attempts(request.max_retries.unwrap_or(0).saturating_add(1));
+    if let Some(session_id) = request.session_id {
+        run = run.with_session_id(session_id);
+    }
+    if let Some(key) = request.idempotency_key {
+        run = run.with_idempotency_key(key);
+    }
+    if let Some(key) = request.concurrency_key {
+        run = run.with_concurrency_key(key, request.on_conflict.unwrap_or_default());
+    }
+    if let Some(at) = request.not_before {
+        run = run.with_not_before(at);
+    }
+
+    let enqueued = match state.runs.enqueue(run).await {
+        Ok(enqueued) => enqueued,
+        Err(error) => return store_error(&error),
+    };
+    state.ensure_worker_started();
+    state.wake_worker();
+    let (status, record, existing) = match enqueued {
+        Enqueued::Created(record) => (StatusCode::CREATED, record, false),
+        Enqueued::Existing(record) => (StatusCode::OK, record, true),
+        Enqueued::Rejected { blocking_run_id } => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "an unfinished run holds this concurrency key",
+                    "blockingRunId": blocking_run_id,
+                })),
+            )
+                .into_response();
+        }
+    };
+    let response = SubmitRunResponse {
+        run_id: record.run_id,
+        status: record.state.into(),
+        created_at: record.created_at.to_rfc3339(),
+        existing,
+    };
+    (status, Json(response)).into_response()
+}
+
+/// `GET /runs` query parameters.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListRunsQuery {
+    /// Only runs in this state.
+    #[serde(default)]
+    pub state: Option<RunState>,
+    /// Only runs continuing this session.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// At most this many runs; defaults to 100.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// GET /runs — List runs.
+async fn list_runs(
+    State(state): State<BackgroundState>,
+    Query(query): Query<ListRunsQuery>,
+) -> Response {
+    let mut filter =
+        RunFilter::default().queue(state.worker.queue.clone()).limit(query.limit.unwrap_or(100));
+    if let Some(run_state) = query.state {
+        filter = filter.states([run_state]);
+    }
+    if let Some(session_id) = query.session_id {
+        filter = filter.session_id(session_id);
+    }
+    match state.runs.list(filter).await {
+        Ok(runs) => {
+            let runs: Vec<RunStatusResponse> = runs.into_iter().map(Into::into).collect();
+            (StatusCode::OK, Json(runs)).into_response()
+        }
+        Err(error) => store_error(&error),
+    }
+}
+
+/// GET /runs/{run_id} — Get a run.
 async fn get_run_status(
     State(state): State<BackgroundState>,
     Path(run_id): Path<String>,
-) -> impl IntoResponse {
-    match state.store.get(&run_id).await {
-        Some(run) => {
-            let retries_remaining = if run.max_retries > 0 {
-                Some(run.max_retries.saturating_sub(run.retry_count))
-            } else {
-                None
-            };
-
-            let retry_count = if run.max_retries > 0 { Some(run.retry_count) } else { None };
-
-            let response = RunStatusResponse {
-                run_id: run.run_id,
-                status: run.status,
-                created_at: run.created_at.to_rfc3339(),
-                updated_at: run.updated_at.to_rfc3339(),
-                result: run.result,
-                error: run.error,
-                retry_count,
-                retries_remaining,
-            };
-
-            (StatusCode::OK, Json(response)).into_response()
-        }
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "run not found" })))
-            .into_response(),
+) -> Response {
+    match state.runs.get(&run_id).await {
+        Ok(Some(run)) => (StatusCode::OK, Json(RunStatusResponse::from(run))).into_response(),
+        Ok(None) => problem(StatusCode::NOT_FOUND, "run not found"),
+        Err(error) => store_error(&error),
     }
 }
 
 /// DELETE /runs/{run_id} — Cancel a run.
-async fn cancel_run(
-    State(state): State<BackgroundState>,
-    Path(run_id): Path<String>,
-) -> impl IntoResponse {
-    match state.store.get(&run_id).await {
-        Some(run) => {
-            // If the run is in a terminal state, return current status without modification
-            match run.status {
-                RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled => {
-                    let response = RunStatusResponse {
-                        run_id: run.run_id,
-                        status: run.status,
-                        created_at: run.created_at.to_rfc3339(),
-                        updated_at: run.updated_at.to_rfc3339(),
-                        result: run.result,
-                        error: run.error,
-                        retry_count: if run.max_retries > 0 { Some(run.retry_count) } else { None },
-                        retries_remaining: if run.max_retries > 0 {
-                            Some(run.max_retries.saturating_sub(run.retry_count))
-                        } else {
-                            None
-                        },
-                    };
-                    (StatusCode::OK, Json(response)).into_response()
-                }
-                // For queued or running runs, signal cancellation
-                RunStatus::Queued | RunStatus::Running => {
-                    run.cancel_token.cancel();
-                    state.store.update_status(&run_id, RunStatus::Cancelled).await;
+///
+/// A queued or waiting run is cancelled at once; a running run is flagged and its
+/// worker, on whichever replica, stops it at its next heartbeat.
+async fn cancel_run(State(state): State<BackgroundState>, Path(run_id): Path<String>) -> Response {
+    if let Err(error) = state.runs.request_cancel(&run_id).await {
+        return if error.is_not_found() {
+            problem(StatusCode::NOT_FOUND, "run not found")
+        } else {
+            store_error(&error)
+        };
+    }
+    tracing::info!(run.id = %run_id, "run cancellation requested");
+    // A run owned by this process stops now; one owned elsewhere at its worker's next heartbeat.
+    if let Some(handle) = state.started.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        handle.heartbeat_now();
+    }
+    match state.runs.get(&run_id).await {
+        Ok(Some(run)) => (StatusCode::OK, Json(RunStatusResponse::from(run))).into_response(),
+        Ok(None) => problem(StatusCode::NOT_FOUND, "run not found"),
+        Err(error) => store_error(&error),
+    }
+}
 
-                    let updated = state.store.get(&run_id).await.unwrap();
-                    let response = RunStatusResponse {
-                        run_id: updated.run_id,
-                        status: updated.status,
-                        created_at: updated.created_at.to_rfc3339(),
-                        updated_at: updated.updated_at.to_rfc3339(),
-                        result: updated.result,
-                        error: updated.error,
-                        retry_count: if updated.max_retries > 0 {
-                            Some(updated.retry_count)
-                        } else {
-                            None
-                        },
-                        retries_remaining: if updated.max_retries > 0 {
-                            Some(updated.max_retries.saturating_sub(updated.retry_count))
-                        } else {
-                            None
-                        },
-                    };
-                    (StatusCode::OK, Json(response)).into_response()
-                }
-            }
-        }
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "run not found" })))
-            .into_response(),
+/// POST /runs/{run_id}/wake — Make a parked run claimable now.
+async fn wake_run(State(state): State<BackgroundState>, Path(run_id): Path<String>) -> Response {
+    if let Err(error) = state.wake_run(&run_id).await {
+        return if error.is_not_found() {
+            problem(StatusCode::NOT_FOUND, "run not found")
+        } else {
+            store_error(&error)
+        };
+    }
+    match state.runs.get(&run_id).await {
+        Ok(Some(run)) => (StatusCode::OK, Json(RunStatusResponse::from(run))).into_response(),
+        Ok(None) => problem(StatusCode::NOT_FOUND, "run not found"),
+        Err(error) => store_error(&error),
     }
 }
 
@@ -1015,31 +886,29 @@ async fn cancel_run(
 // Router
 // ---------------------------------------------------------------------------
 
-/// Create the background runs router.
-///
-/// Mounts the following routes:
-/// - `POST /runs` — Submit a new background run
-/// - `GET /runs/{run_id}` — Get run status
-/// - `DELETE /runs/{run_id}` — Cancel a run
+/// Create the background runs router over a fresh in-memory state.
 ///
 /// > **Important:** the router carries no authentication. Anyone who reaches it can
 /// > submit and cancel runs. Mount it through
 /// > [`ServerBuilder::with_background_runs`](crate::ServerBuilder::with_background_runs),
 /// > which applies the server's auth middleware, or behind your own authentication layer.
 pub fn background_runs_router() -> Router {
-    let state = BackgroundState::new();
-    background_runs_router_with_state(state)
+    background_runs_router_with_state(BackgroundState::new())
 }
 
 /// Create the background runs router with a pre-configured state.
 ///
-/// This is useful for testing or sharing state with other components.
+/// Mounts `POST /runs`, `GET /runs`, `GET /runs/{run_id}`, `DELETE /runs/{run_id}`, and
+/// `POST /runs/{run_id}/wake`,
+/// and starts the embedded worker when a Tokio runtime is running.
 ///
 /// > **Important:** the router carries no authentication; see
 /// > [`background_runs_router`].
 pub fn background_runs_router_with_state(state: BackgroundState) -> Router {
+    state.ensure_worker_started();
     Router::new()
-        .route("/runs", post(submit_run))
+        .route("/runs", post(submit_run).get(list_runs))
         .route("/runs/{run_id}", get(get_run_status).delete(cancel_run))
+        .route("/runs/{run_id}/wake", post(wake_run))
         .with_state(state)
 }

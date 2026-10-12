@@ -39,6 +39,7 @@ retry is reported next to the result.
 | `openai_tools_routing` | Providers | `gpt-5.6-luna` with function tools on the Chat Completions client (`OpenAIClient`) completes a tool call (routed to the Responses API); `openai-chat` only |
 | `anthropic_thinking_replay` | Providers | `claude-haiku-4-5` with budget thinking, which thinks on every turn: two tool-use turns whose history replays signed thinking blocks are accepted; Anthropic only |
 | `builtin_tool_policy` | Built-in tools | A default-deny policy keeps the provider's web search tool (`OpenAIWebSearchTool`, Anthropic `WebSearchTool`, Gemini `GoogleSearchTool`) out of every request: no built-in use is reported and the model events carry a `policyDenied` withheld record. With `allow_read_only()` the tool is attached, the reported uses land in `UsageMetadata::builtin_tool_uses`, and `cost` equals the token cost plus the published fee; `openai-chat` is skipped |
+| `durable_crash_resume` | Durable worker | A `DurableWorker` is killed while the non-idempotent `charge_card` call is in flight; a second worker recovers the run after its lease expires, answers the unanswered call `outcome_unknown` from the SQLite action ledger, and completes the run on the same session: the card is charged once and the call has one response |
 
 ## Providers
 

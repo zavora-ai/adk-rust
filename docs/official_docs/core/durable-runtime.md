@@ -12,8 +12,9 @@ backend passes.
 | Schedules | `ScheduleStore` | `InMemoryScheduleStore` | Cron, one-shot, and interval schedules with their next fire time |
 | Governance state | `GovernanceStateStore` | `InMemoryGovernanceStateStore` | Freeze state per organisation, tenant, and agent |
 
-The run store is named `DurableRunStore` so it does not clash with
-`adk_server::background::RunStore`, the server's process-local record of background runs.
+The run store is named `DurableRunStore` after the role it plays: the durable queue every
+replica claims from. `adk-server`'s background runs, cron jobs, workers, and scheduler are built
+on these contracts (see [Worker](#worker) and [Scheduler](#scheduler)).
 
 Time comes from the injected `adk_core::Clock`: `with_clock` sets it on every in-memory store
 that reads the time, and the conformance suites drive a `ManualClock`.
@@ -176,6 +177,226 @@ at startup do not disturb an advance in flight.
 scope's epoch (0 when it has no state); a moved epoch fails with `governance.conflict`, whose
 `current_epoch` metadata holds the epoch to re-read from.
 
+## Worker
+
+`adk_server::background::DurableWorker` (feature `background`) claims runs from a
+`DurableRunStore` under fenced leases and executes them: agents through their `Runner`,
+workflows through a `WorkflowExecutor`. Run one per replica; every replica claiming from the
+same store and queue shares the work.
+
+| `DurableWorkerConfig` field | Default | Meaning |
+|-----------------------------|---------|---------|
+| `worker_id` | `worker-{uuid}` | Owner name written into every lease |
+| `queue` | `default` | Queue claimed from |
+| `lease_ttl` | 30 s | How long a claim or heartbeat holds the run; heartbeats run every `lease_ttl / 3` |
+| `poll_interval` | 500 ms | Wait when nothing is claimable |
+| `max_concurrent_runs` | 4 | Attempts executed at once |
+| `run_timeout` | `None` | Fails an attempt that runs longer (not retried) |
+| `retain_finished` | 24 h | Finished runs older than this are pruned by the claim loop |
+| `approval_timeout` | `None` | How long a run parked on a held tool call waits for a decision; `None` waits until woken |
+
+One attempt of a claimed run:
+
+1. `claim` returns the run with a fencing epoch. A worker whose governance control refuses work
+   (frozen, or a stale fail-closed mirror) claims nothing.
+2. The worker records the checkpoint with `set_checkpoint` before any progress is made.
+3. A heartbeat every `lease_ttl / 3` extends the lease. A heartbeat that reports a cancellation
+   request stops the run cooperatively; one refused with `run_store.stale_epoch` drops the
+   execution at once, and the worker writes nothing more.
+4. `finish` writes the outcome, fenced by the epoch: `Completed`, `Failed { retryable }`
+   (retryable failures requeue while attempts remain), or `Cancelled` when cancellation was
+   requested.
+
+**Lease fence.** For agent runs the worker installs invocation hooks around every model call,
+model response, tool call, and tool result. Each checks that the lease is still provably held —
+the last successful heartbeat was sent less than `lease_ttl` ago. When it is not, the hook never
+returns and the worker drops the attempt, so a stalled worker makes no further model call, tool
+call, session write, or store write.
+
+| `WorkerHandle` method | Effect |
+|-----------------------|--------|
+| `shutdown().await` | Stops claiming and waits for in-flight attempts to write their outcome |
+| `wake()` | Tries a claim now instead of after `poll_interval` |
+| `heartbeat_now()` | Makes every in-flight attempt heartbeat now, so a cancellation requested in this process is seen at once |
+| `abort()` | Drops the loop and every in-flight attempt without writing, as a crash would; their leases expire and another worker recovers them |
+
+```rust,ignore
+use std::sync::Arc;
+
+use adk_server::background::{DurableWorker, DurableWorkerConfig, WorkflowRegistry};
+
+let worker = DurableWorker::new(run_store)
+    .with_agent("support", Arc::new(runner))
+    .with_workflows(Arc::new(WorkflowRegistry::new()))
+    .with_governance(governance.clone())
+    .with_config(DurableWorkerConfig::default().with_queue("default"));
+let handle = worker.spawn();
+// ...
+handle.shutdown().await;
+```
+
+## Parking on held tool calls
+
+An agent run that ends holding a tool call for approval (no decision available) parks
+instead of finishing:
+
+1. The worker records `RunCheckpointRef::AwaitingApproval { session_id, invocation_id,
+   fingerprints, expires_at }`. `fingerprints` are the held calls' decision keys
+   (`ToolConfirmationRequest::fingerprint`); `expires_at` is `now + approval_timeout` when one
+   is configured.
+2. It calls `DurableRunStore::wait(run_id, epoch, expires_at)`; the run is `Waiting` and holds
+   no lease.
+3. The approval service records the decision and wakes the run with
+   `BackgroundState::wake_run(run_id)`, `BackgroundState::wake_session_runs(app, user,
+   session)`, or `POST /runs/{run_id}/wake`. A wake that lands before the run parks is kept
+   (`wake_pending`).
+4. The next claim continues at the same attempt and resumes the same session with an empty user
+   turn; the agent dispatches the held call under its original call id through the governed
+   path, so the approved call executes once and a denied one is answered as denied.
+
+A run claimed again past `expires_at` with the same calls still held fails with
+`approval expired`.
+
+## Crash resume
+
+A run recovered after its lease expired resumes rather than restarting. No tool executes again
+during recovery.
+
+| Target | Checkpoint | What the recovering worker does |
+|--------|------------|---------------------------------|
+| Agent | `Session { session_id, invocation_id }`, recorded before the event stream is polled, so the user turn never reaches the session without a checkpoint naming it | 1. When the session's last event is the checkpoint invocation's final answer, completes the run with it — no model call. 2. Otherwise answers every unanswered function call from the action ledger (`Runner::recover_unanswered_calls`). 3. Continues the same session with an empty user turn when the original user turn was persisted, so nothing is sent twice; otherwise starts from the run's input |
+| Workflow | `Graph { thread_id, checkpoint_id }`; `thread_id` is the run id | Calls the workflow again with `WorkflowRunContext::resumed` set and the same `thread_id`; a graph workflow invoked with `ExecutionConfig::new(&run.thread_id)` resumes from its checkpointer |
+
+`Runner::recover_unanswered_calls` keys each call by its original idempotency key
+(`app/user/session/invocation/call`):
+
+| Ledger record | Response appended |
+|---------------|-------------------|
+| Completed with a value | `already_succeeded` with the result digest |
+| Completed with an error | `already_failed` with the error |
+| Begun with no outcome, or none | `outcome_unknown` |
+
+A workflow registered with `WorkflowRegistry::register_durable` (or an executor overriding
+`WorkflowExecutor::execute_durable`) receives the `WorkflowRunContext`, and may report
+checkpoints with `record_checkpoint`, which is fenced by the claim's epoch. A workflow
+registered with `register` restarts from its input.
+
+```rust,ignore
+use adk_graph::node::ExecutionConfig;
+use adk_graph::state::State;
+use adk_server::background::WorkflowRegistry;
+
+let registry = WorkflowRegistry::new().register_durable("settle", move |input, run| {
+    let graph = graph.clone();
+    async move {
+        let state: State = input.into_iter().collect();
+        let out = graph
+            .invoke(state, ExecutionConfig::new(&run.thread_id))
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(serde_json::json!({ "receipt": out.get("receipt") }))
+    }
+});
+```
+
+**Across processes.** `adk-server/tests/durable_multiprocess.rs` runs the gate with separate
+OS processes on SQLite files (PR tier) and PostgreSQL (`#[ignore]`, nightly `durable-stores`):
+the process running the charge is killed with SIGKILL mid-call, and a second process completes
+the run with one charge, answered `outcome_unknown` from the durable action ledger.
+
+**Known limits.**
+
+- Session events a stalled worker appended before its fence tripped remain in the session.
+- A model that issues a call again after an `outcome_unknown` response issues a new call with a
+  new idempotency key; the ledger does not deduplicate it. Payment tools keep their own
+  business idempotency key for that case.
+
+## Scheduler
+
+`adk_server::background::DurableScheduler` enqueues each schedule's fire times exactly once,
+from any number of replicas. Each `tick`:
+
+1. Reads `ScheduleStore::due`.
+2. Plans the fire times with `plan_fires` and the schedule's `MissedFirePolicy`.
+3. Enqueues `Schedule::run_for(fire_time)`, keyed `schedule:{id}:{fire_time}`, so replicas that
+   plan the same fire time create one run.
+4. Advances the schedule with `ScheduleStore::advance`, a compare-and-swap on its revision; a
+   replica that loses the race drops its plan.
+
+While the governance control refuses work, nothing fires and nothing advances. Once the freeze
+lifts, the missed-fire policy decides which fire times that fell due during it run.
+`start_cron_scheduler` runs the tick loop every second; start it on every replica.
+
+```rust,ignore
+use std::sync::Arc;
+
+use adk_server::background::DurableScheduler;
+
+let handle = DurableScheduler::new(schedule_store, run_store)
+    .with_governance(governance.clone())
+    .spawn();
+```
+
+## Replicated kill switch
+
+`GovernanceControl::mirrored(store, config)` builds a kill switch that mirrors a
+`GovernanceStateStore` shared by every replica. `GovernanceControl::new` stays process-local.
+
+| `GovernanceMirrorConfig` field | Default | Meaning |
+|--------------------------------|---------|---------|
+| `poll_interval` | 2 s | How often `spawn_mirror` reads the store |
+| `max_staleness` | 30 s | How long the last successful read is trusted |
+| `fail_open` | `false` | Keep running when the store cannot be read past `max_staleness` |
+| `scopes` | `[GovernanceScope::Org]` | Mirrored scopes; frozen when any is; the first is the one replicated freezes write |
+| `watch` | `None` | A `GovernanceWatch` change notification that triggers a read before the next poll |
+
+| Method | Behaviour |
+|--------|-----------|
+| `spawn_mirror` | Reads the store at once, then every `poll_interval` and on each `GovernanceWatch` notification |
+| `refresh` | One read of the mirrored scopes |
+| `freeze_replicated` | Compare-and-swap write of the first scope, retried on `governance.conflict`, then applied locally; when the store cannot be written the replica freezes locally and the error is returned |
+| `unfreeze_replicated` | Compare-and-swap write, then clears the local freeze too |
+| `is_stale`, `staleness` | Time since the last successful read |
+
+A mirrored control is stale until its first read. Past `max_staleness` without a successful
+read, `check` fails closed with `governance.stale` (`ErrorCategory::Unavailable`, retryable;
+`GOVERNANCE_STALE_CODE`): new runs are refused and running ones stop at their next model or tool
+check, as under a freeze (`governance.frozen`, `GOVERNANCE_FROZEN_CODE`). A local `freeze` on a
+mirrored control holds until a local `unfreeze`; the store never lifts it.
+
+The server's `POST /api/admin/freeze` and `POST /api/admin/unfreeze` call `freeze_replicated`
+and `unfreeze_replicated`, so a mirrored `ServerConfig::governance` reaches every replica. A
+freeze also requests cancellation of every running run in the background run stores mounted on
+the builder. Responses report `frozen`, `reason`, `mirrored`, `stale`, and, for a freeze,
+`cancelledRuns`; a store write failure returns `503` with `error`.
+
+```rust,ignore
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_core::GovernanceControl;
+use adk_core::governance::GovernanceMirrorConfig;
+
+let control = GovernanceControl::mirrored(
+    governance_store,
+    GovernanceMirrorConfig::default().with_poll_interval(Duration::from_secs(1)),
+);
+let _mirror = control.spawn_mirror();
+let config = ServerConfig::new(loader, sessions).with_governance(control);
+```
+
+## Cancel across replicas
+
+| Entry point | Effect |
+|-------------|--------|
+| `DELETE /runs/{id}` | `request_cancel`: a queued or waiting run is cancelled at once; a running run is flagged |
+| `Runner::interrupt(session_id)` | Cancels local runs, and, when the runner has a durable run store (`RunnerConfig::durable_runs`, builder `durable_run_store`), requests cancellation of the session's unfinished durable runs on a spawned task |
+| `Runner::cancel_durable_runs(user_id, session_id).await` | The same store request, awaited; returns how many runs were asked to stop |
+
+The worker that owns a flagged run sees the request on its next heartbeat, within
+`lease_ttl / 3`, interrupts the agent or fires the workflow's cancellation token, and finishes
+the run `Cancelled`.
+
 ## Backend matrix
 
 | Backend | `LeaseStore` | `DurableRunStore` | `ScheduleStore` | `GovernanceStateStore` |
@@ -300,3 +521,4 @@ job.
 - [Durable Stores](../security/durable-stores.md)
 - [Tool Authorization](../security/tool-authorization.md)
 - [Runner](runner.md)
+- [Background runs and cron](../agents/functional-api.md)

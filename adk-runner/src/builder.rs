@@ -81,6 +81,7 @@ pub struct RunnerConfigBuilder<A, G, S> {
     action_ledger: Option<Arc<dyn ActionLedger>>,
     approval_store: Option<Arc<dyn ApprovalStore>>,
     spend_ledger: Option<Arc<dyn SpendLedger>>,
+    durable_runs: Option<Arc<dyn adk_core::DurableRunStore>>,
     _marker: PhantomData<(A, G, S)>,
 }
 
@@ -112,6 +113,7 @@ impl RunnerConfigBuilder<NoAppName, NoAgent, NoSessionService> {
             action_ledger: None,
             approval_store: None,
             spend_ledger: None,
+            durable_runs: None,
             _marker: PhantomData,
         }
     }
@@ -155,6 +157,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             action_ledger: self.action_ledger,
             approval_store: self.approval_store,
             spend_ledger: self.spend_ledger,
+            durable_runs: self.durable_runs,
             _marker: PhantomData,
         }
     }
@@ -186,6 +189,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             action_ledger: self.action_ledger,
             approval_store: self.approval_store,
             spend_ledger: self.spend_ledger,
+            durable_runs: self.durable_runs,
             _marker: PhantomData,
         }
     }
@@ -220,6 +224,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             action_ledger: self.action_ledger,
             approval_store: self.approval_store,
             spend_ledger: self.spend_ledger,
+            durable_runs: self.durable_runs,
             _marker: PhantomData,
         }
     }
@@ -407,6 +412,26 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self
     }
 
+    /// Set the durable run queue shared by every replica (optional).
+    ///
+    /// [`Runner::interrupt`](crate::Runner::interrupt) then also requests cancellation of
+    /// the session's unfinished durable runs, wherever their worker runs.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let runner = Runner::builder()
+    ///     .app_name("ops")
+    ///     .agent(agent)
+    ///     .session_service(sessions)
+    ///     .durable_run_store(Arc::new(adk_core::InMemoryRunStore::new()))
+    ///     .build()?;
+    /// ```
+    pub fn durable_run_store(mut self, store: Arc<dyn adk_core::DurableRunStore>) -> Self {
+        self.durable_runs = Some(store);
+        self
+    }
+
     /// Set the context compaction configuration for token-budget overflow handling (optional).
     ///
     /// When configured, the runner applies the given [`CompactionStrategy`](crate::compaction::CompactionStrategy)
@@ -454,6 +479,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             action_ledger: self.action_ledger,
             approval_store: self.approval_store,
             spend_ledger: self.spend_ledger,
+            durable_runs: self.durable_runs,
         }
     }
 
@@ -493,6 +519,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             action_ledger: self.action_ledger,
             approval_store: self.approval_store,
             spend_ledger: self.spend_ledger,
+            durable_runs: self.durable_runs,
         };
         Runner::new(config)
     }

@@ -35,6 +35,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::governance_state::{GovernanceScope, GovernanceState, GovernanceStateStore};
+use crate::principal::SubjectRef;
 use crate::{
     AdkError, ErrorCategory, ErrorComponent, Event, InvocationContext, Part, PolicyDecision,
     Result, RunConfig, Tool, ToolConfirmationDecision, ToolConfirmationRequest, ToolEffect,
@@ -57,6 +59,20 @@ pub const DEFAULT_TOOL_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(300)
 ///
 /// Attach a control to a runner with its builder's `governance`, or to a single run
 /// with [`RunConfigBuilder::governance`](crate::RunConfigBuilder::governance).
+///
+/// # Replicated kill switch
+///
+/// [`GovernanceControl::new`] is process-local. [`GovernanceControl::mirrored`] builds a
+/// control that mirrors a [`GovernanceStateStore`] shared by every replica:
+///
+/// | Mechanism | Behaviour |
+/// |-----------|-----------|
+/// | [`spawn_mirror`](Self::spawn_mirror) | Reads the mirrored scopes every `poll_interval`, and at once when the optional [`GovernanceWatch`] reports a change |
+/// | Staleness lease | Past `max_staleness` without a successful read, [`check`](Self::check) fails closed with `governance.stale`, unless the mirror is configured fail-open |
+/// | [`freeze_replicated`](Self::freeze_replicated) / [`unfreeze_replicated`](Self::unfreeze_replicated) | Compare-and-swap the store, then apply the new state locally |
+///
+/// A local [`freeze`](Self::freeze) still works on a mirrored control and holds until a
+/// local [`unfreeze`](Self::unfreeze); the store never lifts it.
 ///
 /// # Example
 ///
@@ -82,6 +98,166 @@ pub struct GovernanceControl {
 struct ControlState {
     frozen: AtomicBool,
     reason: std::sync::RwLock<Option<String>>,
+    /// The reason of a freeze read from the mirrored store, while one is in force.
+    replicated: std::sync::RwLock<Option<String>>,
+    mirror: Option<Mirror>,
+}
+
+/// Error code returned while a mirrored control has not read its store within `max_staleness`.
+pub const GOVERNANCE_STALE_CODE: &str = "governance.stale";
+
+/// Error code returned while execution is frozen.
+pub const GOVERNANCE_FROZEN_CODE: &str = "governance.frozen";
+
+/// Notifies a mirrored [`GovernanceControl`] that the store changed, so it reads it
+/// before the next poll.
+///
+/// Implement it over a backend's change channel (PostgreSQL `LISTEN`, Redis pub/sub, a
+/// MongoDB change stream). The store remains the truth: a notification only shortens the
+/// time until the control reads it, and a lost notification is covered by the poll.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::governance::GovernanceWatch;
+///
+/// #[derive(Default)]
+/// struct NotifyWatch(tokio::sync::Notify);
+///
+/// #[async_trait::async_trait]
+/// impl GovernanceWatch for NotifyWatch {
+///     async fn changed(&self) -> adk_core::Result<()> {
+///         self.0.notified().await;
+///         Ok(())
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait GovernanceWatch: Send + Sync {
+    /// Resolves when the store reports a change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the change channel failed; the mirror then waits for the
+    /// next poll before listening again.
+    async fn changed(&self) -> Result<()>;
+}
+
+/// How a [`GovernanceControl`] mirrors a [`GovernanceStateStore`].
+///
+/// # Example
+///
+/// ```rust
+/// use std::time::Duration;
+/// use adk_core::governance::GovernanceMirrorConfig;
+/// use adk_core::governance_state::GovernanceScope;
+///
+/// let config = GovernanceMirrorConfig::default()
+///     .with_poll_interval(Duration::from_secs(1))
+///     .with_max_staleness(Duration::from_secs(10))
+///     .with_scopes([GovernanceScope::Org, GovernanceScope::Tenant("acme".into())]);
+/// assert!(!config.fail_open);
+/// ```
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct GovernanceMirrorConfig {
+    /// How often the store is read. Defaults to 2 seconds.
+    pub poll_interval: Duration,
+    /// How long the control trusts its last successful read. Defaults to 30 seconds.
+    pub max_staleness: Duration,
+    /// Keep running when the store cannot be read past `max_staleness`. Defaults to `false`.
+    pub fail_open: bool,
+    /// The scopes mirrored; execution is frozen when any of them is. The first scope is
+    /// the one [`freeze_replicated`](GovernanceControl::freeze_replicated) writes.
+    /// Defaults to [`GovernanceScope::Org`].
+    pub scopes: Vec<GovernanceScope>,
+    /// An optional change notification that triggers a read before the next poll.
+    pub watch: Option<Arc<dyn GovernanceWatch>>,
+}
+
+impl Default for GovernanceMirrorConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval: Self::DEFAULT_POLL_INTERVAL,
+            max_staleness: Self::DEFAULT_MAX_STALENESS,
+            fail_open: false,
+            scopes: vec![GovernanceScope::Org],
+            watch: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for GovernanceMirrorConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GovernanceMirrorConfig")
+            .field("poll_interval", &self.poll_interval)
+            .field("max_staleness", &self.max_staleness)
+            .field("fail_open", &self.fail_open)
+            .field("scopes", &self.scopes)
+            .field("watch", &self.watch.is_some())
+            .finish()
+    }
+}
+
+impl GovernanceMirrorConfig {
+    /// The default `poll_interval`.
+    pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
+    /// The default `max_staleness`.
+    pub const DEFAULT_MAX_STALENESS: Duration = Duration::from_secs(30);
+
+    /// Sets how often the store is read.
+    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval;
+        self
+    }
+
+    /// Sets how long the control trusts its last successful read.
+    pub fn with_max_staleness(mut self, staleness: Duration) -> Self {
+        self.max_staleness = staleness;
+        self
+    }
+
+    /// Keeps execution running when the store cannot be read past `max_staleness`.
+    pub fn with_fail_open(mut self, fail_open: bool) -> Self {
+        self.fail_open = fail_open;
+        self
+    }
+
+    /// Sets the mirrored scopes; the first is the one replicated freezes write.
+    pub fn with_scopes(mut self, scopes: impl IntoIterator<Item = GovernanceScope>) -> Self {
+        self.scopes = scopes.into_iter().collect();
+        self
+    }
+
+    /// Sets the change notification.
+    pub fn with_watch(mut self, watch: Arc<dyn GovernanceWatch>) -> Self {
+        self.watch = Some(watch);
+        self
+    }
+}
+
+struct Mirror {
+    store: Arc<dyn GovernanceStateStore>,
+    config: GovernanceMirrorConfig,
+    last_refresh: std::sync::Mutex<Option<tokio::time::Instant>>,
+    wake: tokio::sync::Notify,
+}
+
+impl Mirror {
+    fn primary_scope(&self) -> GovernanceScope {
+        self.config.scopes.first().cloned().unwrap_or(GovernanceScope::Org)
+    }
+
+    fn staleness(&self) -> Option<Duration> {
+        self.last_refresh
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|refreshed| refreshed.elapsed())
+    }
+
+    fn is_stale(&self) -> bool {
+        self.staleness().is_none_or(|age| age > self.config.max_staleness)
+    }
 }
 
 impl std::fmt::Debug for GovernanceControl {
@@ -89,17 +265,66 @@ impl std::fmt::Debug for GovernanceControl {
         f.debug_struct("GovernanceControl")
             .field("frozen", &self.is_frozen())
             .field("reason", &self.reason())
+            .field("mirrored", &self.is_mirrored())
             .finish()
     }
 }
 
+/// The most compare-and-swap attempts a replicated freeze makes before reporting the conflict.
+const REPLICATED_WRITE_ATTEMPTS: usize = 5;
+
 impl GovernanceControl {
-    /// Creates an unfrozen control.
+    /// Creates an unfrozen, process-local control.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Freezes execution everywhere this control is attached.
+    /// Creates an unfrozen control that mirrors `store`.
+    ///
+    /// The control is stale until its first successful read, so it fails closed until
+    /// [`refresh`](Self::refresh) or [`spawn_mirror`](Self::spawn_mirror) reads the store
+    /// (unless `config.fail_open`).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::GovernanceControl;
+    /// use adk_core::governance::GovernanceMirrorConfig;
+    /// use adk_core::governance_state::InMemoryGovernanceStateStore;
+    ///
+    /// # futures::executor::block_on(async {
+    /// let store = Arc::new(InMemoryGovernanceStateStore::new());
+    /// let a = GovernanceControl::mirrored(store.clone(), GovernanceMirrorConfig::default());
+    /// let b = GovernanceControl::mirrored(store, GovernanceMirrorConfig::default());
+    /// assert!(a.check().is_err(), "stale until the first read");
+    ///
+    /// a.freeze_replicated("incident 7", None).await?;
+    /// b.refresh().await?;
+    /// assert!(b.is_frozen());
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// # }).unwrap();
+    /// ```
+    pub fn mirrored(store: Arc<dyn GovernanceStateStore>, config: GovernanceMirrorConfig) -> Self {
+        Self {
+            inner: Arc::new(ControlState {
+                mirror: Some(Mirror {
+                    store,
+                    config,
+                    last_refresh: std::sync::Mutex::new(None),
+                    wake: tokio::sync::Notify::new(),
+                }),
+                ..ControlState::default()
+            }),
+        }
+    }
+
+    /// Whether the control mirrors a [`GovernanceStateStore`].
+    pub fn is_mirrored(&self) -> bool {
+        self.inner.mirror.is_some()
+    }
+
+    /// Freezes execution everywhere this control is attached, in this process only.
     pub fn freeze(&self, reason: impl Into<String>) {
         let reason = reason.into();
         tracing::warn!(governance.reason = %reason, "execution frozen");
@@ -107,24 +332,28 @@ impl GovernanceControl {
         self.inner.frozen.store(true, Ordering::SeqCst);
     }
 
-    /// Lifts a freeze.
+    /// Lifts a local freeze. A freeze read from a mirrored store stays in force.
     pub fn unfreeze(&self) {
         self.inner.frozen.store(false, Ordering::SeqCst);
         *self.inner.reason.write().unwrap_or_else(|e| e.into_inner()) = None;
         tracing::info!("execution unfrozen");
     }
 
-    /// Whether execution is frozen.
+    /// Whether execution is frozen, locally or by a mirrored store.
     pub fn is_frozen(&self) -> bool {
-        self.inner.frozen.load(Ordering::SeqCst)
+        self.inner.frozen.load(Ordering::SeqCst) || self.replicated_reason().is_some()
+    }
+
+    fn replicated_reason(&self) -> Option<String> {
+        self.inner.replicated.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// The reason given for the current freeze, if frozen.
     pub fn reason(&self) -> Option<String> {
-        if !self.is_frozen() {
-            return None;
+        if self.inner.frozen.load(Ordering::SeqCst) {
+            return self.inner.reason.read().unwrap_or_else(|e| e.into_inner()).clone();
         }
-        self.inner.reason.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.replicated_reason()
     }
 
     /// Whether `other` shares this control's flag.
@@ -132,26 +361,230 @@ impl GovernanceControl {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// Returns an error when frozen.
+    /// How long ago the mirrored store was last read successfully; `None` for a
+    /// process-local control or before the first read.
+    pub fn staleness(&self) -> Option<Duration> {
+        self.inner.mirror.as_ref().and_then(Mirror::staleness)
+    }
+
+    /// Whether a mirrored control has gone past `max_staleness` without a successful
+    /// read. Always `false` for a process-local control.
+    pub fn is_stale(&self) -> bool {
+        self.inner.mirror.as_ref().is_some_and(Mirror::is_stale)
+    }
+
+    /// Returns an error when frozen, or when a mirrored, fail-closed control is stale.
     ///
     /// # Errors
     ///
     /// Returns a non-retryable [`ErrorCategory::Forbidden`] error with code
-    /// `governance.frozen` while the control is frozen.
+    /// `governance.frozen` while frozen, and a retryable [`ErrorCategory::Unavailable`]
+    /// error with code [`GOVERNANCE_STALE_CODE`] while a fail-closed mirror is stale.
     pub fn check(&self) -> Result<()> {
-        if !self.is_frozen() {
-            return Ok(());
+        if self.is_frozen() {
+            let reason = self.reason().unwrap_or_else(|| "no reason given".to_string());
+            return Err(AdkError::new(
+                ErrorComponent::Agent,
+                ErrorCategory::Forbidden,
+                GOVERNANCE_FROZEN_CODE,
+                format!(
+                    "execution is frozen by the governance kill switch ({reason}); no model call \
+                     or tool runs until an operator unfreezes it"
+                ),
+            ));
         }
-        let reason = self.reason().unwrap_or_else(|| "no reason given".to_string());
-        Err(AdkError::new(
-            ErrorComponent::Agent,
-            ErrorCategory::Forbidden,
-            "governance.frozen",
-            format!(
-                "execution is frozen by the governance kill switch ({reason}); no model call or \
-                 tool runs until an operator unfreezes it"
+        if let Some(mirror) = &self.inner.mirror
+            && !mirror.config.fail_open
+            && mirror.is_stale()
+        {
+            let age = mirror
+                .staleness()
+                .map_or_else(|| "never".to_string(), |age| format!("{}s ago", age.as_secs()));
+            return Err(AdkError::new(
+                ErrorComponent::Agent,
+                ErrorCategory::Unavailable,
+                GOVERNANCE_STALE_CODE,
+                format!(
+                    "the governance kill switch state was last read {age}, past its {}s \
+                     staleness limit, so execution is refused until the governance store is \
+                     reachable again",
+                    mirror.config.max_staleness.as_secs()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reads the mirrored scopes once and applies them. A no-op for a process-local control.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error; the previous state stays in force and its age keeps growing.
+    pub async fn refresh(&self) -> Result<()> {
+        let Some(mirror) = &self.inner.mirror else { return Ok(()) };
+        let mut frozen_by = None;
+        for scope in &mirror.config.scopes {
+            if let Some(state) = mirror.store.get(scope).await?
+                && state.frozen
+                && frozen_by.is_none()
+            {
+                frozen_by = Some(state);
+            }
+        }
+        *mirror.last_refresh.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(tokio::time::Instant::now());
+        let reason = frozen_by.as_ref().map(|state| {
+            state.reason.clone().unwrap_or_else(|| format!("{} frozen", state.scope.key()))
+        });
+        let previous = std::mem::replace(
+            &mut *self.inner.replicated.write().unwrap_or_else(|e| e.into_inner()),
+            reason.clone(),
+        );
+        match (&previous, &frozen_by) {
+            (None, Some(state)) => tracing::warn!(
+                governance.scope = %state.scope.key(),
+                governance.epoch = state.epoch,
+                governance.reason = reason.as_deref().unwrap_or_default(),
+                "execution frozen by the replicated kill switch"
             ),
-        ))
+            (Some(_), None) => tracing::info!("replicated kill switch lifted"),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Spawns the task that keeps a mirrored control in step with its store, and returns
+    /// its handle; `None` for a process-local control.
+    ///
+    /// The task reads the store at once, then every `poll_interval` and whenever the
+    /// configured [`GovernanceWatch`] reports a change. It ends when every clone of the
+    /// control has been dropped, or when the handle is aborted.
+    pub fn spawn_mirror(&self) -> Option<tokio::task::JoinHandle<()>> {
+        self.inner.mirror.as_ref()?;
+        let weak = Arc::downgrade(&self.inner);
+        Some(tokio::spawn(async move {
+            loop {
+                let Some(inner) = weak.upgrade() else { return };
+                let control = GovernanceControl { inner };
+                if let Err(error) = control.refresh().await {
+                    tracing::warn!(error = %error, "could not read the governance store");
+                }
+                let Some(mirror) = control.inner.mirror.as_ref() else { return };
+                let poll = tokio::time::sleep(mirror.config.poll_interval);
+                let watch = mirror.config.watch.clone();
+                tokio::select! {
+                    () = poll => {}
+                    () = mirror.wake.notified() => {}
+                    changed = async {
+                        match &watch {
+                            Some(watch) => watch.changed().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        if let Err(error) = changed {
+                            tracing::warn!(error = %error, "governance change notification failed");
+                            tokio::time::sleep(mirror.config.poll_interval).await;
+                        }
+                    }
+                }
+            }
+        }))
+    }
+
+    /// Freezes execution on every replica that mirrors the same store, and returns the
+    /// stored state.
+    ///
+    /// On a mirrored control this writes the first mirrored scope by compare-and-swap,
+    /// retrying when another change lands first, then applies the state locally. When
+    /// the store cannot be written, the control freezes locally so this replica stops
+    /// regardless, and the error is returned. On a process-local control it is
+    /// [`freeze`](Self::freeze) and returns `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error, or `governance.conflict` when every attempt lost the race.
+    pub async fn freeze_replicated(
+        &self,
+        reason: impl Into<String>,
+        issued_by: Option<SubjectRef>,
+    ) -> Result<Option<GovernanceState>> {
+        let reason = reason.into();
+        let Some(mirror) = &self.inner.mirror else {
+            self.freeze(reason);
+            return Ok(None);
+        };
+        match self.write_replicated(mirror, true, Some(reason.clone()), issued_by).await {
+            Ok(state) => Ok(state),
+            Err(error) => {
+                tracing::error!(error = %error, "could not write the replicated freeze; freezing this replica locally");
+                self.freeze(reason);
+                Err(error)
+            }
+        }
+    }
+
+    /// Lifts a replicated freeze, and any local one, and returns the stored state.
+    ///
+    /// On a mirrored control this writes the first mirrored scope by compare-and-swap and
+    /// clears the local freeze only once the store is written. On a process-local control
+    /// it is [`unfreeze`](Self::unfreeze) and returns `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error, or `governance.conflict` when every attempt lost the
+    /// race; the freeze then stays in force.
+    pub async fn unfreeze_replicated(
+        &self,
+        issued_by: Option<SubjectRef>,
+    ) -> Result<Option<GovernanceState>> {
+        let Some(mirror) = &self.inner.mirror else {
+            self.unfreeze();
+            return Ok(None);
+        };
+        let state = self.write_replicated(mirror, false, None, issued_by).await?;
+        self.unfreeze();
+        Ok(state)
+    }
+
+    async fn write_replicated(
+        &self,
+        mirror: &Mirror,
+        frozen: bool,
+        reason: Option<String>,
+        issued_by: Option<SubjectRef>,
+    ) -> Result<Option<GovernanceState>> {
+        let scope = mirror.primary_scope();
+        let mut last_error = None;
+        for _ in 0..REPLICATED_WRITE_ATTEMPTS {
+            let current = mirror.store.get(&scope).await?;
+            let epoch = current.as_ref().map_or(0, |state| state.epoch);
+            if !frozen && current.as_ref().is_none_or(|state| !state.frozen) {
+                self.refresh().await?;
+                return Ok(current);
+            }
+            match mirror
+                .store
+                .set(scope.clone(), epoch, frozen, reason.clone(), issued_by.clone())
+                .await
+            {
+                Ok(state) => {
+                    tracing::warn!(
+                        governance.scope = %scope.key(),
+                        governance.epoch = state.epoch,
+                        governance.frozen = frozen,
+                        governance.issued_by = ?state.issued_by,
+                        "replicated kill switch written"
+                    );
+                    self.refresh().await?;
+                    mirror.wake.notify_waiters();
+                    return Ok(Some(state));
+                }
+                Err(error) if error.is_conflict() => last_error = Some(error),
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last_error
+            .unwrap_or_else(|| crate::governance_state::governance_conflict_error(&scope, 0, 0)))
     }
 }
 

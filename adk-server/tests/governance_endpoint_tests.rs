@@ -144,10 +144,16 @@ async fn freezing_stops_runs_and_pauses_scheduling_until_unfrozen() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "frozen": true, "reason": "incident 4012" }));
+    assert_eq!(
+        body,
+        json!({ "frozen": true, "reason": "incident 4012", "mirrored": false, "stale": false, "cancelledRuns": 0 })
+    );
     assert!(fixture.control.is_frozen());
-    assert!(fixture.cron.cron_store.is_scheduling_paused());
-    assert!(fixture.cron.background_state.runner.is_paused());
+    assert!(fixture.cron.scheduler().tick().await.unwrap().frozen, "schedules do not fire");
+    assert!(
+        fixture.cron.background_state.governance().unwrap().same_as(&fixture.control),
+        "background runs obey the server's kill switch"
+    );
 
     let (status, _) = call(&fixture.app, "POST", "/api/run", Some("good"), run_body.clone()).await;
     assert_ne!(status, StatusCode::OK, "a frozen server must not run the agent");
@@ -160,8 +166,8 @@ async fn freezing_stops_runs_and_pauses_scheduling_until_unfrozen() {
     let (status, body) =
         call(&fixture.app, "POST", "/api/admin/unfreeze", Some("good"), json!({})).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "frozen": false }));
-    assert!(!fixture.cron.cron_store.is_scheduling_paused());
+    assert_eq!(body, json!({ "frozen": false, "mirrored": false, "stale": false }));
+    assert!(!fixture.cron.scheduler().tick().await.unwrap().frozen);
 
     let (status, _) = call(&fixture.app, "POST", "/api/run", Some("good"), run_body).await;
     assert_eq!(status, StatusCode::OK);

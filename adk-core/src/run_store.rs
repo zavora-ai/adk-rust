@@ -129,6 +129,23 @@ pub enum RunCheckpointRef {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         invocation_id: Option<String>,
     },
+    /// A session whose run is parked until tool calls held for approval are decided.
+    ///
+    /// A worker records it before [`wait`](DurableRunStore::wait)ing; the claim that
+    /// follows a [`wake`](DurableRunStore::wake) resumes the same session, and the agent
+    /// dispatches each held call that has a decision.
+    AwaitingApproval {
+        /// The session identifier.
+        session_id: String,
+        /// The invocation that held the calls.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        invocation_id: Option<String>,
+        /// The fingerprints of the held calls, the keys their decisions are recorded under.
+        fingerprints: Vec<String>,
+        /// When the hold expires; `None` waits until woken.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<DateTime<Utc>>,
+    },
     /// A graph thread, optionally at one checkpoint.
     Graph {
         /// The graph thread identifier.

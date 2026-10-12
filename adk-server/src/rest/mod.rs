@@ -669,9 +669,12 @@ impl ServerBuilder {
 
     /// Mount the background run endpoints under `/api`, behind the auth middleware.
     ///
-    /// Serves `POST /api/runs`, `GET /api/runs/{run_id}`, and
-    /// `DELETE /api/runs/{run_id}` from `state`. When a `RequestContextExtractor`
-    /// is configured, every request must authenticate. Mounting
+    /// Serves `POST /api/runs`, `GET /api/runs`, `GET /api/runs/{run_id}`, and
+    /// `DELETE /api/runs/{run_id}` from `state`, and starts its embedded worker when the
+    /// router is built inside a Tokio runtime. The state obeys
+    /// [`ServerConfig::governance`] unless it carries its own control. When a
+    /// `RequestContextExtractor` is configured, every request must authenticate, and an
+    /// authenticated run belongs to the caller's user id. Mounting
     /// [`background_runs_router_with_state`](crate::background::background_runs_router_with_state)
     /// yourself skips that layer.
     ///
@@ -695,7 +698,7 @@ impl ServerBuilder {
     /// Serves `POST /api/cron`, `GET /api/cron`, and `GET`/`PATCH`/`DELETE
     /// /api/cron/{job_id}` from `state`. The scheduler is not started here — call
     /// [`start_cron_scheduler`](crate::background::start_cron_scheduler) with a
-    /// clone of the same state.
+    /// clone of the same state on every replica; each fire time is enqueued once.
     ///
     /// # Example
     ///
@@ -753,9 +756,9 @@ impl ServerBuilder {
     ///
     /// | Route | Effect |
     /// |-------|--------|
-    /// | `POST /api/admin/freeze` | Freezes [`ServerConfig::governance`], failing new runs and stopping running ones before their next model or tool call; pauses background-run and cron scheduling mounted on this builder. Body: `{"reason": "..."}` |
-    /// | `POST /api/admin/unfreeze` | Lifts the freeze and resumes scheduling |
-    /// | `GET /api/admin/governance` | Reports `{"frozen": bool, "reason": ...}` |
+    /// | `POST /api/admin/freeze` | Freezes [`ServerConfig::governance`], failing new runs and stopping running ones before their next model or tool call; background workers stop claiming and schedules stop firing; running durable runs are asked to cancel. A mirrored control writes the freeze to the shared store, so it reaches every replica. Body: `{"reason": "..."}` |
+    /// | `POST /api/admin/unfreeze` | Lifts the freeze |
+    /// | `GET /api/admin/governance` | Reports `{"frozen", "reason", "mirrored", "stale"}` |
     ///
     /// The endpoints carry the same authentication as every other mutation surface. Without
     /// a `RequestContextExtractor` they are open to anyone who reaches the server, so enable
@@ -931,23 +934,26 @@ impl ServerBuilder {
             api_router = api_router.merge(custom_routes.layer(auth_layer.clone()));
         }
 
-        // The kill switch pauses the scheduling mounted here, so its controller is built
-        // before the background and cron states move into their routers.
+        // Background runs and cron schedules obey the server's kill switch unless they
+        // carry their own, and a freeze asks their running runs to cancel.
+        #[cfg(feature = "background")]
+        let mut background_run_stores: Vec<Arc<dyn adk_core::DurableRunStore>> = Vec::new();
+        #[cfg(feature = "background")]
+        for state in self
+            .background_state
+            .iter()
+            .chain(self.cron_state.iter().map(|cron| &cron.background_state))
+        {
+            state.governance_or(&config.governance);
+            background_run_stores.push(Arc::clone(state.run_store()));
+        }
+
         if self.governance_endpoints {
             let controller = controllers::GovernanceController::new(config.governance.clone());
             #[cfg(feature = "background")]
-            let controller = {
-                let mut controller = controller;
-                if let Some(state) = &self.background_state {
-                    controller = controller.with_background_runner(state.runner.clone());
-                }
-                if let Some(state) = &self.cron_state {
-                    controller = controller
-                        .with_background_runner(state.background_state.runner.clone())
-                        .with_cron_store(state.cron_store.clone());
-                }
-                controller
-            };
+            let controller = background_run_stores
+                .iter()
+                .fold(controller, |controller, store| controller.with_run_store(Arc::clone(store)));
             api_router = api_router.merge(
                 Router::new()
                     .route("/admin/freeze", post(controllers::governance::freeze))

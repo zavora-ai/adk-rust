@@ -253,52 +253,77 @@ When configured, the extracted `RequestContext` flows into `InvocationContext`, 
 
 ### Background Runs and Cron (feature: `background`)
 
-Runs a workflow without holding the request open, and schedules one on a cron
+Runs a workflow or an agent without holding the request open, and schedules one on a cron
 expression. Neither is compiled unless the feature is on.
 
-```rust
-use adk_server::background::{FileRunPersistence, RunRetention, RunStore};
+`BackgroundState` holds a `DurableRunStore` — an `InMemoryRunStore` by default — and the
+targets runs execute. A `DurableWorker` over the same store claims runs under fenced leases;
+unless disabled, one starts in this process when the router is built inside a Tokio runtime.
+
+```rust,ignore
 use std::sync::Arc;
 
-// Runs are held in memory. Attach persistence so a restart can still see them.
-let store = RunStore::new()
-    .with_persistence(Arc::new(FileRunPersistence::new("/var/lib/adk/runs.json")))
-    .with_retention(RunRetention::keep_finished(1000));
+use adk_server::background::{BackgroundState, CronState, DurableWorkerConfig, WorkflowRegistry};
 
-// At startup, report what the last stop interrupted.
-for run_id in store.restore().await? {
-    tracing::warn!(run.id = %run_id, "this run did not finish before the last restart");
-}
+let background = BackgroundState::new()
+    .with_run_store(run_store)                 // shared across replicas
+    .with_executor(Arc::new(WorkflowRegistry::new()))
+    .with_agent("support", Arc::new(runner))   // runs whose target is "support"
+    .with_worker_config(DurableWorkerConfig::default().with_queue("default"));
+let cron = CronState::new(background.clone()).with_schedule_store(schedule_store);
+adk_server::background::start_cron_scheduler(cron.clone()); // on every replica
+let app = ServerBuilder::new(config)
+    .with_background_runs(background)
+    .with_cron_jobs(cron)
+    .build();
 ```
+
+| `BackgroundState` method | Effect |
+|--------------------------|--------|
+| `with_run_store` | Uses a shared `DurableRunStore`; every replica claiming from it shares the work |
+| `with_executor` | Workflows a run may target |
+| `with_agent` | Runs whose target names the agent execute through its `Runner` |
+| `with_embedded_worker(false)` | No worker in this process (API-only replicas) |
+| `with_worker_config` | Queue, lease, poll interval, concurrency, run timeout, retention |
+| `with_governance` | Kill switch; `ServerBuilder` installs `ServerConfig::governance` when none is set |
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/runs` | POST | Start a run, returning its id immediately |
-| `/runs/{id}` | GET | Read a run's status and result |
-| `/runs/{id}` | DELETE | Cancel a run |
-| `/cron` | POST / GET / PATCH / DELETE | Manage scheduled jobs |
+| `/runs` | POST | Enqueue a run, returning its id immediately |
+| `/runs` | GET | List runs (`state`, `sessionId`, `limit`) |
+| `/runs/{id}` | GET | Read a run's status, attempts, checkpoint, and result |
+| `/runs/{id}` | DELETE | Cancel a run; a running run stops at its worker's next heartbeat, on whichever replica |
+| `/runs/{id}/wake` | POST | Make a run parked on a held tool call claimable now; the approval service calls it after a decision |
+| `/cron` | POST / GET | Create and list cron jobs |
+| `/cron/{id}` | GET / PATCH / DELETE | Read, pause or resume, and delete a cron job |
 
-Cron jobs take a concurrency policy — `skip`, `allow` or `queue` — for what happens
-when the previous run is still going. A `queue` job holds at most 100 waiting runs
-by default (`CronState::with_max_queue_depth`), and resuming a paused job skips the
-occurrences that fell inside the pause.
+`POST /runs` takes `target` (or `workflowId`), `input`, `sessionId`, `idempotencyKey`,
+`concurrencyKey`, `onConflict` (`reject`, `enqueue`, `interrupt`), `notBefore`, and
+`maxRetries`. An existing idempotency key returns the existing run with `200` and
+`"existing": true`; a `reject` conflict returns `409` with `blockingRunId`; an unknown target
+returns `404`; a frozen or stale kill switch returns `503`.
+
+A cron job is a schedule whose id is its name, evaluated in `timezone` (IANA, default `UTC`),
+with a `missedFirePolicy` for occurrences missed while the scheduler was behind.
+
+| `concurrencyPolicy` | Run template |
+|---------------------|--------------|
+| `skip` (default) | Concurrency key `cron:{name}`, `OnConflict::Reject` |
+| `queue` | Concurrency key `cron:{name}`, `OnConflict::Enqueue` |
+| `allow` | No concurrency key |
+
+Each fire time is enqueued once however many replicas run the scheduler, and resuming a
+paused job skips the occurrences that fell inside the pause.
 
 > **Important:** the routers carry no authentication. Mount them with
 > `ServerBuilder::with_background_runs` and `ServerBuilder::with_cron_jobs`, which
 > serve `/api/runs` and `/api/cron` behind the server's auth middleware, or put a
 > standalone mount behind your own authentication layer.
 
-**What survives a restart.** With a `RunPersistence` attached, run records do. A run
-that was still going cannot still be going, so `restore` returns it as `Failed` with
-a reason and gives it a live cancellation token. The graph state behind it is
-separate: a checkpointed `adk-graph` thread can still be resumed by its id.
-
-Finished runs are bounded by default — the newest 1000 — because a store that keeps
-every finished run forever is a leak that only appears after weeks.
-`RunRetention::unlimited()` opts out. A run still in flight is never discarded.
-
-`FileRunPersistence` writes one JSON file and is enough for a single node. A
-deployment across several needs a shared store; implement `RunPersistence` for one.
+**What survives a restart.** With a durable run store, everything: a run whose worker stopped
+is recovered by another worker once its lease expires and resumes from its checkpoint (see
+[Durable Runtime](../docs/official_docs/core/durable-runtime.md#crash-resume)). Finished runs
+are pruned after `DurableWorkerConfig::retain_finished` (24 hours by default).
 
 ## API Endpoints
 

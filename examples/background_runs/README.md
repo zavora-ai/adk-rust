@@ -4,9 +4,9 @@ Exercises the Background Runs REST API from `adk-server`: submit a run, poll its
 
 ## What This Shows
 
-- **`BackgroundState` / `BackgroundRunner`** — the shared state and executor behind the REST surface
+- **`BackgroundState` / `WorkflowRegistry`** — an in-memory `DurableRunStore`, the registered workflows, and the embedded `DurableWorker` that claims and executes runs
 - **`POST/GET/DELETE /runs`** — submit, inspect, and cancel asynchronous runs
-- **Timeout and retry configuration** — per-run limits carried on the run record
+- **Retry configuration** — `maxRetries` sets the run's attempt budget
 
 ## Prerequisites
 

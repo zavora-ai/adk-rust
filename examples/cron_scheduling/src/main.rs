@@ -1,7 +1,7 @@
 //! Cron Scheduling Example
 //!
 //! Demonstrates the Cron Scheduling API from `adk-server`:
-//! - CronState and CronJobStore
+//! - CronState over an InMemoryScheduleStore
 //! - Axum server with merged background_runs_router + cron_jobs_router
 //! - Create a cron job via POST /cron
 //! - List jobs via GET /cron
@@ -18,15 +18,15 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 
 use adk_server::background::{
-    BackgroundState, CronState, background_runs_router_with_state,
-    cron_jobs_router_with_state, start_cron_scheduler, validate_cron_expression,
+    BackgroundState, CronState, background_runs_router_with_state, cron_jobs_router_with_state,
+    start_cron_scheduler, validate_cron_expression,
 };
 
 fn print_banner() {
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║        Cron Scheduling REST API — Complete Example           ║");
     println!("║                                                              ║");
-    println!("║  Demonstrates: CronState, CronJobStore, POST/GET/PATCH/      ║");
+    println!("║  Demonstrates: CronState, ScheduleStore, POST/GET/PATCH/     ║");
     println!("║  DELETE /cron, validation, and the cron scheduler loop.       ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
@@ -40,10 +40,7 @@ fn print_section(title: &str) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .with_target(false)
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").with_target(false).init();
 
     print_banner();
 
@@ -53,7 +50,7 @@ async fn main() -> Result<()> {
     let bg_state = BackgroundState::new();
     let cron_state = CronState::new(bg_state.clone());
     println!("  ✓ BackgroundState created");
-    println!("  ✓ CronState created (wraps BackgroundState + CronJobStore)");
+    println!("  ✓ CronState created (wraps BackgroundState + InMemoryScheduleStore)");
 
     let app: Router = Router::new()
         .merge(background_runs_router_with_state(bg_state.clone()))
@@ -77,8 +74,8 @@ async fn main() -> Result<()> {
     print_section("Step 2: Cron Expression Validation (Programmatic)");
 
     let valid_exprs = [
-        "0 */5 * * * *",    // Every 5 minutes (6-field)
-        "0 0 * * * *",      // Every hour
+        "0 */5 * * * *",      // Every 5 minutes (6-field)
+        "0 0 * * * *",        // Every hour
         "0 30 9 * * Mon-Fri", // 9:30 weekdays
     ];
 
@@ -91,8 +88,8 @@ async fn main() -> Result<()> {
 
     let invalid_exprs = [
         "not a cron",
-        "60 * * * *",       // 60 minutes is invalid
-        "",                  // empty
+        "60 * * * *", // 60 minutes is invalid
+        "",           // empty
     ];
 
     for expr in &invalid_exprs {
@@ -116,11 +113,7 @@ async fn main() -> Result<()> {
         "concurrencyPolicy": "skip"
     });
 
-    let resp = client
-        .post(format!("{base_url}/cron"))
-        .json(&job1_body)
-        .send()
-        .await?;
+    let resp = client.post(format!("{base_url}/cron")).json(&job1_body).send().await?;
 
     let status_code = resp.status();
     let body: Value = resp.json().await?;
@@ -138,11 +131,7 @@ async fn main() -> Result<()> {
         "concurrencyPolicy": "allow"
     });
 
-    let resp = client
-        .post(format!("{base_url}/cron"))
-        .json(&job2_body)
-        .send()
-        .await?;
+    let resp = client.post(format!("{base_url}/cron")).json(&job2_body).send().await?;
 
     let body: Value = resp.json().await?;
     let job2_id = body["jobId"].as_str().unwrap().to_string();
@@ -157,11 +146,7 @@ async fn main() -> Result<()> {
         "cronExpression": "this is not valid cron"
     });
 
-    let resp = client
-        .post(format!("{base_url}/cron"))
-        .json(&bad_body)
-        .send()
-        .await?;
+    let resp = client.post(format!("{base_url}/cron")).json(&bad_body).send().await?;
 
     let status_code = resp.status();
     let body: Value = resp.json().await?;
@@ -173,10 +158,7 @@ async fn main() -> Result<()> {
     // ─── Step 5: List all cron jobs ──────────────────────────────────────
     print_section("Step 5: Listing Cron Jobs (GET /cron)");
 
-    let resp = client
-        .get(format!("{base_url}/cron"))
-        .send()
-        .await?;
+    let resp = client.get(format!("{base_url}/cron")).send().await?;
 
     let status_code = resp.status();
     let body: Value = resp.json().await?;
@@ -198,11 +180,7 @@ async fn main() -> Result<()> {
 
     // Pause the first job
     let patch_body = serde_json::json!({"status": "paused"});
-    let resp = client
-        .patch(format!("{base_url}/cron/{job1_id}"))
-        .json(&patch_body)
-        .send()
-        .await?;
+    let resp = client.patch(format!("{base_url}/cron/{job1_id}")).json(&patch_body).send().await?;
 
     let status_code = resp.status();
     let body: Value = resp.json().await?;
@@ -212,11 +190,7 @@ async fn main() -> Result<()> {
 
     // Resume it
     let patch_body = serde_json::json!({"status": "active"});
-    let resp = client
-        .patch(format!("{base_url}/cron/{job1_id}"))
-        .json(&patch_body)
-        .send()
-        .await?;
+    let resp = client.patch(format!("{base_url}/cron/{job1_id}")).json(&patch_body).send().await?;
 
     let status_code = resp.status();
     let body: Value = resp.json().await?;
@@ -227,20 +201,14 @@ async fn main() -> Result<()> {
     // ─── Step 7: Delete a cron job ───────────────────────────────────────
     print_section("Step 7: Deleting a Cron Job (DELETE /cron/{job_id})");
 
-    let resp = client
-        .delete(format!("{base_url}/cron/{job2_id}"))
-        .send()
-        .await?;
+    let resp = client.delete(format!("{base_url}/cron/{job2_id}")).send().await?;
 
     let status_code = resp.status();
     println!("  ✓ DELETE /cron/{job2_id} → HTTP {status_code}");
     assert_eq!(status_code, 204);
 
     // Verify it's gone
-    let resp = client
-        .get(format!("{base_url}/cron"))
-        .send()
-        .await?;
+    let resp = client.get(format!("{base_url}/cron")).send().await?;
 
     let body: Value = resp.json().await?;
     let remaining = body.as_array().unwrap().len();
@@ -248,10 +216,7 @@ async fn main() -> Result<()> {
     assert_eq!(remaining, 1);
 
     // Verify DELETE on non-existent returns 404
-    let resp = client
-        .delete(format!("{base_url}/cron/{job2_id}"))
-        .send()
-        .await?;
+    let resp = client.delete(format!("{base_url}/cron/{job2_id}")).send().await?;
 
     let status_code = resp.status();
     println!("  ✓ DELETE (already deleted) → HTTP {status_code}");
@@ -272,19 +237,16 @@ async fn main() -> Result<()> {
 
     // Check if any executions occurred (the cron expressions are future-oriented
     // so likely no executions, but the loop ran successfully)
-    let resp = client
-        .get(format!("{base_url}/cron"))
-        .send()
-        .await?;
+    let resp = client.get(format!("{base_url}/cron")).send().await?;
 
     let body: Value = resp.json().await?;
     let jobs = body.as_array().unwrap();
     for job in jobs {
         println!(
-            "  Job '{}': executions={}, active_runs={}",
+            "  Job '{}': status={}, next_fire_at={}",
             job["name"].as_str().unwrap_or(""),
-            job["executionCount"].as_u64().unwrap_or(0),
-            job["activeRunCount"].as_u64().unwrap_or(0),
+            job["status"].as_str().unwrap_or(""),
+            job["nextFireAt"].as_str().unwrap_or("-"),
         );
     }
 

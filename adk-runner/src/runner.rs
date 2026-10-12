@@ -95,16 +95,24 @@ impl InFlightCalls {
     /// event per author, branch, and invocation, so each call keeps exactly one
     /// response.
     fn answer_interrupted(&mut self) -> Vec<Event> {
+        self.answer_with(|call| {
+            adk_core::outcome_unknown_response(format!(
+                "the run was cancelled while '{}' was in flight, so the call may have taken effect; check its result before calling it again",
+                call.name
+            ))
+        })
+    }
+
+    /// Answers every call still in flight with `respond(call)`, one event per author,
+    /// branch, and invocation.
+    fn answer_with(
+        &mut self,
+        mut respond: impl FnMut(&InFlightCall) -> serde_json::Value,
+    ) -> Vec<Event> {
         let mut events: Vec<Event> = Vec::new();
-        for call in self.0.drain(..) {
+        for call in std::mem::take(&mut self.0) {
             let response = Part::FunctionResponse {
-                function_response: FunctionResponseData::new(
-                    call.name.clone(),
-                    adk_core::outcome_unknown_response(format!(
-                        "the run was cancelled while '{}' was in flight, so the call may have taken effect; check its result before calling it again",
-                        call.name
-                    )),
-                ),
+                function_response: FunctionResponseData::new(call.name.clone(), respond(&call)),
                 id: call.id,
                 annotations: None,
             };
@@ -130,6 +138,29 @@ impl InFlightCalls {
             }
         }
         events
+    }
+}
+
+/// The function response a recovering worker gives a call that a stopped process left
+/// unanswered, from the action ledger's record of it.
+fn recovered_call_response(
+    name: &str,
+    record: Option<adk_core::ActionRecord>,
+) -> serde_json::Value {
+    match record.and_then(|record| record.outcome) {
+        Some(adk_core::ActionOutcome::Succeeded { result_digest }) => serde_json::json!({
+            "status": "already_succeeded",
+            "result_digest": result_digest,
+            "detail": format!("this call to '{name}' completed before the run was recovered; it was not executed again"),
+        }),
+        Some(adk_core::ActionOutcome::Failed { error }) => serde_json::json!({
+            "status": "already_failed",
+            "error": error,
+            "detail": format!("this call to '{name}' failed before the run was recovered; it was not executed again"),
+        }),
+        _ => adk_core::outcome_unknown_response(format!(
+            "the process running '{name}' stopped before the call recorded an outcome, so it may have taken effect; check its result before calling it again"
+        )),
     }
 }
 
@@ -261,6 +292,12 @@ pub struct RunnerConfig {
     ///
     /// Installed on each run's [`RunConfig::spend_ledger`] when the run carries none.
     pub spend_ledger: Option<Arc<dyn adk_core::SpendLedger>>,
+    /// Optional durable run queue shared by every replica.
+    ///
+    /// When set, [`Runner::interrupt`] also requests cancellation of the session's
+    /// unfinished durable runs, so the worker that owns one stops it on its next
+    /// heartbeat, whichever replica it runs on.
+    pub durable_runs: Option<Arc<dyn adk_core::DurableRunStore>>,
 }
 
 /// Agent execution runtime.
@@ -304,6 +341,7 @@ pub struct Runner {
     action_ledger: Option<Arc<dyn adk_core::ActionLedger>>,
     approval_store: Option<Arc<dyn adk_core::ApprovalStore>>,
     spend_ledger: Option<Arc<dyn adk_core::SpendLedger>>,
+    durable_runs: Option<Arc<dyn adk_core::DurableRunStore>>,
     /// Serializes externally triggered invocations per session. The weak values prevent the
     /// per-trigger session policy from retaining one lock forever for every completed event.
     pub(crate) external_session_locks: Arc<
@@ -391,6 +429,7 @@ impl Runner {
             action_ledger: config.action_ledger,
             approval_store: config.approval_store,
             spend_ledger: config.spend_ledger,
+            durable_runs: config.durable_runs,
             external_session_locks: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -1728,6 +1767,7 @@ impl Runner {
     /// let mut stream = runner.run(user_id, session_id, new_content).await?;
     /// ```
     pub fn interrupt(&self, session_id: &str) -> bool {
+        self.request_durable_cancel(None, session_id);
         let runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
         let matching: Vec<&ActiveRun> =
             runs.values().filter(|run| run.identity.session_id.as_ref() == session_id).collect();
@@ -1744,6 +1784,120 @@ impl Runner {
             run.token.cancel();
         }
         true
+    }
+
+    /// Requests cancellation of the session's unfinished durable runs in the background.
+    ///
+    /// `interrupt` is synchronous, so the store write runs on a spawned task; callers that
+    /// need the outcome use [`Runner::cancel_durable_runs`].
+    fn request_durable_cancel(&self, user_id: Option<&str>, session_id: &str) {
+        let Some(store) = self.durable_runs.clone() else { return };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(
+                session.id = session_id,
+                "no tokio runtime to request durable cancellation on; call cancel_durable_runs"
+            );
+            return;
+        };
+        let filter = durable_filter(&self.app_name, user_id, session_id);
+        let session = session_id.to_string();
+        handle.spawn(async move {
+            if let Err(error) = cancel_matching(store.as_ref(), filter).await {
+                tracing::error!(session.id = %session, error = %error, "could not request durable run cancellation");
+            }
+        });
+    }
+
+    /// Requests cancellation of every unfinished durable run of this app for the session,
+    /// and returns how many were asked to stop.
+    ///
+    /// Queued and waiting runs are cancelled at once; a running run is flagged, and the
+    /// worker that owns it stops it on its next heartbeat. Returns 0 when the runner has
+    /// no [`durable_runs`](RunnerConfig::durable_runs) store.
+    ///
+    /// # Errors
+    ///
+    /// Returns the run store's error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let asked = runner.cancel_durable_runs("user-1", "session-1").await?;
+    /// ```
+    pub async fn cancel_durable_runs(&self, user_id: &str, session_id: &str) -> Result<usize> {
+        match &self.durable_runs {
+            Some(store) => {
+                cancel_matching(
+                    store.as_ref(),
+                    durable_filter(&self.app_name, Some(user_id), session_id),
+                )
+                .await
+            }
+            None => Ok(0),
+        }
+    }
+
+    /// Answers every function call in the session that has no response, from the action
+    /// ledger, and returns how many were answered.
+    ///
+    /// A process that stops mid-tool leaves its call unanswered. Before a recovered run
+    /// continues the session, this appends one response per such call, keyed by the
+    /// call's original [idempotency key](adk_core::ToolContext::idempotency_key):
+    ///
+    /// | Ledger record | Response |
+    /// |---------------|----------|
+    /// | Completed with a value | `already_succeeded` with the result digest |
+    /// | Completed with an error | `already_failed` with the error |
+    /// | Begun, no outcome; or none | [`outcome_unknown`](adk_core::outcome_unknown_response) |
+    ///
+    /// No tool executes: a call the model wants again is a new call with a new
+    /// idempotency key. The ledger consulted is the runner's
+    /// [`action_ledger`](RunnerConfig::action_ledger), falling back to its run config's.
+    ///
+    /// # Errors
+    ///
+    /// Returns the session or ledger error.
+    pub async fn recover_unanswered_calls(&self, user_id: &str, session_id: &str) -> Result<usize> {
+        let identity = adk_core::AdkIdentity::new(
+            AppName::try_from(self.app_name.clone())?,
+            UserId::try_from(user_id)?,
+            SessionId::try_from(session_id)?,
+        );
+        let session = self.session_service.get_for_identity(&identity).await?;
+        let mut in_flight = InFlightCalls::default();
+        for event in session.events().all() {
+            in_flight.observe(&event);
+        }
+        if in_flight.0.is_empty() {
+            return Ok(0);
+        }
+        let ledger = self.action_ledger.clone().or_else(|| self.run_config.action_ledger.clone());
+        let mut records = HashMap::new();
+        for call in &in_flight.0 {
+            let (Some(ledger), Some(id)) = (&ledger, &call.id) else { continue };
+            let key =
+                format!("{}/{user_id}/{session_id}/{}/{id}", self.app_name, call.invocation_id);
+            records.insert(id.clone(), ledger.get(&key).await?);
+        }
+        let answered = in_flight.0.len();
+        let events = in_flight.answer_with(|call| {
+            let record = call.id.as_ref().and_then(|id| records.get(id).cloned().flatten());
+            recovered_call_response(&call.name, record)
+        });
+        for event in events {
+            tracing::warn!(
+                session.id = session_id,
+                invocation.id = %event.invocation_id,
+                "answering function calls a stopped process left unanswered"
+            );
+            self.session_service
+                .append_event_for_identity(adk_session::AppendEventRequest {
+                    identity: identity.clone(),
+                    event,
+                })
+                .await?;
+        }
+        Ok(answered)
     }
 
     /// Interrupts runs for one exact identity.
@@ -1972,6 +2126,31 @@ mod streamed_content_tests {
         assert_eq!(text(&final_event), "Verify the invoice.");
         assert!(accumulated.is_empty());
     }
+}
+
+/// The unfinished durable runs of `app_name` continuing `session_id`.
+fn durable_filter(app_name: &str, user_id: Option<&str>, session_id: &str) -> adk_core::RunFilter {
+    let filter = adk_core::RunFilter::default().app_name(app_name).session_id(session_id).states([
+        adk_core::RunState::Queued,
+        adk_core::RunState::Running,
+        adk_core::RunState::Waiting,
+    ]);
+    match user_id {
+        Some(user_id) => filter.user_id(user_id),
+        None => filter,
+    }
+}
+
+async fn cancel_matching(
+    store: &dyn adk_core::DurableRunStore,
+    filter: adk_core::RunFilter,
+) -> Result<usize> {
+    let runs = store.list(filter).await?;
+    for run in &runs {
+        store.request_cancel(&run.run_id).await?;
+        tracing::info!(run.id = %run.run_id, run.state = ?run.state, "durable run cancellation requested");
+    }
+    Ok(runs.len())
 }
 
 #[cfg(test)]
