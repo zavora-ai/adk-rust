@@ -7,6 +7,9 @@
   (`AgentPrincipal::derived`, `ActingContext::derived`) for the run's user. `AgentTool`
   delegation appends the caller to the delegate's chain (`ActingContext::delegate`).
   `PrincipalError` converts into `AdkError` with code `identity.agent_id.invalid`.
+- **Approval requests carry the acting agent** (`adk-core`): the governed path passes the
+  call's `ActingContext` to `ApprovalService::submit_call`, so `ApprovalRequest::acting` and the
+  requester are set for every held call.
 - **Identity-keyed policy** (`adk-core`): `PolicyRule::for_agent`, `for_tenant`, and `for_class`
   restrict a rule to the acting agent.
 - **Identity sources and credential brokers** (`adk-core`, `adk-auth`): `IdentitySource` with

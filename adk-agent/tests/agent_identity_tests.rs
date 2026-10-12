@@ -155,7 +155,10 @@ async fn run_billing(
     let mut config =
         RunConfig::builder().tool_policy(deployment.policy).spend_ledger(deployment.ledger);
     if let Some(store) = deployment.approvals {
-        config = config.approval_store(store);
+        let service = adk_core::StoreApprovalService::new(store.clone()).with_router(
+            adk_core::ApprovalPolicy::new([adk_core::ApproverSelector::group("finance")]),
+        );
+        config = config.approval_store(store).approval_service(Arc::new(service));
     }
     let mut builder = Runner::builder()
         .app_name(APP)
@@ -317,6 +320,12 @@ async fn held_approvals_record_the_acting_context() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].request.acting.as_deref(), policy.acting().first());
     assert_eq!(pending[0].request.acting.as_ref().unwrap().agent.id.as_str(), AGENT_ID);
+
+    // The approval service's request records the same acting context for the approver.
+    let requests = store.list_requests(&adk_core::ApprovalRequestQuery::default()).await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].acting.as_ref(), policy.acting().first());
+    assert_eq!(requests[0].requester, Some(SubjectRef::human("alice")));
 }
 
 /// An identity source that cannot answer.
