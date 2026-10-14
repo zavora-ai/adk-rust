@@ -266,7 +266,6 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       DATABASE_URL_TLS: postgres://postgres:postgres@localhost:5433/postgres
-      PG_TLS_ROOT_CERT: ${{ runner.temp }}/pg-tls/ca.crt
       NEXTEST_PROFILE: ci
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -287,6 +286,8 @@ jobs:
       run: bash scripts/postgres-tls-server.sh "$RUNNER_TEMP/pg-tls" 5433
 
     - name: Run the PostgreSQL suites
+      env:
+        PG_TLS_ROOT_CERT: ${{ runner.temp }}/pg-tls/ca.crt
       run: bash scripts/test-postgres.sh
 
   # ── Docs: documentation coverage for Stable-tier crates ──────
