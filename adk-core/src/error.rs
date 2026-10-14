@@ -190,6 +190,10 @@ pub struct ErrorDetails {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     /// Additional key-value metadata for debugging.
+    ///
+    /// Model providers in `adk-model` store the provider's own error code, such as
+    /// `RATE_LIMIT_EXCEEDED` or `context_length_exceeded`, as a string under
+    /// `"provider_error_code"`.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, Value>,
 }

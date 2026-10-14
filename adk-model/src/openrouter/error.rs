@@ -123,6 +123,11 @@ pub fn stream_error_to_adk_error(
     if !metadata.is_empty() {
         error.details.metadata.extend(metadata);
     }
+    // `code` stays for compatibility; `provider_error_code` follows the shared rule.
+    error = crate::error_metadata::with_first_code(
+        error,
+        [stream_error.code.as_ref().and_then(Value::as_str), stream_error.error_type.as_deref()],
+    );
 
     if let Some(retry_after_ms) = sse_retry_ms {
         let retry_hint =
@@ -193,7 +198,11 @@ fn attach_error_payload_details(
         error.details.metadata.extend(metadata);
     }
 
-    error
+    // `code` stays for compatibility; `provider_error_code` follows the shared rule.
+    crate::error_metadata::with_first_code(
+        error,
+        [payload.error.code.as_ref().and_then(Value::as_str), payload.error.r#type.as_deref()],
+    )
 }
 
 fn retry_after_from_headers(headers: &HeaderMap) -> Option<Duration> {
@@ -344,6 +353,38 @@ mod tests {
         assert_eq!(error.code, "model.openrouter.provider_overloaded");
         assert_eq!(error.details.upstream_status_code, Some(529));
         assert_eq!(error.details.metadata.get("sequence_number"), Some(&json!(7)));
+        assert_eq!(error.details.metadata.get("code"), Some(&json!(529)));
+        assert_eq!(
+            error.details.metadata.get("provider_error_code"),
+            Some(&json!("provider_overloaded"))
+        );
         assert_eq!(error.retry.retry_after_ms, Some(1500));
+    }
+
+    #[test]
+    fn http_errors_record_provider_error_code() {
+        let error = api_error_to_adk_error(
+            400,
+            &HeaderMap::new(),
+            &json!({"error": {
+                "message": "context too long",
+                "code": "context_length_exceeded",
+                "type": "invalid_request_error"
+            }})
+            .to_string(),
+        );
+        assert_eq!(error.details.metadata.get("code"), Some(&json!("context_length_exceeded")));
+        assert_eq!(
+            error.details.metadata.get("provider_error_code"),
+            Some(&json!("context_length_exceeded"))
+        );
+
+        let numeric = api_error_to_adk_error(
+            402,
+            &HeaderMap::new(),
+            &json!({"error": {"message": "no credits", "code": 402}}).to_string(),
+        );
+        assert_eq!(numeric.details.metadata.get("code"), Some(&json!(402)));
+        assert_eq!(numeric.details.metadata.get("provider_error_code"), None);
     }
 }

@@ -780,6 +780,7 @@ OpenAI-compatible, Azure OpenAI, Azure AI Inference, Anthropic, DeepSeek, Groq).
 | Transient upstream errors | HTTP 500, 502, 503, 504, and 529 map to `ErrorCategory::Unavailable` with the upstream status recorded, so `RetryConfig` retries them |
 | `Retry-After` | A delay in seconds is attached to the error and used for the next retry, capped at `RetryConfig::max_delay` (default 5 seconds) |
 | Mid-stream Anthropic `error` event | Fails the stream with the category of the equivalent HTTP error, so `overloaded_error` and `rate_limit_error` are retryable |
+| Provider error codes | `AdkError::details.metadata["provider_error_code"]` holds the provider's own code as a string: the first Google `ErrorInfo.reason`, then the error object's string `code`, `type`, or `status`. Gemini (AI Studio and Vertex AI), OpenAI, OpenAI-compatible, Azure OpenAI, Azure AI Inference, DeepSeek, Anthropic, and OpenRouter record it; codes over 128 bytes or outside `[A-Za-z0-9_.-]` are dropped |
 | Malformed streamed tool arguments | Fail with `model.<provider>.invalid_tool_arguments`; an empty payload is a zero-argument call with `{}` |
 | Text-encoded tool calls | Recognised only when the request declares the named tool; a ` ```json ` fence also needs an `arguments` or `parameters` object |
 | Tool order | Anthropic and Bedrock send tool definitions sorted by name, so the prompt-cache prefix is stable |

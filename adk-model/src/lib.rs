@@ -262,7 +262,14 @@ pub mod bedrock;
 pub mod catalog;
 #[cfg(feature = "deepseek")]
 pub mod deepseek;
-#[cfg(any(feature = "anthropic", feature = "azure-ai", feature = "deepseek", feature = "openai"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "azure-ai",
+    feature = "deepseek",
+    feature = "gemini",
+    feature = "openai",
+    feature = "openrouter"
+))]
 mod error_metadata;
 /// Gemini model provider (Google AI Studio and Vertex AI).
 #[cfg(feature = "gemini")]
