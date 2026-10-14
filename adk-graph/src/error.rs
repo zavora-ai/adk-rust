@@ -51,7 +51,7 @@ pub enum GraphError {
     #[error("State serialization error: {0}")]
     SerializationError(String),
 
-    /// Checkpoint error
+    /// Checkpoint error, including a failure of the checkpointer's database.
     #[error("Checkpoint error: {0}")]
     CheckpointError(String),
 
@@ -110,11 +110,6 @@ pub enum GraphError {
     /// JSON error
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
-
-    /// Database error (when sqlite feature enabled)
-    #[cfg(feature = "sqlite")]
-    #[error("Database error: {0}")]
-    DatabaseError(#[from] sqlx::Error),
 
     /// Other error (used by extensions like the functional API)
     #[error("{0}")]
@@ -184,8 +179,6 @@ impl From<GraphError> for adk_core::AdkError {
             }
             GraphError::IoError(_) => (ErrorCategory::Internal, "graph.io"),
             GraphError::JsonError(_) => (ErrorCategory::Internal, "graph.json"),
-            #[cfg(feature = "sqlite")]
-            GraphError::DatabaseError(_) => (ErrorCategory::Internal, "graph.database"),
             GraphError::Other(_) => (ErrorCategory::Internal, "graph.other"),
         };
         adk_core::AdkError::new(ErrorComponent::Graph, category, code, err.to_string())

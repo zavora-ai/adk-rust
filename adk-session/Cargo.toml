@@ -47,9 +47,9 @@ tracing-subscriber = { workspace = true, features = ["fmt"] }
 
 [features]
 default = []
-sqlite = ["sqlx/sqlite"]
+sqlite = ["dep:sqlx", "sqlx/sqlite"]
 database = ["sqlite"]
-postgres = ["sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs"]
+postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs"]
 redis = ["fred"]
 mongodb = ["dep:mongodb", "tokio"]
 firestore = ["dep:firestore", "dep:gcloud-sdk", "sha2", "tokio"]

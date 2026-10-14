@@ -335,7 +335,7 @@ pub struct AuditFilter {
     /// Filter by outcome.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<AuditOutcome>,
-    /// Filter by resource name (substring match).
+    /// Filter by resource name (literal substring match; `%` and `_` are not wildcards).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     /// Filter by resource UUID.

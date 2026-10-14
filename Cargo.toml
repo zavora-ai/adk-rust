@@ -165,7 +165,7 @@ webrtc-sys = { version = "=0.3.40", default-features = false }
 
 # Shared database API types; all public pool constructors use this SQLx line.
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio"] }
-pgvector = "=0.4.2"
+pgvector = "0.4.2"
 
 # ADK internal crates (use { workspace = true } in member crates)
 adk-core = { path = "adk-core", version = "3.0.0" }

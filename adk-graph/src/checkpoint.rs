@@ -437,13 +437,13 @@ impl SqliteCheckpointer {
     /// semver-compatible `sqlx` to construct one:
     ///
     /// ```toml
-    /// sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
+    /// sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns `GraphError::CheckpointError` when the table or the index cannot be
-    /// created on the pool's database.
+    /// Returns `GraphError::CheckpointError` when the table, a missing column, or
+    /// the index cannot be created on the pool's database.
     pub async fn from_pool(pool: sqlx::SqlitePool) -> Result<Self> {
         sqlx::query(
             r#"
@@ -468,8 +468,8 @@ impl SqliteCheckpointer {
         .map_err(sqlite_error)?;
 
         // A database created before a column existed keeps its old shape under
-        // CREATE TABLE IF NOT EXISTS, so add each column separately and ignore the
-        // duplicate-column error on a database that already has it.
+        // CREATE TABLE IF NOT EXISTS, so add each column separately and tolerate only
+        // the duplicate-column error on a database that already has it.
         for alter in [
             "ALTER TABLE graph_checkpoints ADD COLUMN cleared_interrupt TEXT",
             "ALTER TABLE graph_checkpoints ADD COLUMN attempts TEXT",
@@ -477,7 +477,12 @@ impl SqliteCheckpointer {
             "ALTER TABLE graph_checkpoints ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE graph_checkpoints ADD COLUMN pending_writes TEXT",
         ] {
-            let _ = sqlx::query(alter).execute(&pool).await;
+            match sqlx::query(alter).execute(&pool).await {
+                Ok(_) => {}
+                Err(sqlx::Error::Database(error))
+                    if error.message().starts_with("duplicate column name") => {}
+                Err(error) => return Err(sqlite_error(error)),
+            }
         }
 
         // Rows written before versions existed are numbered in creation order.

@@ -78,6 +78,23 @@ impl Backend {
     }
 }
 
+/// Checks that a `--schema` value is a plain PostgreSQL identifier.
+///
+/// The name is interpolated into `CREATE SCHEMA` and into the audit export URL, so
+/// it must start with a letter or underscore, continue with ASCII letters, digits,
+/// or underscores, and fit PostgreSQL's 63-byte identifier limit.
+pub fn check_schema(schema: &str) -> anyhow::Result<()> {
+    let mut chars = schema.chars();
+    anyhow::ensure!(
+        schema.len() <= 63
+            && chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "--schema must be 1 to 63 ASCII letters, digits, or underscores, starting with a \
+         letter or underscore"
+    );
+    Ok(())
+}
+
 /// The company's stores.
 #[derive(Clone)]
 pub struct Stores {
@@ -156,10 +173,7 @@ impl Stores {
                 let admin =
                     PgPoolOptions::new().max_connections(1).connect_with(base.clone()).await?;
                 // The schema name comes from `--schema`, so only a plain identifier is interpolated.
-                anyhow::ensure!(
-                    schema.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
-                    "--schema must contain only ASCII letters, digits, and underscores"
-                );
+                check_schema(schema)?;
                 sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA IF NOT EXISTS {schema}")))
                     .execute(&admin)
                     .await?;

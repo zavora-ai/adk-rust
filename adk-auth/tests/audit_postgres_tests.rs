@@ -91,4 +91,34 @@ async fn query_applies_every_filter_with_bound_values() {
         let description = format!("{filter:?}");
         assert_eq!(resources(&sink, &tenant, filter).await, expected, "{description}");
     }
+
+    // Same test, not a second one: concurrent `migrate` calls race on a fresh database.
+    resource_filter_matches_a_literal_substring(&sink).await;
+}
+
+/// `%` and `_` in a resource filter are literal characters, as in
+/// `AuditFilter::matches`, not LIKE wildcards.
+async fn resource_filter_matches_a_literal_substring(sink: &PostgresAuditSink) {
+    let tenant = format!("literal-{}", Utc::now().timestamp_nanos_opt().unwrap_or_default());
+    let start = Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap();
+
+    for (offset, resource) in
+        ["delete_file", "deleteXfile", "quota_50%", "quota_50X"].iter().enumerate()
+    {
+        let mut event =
+            AuditEvent::tool_access("alice", resource, AuditOutcome::Allowed).with_tenant(&tenant);
+        event.timestamp = start + Duration::minutes(offset as i64);
+        sink.log(event).await.expect("log");
+    }
+
+    for (needle, expected) in [
+        ("delete_file", vec!["delete_file"]),
+        ("e_f", vec!["delete_file"]),
+        ("50%", vec!["quota_50%"]),
+        ("%", vec!["quota_50%"]),
+        ("_", vec!["quota_50X", "quota_50%", "delete_file"]),
+    ] {
+        let filter = AuditFilter { resource: Some(needle.into()), ..Default::default() };
+        assert_eq!(resources(sink, &tenant, filter).await, expected, "resource filter {needle:?}");
+    }
 }

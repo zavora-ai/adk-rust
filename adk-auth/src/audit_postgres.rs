@@ -235,7 +235,9 @@ impl AuditSink for PostgresAuditSink {
                 .push_bind(value.as_str().unwrap_or("unknown").to_string());
         }
         if let Some(ref res) = filter.resource {
-            builder.push(" AND resource LIKE ").push_bind(format!("%{res}%"));
+            // `strpos` matches a literal substring, as `AuditFilter::matches` does;
+            // LIKE would read `%` and `_` in the filter as wildcards.
+            builder.push(" AND strpos(resource, ").push_bind(res).push(") > 0");
         }
         if let Some(ref rid) = filter.resource_id {
             builder.push(" AND resource_id = ").push_bind(rid);

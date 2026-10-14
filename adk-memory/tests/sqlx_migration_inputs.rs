@@ -44,8 +44,16 @@ async fn descriptions_round_trip_on_fresh_and_baselined_databases() {
 #[tokio::test]
 async fn invalid_identifiers_fail_before_executing_sql() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-    for name in ["", "1registry", "registry; DROP TABLE widgets", "schema.registry", "owner's", "é"]
-    {
+    let too_long = "r".repeat(64);
+    for name in [
+        "",
+        "1registry",
+        "registry; DROP TABLE widgets",
+        "schema.registry",
+        "owner's",
+        "é",
+        too_long.as_str(),
+    ] {
         assert!(
             sqlite_runner::run_sql_migrations(&pool, name, STEPS, || async { Ok(false) })
                 .await
@@ -87,4 +95,26 @@ async fn failed_step_rolls_back_its_schema_and_registry_record() {
         .await
         .unwrap();
     assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn a_63_byte_registry_name_is_accepted() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let name = "r".repeat(63);
+    sqlite_runner::run_sql_migrations(&pool, &name, STEPS, || async { Ok(false) }).await.unwrap();
+    assert_eq!(sqlite_runner::sql_schema_version(&pool, &name).await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn schema_version_is_zero_only_for_a_missing_registry() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    assert_eq!(sqlite_runner::sql_schema_version(&pool, "_absent_migrations").await.unwrap(), 0);
+
+    // A table without the registry's shape is an error, not an unmigrated database.
+    sqlx::query("CREATE TABLE _misshapen_migrations (id INTEGER)").execute(&pool).await.unwrap();
+    assert!(sqlite_runner::sql_schema_version(&pool, "_misshapen_migrations").await.is_err());
+
+    // So is a database that cannot be reached.
+    pool.close().await;
+    assert!(sqlite_runner::sql_schema_version(&pool, "_absent_migrations").await.is_err());
 }

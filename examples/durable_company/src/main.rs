@@ -37,12 +37,17 @@ fn backend(args: &[String], data_dir: &std::path::Path, tag: &str) -> anyhow::Re
             file: flag(args, "--sqlite")
                 .unwrap_or_else(|| data_dir.join("company.db").display().to_string()),
         }),
-        "postgres" => Ok(Backend::Postgres {
-            url: flag(args, "--database-url")
-                .or_else(|| std::env::var("DATABASE_URL").ok())
-                .context("--store postgres needs DATABASE_URL or --database-url")?,
-            schema: flag(args, "--schema").unwrap_or_else(|| format!("durable_company_{tag}")),
-        }),
+        "postgres" => {
+            let schema = flag(args, "--schema").unwrap_or_else(|| format!("durable_company_{tag}"));
+            // Checked before the name reaches the audit export URL or any SQL.
+            crate::stores::check_schema(&schema)?;
+            Ok(Backend::Postgres {
+                url: flag(args, "--database-url")
+                    .or_else(|| std::env::var("DATABASE_URL").ok())
+                    .context("--store postgres needs DATABASE_URL or --database-url")?,
+                schema,
+            })
+        }
         other => bail!("unknown store '{other}'; use memory, sqlite, or postgres"),
     }
 }

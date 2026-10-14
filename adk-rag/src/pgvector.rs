@@ -9,6 +9,14 @@
 //! - PostgreSQL with the `pgvector` extension installed
 //! - The extension must be created: `CREATE EXTENSION IF NOT EXISTS vector;`
 //!
+//! # Collection names
+//!
+//! Each collection is stored in the table `rag_<name>`. A name must be non-empty,
+//! contain only ASCII lowercase letters, digits and underscores, and be at most 59
+//! bytes long, so the table name fits PostgreSQL's 63-byte identifier limit. Any
+//! other name is rejected with [`RagError::VectorStoreError`] instead of being
+//! rewritten, so two distinct names never share a table.
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -33,16 +41,36 @@ use crate::vectorstore::VectorStore;
 
 /// A [`VectorStore`] backed by PostgreSQL with the pgvector extension.
 ///
-/// Each collection is stored as a separate table with columns:
-/// `id`, `text`, `embedding` (vector), `metadata` (jsonb), `document_id`.
+/// Each collection is stored as a separate table named `rag_<name>` with columns:
+/// `id`, `text`, `embedding` (vector), `metadata` (jsonb), `document_id`. See the
+/// [module documentation](self) for the collection naming rule.
 pub struct PgVectorStore {
     pool: PgPool,
 }
 
 impl PgVectorStore {
     /// Create a new pgvector store by connecting to the given database URL.
-    pub async fn new(database_url: &str) -> std::result::Result<Self, sqlx::Error> {
-        let pool = PgPoolOptions::new().max_connections(5).connect(database_url).await?;
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_rag::pgvector::PgVectorStore;
+    ///
+    /// # async fn example() -> adk_rag::Result<()> {
+    /// let store = PgVectorStore::new("postgres://user:pass@localhost/mydb").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RagError::VectorStoreError`] when the database cannot be reached.
+    pub async fn new(database_url: &str) -> Result<Self> {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(database_url)
+            .await
+            .map_err(Self::map_err)?;
         Ok(Self { pool })
     }
 
@@ -55,27 +83,33 @@ impl PgVectorStore {
         RagError::VectorStoreError { backend: "pgvector".to_string(), message: e.to_string() }
     }
 
-    /// Sanitize a collection name for use as a table name.
-    /// Only allows alphanumeric characters and underscores.
-    /// Dynamic SQL assertions rely on this identifier sanitization and typed
-    /// integer dimensions; all data values remain bound parameters.
-    fn sanitize_table_name(name: &str) -> Result<String> {
-        let sanitized: String =
-            name.chars().map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' }).collect();
-        if sanitized.is_empty() {
+    /// Maps a collection name to its table name, rejecting names outside the rule.
+    ///
+    /// Rejecting rather than rewriting keeps the mapping one-to-one: PostgreSQL folds
+    /// unquoted identifiers to lowercase and truncates them past 63 bytes, so any
+    /// rewrite could send two collections to one table.
+    fn table_name(name: &str) -> Result<String> {
+        const PREFIX: &str = "rag_";
+        if name.is_empty()
+            || PREFIX.len() + name.len() > 63
+            || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        {
             return Err(RagError::VectorStoreError {
                 backend: "pgvector".to_string(),
-                message: "collection name is empty after sanitization".to_string(),
+                message: format!(
+                    "invalid collection name `{name}`: use 1 to 59 ASCII lowercase letters, \
+                     digits or underscores"
+                ),
             });
         }
-        Ok(format!("rag_{sanitized}"))
+        Ok(format!("{PREFIX}{name}"))
     }
 }
 
 #[async_trait]
 impl VectorStore for PgVectorStore {
     async fn create_collection(&self, name: &str, dimensions: usize) -> Result<()> {
-        let table_name = Self::sanitize_table_name(name)?;
+        let table_name = Self::table_name(name)?;
 
         // Ensure the pgvector extension exists
         sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
@@ -83,6 +117,7 @@ impl VectorStore for PgVectorStore {
             .await
             .map_err(Self::map_err)?;
 
+        // `table_name` passed `Self::table_name` and `dimensions` is an integer.
         let create_sql = format!(
             "CREATE TABLE IF NOT EXISTS {table_name} (\
                 id TEXT PRIMARY KEY, \
@@ -103,8 +138,9 @@ impl VectorStore for PgVectorStore {
     }
 
     async fn delete_collection(&self, name: &str) -> Result<()> {
-        let table_name = Self::sanitize_table_name(name)?;
+        let table_name = Self::table_name(name)?;
 
+        // `table_name` passed `Self::table_name`.
         let drop_sql = format!("DROP TABLE IF EXISTS {table_name}");
         sqlx::query(sqlx::AssertSqlSafe(drop_sql.as_str()))
             .execute(&self.pool)
@@ -120,8 +156,9 @@ impl VectorStore for PgVectorStore {
             return Ok(());
         }
 
-        let table_name = Self::sanitize_table_name(collection)?;
+        let table_name = Self::table_name(collection)?;
 
+        // `table_name` passed `Self::table_name`; every value is a bound parameter.
         let upsert_sql = format!(
             "INSERT INTO {table_name} (id, text, embedding, metadata, document_id) \
              VALUES ($1, $2, $3::vector, $4::jsonb, $5) \
@@ -162,9 +199,9 @@ impl VectorStore for PgVectorStore {
             return Ok(());
         }
 
-        let table_name = Self::sanitize_table_name(collection)?;
+        let table_name = Self::table_name(collection)?;
 
-        // Use parameterized ANY($1) for safe deletion
+        // `table_name` passed `Self::table_name`; the ids are a bound parameter.
         let delete_sql = format!("DELETE FROM {table_name} WHERE id = ANY($1)");
         let id_vec: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
 
@@ -184,10 +221,11 @@ impl VectorStore for PgVectorStore {
         embedding: &[f32],
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
-        let table_name = Self::sanitize_table_name(collection)?;
+        let table_name = Self::table_name(collection)?;
 
         // pgvector cosine distance operator: <=>
-        // Returns distance (0 = identical), so score = 1 - distance
+        // Returns distance (0 = identical), so score = 1 - distance.
+        // `table_name` passed `Self::table_name`; the query vector is a bound parameter.
         let search_sql = format!(
             "SELECT id, text, metadata, document_id, \
                     1 - (embedding <=> $1::vector) AS score \
@@ -231,5 +269,34 @@ impl VectorStore for PgVectorStore {
             .collect();
 
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PgVectorStore;
+
+    #[test]
+    fn accepts_lowercase_ascii_identifiers() {
+        for (name, table) in [
+            ("docs", "rag_docs"),
+            ("docs_v2", "rag_docs_v2"),
+            ("2026_reports", "rag_2026_reports"),
+            ("_", "rag__"),
+        ] {
+            assert_eq!(PgVectorStore::table_name(name).unwrap(), table, "{name}");
+        }
+        let longest = "a".repeat(59);
+        assert_eq!(PgVectorStore::table_name(&longest).unwrap(), format!("rag_{longest}"));
+    }
+
+    #[test]
+    fn rejects_names_that_could_share_a_table() {
+        for name in
+            ["", "Docs", "a-b", "a b", "a.b", "caf\u{e9}", "docs;drop", "\"docs\"", &"a".repeat(60)]
+        {
+            let error = PgVectorStore::table_name(name).unwrap_err();
+            assert!(error.to_string().contains("invalid collection name"), "{name}: {error}");
+        }
     }
 }

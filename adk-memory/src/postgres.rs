@@ -402,6 +402,12 @@ impl PostgresMemoryService {
 
     /// Returns the highest applied migration version, or 0 if no registry
     /// exists or the registry is empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry cannot be read for any reason other
+    /// than the table being absent, such as a lost connection or a missing
+    /// privilege.
     pub async fn schema_version(&self) -> Result<i64> {
         pg_runner::sql_schema_version(&self.pool, Self::REGISTRY_TABLE).await
     }

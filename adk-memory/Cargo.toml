@@ -41,11 +41,11 @@ uuid = { version = "1.23", features = ["v4"] }
 default = []
 # Exposes only the EmbeddingProvider trait without heavy DB dependencies
 embedding-trait = []
-sqlite-memory = ["sqlx/sqlite"]
+sqlite-memory = ["dep:sqlx", "sqlx/sqlite"]
 # Knowledge-graph (bi-temporal) memory backend, SQLite-backed.
 # Reuses the SQLite migration runner from the sqlite-memory backend.
 graph-memory = ["sqlite-memory"]
-database-memory = ["sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "pgvector"]
+database-memory = ["dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "dep:pgvector"]
 redis-memory = ["fred"]
 mongodb-memory = ["dep:mongodb"]
 neo4j-memory = ["dep:neo4rs", "dep:uuid"]

@@ -128,7 +128,7 @@ async fn from_pool_creates_the_full_schema() {
 ///
 /// Two checkpointers over one database is a plausible shape — a subgraph with its
 /// own handle, say — and the schema statements are all `IF NOT EXISTS` or
-/// deliberately ignored, so the second call must not fail.
+/// tolerate an existing column, so the second call must not fail.
 #[tokio::test]
 async fn adopting_the_same_pool_twice_succeeds() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.expect("pool");
@@ -214,4 +214,25 @@ async fn a_database_without_versions_is_numbered_in_creation_order() {
     assert_eq!(listed, vec![("early".to_string(), 1), ("late".to_string(), 2)]);
     assert_eq!(cp.load("legacy").await.unwrap().map(|c| c.checkpoint_id), Some("late".to_string()));
     cp.save(&checkpoint("legacy", "next", 1)).await.expect_err("version 1 is behind");
+}
+
+/// Only the duplicate-column error is tolerated while adding late columns; any
+/// other schema failure is reported instead of leaving a half-migrated table.
+#[tokio::test]
+async fn a_failed_column_addition_is_reported() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.expect("pool");
+    // A view satisfies CREATE TABLE IF NOT EXISTS but refuses ADD COLUMN.
+    sqlx::query("CREATE VIEW graph_checkpoints AS SELECT 'id' AS id")
+        .execute(&pool)
+        .await
+        .expect("view");
+
+    let error = match SqliteCheckpointer::from_pool(pool).await {
+        Ok(_) => panic!("adding a column to a view must fail the schema step"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(&error, adk_graph::GraphError::CheckpointError(message) if message.contains("view")),
+        "unexpected error: {error}"
+    );
 }

@@ -59,15 +59,19 @@ impl std::error::Error for MigrationError {}
 // ---------------------------------------------------------------------------
 
 // Registry identifiers are interpolated; migration bodies are trusted executable SQL.
+// PostgreSQL truncates identifiers past 63 bytes, so a longer name could address
+// another registry.
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 fn validate_registry_table(name: &str) -> Result<(), adk_core::AdkError> {
     let mut chars = name.chars();
-    if !chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+    if name.len() > 63
+        || !chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
     {
-        return Err(adk_core::AdkError::session(
-            "invalid migration registry table: use an ASCII identifier starting with a letter or underscore".to_string(),
-        ));
+        return Err(adk_core::AdkError::session(format!(
+            "invalid migration registry table `{name}`: use an ASCII identifier of at most 63 bytes \
+             starting with a letter or underscore, followed by letters, digits or underscores"
+        )));
     }
     Ok(())
 }
@@ -180,18 +184,17 @@ macro_rules! sql_migration_body {
             // semicolon-separated statements in a single call).
             // `Executor::execute` returns a boxed `Send` future; `RawSql::execute` is an
             // `async fn` whose future is not provably `Send` for PostgreSQL connections.
-            sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(sqlx::AssertSqlSafe(sql)))
-                .await
-                .map_err(|e| {
-                    adk_core::AdkError::session(format!(
-                        "{}",
-                        MigrationError {
-                            version,
-                            description: description.to_string(),
-                            cause: e.to_string(),
-                        }
-                    ))
-                })?;
+            // Step bodies are `&'static str`, so they need no `AssertSqlSafe`.
+            sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(sql)).await.map_err(|e| {
+                adk_core::AdkError::session(format!(
+                    "{}",
+                    MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: e.to_string(),
+                    }
+                ))
+            })?;
 
             // Record the step in the registry
             let now = Utc::now().to_rfc3339();
@@ -239,7 +242,7 @@ macro_rules! sql_migration_body {
 /// generic trait bounds.
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 macro_rules! impl_sql_migration_runner {
-    ($mod_name:ident, $pool_ty:ty, $conn_ty:ty, $int_type:expr) => {
+    ($mod_name:ident, $pool_ty:ty, $conn_ty:ty, $int_type:expr, $missing_table:expr) => {
         /// SQL migration runner for this database backend.
         pub mod $mod_name {
             use super::MigrationError;
@@ -250,8 +253,8 @@ macro_rules! impl_sql_migration_runner {
 
             /// Run all pending migrations for a SQL backend.
             ///
-            /// `registry_table` must be an ASCII identifier starting with a letter or
-            /// underscore. Step bodies are trusted executable SQL, never user input.
+            /// `registry_table` must be an ASCII identifier of at most 63 bytes,
+            /// starting with a letter or underscore. Step bodies are trusted executable SQL, never user input.
             /// Descriptions are bound as values and may contain quotes.
             ///
             /// 1. Creates the registry table if it does not exist.
@@ -329,7 +332,12 @@ macro_rules! impl_sql_migration_runner {
             /// Returns the highest applied migration version, or 0 if no
             /// registry table exists or the registry is empty.
             ///
-            /// Rejects registry names that are not simple ASCII identifiers.
+            /// # Errors
+            ///
+            /// Returns an error when `registry_table` is not an ASCII identifier of
+            /// at most 63 bytes, or when the registry cannot be read for any reason
+            /// other than the table being absent, such as a lost connection or a
+            /// missing privilege.
             pub async fn sql_schema_version(
                 pool: &$pool_ty,
                 registry_table: &str,
@@ -337,23 +345,42 @@ macro_rules! impl_sql_migration_runner {
                 super::validate_registry_table(registry_table)?;
                 let sql =
                     format!("SELECT COALESCE(MAX(version), 0) AS max_v FROM {registry_table}");
-                match sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_one(pool).await {
-                    Ok(row) => {
-                        let version: i64 = row.try_get("max_v").unwrap_or(0);
-                        Ok(version)
+                let missing_table: fn(&dyn sqlx::error::DatabaseError) -> bool = $missing_table;
+                let row = match sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_one(pool).await {
+                    Ok(row) => row,
+                    Err(sqlx::Error::Database(error)) if missing_table(error.as_ref()) => {
+                        return Ok(0);
                     }
-                    Err(_) => Ok(0),
-                }
+                    Err(e) => {
+                        return Err(adk_core::AdkError::session(format!(
+                            "migration registry read failed: {e}"
+                        )));
+                    }
+                };
+                row.try_get("max_v").map_err(|e| {
+                    adk_core::AdkError::session(format!("migration registry read failed: {e}"))
+                })
             }
         }
     };
 }
 
+// SQLite reports a missing table only through its message; PostgreSQL uses
+// SQLSTATE 42P01 (undefined_table).
 #[cfg(feature = "sqlite")]
-impl_sql_migration_runner!(sqlite_runner, sqlx::SqlitePool, sqlx::SqliteConnection, "INTEGER");
+impl_sql_migration_runner!(
+    sqlite_runner,
+    sqlx::SqlitePool,
+    sqlx::SqliteConnection,
+    "INTEGER",
+    |error| error.message().starts_with("no such table")
+);
 
 #[cfg(feature = "postgres")]
-impl_sql_migration_runner!(pg_runner, sqlx::PgPool, sqlx::PgConnection, "BIGINT");
+impl_sql_migration_runner!(pg_runner, sqlx::PgPool, sqlx::PgConnection, "BIGINT", |error| error
+    .code()
+    .as_deref()
+    == Some("42P01"));
 
 /// Runs migrations for a PostgreSQL-backed store under a session-level advisory lock
 /// keyed by `registry_table`, so concurrent processes migrate one at a time.
