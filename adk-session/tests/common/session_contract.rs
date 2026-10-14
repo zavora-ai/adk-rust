@@ -1,7 +1,7 @@
 use adk_session::{
     CreateRequest, DeleteRequest, Event, GetRequest, KEY_PREFIX_TEMP, ListRequest, SessionService,
 };
-use chrono::{Duration, Utc};
+use chrono::{Duration, SubsecRound, Utc};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -86,7 +86,8 @@ pub async fn assert_session_contract_with_users(
     assert_eq!(fetched.state().get("session_key"), Some(json!("seed")));
     assert_eq!(fetched.state().get("temp:create"), None);
 
-    let t1 = Utc::now();
+    // Microseconds: the finest precision every backend stores (PostgreSQL TIMESTAMPTZ).
+    let t1 = Utc::now().trunc_subsecs(6);
     let t2 = t1 + Duration::seconds(1);
 
     let mut event_1 = Event::new("inv-1");
