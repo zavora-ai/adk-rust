@@ -217,8 +217,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     services:
+      # postgres:17 plus pgvector, the image the PR-tier `postgres` job uses.
       postgres:
-        image: postgres:17
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_PASSWORD: postgres
         ports: ["5432:5432"]
@@ -340,7 +341,7 @@ jobs:
       run: >-
         cargo nextest run -p adk-graph
         --features sqlite,postgres,redis,mongodb,neo4j,firestore
-        --run-ignored all
+        --run-ignored all --no-fail-fast
         --test checkpointer_conformance
         --test checkpointer_conformance_postgres
         --test checkpointer_conformance_redis
@@ -395,9 +396,14 @@ jobs:
     # Runs only when at least one provider secret is present. env context is
     # allowed in a step `if:` (secrets context is not), so the mapped env vars
     # above are what we test against.
+    # The workspace build enables adk-session's `postgres` feature (adk-managed's tests
+    # depend on it), so the PostgreSQL suites compile here but have no server; they run
+    # in ci.yml's `postgres` job and the `durable-stores` job above.
     - name: Run ignored integration tests
       if: ${{ env.GOOGLE_API_KEY != '' || env.OPENAI_API_KEY != '' || env.ANTHROPIC_API_KEY != '' }}
-      run: cargo nextest run --workspace --run-ignored ignored-only
+      run: >-
+        cargo nextest run --workspace --run-ignored ignored-only
+        -E 'not (binary(/postgres|pgvector/) or test(/postgres|pgvector/))'
 
     - name: Skip notice (no provider secrets configured)
       if: ${{ env.GOOGLE_API_KEY == '' && env.OPENAI_API_KEY == '' && env.ANTHROPIC_API_KEY == '' }}
