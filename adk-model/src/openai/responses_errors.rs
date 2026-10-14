@@ -2,22 +2,17 @@
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 use async_openai::error::{ApiError, ApiErrorResponse, OpenAIError, WrappedError};
-use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
-use std::{
-    fmt,
-    time::{Duration, Instant},
-};
+use std::{fmt, time::Duration};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RetryAfter {
-    Fallback,
-    Delay(u64),
-    Unsupported,
-}
+use crate::retry::{parse_retry_after, with_retry_after};
+
+/// Longest raw error body quoted in an error message.
+const BODY_EXCERPT_BYTES: usize = 512;
 
 struct HttpError {
     error: ApiErrorResponse,
-    retry_after: RetryAfter,
+    retry_after: Option<Duration>,
+    request_id: Option<String>,
 }
 
 impl fmt::Debug for HttpError {
@@ -26,6 +21,7 @@ impl fmt::Debug for HttpError {
             .debug_struct("HttpError")
             .field("status", &self.error.status_code.as_u16())
             .field("retry_after", &self.retry_after)
+            .field("request_id", &self.request_id)
             .finish()
     }
 }
@@ -39,124 +35,73 @@ impl fmt::Display for HttpError {
 impl std::error::Error for HttpError {}
 
 /// Decode a failed HTTP response before the SDK can replace its status with a
-/// body-deserialization error. The original `Retry-After` header is captured
+/// body-deserialization error. `Retry-After` and `x-request-id` are captured
 /// before consuming the body.
 pub(super) async fn normalize_response(
     response: reqwest_openai::Response,
     open_responses_mode: bool,
 ) -> Result<reqwest_openai::Response, OpenAIError> {
     let status = response.status();
-    let retry_after = retry_after(response.headers());
-    let bytes = response.bytes().await.unwrap_or_default();
-    if let Ok(wrapped) = serde_json::from_slice::<WrappedError>(&bytes) {
-        return Err(http_error(
-            ApiErrorResponse { status_code: status, api_error: wrapped.error },
-            retry_after,
-        ));
-    }
-    if open_responses_mode
-        && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
-        && value.get("error").is_none()
-        && let Some(detail) = value.get("detail").and_then(serde_json::Value::as_str)
-    {
-        return Err(http_error(
-            ApiErrorResponse {
-                status_code: status,
-                api_error: ApiError {
-                    message: detail.to_owned(),
-                    r#type: None,
-                    param: None,
-                    code: value.get("code").and_then(serde_json::Value::as_str).map(str::to_owned),
-                },
-            },
-            retry_after,
-        ));
-    }
-    Err(http_error(
-        ApiErrorResponse {
-            status_code: status,
-            api_error: ApiError {
-                message: format!("HTTP {status}"),
+    let header = |name| response.headers().get(name).and_then(|value| value.to_str().ok());
+    let retry_after = header(http::header::RETRY_AFTER).and_then(parse_retry_after);
+    let request_id = header(http::HeaderName::from_static("x-request-id"))
+        .and_then(identifier)
+        .map(str::to_owned);
+    let api_error = match response.bytes().await {
+        Ok(bytes) => api_error(status, &bytes, open_responses_mode),
+        Err(error) => {
+            tracing::debug!(error = %error, http.status = status.as_u16(), "failed to read responses error body");
+            ApiError {
+                message: format!("HTTP {status} (error body could not be read)"),
                 r#type: None,
                 param: None,
                 code: None,
-            },
-        },
+            }
+        }
+    };
+    Err(OpenAIError::Boxed(Box::new(HttpError {
+        error: ApiErrorResponse { status_code: status, api_error },
         retry_after,
-    ))
+        request_id,
+    })))
 }
 
-fn retry_after(headers: &http::HeaderMap) -> RetryAfter {
-    parse_delay(
-        headers.get(http::header::RETRY_AFTER).and_then(|value| value.to_str().ok()),
-        Utc::now(),
-        Instant::now(),
-    )
-}
-
-fn parse_delay(value: Option<&str>, now: DateTime<Utc>, started: Instant) -> RetryAfter {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return RetryAfter::Fallback;
-    };
-    let delay = if value.bytes().all(|byte| byte.is_ascii_digit()) {
-        let Ok(seconds) = value.parse::<u64>() else {
-            return RetryAfter::Unsupported;
-        };
-        Duration::from_secs(seconds)
-    } else {
-        let Some(date) = parse_date(value, now) else {
-            return RetryAfter::Fallback;
-        };
-        date.signed_duration_since(now).to_std().unwrap_or(Duration::ZERO)
-    };
-    // A date can contain fractional seconds relative to `now`; round up to
-    // the retry hint's millisecond precision, never earlier than requested.
-    let Ok(millis) = u64::try_from(delay.as_nanos().div_ceil(1_000_000)) else {
-        return RetryAfter::Unsupported;
-    };
-    if started.checked_add(Duration::from_millis(millis)).is_none() {
-        return RetryAfter::Unsupported;
+fn api_error(
+    status: reqwest_openai::StatusCode,
+    bytes: &[u8],
+    open_responses_mode: bool,
+) -> ApiError {
+    if let Ok(wrapped) = serde_json::from_slice::<WrappedError>(bytes) {
+        return wrapped.error;
     }
-    RetryAfter::Delay(millis)
-}
-
-fn parse_date(value: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    if let Ok(date) = DateTime::parse_from_rfc2822(value) {
-        return Some(date.with_timezone(&Utc));
-    }
-    if let Ok(date) = NaiveDateTime::parse_from_str(value, "%a %b %e %H:%M:%S %Y") {
-        return Some(date.and_utc());
-    }
-    let mut parsed = chrono::format::Parsed::new();
-    chrono::format::parse(
-        &mut parsed,
-        value,
-        chrono::format::StrftimeItems::new("%A, %d-%b-%y %H:%M:%S GMT"),
-    )
-    .ok()?;
-    // Resolve the obsolete two-digit year before validating the weekday.
-    let cutoff = now.year() + 50;
-    let mut year = cutoff.div_euclid(100) * 100 + parsed.year_mod_100?;
-    if year > cutoff {
-        year -= 100;
-    }
-    let weekday = parsed.weekday.take();
-    parsed.set_year(i64::from(year)).ok()?;
-    let date = parsed.to_naive_datetime_with_offset(0).ok()?.and_utc();
-    if (date.year(), date.month(), date.day(), date.time())
-        > (cutoff, now.month(), now.day(), now.time())
+    if open_responses_mode
+        && let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes)
+        && value.get("error").is_none()
+        && let Some(detail) = value.get("detail").and_then(serde_json::Value::as_str)
     {
-        parsed.year = Some(year - 100);
+        return ApiError {
+            message: detail.to_owned(),
+            r#type: None,
+            param: None,
+            code: value.get("code").and_then(serde_json::Value::as_str).map(str::to_owned),
+        };
     }
-    parsed.weekday = weekday;
-    Some(parsed.to_naive_datetime_with_offset(0).ok()?.and_utc())
+    let excerpt = String::from_utf8_lossy(&bytes[..bytes.len().min(BODY_EXCERPT_BYTES)]);
+    let excerpt = excerpt.trim();
+    let message = if excerpt.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        format!("HTTP {status}: {excerpt}")
+    };
+    ApiError { message, r#type: None, param: None, code: None }
 }
 
-fn http_error(error: ApiErrorResponse, retry_after: RetryAfter) -> OpenAIError {
-    match retry_after {
-        RetryAfter::Fallback => OpenAIError::ApiError(error),
-        _ => OpenAIError::Boxed(Box::new(HttpError { error, retry_after })),
-    }
+/// Returns `value` when it is short and limited to ASCII alphanumerics, `_`, `.`, and `-`.
+fn identifier(value: &str) -> Option<&str> {
+    (!value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte)))
+    .then_some(value)
 }
 
 pub(super) fn mapped_http_error(error: &OpenAIError) -> Option<AdkError> {
@@ -164,23 +109,12 @@ pub(super) fn mapped_http_error(error: &OpenAIError) -> Option<AdkError> {
         return None;
     };
     let error = error.downcast_ref::<HttpError>()?;
-    let mut mapped = map_api_error(&error.error);
-    match error.retry_after {
-        RetryAfter::Delay(millis)
-            if Instant::now().checked_add(Duration::from_millis(millis)).is_some() =>
-        {
-            if mapped.retry.should_retry {
-                mapped.retry.retry_after_ms = Some(millis);
-            }
-        }
-        RetryAfter::Delay(_) | RetryAfter::Unsupported => {
-            // An unsupported valid delay cannot authorize an earlier fallback retry.
-            mapped.retry.should_retry = false;
-            mapped.retry.retry_after_ms = None;
-        }
-        RetryAfter::Fallback => {}
-    }
-    Some(mapped)
+    // A delay above `RetryConfig::max_delay` is capped by the retry loop.
+    let mapped = with_retry_after(map_api_error(&error.error), error.retry_after);
+    Some(match &error.request_id {
+        Some(request_id) => mapped.with_request_id(request_id.as_str()),
+        None => mapped,
+    })
 }
 
 pub(super) fn map_api_error(api_err: &ApiErrorResponse) -> AdkError {
@@ -205,11 +139,7 @@ pub(super) fn map_api_error(api_err: &ApiErrorResponse) -> AdkError {
     )
     .with_provider("openai-responses")
     .with_upstream_status(status_code);
-    if let Some(provider_code) = api_err.api_error.code.as_deref().filter(|code| {
-        !code.is_empty()
-            && code.len() <= 128
-            && code.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
-    }) {
+    if let Some(provider_code) = api_err.api_error.code.as_deref().and_then(identifier) {
         mapped.details.metadata.insert(
             "provider_error_code".to_string(),
             serde_json::Value::String(provider_code.to_string()),
@@ -222,48 +152,24 @@ pub(super) fn map_api_error(api_err: &ApiErrorResponse) -> AdkError {
 mod tests {
     use super::*;
 
-    fn now() -> DateTime<Utc> {
-        "2026-10-12T00:00:00Z".parse().unwrap()
-    }
-
-    fn parse(value: Option<&str>) -> RetryAfter {
-        parse_delay(value, now(), Instant::now())
-    }
-
     #[test]
-    fn parses_seconds_and_dates() {
-        assert_eq!(parse(Some(" 12 ")), RetryAfter::Delay(12_000));
-        assert_eq!(parse(Some("0")), RetryAfter::Delay(0));
-        for value in [
-            "Mon, 12 Oct 2026 00:00:12 GMT",
-            "Monday, 12-Oct-26 00:00:12 GMT",
-            "Mon Oct 12 00:00:12 2026",
-        ] {
-            assert_eq!(parse(Some(value)), RetryAfter::Delay(12_000), "{value}");
-        }
-        assert_eq!(parse(Some("Sun, 11 Oct 2026 23:59:59 GMT")), RetryAfter::Delay(0));
-    }
-
-    #[test]
-    fn rounds_fractional_date_delays_up() {
-        let now = "2026-10-12T00:00:00.999500Z".parse().unwrap();
+    fn quotes_a_bounded_excerpt_of_unrecognized_bodies() {
+        let status = reqwest_openai::StatusCode::BAD_GATEWAY;
         assert_eq!(
-            parse_delay(Some("Mon, 12 Oct 2026 00:00:01 GMT"), now, Instant::now()),
-            RetryAfter::Delay(1)
+            api_error(status, b"  upstream timed out \n", false).message,
+            "HTTP 502 Bad Gateway: upstream timed out"
         );
+        assert_eq!(api_error(status, b"", false).message, "HTTP 502 Bad Gateway");
+        let long = "x".repeat(BODY_EXCERPT_BYTES * 2);
+        let message = api_error(status, long.as_bytes(), false).message;
+        assert_eq!(message.len(), "HTTP 502 Bad Gateway: ".len() + BODY_EXCERPT_BYTES);
     }
 
     #[test]
-    fn falls_back_for_invalid_values() {
-        for value in [None, Some(""), Some("invalid"), Some("-1"), Some("+1"), Some("1.5")] {
-            assert_eq!(parse(value), RetryAfter::Fallback, "{value:?}");
-        }
-    }
-
-    #[test]
-    fn rejects_unrepresentable_delays() {
-        for value in ["18446744073709551616", "18446744073709551615"] {
-            assert_eq!(parse(Some(value)), RetryAfter::Unsupported);
+    fn accepts_only_identifier_like_values() {
+        assert_eq!(identifier("req_123-abc.def"), Some("req_123-abc.def"));
+        for value in ["", "secret token", "line\nbreak", &"a".repeat(129)] {
+            assert_eq!(identifier(value), None, "{value:?}");
         }
     }
 

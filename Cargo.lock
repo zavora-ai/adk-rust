@@ -764,6 +764,7 @@ dependencies = [
  "futures",
  "google-cloud-gax 1.13.0",
  "http 1.5.0",
+ "httpdate",
  "ollama-rs",
  "proptest",
  "reqwest 0.12.28",

@@ -768,6 +768,11 @@ and stream paths are unchanged. Explicit Anthropic/Gemini base URLs, Vertex
 endpoints, and a supplied Bedrock client avoid ambient configuration when the
 application owns authentication.
 
+`OpenAIResponsesClient::with_response_observer` receives the raw headers of each
+generation HTTP attempt, failed attempts and retries included, before the body is
+read. It does not run for background polling. Headers may include cookies; the
+observer should not log the whole map.
+
 ## Environment Variables
 
 ```bash

@@ -29,6 +29,7 @@ mod responses_client;
 mod responses_convert;
 mod responses_errors;
 mod responses_lines;
+mod responses_stream;
 pub mod schema_adapter;
 #[cfg(feature = "openai-ws")]
 pub mod ws_transport;

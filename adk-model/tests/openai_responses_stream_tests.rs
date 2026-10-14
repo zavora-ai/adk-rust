@@ -394,7 +394,35 @@ mod output_recovery {
                     .await;
             let terminal = unfinished.last().unwrap();
             assert_eq!(terminal.provider_metadata.as_ref().unwrap()["content_complete"], true);
-            assert!(terminal.content.as_ref().unwrap().parts.is_empty());
+            assert_eq!(
+                terminal.content.as_ref().unwrap().parts,
+                [Part::Text { text: "Draft".into() }]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_terminal_output_keeps_streamed_text() {
+        for compatible in [false, true] {
+            let results = responses(
+                &[
+                    delta("first", 0, 0, "Hel"),
+                    delta("first", 0, 0, "lo"),
+                    delta("second", 1, 0, "Dra"),
+                    done("second", 1, 0, "Done"),
+                    completion(json!([])),
+                ],
+                compatible,
+                "",
+            )
+            .await;
+            let terminal = results.last().unwrap();
+            assert!(terminal.turn_complete);
+            assert_eq!(terminal.provider_metadata.as_ref().unwrap()["content_complete"], true);
+            assert_eq!(
+                terminal.content.as_ref().unwrap().parts,
+                [Part::Text { text: "Hello".into() }, Part::Text { text: "Done".into() }]
+            );
         }
     }
 
@@ -575,4 +603,41 @@ async fn native_tool_requests_stream_and_preserve_final_call() {
             Part::Text { text: "Found results".into() }
         );
     }
+}
+
+#[tokio::test]
+async fn unknown_event_types_do_not_end_the_stream() {
+    for compatible in [false, true] {
+        let results = responses(
+            &[
+                delta("msg", 0, 0, "Hello"),
+                json!({"type": "response.future_tool.progress", "sequence_number": 2,
+                    "output_index": 0, "item_id": "ft_1"}),
+                delta("msg", 0, 0, " world"),
+                completion(json!([message("msg", json!([text("Hello world")]))])),
+            ],
+            compatible,
+            "",
+        )
+        .await;
+        assert_eq!(text_parts(&results), ["Hello", " world"]);
+        let terminal = results.last().unwrap();
+        assert!(terminal.turn_complete);
+        assert_eq!(terminal.usage_metadata.as_ref().unwrap().total_token_count, 120);
+    }
+}
+
+#[tokio::test]
+async fn malformed_known_events_still_fail_the_stream() {
+    let error = try_responses(
+        &[
+            json!({"type": "response.output_text.delta", "sequence_number": 1}),
+            completion(json!([message("msg", json!([text("Hello")]))])),
+        ],
+        false,
+        "",
+    )
+    .await
+    .expect_err("a known event missing required fields must fail");
+    assert_eq!(error.code, "model.openai_responses.parse");
 }

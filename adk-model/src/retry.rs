@@ -102,10 +102,13 @@ pub fn category_for_status_code(status_code: u16) -> ErrorCategory {
     }
 }
 
-/// Parses a `Retry-After` header value given in seconds.
+/// Parses a `Retry-After` header value given in seconds or as an HTTP-date.
 ///
-/// Returns `None` for an HTTP-date or any other value that is not a
-/// non-negative number of seconds.
+/// Seconds may be fractional. An HTTP-date in any of the three formats of
+/// RFC 9110 yields the time remaining until that date, or zero when it has
+/// passed. A delay too large to represent in milliseconds saturates, and
+/// [`execute_with_retry`] caps every server delay at [`RetryConfig::max_delay`].
+/// Returns `None` for any other value.
 ///
 /// # Example
 ///
@@ -115,12 +118,25 @@ pub fn category_for_status_code(status_code: u16) -> ErrorCategory {
 ///
 /// assert_eq!(parse_retry_after("7"), Some(Duration::from_secs(7)));
 /// assert_eq!(parse_retry_after("1.5"), Some(Duration::from_millis(1500)));
-/// assert_eq!(parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT"), None);
+/// assert_eq!(parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT"), Some(Duration::ZERO));
+/// assert_eq!(parse_retry_after("soon"), None);
 /// ```
 #[must_use]
 pub fn parse_retry_after(value: &str) -> Option<Duration> {
-    let seconds = value.trim().parse::<f64>().ok()?;
-    Duration::try_from_secs_f64(seconds).ok()
+    // `RetryHint` stores whole milliseconds as `u64`.
+    let max = Duration::from_millis(u64::MAX);
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<f64>() {
+        if !seconds.is_finite() || seconds < 0.0 {
+            return None;
+        }
+        return Some(Duration::try_from_secs_f64(seconds).map_or(max, |delay| delay.min(max)));
+    }
+    let date = httpdate::parse_http_date(value).ok()?;
+    let delay = date.duration_since(std::time::SystemTime::now()).unwrap_or(Duration::ZERO);
+    // Round up so a retry never starts before the requested date.
+    let millis = delay.as_nanos().div_ceil(1_000_000);
+    Some(u64::try_from(millis).map_or(max, Duration::from_millis))
 }
 
 /// Attaches a server-provided `Retry-After` delay to a retryable error.
@@ -470,6 +486,27 @@ mod tests {
         assert_eq!(with_retry_after(invalid, delay).retry.retry_after(), None);
         assert_eq!(parse_retry_after("-1"), None);
         assert_eq!(parse_retry_after(" 30 "), Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn parse_retry_after_accepts_http_dates_and_saturates() {
+        let future = std::time::SystemTime::now() + Duration::from_secs(30);
+        for date in [
+            httpdate::fmt_http_date(future),
+            "Sunday, 06-Nov-94 08:49:37 GMT".to_string(),
+            "Sun Nov  6 08:49:37 1994".to_string(),
+        ] {
+            let delay = parse_retry_after(&date).expect("HTTP-date should parse");
+            assert!(delay <= Duration::from_secs(30), "{date}");
+        }
+        assert!(parse_retry_after(&httpdate::fmt_http_date(future)).unwrap() > Duration::ZERO);
+
+        let max = Some(Duration::from_millis(u64::MAX));
+        assert_eq!(parse_retry_after("18446744073709551616"), max);
+        assert_eq!(parse_retry_after("1e300"), max);
+        for invalid in ["", "soon", "inf", "NaN", "-0.5"] {
+            assert_eq!(parse_retry_after(invalid), None, "{invalid:?}");
+        }
     }
 
     #[test]

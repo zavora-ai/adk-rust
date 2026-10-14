@@ -31,6 +31,21 @@ pub type RequestAdapter = std::sync::Arc<
 
 /// Observes response headers before status handling or body consumption.
 ///
-/// The callback runs once for each Responses generation HTTP attempt, including
-/// unsuccessful statuses. It should not perform I/O or retain sensitive headers.
+/// The callback runs once for each Responses generation HTTP attempt, retries and
+/// unsuccessful statuses included, and not for background polling. It must not
+/// panic, block, or perform I/O. Headers may include cookies and other credentials,
+/// so do not log or retain the whole map.
+///
+/// # Example
+///
+/// ```
+/// use adk_model::openai::ResponseObserver;
+/// use std::sync::Arc;
+///
+/// let observer: ResponseObserver = Arc::new(|headers| {
+///     if let Some(request_id) = headers.get("x-request-id") {
+///         tracing::debug!(request_id = ?request_id, "responses attempt");
+///     }
+/// });
+/// ```
 pub type ResponseObserver = std::sync::Arc<dyn Fn(&http::HeaderMap) + Send + Sync>;

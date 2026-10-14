@@ -239,6 +239,32 @@ let client = OpenAIResponsesClient::new(OpenAIResponsesConfig::new(api_key, "gpt
 
 The client does not follow HTTP redirects on generation requests.
 
+### Response Header Observers
+
+`with_response_observer` receives the raw response headers of every generation request,
+for example to read rate-limit or request-id headers:
+
+```rust
+use std::sync::Arc;
+
+use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig, ResponseObserver};
+
+let observer: ResponseObserver = Arc::new(|headers| {
+    if let Some(remaining) = headers.get("x-ratelimit-remaining-requests") {
+        tracing::debug!(remaining = ?remaining, "responses rate limit");
+    }
+});
+let client = OpenAIResponsesClient::new(OpenAIResponsesConfig::new(api_key, "gpt-5"))?
+    .with_response_observer(observer);
+```
+
+| Behaviour | Detail |
+|-----------|--------|
+| **Frequency** | Once per HTTP attempt — a request retried `N` times calls it `N + 1` times |
+| **Timing** | Before status handling or body consumption, so failed attempts are observed too |
+| **Scope** | `POST /responses` generation requests only; not background polling, cancellation, or compaction |
+| **Contract** | Must not panic or block; headers may include cookies, so do not log the whole map |
+
 ---
 
 ## Available Models
@@ -416,9 +442,19 @@ Errors are mapped to structured `AdkError` with appropriate categories:
 | HTTP Status | Error Category | Retryable |
 |-------------|---------------|-----------|
 | 401 | `Unauthorized` | No |
+| 403 | `Forbidden` | No |
+| 404 | `NotFound` | No |
+| 408 | `Timeout` | Yes |
 | 429 | `RateLimited` | Yes |
-| 500, 502, 503, 504 | `Unavailable` | Yes |
+| 500, 502, 503, 504, 529 | `Unavailable` | Yes |
+| Other 4xx | `InvalidInput` | No |
 | Other | `Internal` | No |
+
+HTTP errors carry the upstream status in `details.upstream_status_code` and an
+identifier-like `x-request-id` in `details.request_id`. A `Retry-After` header, in
+seconds or as an HTTP-date, sets the retry delay, capped at `RetryConfig::max_delay`.
+An error body that is not a JSON error object is quoted, up to 512 bytes, in the message.
+A stream event type the client does not recognize is skipped rather than ending the turn.
 
 ```rust
 match runner.run(uid, sid, message).await {
