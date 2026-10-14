@@ -629,7 +629,11 @@ cargo nextest run --workspace --profile ci
 cargo test --workspace --doc
 
 # Run ignored tests (require API keys)
-cargo nextest run --workspace -- --run-ignored
+cargo nextest run --workspace --run-ignored only
+
+# Run the PostgreSQL suites (ignored by default) against a server with pgvector
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres pgvector/pgvector:pg17
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres scripts/test-postgres.sh
 
 # Run with output (nextest shows output for failing tests by default)
 cargo nextest run --workspace --no-capture

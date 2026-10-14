@@ -170,7 +170,9 @@ expensive axes move to a later tier.
   coverage: `fmt` (prerequisite gate), `clippy --workspace --all-targets -D warnings`,
   `nextest --workspace` (Linux, runs at most once), `feature-coverage` for
   feature-gated modules default builds skip (e.g. `adk-agent --features codeact`),
-  as eight shards driven by `scripts/feature-coverage-pairs.txt`,
+  as eight shards driven by `scripts/feature-coverage-pairs.txt`, `postgres` (the
+  `#[ignore]`d PostgreSQL suites, pgvector and TLS included, against a
+  `pgvector/pgvector:pg17` service, driven by `scripts/test-postgres.sh`),
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
   (4 shards), `templates`, a compile-only macOS build, a Windows workspace build
   with a targeted sandbox portability smoke, and `semver` (stable strict against
@@ -724,6 +726,8 @@ See `adk-gemini/AGENTS.md` for the full tracing conventions. The key rules:
 cargo nextest run --workspace                                # full workspace (parallel)
 cargo nextest run -p adk-core                                # single crate
 cargo nextest run -p adk-realtime --features full            # with features
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
+  scripts/test-postgres.sh                                     # PostgreSQL suites (pgvector server)
 ```
 
 - Prefer `cargo nextest run` over `cargo test` for speed (~10x faster via parallel test binary execution).

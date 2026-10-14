@@ -372,7 +372,7 @@ expensive axes just move to a later tier.
 
 | Tier | Trigger | Checks | Blocks merge? |
 |------|---------|--------|---------------|
-| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), docs and doctests, standalone examples (4 shards), `templates`, a compile-only macOS build, a Windows workspace build with a targeted sandbox portability smoke, and `semver` (stable strict against `SEMVER_RELEASE_TYPE` in `semver.yml`: `minor` fails breakage, `major` during a major release candidate accepts it, and `breaking` changelog fragments record it; beta warn-only) | Yes — aggregated by `pr-gate`, plus `semver` |
+| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), `postgres` (the `#[ignore]`d PostgreSQL suites against a pgvector server, including TLS), docs and doctests, standalone examples (4 shards), `templates`, a compile-only macOS build, a Windows workspace build with a targeted sandbox portability smoke, and `semver` (stable strict against `SEMVER_RELEASE_TYPE` in `semver.yml`: `minor` fails breakage, `major` during a major release candidate accepts it, and `breaking` changelog fragments record it; beta warn-only) | Yes — aggregated by `pr-gate`, plus `semver` |
 | **Merge** | `push: main` (`ci-merge.yml`) | cross-platform `nextest --workspace` on macOS/Windows, doc-example compilation | No — runs post-merge |
 | **Nightly** | `schedule` (`ci-nightly.yml`) | feature-combination matrix, `cargo-audit`/`cargo-deny` supply-chain, `#[ignore]` integration tests gated on secrets | No — runs on a schedule |
 
@@ -433,9 +433,10 @@ Require exactly these stable contexts in the `main` ruleset:
 > edit.
 
 `pr-gate` covers `fmt`, `webui`, `clippy`, Linux workspace tests, the eight
-`feature-coverage` shards driven by `scripts/feature-coverage-pairs.txt`, docs and
-doctests, the four standalone-example shards, `templates`, the macOS build, and the
-Windows build plus sandbox portability smokes. `semver` stays separate because its
+`feature-coverage` shards driven by `scripts/feature-coverage-pairs.txt`, the
+`postgres` job driven by `scripts/test-postgres.sh`, docs and doctests, the four
+standalone-example shards, `templates`, the macOS build, and the Windows build plus
+sandbox portability smokes. `semver` stays separate because its
 workflow has an independent trigger and keeps stable crates strict while
 beta/experimental crates remain advisory.
 
@@ -456,7 +457,7 @@ These run post-merge or on a schedule and MUST NOT be branch-protection-required
   `cross-platform-test (macos-latest)`, `cross-platform-test (windows-latest)`,
   `doc-examples`.
 - **Nightly tier** (`ci-nightly.yml`, `on: schedule`): the `features (…)`
-  feature-combination matrix jobs, `supply-chain`, `integration-tests`.
+  feature-combination matrix jobs, `supply-chain`, `durable-stores`, `integration-tests`.
 - **Code scanning** (`codeql.yml`, `on: push: branches:[main]` and weekly): the
   `Analyze (…)` CodeQL jobs. Alerts appear under Security → Code scanning; test
   code and examples are excluded by `.github/codeql/config.yml`.
@@ -550,6 +551,39 @@ cargo nextest run -p ralph
 
 # Doctests (nextest doesn't run these)
 cargo test --workspace --doc
+```
+
+### PostgreSQL Tests
+
+Tests that need a PostgreSQL server are `#[ignore]`d, so the commands above skip them.
+`scripts/test-postgres.sh` runs every PostgreSQL suite of `adk-session`, `adk-memory`,
+`adk-graph`, `adk-auth`, `adk-rag`, and `adk-managed`, as the PR-tier `postgres` job
+does. The `adk-memory` and `adk-rag` suites need the pgvector extension, which the
+`pgvector/pgvector:pg17` image provides:
+
+```bash
+docker run -d --name adk-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres pgvector/pgvector:pg17
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres scripts/test-postgres.sh
+```
+
+The suites create and drop their own schemas and databases, so a scratch server is
+enough. To run one suite, pass its crate, features, and test target:
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
+  cargo nextest run -p adk-session --features postgres --run-ignored only --test session_contract_postgres
+```
+
+The TLS suite (`adk-session/tests/postgres_tls_tests.rs`) needs a second server with a
+certificate from a private CA. `scripts/postgres-tls-server.sh` starts one in Docker;
+the script then runs the TLS suite as well:
+
+```bash
+scripts/postgres-tls-server.sh /tmp/adk-pg-tls
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
+DATABASE_URL_TLS=postgres://postgres:postgres@localhost:5433/postgres \
+PG_TLS_ROOT_CERT=/tmp/adk-pg-tls/ca.crt \
+  scripts/test-postgres.sh
 ```
 
 ### Test Organization
