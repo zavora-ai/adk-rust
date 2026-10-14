@@ -648,6 +648,41 @@ impl Anthropic {
         self.default_headers()
     }
 
+    /// Returns the headers [`Anthropic::send`] or [`Anthropic::stream`] sends for `params`.
+    ///
+    /// The map holds the client defaults plus the beta headers the request's typed
+    /// features require (structured outputs, context management, fast mode) and, when
+    /// `streaming` is true, `accept: text/event-stream`. Callers can modify it and pass it
+    /// to [`Anthropic::send_with_headers`] or [`Anthropic::stream_with_headers`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when a configured `anthropic-beta` header is not valid
+    /// ASCII or the combined beta list is not a valid header value.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use adk_anthropic::{Anthropic, KnownModel, MessageCreateParams, MessageParam, Model};
+    ///
+    /// let client = Anthropic::new(Some("api-key".into()))?;
+    /// let params = MessageCreateParams::new(
+    ///     1024,
+    ///     vec![MessageParam::user("Hello")],
+    ///     Model::Known(KnownModel::ClaudeSonnet46),
+    /// );
+    /// let mut headers = client.message_headers_for_request(&params, false)?;
+    /// headers.remove("anthropic-beta");
+    /// # Ok::<(), adk_anthropic::Error>(())
+    /// ```
+    pub fn message_headers_for_request(
+        &self,
+        params: &MessageCreateParams,
+        streaming: bool,
+    ) -> Result<HeaderMap> {
+        self.message_headers(params, &[], streaming)
+    }
+
     /// Build a full endpoint URL from the base URL and endpoint path.
     ///
     /// This method handles trailing slashes gracefully and always inserts `/v1/`
