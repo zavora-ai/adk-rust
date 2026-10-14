@@ -109,6 +109,8 @@
 # `adk-memory --features database-memory` once stopped compiling entirely while every
 # required check stayed green.
 5 adk-memory database-memory
+# The graph memory backend over sqlx: default workspace builds never compile it.
+5 adk-memory graph-memory
 5 adk-eval vertex-eval
 # Agent Engine deployment client: golden DTO and mock contract tests.
 5 adk-deploy gcp
@@ -120,6 +122,10 @@
 6 adk-auth sso
 # Signed audit log: JCS, RFC 9162 proofs, signed-note checkpoints, tamper tests.
 6 adk-auth signed-audit
+# The PostgreSQL audit sink and RFC 8693 token exchange: default workspace builds never
+# compile either.
+6 adk-auth postgres-audit
+6 adk-auth token-exchange
 # The GCS artifact backend must keep blob-name parity with adk-python.
 6 adk-artifact gcs
 6 adk-telemetry gcp
@@ -135,8 +141,3 @@
 # A surrealdb 3.2 parser change broke create_collection while every required check stayed
 # green; tests run on the embedded kv-mem engine.
 7 adk-rag surrealdb
-
-# SQLx 0.9: independently compile backends hidden by default workspace builds.
-6 adk-auth postgres-audit
-5 adk-memory graph-memory
-6 adk-auth token-exchange
