@@ -136,14 +136,21 @@ impl AnthropicClient {
         self
     }
 
-    /// Adapt the complete Anthropic message body and HTTP headers before each attempt.
+    /// Adapts the complete Anthropic Messages body and HTTP headers before each attempt.
     ///
     /// The adapter receives the serialized [`adk_anthropic::MessageCreateParams`]
-    /// and the headers normally sent by the SDK, including authentication and
-    /// feature-derived beta headers. It may replace or remove any header. The
-    /// adapted body must remain valid message parameters with the same streaming
-    /// mode. Without an adapter, generation uses the SDK's normal send and
-    /// stream methods unchanged.
+    /// and the headers the SDK would send, including authentication and
+    /// feature-derived beta headers. It may replace or remove any header. It runs
+    /// once per HTTP attempt, retries included. Without an adapter, generation
+    /// sends the same requests through the SDK's normal send and stream methods.
+    /// See [`RequestAdapter`] for prompt-cache and token-refresh guidance.
+    ///
+    /// # Errors
+    ///
+    /// Generation fails with `model.anthropic.request_adapter` and no request is
+    /// sent when the adapter changes `stream`, leaves a body that is not valid
+    /// message parameters, or adds a top-level field the parameters do not model.
+    /// An error the adapter returns is passed through unchanged.
     ///
     /// # Example
     ///

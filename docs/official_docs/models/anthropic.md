@@ -153,6 +153,42 @@ export ANTHROPIC_ALLOW_INSECURE_HTTP=1
 | `ANTHROPIC_ALLOW_INSECURE_HTTP` | Applies to `ANTHROPIC_BASE_URL` only; ignored for URLs given in code |
 | `FilesClient`, `ManagedAgentsClient` | No opt-in; plain HTTP stays loopback-only |
 
+### Request adapter
+
+`AnthropicClient::with_request_adapter` edits the JSON body and headers of each
+Messages request before it is sent, for gateways that need per-request bearer tokens,
+routing headers, or metadata:
+
+```rust
+use adk_anthropic::HeaderValue;
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig, RequestAdapter};
+use std::sync::{Arc, RwLock};
+
+fn build(token: Arc<RwLock<String>>) -> Result<AnthropicClient, adk_core::AdkError> {
+    let adapter: RequestAdapter = Arc::new(move |body, headers| {
+        body["metadata"] = serde_json::json!({"user_id": "session-1"});
+        let bearer = format!("Bearer {}", token.read().expect("token lock").as_str());
+        headers.remove("x-api-key");
+        headers.insert(
+            "authorization",
+            HeaderValue::from_str(&bearer).expect("token is a valid header value"),
+        );
+        Ok(())
+    });
+    Ok(AnthropicClient::new(AnthropicConfig::new("unused", "claude-sonnet-5"))?
+        .with_request_adapter(adapter))
+}
+```
+
+| Behaviour | Rule |
+|-----------|------|
+| Input | The serialized `MessageCreateParams` and the headers the SDK would send, including feature-derived `anthropic-beta` values |
+| Frequency | Once per HTTP attempt, retries included |
+| Prompt cache | `cache_control` breakpoints are already placed; edits to `system`, `tools`, or cached blocks can miss the cache |
+| I/O | None — the closure is synchronous; refresh tokens out of band and read them here |
+| Rejected | Changing `stream`, an invalid body, or a top-level field `MessageCreateParams` does not model (`model.anthropic.request_adapter`, nothing sent) |
+| Without an adapter | The client sends the same requests through the SDK's normal send and stream methods |
+
 ## Retries and Streaming
 
 | Behaviour | Rule |

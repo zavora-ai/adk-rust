@@ -763,8 +763,8 @@ per-attempt JSON/header customization. Retry limits remain controlled by
 `RetryConfig`, including disabled retries. `AnthropicClient::with_request_adapter`
 offers the same optional body/header boundary for Messages requests. The adapter
 receives the SDK's default and feature-derived headers, may replace authentication
-or beta headers, and runs on each retry attempt; without one, the normal SDK send
-and stream paths are unchanged. Explicit Anthropic/Gemini base URLs, Vertex
+or beta headers, and runs on each retry attempt; without one, the client sends the
+same requests through the normal SDK send and stream paths. Explicit Anthropic/Gemini base URLs, Vertex
 endpoints, and a supplied Bedrock client avoid ambient configuration when the
 application owns authentication.
 

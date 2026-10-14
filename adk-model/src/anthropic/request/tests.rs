@@ -1,6 +1,7 @@
 use super::*;
 use crate::anthropic::{AnthropicClient, AnthropicConfig};
 use crate::retry::RetryConfig;
+use adk_anthropic::HeaderValue;
 use adk_core::{Content, GenerateContentConfig, Llm, LlmRequest, Part};
 use futures::TryStreamExt;
 use serde_json::{Value, json};
@@ -229,6 +230,30 @@ async fn invalid_body_prevents_dispatch() {
             .unwrap_err();
         assert_eq!(error.code, "model.anthropic.request_adapter");
         assert_eq!(error.category, ErrorCategory::InvalidInput);
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn unmodeled_field_prevents_dispatch() {
+    for streaming in [false, true] {
+        let server = MockServer::start().await;
+        let adapter: RequestAdapter = Arc::new(|body, _| {
+            body["gateway_route"] = json!("fixture");
+            body["temperature"] = Value::Null;
+            Ok(())
+        });
+        let error = client(&server)
+            .with_request_adapter(adapter)
+            .generate_content(request(), streaming)
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "model.anthropic.request_adapter");
+        assert_eq!(error.category, ErrorCategory::InvalidInput);
+        assert!(error.message.contains("would be dropped: gateway_route."), "{}", error.message);
         assert!(server.received_requests().await.unwrap().is_empty());
     }
 }
