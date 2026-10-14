@@ -52,7 +52,7 @@ lets you pick the index strategy.
 ```rust
 use adk_memory::{PostgresMemoryService, VectorIndexType};
 
-let memory = PostgresMemoryService::builder(pool, embedding_provider)
+let memory = PostgresMemoryService::builder("postgres://localhost/app", embedding_provider)
     .vector_index(VectorIndexType::Hnsw { m: 32, ef_construction: 128 })  // or IvfFlat / None
     .build()
     .await?;

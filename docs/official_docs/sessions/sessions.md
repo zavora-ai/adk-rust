@@ -722,6 +722,10 @@ let version = service.schema_version().await?;
 println!("Current schema version: {version}");
 ```
 
+`schema_version()` returns 0 when the migration registry table does not exist yet.
+Any other failure to read it, such as a lost connection or a missing privilege, is
+returned as an error.
+
 ### Baseline Detection
 
 If you have an existing database created before the migration system was added, `migrate()` detects the pre-existing tables and registers them as already applied. This avoids destructive re-creation and allows incremental adoption.

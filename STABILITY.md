@@ -123,6 +123,24 @@ Public structs in Stable-tier crates that are constructed by downstream consumer
 
 4. **Struct literal construction.** All public structs support direct struct literal construction with `..Default::default()` for forward compatibility. Builder patterns are provided as a convenience but are not required.
 
+## Public Dependency Policy
+
+A dependency whose types appear in a public signature is part of the crate's API: callers construct those types with their own copy of the dependency, and two semver-incompatible versions are distinct Rust types.
+
+1. **SQLx is a public dependency** of the crates below, through their SQL backends.
+
+   | Crate | Features | SQLx types in the public API |
+   |-------|----------|------------------------------|
+   | `adk-session` | `sqlite`, `postgres` | `from_pool` on every SQL store and session service, `SqliteSessionService::pool`, the `migration` runners (`run_sql_migrations`, `run_sql_migrations_on_connection`, `sql_schema_version`) |
+   | `adk-memory` | `sqlite-memory`, `graph-memory`, `database-memory` | `from_pool` on `SqliteMemoryService`, `GraphMemoryService`, and `PostgresMemoryService`, the `migration` runners |
+   | `adk-graph` | `sqlite`, `postgres` | `SqliteCheckpointer::from_pool`, `PostgresCheckpointer::from_pool` |
+   | `adk-auth` | `postgres-audit` | `PostgresAuditSink::from_pool`, `PostgresAuditSink::pool` |
+   | `adk-rag` | `pgvector` | `PgVectorStore::from_pool` |
+
+2. **Breaking SQLx upgrades are breaking releases.** Moving these crates to a semver-incompatible SQLx release (0.8 → 0.9, 0.9 → 0.10) is a breaking change and ships only in a major ADK-Rust release, with a migration guide. A semver-compatible SQLx update is not breaking.
+
+3. **CI coverage.** The `semver` gate checks these crates with the features above enabled, in addition to their default features (`SEMVER_EXTRA_FEATURES` in `.github/workflows/semver.yml`).
+
 ## 1.0 Milestone
 
 ADK-Rust 1.0.0 was released on June 7, 2026. All Stable-tier crates commit to long-term API stability under semantic versioning.

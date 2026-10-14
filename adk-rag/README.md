@@ -254,6 +254,12 @@ adk-rag = { version = "3.0.0", features = ["pgvector"] }
 let store = PgVectorStore::new("postgres://user:pass@localhost/mydb").await?;
 ```
 
+Each collection is stored in the table `rag_<name>`. A collection name must be 1
+to 59 bytes of ASCII lowercase letters, digits and underscores, so the table name
+fits PostgreSQL's 63-byte identifier limit. Any other name returns
+`RagError::VectorStoreError` instead of being rewritten, so two distinct names
+never share a table.
+
 ### SurrealDB
 
 Embedded or remote multi-model database with built-in vector search.
@@ -545,9 +551,13 @@ let tool = RagTool::new(pipeline, "default_collection");
 
 ## SQLx compatibility
 
-ADK-Rust 3.0 SQL database APIs use SQLx 0.9 pool and error types. Applications
-sharing pools must also use SQLx 0.9. See the [migration guide](../docs/official_docs/migration/sqlx-0.9.md)
-for runtime/TLS flags and migration-input requirements.
+ADK-Rust 3.0 SQL backends use SQLx 0.9. SQLx types appear in this crate's public
+API — `PgVectorStore::from_pool` — so an application that passes in its own pool must depend on
+SQLx 0.9 too. Applications that let ADK open its own connections need no SQLx
+dependency. The [SQLx 0.9 migration guide](../docs/official_docs/migration/sqlx-0.9.md)
+lists who is affected and what changed, and its
+[TLS behaviour](../docs/official_docs/migration/sqlx-0.9.md#tls-behaviour) section
+covers PostgreSQL certificate verification.
 
 ## License
 

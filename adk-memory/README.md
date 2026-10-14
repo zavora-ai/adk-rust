@@ -252,9 +252,13 @@ pub trait MemoryService: Send + Sync {
 
 ## SQLx compatibility
 
-ADK-Rust 3.0 SQL database APIs use SQLx 0.9 pool and error types. Applications
-sharing pools must also use SQLx 0.9. See the [migration guide](../docs/official_docs/migration/sqlx-0.9.md)
-for runtime/TLS flags and migration-input requirements.
+ADK-Rust 3.0 SQL backends use SQLx 0.9. SQLx types appear in this crate's public
+API — `from_pool` on `SqliteMemoryService`, `GraphMemoryService` and `PostgresMemoryService`, and the `migration` runners — so an application that passes in its own pool must depend on
+SQLx 0.9 too. Applications that let ADK open its own connections need no SQLx
+dependency. The [SQLx 0.9 migration guide](../docs/official_docs/migration/sqlx-0.9.md)
+lists who is affected and what changed, and its
+[TLS behaviour](../docs/official_docs/migration/sqlx-0.9.md#tls-behaviour) section
+covers PostgreSQL certificate verification.
 
 ## License
 

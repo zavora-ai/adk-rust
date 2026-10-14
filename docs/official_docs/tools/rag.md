@@ -273,6 +273,11 @@ use adk_rag::PgVectorStore;
 let store = PgVectorStore::new("postgres://user:pass@localhost/db").await?;
 ```
 
+> **Note:** `PgVectorStore` stores each collection in the table `rag_<name>`. A
+> collection name must be 1 to 59 bytes of ASCII lowercase letters, digits and
+> underscores; any other name returns `RagError::VectorStoreError` instead of being
+> rewritten, so two distinct names never share a table.
+
 ---
 
 ## Custom Reranker
