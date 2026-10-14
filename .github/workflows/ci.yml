@@ -244,6 +244,51 @@ jobs:
     - name: Clippy and test the shard's pairs
       run: bash scripts/check-feature-coverage.sh ${{ matrix.shard }}
 
+  # ── PostgreSQL: the database crates against a live server ───────
+  # The PostgreSQL backends' tests are #[ignore]d because they need a server, so no
+  # other PR-tier job runs them. The pgvector image is postgres:17 plus the extension,
+  # which the pgvector and memory suites need. Service containers cannot mount files,
+  # so the TLS server is started by a step. scripts/test-postgres.sh lists the suites.
+  postgres:
+    needs: [fmt, scope]
+    if: needs.scope.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      DATABASE_URL_TLS: postgres://postgres:postgres@localhost:5433/postgres
+      PG_TLS_ROOT_CERT: ${{ runner.temp }}/pg-tls/ca.crt
+      NEXTEST_PROFILE: ci
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: postgres
+        cache-save: 'false'
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+      with:
+        tool: cargo-nextest
+
+    - name: Start a TLS PostgreSQL server
+      timeout-minutes: 5
+      run: bash scripts/postgres-tls-server.sh "$RUNNER_TEMP/pg-tls" 5433
+
+    - name: Run the PostgreSQL suites
+      run: bash scripts/test-postgres.sh
+
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:
     needs: [fmt, scope]
@@ -491,6 +536,7 @@ jobs:
       - clippy
       - test
       - feature-coverage
+      - postgres
       - docs
       - examples-compile
       - templates
@@ -508,7 +554,7 @@ jobs:
       run: |
         skippable=""
         if [[ "$DOCS_ONLY" == "true" ]]; then
-          skippable="clippy test feature-coverage docs examples-compile macos windows"
+          skippable="clippy test feature-coverage postgres docs examples-compile macos windows"
         fi
         if [[ "$EVENT" == "merge_group" ]]; then
           skippable="$skippable docs examples-compile macos windows"
