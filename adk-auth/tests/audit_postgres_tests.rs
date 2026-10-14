@@ -1,12 +1,19 @@
-//! `PostgresAuditSink::query` against a live PostgreSQL server.
+//! `PostgresAuditSink` migration and queries against a live PostgreSQL server.
 //!
-//! Run with `DATABASE_URL` set and `--run-ignored all`.
+//! ```bash
+//! DATABASE_URL=postgres://postgres@localhost:5432/postgres \
+//!   cargo nextest run -p adk-auth --features postgres-audit --run-ignored only --test audit_postgres_tests
+//! ```
 #![cfg(feature = "postgres-audit")]
+
+use std::str::FromStr;
 
 use adk_auth::{
     AuditEvent, AuditEventType, AuditFilter, AuditOutcome, AuditSink, PostgresAuditSink,
 };
 use chrono::{Duration, TimeZone, Utc};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{Connection, PgConnection};
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").expect("DATABASE_URL must point at a PostgreSQL server")
@@ -91,14 +98,16 @@ async fn query_applies_every_filter_with_bound_values() {
         let description = format!("{filter:?}");
         assert_eq!(resources(&sink, &tenant, filter).await, expected, "{description}");
     }
-
-    // Same test, not a second one: concurrent `migrate` calls race on a fresh database.
-    resource_filter_matches_a_literal_substring(&sink).await;
 }
 
 /// `%` and `_` in a resource filter are literal characters, as in
 /// `AuditFilter::matches`, not LIKE wildcards.
-async fn resource_filter_matches_a_literal_substring(sink: &PostgresAuditSink) {
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn resource_filter_matches_a_literal_substring() {
+    let sink = PostgresAuditSink::new(&database_url()).await.expect("connect");
+    sink.migrate().await.expect("migrate");
+    let sink = &sink;
     let tenant = format!("literal-{}", Utc::now().timestamp_nanos_opt().unwrap_or_default());
     let start = Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap();
 
@@ -121,4 +130,44 @@ async fn resource_filter_matches_a_literal_substring(sink: &PostgresAuditSink) {
         let filter = AuditFilter { resource: Some(needle.into()), ..Default::default() };
         assert_eq!(resources(sink, &tenant, filter).await, expected, "resource filter {needle:?}");
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires DATABASE_URL"]
+async fn concurrent_migrations_on_a_fresh_schema_all_succeed() {
+    let schema = format!("audit_migrate_{}", Utc::now().timestamp_nanos_opt().unwrap_or_default());
+    let mut admin = PgConnection::connect(&database_url()).await.expect("connect admin");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&mut admin)
+        .await
+        .expect("create schema");
+
+    let options = PgConnectOptions::from_str(&database_url())
+        .expect("parse DATABASE_URL")
+        .options([("search_path", schema.as_str())]);
+    let pool =
+        PgPoolOptions::new().max_connections(8).connect_with(options).await.expect("connect");
+    let mut migrations = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let sink = PostgresAuditSink::from_pool(pool.clone());
+        migrations.spawn(async move { sink.migrate().await });
+    }
+    let results: Vec<String> = migrations
+        .join_all()
+        .await
+        .into_iter()
+        .filter_map(|result| result.err().map(|error| error.to_string()))
+        .collect();
+
+    let sink = PostgresAuditSink::from_pool(pool.clone());
+    sink.log(AuditEvent::tool_access("alice", "search", AuditOutcome::Allowed))
+        .await
+        .expect("log after concurrent migrations");
+    pool.close().await;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&mut admin)
+        .await
+        .expect("drop schema");
+
+    assert_eq!(results, Vec::<String>::new());
 }

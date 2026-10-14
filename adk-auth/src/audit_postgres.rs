@@ -54,16 +54,26 @@ impl PostgresAuditSink {
 
     /// Run database migrations to create the audit_events table.
     ///
-    /// Safe to call multiple times — uses `CREATE TABLE IF NOT EXISTS`.
-    /// Executes each statement individually since sqlx doesn't support
-    /// multi-statement queries.
+    /// Safe to call multiple times — uses `CREATE TABLE IF NOT EXISTS`. The
+    /// statements run in one transaction under an advisory lock, so concurrent
+    /// processes can call it at startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AuthError::AuditError` when a statement fails.
     pub async fn migrate(&self) -> Result<(), AuthError> {
+        let fail = |e: sqlx::Error| AuthError::AuditError(format!("migration failed: {e}"));
+        let mut tx = self.pool.begin().await.map_err(fail)?;
+        // `CREATE TABLE IF NOT EXISTS` is not atomic: two concurrent creators both
+        // pass the existence check and one fails on the catalog's unique index.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('audit_events'))")
+            .execute(&mut *tx)
+            .await
+            .map_err(fail)?;
         for &statement in MIGRATION_STATEMENTS {
-            sqlx::query(statement)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| AuthError::AuditError(format!("migration failed: {e}")))?;
+            sqlx::query(statement).execute(&mut *tx).await.map_err(fail)?;
         }
+        tx.commit().await.map_err(fail)?;
         info!("audit_events table ready");
         Ok(())
     }
