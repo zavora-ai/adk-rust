@@ -1,0 +1,27 @@
+/* WARNING: Script requires that SQLITE_DBCONFIG_DEFENSIVE be disabled */
+PRAGMA foreign_keys=OFF;
+BEGIN TRANSACTION;
+CREATE TABLE _adk_memory_migrations (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL);
+INSERT INTO _adk_memory_migrations VALUES(1,'create memory_entries table, FTS5 virtual table, and sync triggers','2026-10-14T10:40:47.048707+00:00');
+INSERT INTO _adk_memory_migrations VALUES(2,'add project_id column and index','2026-10-14T10:40:47.049961+00:00');
+CREATE TABLE memory_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, app_name TEXT NOT NULL, user_id TEXT NOT NULL, session_id TEXT NOT NULL, content TEXT NOT NULL, content_text TEXT NOT NULL, author TEXT NOT NULL, timestamp TEXT NOT NULL, project_id TEXT);
+INSERT INTO memory_entries VALUES(1,'upgrade_app','upgrade_user','upgrade_session','{"role":"user","parts":[{"text":"O''Brien prefers the harbour at high tide"}]}','O''Brien prefers the harbour at high tide','user','2026-01-02T03:04:05+00:00',NULL);
+PRAGMA writable_schema=ON;
+INSERT INTO sqlite_schema(type,name,tbl_name,rootpage,sql)VALUES('table','memory_entries_fts','memory_entries_fts',0,'CREATE VIRTUAL TABLE memory_entries_fts USING fts5(content_text, content=''memory_entries'', content_rowid=''id'')');
+CREATE TABLE IF NOT EXISTS 'memory_entries_fts_data'(id INTEGER PRIMARY KEY, block BLOB);
+INSERT INTO memory_entries_fts_data VALUES(1,X'0108');
+INSERT INTO memory_entries_fts_data VALUES(10,X'000000000101010001010101');
+INSERT INTO memory_entries_fts_data VALUES(137438953473,X'0000004b033061740102070105627269656e0102030107686172626f7572010206020369676801020801016f0102020107707265666572730102040103746865010205020369646501020904070a0c08060c08');
+CREATE TABLE IF NOT EXISTS 'memory_entries_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID;
+INSERT INTO memory_entries_fts_idx VALUES(1,X'',2);
+CREATE TABLE IF NOT EXISTS 'memory_entries_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB);
+INSERT INTO memory_entries_fts_docsize VALUES(1,X'08');
+CREATE TABLE IF NOT EXISTS 'memory_entries_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID;
+INSERT INTO memory_entries_fts_config VALUES('version',4);
+INSERT INTO sqlite_sequence VALUES('memory_entries',1);
+CREATE TRIGGER memory_entries_ai AFTER INSERT ON memory_entries BEGIN INSERT INTO memory_entries_fts(rowid, content_text) VALUES (new.id, new.content_text); END;
+CREATE TRIGGER memory_entries_ad AFTER DELETE ON memory_entries BEGIN INSERT INTO memory_entries_fts(memory_entries_fts, rowid, content_text) VALUES('delete', old.id, old.content_text); END;
+CREATE INDEX idx_memory_app_user ON memory_entries(app_name, user_id);
+CREATE INDEX idx_memory_project_id ON memory_entries(project_id);
+PRAGMA writable_schema=OFF;
+COMMIT;

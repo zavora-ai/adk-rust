@@ -1,0 +1,14 @@
+PRAGMA foreign_keys=OFF;
+BEGIN TRANSACTION;
+CREATE TABLE _adk_session_migrations (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL);
+INSERT INTO _adk_session_migrations VALUES(1,'create initial session tables','2026-10-14T10:40:47.040949+00:00');
+CREATE TABLE sessions (app_name TEXT NOT NULL, user_id TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (app_name, user_id, session_id));
+INSERT INTO sessions VALUES('upgrade_app','upgrade_user','upgrade_session','{"user:name":"O''Brien","turns":2,"app:plan":"team","topic":"tides"}','2026-10-14T10:40:47.041875+00:00','2026-10-14T10:40:47.044655+00:00');
+CREATE TABLE events (id TEXT NOT NULL, app_name TEXT NOT NULL, user_id TEXT NOT NULL, session_id TEXT NOT NULL, invocation_id TEXT NOT NULL, branch TEXT NOT NULL, author TEXT NOT NULL, timestamp TEXT NOT NULL, llm_response TEXT NOT NULL, actions TEXT NOT NULL, long_running_tool_ids TEXT NOT NULL, PRIMARY KEY (id, app_name, user_id, session_id), FOREIGN KEY (app_name, user_id, session_id) REFERENCES sessions(app_name, user_id, session_id) ON DELETE CASCADE);
+INSERT INTO events VALUES('event-0','upgrade_app','upgrade_user','upgrade_session','invocation-1','','user','2026-10-14T10:40:47.043233+00:00','{"content":{"role":"user","parts":[{"text":"When is high tide?"}]},"usage_metadata":null,"finish_reason":null,"partial":false,"turn_complete":false,"interrupted":false,"error_code":null,"error_message":null}','{"state_delta":{"turns":1},"artifact_delta":{},"skip_summarization":false,"transfer_to_agent":null,"escalate":false}','[]');
+INSERT INTO events VALUES('event-1','upgrade_app','upgrade_user','upgrade_session','invocation-1','','assistant','2026-10-14T10:40:47.044655+00:00','{"content":{"role":"assistant","parts":[{"text":"High tide is at 06:12."}]},"usage_metadata":null,"finish_reason":null,"partial":false,"turn_complete":false,"interrupted":false,"error_code":null,"error_message":null}','{"state_delta":{"turns":2},"artifact_delta":{},"skip_summarization":false,"transfer_to_agent":null,"escalate":false}','[]');
+CREATE TABLE app_states (app_name TEXT PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT NOT NULL);
+INSERT INTO app_states VALUES('upgrade_app','{"plan":"team"}','2026-10-14T10:40:47.044655+00:00');
+CREATE TABLE user_states (app_name TEXT NOT NULL, user_id TEXT NOT NULL, state TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (app_name, user_id));
+INSERT INTO user_states VALUES('upgrade_app','upgrade_user','{"name":"O''Brien"}','2026-10-14T10:40:47.044655+00:00');
+COMMIT;
