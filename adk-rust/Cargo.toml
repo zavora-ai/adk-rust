@@ -177,8 +177,10 @@ sambanova = ["models", "adk-model/sambanova"]
 bedrock = ["models", "adk-model/bedrock"]
 azure-ai = ["models", "adk-model/azure-ai"]
 
-# Production backend features (forwarded to adk-session, adk-memory, adk-auth)
-# These require external infrastructure (PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex AI) and are NOT included in `full`
+# Production backend features (forwarded to adk-session and adk-memory; `auth-bridge`
+# forwards to adk-auth and adk-server). Most require external
+# infrastructure (PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex AI); none is in `full`.
+# adk-auth's `postgres-audit` sink has no umbrella feature: enable it on adk-auth directly.
 postgres-session = ["sessions", "adk-session/postgres"]
 redis-session = ["sessions", "adk-session/redis"]
 mongodb-session = ["sessions", "adk-session/mongodb"]
