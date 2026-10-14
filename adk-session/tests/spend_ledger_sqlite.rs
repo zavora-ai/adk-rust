@@ -91,13 +91,14 @@ async fn committed_spend_survives_a_restart_and_counts_against_the_cap() {
 #[tokio::test]
 async fn an_expired_reservation_stops_holding_budget() {
     let database = FileDatabase::new();
+    // Long enough that a loaded runner reaches the second reserve before the hold expires.
     let ledger =
-        database.ledger(daily_cap(100)).await.with_reservation_ttl(Duration::from_millis(20));
+        database.ledger(daily_cap(100)).await.with_reservation_ttl(Duration::from_millis(500));
     let key = SpendKey::org("acme");
 
     let abandoned = ledger.reserve(&key, 100).await.unwrap();
     assert!(ledger.reserve(&key, 1).await.is_err());
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    tokio::time::sleep(Duration::from_millis(700)).await;
     let next = ledger.reserve(&key, 100).await.expect("the expired hold is released");
 
     ledger.release(next.clone()).await.unwrap();
