@@ -105,6 +105,7 @@ dependencies = [
  "base64",
  "chrono",
  "futures",
+ "httpdate",
  "serde",
  "serde_json",
  "tokio",

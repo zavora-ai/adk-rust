@@ -2,6 +2,7 @@
 
 use super::config::{OpenAIReasoningEffort, OpenAIResponsesConfig, ReasoningSummary};
 use super::responses_convert;
+use super::responses_stream::StreamState;
 use super::{responses_errors, responses_lines};
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
@@ -10,11 +11,6 @@ use adk_core::{
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::StreamExt;
-
-#[path = "responses_stream.rs"]
-mod stream;
-
-use stream::StreamState;
 
 /// Client for the OpenAI Responses API (`/responses` endpoint).
 ///
@@ -241,8 +237,14 @@ impl OpenAIResponsesClient {
     /// Observe raw response headers for each Responses generation HTTP attempt.
     ///
     /// The observer runs before status handling or body consumption, including
-    /// for unsuccessful responses. It receives headers without interpreting them.
-    /// The callback should not perform I/O or retain sensitive headers.
+    /// for unsuccessful responses. It runs once per HTTP attempt, so a request
+    /// retried under [`RetryConfig`] calls it once per attempt. It applies to
+    /// `POST /responses` only, not to background polling, cancellation, or
+    /// compaction requests.
+    ///
+    /// The callback runs on the request path: it must not panic, block, or
+    /// perform I/O. Headers may include cookies and other credentials, so do not
+    /// log or retain the whole map.
     ///
     /// # Example
     ///
@@ -422,6 +424,10 @@ async fn normalize_responses_response(
     if !response.status().is_success() {
         return responses_errors::normalize_response(response, open_responses_mode).await;
     }
+    // OpenAI's own stream framing needs no rewrite; the SDK's SSE parser handles it.
+    if !uses_max_reasoning && !open_responses_mode {
+        return Ok(response);
+    }
 
     // Some compatible endpoints omit Content-Type even when a streaming
     // request receives SSE. The adapted request is authoritative in that case.
@@ -431,9 +437,6 @@ async fn normalize_responses_response(
         .and_then(|value| value.to_str().ok());
     let is_event_stream =
         content_type.map_or(requested_streaming, |value| value.starts_with("text/event-stream"));
-    if !is_event_stream && !uses_max_reasoning && !open_responses_mode {
-        return Ok(response);
-    }
     let status = response.status();
     let version = response.version();
     let url = response.url().clone();
@@ -774,6 +777,17 @@ fn set_max_reasoning_effort(
     Ok(())
 }
 
+/// Whether a stream event failed to deserialize only because its top-level `type` is unknown.
+fn is_unknown_event_type(error: &serde_json::Error, payload: &str) -> bool {
+    error.is_data()
+        && serde_json::from_str::<serde_json::Value>(payload)
+            .ok()
+            .as_ref()
+            .and_then(|event| event.get("type"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|kind| error.to_string().starts_with(&format!("unknown variant `{kind}`")))
+}
+
 /// Map an `async_openai::error::OpenAIError` to an `AdkError`.
 pub(super) fn map_openai_error(e: async_openai::error::OpenAIError) -> AdkError {
     if let Some(mapped) = responses_errors::mapped_http_error(&e) {
@@ -891,28 +905,34 @@ impl Llm for OpenAIResponsesClient {
             let response_stream = try_stream! {
                 futures::pin_mut!(event_stream);
                 while let Some(event_result) = event_stream.next().await {
-                    let event = event_result.map_err(map_openai_error)?;
-                    if let Some(response) = state.partial(&event) {
-                        yield response;
-                        continue;
-                    }
                     use async_openai::types::responses::ResponseStreamEvent;
+                    let event = match event_result {
+                        Ok(event) => event,
+                        Err(async_openai::error::OpenAIError::JSONDeserialize(error, payload))
+                            if is_unknown_event_type(&error, &payload) =>
+                        {
+                            // A newer event type must not end a turn the client can still finish.
+                            tracing::debug!(error = %error, "skipping unrecognized Responses stream event");
+                            continue;
+                        }
+                        Err(error) => Err(map_openai_error(error))?,
+                    };
                     match event {
                         ResponseStreamEvent::ResponseCompleted(evt) => {
-                            yield state.complete(&evt.response);
+                            yield state.complete(evt.response);
                             break;
                         }
                         ResponseStreamEvent::ResponseIncomplete(evt) => {
-                            yield state.complete(&evt.response);
+                            yield state.complete(evt.response);
                             break;
                         }
                         ResponseStreamEvent::ResponseFailed(evt) => {
-                            let (error_code, error_message) =
-                                if let Some(err) = &evt.response.error {
-                                    (Some(err.code.clone()), Some(err.message.clone()))
-                                } else {
+                            let (error_code, error_message) = match evt.response.error {
+                                Some(err) => (Some(err.code), Some(err.message)),
+                                None => {
                                     (Some("unknown".to_string()), Some("Response failed".to_string()))
-                                };
+                                }
+                            };
                             yield LlmResponse {
                                 error_code,
                                 error_message,
@@ -928,7 +948,11 @@ impl Llm for OpenAIResponsesClient {
                                 ..Default::default()
                             };
                         }
-                        _ => {}
+                        event => {
+                            if let Some(response) = state.partial(event) {
+                                yield response;
+                            }
+                        }
                     }
                 }
             };
@@ -1020,19 +1044,19 @@ mod tests {
                     "phase":"commentary", "content":[]}
         }))
         .unwrap();
-        assert!(state.partial(&added).is_none());
+        assert!(state.partial(added).is_none());
         let delta = serde_json::from_value(serde_json::json!({
             "type":"response.output_text.delta", "sequence_number":1, "item_id":"msg",
             "output_index":0, "content_index":0, "delta":"Checking", "logprobs":[]
         }))
         .unwrap();
-        let response = state.partial(&delta).unwrap();
+        let response = state.partial(delta).unwrap();
         let Part::ServerToolCall { server_tool_call } = &response.content.unwrap().parts[0] else {
             panic!("native message expected");
         };
         assert_eq!(server_tool_call["phase"], "commentary");
         assert_eq!(server_tool_call["content"][0]["text"], "Checking");
-        let final_response = state.complete(&terminal(json!([
+        let final_response = state.complete(terminal(json!([
             {"type":"message", "id":"msg", "role":"assistant", "status":"completed",
              "phase":"commentary", "content":[{"type":"output_text", "text":"Checking", "annotations":[]}]},
             {"type":"message", "id":"answer", "role":"assistant", "status":"completed",
@@ -1171,7 +1195,7 @@ mod tests {
     #[test]
     fn completion_preserves_errors() {
         let mut state = StreamState::new(false);
-        let result = state.complete(&terminal(json!([{
+        let result = state.complete(terminal(json!([{
             "type":"function_call", "id":"fc_bad", "call_id":"call_bad",
             "name":"read_file", "arguments":"{invalid", "status":"completed"
         }])));
@@ -1272,7 +1296,7 @@ mod tests {
     #[test]
     fn completion_preserves_citations() {
         let mut state = StreamState::new(false);
-        let completed = state.complete(&terminal(json!([{
+        let completed = state.complete(terminal(json!([{
             "type":"message", "id":"answer", "role":"assistant", "status":"completed",
             "content":[{"type":"output_text", "text":"answer", "annotations":[{
                 "type":"url_citation", "start_index":0, "end_index":6,

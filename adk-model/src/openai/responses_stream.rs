@@ -46,7 +46,8 @@ impl StreamState {
         Self { native_tools, ..Default::default() }
     }
 
-    pub(super) fn partial(&mut self, event: &ResponseStreamEvent) -> Option<LlmResponse> {
+    /// Records a non-terminal event and returns the text it adds, if any.
+    pub(super) fn partial(&mut self, event: ResponseStreamEvent) -> Option<LlmResponse> {
         use ResponseStreamEvent::*;
 
         let mut parts = Vec::new();
@@ -91,7 +92,7 @@ impl StreamState {
                 );
                 self.done(key, &event.refusal, &mut parts);
             }
-            ResponseContentPartDone(event) => match &event.part {
+            ResponseContentPartDone(event) => match event.part {
                 OutputContent::OutputText(text) => {
                     let key = TextKey::new(
                         &event.item_id,
@@ -131,7 +132,7 @@ impl StreamState {
                 self.done(key, &event.text, &mut parts);
             }
             ResponseReasoningSummaryPartDone(event) => {
-                let SummaryPart::SummaryText(text) = &event.part;
+                let SummaryPart::SummaryText(text) = event.part;
                 let key = TextKey::new(
                     &event.item_id,
                     event.output_index,
@@ -141,10 +142,11 @@ impl StreamState {
                 self.done(key, &text.text, &mut parts);
             }
             ResponseOutputItemDone(event) => {
-                self.finalized_items.insert(event.output_index, event.item.clone());
                 self.record_phase(event.output_index, &event.item);
-                let mut item = event.item.clone();
-                self.trim_item(event.output_index, &mut item, &mut parts);
+                for (key, text) in Self::item_texts(event.output_index, &event.item) {
+                    self.done(key, text, &mut parts);
+                }
+                self.finalized_items.insert(event.output_index, event.item);
             }
             _ => return None,
         }
@@ -155,21 +157,20 @@ impl StreamState {
         })
     }
 
-    pub(super) fn complete(&mut self, response: &Response) -> LlmResponse {
-        let mut response = response.clone();
+    /// Converts the terminal response, keeping only what the stream has not delivered.
+    pub(super) fn complete(&mut self, mut response: Response) -> LlmResponse {
         let recovered = response.output.is_empty() && !self.finalized_items.is_empty();
         if recovered {
             // Some endpoints omit terminal output after emitting authoritative done items.
             // Recover the whole items, including calls and reasoning.
-            response.output = self.finalized_items.values().cloned().collect();
+            response.output = std::mem::take(&mut self.finalized_items).into_values().collect();
         }
         let mut full = responses_convert::from_response(&response);
-        let mut unseen = response.clone();
         let mut final_keys = BTreeSet::new();
-        for (output_index, item) in unseen.output.iter_mut().enumerate() {
-            final_keys.extend(Self::item_keys(output_index as u32, item));
+        for (output_index, item) in response.output.iter_mut().enumerate() {
+            final_keys.extend(Self::item_texts(output_index as u32, item).map(|(key, _)| key));
             self.record_phase(output_index as u32, item);
-            self.trim_item(output_index as u32, item, &mut Vec::new());
+            self.trim_item(output_index as u32, item);
         }
         let omitted = response.output.is_empty();
         let removed = !omitted && self.emitted.keys().any(|key| !final_keys.contains(key));
@@ -191,7 +192,7 @@ impl StreamState {
                 serde_json::json!(true);
         } else {
             // Keep metadata/citation offsets from the full response, not its suffixes.
-            full.content = responses_convert::from_response(&unseen).content;
+            full.content = responses_convert::output_parts(&response.output).ok().flatten();
         }
         full
     }
@@ -238,71 +239,71 @@ impl StreamState {
     }
 
     fn snapshot_parts(&self) -> Vec<Part> {
-        // An omitted output retains done payloads, not unfinished streamed deltas.
-        let mut parts: Vec<Part> = Vec::new();
-        let mut messages: BTreeMap<(u32, String), usize> = BTreeMap::new();
-        for (key, text) in &self.finalized {
-            let Some(part) = self.part(key, text, "completed") else {
+        // Without terminal output, a done payload supersedes its streamed deltas
+        // and an unfinished part keeps the text already delivered to the caller.
+        let keys: BTreeSet<&TextKey> = self.emitted.keys().chain(self.finalized.keys()).collect();
+        let mut parts: Vec<Result<Part, (u32, &str)>> = Vec::new();
+        let mut messages: BTreeMap<(u32, &str), Vec<serde_json::Value>> = BTreeMap::new();
+        for key in keys {
+            let Some(text) = self.finalized.get(key).or_else(|| self.emitted.get(key)) else {
                 continue;
             };
-            if let Part::ServerToolCall { server_tool_call } = &part {
-                let identity = (key.output_index, key.item_id.clone());
-                if let Some(index) = messages.get(&identity) {
-                    let Part::ServerToolCall { server_tool_call: message } = &mut parts[*index]
-                    else {
-                        unreachable!("commentary messages use native parts");
-                    };
-                    message["content"]
-                        .as_array_mut()
-                        .expect("native message content is an array")
-                        .extend(
-                            server_tool_call["content"]
-                                .as_array()
-                                .expect("native message content is an array")
-                                .iter()
-                                .cloned(),
-                        );
-                    continue;
-                }
-                messages.insert(identity, parts.len());
+            if text.is_empty() {
+                continue;
             }
-            parts.push(part);
+            if self.is_commentary(key) {
+                let identity = (key.output_index, key.item_id.as_str());
+                let contents = messages.entry(identity).or_default();
+                if contents.is_empty() {
+                    parts.push(Err(identity));
+                }
+                contents.push(commentary_content(key.kind, text));
+            } else if let Some(part) = self.part(key, text, "completed") {
+                parts.push(Ok(part));
+            }
         }
         parts
+            .into_iter()
+            .filter_map(|part| match part {
+                Ok(part) => Some(part),
+                Err(identity) => messages
+                    .remove(&identity)
+                    .map(|contents| commentary_message(identity.1, "completed", contents)),
+            })
+            .collect()
     }
 
-    fn item_keys(output_index: u32, item: &OutputItem) -> Vec<TextKey> {
-        match item {
-            OutputItem::Message(message) => message
-                .content
-                .iter()
-                .enumerate()
-                .map(|(index, part)| {
-                    let kind = match part {
-                        OutputMessageContent::OutputText(_) => TextKind::Answer,
-                        OutputMessageContent::Refusal(_) => TextKind::Refusal,
-                    };
-                    TextKey::new(&message.id, output_index, index as u32, kind)
-                })
-                .collect(),
-            OutputItem::Reasoning(reasoning) => reasoning
-                .summary
-                .iter()
-                .enumerate()
-                .map(|(index, _)| {
-                    TextKey::new(
-                        reasoning.id.as_deref().unwrap_or_default(),
-                        output_index,
-                        index as u32,
-                        TextKind::Summary,
-                    )
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
+    fn item_texts(output_index: u32, item: &OutputItem) -> impl Iterator<Item = (TextKey, &str)> {
+        let (message, reasoning) = match item {
+            OutputItem::Message(message) => (Some(message), None),
+            OutputItem::Reasoning(reasoning) => (None, Some(reasoning)),
+            _ => (None, None),
+        };
+        let message_texts = message.into_iter().flat_map(move |message| {
+            message.content.iter().enumerate().map(move |(index, part)| {
+                let (kind, text) = match part {
+                    OutputMessageContent::OutputText(text) => (TextKind::Answer, &text.text),
+                    OutputMessageContent::Refusal(refusal) => (TextKind::Refusal, &refusal.refusal),
+                };
+                (TextKey::new(&message.id, output_index, index as u32, kind), text.as_str())
+            })
+        });
+        let summary_texts = reasoning.into_iter().flat_map(move |reasoning| {
+            let item_id = reasoning.id.as_deref().unwrap_or_default();
+            reasoning.summary.iter().enumerate().map(move |(index, summary)| {
+                let SummaryPart::SummaryText(text) = summary;
+                (
+                    TextKey::new(item_id, output_index, index as u32, TextKind::Summary),
+                    text.text.as_str(),
+                )
+            })
+        });
+        message_texts.chain(summary_texts)
     }
 
-    fn trim_item(&mut self, output_index: u32, item: &mut OutputItem, parts: &mut Vec<Part>) {
+    /// Replaces each text in `item` with the suffix the stream has not delivered.
+    fn trim_item(&mut self, output_index: u32, item: &mut OutputItem) {
+        let mut ignored = Vec::new();
         match item {
             OutputItem::Message(message) => {
                 for (part_index, content) in message.content.iter_mut().enumerate() {
@@ -315,7 +316,7 @@ impl StreamState {
                         }
                     };
                     let key = TextKey::new(&message.id, output_index, part_index as u32, kind);
-                    *text = self.done(key, text, parts);
+                    *text = self.done(key, text, &mut ignored);
                 }
             }
             OutputItem::Reasoning(reasoning) => {
@@ -324,33 +325,49 @@ impl StreamState {
                     let SummaryPart::SummaryText(text) = summary;
                     let key =
                         TextKey::new(item_id, output_index, part_index as u32, TextKind::Summary);
-                    text.text = self.done(key, &text.text, parts);
+                    text.text = self.done(key, &text.text, &mut ignored);
                 }
             }
             _ => {}
         }
     }
 
+    fn is_commentary(&self, key: &TextKey) -> bool {
+        self.commentary.contains(&(key.output_index, key.item_id.clone()))
+    }
+
     fn part(&self, key: &TextKey, text: &str, message_status: &str) -> Option<Part> {
         if text.is_empty() {
             return None;
         }
-        if self.commentary.contains(&(key.output_index, key.item_id.clone())) {
-            let content = if key.kind == TextKind::Refusal {
-                serde_json::json!({"type": "refusal", "refusal": text})
-            } else {
-                serde_json::json!({"type": "output_text", "text": text, "annotations": []})
-            };
-            Some(Part::ServerToolCall {
-                server_tool_call: serde_json::json!({
-                    "type": "message", "role": "assistant", "id": key.item_id,
-                    "phase": "commentary", "status": message_status, "content": [content]
-                }),
-            })
+        if self.is_commentary(key) {
+            let content = commentary_content(key.kind, text);
+            Some(commentary_message(&key.item_id, message_status, vec![content]))
         } else if key.kind == TextKind::Summary {
             Some(Part::Thinking { thinking: text.into(), signature: None })
         } else {
             Some(Part::Text { text: text.into() })
         }
+    }
+}
+
+fn commentary_content(kind: TextKind, text: &str) -> serde_json::Value {
+    if kind == TextKind::Refusal {
+        serde_json::json!({"type": "refusal", "refusal": text})
+    } else {
+        serde_json::json!({"type": "output_text", "text": text, "annotations": []})
+    }
+}
+
+fn commentary_message(
+    item_id: &str,
+    message_status: &str,
+    content: Vec<serde_json::Value>,
+) -> Part {
+    Part::ServerToolCall {
+        server_tool_call: serde_json::json!({
+            "type": "message", "role": "assistant", "id": item_id,
+            "phase": "commentary", "status": message_status, "content": content
+        }),
     }
 }
