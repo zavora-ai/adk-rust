@@ -239,6 +239,10 @@ fn content_to_input_items(content: &Content) -> Vec<InputItem> {
 /// (`image_generation`, `mcp`, `shell`, etc.), the extension value is deserialized directly.
 /// If the type is not recognized (e.g., `tool_search`, `skill`), the tool falls back to
 /// being treated as a regular function tool.
+///
+/// Function tools are sent with `strict: false`, since ADK schemas may keep optional
+/// properties that strict mode rejects. A native declaration's explicit boolean `strict`
+/// is kept, including on the function-tool fallback.
 pub fn convert_tools(tools: &HashMap<String, serde_json::Value>) -> Result<Vec<Tool>, AdkError> {
     let mut tools = tools.iter().collect::<Vec<_>>();
     tools.sort_unstable_by_key(|(name, _)| *name);
@@ -293,7 +297,10 @@ fn convert_native_tool(
                 name: name.to_string(),
                 description,
                 parameters,
-                strict: Some(false),
+                strict: provider_tool
+                    .get("strict")
+                    .and_then(serde_json::Value::as_bool)
+                    .or(Some(false)),
                 defer_loading: None,
             }))
         }
@@ -591,14 +598,10 @@ pub fn build_create_response(
 /// collects all parts into a single `Content`, and maps usage, finish reason,
 /// and provider metadata.
 pub fn from_response(response: &Response) -> LlmResponse {
-    let parts = response.output.iter().map(output_item_to_parts).collect::<Result<Vec<_>, _>>();
-    let (parts, argument_error) = match parts {
-        Ok(parts) => (parts.into_iter().flatten().collect::<Vec<_>>(), None),
-        Err(error) => (Vec::new(), Some(error)),
+    let (content, argument_error) = match output_parts(&response.output) {
+        Ok(content) => (content, None),
+        Err(error) => (None, Some(error)),
     };
-
-    let content =
-        if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) };
 
     let usage_metadata = response.usage.as_ref().map(|usage| UsageMetadata {
         builtin_tool_uses: builtin_tool_uses(&response.output),
@@ -669,6 +672,20 @@ pub fn from_response(response: &Response) -> LlmResponse {
         model: None,
         provider: None,
     }
+}
+
+/// Converts output items to model content, or `None` when they carry no parts.
+///
+/// Returns the argument error of the first function call with invalid JSON arguments.
+pub(super) fn output_parts(output: &[OutputItem]) -> Result<Option<Content>, String> {
+    let parts = output
+        .iter()
+        .map(output_item_to_parts)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    Ok((!parts.is_empty()).then(|| Content { role: "model".to_string(), parts }))
 }
 
 /// Convert a single `OutputItem` to zero or more ADK `Part`s.
@@ -1161,6 +1178,22 @@ mod tests {
         assert_eq!(value["type"], "function");
         assert_eq!(value["strict"], false);
         assert_eq!(value["parameters"]["type"], "object");
+    }
+
+    #[test]
+    fn fallback_functions_keep_explicit_strictness() {
+        let tools = HashMap::from([(
+            "lookup".to_string(),
+            serde_json::json!({
+                "parameters": {"type": "object", "properties": {}},
+                "x-adk-openai-tool": {"type": "unsupported_tool", "strict": true}
+            }),
+        )]);
+
+        let converted = convert_tools(&tools).expect("fallback tool should convert");
+        let value = serde_json::to_value(&converted[0]).expect("tool should serialize");
+        assert_eq!(value["type"], "function");
+        assert_eq!(value["strict"], true);
     }
 
     #[test]

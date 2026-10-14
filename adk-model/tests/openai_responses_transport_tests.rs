@@ -77,7 +77,7 @@ fn read_request(socket: &mut std::net::TcpStream) -> Value {
     }
 }
 
-async fn fragmented_stream(ending: &str) -> Vec<LlmResponse> {
+async fn fragmented_stream(ending: &str, compatible: bool) -> Vec<LlmResponse> {
     use std::io::Write;
     use std::net::TcpListener;
     use std::time::Duration;
@@ -92,7 +92,13 @@ async fn fragmented_stream(ending: &str) -> Vec<LlmResponse> {
         "content_index": 0,
         "delta": "done"
     });
-    let completed = completion();
+    let mut completed = completion();
+    if !compatible {
+        // Standard mode passes OpenAI payloads through without compatibility defaults.
+        let message = &mut completed["response"]["output"][0];
+        message["status"] = json!("completed");
+        message["content"][0]["annotations"] = json!([]);
+    }
     let body = format!(
         "data: {delta}{ending}{ending}data: {completed}{ending}{ending}data: [DONE]{ending}{ending}"
     );
@@ -120,7 +126,7 @@ async fn fragmented_stream(ending: &str) -> Vec<LlmResponse> {
         body["metadata"] = json!({"fixture": "adapted"});
         Ok(())
     });
-    let client = client(&base_url, true).with_request_adapter(adapter);
+    let client = client(&base_url, compatible).with_request_adapter(adapter);
     let result = tokio::time::timeout(Duration::from_secs(5), async {
         client.generate_content(request(), true).await?.try_collect::<Vec<_>>().await
     })
@@ -133,8 +139,10 @@ async fn fragmented_stream(ending: &str) -> Vec<LlmResponse> {
 
 #[tokio::test]
 async fn frames_fragmented_sse_without_content_type() {
-    for ending in ["\n", "\r\n", "\r"] {
-        let results = fragmented_stream(ending).await;
+    for (ending, compatible) in
+        [("\n", true), ("\r\n", true), ("\r", true), ("\n", false), ("\r\n", false), ("\r", false)]
+    {
+        let results = fragmented_stream(ending, compatible).await;
         let text: String = results
             .iter()
             .filter_map(|response| response.content.as_ref())
@@ -144,7 +152,7 @@ async fn frames_fragmented_sse_without_content_type() {
                 _ => None,
             })
             .collect();
-        assert_eq!(text, "done", "line ending {ending:?}");
+        assert_eq!(text, "done", "line ending {ending:?}, compatible {compatible}");
         let final_response = results.last().expect("completion response");
         assert!(final_response.turn_complete);
         assert_eq!(final_response.usage_metadata.as_ref().unwrap().total_token_count, 3);
@@ -217,9 +225,12 @@ async fn preserves_status_and_provider_codes() {
 
 #[tokio::test]
 async fn carries_retry_after_hints() {
-    for (header, delay, retryable) in
-        [("2", Some(2_000), true), ("invalid", None, true), ("18446744073709551616", None, false)]
-    {
+    for (header, delay) in [
+        ("2", Some(2_000)),
+        ("1.5", Some(1_500)),
+        ("invalid", None),
+        ("18446744073709551616", Some(u64::MAX)),
+    ] {
         let error = failed(
             503,
             r#"{"error":{"message":"unavailable","type":"server_error","code":"upstream_busy"}}"#,
@@ -230,7 +241,7 @@ async fn carries_retry_after_hints() {
         assert_eq!(error.details.upstream_status_code, Some(503));
         assert_eq!(error.details.metadata["provider_error_code"], "upstream_busy");
         assert_eq!(error.retry.retry_after_ms, delay, "header {header}");
-        assert_eq!(error.retry.should_retry, retryable, "header {header}");
+        assert!(error.retry.should_retry, "header {header}");
     }
 
     let date = (chrono::Utc::now() + chrono::Duration::seconds(30))
@@ -250,7 +261,8 @@ async fn retry_attempts_follow_header_validity() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    for (header, expected_attempts) in [("0", 2), ("invalid", 2), ("18446744073709551616", 1)] {
+    // An oversized delay is capped at `max_delay` like any other server delay.
+    for (header, expected_attempts) in [("0", 2), ("invalid", 2), ("18446744073709551616", 2)] {
         let server = MockServer::start().await;
         let attempts = Arc::new(AtomicUsize::new(0));
         let observed = attempts.clone();
@@ -277,5 +289,77 @@ async fn retry_attempts_follow_header_validity() {
         let error = stream.try_collect::<Vec<_>>().await.expect_err("request should fail");
         assert_eq!(error.details.upstream_status_code, Some(503));
         assert_eq!(attempts.load(Ordering::SeqCst), expected_attempts as usize);
+    }
+}
+
+#[tokio::test]
+async fn keeps_request_ids_and_body_excerpts() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(502)
+                .insert_header("x-request-id", "req_abc-123")
+                .set_body_string("upstream connect error"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let stream = client(&server.uri(), false)
+        .generate_content(request(), false)
+        .await
+        .expect("request should build");
+    let error = stream.try_collect::<Vec<_>>().await.expect_err("request should fail");
+    assert_eq!(error.details.request_id.as_deref(), Some("req_abc-123"));
+    assert!(error.message.contains("upstream connect error"), "{}", error.message);
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(502)
+                .insert_header("x-request-id", "not an id")
+                .set_body_string("bad gateway"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let stream = client(&server.uri(), false)
+        .generate_content(request(), false)
+        .await
+        .expect("request should build");
+    let error = stream.try_collect::<Vec<_>>().await.expect_err("request should fail");
+    assert_eq!(error.details.request_id, None);
+}
+
+#[tokio::test]
+async fn streaming_failures_keep_status_and_retry_hints() {
+    for compatible in [false, true] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "3")
+                    .insert_header("x-request-id", "req_stream")
+                    .set_body_json(json!({
+                        "error": {"message": "limited", "type": "rate_limit_error",
+                            "code": "rate_limit_exceeded"}
+                    })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = match client(&server.uri(), compatible).generate_content(request(), true).await
+        {
+            Ok(stream) => stream.try_collect::<Vec<_>>().await.expect_err("stream should fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error.category, ErrorCategory::RateLimited);
+        assert_eq!(error.details.upstream_status_code, Some(429));
+        assert_eq!(error.details.metadata["provider_error_code"], "rate_limit_exceeded");
+        assert_eq!(error.details.request_id.as_deref(), Some("req_stream"));
+        assert_eq!(error.retry.retry_after_ms, Some(3_000));
+        assert!(error.retry.should_retry);
     }
 }
