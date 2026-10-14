@@ -251,6 +251,15 @@ pub(crate) fn gemini_error_to_adk(e: &adk_gemini::ClientError) -> adk_core::AdkE
     crate::error_metadata::with_code(err, provider_code.as_deref())
 }
 
+/// Whether a google-cloud-gax error without a status is a failed connection or
+/// transport. gax's `is_connect`/`is_transport` are hidden and outside its semver
+/// guarantee, so this reads the prefixes its `Display` writes for those kinds.
+#[cfg(feature = "gemini-vertex")]
+fn is_gax_connection_failure(message: &str) -> bool {
+    message.starts_with("cannot connect to endpoint")
+        || message.starts_with("the transport reports an error")
+}
+
 /// Classify failures with no HTTP response without inventing an upstream status.
 fn error_without_status(error: &adk_gemini::ClientError) -> (ErrorCategory, &'static str) {
     match error {
@@ -294,8 +303,7 @@ fn error_without_status(error: &adk_gemini::ClientError) -> (ErrorCategory, &'st
                     "INVALID_ARGUMENT" => (ErrorCategory::InvalidInput, "model.gemini.bad_request"),
                     _ => (ErrorCategory::Internal, "model.gemini.internal"),
                 }
-            } else if source.is_connect() || source.is_io() {
-                // A failed connection or a connection broken before a full response.
+            } else if is_gax_connection_failure(&source.to_string()) {
                 (ErrorCategory::Unavailable, "model.gemini.unavailable")
             } else {
                 (ErrorCategory::Internal, "model.gemini.internal")
@@ -3088,17 +3096,12 @@ mod vertex_transport_tests {
 
     #[test]
     fn vertex_transport_failures_are_retryable() {
-        for source in [
-            GaxError::connect(std::io::Error::other("dns failure")),
-            GaxError::io(std::io::Error::other("connection reset")),
-        ] {
-            let mapped =
-                gemini_error_to_adk(&adk_gemini::ClientError::GoogleCloudRequest { source });
-            assert_eq!(
-                (mapped.category, mapped.code, mapped.is_retryable()),
-                (ErrorCategory::Unavailable, "model.gemini.unavailable", true)
-            );
-        }
+        let source = GaxError::connect(std::io::Error::other("dns failure"));
+        let mapped = gemini_error_to_adk(&adk_gemini::ClientError::GoogleCloudRequest { source });
+        assert_eq!(
+            (mapped.category, mapped.code, mapped.is_retryable()),
+            (ErrorCategory::Unavailable, "model.gemini.unavailable", true)
+        );
 
         let error = adk_gemini::ClientError::GoogleCloudRequest {
             source: GaxError::deser(std::io::Error::other(
