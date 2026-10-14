@@ -191,7 +191,7 @@ pub struct PromptTokenDetails {
 }
 
 /// Grounding metadata for responses that use grounding tools
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GroundingMetadata {
     /// Grounding chunks containing source information
@@ -212,7 +212,7 @@ pub struct GroundingMetadata {
 }
 
 /// Google Search suggestions returned alongside a grounded answer.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchEntryPoint {
     /// HTML and CSS to display the provider's search suggestions.
@@ -277,7 +277,10 @@ pub struct GroundingSupport {
 #[serde(rename_all = "camelCase")]
 pub struct GroundingSegment {
     /// Index of the Part within the candidate's Content.
-    #[serde(default)]
+    ///
+    /// The API omits zero values, so the field is absent when the segment is in the
+    /// first part; treat `None` as part `0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub part_index: Option<u32>,
     /// Start index of the segment in the response text
     #[serde(default)]

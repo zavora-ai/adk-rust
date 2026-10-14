@@ -22,6 +22,48 @@ fn grounding_preserves_search_suggestions_and_part_indices() {
 }
 
 #[test]
+fn grounding_segment_without_part_index_is_first_part() {
+    let wire = json!({
+        "groundingSupports": [{
+            "segment": {"endIndex": 6, "text": "Answer"},
+            "groundingChunkIndices": [0]
+        }]
+    });
+    let metadata: crate::GroundingMetadata = serde_json::from_value(wire).unwrap();
+    let expected = crate::GroundingMetadata {
+        grounding_supports: Some(vec![crate::GroundingSupport {
+            segment: crate::GroundingSegment {
+                end_index: Some(6),
+                text: Some("Answer".to_string()),
+                ..Default::default()
+            },
+            grounding_chunk_indices: vec![0],
+        }]),
+        ..Default::default()
+    };
+    assert_eq!(metadata, expected);
+    assert_eq!(
+        serde_json::to_value(&metadata).unwrap()["groundingSupports"][0]["segment"],
+        json!({"startIndex": null, "endIndex": 6, "text": "Answer"})
+    );
+}
+
+#[test]
+fn search_entry_point_with_only_rendered_content() {
+    let wire = json!({"searchEntryPoint": {"renderedContent": "<p>Search</p>"}});
+    let metadata: crate::GroundingMetadata = serde_json::from_value(wire.clone()).unwrap();
+    let expected = crate::GroundingMetadata {
+        search_entry_point: Some(crate::SearchEntryPoint {
+            rendered_content: Some("<p>Search</p>".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(metadata, expected);
+    assert_eq!(serde_json::to_value(metadata).unwrap(), wire);
+}
+
+#[test]
 fn test_model_deserialization() {
     #[derive(Serialize, Deserialize)]
     struct Response {
