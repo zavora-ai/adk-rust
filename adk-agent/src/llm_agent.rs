@@ -1968,6 +1968,31 @@ struct ToolExecutionResult {
     pending: Option<ToolConfirmationRequest>,
 }
 
+/// Runs output guardrails on the function responses of a result that ends the turn.
+///
+/// Guardrails read text parts, so each response is screened as its JSON text. A transformed
+/// text replaces the response, parsed back to JSON when it still parses and wrapped as
+/// `{"result": text}` when it does not.
+async fn screen_terminal_tool_output(
+    guardrails: &GuardrailSet,
+    mut content: Content,
+) -> Result<Content> {
+    for part in &mut content.parts {
+        if let Part::FunctionResponse { function_response, .. } = part {
+            let text = function_response.response.to_string();
+            let screened =
+                enforce_guardrails(guardrails, &Content::new("model").with_text(&text), "output")
+                    .await?;
+            let screened_text: String = screened.parts.iter().filter_map(Part::text).collect();
+            if screened_text != text {
+                function_response.response = serde_json::from_str(&screened_text)
+                    .unwrap_or_else(|_| serde_json::json!({ "result": screened_text }));
+            }
+        }
+    }
+    Ok(content)
+}
+
 /// Turns a tool callback's substitute content into the response to the call it replaces.
 ///
 /// Providers reject a request whose function call has no function response with the same id,
@@ -2043,6 +2068,8 @@ struct ToolExecutor<'a> {
     hook_callbacks: &'a HookCallbacks,
     tool_confirmation_policy: &'a ToolConfirmationPolicy,
     tool_guardrails: &'a ToolGuardrailSet,
+    /// Screens a result that ends the turn, since that result is the final response.
+    output_guardrails: &'a GuardrailSet,
     cb_mutex: &'a std::sync::Mutex<Option<CircuitBreakerState>>,
     invocation_id: &'a str,
     concurrency_manager: &'a adk_core::ToolConcurrencyManager,
@@ -2163,7 +2190,14 @@ impl ToolExecutor<'_> {
     }
 
     async fn execute(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
-        let result = self.execute_inner(call).await?;
+        let mut result = self.execute_inner(call).await?;
+        // A result that ends the turn is the final response, so it is screened like one,
+        // before the client or the session sees it.
+        if result.escalate_or_skip && result.pending.is_none() && !self.output_guardrails.is_empty()
+        {
+            result.content =
+                screen_terminal_tool_output(self.output_guardrails, result.content).await?;
+        }
         let mut event = Event::new(self.invocation_id);
         event.author = self.ctx.agent_name().to_owned();
         event.branch = self.ctx.branch().to_owned();
@@ -3003,6 +3037,7 @@ impl Agent for LlmAgent {
                     tool_map: &tool_map,
                     tool_retry_budgets: &tool_retry_budgets,
                     default_retry_budget: &default_retry_budget,
+                    output_guardrails: output_guardrails.as_ref(),
                     before_tool_callbacks: &before_tool_callbacks,
                     after_tool_callbacks: &after_tool_callbacks,
                     after_tool_callbacks_full: &after_tool_callbacks_full,
@@ -3882,6 +3917,7 @@ impl Agent for LlmAgent {
                         tool_map: &tool_map,
                         tool_retry_budgets: &tool_retry_budgets,
                         default_retry_budget: &default_retry_budget,
+                        output_guardrails: output_guardrails.as_ref(),
                         before_tool_callbacks: &before_tool_callbacks,
                         after_tool_callbacks: &after_tool_callbacks,
                         after_tool_callbacks_full: &after_tool_callbacks_full,

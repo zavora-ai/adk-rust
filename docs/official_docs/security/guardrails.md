@@ -256,6 +256,12 @@ Guardrails integrate with `LlmAgentBuilder`:
 
 Configured input guardrails run before model execution, and configured output guardrails run on generated responses before they are returned to the caller.
 
+A tool result that ends the turn, because the tool set `skip_summarization` or `escalate`, is
+the final response, so output guardrails screen it too, before the client or the session sees
+it. Each function response is screened as its JSON text: a block ends the run with an error and
+nothing of the result is sent or saved, and a transformed text replaces the response, parsed
+back to JSON when it still parses and wrapped as `{"result": "<text>"}` when it does not.
+
 > **Note:** `LlmAgentBuilder` accepts these sets only when `adk-agent` is built with its `guardrails` feature. The `adk-rust` `guardrail` feature enables it.
 
 ```rust
