@@ -102,6 +102,26 @@ fn build_generation_config(
     }
 }
 
+/// Appends streamed parts, joining a delta onto the part it continues.
+///
+/// Consecutive text deltas form one text part. A thinking delta joins the previous
+/// thinking part until that part is signed, since a signature closes its block.
+fn append_streamed_parts(parts: &mut Vec<Part>, incoming: Vec<Part>) {
+    for part in incoming {
+        match (parts.last_mut(), part) {
+            (Some(Part::Text { text }), Part::Text { text: delta }) => text.push_str(&delta),
+            (
+                Some(Part::Thinking { thinking, signature: signature @ None }),
+                Part::Thinking { thinking: delta, signature: delta_signature },
+            ) => {
+                thinking.push_str(&delta);
+                *signature = delta_signature;
+            }
+            (_, part) => parts.push(part),
+        }
+    }
+}
+
 fn collect_function_calls(content: &Content, invocation_id: &str) -> Vec<PendingToolCall> {
     content
         .parts
@@ -3370,10 +3390,15 @@ impl Agent for LlmAgent {
                             {
                                 accumulated_content = Some(chunk_content);
                             } else if let Some(ref mut acc) = accumulated_content {
-                                acc.parts.extend(chunk_content.parts);
+                                append_streamed_parts(&mut acc.parts, chunk_content.parts);
                             } else {
                                 accumulated_content = Some(chunk_content);
                             }
+                        }
+                        // Tool-call markup can span deltas, so it is parsed again once the
+                        // text is complete.
+                        if !chunk.partial {
+                            normalize_option_content(&mut accumulated_content);
                         }
 
                         // For SSE/Bidi mode: yield each chunk immediately with stable event ID
@@ -3439,6 +3464,7 @@ impl Agent for LlmAgent {
                     if let Some(last) = &last_chunk {
                         final_provider_metadata = last.provider_metadata.clone();
                     }
+                    normalize_option_content(&mut accumulated_content);
                     // A stream that ended without a non-partial usage report is settled
                     // here, before any tool runs, from the best usage it carried.
                     drop(response_stream);
