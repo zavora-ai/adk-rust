@@ -30,7 +30,8 @@
 //! - `OPENROUTER_FALLBACK_MODEL`
 //! - `OPENROUTER_ENABLE_WEB_SEARCH=1`
 //! - `OPENROUTER_WEB_SEARCH_TOOL=web_search_preview`
-//! - `OPENROUTER_IMAGE_URL`
+//! - `OPENROUTER_IMAGE_URL` (default: a PNG sent inline)
+//! - `OPENROUTER_MAX_OUTPUT_TOKENS` (default: 1024)
 //! - `OPENROUTER_PDF_URL`
 //! - `OPENROUTER_ENABLE_PDF=1`
 
@@ -54,11 +55,12 @@ const DEFAULT_REASONING_MODEL: &str = "openai/gpt-4.1-mini";
 const DEFAULT_SITE_URL: &str = "https://github.com/zavora-ai/adk-rust";
 const DEFAULT_APP_NAME: &str = "ADK-Rust OpenRouter Example";
 const DEFAULT_WEB_SEARCH_TOOL: &str = "web_search_preview";
-const DEFAULT_IMAGE_URL: &str =
-    "https://upload.wikimedia.org/wikipedia/commons/3/3f/JPEG_example_flower.jpg";
+/// Sent inline: upstream providers fetch remote image URLs themselves, and some hosts refuse them.
+const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/red-circle.png");
 const DEFAULT_PDF_URL: &str =
     "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf";
-const MAX_OUTPUT_TOKENS: i32 = 256;
+/// Leaves reasoning models room to answer after they think.
+const DEFAULT_MAX_OUTPUT_TOKENS: i32 = 1024;
 type ScenarioFuture = std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>;
 type ScenarioFn = fn() -> ScenarioFuture;
 
@@ -139,7 +141,10 @@ fn make_model(model_name: &str, api_mode: OpenRouterApiMode) -> Arc<OpenRouterCl
 }
 
 fn base_generation_config() -> GenerateContentConfig {
-    GenerateContentConfig { max_output_tokens: Some(MAX_OUTPUT_TOKENS), ..Default::default() }
+    let max_output_tokens = env_value("OPENROUTER_MAX_OUTPUT_TOKENS")
+        .map(|value| value.parse().expect("OPENROUTER_MAX_OUTPUT_TOKENS must be an integer"))
+        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS);
+    GenerateContentConfig { max_output_tokens: Some(max_output_tokens), ..Default::default() }
 }
 
 fn config_with_options(options: OpenRouterRequestOptions) -> GenerateContentConfig {
@@ -180,6 +185,18 @@ async fn make_runner(agent: Arc<dyn Agent>, session_id: &str) -> anyhow::Result<
         .build()?)
 }
 
+/// Parts of `event` to display: streamed deltas, and a terminal event's content only when no
+/// deltas preceded it, since that content repeats them.
+fn display_parts<'a>(event: &'a Event, streamed: &mut bool) -> &'a [Part] {
+    let partial = event.llm_response.partial;
+    let show = partial || !*streamed;
+    *streamed = partial;
+    match &event.llm_response.content {
+        Some(content) if show => &content.parts,
+        _ => &[],
+    }
+}
+
 async fn collect_text(
     runner: &Runner,
     session_id: &str,
@@ -187,15 +204,14 @@ async fn collect_text(
 ) -> anyhow::Result<String> {
     let mut stream = runner.run(UserId::new("user")?, SessionId::new(session_id)?, content).await?;
     let mut full_text = String::new();
+    let mut streamed = false;
 
     while let Some(event) = stream.next().await {
         let event = event?;
-        if let Some(content) = &event.llm_response.content {
-            for part in &content.parts {
-                if let Some(text) = part.text() {
-                    print!("{text}");
-                    full_text.push_str(text);
-                }
+        for part in display_parts(&event, &mut streamed) {
+            if let Some(text) = part.text() {
+                print!("{text}");
+                full_text.push_str(text);
             }
         }
     }
@@ -233,7 +249,7 @@ async fn test_basic_chat() -> anyhow::Result<()> {
     )
     .await?;
 
-    assert!(!text.trim().is_empty(), "basic chat should return text");
+    anyhow::ensure!(!text.trim().is_empty(), "basic chat should return text");
     println!("✓ Basic text generation passed");
     Ok(())
 }
@@ -259,26 +275,25 @@ async fn test_streaming_chat() -> anyhow::Result<()> {
 
     let mut partial_count = 0usize;
     let mut full_text = String::new();
+    let mut streamed = false;
 
     while let Some(event) = stream.next().await {
         let event = event?;
         if event.llm_response.partial {
             partial_count += 1;
         }
-        if let Some(content) = &event.llm_response.content {
-            for part in &content.parts {
-                if let Part::Text { text } = part {
-                    print!("{text}");
-                    full_text.push_str(text);
-                }
+        for part in display_parts(&event, &mut streamed) {
+            if let Part::Text { text } = part {
+                print!("{text}");
+                full_text.push_str(text);
             }
         }
     }
 
     println!();
     println!("Received {partial_count} streaming partial events");
-    assert!(partial_count > 0, "streaming chat should yield partial events");
-    assert!(
+    anyhow::ensure!(partial_count > 0, "streaming chat should yield partial events");
+    anyhow::ensure!(
         full_text.contains('1') && full_text.contains('5'),
         "streaming output should include the requested sequence"
     );
@@ -340,11 +355,11 @@ async fn test_function_calling() -> anyhow::Result<()> {
                         println!("  → tool call: {name}({args})");
                         saw_function_call = true;
                     }
-                    Part::Text { text } => {
-                        if !text.trim().is_empty() && !event.llm_response.partial {
-                            print!("{text}");
-                            saw_final_text = true;
-                        }
+                    Part::Text { text }
+                        if !text.trim().is_empty() && !event.llm_response.partial =>
+                    {
+                        print!("{text}");
+                        saw_final_text = true;
                     }
                     Part::FunctionResponse { function_response, .. } => {
                         println!("  ← tool result: {}", function_response.response);
@@ -357,8 +372,8 @@ async fn test_function_calling() -> anyhow::Result<()> {
     }
     println!();
 
-    assert!(saw_function_call, "expected a function call event");
-    assert!(
+    anyhow::ensure!(saw_function_call, "expected a function call event");
+    anyhow::ensure!(
         saw_tool_response || saw_final_text,
         "expected a tool response or final text answer"
     );
@@ -399,7 +414,7 @@ async fn test_session_continuation() -> anyhow::Result<()> {
     )
     .await?;
 
-    assert!(
+    anyhow::ensure!(
         text.to_ascii_lowercase().contains("rust"),
         "session continuation should remember the earlier turn"
     );
@@ -438,31 +453,30 @@ async fn test_responses_mode_reasoning() -> anyhow::Result<()> {
     let mut saw_text = false;
     let mut saw_thinking = false;
     let mut final_provider_metadata = None;
+    let mut streamed = false;
 
     while let Some(event) = stream.next().await {
         let event = event?;
         if !event.llm_response.partial {
             final_provider_metadata = event.llm_response.provider_metadata.clone();
         }
-        if let Some(content) = &event.llm_response.content {
-            for part in &content.parts {
-                match part {
-                    Part::Thinking { thinking, .. } if !thinking.trim().is_empty() => {
-                        if !saw_thinking {
-                            println!("  [thinking]");
-                        }
-                        println!("  {thinking}");
-                        saw_thinking = true;
+        for part in display_parts(&event, &mut streamed) {
+            match part {
+                Part::Thinking { thinking, .. } if !thinking.is_empty() => {
+                    if !saw_thinking {
+                        println!("  [thinking]");
                     }
-                    Part::Text { text } if !text.trim().is_empty() => {
-                        if saw_thinking && !saw_text {
-                            println!("  [answer]");
-                        }
-                        print!("{text}");
-                        saw_text = true;
-                    }
-                    _ => {}
+                    print!("{thinking}");
+                    saw_thinking = true;
                 }
+                Part::Text { text } if !text.is_empty() => {
+                    if !saw_text {
+                        println!("\n  [answer]");
+                    }
+                    print!("{text}");
+                    saw_text = true;
+                }
+                _ => {}
             }
         }
     }
@@ -474,7 +488,7 @@ async fn test_responses_mode_reasoning() -> anyhow::Result<()> {
     if !saw_thinking {
         println!("  [note] no Part::Thinking was emitted for this model/account setup");
     }
-    assert!(saw_text, "responses mode should return a text answer");
+    anyhow::ensure!(saw_text, "responses mode should return a text answer");
     println!("✓ Responses mode reasoning passed");
     Ok(())
 }
@@ -513,7 +527,7 @@ async fn test_routing_and_fallback() -> anyhow::Result<()> {
     .await?;
 
     println!("configured fallback models: {:?}", fallback_models(&primary_model));
-    assert!(!text.trim().is_empty(), "routing scenario should return text");
+    anyhow::ensure!(!text.trim().is_empty(), "routing scenario should return text");
     println!("✓ Provider routing and fallback passed");
     Ok(())
 }
@@ -578,7 +592,7 @@ async fn test_web_search() -> anyhow::Result<()> {
     println!();
     println!("citation sources observed: {citation_count}");
 
-    assert!(!full_text.trim().is_empty(), "web search scenario should return text");
+    anyhow::ensure!(!full_text.trim().is_empty(), "web search scenario should return text");
     println!("✓ Built-in web search passed");
     Ok(())
 }
@@ -597,16 +611,14 @@ async fn test_multimodal_and_plugins() -> anyhow::Result<()> {
     );
 
     let runner = make_runner(agent, "multimodal").await?;
-    let image_url = env_or("OPENROUTER_IMAGE_URL", DEFAULT_IMAGE_URL);
-    let image_text = collect_text(
-        &runner,
-        "multimodal",
-        Content::new("user")
-            .with_text("Describe the main subject of this image in one sentence.")
-            .with_file_uri("image/jpeg", image_url),
-    )
-    .await?;
-    assert!(!image_text.trim().is_empty(), "image input should return text");
+    let prompt = Content::new("user")
+        .with_text("Describe the main subject of this image in one sentence.");
+    let prompt = match env_value("OPENROUTER_IMAGE_URL") {
+        Some(image_url) => prompt.with_file_uri("image/jpeg", image_url),
+        None => prompt.with_inline_data("image/png", DEFAULT_IMAGE.to_vec()),
+    };
+    let image_text = collect_text(&runner, "multimodal", prompt).await?;
+    anyhow::ensure!(!image_text.trim().is_empty(), "image input should return text");
 
     if env_flag("OPENROUTER_ENABLE_PDF") {
         println!("\n  [pdf]");
@@ -634,7 +646,7 @@ async fn test_multimodal_and_plugins() -> anyhow::Result<()> {
                 .with_file_uri("application/pdf", env_or("OPENROUTER_PDF_URL", DEFAULT_PDF_URL)),
         )
         .await?;
-        assert!(!pdf_text.trim().is_empty(), "pdf input should return text");
+        anyhow::ensure!(!pdf_text.trim().is_empty(), "pdf input should return text");
     } else {
         println!("PDF step skipped; set OPENROUTER_ENABLE_PDF=1 to run the file-parser path");
     }
@@ -682,8 +694,8 @@ async fn test_discovery() -> anyhow::Result<()> {
         Err(err) => println!("credits lookup failed for this key: {err}"),
     }
 
-    assert!(!models.is_empty(), "discovery should return at least one model");
-    assert!(!providers.is_empty(), "discovery should return at least one provider");
+    anyhow::ensure!(!models.is_empty(), "discovery should return at least one model");
+    anyhow::ensure!(!providers.is_empty(), "discovery should return at least one provider");
     println!("✓ Native discovery APIs passed");
     Ok(())
 }

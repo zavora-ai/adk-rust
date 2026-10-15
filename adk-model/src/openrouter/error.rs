@@ -49,7 +49,13 @@ pub fn api_error_to_adk_error(status_code: u16, headers: &HeaderMap, body: &str)
     let (category, code) = status_category_and_code(status_code);
     let message = parsed
         .as_ref()
-        .map(|payload| payload.error.message.clone())
+        .map(|payload| {
+            with_upstream_detail(
+                &payload.error.message,
+                payload.error.provider_name.as_deref(),
+                payload.error.metadata.as_ref(),
+            )
+        })
         .unwrap_or_else(|| format!("OpenRouter request failed with status {status_code}"));
 
     let mut error = AdkError::new(ErrorComponent::Model, category, code, message)
@@ -88,11 +94,14 @@ pub fn stream_error_to_adk_error(
         .map(status_category_and_code)
         .unwrap_or((ErrorCategory::Internal, "model.openrouter.stream_error"));
 
-    let mut error =
-        AdkError::new(ErrorComponent::Model, category, code, stream_error.message.clone())
-            .with_provider(
-                stream_error.provider_name.clone().unwrap_or_else(|| "openrouter".to_string()),
-            );
+    let message = with_upstream_detail(
+        &stream_error.message,
+        stream_error.provider_name.as_deref(),
+        stream_error.metadata.as_ref(),
+    );
+    let mut error = AdkError::new(ErrorComponent::Model, category, code, message).with_provider(
+        stream_error.provider_name.clone().unwrap_or_else(|| "openrouter".to_string()),
+    );
 
     if let Some(status_code) = status_code {
         error = error.with_upstream_status(status_code);
@@ -141,6 +150,42 @@ pub fn stream_error_to_adk_error(
     }
 
     error
+}
+
+/// Longest upstream detail appended to an error message; `raw` can be a full response body.
+const MAX_UPSTREAM_DETAIL_BYTES: usize = 512;
+
+/// Appends the upstream provider's own explanation to OpenRouter's message.
+///
+/// For upstream failures OpenRouter's message is generic ("Provider returned error") and
+/// the actionable text is in `metadata.raw`, with the provider in `metadata.provider_name`.
+fn with_upstream_detail(
+    message: &str,
+    provider_name: Option<&str>,
+    metadata: Option<&Value>,
+) -> String {
+    let raw = metadata
+        .and_then(|metadata| metadata.get("raw"))
+        .map(|raw| match raw {
+            Value::String(text) => text.trim().to_string(),
+            other => other.to_string(),
+        })
+        .filter(|raw| !raw.is_empty() && raw != message);
+    let Some(raw) = raw else {
+        return message.to_string();
+    };
+    let provider = provider_name.or_else(|| {
+        metadata.and_then(|metadata| metadata.get("provider_name")).and_then(Value::as_str)
+    });
+    let detail = if raw.len() > MAX_UPSTREAM_DETAIL_BYTES {
+        format!("{}…", &raw[..raw.floor_char_boundary(MAX_UPSTREAM_DETAIL_BYTES)])
+    } else {
+        raw
+    };
+    match provider {
+        Some(provider) => format!("{message} ({provider}): {detail}"),
+        None => format!("{message}: {detail}"),
+    }
 }
 
 fn status_category_and_code(status_code: u16) -> (ErrorCategory, &'static str) {
@@ -252,7 +297,10 @@ fn retry_after_from_metadata_value(metadata: &Value) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_error_to_adk_error, parse_retry_after_value, stream_error_to_adk_error};
+    use super::{
+        MAX_UPSTREAM_DETAIL_BYTES, api_error_to_adk_error, parse_retry_after_value,
+        stream_error_to_adk_error, with_upstream_detail,
+    };
     use crate::openrouter::stream::OpenRouterStreamError;
     use adk_core::ErrorCategory;
     use chrono::Utc;
@@ -386,5 +434,43 @@ mod tests {
         );
         assert_eq!(numeric.details.metadata.get("code"), Some(&json!(402)));
         assert_eq!(numeric.details.metadata.get("provider_error_code"), None);
+    }
+
+    #[test]
+    fn upstream_errors_carry_the_provider_explanation() {
+        let raw = "google/gemma-4-31b-it:free is temporarily rate-limited upstream. Please retry shortly.";
+        let error = api_error_to_adk_error(
+            429,
+            &HeaderMap::new(),
+            &json!({"error": {
+                "message": "Provider returned error",
+                "code": 429,
+                "metadata": {"raw": raw, "provider_name": "Google AI Studio", "is_byok": false}
+            }})
+            .to_string(),
+        );
+        assert_eq!(error.message, format!("Provider returned error (Google AI Studio): {raw}"));
+        assert_eq!(error.category, ErrorCategory::RateLimited);
+
+        let stream = stream_error_to_adk_error(
+            &OpenRouterStreamError {
+                message: "Provider returned error".to_string(),
+                metadata: Some(json!({"raw": {"error": "overloaded"}})),
+                ..Default::default()
+            },
+            None,
+        );
+        assert_eq!(stream.message, r#"Provider returned error: {"error":"overloaded"}"#);
+    }
+
+    #[test]
+    fn upstream_detail_is_capped_and_skipped_when_redundant() {
+        let long = "é".repeat(MAX_UPSTREAM_DETAIL_BYTES);
+        let message = with_upstream_detail("failed", None, Some(&json!({"raw": long})));
+        assert!(message.len() <= "failed: ".len() + MAX_UPSTREAM_DETAIL_BYTES + "…".len());
+        assert!(message.ends_with('…'));
+
+        assert_eq!(with_upstream_detail("same", None, Some(&json!({"raw": "same"}))), "same");
+        assert_eq!(with_upstream_detail("plain", Some("x"), Some(&json!({}))), "plain");
     }
 }

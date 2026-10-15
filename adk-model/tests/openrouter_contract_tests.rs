@@ -10,6 +10,8 @@ use adk_model::openrouter::{
     OpenRouterResponsesRequest, OpenRouterResponsesStreamItem, OpenRouterTool,
     OpenRouterToolChoice,
 };
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use futures::StreamExt;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -22,15 +24,17 @@ const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const DEFAULT_SITE_URL: &str = "https://github.com/zavora-ai/adk-rust";
 const DEFAULT_APP_NAME: &str = "ADK-Rust OpenRouter Contract Tests";
 const DEFAULT_WEB_SEARCH_TOOL: &str = "web_search_preview";
-const DEFAULT_IMAGE_URL: &str =
-    "https://upload.wikimedia.org/wikipedia/commons/3/3f/JPEG_example_flower.jpg";
-const MAX_OUTPUT_TOKENS: i32 = 128;
+/// Sent inline: upstream providers fetch remote image URLs themselves, and some hosts refuse them.
+const DEFAULT_IMAGE: &[u8] = include_bytes!("fixtures/openrouter/red-circle.png");
+/// Leaves reasoning models room to answer after they think.
+const DEFAULT_MAX_OUTPUT_TOKENS: i32 = 1024;
 
 #[derive(Debug, Clone)]
 struct TestConfig {
     model: String,
     web_search_tool: String,
     image_url: String,
+    max_output_tokens: i32,
 }
 
 fn load_test_config() -> Option<TestConfig> {
@@ -44,7 +48,10 @@ fn load_test_config() -> Option<TestConfig> {
         web_search_tool: env_value("OPENROUTER_WEB_SEARCH_TOOL")
             .unwrap_or_else(|| DEFAULT_WEB_SEARCH_TOOL.to_string()),
         image_url: env_value("OPENROUTER_IMAGE_URL")
-            .unwrap_or_else(|| DEFAULT_IMAGE_URL.to_string()),
+            .unwrap_or_else(|| format!("data:image/png;base64,{}", STANDARD.encode(DEFAULT_IMAGE))),
+        max_output_tokens: env_value("OPENROUTER_MAX_OUTPUT_TOKENS")
+            .map(|value| value.parse().expect("OPENROUTER_MAX_OUTPUT_TOKENS must be an integer"))
+            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
     })
 }
 
@@ -187,7 +194,7 @@ async fn chat_non_streaming_contract() {
                 )),
                 ..Default::default()
             }],
-            max_completion_tokens: Some(MAX_OUTPUT_TOKENS),
+            max_completion_tokens: Some(config.max_output_tokens),
             ..Default::default()
         })
         .await
@@ -222,7 +229,7 @@ async fn chat_streaming_contract() {
                 )),
                 ..Default::default()
             }],
-            max_completion_tokens: Some(MAX_OUTPUT_TOKENS),
+            max_completion_tokens: Some(config.max_output_tokens),
             ..Default::default()
         })
         .await
@@ -267,7 +274,7 @@ async fn responses_non_streaming_contract() {
             input: Some(OpenRouterResponseInput::Text(
                 "Explain what OpenRouter routing does in one sentence.".to_string(),
             )),
-            max_output_tokens: Some(MAX_OUTPUT_TOKENS),
+            max_output_tokens: Some(config.max_output_tokens),
             ..Default::default()
         })
         .await
@@ -292,7 +299,7 @@ async fn responses_streaming_contract() {
             input: Some(OpenRouterResponseInput::Text(
                 "List three short benefits of provider routing.".to_string(),
             )),
-            max_output_tokens: Some(MAX_OUTPUT_TOKENS),
+            max_output_tokens: Some(config.max_output_tokens),
             ..Default::default()
         })
         .await
@@ -359,7 +366,7 @@ async fn tool_calling_contract() {
                 ..Default::default()
             }]),
             tool_choice: Some(OpenRouterToolChoice::Mode("required".to_string())),
-            max_completion_tokens: Some(MAX_OUTPUT_TOKENS),
+            max_completion_tokens: Some(config.max_output_tokens),
             ..Default::default()
         })
         .await
@@ -407,7 +414,7 @@ async fn built_in_web_search_contract() {
                 kind: config.web_search_tool,
                 ..Default::default()
             }]),
-            max_output_tokens: Some(MAX_OUTPUT_TOKENS),
+            max_output_tokens: Some(config.max_output_tokens),
             ..Default::default()
         })
         .await
@@ -448,7 +455,7 @@ async fn multimodal_image_contract() {
                 ])),
                 ..Default::default()
             }],
-            max_completion_tokens: Some(MAX_OUTPUT_TOKENS),
+            max_completion_tokens: Some(config.max_output_tokens),
             ..Default::default()
         })
         .await
@@ -535,7 +542,7 @@ async fn responses_multimodal_image_contract() {
                 ])),
                 ..Default::default()
             }])),
-            max_output_tokens: Some(MAX_OUTPUT_TOKENS),
+            max_output_tokens: Some(config.max_output_tokens),
             ..Default::default()
         })
         .await
