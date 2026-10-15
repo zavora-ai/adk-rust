@@ -690,8 +690,22 @@ impl IntegratedRealtimeRunner {
                     {
                         Ok(adk_plugin::AfterToolCallResult::Continue(v)) => v,
                         Err(e) => {
-                            tracing::warn!(error = %e, "after_tool_call plugin error (non-fatal)");
-                            tool_result
+                            // Fail closed. An after-tool plugin is where result redaction and
+                            // screening live, so the unscreened result is withheld. The tool has
+                            // already run, and the model is told so it does not repeat a side
+                            // effect.
+                            tracing::error!(
+                                tool = tool.name(),
+                                error = %e,
+                                "after_tool_call plugin failed; withholding the tool result"
+                            );
+                            serde_json::json!({
+                                "error": format!(
+                                    "tool {} ran, but its after-tool plugin pipeline failed ({e}), \
+                                     so its result is withheld; do not call it again for this request.",
+                                    tool.name()
+                                )
+                            })
                         }
                     }
                 }

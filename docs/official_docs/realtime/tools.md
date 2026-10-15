@@ -161,7 +161,16 @@ If the `before_tool_call` pipeline returns an error, the tool is **refused**:
 > the tool. Authorization, redaction, and policy live in before-tool plugins, so a broken guard
 > became no guard.
 
-After-tool plugin errors leave the tool's own result in place, since the tool has already run.
+If the `after_tool_call` pipeline returns an error, the tool has already run, but its result
+is **withheld**, since result redaction and screening live in after-tool plugins. The model
+receives:
+
+```json
+{ "error": "tool guarded ran, but its after-tool plugin pipeline failed (...), so its result is withheld; do not call it again for this request." }
+```
+
+The message states that the tool ran, so the model does not repeat a side effect.
+
 ### The governed path
 
 Every realtime dispatch runs the same governed path as `LlmAgent`

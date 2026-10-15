@@ -82,6 +82,28 @@ impl EnhancedPlugin for FailingPlugin {
     }
 }
 
+/// A redaction plugin whose backend is down, so its after-tool pipeline fails.
+#[derive(Debug)]
+struct FailingRedactor;
+
+#[async_trait]
+impl EnhancedPlugin for FailingRedactor {
+    fn name(&self) -> &str {
+        "failing-redactor"
+    }
+
+    async fn after_tool_call(
+        &self,
+        _tool: Arc<dyn Tool>,
+        _args: &serde_json::Value,
+        _result: serde_json::Value,
+        _ctx: Arc<dyn adk_core::CallbackContext>,
+        _plugin_ctx: &adk_plugin::PluginContext,
+    ) -> adk_core::Result<adk_plugin::AfterToolCallResult> {
+        Err(adk_core::AdkError::tool("redaction backend unreachable"))
+    }
+}
+
 /// A model that never connects; these tests exercise dispatch, not transport.
 struct MockModel;
 
@@ -171,6 +193,31 @@ async fn a_failing_plugin_pipeline_refuses_the_tool_rather_than_running_it() {
         message.contains("policy backend unreachable"),
         "the underlying failure must be reported so it can be fixed: {message}"
     );
+}
+
+#[tokio::test]
+async fn a_failing_after_tool_pipeline_withholds_the_result() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let runner = runner_with_plugin(Arc::new(FailingRedactor), Arc::clone(&executions));
+
+    let call = adk_realtime::events::ToolCall {
+        call_id: "call-1".to_string(),
+        name: "guarded".to_string(),
+        arguments: serde_json::json!({}),
+    };
+    let tool: Arc<dyn Tool> = Arc::new(CountingTool { executions: Arc::clone(&executions) });
+
+    let result = runner.execute_tool_with_plugins_for_test(&tool, &call).await.expect("dispatch");
+
+    assert_eq!(executions.load(Ordering::SeqCst), 1, "the tool runs before the pipeline");
+    assert!(
+        result.get("ran").is_none(),
+        "the unscreened result must not reach the model: {result}"
+    );
+    let message = result["error"].as_str().unwrap_or_default();
+    assert!(message.contains("ran"), "the model must learn the tool already ran: {message}");
+    assert!(message.contains("do not call it again"), "a retry must be discouraged: {message}");
+    assert!(message.contains("redaction backend unreachable"), "{message}");
 }
 
 #[tokio::test]
