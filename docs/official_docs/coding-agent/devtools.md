@@ -74,6 +74,10 @@ let ws = Workspace::new("./my-repo")
   followed; closing it needs descriptor-relative traversal. Treat the file tools
   as containment against an agent that wanders, not as isolation against an
   adversary that can write into the workspace concurrently.
+
+  A file with more than one hard link is replaced on write, keeping its
+  permissions, rather than truncated, so a link from outside the workspace keeps
+  its contents.
 - **Read-only mode** — `Workspace::read_only(..)` hides the mutating tools
   entirely (the model only ever sees `read_file`/`glob`/`grep`).
 - **`bash` environment is cleared** — the command receives only `PATH`, `HOME`, `LANG`,

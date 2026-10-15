@@ -152,6 +152,7 @@ The `workspace` feature adds a `provision → session → exec → snapshot → 
 | Control | `LocalUnixClient` | `DockerClient` (`workspace-docker`) |
 |---------|-------------------|-------------------------------------|
 | Filesystem | Host filesystem; the workspace is only the working directory | Container filesystem |
+| File operations | `read_file`, `write_file`, `list_dir`, `apply_patch`, and the working directory resolve inside the workspace, through symlinks; a hard-linked file is replaced on write, not truncated | Container filesystem |
 | Network | Host network | `none` by default; `with_network_mode("bridge")` to enable |
 | Privileges | Host user | `cap_drop: ALL`, `no-new-privileges`, 512-process limit (`with_pids_limit`) |
 | Environment | Cleared except `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, `TERM` | Image environment |

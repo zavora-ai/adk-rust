@@ -254,7 +254,9 @@ impl Workspace {
     /// open, and on Unix the final component is opened with `O_NOFOLLOW`, so a
     /// symlink planted after `resolve` fails the open instead of redirecting the
     /// write. An existing symlink that `resolve` accepted, which points inside the
-    /// workspace, is written through its canonical target.
+    /// workspace, is written through its canonical target. A file with more than one
+    /// hard link is replaced, keeping its permissions, rather than truncated:
+    /// truncating writes through every link, including one outside the workspace.
     pub(crate) async fn write_contained(
         &self,
         resolved: &Path,
@@ -274,6 +276,16 @@ impl Workspace {
         };
         if !target.starts_with(&self.root) {
             return Err(escape());
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if let Ok(meta) = tokio::fs::symlink_metadata(&target).await
+                && meta.nlink() > 1
+            {
+                return replace_file(&target, meta.permissions(), contents).await;
+            }
         }
 
         let mut options = tokio::fs::OpenOptions::new();
@@ -302,6 +314,38 @@ impl Workspace {
     pub(crate) fn was_read(&self, path: &Path) -> bool {
         self.read_tracker.lock().map(|set| set.contains(path)).unwrap_or(false)
     }
+}
+
+/// Writes `contents` to a new file beside `target` and renames it over `target`.
+#[cfg(unix)]
+async fn replace_file(
+    target: &Path,
+    permissions: std::fs::Permissions,
+    contents: &[u8],
+) -> Result<(), DevToolError> {
+    let name = target.file_name().unwrap_or_default().to_string_lossy();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    let temp = target.with_file_name(format!(".{name}.{}.{nanos}.tmp", std::process::id()));
+    let result = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&temp)
+            .await?;
+        file.write_all(contents).await?;
+        file.flush().await?;
+        file.set_permissions(permissions).await?;
+        tokio::fs::rename(&temp, target).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temp).await;
+    }
+    Ok(result?)
 }
 
 /// Lexically normalize a path, resolving `.` and `..` without touching the
@@ -358,6 +402,31 @@ mod tests {
         }
         assert!(!outside.join("planted.txt").exists());
         assert_eq!(std::fs::read_to_string(outside.join("existing.txt")).unwrap(), "host");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn writing_a_hard_linked_file_leaves_the_other_link_unchanged() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        let outside = temp.path().join("outside.txt");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&outside, "host").unwrap();
+        std::fs::hard_link(&outside, root.join("linked.txt")).unwrap();
+        std::fs::set_permissions(root.join("linked.txt"), std::fs::Permissions::from_mode(0o640))
+            .unwrap();
+        let ws = Workspace::new(&root);
+
+        let resolved = ws.resolve("linked.txt").unwrap();
+        ws.write_contained(&resolved, b"rewritten").await.unwrap();
+
+        assert_eq!(std::fs::read_to_string(root.join("linked.txt")).unwrap(), "rewritten");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "host");
+        let mode = std::fs::metadata(root.join("linked.txt")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o7777, 0o640);
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1, "no temporary file is left");
     }
 
     #[test]
