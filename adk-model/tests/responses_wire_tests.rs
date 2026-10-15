@@ -328,6 +328,34 @@ async fn rejects_failed_unknown_and_nonterminal_statuses() {
 }
 
 #[tokio::test]
+async fn failures_keep_documented_codes_and_their_categories() {
+    use adk_core::ErrorCategory;
+
+    for (code, category) in [
+        ("rate_limit_exceeded", ErrorCategory::RateLimited),
+        ("server_error", ErrorCategory::Unavailable),
+        ("vector_store_timeout", ErrorCategory::Timeout),
+        ("invalid_image_url", ErrorCategory::InvalidInput),
+    ] {
+        let mut failed = response(json!([]));
+        failed["status"] = json!("failed");
+        failed["error"] = json!({"code":code, "message":SECRET});
+        for error in [
+            unary(&failed).await.unwrap_err(),
+            events(&[json!({"type":"response.failed", "response":failed})]).await.unwrap_err(),
+            events(&[json!({"type":"error", "code":code, "message":SECRET})]).await.unwrap_err(),
+        ] {
+            assert_eq!(error.code, "model.openai_responses.response_failed");
+            assert_eq!(error.category, category, "{code}");
+            assert_eq!(error.is_retryable(), category != ErrorCategory::InvalidInput, "{code}");
+            assert_eq!(error.message, format!("OpenAI Responses generation failed: {code}"));
+            assert_eq!(error.details.metadata["provider_error_code"], json!(code));
+            assert!(!format!("{error:?}").contains(SECRET));
+        }
+    }
+}
+
+#[tokio::test]
 async fn preserves_known_incomplete_outcomes_and_aliases() {
     for (reason, finish) in
         [("max_output_tokens", FinishReason::MaxTokens), ("content_filter", FinishReason::Safety)]

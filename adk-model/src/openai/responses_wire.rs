@@ -248,15 +248,51 @@ pub(in crate::openai) fn missing_output() -> AdkError {
     invalid("invalid_terminal", "OpenAI Responses terminal output is missing")
 }
 
-fn stream_error(_code: Option<&str>) -> AdkError {
-    // Provider messages and unrecognized codes must not become diagnostics.
-    AdkError::new(
+/// OpenAI's documented `response.error.code` values. Only these leave this boundary: a
+/// compatible provider's code is free text and can echo request content.
+const DOCUMENTED_ERROR_CODES: &[&str] = &[
+    "server_error",
+    "rate_limit_exceeded",
+    "invalid_prompt",
+    "vector_store_timeout",
+    "invalid_image",
+    "invalid_image_format",
+    "invalid_base64_image",
+    "invalid_image_url",
+    "image_too_large",
+    "image_too_small",
+    "image_parse_error",
+    "image_content_policy_violation",
+    "invalid_image_mode",
+    "image_file_too_large",
+    "unsupported_image_media_type",
+    "empty_image_file",
+    "failed_to_download_image",
+    "image_file_not_found",
+];
+
+fn stream_error(code: Option<&str>) -> AdkError {
+    let code =
+        code.and_then(|code| DOCUMENTED_ERROR_CODES.iter().copied().find(|known| *known == code));
+    let category = match code {
+        Some("rate_limit_exceeded") => ErrorCategory::RateLimited,
+        Some("server_error") => ErrorCategory::Unavailable,
+        Some("vector_store_timeout") => ErrorCategory::Timeout,
+        Some(_) => ErrorCategory::InvalidInput,
+        None => ErrorCategory::Internal,
+    };
+    let message = match code {
+        Some(code) => format!("OpenAI Responses generation failed: {code}"),
+        None => "OpenAI Responses generation failed".to_string(),
+    };
+    let error = AdkError::new(
         ErrorComponent::Model,
-        ErrorCategory::Internal,
+        category,
         "model.openai_responses.response_failed",
-        "OpenAI Responses generation failed",
+        message,
     )
-    .with_provider("openai-responses")
+    .with_provider("openai-responses");
+    crate::error_metadata::with_code(error, code)
 }
 
 fn invalid(cause: &'static str, message: &'static str) -> AdkError {
@@ -268,6 +304,7 @@ fn invalid(cause: &'static str, message: &'static str) -> AdkError {
         "unfinished_stream" => "model.openai_responses.unfinished_stream",
         _ => "model.openai_responses.unsupported_event",
     };
-    AdkError::new(ErrorComponent::Model, ErrorCategory::Internal, code, message)
-        .with_provider("openai-responses")
+    let category =
+        if cause == "cancelled" { ErrorCategory::Cancelled } else { ErrorCategory::Internal };
+    AdkError::new(ErrorComponent::Model, category, code, message).with_provider("openai-responses")
 }

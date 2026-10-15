@@ -66,6 +66,11 @@ Or with `adk-model` directly:
 adk-model = { version = "3.0.0", features = ["openai"] }
 ```
 
+> **Note:** the `openai` feature enables the `byot` feature of `async-openai` 0.41, and
+> Cargo enables a feature for every user of a crate in the build. If your application also
+> calls `async-openai` directly, set `stream` on each request yourself: with `byot`,
+> `create_stream` no longer sets `stream: true` for you.
+
 Set your API key:
 
 ```bash
@@ -455,6 +460,32 @@ identifier-like `x-request-id` in `details.request_id`. A `Retry-After` header, 
 seconds or as an HTTP-date, sets the retry delay, capped at `RetryConfig::max_delay`.
 An error body that is not a JSON error object is quoted, up to 512 bytes, in the message.
 A stream event type the client does not recognize is skipped rather than ending the turn.
+
+### Failed and unfinished responses
+
+A response that does not complete successfully ends the turn with an error, in streaming
+and non-streaming mode alike:
+
+| Outcome | Error code | Category |
+|---------|------------|----------|
+| `failed` status, `response.failed`, or an `error` event | `model.openai_responses.response_failed` | From the provider code, below |
+| `cancelled` status or `response.cancelled` | `model.openai_responses.cancelled` | `Cancelled` |
+| `incomplete` for a reason other than `max_output_tokens` or `content_filter` | `model.openai_responses.incomplete` | `Internal` |
+| Stream ends without a terminal event | `model.openai_responses.unfinished_stream` | `Internal` |
+| Unfinished, duplicate, or unnamed tool call | `model.openai_responses.invalid_terminal` or `invalid_identity` | `Internal` |
+
+A failure whose code is one of OpenAI's documented `response.error.code` values keeps it
+in `details.metadata["provider_error_code"]` and in the message, and sets the category:
+
+| Provider code | Category | Retryable |
+|---------------|----------|-----------|
+| `rate_limit_exceeded` | `RateLimited` | Yes |
+| `server_error` | `Unavailable` | Yes |
+| `vector_store_timeout` | `Timeout` | Yes |
+| `invalid_prompt`, `invalid_image*`, `image_*`, and the other image input codes | `InvalidInput` | No |
+
+Any other code, and every provider message, is dropped: a compatible provider's error
+text can echo request content.
 
 ```rust
 match runner.run(uid, sid, message).await {
