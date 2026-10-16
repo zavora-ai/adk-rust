@@ -54,6 +54,7 @@ Standalone crates demonstrating current ADK-Rust features. Each has its own `Car
 |---------|---------|-----|
 | `examples/mcp_manager` | Dynamic local MCP server registry with a deterministic Rust fixture | `cargo run --manifest-path examples/mcp_manager/Cargo.toml` |
 | `examples/mcp_protocol_revisions` | MCP `2026-07-28` and SEP-2663 tasks, ending with an `LlmAgent`; ships its own server | `cargo run --manifest-path examples/mcp_protocol_revisions/Cargo.toml --bin revisions-agent` |
+| `examples/mcp_hardening` | `LlmAgent` + `McpToolset` against servers that page forever, repeat names, collide under manager prefixes, or answer 5xx; optional live Gemini turn | `cargo run --manifest-path examples/mcp_hardening/Cargo.toml` |
 | `examples/slack_toolset` | Slack Toolset | `cargo run --manifest-path examples/slack_toolset/Cargo.toml` |
 | `examples/bigquery_toolset` | BigQuery Toolset | `cargo run --manifest-path examples/bigquery_toolset/Cargo.toml` |
 | `examples/spanner_toolset` | Spanner Toolset | `cargo run --manifest-path examples/spanner_toolset/Cargo.toml` |
