@@ -87,6 +87,52 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// Returns the behaviour annotations the tool's publisher declared, if any.
+    ///
+    /// MCP tools return the server's `annotations` object unchanged, with its
+    /// camelCase keys: `title`, `readOnlyHint`, `destructiveHint`,
+    /// `idempotentHint`, and `openWorldHint`. The values are hints from the
+    /// publisher, not guarantees, so trust them only as far as the publisher.
+    /// The default returns `None`; tools that wrap another tool forward it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Result, Tool, ToolContext};
+    /// use serde_json::{Value, json};
+    /// use std::sync::{Arc, LazyLock};
+    ///
+    /// static HINTS: LazyLock<Value> =
+    ///     LazyLock::new(|| json!({ "destructiveHint": true, "openWorldHint": false }));
+    ///
+    /// struct DeleteLogs;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Tool for DeleteLogs {
+    ///     fn name(&self) -> &str {
+    ///         "delete_logs"
+    ///     }
+    ///     fn description(&self) -> &str {
+    ///         "Deletes the service logs"
+    ///     }
+    ///     fn annotations(&self) -> Option<&Value> {
+    ///         Some(&HINTS)
+    ///     }
+    ///     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    ///         Ok(Value::Null)
+    ///     }
+    /// }
+    ///
+    /// let destructive = DeleteLogs
+    ///     .annotations()
+    ///     .and_then(|hints| hints["destructiveHint"].as_bool())
+    ///     .unwrap_or(true);
+    /// assert!(destructive);
+    /// ```
+    fn annotations(&self) -> Option<&Value> {
+        None
+    }
+
     /// Returns the scopes required to execute this tool.
     ///
     /// When non-empty, the framework can enforce that the calling user

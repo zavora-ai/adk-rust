@@ -185,6 +185,8 @@ async fn input_batches_dispatch_custom_handlers_concurrently() {
 struct SubscriptionServer {
     subscriptions: Arc<AtomicUsize>,
     calls: Arc<AtomicUsize>,
+    /// Carries the current connection; aborting it cuts the connection both ways.
+    proxy: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl ServerHandler for SubscriptionServer {
@@ -211,7 +213,11 @@ impl ServerHandler for SubscriptionServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-            return Err(ErrorData::internal_error("connection reset", None));
+            // The first call loses its connection, as when the server process dies mid-call.
+            if let Some(proxy) = self.proxy.lock().unwrap().take() {
+                proxy.abort();
+            }
+            return Err(ErrorData::internal_error("unreachable: the connection is gone", None));
         }
         Ok(CallToolResult::structured(json!({"ok":true})).into())
     }
@@ -222,11 +228,16 @@ struct Factory(SubscriptionServer);
 #[async_trait::async_trait]
 impl ConnectionFactory<()> for Factory {
     async fn create_connection(&self) -> Result<RunningService<RoleClient, ()>, String> {
-        let (server_io, client_io) = tokio::io::duplex(4096);
+        let (client_io, mut client_side) = tokio::io::duplex(4096);
+        let (mut server_side, server_io) = tokio::io::duplex(4096);
         let server = self.0.clone();
         tokio::spawn(async move {
             server.serve(server_io).await.unwrap().waiting().await.unwrap();
         });
+        let proxy = tokio::spawn(async move {
+            let _ = tokio::io::copy_bidirectional(&mut client_side, &mut server_side).await;
+        });
+        *self.0.proxy.lock().unwrap() = Some(proxy);
         ().serve(client_io).await.map_err(|error| error.to_string())
     }
 }

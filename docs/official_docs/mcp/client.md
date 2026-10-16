@@ -56,14 +56,48 @@ the server's input and output schemas unchanged, provided they are within the
 [schema size limits](#schema-size-limits). The selected model provider
 normalizes a copy of the schema when it builds its request.
 
-The adapter also retains MCP tool annotations. A `readOnlyHint` marks the ADK
-tool as read-only and concurrency-safe; an `idempotentHint` permits safe replay
-after reconnecting but does not by itself make the tool eligible for automatic
-parallel dispatch. Missing hints keep both behaviors disabled.
+The adapter also retains MCP tool annotations and maps them to the tool's
+safety signals:
+
+| Annotation | `Tool::effect()` | `is_read_only()` | `is_concurrency_safe()` |
+|------------|------------------|------------------|-------------------------|
+| `readOnlyHint: true` | `ReadOnly` | `true` | `true` |
+| `idempotentHint: true` (not read-only) | `Idempotent` | `false` | `true` |
+| Neither | `NonIdempotent` | `false` | `false` |
+
+An `Idempotent` or `ReadOnly` effect permits safe replay after reconnecting and
+retries under a `ToolRetryConfig`; a `NonIdempotent` call is recorded in the
+action ledger when one is configured. `Tool::annotations()` returns the server's
+`annotations` object unchanged, so a policy or callback can read `title`,
+`destructiveHint`, and `openWorldHint` as well:
+
+```rust
+use adk_tool::mcp::rmcp::model::ToolAnnotations;
+
+let hints = tool
+    .annotations()
+    .and_then(|hints| serde_json::from_value::<ToolAnnotations>(hints.clone()).ok());
+let destructive = hints.as_ref().is_none_or(ToolAnnotations::is_destructive);
+```
 
 > **Important:** MCP annotations are server-published hints. Use automatic
 > replay and dispatch metadata only with servers inside the application's trust
 > boundary.
+
+### Tool names
+
+Discovery admits each tool name once per server and skips, with a `warn!`
+naming the toolset and the escaped name, any tool that no model can call:
+
+| Skipped tool | Why |
+|--------------|-----|
+| A later tool with the name of an earlier one on the same server | The first definition is kept, so one server cannot fail the agent's turn with a duplicate |
+| An empty name, or one containing control characters | No model provider accepts it, and it would corrupt log lines |
+| A name longer than 64 bytes | Every model adapter truncates names to 64 bytes and nothing maps a truncated name back to its tool |
+
+Names from different toolsets are not renamed: an agent whose toolsets publish
+the same name still fails the turn. Use `PrefixedToolset`, or
+`McpServerManager`, which prefixes names shared by its servers.
 
 ```rust
 let reviewed = McpToolset::new(client).with_filter(|name| {
@@ -71,8 +105,38 @@ let reviewed = McpToolset::new(client).with_filter(|name| {
 });
 ```
 
-Filtering controls model visibility. It does not replace authorization at tool
-execution time.
+Filtering controls model visibility. `call_tool_value` applies the same filter
+and refuses an excluded tool without contacting the server. Filtering does not
+replace authorization at tool execution time.
+
+### Discovery bounds
+
+`McpToolset` follows the server's `nextCursor` itself, so a server that never
+stops paging cannot hold an agent turn. Each of `tools/list`, `resources/list`,
+`resources/templates/list`, and `prompts/list` fails with `AdkError::Tool` when:
+
+| Condition | Default bound |
+|-----------|---------------|
+| The server still returns a `nextCursor` after `max_pages` pages | 64 pages |
+| The server returns a cursor it already returned | Always |
+| The listing, reconnects included, takes longer than `timeout` | 30 seconds |
+
+A toolset that fails discovery is skipped for that turn with a warning, or
+fails the turn promptly with `strict_toolsets(true)`.
+
+```rust
+use adk_tool::mcp::{McpDiscoveryLimits, McpToolset};
+use std::time::Duration;
+
+let toolset = McpToolset::new(client).with_discovery_limits(
+    McpDiscoveryLimits::default()
+        .with_max_pages(256)
+        .with_timeout(Duration::from_secs(10)),
+);
+```
+
+`McpServerManager::with_discovery_limits`, `ConnectionRefresher::with_discovery_limits`,
+and `SimpleClient::with_discovery_limits` apply the same bounds.
 
 ### Discovery cache
 
@@ -85,6 +149,11 @@ MCP server. The cached list is dropped before the TTL elapses when:
 | The connection is refreshed | Every toolset with a connection factory |
 | The server sends `notifications/tools/list_changed` | Connections served by `AdkClientHandler`, such as those built with `with_elicitation_handler` |
 | `invalidate_tool_list_cache()` is called | Every toolset |
+
+`invalidate_tool_list_cache()` also clears the connection's rmcp response cache,
+which keeps pages the server marked fresh with `ttlMs`, and keeps a `tools/list`
+already in flight from caching its result. With a TTL of `Duration::ZERO`,
+rmcp's response cache still answers a page the server marked fresh.
 
 ```rust
 use std::time::Duration;
@@ -140,6 +209,12 @@ another call.
   retries, and the next request replaces the closed connection before it is
   sent. A `tools/call` that was in flight is not resent unless replay is
   allowed.
+- **What reconnects** — the decision comes from the error's variant, never
+  from text the server chose. A closed transport, a broken pipe or reset
+  connection, an interrupted HTTP stream, an expired Streamable HTTP session,
+  and an HTTP 401 reconnect. An HTTP 5xx or a JSON-RPC error is an answer from
+  a live session and is returned as is, whatever its body says.
+  `should_refresh_connection` applies the same rule to an `rmcp::ServiceError`.
 - **Dropped calls** — when a `tools/call` future is dropped before the response
   arrives, for example by the agent's tool timeout, the toolset sends
   `notifications/cancelled` for that request so the server can stop the work.

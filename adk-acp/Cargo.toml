@@ -49,3 +49,5 @@ proptest = "1.5"
 adk-session = { path = "../adk-session" }
 adk-runner = { path = "../adk-runner" }
 adk-agent = { path = "../adk-agent" }
+# Server side of rmcp, used only to serve in-process MCP catalogs in tests.
+rmcp = { version = "3.1", features = ["client", "server"] }

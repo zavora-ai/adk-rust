@@ -210,8 +210,20 @@ impl Tool for PrefixedTool {
         self.inner.required_scopes()
     }
 
+    fn is_read_only(&self) -> bool {
+        self.inner.is_read_only()
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        self.inner.is_concurrency_safe()
+    }
+
     fn effect(&self) -> adk_core::ToolEffect {
         self.inner.effect()
+    }
+
+    fn annotations(&self) -> Option<&Value> {
+        self.inner.annotations()
     }
 
     fn timeout_override(&self) -> Option<Option<std::time::Duration>> {

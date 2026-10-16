@@ -163,8 +163,15 @@ starting a process. It then:
 1. starts each child in the session workspace;
 2. applies a bounded startup handshake;
 3. wraps the connection as an ADK `McpToolset`;
-4. injects the toolset into that Runner invocation;
-5. cancels the MCP services on close, delete, failed startup, or server shutdown.
+4. lists every server's tools and fails setup with `MalformedMessage` when two
+   servers publish the same tool name, naming both servers and the tool;
+5. injects the toolset into that Runner invocation;
+6. cancels the MCP services on close, delete, failed startup, or server shutdown.
+
+The tools of every attached server share the agent's namespace and are not
+prefixed, so a shared name would otherwise fail every prompt turn. A server
+whose tools cannot be listed at setup is left to the agent, which skips it for
+the turn.
 
 Invocation-scoped toolsets are currently resolved by `LlmAgent` and
 `CodeActAgent`. Optional HTTP and SSE MCP transports are not advertised by the

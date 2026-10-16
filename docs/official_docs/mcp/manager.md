@@ -97,6 +97,19 @@ Each managed toolset is named after its server ID, so the warning for a skipped
 tool names the server. See
 [Schema size limits](client.md#schema-size-limits) for the defaults.
 
+`with_discovery_limits` sets the [discovery bounds](client.md#discovery-bounds)
+for every managed server. The manager lists its running servers concurrently,
+so a server that never answers `tools/list` costs the turn at most the
+discovery timeout, and the other servers' tools still resolve.
+
+```rust
+use adk_tool::mcp::McpDiscoveryLimits;
+use std::time::Duration;
+
+let manager = McpServerManager::new(configs)
+    .with_discovery_limits(McpDiscoveryLimits::default().with_timeout(Duration::from_secs(5)));
+```
+
 ## Change the registry at runtime
 
 ```rust
@@ -200,6 +213,14 @@ knowledge__search
 ```
 
 A tool name published by only one server is unchanged.
+
+Server IDs and tool names may both contain `__`, so a resolved name can still
+repeat: server `a` with tool `b__x` and server `a__b` with tool `x` both become
+`a__b__x` when each name is also published elsewhere. Servers are visited in
+ID order and the first tool to claim a resolved name keeps it; a later one is
+skipped with a `warn!` naming both servers. A prefixed name longer than the 64
+bytes model providers accept is skipped the same way. Choose server IDs that do
+not contain `__` to avoid both cases.
 
 ## Shutdown behavior
 

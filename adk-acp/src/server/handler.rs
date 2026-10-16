@@ -1035,6 +1035,7 @@ async fn start_mcp_servers(
         toolsets: Vec::with_capacity(servers.len()),
         cancellations: Vec::with_capacity(servers.len()),
     };
+    let mut names = Vec::with_capacity(servers.len());
     for server in servers {
         let McpServer::Stdio(config) = server else {
             return Err(AcpServerError::MalformedMessage(
@@ -1086,8 +1087,58 @@ async fn start_mcp_servers(
         let cancellation = toolset.cancellation_token().await;
         resources.cancellations.push(Some(cancellation));
         resources.toolsets.push(Arc::new(toolset));
+        names.push(config.name.as_str());
     }
+    let checked = tokio::select! {
+        _ = cancellation.cancelled() => Err(AcpServerError::Execution(
+            "ACP session creation was cancelled while listing MCP tools".into(),
+        )),
+        checked = reject_tool_name_collisions(&names, &resources.toolsets) => checked,
+    };
+    checked?;
     Ok(resources)
+}
+
+/// Fails session setup when two attached MCP servers publish the same tool name.
+///
+/// The tools of every attached server share the session agent's namespace, and the
+/// agent fails every turn on a duplicate name, so the conflict is reported here, at
+/// setup, naming both servers. A server whose tools cannot be listed is left to the
+/// agent, which skips it for the turn.
+async fn reject_tool_name_collisions(
+    names: &[&str],
+    toolsets: &[Arc<dyn Toolset>],
+) -> Result<(), AcpServerError> {
+    let ctx: Arc<dyn adk_core::ReadonlyContext> =
+        Arc::new(adk_tool::SimpleToolContext::new("acp-session-setup"));
+    let listed =
+        futures::future::join_all(toolsets.iter().map(|toolset| toolset.tools(Arc::clone(&ctx))))
+            .await;
+    let mut owners = HashMap::<String, &str>::new();
+    for (server, listed) in names.iter().zip(listed) {
+        let tools = match listed {
+            Ok(tools) => tools,
+            Err(error) => {
+                warn!(
+                    server.name = server,
+                    %error,
+                    "could not list MCP tools during ACP session setup"
+                );
+                continue;
+            }
+        };
+        for tool in tools {
+            if let Some(owner) = owners.insert(tool.name().to_string(), server) {
+                return Err(AcpServerError::MalformedMessage(format!(
+                    "MCP servers '{owner}' and '{server}' both publish a tool named '{}'; the \
+                     tools of every MCP server attached to one ACP session share a namespace, so \
+                     attach only one of them",
+                    tool.name()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_mcp_servers(servers: &[McpServer]) -> Result<(), AcpServerError> {
@@ -1252,6 +1303,64 @@ mod tests {
         assert!(
             matches!(error, AcpServerError::MalformedMessage(message) if message.contains("content"))
         );
+    }
+
+    /// Publishes a fixed list of tool names.
+    #[derive(Clone)]
+    struct Catalog(Vec<&'static str>);
+
+    impl rmcp::ServerHandler for Catalog {
+        fn get_info(&self) -> rmcp::model::InitializeResult {
+            rmcp::model::InitializeResult::new(
+                rmcp::model::ServerCapabilities::builder().enable_tools().build(),
+            )
+        }
+
+        async fn list_tools(
+            &self,
+            _params: Option<rmcp::model::PaginatedRequestParams>,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+            let schema = Arc::new(serde_json::Map::new());
+            Ok(rmcp::model::ListToolsResult::with_all_items(
+                self.0
+                    .iter()
+                    .map(|name| rmcp::model::Tool::new(*name, "A tool.", Arc::clone(&schema)))
+                    .collect(),
+            ))
+        }
+    }
+
+    async fn catalog_toolset(names: Vec<&'static str>) -> Arc<dyn Toolset> {
+        let (server_io, client_io) = tokio::io::duplex(4096);
+        tokio::spawn(async move {
+            if let Ok(running) = Catalog(names).serve(server_io).await {
+                let _ = running.waiting().await;
+            }
+        });
+        Arc::new(McpToolset::new(().serve(client_io).await.unwrap()))
+    }
+
+    #[tokio::test]
+    async fn attached_mcp_servers_that_share_a_tool_name_are_rejected_at_setup() {
+        let toolsets = vec![
+            catalog_toolset(vec!["list_directory", "read_file"]).await,
+            catalog_toolset(vec!["read_file"]).await,
+        ];
+        let error = reject_tool_name_collisions(&["fs-a", "fs-b"], &toolsets)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("'fs-a' and 'fs-b' both publish a tool named 'read_file'"),
+            "{error}"
+        );
+
+        let toolsets = vec![
+            catalog_toolset(vec!["read_file"]).await,
+            catalog_toolset(vec!["write_file"]).await,
+        ];
+        reject_tool_name_collisions(&["reader", "writer"], &toolsets).await.unwrap();
     }
 
     #[test]

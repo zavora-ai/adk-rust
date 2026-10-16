@@ -15,6 +15,7 @@ use adk_core::AdkError;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
+use super::super::discovery::McpDiscoveryLimits;
 use super::super::elicitation::{
     AdkClientHandler, AutoDeclineElicitationHandler, ElicitationHandler,
 };
@@ -92,6 +93,16 @@ pub struct McpServerManager {
 
     /// Size limits applied to the tool schemas of every managed server.
     pub(crate) schema_limits: McpSchemaLimits,
+
+    /// Bounds on each catalog listing of every managed server.
+    pub(crate) discovery_limits: McpDiscoveryLimits,
+}
+
+/// The limits every managed toolset is built with.
+#[derive(Clone, Copy)]
+struct ToolsetLimits {
+    schema: McpSchemaLimits,
+    discovery: McpDiscoveryLimits,
 }
 
 impl McpServerManager {
@@ -141,6 +152,7 @@ impl McpServerManager {
             monitor_running: Arc::new(AtomicBool::new(false)),
             name: "mcp_server_manager".to_string(),
             schema_limits: McpSchemaLimits::default(),
+            discovery_limits: McpDiscoveryLimits::default(),
         }
     }
 
@@ -274,6 +286,32 @@ impl McpServerManager {
         self
     }
 
+    /// Set the bounds on each catalog listing of every managed server.
+    ///
+    /// [`Toolset::tools`](adk_core::Toolset::tools) lists every running server
+    /// concurrently, so a server that pages without end or never answers costs
+    /// at most `timeout` and the other servers' tools still resolve. Default:
+    /// [`McpDiscoveryLimits::default`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_tool::mcp::{McpDiscoveryLimits, McpServerManager};
+    /// use std::collections::HashMap;
+    /// use std::time::Duration;
+    ///
+    /// let manager = McpServerManager::new(HashMap::new())
+    ///     .with_discovery_limits(McpDiscoveryLimits::default().with_timeout(Duration::from_secs(5)));
+    /// ```
+    pub fn with_discovery_limits(mut self, limits: McpDiscoveryLimits) -> Self {
+        self.discovery_limits = limits;
+        self
+    }
+
+    fn toolset_limits(&self) -> ToolsetLimits {
+        ToolsetLimits { schema: self.schema_limits, discovery: self.discovery_limits }
+    }
+
     /// Start a managed MCP server by ID.
     ///
     /// Spawns the configured command as a child process, creates a
@@ -306,7 +344,7 @@ impl McpServerManager {
             &self.elicitation_handler,
             &self.resource_notification_handler,
             &self.resource_subscriptions,
-            self.schema_limits,
+            self.toolset_limits(),
             #[cfg(feature = "mcp-sampling")]
             &self.sampling_handler,
         )
@@ -322,7 +360,7 @@ impl McpServerManager {
         elicitation_handler: &Option<Arc<dyn ElicitationHandler>>,
         resource_notification_handler: &Option<Arc<dyn ResourceNotificationHandler>>,
         resource_subscriptions: &Arc<RwLock<HashMap<String, BTreeSet<String>>>>,
-        schema_limits: McpSchemaLimits,
+        limits: ToolsetLimits,
         #[cfg(feature = "mcp-sampling")] sampling_handler: &Option<
             Arc<dyn crate::sampling::SamplingHandler>,
         >,
@@ -383,7 +421,8 @@ impl McpServerManager {
             .map(|client| {
                 McpToolset::new(client)
                     .with_name(id)
-                    .with_schema_limits(schema_limits)
+                    .with_schema_limits(limits.schema)
+                    .with_discovery_limits(limits.discovery)
                     .with_task_support(config.task_config.clone())
                     .with_mrtr_handler(input_handler)
             })
@@ -556,7 +595,7 @@ impl McpServerManager {
             &self.elicitation_handler,
             &self.resource_notification_handler,
             &self.resource_subscriptions,
-            self.schema_limits,
+            self.toolset_limits(),
             #[cfg(feature = "mcp-sampling")]
             &self.sampling_handler,
         )
@@ -726,7 +765,7 @@ impl McpServerManager {
         let elicitation_handler = self.elicitation_handler.clone();
         let resource_notification_handler = self.resource_notification_handler.clone();
         let resource_subscriptions = Arc::clone(&self.resource_subscriptions);
-        let schema_limits = self.schema_limits;
+        let limits = self.toolset_limits();
         #[cfg(feature = "mcp-sampling")]
         let sampling_handler = self.sampling_handler.clone();
 
@@ -866,7 +905,7 @@ impl McpServerManager {
                                             &elicitation_handler,
                                             &resource_notification_handler,
                                             &resource_subscriptions,
-                                            schema_limits,
+                                            limits,
                                             #[cfg(feature = "mcp-sampling")]
                                             &sampling_handler,
                                         )
@@ -1987,6 +2026,94 @@ mod tests {
 
         assert_eq!(cancels.load(Ordering::SeqCst), 2, "shutdown must cancel the pending task");
         assert_eq!(manager.server_status("tasks").await.unwrap(), ServerStatus::Stopped);
+    }
+
+    /// Never answers `tools/list`, or publishes one `lookup` tool.
+    #[derive(Clone)]
+    struct ListingServer {
+        hang: bool,
+    }
+
+    impl rmcp::ServerHandler for ListingServer {
+        fn get_info(&self) -> rmcp::model::InitializeResult {
+            rmcp::model::InitializeResult::new(
+                rmcp::model::ServerCapabilities::builder().enable_tools().build(),
+            )
+        }
+
+        async fn list_tools(
+            &self,
+            _params: Option<rmcp::model::PaginatedRequestParams>,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+            if self.hang {
+                std::future::pending::<()>().await;
+            }
+            let schema = Arc::new(serde_json::Map::new());
+            Ok(rmcp::model::ListToolsResult::with_all_items(vec![rmcp::model::Tool::new(
+                "lookup",
+                "Looks up.",
+                schema,
+            )]))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_server_that_never_lists_does_not_hold_the_other_servers() {
+        use adk_core::Toolset;
+        use rmcp::ServiceExt;
+
+        let limits = McpDiscoveryLimits::default().with_timeout(Duration::from_secs(5));
+        let servers = [("stuck_a", true), ("stuck_b", true), ("healthy", false)];
+        let manager = McpServerManager::new(
+            servers
+                .iter()
+                .map(|(id, _)| {
+                    (
+                        id.to_string(),
+                        McpServerConfig { command: "unused".to_string(), ..Default::default() },
+                    )
+                })
+                .collect(),
+        );
+        for (id, hang) in servers {
+            let (server_io, client_io) = tokio::io::duplex(4096);
+            tokio::spawn(async move {
+                if let Ok(running) = (ListingServer { hang }).serve(server_io).await {
+                    let _ = running.waiting().await;
+                }
+            });
+            let client = AdkClientHandler::new(Arc::new(AutoDeclineElicitationHandler))
+                .serve(client_io)
+                .await
+                .unwrap();
+            let toolset = McpToolset::new(client).with_name(id).with_discovery_limits(limits);
+            let mut entries = manager.servers.write().await;
+            let entry = entries.get_mut(id).unwrap();
+            entry.status = ServerStatus::Running;
+            entry.toolset = Some(toolset);
+        }
+
+        let started = tokio::time::Instant::now();
+        let tools =
+            manager.tools(Arc::new(crate::SimpleToolContext::new("manager-test"))).await.unwrap();
+
+        let names: Vec<_> = tools.iter().map(|tool| tool.name().to_string()).collect();
+        assert_eq!(names, vec!["lookup"]);
+        // Listed one after another, the two stuck servers would take twice the timeout.
+        let elapsed = started.elapsed();
+        assert!(elapsed >= limits.timeout && elapsed < limits.timeout * 2, "{elapsed:?}");
+    }
+
+    #[test]
+    fn test_builder_with_discovery_limits() {
+        let limits = McpDiscoveryLimits::default().with_max_pages(4);
+        let manager = McpServerManager::new(HashMap::new()).with_discovery_limits(limits);
+        assert_eq!(manager.discovery_limits, limits);
+        assert_eq!(
+            McpServerManager::new(HashMap::new()).discovery_limits,
+            McpDiscoveryLimits::default()
+        );
     }
 
     #[tokio::test]

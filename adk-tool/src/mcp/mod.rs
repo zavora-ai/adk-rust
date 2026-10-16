@@ -1,4 +1,5 @@
 mod auth;
+mod discovery;
 mod elicitation;
 mod http;
 mod input;
@@ -10,6 +11,7 @@ mod task;
 mod toolset;
 
 pub use auth::{AuthError, McpAuth, OAuth2Config};
+pub use discovery::McpDiscoveryLimits;
 pub use elicitation::{AdkClientHandler, AutoDeclineElicitationHandler, ElicitationHandler};
 pub use http::McpHttpClientBuilder;
 pub use manager::{McpServerConfig, McpServerManager, RestartPolicy, ServerStatus};

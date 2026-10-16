@@ -240,8 +240,20 @@ server.
 
 `McpToolset` reuses a `tools/list` result for 60 seconds, dropping it early on a
 reconnect, on `notifications/tools/list_changed` (connections served by
-`AdkClientHandler`), or on `invalidate_tool_list_cache()`. Set the TTL with
-`with_tool_list_cache_ttl`; `Duration::ZERO` disables the cache.
+`AdkClientHandler`), or on `invalidate_tool_list_cache()`, which also clears
+rmcp's response cache and keeps a fetch already in flight from caching its
+result. Set the TTL with `with_tool_list_cache_ttl`; `Duration::ZERO` disables
+the cache.
+
+Every catalog listing (`tools/list`, `resources/list`, `resources/templates/list`,
+`prompts/list`) is bounded by `McpDiscoveryLimits`: at most 64 pages, no repeated
+cursor, and 30 seconds including reconnects by default. Set them with
+`with_discovery_limits` on `McpToolset`, `McpServerManager`, `ConnectionRefresher`,
+or `SimpleClient`. The manager lists its servers concurrently.
+
+Discovery admits a tool name once per server and skips names that no model can
+call: empty, containing control characters, or longer than 64 bytes. Each
+skipped tool logs a `warn!` with the escaped name.
 
 Calls and discovery on one toolset run concurrently over its shared connection.
 A `tools/call` dropped before it completes, such as by an agent tool timeout,
@@ -362,12 +374,15 @@ again after a retryable failure. Configure bounded attempts and delay with
 `McpServerManager`, whose registry, monitoring, restart, and persistence model
 is easier to operate.
 
-The refresher handles these error conditions automatically:
-- Connection closed / EOF
-- Broken pipe / transport errors
+The refresher reconnects on these error variants, never on the text of a
+server's response:
 - `Transport closed`, reported when a stdio server process exits
-- Session not found (server restart)
-- Connection reset
+- Broken pipe, connection reset or aborted, and unexpected EOF I/O errors
+- An interrupted Streamable HTTP stream or an expired session (HTTP 404)
+- An HTTP 401 rejection, so a factory can reconnect with fresh credentials
+
+An HTTP 5xx or a JSON-RPC error is an answer from a live session and is
+returned unchanged.
 
 Requests through `ConnectionRefresher`, `SimpleClient`, and `McpToolset` share
 one connection and run concurrently. A connection whose transport has already
@@ -376,7 +391,9 @@ replay.
 
 Discovery calls reconnect and retry automatically. Discovered tool wrappers
 also replay when the server publishes `readOnlyHint: true` or
-`idempotentHint: true`. Missing hints keep replay disabled because a lost
+`idempotentHint: true`, which map to `ToolEffect::ReadOnly` and
+`ToolEffect::Idempotent`. `Tool::annotations()` returns the server's
+annotations, including `title`, `destructiveHint`, and `openWorldHint`. Missing hints keep replay disabled because a lost
 response can leave a mutating tool's external result uncertain. The direct
 `call_tool_value` and `ConnectionRefresher::call_tool` paths do not have
 discovered per-tool metadata; opt them in only for read-only tools or operations

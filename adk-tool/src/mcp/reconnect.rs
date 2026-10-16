@@ -4,14 +4,15 @@
 // Based on adk-go's connectionRefresher pattern.
 //
 // Handles:
-// - Connection closed errors, including rmcp's `Transport closed`
-// - EOF errors
-// - Session not found errors
+// - A closed transport, as when a stdio server process exits
+// - A broken pipe, reset connection, or interrupted HTTP stream
+// - An expired Streamable HTTP session
 // - HTTP 401 rejections, so a factory can reconnect with fresh credentials
 // - Automatic retry with reconnection
 
+use super::discovery::{ListError, McpDiscoveryLimits, list_tools};
 use rmcp::{
-    RoleClient,
+    RoleClient, ServiceError,
     model::{CallToolRequestParams, CallToolResponse, Tool as McpTool},
     service::RunningService,
 };
@@ -19,51 +20,123 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
-/// Errors that should trigger a connection refresh
-pub fn should_refresh_connection(error: &str) -> bool {
-    let error_lower = error.to_lowercase();
+/// How a failed request relates to the connection that carried it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Failure {
+    /// The connection can no longer carry requests.
+    ConnectionLost,
+    /// The server rejected the request's credentials with HTTP 401 before running it.
+    AuthRejected,
+    /// The server answered, or the request failed for a reason a new connection does not fix.
+    Other,
+}
 
-    // Connection closed
-    if error_lower.contains("connection closed") || error_lower.contains("connectionclosed") {
-        return true;
+/// Classifies `error` from its variant and the transport error it wraps.
+///
+/// Text the server chose, such as an HTTP error body, never decides the outcome.
+fn classify(error: &ServiceError) -> Failure {
+    match error {
+        ServiceError::TransportClosed => Failure::ConnectionLost,
+        ServiceError::TransportSend(error) => classify_transport(error.error.as_ref()),
+        // The server answered with a JSON-RPC error or an unexpected result, or the
+        // request ended on this side: none of these leaves the connection unusable.
+        _ => Failure::Other,
     }
+}
 
-    // EOF / pipe closed
-    if error_lower.contains("eof")
-        || error_lower.contains("closed pipe")
-        || error_lower.contains("broken pipe")
-    {
-        return true;
+/// The error ADK's own Streamable HTTP client reports.
+#[cfg(feature = "http-transport")]
+type HttpError = rmcp::transport::streamable_http_client::StreamableHttpError<reqwest_mcp::Error>;
+
+fn classify_transport(error: &(dyn std::error::Error + 'static)) -> Failure {
+    #[cfg(feature = "http-transport")]
+    if let Some(error) = error.downcast_ref::<HttpError>() {
+        return classify_http(error);
     }
-
-    // Session not found (server restarted)
-    if error_lower.contains("session not found") || error_lower.contains("session missing") {
-        return true;
+    let mut current = Some(error);
+    while let Some(error) = current {
+        #[cfg(feature = "http-transport")]
+        if error.is::<rmcp::transport::streamable_http_client::AuthRequiredError>() {
+            return Failure::AuthRejected;
+        }
+        if let Some(error) = error.downcast_ref::<std::io::Error>() {
+            return classify_io(error);
+        }
+        current = error.source();
     }
+    Failure::Other
+}
 
-    // Transport errors. rmcp reports `Transport closed` for every request pending or
-    // sent after the transport stops, as it does when a stdio server process exits.
-    if error_lower.contains("transport error")
-        || error_lower.contains("transport closed")
-        || error_lower.contains("connection reset")
-    {
-        return true;
+#[cfg(feature = "http-transport")]
+fn classify_http(error: &HttpError) -> Failure {
+    use rmcp::transport::streamable_http_client::{SseError, StreamableHttpError};
+    match error {
+        StreamableHttpError::AuthRequired(_) => Failure::AuthRejected,
+        // rmcp formats this as `HTTP {status}: {body}`, so the prefix is rmcp's, not the server's.
+        StreamableHttpError::UnexpectedServerResponse(message)
+            if message.starts_with("HTTP 401 ") =>
+        {
+            Failure::AuthRejected
+        }
+        StreamableHttpError::Client(error)
+            if error.status() == Some(reqwest_mcp::StatusCode::UNAUTHORIZED) =>
+        {
+            Failure::AuthRejected
+        }
+        StreamableHttpError::Io(error) => classify_io(error),
+        StreamableHttpError::Sse(SseError::Body(_))
+        | StreamableHttpError::UnexpectedEndOfStream
+        | StreamableHttpError::TransportChannelClosed
+        | StreamableHttpError::SessionExpired => Failure::ConnectionLost,
+        // A 5xx, an unparseable body, or any other answer the server sent on a live session.
+        _ => Failure::Other,
     }
+}
 
-    is_auth_rejection(error)
+fn classify_io(error: &std::io::Error) -> Failure {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::BrokenPipe
+        | ErrorKind::ConnectionReset
+        | ErrorKind::ConnectionAborted
+        | ErrorKind::NotConnected
+        | ErrorKind::UnexpectedEof => Failure::ConnectionLost,
+        _ => Failure::Other,
+    }
+}
+
+/// Returns `true` when `error` shows the connection is unusable, or that the server
+/// rejected the request's credentials, so a new connection may succeed.
+///
+/// The decision comes from the error's variant: a closed transport, a broken pipe or
+/// reset connection, an interrupted HTTP stream, an expired session, or an HTTP 401.
+/// An answer from the server, such as an HTTP 5xx or a JSON-RPC error, never
+/// triggers a refresh, whatever its body says.
+///
+/// # Example
+///
+/// ```
+/// use adk_tool::mcp::{rmcp::ServiceError, should_refresh_connection};
+///
+/// assert!(should_refresh_connection(&ServiceError::TransportClosed));
+/// assert!(!should_refresh_connection(&ServiceError::UnexpectedResponse));
+/// ```
+pub fn should_refresh_connection(error: &ServiceError) -> bool {
+    match classify(error) {
+        Failure::ConnectionLost | Failure::AuthRejected => true,
+        Failure::Other => false,
+    }
 }
 
 /// Returns `true` when the transport reports that the server rejected the
 /// request's credentials with HTTP 401.
 ///
-/// rmcp reports a 401 that carries `WWW-Authenticate` as `Auth required`, and
-/// one without it as `HTTP 401 Unauthorized` or reqwest's status error. All of
-/// them arrive as transport errors, so a JSON-RPC error whose message merely
-/// mentions authorization is not matched: that request reached the server.
-pub(crate) fn is_auth_rejection(error: &str) -> bool {
-    let error_lower = error.to_lowercase();
-    error_lower.starts_with("transport")
-        && (error_lower.contains("auth required") || error_lower.contains("401 unauthorized"))
+/// rmcp reports a 401 that carries `WWW-Authenticate` as `AuthRequired`, and
+/// one without it as an `HTTP 401` server response or reqwest's status error. A
+/// JSON-RPC error whose message merely mentions authorization is not matched:
+/// that request reached the server.
+pub(crate) fn is_auth_rejection(error: &ServiceError) -> bool {
+    classify(error) == Failure::AuthRejected
 }
 
 /// Replay of `tools/call` after an ambiguous connection failure is opt-in.
@@ -76,16 +149,17 @@ pub(crate) const DEFAULT_RETRY_TOOL_CALLS: bool = false;
 /// A request rejected with HTTP 401 never ran, so it is retried after a
 /// reconnect even when replay is not allowed.
 pub(crate) fn should_retry_mcp_operation(
-    error: &str,
+    error: &ServiceError,
     attempt: u32,
     refresh_config: &RefreshConfig,
     has_connection_factory: bool,
     replay_allowed: bool,
 ) -> bool {
-    (replay_allowed || is_auth_rejection(error))
+    let failure = classify(error);
+    (replay_allowed || failure == Failure::AuthRejected)
         && has_connection_factory
         && attempt < refresh_config.max_attempts
-        && should_refresh_connection(error)
+        && failure != Failure::Other
 }
 
 /// Result of an operation with retry information
@@ -222,6 +296,8 @@ where
     config: RefreshConfig,
     /// Whether ambiguous tool-call outcomes may be replayed after reconnection.
     retry_tool_calls: bool,
+    /// Bounds on `list_tools`.
+    discovery_limits: McpDiscoveryLimits,
 }
 
 impl<S, F> ConnectionRefresher<S, F>
@@ -242,6 +318,7 @@ where
             factory,
             config: RefreshConfig::default(),
             retry_tool_calls: DEFAULT_RETRY_TOOL_CALLS,
+            discovery_limits: McpDiscoveryLimits::default(),
         }
     }
 
@@ -255,6 +332,7 @@ where
             factory,
             config: RefreshConfig::default(),
             retry_tool_calls: DEFAULT_RETRY_TOOL_CALLS,
+            discovery_limits: McpDiscoveryLimits::default(),
         }
     }
 
@@ -267,6 +345,22 @@ where
     /// Set the maximum number of reconnection attempts.
     pub fn with_max_attempts(mut self, attempts: u32) -> Self {
         self.config.max_attempts = attempts;
+        self
+    }
+
+    /// Set the bounds on [`list_tools`](Self::list_tools).
+    ///
+    /// The timeout covers the whole listing, reconnect attempts included. See
+    /// [`McpDiscoveryLimits`] for the defaults.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let refresher = ConnectionRefresher::new(client, Arc::new(factory))
+    ///     .with_discovery_limits(McpDiscoveryLimits::default().with_max_pages(8));
+    /// ```
+    pub fn with_discovery_limits(mut self, limits: McpDiscoveryLimits) -> Self {
+        self.discovery_limits = limits;
         self
     }
 
@@ -333,14 +427,16 @@ where
         mut send: impl FnMut(Arc<RunningService<RoleClient, S>>) -> Fut,
     ) -> Result<RetryResult<T>, String>
     where
-        Fut: std::future::Future<Output = Result<T, rmcp::ServiceError>>,
+        Fut: std::future::Future<Output = Result<T, ListError>>,
     {
         let mut connection = self.connection().await?;
         let mut attempt = 0u32;
         loop {
             let error = match send(Arc::clone(&connection)).await {
                 Ok(value) => return Ok(RetryResult { value, reconnected: attempt > 0 }),
-                Err(error) => error.to_string(),
+                Err(ListError::Service(error)) => error,
+                // A listing that ran past its bounds would do the same on a new connection.
+                Err(bound) => return Err(bound.to_string()),
             };
             if !should_retry_mcp_operation(&error, attempt, &self.config, true, replay_allowed) {
                 if !replay_allowed
@@ -352,7 +448,7 @@ where
                          Enable tool-call retries only for replay-safe operations"
                     ));
                 }
-                return Err(error);
+                return Err(error.to_string());
             }
             if self.config.log_reconnections {
                 warn!(error = %error, operation, "MCP request failed, will retry with reconnection");
@@ -392,13 +488,15 @@ where
     ///
     /// Handles pagination internally and restarts from scratch if
     /// reconnection occurs (per MCP spec, cursors don't persist across sessions).
+    /// The listing is bounded by the [discovery limits](Self::with_discovery_limits).
     pub async fn list_tools(&self) -> Result<RetryResult<Vec<McpTool>>, String> {
-        self.with_reconnect(
-            "list_tools",
-            true,
-            |client| async move { client.list_all_tools().await },
-        )
-        .await
+        let limits = self.discovery_limits;
+        let listing = self.with_reconnect("list_tools", true, |client| async move {
+            list_tools(client.peer(), limits.max_pages).await
+        });
+        tokio::time::timeout(limits.timeout, listing).await.unwrap_or_else(|_| {
+            Err(ListError::Timeout { method: "tools/list", timeout: limits.timeout }.to_string())
+        })
     }
 
     /// Call a tool on the MCP server.
@@ -413,7 +511,7 @@ where
     ) -> Result<RetryResult<CallToolResponse>, String> {
         self.with_reconnect("tool call", self.retry_tool_calls, |client| {
             let params = params.clone();
-            async move { client.call_tool_once(params).await }
+            async move { Ok(client.call_tool_once(params).await?) }
         })
         .await
     }
@@ -481,6 +579,7 @@ where
     S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
 {
     client: Arc<RunningService<RoleClient, S>>,
+    discovery_limits: McpDiscoveryLimits,
 }
 
 impl<S> SimpleClient<S>
@@ -489,12 +588,33 @@ where
 {
     /// Create a new simple client wrapper.
     pub fn new(client: RunningService<RoleClient, S>) -> Self {
-        Self { client: Arc::new(client) }
+        Self { client: Arc::new(client), discovery_limits: McpDiscoveryLimits::default() }
     }
 
-    /// List all tools from the MCP server.
+    /// Set the bounds on [`list_tools`](Self::list_tools). See [`McpDiscoveryLimits`]
+    /// for the defaults.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let simple = SimpleClient::new(client)
+    ///     .with_discovery_limits(McpDiscoveryLimits::default().with_max_pages(8));
+    /// ```
+    pub fn with_discovery_limits(mut self, limits: McpDiscoveryLimits) -> Self {
+        self.discovery_limits = limits;
+        self
+    }
+
+    /// List all tools from the MCP server, within the [discovery limits](Self::with_discovery_limits).
     pub async fn list_tools(&self) -> Result<Vec<McpTool>, String> {
-        self.client.list_all_tools().await.map_err(|e| e.to_string())
+        let limits = self.discovery_limits;
+        super::discovery::within(
+            "tools/list",
+            limits.timeout,
+            list_tools(self.client.peer(), limits.max_pages),
+        )
+        .await
+        .map_err(|error| error.to_string())
     }
 
     /// Call a tool on the MCP server.
@@ -522,55 +642,140 @@ where
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_should_refresh_connection() {
-        assert!(should_refresh_connection("connection closed"));
-        assert!(should_refresh_connection("ConnectionClosed"));
-        assert!(should_refresh_connection("EOF"));
-        assert!(should_refresh_connection("eof error"));
-        assert!(should_refresh_connection("broken pipe"));
-        assert!(should_refresh_connection("session not found"));
-        assert!(should_refresh_connection("transport error"));
-        assert!(should_refresh_connection("connection reset"));
-        // rmcp's `ServiceError::TransportClosed`, reported once a stdio server exits.
-        assert!(should_refresh_connection("Transport closed"));
+    fn transport_error(error: impl std::error::Error + Send + Sync + 'static) -> ServiceError {
+        ServiceError::TransportSend(rmcp::transport::DynamicTransportError::from_parts(
+            "test",
+            std::any::TypeId::of::<()>(),
+            Box::new(error),
+        ))
+    }
 
-        // Should not refresh for other errors
-        assert!(!should_refresh_connection("invalid argument"));
-        assert!(!should_refresh_connection("permission denied"));
-        assert!(!should_refresh_connection("tool not found"));
+    fn io(kind: std::io::ErrorKind, message: &str) -> std::io::Error {
+        std::io::Error::new(kind, message.to_string())
     }
 
     #[test]
-    fn http_401_rejections_trigger_a_refresh() {
-        let with_challenge = "Transport send error: Transport [rmcp::transport::\
-            StreamableHttpClientTransport] error: Auth required";
-        let post_without_challenge = "Transport send error: Transport [rmcp::transport::\
-            StreamableHttpClientTransport] error: unexpected server response: \
-            HTTP 401 Unauthorized: ";
-        let get_without_challenge = "Transport send error: Transport [rmcp::transport::\
-            StreamableHttpClientTransport] error: Client error: HTTP status client error \
-            (401 Unauthorized) for url (https://mcp.example.com/)";
+    fn a_lost_connection_triggers_a_refresh() {
+        use std::io::ErrorKind;
+        // rmcp's `ServiceError::TransportClosed`, reported once a stdio server exits.
+        assert!(should_refresh_connection(&ServiceError::TransportClosed));
+        for kind in [
+            ErrorKind::BrokenPipe,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::NotConnected,
+            ErrorKind::UnexpectedEof,
+        ] {
+            assert!(should_refresh_connection(&transport_error(io(kind, "lost"))), "{kind:?}");
+        }
+    }
 
-        for error in [with_challenge, post_without_challenge, get_without_challenge] {
-            assert!(is_auth_rejection(error), "{error}");
-            assert!(should_refresh_connection(error), "{error}");
+    /// An I/O error a transport wraps in its own error type is found through `source()`.
+    #[test]
+    fn a_wrapped_io_error_is_classified_by_its_kind() {
+        #[derive(Debug)]
+        struct Codec(std::io::Error);
+        impl std::fmt::Display for Codec {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "codec failed")
+            }
+        }
+        impl std::error::Error for Codec {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        let broken = Codec(io(std::io::ErrorKind::BrokenPipe, "pipe"));
+        assert!(should_refresh_connection(&transport_error(broken)));
+    }
+
+    /// Server-chosen text that mentions a lost connection never triggers a refresh.
+    #[test]
+    fn error_text_does_not_trigger_a_refresh() {
+        let text = "upstream geoffrey: EOF, broken pipe, connection reset, transport closed, \
+                    session not found";
+        let errors = [
+            transport_error(io(std::io::ErrorKind::Other, text)),
+            ServiceError::McpError(rmcp::ErrorData::internal_error(text.to_string(), None)),
+            ServiceError::UnexpectedResponse,
+            ServiceError::Timeout { timeout: std::time::Duration::from_secs(1) },
+        ];
+        for error in errors {
+            assert!(!should_refresh_connection(&error), "{error}");
+            assert!(!is_auth_rejection(&error), "{error}");
         }
     }
 
     #[test]
     fn server_errors_that_mention_authorization_are_not_auth_rejections() {
-        let error = "Mcp error: -32001: upstream returned 401 Unauthorized; auth required";
-        assert!(!is_auth_rejection(error));
-        assert!(!should_refresh_connection(error));
+        let error = ServiceError::McpError(rmcp::ErrorData::new(
+            rmcp::model::ErrorCode(-32001),
+            "upstream returned 401 Unauthorized; auth required",
+            None,
+        ));
+        assert!(!is_auth_rejection(&error));
+        assert!(!should_refresh_connection(&error));
     }
 
-    #[test]
-    fn a_rejected_tool_call_is_retried_without_replay_opt_in() {
-        let config = RefreshConfig::default();
-        let rejected = "Transport send error: Transport [http] error: Auth required";
-        assert!(should_retry_mcp_operation(rejected, 0, &config, true, false));
-        assert!(!should_retry_mcp_operation("Transport closed EOF", 0, &config, true, false));
+    #[cfg(feature = "http-transport")]
+    mod http {
+        use super::*;
+        use rmcp::transport::streamable_http_client::AuthRequiredError;
+
+        fn http(error: HttpError) -> ServiceError {
+            transport_error(error)
+        }
+
+        #[test]
+        fn http_401_rejections_trigger_a_refresh() {
+            let with_challenge =
+                http(HttpError::AuthRequired(AuthRequiredError::new("Bearer".to_string())));
+            let without_challenge =
+                http(HttpError::UnexpectedServerResponse("HTTP 401 Unauthorized: ".into()));
+            for error in [with_challenge, without_challenge] {
+                assert!(is_auth_rejection(&error), "{error}");
+                assert!(should_refresh_connection(&error), "{error}");
+            }
+        }
+
+        #[test]
+        fn a_5xx_never_triggers_a_refresh_whatever_its_body_says() {
+            let error = http(HttpError::UnexpectedServerResponse(
+                "HTTP 500 Internal Server Error: upstream geoffrey: EOF; Transport closed; \
+                 connection reset; session not found; HTTP 401 Unauthorized"
+                    .into(),
+            ));
+            assert!(!should_refresh_connection(&error), "{error}");
+            assert!(!is_auth_rejection(&error), "{error}");
+        }
+
+        #[test]
+        fn an_interrupted_stream_or_expired_session_triggers_a_refresh() {
+            for error in [
+                HttpError::UnexpectedEndOfStream,
+                HttpError::TransportChannelClosed,
+                HttpError::SessionExpired,
+                HttpError::Io(io(std::io::ErrorKind::ConnectionReset, "reset")),
+            ] {
+                let error = http(error);
+                assert!(should_refresh_connection(&error), "{error}");
+                assert!(!is_auth_rejection(&error), "{error}");
+            }
+        }
+
+        #[test]
+        fn a_rejected_tool_call_is_retried_without_replay_opt_in() {
+            let config = RefreshConfig::default();
+            let rejected = http(HttpError::AuthRequired(AuthRequiredError::new("Bearer".into())));
+            assert!(should_retry_mcp_operation(&rejected, 0, &config, true, false));
+            assert!(!should_retry_mcp_operation(
+                &ServiceError::TransportClosed,
+                0,
+                &config,
+                true,
+                false
+            ));
+        }
     }
 
     #[test]

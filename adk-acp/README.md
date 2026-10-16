@@ -168,7 +168,8 @@ only when the agent supplies a `SessionControls` provider — an agent without o
 advertises no modes and no options, so advertised capabilities always match what
 the server implements. It does not advertise optional HTTP or SSE MCP support.
 MCP startup has a bounded timeout, session capacity is reserved before a process
-starts, duplicate names and environment entries are rejected, and close, delete,
+starts, duplicate names and environment entries are rejected, servers that
+publish the same tool name are rejected at session setup, and close, delete,
 and shutdown cancel the session-owned MCP services.
 
 ### Session modes, configuration options, and commands

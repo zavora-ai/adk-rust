@@ -130,9 +130,9 @@ pub use example_store::{ExampleStoreClient, ExampleStoreConfig, ExampleStoreProv
 pub use function_tool::FunctionTool;
 #[cfg(feature = "mcp")]
 pub use mcp::{
-    AutoDeclineElicitationHandler, ElicitationHandler, McpAuth, McpHttpClientBuilder,
-    McpSchemaLimits, McpServerManager, McpTaskConfig, McpToolset, OAuth2Config, Resource,
-    ResourceContents, ResourceNotificationHandler, ResourceTemplate,
+    AutoDeclineElicitationHandler, ElicitationHandler, McpAuth, McpDiscoveryLimits,
+    McpHttpClientBuilder, McpSchemaLimits, McpServerManager, McpTaskConfig, McpToolset,
+    OAuth2Config, Resource, ResourceContents, ResourceNotificationHandler, ResourceTemplate,
 };
 pub use simple_context::SimpleToolContext;
 pub use stateful_tool::StatefulTool;

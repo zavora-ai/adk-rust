@@ -29,8 +29,11 @@ struct SlowServer {
     /// Notified when the server sees a `hang` call cancelled.
     cancelled: Arc<Notify>,
     list_calls: Arc<AtomicUsize>,
-    /// Fails `tools/list` the way a server that lost the session does.
-    session_lost: bool,
+    /// Cuts the connection once two `tools/list` requests are in flight, the way a
+    /// server process that dies mid-request does.
+    connection_lost: bool,
+    /// Carries the connection made by `connect_through_proxy`.
+    proxy: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl SlowServer {
@@ -40,7 +43,8 @@ impl SlowServer {
             gate: Arc::new(Notify::new()),
             cancelled: Arc::new(Notify::new()),
             list_calls: Arc::new(AtomicUsize::new(0)),
-            session_lost: false,
+            connection_lost: false,
+            proxy: Arc::default(),
         }
     }
 }
@@ -58,8 +62,12 @@ impl ServerHandler for SlowServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let generation = self.list_calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if self.session_lost {
-            return Err(ErrorData::invalid_request("session not found", None));
+        if self.connection_lost {
+            self.rendezvous.wait().await;
+            if let Some(proxy) = self.proxy.lock().unwrap().take() {
+                proxy.abort();
+            }
+            std::future::pending::<()>().await;
         }
         let schema = Arc::new(json!({ "type": "object" }).as_object().unwrap().clone());
         Ok(ListToolsResult::with_all_items(vec![Tool::new(
@@ -96,6 +104,22 @@ async fn connect(server: SlowServer) -> RunningService<RoleClient, ()> {
             let _ = running.waiting().await;
         }
     });
+    ().serve(client_io).await.unwrap()
+}
+
+/// Connects through a byte proxy that `server` aborts to cut both directions at once.
+async fn connect_through_proxy(server: SlowServer) -> RunningService<RoleClient, ()> {
+    let (client_io, mut client_side) = tokio::io::duplex(64 * 1024);
+    let (mut server_side, server_io) = tokio::io::duplex(64 * 1024);
+    let proxy = Arc::clone(&server.proxy);
+    tokio::spawn(async move {
+        if let Ok(running) = server.serve(server_io).await {
+            let _ = running.waiting().await;
+        }
+    });
+    *proxy.lock().unwrap() = Some(tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut client_side, &mut server_side).await;
+    }));
     ().serve(client_io).await.unwrap()
 }
 
@@ -226,9 +250,9 @@ impl ConnectionFactory<()> for CountingFactory {
 
 #[tokio::test]
 async fn concurrent_failures_on_one_connection_reconnect_once() {
-    let lost = SlowServer { session_lost: true, ..SlowServer::new() };
+    let lost = SlowServer { connection_lost: true, ..SlowServer::new() };
     let factory = Arc::new(CountingFactory { connections: AtomicUsize::new(0) });
-    let toolset = McpToolset::new(connect(lost).await)
+    let toolset = McpToolset::new(connect_through_proxy(lost).await)
         .with_connection_factory(factory.clone())
         .with_refresh_config(RefreshConfig::default().with_retry_delay_ms(0).without_logging())
         .with_tool_list_cache_ttl(Duration::ZERO);

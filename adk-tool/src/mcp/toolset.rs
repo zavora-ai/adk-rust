@@ -6,13 +6,17 @@
 // The McpToolset connects to an MCP server, discovers available tools,
 // and exposes them as ADK-compatible tools for use with LlmAgent.
 
+use super::discovery::{
+    ListError, McpDiscoveryLimits, escape_for_display, list_pages, list_tools, unroutable_name,
+    within,
+};
 use super::reconnect::{
     DEFAULT_RETRY_TOOL_CALLS, is_auth_rejection, is_connection_closed, should_retry_mcp_operation,
 };
 use super::schema_limits::McpSchemaLimits;
 use super::task::{McpTaskConfig, TaskError};
 use super::{ConnectionFactory, RefreshConfig, should_refresh_connection};
-use adk_core::{AdkError, ReadonlyContext, Result, Tool, ToolContext, Toolset};
+use adk_core::{AdkError, ReadonlyContext, Result, Tool, ToolContext, ToolEffect, Toolset};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt;
@@ -22,15 +26,15 @@ use rmcp::{
         CallToolRequest, CallToolRequestParams, CallToolResponse, CancelTaskParams,
         CancelledNotification, CancelledNotificationParam, ClientRequest, CompletionContext,
         CompletionInfo, ContentBlock, ErrorCode, GetPromptRequestParams, GetPromptResult,
-        GetTaskParams, GetTaskRequest, InputRequest, InputRequests, InputResponses, Prompt,
-        ReadResourceRequestParams, RequestId, Resource, ResourceContents, ResourceTemplate,
-        ServerResult, SubscribeRequestParams, TaskPayload, ToolAnnotations,
-        UnsubscribeRequestParams, UpdateTaskParams, UpdateTaskRequest,
+        GetTaskParams, GetTaskRequest, InputRequest, InputRequests, InputResponses,
+        PaginatedRequestParams, Prompt, ReadResourceRequestParams, RequestId, Resource,
+        ResourceContents, ResourceTemplate, ServerResult, SubscribeRequestParams, TaskPayload,
+        ToolAnnotations, UnsubscribeRequestParams, UpdateTaskParams, UpdateTaskRequest,
     },
     service::{Peer, PeerRequestOptions, RunningService},
 };
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
@@ -147,6 +151,15 @@ where
         current.1 += 1;
         Ok(true)
     }
+}
+
+/// The cached `tools/list` result, and how many times it has been invalidated.
+#[derive(Default)]
+struct ToolListCache {
+    entry: Option<CachedToolList>,
+    /// Bumped by `invalidate_tool_list_cache`; a fetch stores its result only when
+    /// this has not changed since the fetch began.
+    invalidations: u64,
 }
 
 /// One `tools/list` result and the state it was fetched under.
@@ -300,9 +313,6 @@ const MAX_TASK_ID_BYTES: usize = 16 * 1024;
 /// Most input requests answered in one MRTR or in-task input round.
 const MAX_INPUT_REQUESTS_PER_ROUND: usize = 64;
 
-/// Longest prefix of a server-chosen tool name written to a discovery log line.
-const MAX_LOGGED_TOOL_NAME_BYTES: usize = 128;
-
 /// Most tasks `cancel_pending_tasks` checks or cancels at once.
 const MAX_CONCURRENT_TASK_CLEANUPS: usize = 16;
 
@@ -336,10 +346,14 @@ async fn restore_subscriptions<S: rmcp::service::Service<RoleClient>>(
     Ok(())
 }
 
-fn mcp_tool_safety(annotations: Option<&ToolAnnotations>) -> (bool, bool) {
-    let read_only = annotations.and_then(|value| value.read_only_hint).unwrap_or(false);
-    let idempotent = annotations.and_then(|value| value.idempotent_hint).unwrap_or(false);
-    (read_only, read_only || idempotent)
+/// The effect a tool's `readOnlyHint` and `idempotentHint` declare; a tool that
+/// declares neither is treated as non-idempotent.
+fn mcp_tool_effect(annotations: Option<&ToolAnnotations>) -> ToolEffect {
+    match annotations {
+        Some(hints) if hints.read_only_hint == Some(true) => ToolEffect::ReadOnly,
+        Some(hints) if hints.idempotent_hint == Some(true) => ToolEffect::Idempotent,
+        _ => ToolEffect::NonIdempotent,
+    }
 }
 
 /// Preserve every MCP content block in ADK's multimodal tool-result envelope.
@@ -421,7 +435,7 @@ pub type ToolFilter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 fn mcp_tool_call_error(
     tool_name: &str,
-    error: &str,
+    error: &ServiceError,
     has_connection_factory: bool,
     replay_allowed: bool,
 ) -> AdkError {
@@ -489,7 +503,7 @@ where
     /// The running MCP client service
     client: Arc<SharedClient<S>>,
     /// The last `tools/list` result, shared by clones of this toolset.
-    tool_list: Arc<Mutex<Option<CachedToolList>>>,
+    tool_list: Arc<Mutex<ToolListCache>>,
     /// How long `tool_list` is reused; zero disables the cache.
     tool_list_ttl: Duration,
     /// Optional filter to select which tools to expose
@@ -512,6 +526,8 @@ where
     mrtr_handler: Option<super::elicitation::AdkClientHandler>,
     /// Size limits checked against each discovered tool schema.
     schema_limits: McpSchemaLimits,
+    /// Bounds on each catalog listing.
+    discovery_limits: McpDiscoveryLimits,
 }
 
 impl<S> Clone for McpToolset<S>
@@ -533,6 +549,7 @@ where
             resource_subscriptions: Arc::clone(&self.resource_subscriptions),
             mrtr_handler: self.mrtr_handler.clone(),
             schema_limits: self.schema_limits,
+            discovery_limits: self.discovery_limits,
         }
     }
 }
@@ -571,7 +588,7 @@ where
             .cloned();
         Self {
             client: Arc::new(SharedClient::new(client)),
-            tool_list: Arc::new(Mutex::new(None)),
+            tool_list: Arc::new(Mutex::new(ToolListCache::default())),
             tool_list_ttl: DEFAULT_TOOL_LIST_CACHE_TTL,
             tool_filter: None,
             name: "mcp_toolset".to_string(),
@@ -583,6 +600,7 @@ where
             resource_subscriptions: Arc::new(RwLock::new(BTreeSet::new())),
             mrtr_handler,
             schema_limits: McpSchemaLimits::default(),
+            discovery_limits: McpDiscoveryLimits::default(),
         }
     }
 
@@ -676,9 +694,35 @@ where
         self
     }
 
+    /// Set the bounds on each catalog listing: `tools/list`, `resources/list`,
+    /// `resources/templates/list`, and `prompts/list`.
+    ///
+    /// A listing fails with `AdkError::Tool` when the server still returns a
+    /// `nextCursor` after `max_pages` pages, returns a cursor it already returned,
+    /// or takes longer than `timeout`, reconnects included. See
+    /// [`McpDiscoveryLimits`] for the defaults.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_tool::mcp::{McpDiscoveryLimits, McpToolset};
+    /// use std::time::Duration;
+    ///
+    /// fn fail_fast(toolset: McpToolset) -> McpToolset {
+    ///     toolset.with_discovery_limits(
+    ///         McpDiscoveryLimits::default().with_max_pages(16).with_timeout(Duration::from_secs(5)),
+    ///     )
+    /// }
+    /// ```
+    pub fn with_discovery_limits(mut self, limits: McpDiscoveryLimits) -> Self {
+        self.discovery_limits = limits;
+        self
+    }
+
     /// Set how long a `tools/list` result is reused before discovery asks the
-    /// server again. The default is 60 seconds; `Duration::ZERO` disables the
-    /// cache, so every [`Toolset::tools`] call sends `tools/list`.
+    /// server again. The default is 60 seconds; `Duration::ZERO` disables this
+    /// cache, so every [`Toolset::tools`] call sends `tools/list`, except for a page
+    /// the server marked fresh with `ttlMs`, which rmcp's response cache answers.
     ///
     /// An agent resolves its toolsets before every model turn, so without the
     /// cache each turn costs one `tools/list` round trip per MCP server. The
@@ -688,7 +732,7 @@ where
     /// |-------|------------|
     /// | The connection is refreshed | Every toolset with a connection factory |
     /// | The server sends `notifications/tools/list_changed` | Connections served by [`AdkClientHandler`](super::AdkClientHandler) |
-    /// | [`invalidate_tool_list_cache`](Self::invalidate_tool_list_cache) is called | Every toolset |
+    /// | [`invalidate_tool_list_cache`](Self::invalidate_tool_list_cache) is called | Every toolset, including a fetch already in flight |
     ///
     /// # Example
     ///
@@ -708,6 +752,11 @@ where
     /// Drop the cached `tools/list` result, so the next [`Toolset::tools`] call
     /// asks the server again.
     ///
+    /// This also clears the connection's rmcp response cache, which keeps pages
+    /// the server marked fresh with `ttlMs`, and stops a `tools/list` already in
+    /// flight from caching its result: that call still returns what it fetched,
+    /// and the next call fetches again.
+    ///
     /// Call this from a custom `ClientHandler`'s `on_tool_list_changed` when the
     /// connection does not run on [`AdkClientHandler`](super::AdkClientHandler),
     /// which invalidates the cache on its own.
@@ -722,7 +771,11 @@ where
     /// }
     /// ```
     pub async fn invalidate_tool_list_cache(&self) {
-        *self.tool_list.lock().await = None;
+        // Cleared first, so a fetch that starts after the bump below reads the server.
+        self.client.connection().await.peer().clear_response_cache().await;
+        let mut cache = self.tool_list.lock().await;
+        cache.invalidations += 1;
+        cache.entry = None;
     }
 
     /// Reuse the connection's client policy for stateless MRTR and task input.
@@ -844,11 +897,25 @@ where
 
     /// Call one MCP tool and preserve structured, text, image, audio, and resource content
     /// in the same ADK multimodal value shape used by model-facing tool execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` without contacting the server when the toolset's
+    /// [filter](Self::with_filter) excludes `name`, and when the call fails.
     pub async fn call_tool_value(
         &self,
         name: &str,
         arguments: serde_json::Map<String, Value>,
     ) -> Result<Value> {
+        if let Some(filter) = &self.tool_filter
+            && !filter(name)
+        {
+            return Err(AdkError::tool(format!(
+                "MCP tool '{}' is excluded by the tool filter of toolset '{}'",
+                escape_for_display(name),
+                self.name
+            )));
+        }
         let server_supports_tasks = self
             .client
             .connection()
@@ -865,6 +932,7 @@ where
             refresh_config: self.refresh_config.clone(),
             retry_tool_calls: self.retry_tool_calls,
             annotations: None,
+            annotations_json: None,
             server_supports_tasks,
             task_config: self.task_config.clone(),
             active_tasks: self.active_tasks.clone(),
@@ -983,18 +1051,28 @@ where
     ///
     /// # Errors
     ///
-    /// Returns `AdkError::Tool` on transport or unexpected server errors.
+    /// Returns `AdkError::Tool` on transport or unexpected server errors, and when
+    /// the listing exceeds the [discovery limits](Self::with_discovery_limits).
     pub async fn list_resources(&self) -> Result<Vec<Resource>> {
         let client = self.client.connection().await;
-        match client.list_all_resources().await {
-            Ok(resources) => Ok(resources),
-            Err(e) => {
-                if is_method_not_found(&e) {
-                    Ok(vec![])
-                } else {
-                    Err(AdkError::tool(format!("Failed to list MCP resources: {e}")))
-                }
+        let limits = self.discovery_limits;
+        let method = "resources/list";
+        let listing = list_pages(method, limits.max_pages, |cursor| {
+            let client = Arc::clone(&client);
+            async move {
+                let page = client
+                    .list_resources(Some(PaginatedRequestParams::default().with_cursor(cursor)))
+                    .await?;
+                Ok((page.resources, page.next_cursor))
             }
+        });
+        match within(method, limits.timeout, listing).await {
+            Ok(resources) => Ok(resources),
+            Err(ListError::Service(error)) if is_method_not_found(&error) => Ok(Vec::new()),
+            Err(error) => Err(AdkError::tool(format!(
+                "Failed to list MCP resources from '{}': {error}",
+                self.name
+            ))),
         }
     }
 
@@ -1007,18 +1085,30 @@ where
     ///
     /// # Errors
     ///
-    /// Returns `AdkError::Tool` on transport or unexpected server errors.
+    /// Returns `AdkError::Tool` on transport or unexpected server errors, and when
+    /// the listing exceeds the [discovery limits](Self::with_discovery_limits).
     pub async fn list_resource_templates(&self) -> Result<Vec<ResourceTemplate>> {
         let client = self.client.connection().await;
-        match client.list_all_resource_templates().await {
-            Ok(templates) => Ok(templates),
-            Err(e) => {
-                if is_method_not_found(&e) {
-                    Ok(vec![])
-                } else {
-                    Err(AdkError::tool(format!("Failed to list MCP resource templates: {e}")))
-                }
+        let limits = self.discovery_limits;
+        let method = "resources/templates/list";
+        let listing = list_pages(method, limits.max_pages, |cursor| {
+            let client = Arc::clone(&client);
+            async move {
+                let page = client
+                    .list_resource_templates(Some(
+                        PaginatedRequestParams::default().with_cursor(cursor),
+                    ))
+                    .await?;
+                Ok((page.resource_templates, page.next_cursor))
             }
+        });
+        match within(method, limits.timeout, listing).await {
+            Ok(templates) => Ok(templates),
+            Err(ListError::Service(error)) if is_method_not_found(&error) => Ok(Vec::new()),
+            Err(error) => Err(AdkError::tool(format!(
+                "Failed to list MCP resource templates from '{}': {error}",
+                self.name
+            ))),
         }
     }
 
@@ -1048,12 +1138,33 @@ where
     }
 
     /// Return the prompt templates published by the connected MCP server.
+    ///
+    /// Returns an empty `Vec` when the server does not support prompts.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` on transport or unexpected server errors, and when
+    /// the listing exceeds the [discovery limits](Self::with_discovery_limits).
     pub async fn list_prompts(&self) -> Result<Vec<Prompt>> {
         let client = self.client.connection().await;
-        match client.list_all_prompts().await {
+        let limits = self.discovery_limits;
+        let method = "prompts/list";
+        let listing = list_pages(method, limits.max_pages, |cursor| {
+            let client = Arc::clone(&client);
+            async move {
+                let page = client
+                    .list_prompts(Some(PaginatedRequestParams::default().with_cursor(cursor)))
+                    .await?;
+                Ok((page.prompts, page.next_cursor))
+            }
+        });
+        match within(method, limits.timeout, listing).await {
             Ok(prompts) => Ok(prompts),
-            Err(error) if is_method_not_found(&error) => Ok(Vec::new()),
-            Err(error) => Err(AdkError::tool(format!("failed to list MCP prompts: {error}"))),
+            Err(ListError::Service(error)) if is_method_not_found(&error) => Ok(Vec::new()),
+            Err(error) => Err(AdkError::tool(format!(
+                "failed to list MCP prompts from '{}': {error}",
+                self.name
+            ))),
         }
     }
 
@@ -1149,93 +1260,113 @@ where
     }
 
     async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
-        let (mut connection, mut generation) = self
-            .client
-            .live_connection(self.connection_factory.as_ref(), &self.resource_subscriptions)
-            .await?;
-        // Read before fetching, so a change notified mid-fetch invalidates the result.
-        let mut list_changes = tool_list_changes(&connection);
-        let cached = if self.tool_list_ttl.is_zero() {
-            None
-        } else {
-            self.tool_list
-                .lock()
-                .await
-                .as_ref()
-                .filter(|cached| {
-                    cached.generation == generation
-                        && cached.list_changes == list_changes
-                        && cached.fetched_at.elapsed() < self.tool_list_ttl
-                })
-                .map(|cached| cached.tools.clone())
+        let limits = self.discovery_limits;
+        let list_error = |error: ListError| {
+            AdkError::tool(format!("Failed to list MCP tools from '{}': {error}", self.name))
         };
+        let discovery = async {
+            let (mut connection, mut generation) = self
+                .client
+                .live_connection(self.connection_factory.as_ref(), &self.resource_subscriptions)
+                .await?;
+            // Read before fetching, so a change notified or an invalidation made mid-fetch
+            // keeps the result out of the cache.
+            let mut list_changes = tool_list_changes(&connection);
+            let (cached, invalidations) = {
+                let cache = self.tool_list.lock().await;
+                let cached = cache
+                    .entry
+                    .as_ref()
+                    .filter(|cached| {
+                        !self.tool_list_ttl.is_zero()
+                            && cached.generation == generation
+                            && cached.list_changes == list_changes
+                            && cached.fetched_at.elapsed() < self.tool_list_ttl
+                    })
+                    .map(|cached| cached.tools.clone());
+                (cached, cache.invalidations)
+            };
+            if let Some(tools) = cached {
+                return Ok((connection, tools));
+            }
 
-        let mcp_tools = match cached {
-            Some(tools) => tools,
-            None => {
-                let mut attempt = 0u32;
-                let has_connection_factory = self.connection_factory.is_some();
-                let fetched = loop {
-                    let error = match connection.list_all_tools().await {
-                        Ok(tools) => break tools,
-                        Err(error) => error.to_string(),
-                    };
-                    if !should_retry_mcp_operation(
-                        &error,
-                        attempt,
-                        &self.refresh_config,
-                        has_connection_factory,
-                        true,
-                    ) {
-                        return Err(AdkError::tool(format!("Failed to list MCP tools: {error}")));
-                    }
-
-                    let retry_attempt = attempt + 1;
-                    if self.refresh_config.log_reconnections {
-                        warn!(
-                            attempt = retry_attempt,
-                            max_attempts = self.refresh_config.max_attempts,
-                            error = %error,
-                            "MCP list_all_tools failed; reconnecting and retrying"
-                        );
-                    }
-
-                    if self.refresh_config.retry_delay_ms > 0 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(
-                            self.refresh_config.retry_delay_ms,
-                        ))
-                        .await;
-                    }
-
-                    if !self
-                        .client
-                        .refresh(
-                            &connection,
-                            self.connection_factory.as_ref(),
-                            &self.resource_subscriptions,
-                        )
-                        .await?
-                    {
-                        return Err(AdkError::tool(format!("Failed to list MCP tools: {error}")));
-                    }
-                    (connection, generation) = self.client.connection_with_generation().await;
-                    list_changes = tool_list_changes(&connection);
-                    attempt += 1;
+            let mut attempt = 0u32;
+            let has_connection_factory = self.connection_factory.is_some();
+            let fetched = loop {
+                let error = match list_tools(connection.peer(), limits.max_pages).await {
+                    Ok(tools) => break tools,
+                    Err(ListError::Service(error)) => error,
+                    // A server that pages without end would do the same on a new connection.
+                    Err(bound) => return Err(list_error(bound)),
                 };
-                if !self.tool_list_ttl.is_zero() {
-                    *self.tool_list.lock().await = Some(CachedToolList {
+                if !should_retry_mcp_operation(
+                    &error,
+                    attempt,
+                    &self.refresh_config,
+                    has_connection_factory,
+                    true,
+                ) {
+                    return Err(list_error(ListError::Service(error)));
+                }
+
+                let retry_attempt = attempt + 1;
+                if self.refresh_config.log_reconnections {
+                    warn!(
+                        attempt = retry_attempt,
+                        max_attempts = self.refresh_config.max_attempts,
+                        error = %error,
+                        "MCP tools/list failed; reconnecting and retrying"
+                    );
+                }
+
+                if self.refresh_config.retry_delay_ms > 0 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(
+                        self.refresh_config.retry_delay_ms,
+                    ))
+                    .await;
+                }
+
+                if !self
+                    .client
+                    .refresh(
+                        &connection,
+                        self.connection_factory.as_ref(),
+                        &self.resource_subscriptions,
+                    )
+                    .await?
+                {
+                    return Err(list_error(ListError::Service(error)));
+                }
+                (connection, generation) = self.client.connection_with_generation().await;
+                list_changes = tool_list_changes(&connection);
+                attempt += 1;
+            };
+            if !self.tool_list_ttl.is_zero() {
+                let mut cache = self.tool_list.lock().await;
+                if cache.invalidations == invalidations {
+                    cache.entry = Some(CachedToolList {
                         generation,
                         list_changes,
                         fetched_at: Instant::now(),
                         tools: fetched.clone(),
                     });
                 }
-                fetched
+            }
+            Ok::<_, AdkError>((connection, fetched))
+        };
+        let (connection, mcp_tools) = match tokio::time::timeout(limits.timeout, discovery).await {
+            Ok(discovered) => discovered?,
+            Err(_) => {
+                return Err(list_error(ListError::Timeout {
+                    method: "tools/list",
+                    timeout: limits.timeout,
+                }));
             }
         };
 
         // Convert MCP tools to ADK tools
         let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
+        let mut seen = HashSet::new();
         let server_supports_tasks =
             connection.peer_info().is_some_and(|info| info.capabilities.supports_tasks());
 
@@ -1249,9 +1380,27 @@ where
                 continue;
             }
 
-            // The server chooses the name as well as the schema, so the log keeps a prefix.
-            let logged_name =
-                &tool_name[..tool_name.floor_char_boundary(MAX_LOGGED_TOOL_NAME_BYTES)];
+            // The server chooses the name as well as the schema, so logs show it escaped.
+            let logged_name = escape_for_display(&tool_name);
+            if let Some(reason) = unroutable_name(&tool_name) {
+                warn!(
+                    toolset.name = %self.name,
+                    tool.name = %logged_name,
+                    reason,
+                    "skipping MCP tool whose name no model provider can call"
+                );
+                continue;
+            }
+            // The first definition of a name wins, whatever happens to it below.
+            if !seen.insert(tool_name.clone()) {
+                warn!(
+                    toolset.name = %self.name,
+                    tool.name = %logged_name,
+                    "skipping MCP tool that repeats the name of an earlier tool on the same \
+                     server; the first definition is kept"
+                );
+                continue;
+            }
             // Measured from the server's document before anything copies or logs it.
             let limits = self.schema_limits;
             let measured = limits
@@ -1271,7 +1420,7 @@ where
                 Err((kind, size)) => {
                     warn!(
                         toolset.name = %self.name,
-                        tool.name = logged_name,
+                        tool.name = %logged_name,
                         schema.kind = kind,
                         schema.bytes = size.bytes,
                         schema.nodes = size.nodes,
@@ -1285,13 +1434,15 @@ where
             };
             debug!(
                 toolset.name = %self.name,
-                tool.name = logged_name,
+                tool.name = %logged_name,
                 schema.bytes = input_size.bytes,
                 schema.nodes = input_size.nodes,
                 output_schema.bytes = output_size.map(|size| size.bytes),
                 output_schema.nodes = output_size.map(|size| size.nodes),
                 "registering MCP tool"
             );
+            let annotations_json =
+                mcp_tool.annotations.as_ref().and_then(|hints| serde_json::to_value(hints).ok());
             let adk_tool = McpTool {
                 name: tool_name,
                 description: mcp_tool.description.map(|d| d.to_string()).unwrap_or_default(),
@@ -1304,6 +1455,7 @@ where
                 refresh_config: self.refresh_config.clone(),
                 retry_tool_calls: self.retry_tool_calls,
                 annotations: mcp_tool.annotations,
+                annotations_json,
                 server_supports_tasks,
                 task_config: self.task_config.clone(),
                 active_tasks: self.active_tasks.clone(),
@@ -1498,6 +1650,8 @@ where
     retry_tool_calls: bool,
     /// Safety hints published by the MCP server for this tool.
     annotations: Option<ToolAnnotations>,
+    /// `annotations` as the JSON object the server sent, for [`Tool::annotations`].
+    annotations_json: Option<Value>,
     /// Whether the negotiated server capabilities permit task-augmented tool calls.
     server_supports_tasks: bool,
     /// Task configuration
@@ -1609,7 +1763,7 @@ where
         mut params: CallToolRequestParams,
     ) -> Result<(CallToolResponse, Peer<RoleClient>)> {
         let has_connection_factory = self.connection_factory.is_some();
-        let (_, metadata_allows_replay) = mcp_tool_safety(self.annotations.as_ref());
+        let metadata_allows_replay = mcp_tool_effect(self.annotations.as_ref()).is_retry_safe();
         let replay_allowed = self.retry_tool_calls || metadata_allows_replay;
         let mut attempt = 0u32;
 
@@ -1620,8 +1774,7 @@ where
                 .client
                 .live_connection(self.connection_factory.as_ref(), &self.resource_subscriptions)
                 .await?;
-            let call_result =
-                send_tool_call(connection.peer(), params.clone()).await.map_err(|e| e.to_string());
+            let call_result = send_tool_call(connection.peer(), params.clone()).await;
 
             match call_result {
                 Ok(CallToolResponse::InputRequired(required)) => {
@@ -1946,11 +2099,19 @@ where
     }
 
     fn is_read_only(&self) -> bool {
-        mcp_tool_safety(self.annotations.as_ref()).0
+        mcp_tool_effect(self.annotations.as_ref()) == ToolEffect::ReadOnly
     }
 
     fn is_concurrency_safe(&self) -> bool {
-        mcp_tool_safety(self.annotations.as_ref()).1
+        mcp_tool_effect(self.annotations.as_ref()).is_retry_safe()
+    }
+
+    fn effect(&self) -> ToolEffect {
+        mcp_tool_effect(self.annotations.as_ref())
+    }
+
+    fn annotations(&self) -> Option<&Value> {
+        self.annotations_json.as_ref()
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -2007,46 +2168,70 @@ mod tests {
         require_send_sync::<McpToolset<()>>();
     }
 
+    fn broken_pipe() -> ServiceError {
+        ServiceError::TransportSend(rmcp::transport::DynamicTransportError::from_parts(
+            "test",
+            std::any::TypeId::of::<()>(),
+            Box::new(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe closed")),
+        ))
+    }
+
     #[test]
     fn test_should_retry_mcp_operation_reconnectable_errors() {
         let config = RefreshConfig::default().with_max_attempts(3);
-        assert!(should_retry_mcp_operation("EOF", 0, &config, true, true));
-        assert!(should_retry_mcp_operation("connection reset by peer", 1, &config, true, true));
+        assert!(should_retry_mcp_operation(&ServiceError::TransportClosed, 0, &config, true, true));
+        assert!(should_retry_mcp_operation(&broken_pipe(), 1, &config, true, true));
     }
 
     #[test]
-    fn mcp_tool_safety_defaults_to_conservative_values() {
-        assert_eq!(mcp_tool_safety(None), (false, false));
-        assert_eq!(mcp_tool_safety(Some(&ToolAnnotations::default())), (false, false));
+    fn mcp_tool_effect_defaults_to_non_idempotent() {
+        assert_eq!(mcp_tool_effect(None), ToolEffect::NonIdempotent);
+        assert_eq!(mcp_tool_effect(Some(&ToolAnnotations::default())), ToolEffect::NonIdempotent);
+        let destructive = ToolAnnotations::new().destructive(true).idempotent(false);
+        assert_eq!(mcp_tool_effect(Some(&destructive)), ToolEffect::NonIdempotent);
     }
 
     #[test]
-    fn mcp_tool_safety_maps_read_only_and_idempotent_hints() {
-        let mut read_only = ToolAnnotations::default();
-        read_only.read_only_hint = Some(true);
-        assert_eq!(mcp_tool_safety(Some(&read_only)), (true, true));
+    fn mcp_tool_effect_maps_read_only_and_idempotent_hints() {
+        let read_only = ToolAnnotations::new().read_only(true).idempotent(true);
+        assert_eq!(mcp_tool_effect(Some(&read_only)), ToolEffect::ReadOnly);
 
-        let mut idempotent = ToolAnnotations::default();
-        idempotent.idempotent_hint = Some(true);
-        assert_eq!(mcp_tool_safety(Some(&idempotent)), (false, true));
+        let idempotent = ToolAnnotations::new().idempotent(true);
+        assert_eq!(mcp_tool_effect(Some(&idempotent)), ToolEffect::Idempotent);
     }
 
     #[test]
     fn test_should_retry_mcp_operation_stops_at_max_attempts() {
         let config = RefreshConfig::default().with_max_attempts(2);
-        assert!(!should_retry_mcp_operation("EOF", 2, &config, true, true));
+        assert!(!should_retry_mcp_operation(
+            &ServiceError::TransportClosed,
+            2,
+            &config,
+            true,
+            true
+        ));
     }
 
     #[test]
     fn test_should_retry_mcp_operation_requires_factory() {
         let config = RefreshConfig::default().with_max_attempts(3);
-        assert!(!should_retry_mcp_operation("EOF", 0, &config, false, true));
+        assert!(!should_retry_mcp_operation(
+            &ServiceError::TransportClosed,
+            0,
+            &config,
+            false,
+            true
+        ));
     }
 
     #[test]
     fn test_should_retry_mcp_operation_non_reconnectable_error() {
         let config = RefreshConfig::default().with_max_attempts(3);
-        assert!(!should_retry_mcp_operation("invalid arguments for tool", 0, &config, true, true));
+        let invalid = ServiceError::McpError(rmcp::ErrorData::invalid_params(
+            "invalid arguments for tool; EOF",
+            None,
+        ));
+        assert!(!should_retry_mcp_operation(&invalid, 0, &config, true, true));
     }
 
     /// The default must stay off.
@@ -2058,7 +2243,13 @@ mod tests {
     fn tool_call_replay_is_disabled_by_default() {
         let config = RefreshConfig::default();
         assert!(
-            !should_retry_mcp_operation("EOF", 0, &config, true, DEFAULT_RETRY_TOOL_CALLS),
+            !should_retry_mcp_operation(
+                &ServiceError::TransportClosed,
+                0,
+                &config,
+                true,
+                DEFAULT_RETRY_TOOL_CALLS
+            ),
             "a connection-level error must not replay tools/call under the default; see #504"
         );
     }
@@ -2066,12 +2257,13 @@ mod tests {
     #[test]
     fn test_should_retry_mcp_operation_requires_explicit_replay() {
         let config = RefreshConfig::default().with_max_attempts(3);
-        assert!(!should_retry_mcp_operation("EOF", 0, &config, true, false));
+        assert!(!should_retry_mcp_operation(&broken_pipe(), 0, &config, true, false));
     }
 
     #[test]
     fn test_ambiguous_tool_call_error_explains_no_replay() {
-        let error = mcp_tool_call_error("create_record", "EOF", true, false);
+        let error =
+            mcp_tool_call_error("create_record", &ServiceError::TransportClosed, true, false);
         let message = error.to_string();
         assert!(message.contains("result is uncertain and was not replayed"));
         assert!(message.contains("replay-safe operations"));
@@ -2218,5 +2410,150 @@ mod tests {
             "image/png",
         )]);
         assert!(call_tool_result_to_adk_value(&result).is_err());
+    }
+
+    #[tokio::test]
+    async fn discovery_skips_repeated_and_unroutable_names_and_keeps_the_rest() {
+        let long = |suffix: &str| format!("{}{suffix}", "n".repeat(64));
+        let catalog = vec![
+            rmcp::model::Tool::new("dup", "First.", small_schema()),
+            rmcp::model::Tool::new("dup", "Second.", small_schema()),
+            rmcp::model::Tool::new("line\nbreak\u{1b}[31m", "Control characters.", small_schema()),
+            rmcp::model::Tool::new("", "Empty.", small_schema()),
+            rmcp::model::Tool::new(long("_a"), "Long a.", small_schema()),
+            rmcp::model::Tool::new(long("_b"), "Long b.", small_schema()),
+            rmcp::model::Tool::new("n".repeat(64), "Exactly 64 bytes.", small_schema()),
+            rmcp::model::Tool::new("lookup", "Valid.", small_schema()),
+        ];
+
+        let tools = discover(catalog, McpSchemaLimits::default()).await;
+
+        let registered: Vec<_> = tools
+            .iter()
+            .map(|tool| (tool.name().to_string(), tool.description().to_string()))
+            .collect();
+        assert_eq!(
+            registered,
+            vec![
+                ("dup".to_string(), "First.".to_string()),
+                ("n".repeat(64), "Exactly 64 bytes.".to_string()),
+                ("lookup".to_string(), "Valid.".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn discovered_tools_carry_their_effect_and_annotations() {
+        let annotated = |name: &str, hints: ToolAnnotations| {
+            rmcp::model::Tool::new(name.to_string(), "Annotated.", small_schema()).annotate(hints)
+        };
+        let catalog = vec![
+            annotated(
+                "set_thermostat",
+                ToolAnnotations::with_title("Set thermostat")
+                    .idempotent(true)
+                    .destructive(false)
+                    .open_world(false),
+            ),
+            annotated("read_temperature", ToolAnnotations::new().read_only(true)),
+            annotated("delete_logs", ToolAnnotations::new().destructive(true)),
+            rmcp::model::Tool::new("plain", "No annotations.", small_schema()),
+        ];
+
+        let tools = discover(catalog, McpSchemaLimits::default()).await;
+
+        let described: Vec<_> = tools
+            .iter()
+            .map(|tool| {
+                (
+                    tool.name(),
+                    tool.effect(),
+                    tool.is_read_only(),
+                    tool.is_concurrency_safe(),
+                    tool.annotations().cloned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            described,
+            vec![
+                (
+                    "set_thermostat",
+                    ToolEffect::Idempotent,
+                    false,
+                    true,
+                    Some(json!({
+                        "title": "Set thermostat",
+                        "idempotentHint": true,
+                        "destructiveHint": false,
+                        "openWorldHint": false
+                    })),
+                ),
+                (
+                    "read_temperature",
+                    ToolEffect::ReadOnly,
+                    true,
+                    true,
+                    Some(json!({ "readOnlyHint": true }))
+                ),
+                (
+                    "delete_logs",
+                    ToolEffect::NonIdempotent,
+                    false,
+                    false,
+                    Some(json!({ "destructiveHint": true })),
+                ),
+                ("plain", ToolEffect::NonIdempotent, false, false, None),
+            ]
+        );
+    }
+
+    /// Counts `tools/call` requests so a refused call can be shown never to reach the server.
+    #[derive(Clone, Default)]
+    struct CallCounter(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl rmcp::ServerHandler for CallCounter {
+        fn get_info(&self) -> rmcp::model::InitializeResult {
+            rmcp::model::InitializeResult::new(
+                rmcp::model::ServerCapabilities::builder().enable_tools().build(),
+            )
+        }
+
+        async fn call_tool(
+            &self,
+            params: CallToolRequestParams,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> std::result::Result<CallToolResponse, rmcp::ErrorData> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(rmcp::model::CallToolResult::success(vec![ContentBlock::text(
+                params.name.to_string(),
+            )])
+            .into())
+        }
+    }
+
+    #[tokio::test]
+    async fn call_tool_value_refuses_a_tool_the_filter_excludes() {
+        use rmcp::ServiceExt;
+
+        let server = CallCounter::default();
+        let calls = Arc::clone(&server.0);
+        let (server_io, client_io) = tokio::io::duplex(4096);
+        tokio::spawn(async move {
+            if let Ok(running) = server.serve(server_io).await {
+                let _ = running.waiting().await;
+            }
+        });
+        let toolset = McpToolset::new(().serve(client_io).await.unwrap())
+            .with_name("filtered")
+            .with_tools(&["public"]);
+
+        let refused = toolset.call_tool_value("secret", Default::default()).await.unwrap_err();
+        assert!(refused.to_string().contains("excluded by the tool filter"), "{refused}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let allowed = toolset.call_tool_value("public", Default::default()).await.unwrap();
+        assert_eq!(allowed, json!({ "output": "public" }));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
