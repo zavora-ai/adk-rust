@@ -142,9 +142,9 @@ governed path authorizes the call and before it executes:
 |--------------|-----------|-------------------|
 | No record | `begin`, execute, `complete` | The tool's result |
 | Completed with a result | Not executed | `{"status": "already_succeeded", "result_digest": "fnv1a128:…"}` |
-| Completed with an error | Not executed | `{"status": "already_failed", "error": "…"}` |
+| Completed with an error | Not executed | `{"status": "already_failed", "error": "…"}`, where `error` is the text the model was given when the call failed |
 | Begun, never completed | Not executed | `{"status": "outcome_unknown", "detail": "…"}` |
-| Read or `begin` fails | Not executed | `{"error": "tool '…' was not executed: …"}` |
+| Read or `begin` fails | Not executed | `{"error": "tool '…' was not executed: …"}`, naming the ledger error's component, category, and code; the message is logged |
 
 A call that times out or panics keeps its begun record, so a replay of it after a crash,
 a timeout, or a cancelled run is answered as `outcome_unknown` rather than executed a
@@ -192,7 +192,7 @@ an outcome-unknown function response instead of an error the model would read as
 invitation to try again:
 
 ```json
-{ "status": "outcome_unknown", "detail": "Tool 'charge_card' timed out after 300 seconds. The call may have taken effect; check its result before calling it again." }
+{ "status": "outcome_unknown", "detail": "Tool 'charge_card' timed out after 300s. The call may have taken effect; check its result before calling it again." }
 ```
 
 | Cause | Source |

@@ -274,15 +274,14 @@ impl Llm for GroqClient {
                                                 let tool_calls = sorted_calls
                                                     .into_iter()
                                                     .map(|(_, (id, name, args_str))| {
-                                                        let args = crate::tool_args::parse_streamed_tool_arguments(
+                                                        let args = crate::tool_args::streamed_tool_arguments(
                                                             "groq",
-                                                            "model.groq.invalid_tool_arguments",
                                                             &name,
                                                             &args_str,
-                                                        )?;
-                                                        Ok((id, name, args))
+                                                        );
+                                                        (id, name, args)
                                                     })
-                                                    .collect::<Result<Vec<_>, AdkError>>()?;
+                                                    .collect::<Vec<_>>();
 
                                                 yield convert::create_tool_call_response(
                                                     tool_calls,

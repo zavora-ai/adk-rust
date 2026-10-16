@@ -278,11 +278,13 @@ async fn preserves_parallel_arguments_and_rejects_truncation() {
         "name":"read","arguments":"{\"path\":"}]));
     for result in [unary(&value).await.unwrap(), events(&[terminal(value.clone())]).await.unwrap()]
     {
-        assert_eq!(
-            result.last().unwrap().error_code.as_deref(),
-            Some("model.openai_responses.invalid_tool_arguments")
-        );
-        assert!(result.last().unwrap().content.is_none());
+        let last = result.last().unwrap();
+        assert!(last.error_code.is_none());
+        let parts = &last.content.as_ref().expect("call content").parts;
+        assert!(matches!(
+            parts.as_slice(),
+            [Part::FunctionCall { args, .. }] if adk_core::invalid_tool_arguments_reason(args).is_some()
+        ));
     }
     for output in [
         json!([{"type":"function_call","call_id":"same","name":"read","arguments":"{}"},

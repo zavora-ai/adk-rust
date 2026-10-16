@@ -1,4 +1,6 @@
-//! Mid-stream Anthropic failures surface as errors, never as a silent success.
+//! Mid-stream Anthropic failures surface as errors, never as a silent success, and a
+//! malformed or cut-off tool call is marked for the agent to answer, never run with
+//! substituted input.
 #![cfg(feature = "anthropic")]
 
 use adk_core::{AdkError, Content, ErrorCategory, Llm, LlmRequest, LlmResponse, Part};
@@ -85,34 +87,47 @@ async fn rate_limit_error_event_maps_to_rate_limited() {
     assert!(error.is_retryable());
 }
 
+/// The one function call the stream completed with.
+fn only_call(items: Vec<Result<LlmResponse, AdkError>>) -> (String, serde_json::Value) {
+    let calls: Vec<Part> = items
+        .into_iter()
+        .map(|item| item.expect("stream succeeds"))
+        .filter(|response| !response.partial)
+        .filter_map(|response| response.content)
+        .flat_map(|content| content.parts)
+        .filter(|part| matches!(part, Part::FunctionCall { .. }))
+        .collect();
+    match calls.as_slice() {
+        [Part::FunctionCall { name, args, .. }] => (name.clone(), args.clone()),
+        other => panic!("expected one function call, got {other:?}"),
+    }
+}
+
 #[tokio::test]
-async fn truncated_tool_arguments_fail_instead_of_becoming_empty() {
+async fn truncated_tool_arguments_are_marked_instead_of_becoming_empty() {
     let body = format!(
         "{MESSAGE_START}{}{}{BLOCK_STOP}{TOOL_USE_DELTA}{MESSAGE_STOP}",
         tool_use_start("get_weather"),
         input_json_delta("{\"city\": \"Nai"),
     );
 
-    let items = stream_items(body).await;
-
-    let error = items.last().expect("stream yields items").as_ref().unwrap_err();
-    assert_eq!(error.code, "model.anthropic.invalid_tool_arguments");
-    assert!(error.message.contains("'get_weather'"));
+    let (name, args) = only_call(stream_items(body).await);
+    assert_eq!(name, "get_weather");
+    let reason = adk_core::invalid_tool_arguments_reason(&args).expect("marked arguments");
+    assert!(reason.contains("not valid JSON"), "{reason}");
 }
 
 #[tokio::test]
-async fn tool_call_cut_off_by_max_tokens_fails_instead_of_being_dropped() {
+async fn tool_call_cut_off_by_max_tokens_is_marked_instead_of_being_dropped() {
     let body = format!(
         "{MESSAGE_START}{}{}{BLOCK_STOP}{MAX_TOKENS_DELTA}{MESSAGE_STOP}",
         tool_use_start("get_weather"),
         input_json_delta("{\"city\": \"Nai"),
     );
 
-    let items = stream_items(body).await;
-
-    let error = items.last().expect("stream yields items").as_ref().unwrap_err();
-    assert_eq!(error.code, "model.anthropic.invalid_tool_arguments");
-    assert!(error.message.contains("'get_weather'"));
+    let (name, args) = only_call(stream_items(body).await);
+    assert_eq!(name, "get_weather");
+    assert!(adk_core::invalid_tool_arguments_reason(&args).is_some(), "{args}");
 }
 
 #[tokio::test]

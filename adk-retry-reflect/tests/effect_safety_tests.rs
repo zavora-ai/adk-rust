@@ -1,9 +1,13 @@
 //! The plugin never suggests repeating a refused call or a timed-out non-idempotent call.
+//!
+//! `LlmAgent` sends the model a tool error's category and code but not its message, so the
+//! plugin classifies on the message the tool outcome keeps.
 
 use std::sync::Arc;
 
 use adk_core::{
-    CallbackContext, Content, ReadonlyContext, Result, Tool, ToolContext, ToolEffect, async_trait,
+    CallbackContext, Content, ReadonlyContext, Result, Tool, ToolContext, ToolEffect, ToolOutcome,
+    async_trait,
 };
 use adk_plugin::{AfterToolCallResult, EnhancedPlugin, PluginContext};
 use adk_retry_reflect::RetryReflectPluginBuilder;
@@ -27,7 +31,7 @@ impl Tool for EffectTool {
     }
 }
 
-struct Ctx(Content);
+struct Ctx(Content, Option<ToolOutcome>);
 
 #[async_trait]
 impl ReadonlyContext for Ctx {
@@ -59,16 +63,34 @@ impl CallbackContext for Ctx {
     fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
         None
     }
+
+    fn tool_outcome(&self) -> Option<ToolOutcome> {
+        self.1.clone()
+    }
 }
 
 async fn after_tool(effect: ToolEffect, result: Value) -> Value {
+    after_failed_tool(effect, result, None).await
+}
+
+/// Runs the plugin on `result` with a failed tool outcome whose full message is `message`.
+async fn after_failed_tool(effect: ToolEffect, result: Value, message: Option<&str>) -> Value {
     let plugin = RetryReflectPluginBuilder::new().build().expect("valid config");
+    let tool_outcome = message.map(|message| ToolOutcome {
+        tool_name: "charge_card".to_string(),
+        tool_args: json!({"amount": 50}),
+        success: false,
+        duration: std::time::Duration::from_millis(5),
+        error_message: Some(message.to_string()),
+        error: None,
+        attempt: 0,
+    });
     let outcome = plugin
         .after_tool_call(
             Arc::new(EffectTool(effect)),
             &json!({"amount": 50}),
             result,
-            Arc::new(Ctx(Content::new("user"))),
+            Arc::new(Ctx(Content::new("user"), tool_outcome)),
             &PluginContext::new(),
         )
         .await
@@ -101,4 +123,35 @@ async fn an_authorization_denial_is_never_suggested_for_retry() {
         let result = json!({ "error": message });
         assert_eq!(after_tool(ToolEffect::ReadOnly, result.clone()).await, result, "{message}");
     }
+}
+
+#[tokio::test]
+async fn a_redacted_denial_is_classified_on_the_outcome_message() {
+    let result = json!({"error": "tool 'charge_card' failed: tool.internal (tool.internal)"});
+    let message = "tool.internal: missing required scopes: [payments:write] (tool requires: [payments:write])";
+    assert_eq!(
+        after_failed_tool(ToolEffect::ReadOnly, result.clone(), Some(message)).await,
+        result
+    );
+}
+
+#[tokio::test]
+async fn a_redacted_non_idempotent_timeout_is_classified_on_the_outcome_message() {
+    let result = json!({"error": "tool 'charge_card' failed: tool.internal (tool.gateway.failed)"});
+    let message = "tool.internal: gateway request timed out after 30s";
+    assert_eq!(
+        after_failed_tool(ToolEffect::NonIdempotent, result.clone(), Some(message)).await,
+        result
+    );
+}
+
+#[tokio::test]
+async fn the_reflection_prompt_quotes_the_response_not_the_outcome_message() {
+    let result =
+        json!({"error": "tool 'charge_card' failed: tool.unavailable (tool.gateway.down)"});
+    let message = "tool.unavailable: connect postgres://admin:hunter2@db.internal/prod refused";
+    let reflected = after_failed_tool(ToolEffect::Idempotent, result, Some(message)).await;
+    let prompt = reflected["reflection"].as_str().expect("a retry is suggested");
+    assert!(prompt.contains("tool.gateway.down"), "{prompt}");
+    assert!(!prompt.contains("hunter2"), "{prompt}");
 }

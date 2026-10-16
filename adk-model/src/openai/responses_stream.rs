@@ -271,7 +271,7 @@ impl StreamState {
                 serde_json::json!(true);
         } else {
             // Keep metadata/citation offsets from the full response, not its suffixes.
-            full.content = responses_convert::output_parts(&response.output).ok().flatten();
+            full.content = responses_convert::output_parts(&response.output);
         }
         Ok(full)
     }

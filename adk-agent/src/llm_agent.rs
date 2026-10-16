@@ -303,6 +303,8 @@ pub struct LlmAgent {
     max_iterations: u32,
     /// Timeout for individual tool executions
     tool_timeout: std::time::Duration,
+    /// Whether tool and callback error messages reach the model.
+    expose_tool_error_messages: bool,
     before_callbacks: Arc<Vec<BeforeAgentCallback>>,
     after_callbacks: Arc<Vec<AfterAgentCallback>>,
     before_model_callbacks: Arc<Vec<BeforeModelCallback>>,
@@ -796,6 +798,7 @@ pub struct LlmAgentBuilder {
     generate_content_config: Option<adk_core::GenerateContentConfig>,
     max_iterations: u32,
     tool_timeout: std::time::Duration,
+    expose_tool_error_messages: bool,
     before_callbacks: Vec<BeforeAgentCallback>,
     after_callbacks: Vec<AfterAgentCallback>,
     before_model_callbacks: Vec<BeforeModelCallback>,
@@ -849,6 +852,7 @@ impl LlmAgentBuilder {
             generate_content_config: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             tool_timeout: DEFAULT_TOOL_TIMEOUT,
+            expose_tool_error_messages: false,
             before_callbacks: Vec::new(),
             after_callbacks: Vec::new(),
             before_model_callbacks: Vec::new(),
@@ -1103,6 +1107,34 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Sends the full message of a tool or tool-callback error to the model.
+    ///
+    /// By default a call that fails with an [`AdkError`](adk_core::AdkError) is answered with
+    /// its component, category, and code only
+    /// ([`tool_error_response`](adk_core::tool_error_response)), because the message can quote
+    /// credentials, internal hosts, or upstream bodies, and the function response is sent to the
+    /// model provider and stored in the session. The message is logged when
+    /// [`RunConfig::record_payloads`](adk_core::RunConfig::record_payloads) is set. Errors with
+    /// code [`TOOL_INVALID_ARGUMENTS_CODE`](adk_core::TOOL_INVALID_ARGUMENTS_CODE) always keep
+    /// their message, as do timeouts and the agent's own refusals.
+    ///
+    /// Enable this only when every tool's error messages are safe to send to the provider. An
+    /// [`on_tool_error`](Self::on_tool_error) callback chooses the text for one failure instead.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let agent = LlmAgentBuilder::new("support")
+    ///     .model(model)
+    ///     .tool(lookup_order)
+    ///     .expose_tool_error_messages(true)
+    ///     .build()?;
+    /// ```
+    pub fn expose_tool_error_messages(mut self, expose: bool) -> Self {
+        self.expose_tool_error_messages = expose;
+        self
+    }
+
     /// Add a tool to this agent's toolbox.
     pub fn tool(mut self, tool: Arc<dyn Tool>) -> Self {
         self.tools.push(tool);
@@ -1212,10 +1244,15 @@ impl LlmAgentBuilder {
     /// Register a callback invoked when a tool execution fails
     /// (after retries are exhausted).
     ///
+    /// The callback receives the error's full message, and
+    /// `ctx.tool_outcome()` carries the structured error in
+    /// [`ToolOutcome::error`](adk_core::ToolOutcome::error).
     /// If the callback returns `Ok(Some(value))`, the value is used as a
     /// fallback function response to the LLM. If it returns `Ok(None)`,
     /// the next callback in the chain is tried. If no callback provides a
-    /// fallback, the original error is reported to the LLM.
+    /// fallback, the LLM receives
+    /// [`tool_error_response`](adk_core::tool_error_response), which omits the message unless
+    /// [`expose_tool_error_messages`](Self::expose_tool_error_messages) is set.
     pub fn on_tool_error(mut self, callback: OnToolErrorCallback) -> Self {
         self.on_tool_error_callbacks.push(callback);
         self
@@ -1519,6 +1556,7 @@ impl LlmAgentBuilder {
             generate_content_config: self.generate_content_config,
             max_iterations: self.max_iterations,
             tool_timeout: self.tool_timeout,
+            expose_tool_error_messages: self.expose_tool_error_messages,
             before_callbacks: Arc::new(self.before_callbacks),
             after_callbacks: Arc::new(self.after_callbacks),
             before_model_callbacks: Arc::new(self.before_model_callbacks),
@@ -2075,6 +2113,7 @@ struct ToolExecutor<'a> {
     concurrency_manager: &'a adk_core::ToolConcurrencyManager,
     progress_tx: tokio::sync::mpsc::Sender<Event>,
     tool_timeout: std::time::Duration,
+    expose_tool_error_messages: bool,
     /// Set when an approval fails, so calls still waiting for theirs stop waiting.
     approval_failed: tokio::sync::watch::Sender<bool>,
     #[cfg(feature = "enhanced-plugins")]
@@ -2208,6 +2247,16 @@ impl ToolExecutor<'_> {
         Ok(result)
     }
 
+    /// The text logged for an error message: the message when payloads are recorded, else a
+    /// placeholder, since a message can carry credentials.
+    fn logged_message(&self, message: &str) -> String {
+        trace_json_payload(
+            &message,
+            self.ctx.run_config().record_payloads,
+            self.ctx.run_config().trace_payload_max_bytes,
+        )
+    }
+
     async fn execute_inner(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
         let PendingToolCall { index, name, args, id, function_call_id } = call;
         let mut tool_actions = EventActions::default();
@@ -2216,18 +2265,42 @@ impl ToolExecutor<'_> {
         let mut tool_outcome_for_callback: Option<ToolOutcome> = None;
         let mut executed_tool: Option<Arc<dyn Tool>> = None;
         let mut executed_tool_response: Option<serde_json::Value> = None;
+        // Set once `execute` was called, so its side effect may have happened.
+        let mut tool_executed = false;
         let mut pending_confirmation: Option<ToolConfirmationRequest> = None;
-        let error_response = |message: String| Content {
+        let respond = |response: serde_json::Value| Content {
             role: "function".to_string(),
             parts: vec![Part::FunctionResponse {
-                function_response: FunctionResponseData::new(
-                    name.clone(),
-                    serde_json::json!({ "error": message }),
-                ),
+                function_response: FunctionResponseData::new(name.clone(), response),
                 id: id.clone(),
                 annotations: None,
             }],
         };
+        let error_response = |message: String| respond(serde_json::json!({ "error": message }));
+        // A callback's error message stays local unless the agent exposes error messages.
+        let callback_failure = |error: &adk_core::AdkError| {
+            if self.expose_tool_error_messages { error.to_string() } else { error.redacted() }
+        };
+
+        // The provider could not decode the model's arguments into an object, so there is
+        // nothing to authorize or execute; the model is asked to send the call again.
+        if let Some(reason) = adk_core::invalid_tool_arguments_reason(&args) {
+            tracing::warn!(
+                tool.name = %name,
+                reason = %reason,
+                "tool call arguments are not a JSON object; answering without executing"
+            );
+            return Ok(ToolExecutionResult {
+                index,
+                content: error_response(format!(
+                    "tool '{name}' was not run: {reason}. Call it again with arguments that are \
+                     one JSON object matching its parameters."
+                )),
+                actions: tool_actions,
+                escalate_or_skip: false,
+                pending: None,
+            });
+        }
 
         // Before-tool hooks run first and may rewrite the arguments. Governance below sees
         // only the final arguments, so nothing can change a call after it is authorized.
@@ -2265,7 +2338,17 @@ impl ToolExecutor<'_> {
                     executed_tool = Some(tool_ref.clone());
                 }
                 Err(e) => {
-                    response_content = Some(error_response(e.to_string()));
+                    tracing::warn!(
+                        tool.name = %name,
+                        error.code = %e.code,
+                        error.category = %e.category,
+                        error.message = %self.logged_message(&e.message),
+                        "before-tool plugin failed; the tool was not run"
+                    );
+                    response_content = Some(error_response(format!(
+                        "tool '{name}' was not run: a before-tool plugin failed with {}",
+                        callback_failure(&e)
+                    )));
                     run_after_tool_callbacks = false;
                 }
             }
@@ -2293,7 +2376,17 @@ impl ToolExecutor<'_> {
                     }
                     Ok(None) => continue,
                     Err(e) => {
-                        response_content = Some(error_response(e.to_string()));
+                        tracing::warn!(
+                            tool.name = %name,
+                            error.code = %e.code,
+                            error.category = %e.category,
+                            error.message = %self.logged_message(&e.message),
+                            "before-tool callback failed; the tool was not run"
+                        );
+                        response_content = Some(error_response(format!(
+                            "tool '{name}' was not run: a before-tool callback failed with {}",
+                            callback_failure(&e)
+                        )));
                         run_after_tool_callbacks = false;
                         break;
                     }
@@ -2347,17 +2440,8 @@ impl ToolExecutor<'_> {
                     run_after_tool_callbacks = false;
                 }
                 Ok(ToolAuthorization::Pending { request, reason }) => {
-                    response_content = Some(Content {
-                        role: "function".to_string(),
-                        parts: vec![Part::FunctionResponse {
-                            function_response: FunctionResponseData::new(
-                                name.clone(),
-                                adk_core::confirmation_pending_response(reason),
-                            ),
-                            id: id.clone(),
-                            annotations: None,
-                        }],
-                    });
+                    response_content =
+                        Some(respond(adk_core::confirmation_pending_response(reason)));
                     pending_confirmation = Some(request);
                     run_after_tool_callbacks = false;
                 }
@@ -2469,11 +2553,13 @@ impl ToolExecutor<'_> {
                     serde_json::json!({"id": id, "name": name}).to_string(),
                 );
                 let _ = self.progress_tx.send(started).await;
+                tool_executed = true;
                 let tool_clone = tool.clone();
                 let tool_start = std::time::Instant::now();
-                let mut last_error = String::new();
+                let mut last_error: Option<Arc<adk_core::AdkError>> = None;
                 // Set when the last attempt ended mid-flight (timeout or panic), so its side
-                // effect may or may not have happened.
+                // effect may or may not have happened. Such an error is the agent's own, and
+                // its message is always shown to the model.
                 let mut interrupted = false;
                 let mut final_attempt: u32 = 0;
                 let mut retry_result: Option<serde_json::Value> = None;
@@ -2503,14 +2589,27 @@ impl ToolExecutor<'_> {
                             }
                         };
                         match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(bounded)).await {
-                            Ok(Ok(result)) => result.map_err(|error| (error.to_string(), error.is_retryable(), false)),
+                            Ok(Ok(result)) => result.map_err(|error| {
+                                let retryable = error.is_retryable();
+                                (error, retryable, false)
+                            }),
                             Ok(Err(limit)) => Err((
-                                format!("Tool '{name}' timed out after {} seconds", limit.as_secs()),
+                                adk_core::AdkError::new(
+                                    adk_core::ErrorComponent::Tool,
+                                    adk_core::ErrorCategory::Timeout,
+                                    "tool.timeout",
+                                    format!("Tool '{name}' timed out after {limit:?}"),
+                                ),
                                 true,
                                 true,
                             )),
                             Err(_panic) => Err((
-                                format!("tool '{name}' panicked during execution"),
+                                adk_core::AdkError::new(
+                                    adk_core::ErrorComponent::Tool,
+                                    adk_core::ErrorCategory::Internal,
+                                    "tool.panicked",
+                                    format!("tool '{name}' panicked during execution"),
+                                ),
                                 false,
                                 true,
                             )),
@@ -2529,13 +2628,21 @@ impl ToolExecutor<'_> {
                             retry_result = Some(value);
                             break;
                         }
-                        Err((message, retryable, mid_flight)) => {
-                            last_error = message;
+                        Err((error, retryable, mid_flight)) => {
                             interrupted = mid_flight;
-                            if retryable && attempt + 1 < max_attempts {
-                                tracing::warn!(tool.name = %name, attempt = attempt, error = %last_error, "tool execution failed, retrying");
+                            let message = if mid_flight {
+                                error.message.clone()
                             } else {
-                                tracing::warn!(tool.name = %name, error = %last_error, "tool_error");
+                                self.logged_message(&error.message)
+                            };
+                            if retryable && attempt + 1 < max_attempts {
+                                tracing::warn!(tool.name = %name, attempt = attempt, error.code = %error.code, error.category = %error.category, error.message = %message, "tool execution failed, retrying");
+                            } else {
+                                tracing::warn!(tool.name = %name, error.code = %error.code, error.category = %error.category, error.message = %message, "tool_error");
+                            }
+                            let retry = retryable && attempt + 1 < max_attempts;
+                            last_error = Some(Arc::new(error));
+                            if !retry {
                                 break;
                             }
                         }
@@ -2543,6 +2650,22 @@ impl ToolExecutor<'_> {
                 }
 
                 let outcome_unknown = interrupted && effect == ToolEffect::NonIdempotent;
+                // What the model is told about the failure: the agent's own timeout and panic
+                // messages, or the tool error without its message by default.
+                let failure_response = match (&retry_result, &last_error) {
+                    (None, Some(error)) if outcome_unknown => {
+                        Some(crate::tool_ledger::interrupted_call_response(&error.message))
+                    }
+                    (None, Some(error)) if interrupted => {
+                        Some(serde_json::json!({ "error": error.message }))
+                    }
+                    (None, Some(error)) => Some(adk_core::tool_error_response(
+                        &name,
+                        error,
+                        self.expose_tool_error_messages,
+                    )),
+                    (None, None) | (Some(_), _) => None,
+                };
                 if outcome_unknown {
                     crate::tool_ledger::record_outcome_unknown(
                         self.ctx.as_ref(),
@@ -2553,25 +2676,30 @@ impl ToolExecutor<'_> {
                     .await?;
                 }
                 // A call that ended mid-flight keeps its begun record, so a replay is answered
-                // with an unknown outcome instead of executing again.
+                // with an unknown outcome instead of executing again. The ledger records what
+                // the model was told, since a replay answers with it.
                 if let Some(ledgered) = ledgered
                     && !outcome_unknown
                 {
-                    ledgered.complete(&name, retry_result.as_ref(), &last_error).await;
+                    let failure_text = failure_response
+                        .as_ref()
+                        .and_then(|response| response.get("error"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    ledgered.complete(&name, retry_result.as_ref(), failure_text).await;
                 }
 
                 let tool_duration = tool_start.elapsed();
-                let (tool_success, tool_error_message, function_response) = match retry_result {
-                    Some(value) => (true, None, value),
-                    None if outcome_unknown => (
-                        false,
-                        Some(last_error.clone()),
-                        crate::tool_ledger::interrupted_call_response(&last_error),
-                    ),
-                    None => (
-                        false,
-                        Some(last_error.clone()),
-                        serde_json::json!({ "error": last_error }),
+                // Callbacks run in this process, so they see the full message.
+                let error_message =
+                    last_error.as_ref().filter(|_| retry_result.is_none()).map(|error| {
+                        if interrupted { error.message.clone() } else { error.to_string() }
+                    });
+                let tool_success = retry_result.is_some();
+                let function_response = match retry_result {
+                    Some(value) => value,
+                    None => failure_response.unwrap_or_else(
+                        || serde_json::json!({ "error": format!("tool '{name}' failed") }),
                     ),
                 };
 
@@ -2580,23 +2708,28 @@ impl ToolExecutor<'_> {
                     tool_args: final_args.clone(),
                     success: tool_success,
                     duration: tool_duration,
-                    error_message: tool_error_message.clone(),
+                    error_message: error_message.clone(),
+                    error: if tool_success { None } else { last_error.clone() },
                     attempt: final_attempt,
                 };
-                tool_outcome_for_callback = Some(outcome);
 
                 // Circuit breaker recording
                 {
                     let mut guard = self.cb_mutex.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(ref mut cb_state) = *guard {
-                        cb_state.record(tool_outcome_for_callback.as_ref().unwrap());
+                        cb_state.record(&outcome);
                     }
                 }
 
                 // On-tool-error callbacks
                 let final_function_response = if !tool_success {
+                    let error_ctx: Arc<dyn CallbackContext> =
+                        Arc::new(ToolOutcomeCallbackContext {
+                            inner: self.ctx.clone() as Arc<dyn CallbackContext>,
+                            outcome: outcome.clone(),
+                        });
                     let mut fallback_result = None;
-                    let error_msg = tool_error_message.clone().unwrap_or_default();
+                    let error_msg = error_message.unwrap_or_default();
                     for callback in self
                         .hook_callbacks
                         .on_tool_error
@@ -2604,7 +2737,7 @@ impl ToolExecutor<'_> {
                         .chain(self.on_tool_error_callbacks.iter())
                     {
                         match callback(
-                            self.ctx.clone() as Arc<dyn CallbackContext>,
+                            error_ctx.clone(),
                             tool.clone(),
                             final_args.clone(),
                             error_msg.clone(),
@@ -2617,7 +2750,7 @@ impl ToolExecutor<'_> {
                             }
                             Ok(None) => continue,
                             Err(e) => {
-                                tracing::warn!(error = %e, "on_tool_error callback failed");
+                                tracing::warn!(error.code = %e.code, error.message = %self.logged_message(&e.message), "on_tool_error callback failed");
                                 break;
                             }
                         }
@@ -2626,6 +2759,7 @@ impl ToolExecutor<'_> {
                 } else {
                     function_response
                 };
+                tool_outcome_for_callback = Some(outcome);
 
                 let confirmation_decision = tool_actions.tool_confirmation_decision;
                 tool_actions = tool_ctx.actions();
@@ -2646,25 +2780,17 @@ impl ToolExecutor<'_> {
                     }],
                 });
             } else {
-                response_content = Some(Content {
-                    role: "function".to_string(),
-                    parts: vec![Part::FunctionResponse {
-                        function_response: FunctionResponseData::new(
-                            name.clone(),
-                            serde_json::json!({
-                                "error": format!("Tool {} not found", name)
-                            }),
-                        ),
-                        id: id.clone(),
-                        annotations: None,
-                    }],
-                });
+                response_content = Some(error_response(format!("Tool {name} not found")));
             }
         }
 
-        // After-tool callbacks
+        // ===== AFTER-TOOL PIPELINE =====
+        // Runner hooks and `after_tool_callback`s, then `after_tool_callback_full`s, then
+        // enhanced plugins. The first failure ends the pipeline: a later stage may be handed the
+        // unscreened result, so none runs once a redaction or screening stage has failed.
         let mut response_content = response_content.expect("tool response content is set");
         if run_after_tool_callbacks {
+            let mut failure: Option<adk_core::AdkError> = None;
             let outcome_ctx: Arc<dyn CallbackContext> = match tool_outcome_for_callback {
                 Some(outcome) => Arc::new(ToolOutcomeCallbackContext {
                     inner: self.ctx.clone() as Arc<dyn CallbackContext>,
@@ -2689,22 +2815,14 @@ impl ToolExecutor<'_> {
                     }
                     Ok(None) => continue,
                     Err(e) => {
-                        response_content = Content {
-                            role: "function".to_string(),
-                            parts: vec![Part::FunctionResponse {
-                                function_response: FunctionResponseData::new(
-                                    name.clone(),
-                                    serde_json::json!({ "error": e.to_string() }),
-                                ),
-                                id: id.clone(),
-                                annotations: None,
-                            }],
-                        };
+                        failure = Some(e);
                         break;
                     }
                 }
             }
-            if let (Some(tool_ref), Some(tool_resp)) = (&executed_tool, executed_tool_response) {
+            if failure.is_none()
+                && let (Some(tool_ref), Some(tool_resp)) = (&executed_tool, executed_tool_response)
+            {
                 for callback in self.after_tool_callbacks_full.as_ref() {
                     match callback(
                         cb_ctx.clone(),
@@ -2730,17 +2848,7 @@ impl ToolExecutor<'_> {
                         }
                         Ok(None) => continue,
                         Err(e) => {
-                            response_content = Content {
-                                role: "function".to_string(),
-                                parts: vec![Part::FunctionResponse {
-                                    function_response: FunctionResponseData::new(
-                                        name.clone(),
-                                        serde_json::json!({ "error": e.to_string() }),
-                                    ),
-                                    id: id.clone(),
-                                    annotations: None,
-                                }],
-                            };
+                            failure = Some(e);
                             break;
                         }
                     }
@@ -2750,7 +2858,8 @@ impl ToolExecutor<'_> {
             // ===== ENHANCED PLUGIN: AFTER TOOL CALL =====
             // Enhanced plugins can modify the tool result after legacy callbacks.
             #[cfg(feature = "enhanced-plugins")]
-            if let Some(epm) = self.enhanced_plugin_manager.as_ref()
+            if failure.is_none()
+                && let Some(epm) = self.enhanced_plugin_manager.as_ref()
                 && let Some(tool_ref) = &executed_tool
             {
                 // Extract the result value from the response content
@@ -2766,12 +2875,14 @@ impl ToolExecutor<'_> {
                     })
                     .unwrap_or(serde_json::json!(null));
 
+                // The outcome context carries the full error message, which the function
+                // response no longer does, so plugins can still classify the failure.
                 match epm
                     .run_after_tool_call(
                         tool_ref.clone(),
                         &final_args,
                         result_value,
-                        self.ctx.clone() as Arc<dyn CallbackContext>,
+                        cb_ctx.clone(),
                     )
                     .await
                 {
@@ -2788,20 +2899,33 @@ impl ToolExecutor<'_> {
                             }],
                         };
                     }
-                    Err(e) => {
-                        response_content = Content {
-                            role: "function".to_string(),
-                            parts: vec![Part::FunctionResponse {
-                                function_response: FunctionResponseData::new(
-                                    name.clone(),
-                                    serde_json::json!({ "error": e.to_string() }),
-                                ),
-                                id: id.clone(),
-                                annotations: None,
-                            }],
-                        };
-                    }
+                    Err(e) => failure = Some(e),
                 }
+            }
+
+            if let Some(error) = failure {
+                tracing::error!(
+                    tool.name = %name,
+                    tool.executed = tool_executed,
+                    error.code = %error.code,
+                    error.category = %error.category,
+                    error.message = %self.logged_message(&error.message),
+                    "after-tool pipeline failed; withholding the tool result"
+                );
+                // The tool's side effect stands and its ledger record says so; the model is
+                // told not to repeat it, since a new call has a new idempotency key.
+                response_content = if tool_executed {
+                    respond(adk_core::result_withheld_response(
+                        &name,
+                        &error,
+                        self.expose_tool_error_messages,
+                    ))
+                } else {
+                    error_response(format!(
+                        "tool '{name}' was not run, and its after-tool pipeline failed with {}",
+                        callback_failure(&error)
+                    ))
+                };
             }
         }
 
@@ -2867,6 +2991,7 @@ impl Agent for LlmAgent {
         let generate_content_config = self.generate_content_config.clone();
         let max_iterations = self.max_iterations;
         let tool_timeout = self.tool_timeout;
+        let expose_tool_error_messages = self.expose_tool_error_messages;
         // Clone Arc references (cheap)
         let before_agent_callbacks = self.before_callbacks.clone();
         let after_agent_callbacks = self.after_callbacks.clone();
@@ -3050,6 +3175,7 @@ impl Agent for LlmAgent {
                     concurrency_manager: &concurrency_manager,
                     progress_tx,
                     tool_timeout,
+                    expose_tool_error_messages,
                     approval_failed: tokio::sync::watch::channel(false).0,
                     #[cfg(feature = "enhanced-plugins")]
                     enhanced_plugin_manager: &enhanced_plugin_manager,
@@ -3930,6 +4056,7 @@ impl Agent for LlmAgent {
                         concurrency_manager: &concurrency_manager,
                         progress_tx: progress_tx.clone(),
                         tool_timeout,
+                        expose_tool_error_messages,
                         approval_failed: tokio::sync::watch::channel(false).0,
                         #[cfg(feature = "enhanced-plugins")]
                         enhanced_plugin_manager: &enhanced_plugin_manager,

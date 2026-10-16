@@ -1158,18 +1158,20 @@ mod tests {
     }
 
     #[test]
-    fn completion_preserves_errors() {
+    fn completion_marks_malformed_call_arguments() {
         let mut state = StreamState::new(false);
         let result = state.complete(terminal(json!([{
             "type":"function_call", "id":"fc_bad", "call_id":"call_bad",
             "name":"read_file", "arguments":"{invalid", "status":"completed"
         }])));
-        assert_eq!(
-            result.error_code.as_deref(),
-            Some("model.openai_responses.invalid_tool_arguments")
-        );
-        assert!(result.error_message.is_some());
-        assert!(result.turn_complete);
+        // Malformed arguments are not a stream failure: the call is marked so the agent
+        // answers it with an error and the model can retry.
+        assert!(result.error_code.is_none());
+        let parts = result.content.expect("call content").parts;
+        assert!(matches!(
+            parts.as_slice(),
+            [Part::FunctionCall { args, .. }] if adk_core::invalid_tool_arguments_reason(args).is_some()
+        ));
     }
 
     #[test]

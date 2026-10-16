@@ -152,6 +152,8 @@ pub mod spend;
 pub mod tool;
 /// Semaphore-based tool concurrency management.
 pub mod tool_concurrency;
+/// Function responses for tool calls that fail, are withheld, or carry undecodable arguments.
+pub mod tool_response;
 /// Content, Part, and multimodal data types.
 pub mod types;
 #[cfg(feature = "webhooks")]
@@ -270,6 +272,11 @@ pub use tool::{
     Toolset, ValidationMode,
 };
 pub use tool_concurrency::{ConcurrencyPermit, ToolConcurrencyManager};
+pub use tool_response::{
+    INVALID_TOOL_ARGUMENTS_KEY, RESULT_WITHHELD_STATUS, TOOL_INVALID_ARGUMENTS_CODE,
+    invalid_tool_arguments, invalid_tool_arguments_reason, result_withheld_response,
+    tool_error_response,
+};
 pub use types::{
     BlobResourceContents, Content, EmbeddedResource, FileDataPart, FunctionResponseData,
     InlineDataPart, MAX_INLINE_DATA_SIZE, Part, TextResourceContents,

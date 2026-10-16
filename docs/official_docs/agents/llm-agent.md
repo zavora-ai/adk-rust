@@ -544,6 +544,7 @@ Intercept agent behavior:
 | `tool_retry_budget(name, RetryBudget)` | Per-tool retry override |
 | `circuit_breaker_threshold(u32)` | Disable tool after N consecutive failures |
 | `on_tool_error(callback)` | Register fallback handler for tool failures |
+| `expose_tool_error_messages(bool)` | Send tool and tool-callback error messages to the model (default: component, category, and code only) |
 | `after_tool_callback_full(callback)` | V2 rich after-tool callback with tool, args, and response |
 | `build()` | Creates the agent |
 
@@ -687,13 +688,41 @@ let agent = LlmAgentBuilder::new("resilient_agent")
     .on_tool_error(Box::new(|_ctx, tool, _args, error| {
         Box::pin(async move {
             tracing::warn!(tool = tool.name(), %error, "tool failed");
-            Ok(None) // None = propagate error; Some(value) = use as fallback
+            Ok(None) // None = the default error response; Some(value) = use as fallback
         })
     }))
     .build()?;
 ```
 
 A retry budget applies only to tools whose `effect()` is `ReadOnly` or `Idempotent`, and only after a retryable error (rate limited, unavailable, timed out). A `NonIdempotent` tool — the default for any tool not marked read-only — runs once. The delay doubles on each retry up to `RetryBudget::max_delay`, with jitter. A `NonIdempotent` call that times out is answered with `{"status": "outcome_unknown"}` rather than an error, and an `AgentTool` delegation is bounded by its own `timeout` rather than `tool_timeout`. See [Tool Effects and the Action Ledger](../tools/tool-effects.md).
+
+### What the model is told
+
+Every function call gets exactly one function response, which is sent to the model provider and
+stored in the session. An error message can quote credentials, internal hosts, or upstream bodies,
+so by default the model sees an error's component, category, and code
+(`AdkError::redacted()`), not its message:
+
+| Outcome | Function response |
+|---------|-------------------|
+| Tool returns `Err(AdkError)` | `{"error": "tool 'lookup_order' failed: tool.unavailable (tool.orders_db.unavailable)"}` |
+| Error with code `adk_core::TOOL_INVALID_ARGUMENTS_CODE` (the `#[tool]` macro's argument errors) | `{"error": "tool.invalid_input: invalid arguments for 'lookup_order': missing field `id`"}` — the message tells the model what to fix |
+| Timeout | `{"error": "Tool 'slow_report' timed out after 50ms"}`; a `NonIdempotent` call gets `{"status": "outcome_unknown", ...}` |
+| Before-tool callback or plugin returns `Err` | `{"error": "tool 'lookup_order' was not run: a before-tool callback failed with agent.internal (agent.legacy)"}` |
+| After-tool hook, callback, or plugin returns `Err` | `{"status": "result_withheld", "error": "tool 'charge_card' ran, but its after-tool pipeline failed with ..., so its result is withheld; do not call it again for this request."}` |
+| The provider could not decode the model's arguments into a JSON object | `{"error": "tool 'get_weather' was not run: arguments are not valid JSON: ... Call it again with arguments that are one JSON object matching its parameters."}` — the tool does not run and the turn continues |
+
+- **Full messages**: `expose_tool_error_messages(true)` sends `component.category: message`
+  instead. Enable it only when every tool's error messages are safe to send to the provider.
+- **Where the message goes**: `on_tool_error` receives the full message, and
+  `ToolOutcome::error` carries the structured `AdkError`. Tracing records the message when
+  `RunConfig::record_payloads` is set.
+- **After-tool failures**: the first failing stage ends the after-tool pipeline, since a later stage
+  may be handed the unscreened result. The tool's side effect stands and its action-ledger record
+  says it completed; the model is told not to repeat the call, because a new call has a new
+  idempotency key.
+- **Errors the model should read**: a tool returns `Ok(json!({"error": "..."}))` for a failure
+  whose text is meant for the model, or an `on_tool_error` callback supplies that text.
 
 After-tool callbacks can inspect structured `ToolOutcome` metadata via `CallbackContext::tool_outcome()`:
 

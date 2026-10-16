@@ -119,7 +119,16 @@ Callbacks use different return values to control execution flow:
 |-------------|--------|
 | `Ok(None)` | Continue normal execution |
 | `Ok(Some(content))` | Override/skip with provided content |
-| `Err(e)` | Abort execution with error |
+| `Err(e)` | Agent callbacks: abort execution with error. Tool callbacks: answer the call with an error and continue (see below) |
+
+A tool callback's error never ends the run. `LlmAgent` answers the call, by default naming the
+error's component, category, and code but not its message
+(see [What the model is told](../agents/llm-agent.md#what-the-model-is-told)):
+
+| Callback | Function response on `Err(e)` |
+|----------|-------------------------------|
+| `before_tool` (and runner plugin `before_tool`, enhanced `before_tool_call`) | The tool is not run: `{"error": "tool 'x' was not run: a before-tool callback failed with ..."}` |
+| `after_tool`, `after_tool_full` (and runner plugin `after_tool`, enhanced `after_tool_call`) | The tool already ran, so its result is withheld and the model is told not to call it again: `{"status": "result_withheld", "error": "tool 'x' ran, but its after-tool pipeline failed with ..."}`. The remaining after-tool stages do not run |
 
 ### Model Callbacks
 
@@ -234,7 +243,7 @@ pub trait ReadonlyContext: Send + Sync {
 
 ### ToolOutcome
 
-`ToolOutcome` carries structured metadata about a completed tool execution. It is available via `ctx.tool_outcome()` in after-tool callbacks:
+`ToolOutcome` carries structured metadata about a completed tool execution. It is available via `ctx.tool_outcome()` in after-tool and `on_tool_error` callbacks, and in an enhanced plugin's `after_tool_call`:
 
 ```rust
 pub struct ToolOutcome {
@@ -242,7 +251,8 @@ pub struct ToolOutcome {
     pub tool_args: serde_json::Value,
     pub success: bool,
     pub duration: std::time::Duration,
-    pub error_message: Option<String>,
+    pub error_message: Option<String>,  // full message, which the model does not see by default
+    pub error: Option<Arc<AdkError>>,   // structured error: `tool.timeout`, `tool.panicked`, or the tool's own
     pub attempt: u32,  // 0-based retry attempt number
 }
 ```
@@ -511,7 +521,7 @@ let agent = LlmAgentBuilder::new("fallback_agent")
     .build()?;
 ```
 
-The `on_tool_error` callback is invoked after retries are exhausted (if a retry budget is configured). Return `Some(value)` to substitute a fallback, or `None` to let the original error reach the LLM.
+The `on_tool_error` callback is invoked after retries are exhausted (if a retry budget is configured). It receives the error's full message, and `ctx.tool_outcome()` carries the structured `AdkError` in `ToolOutcome::error`. Return `Some(value)` to substitute a fallback, or `None` to send the default error response, which names the error's component, category, and code but not its message unless the agent sets `expose_tool_error_messages(true)`.
 
 ### Rich After-Tool Inspection (V2)
 

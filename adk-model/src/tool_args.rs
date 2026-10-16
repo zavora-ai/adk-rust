@@ -1,6 +1,5 @@
 //! Decoding of tool-call arguments shared by the provider clients.
 
-use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 use serde_json::Value;
 
 /// Normalizes tool arguments returned by OpenAI-compatible wire protocols.
@@ -45,44 +44,50 @@ pub(crate) fn decode_tool_call_arguments(arguments: Option<&Value>) -> Result<Va
     }
 }
 
-/// Parses the JSON arguments accumulated from a streamed tool call.
+/// Decodes a tool call's arguments, or marks the call as having undecodable arguments.
+///
+/// Arguments that do not decode to a JSON object become
+/// [`adk_core::invalid_tool_arguments`], so the turn continues and the agent answers the call
+/// with an error instead of executing it; the model can then send the call again. A truncated
+/// or malformed call never runs with substituted arguments.
+pub(crate) fn tool_call_arguments(
+    provider: &str,
+    tool_name: &str,
+    arguments: Option<&Value>,
+) -> Value {
+    decode_tool_call_arguments(arguments).unwrap_or_else(|reason| {
+        let raw = match arguments {
+            Some(Value::String(raw)) => raw.clone(),
+            Some(other) => other.to_string(),
+            None => String::new(),
+        };
+        tracing::warn!(
+            provider = %provider,
+            tool.name = %tool_name,
+            reason = %reason,
+            "model sent tool-call arguments that are not a JSON object"
+        );
+        adk_core::invalid_tool_arguments(reason, &raw)
+    })
+}
+
+/// Decodes the JSON arguments accumulated from a streamed tool call, as
+/// [`tool_call_arguments`] does.
 ///
 /// An empty payload is a zero-argument call and decodes to `{}`.
-///
-/// # Errors
-///
-/// Returns an [`ErrorCategory::Internal`] error with the given `code` when the
-/// payload is not a JSON object, so a truncated or malformed call never runs
-/// the tool with substituted arguments.
-pub(crate) fn parse_streamed_tool_arguments(
-    provider: &str,
-    code: &'static str,
-    tool_name: &str,
-    arguments: &str,
-) -> Result<Value, AdkError> {
-    let encoded = Value::String(arguments.to_owned());
-    decode_tool_call_arguments(Some(&encoded)).map_err(|error| {
-        AdkError::new(
-            ErrorComponent::Model,
-            ErrorCategory::Internal,
-            code,
-            format!("{provider} returned invalid JSON arguments for tool '{tool_name}': {error}"),
-        )
-        .with_provider(provider)
-    })
+pub(crate) fn streamed_tool_arguments(provider: &str, tool_name: &str, arguments: &str) -> Value {
+    tool_call_arguments(provider, tool_name, Some(&Value::String(arguments.to_owned())))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const CODE: &str = "model.test.invalid_tool_arguments";
-
     #[test]
     fn empty_streamed_arguments_are_an_empty_object() {
         for empty in ["", "  ", "null", "[]"] {
             assert_eq!(
-                parse_streamed_tool_arguments("test", CODE, "no_args", empty).unwrap(),
+                streamed_tool_arguments("test", "no_args", empty),
                 serde_json::json!({}),
                 "{empty:?}"
             );
@@ -90,23 +95,35 @@ mod tests {
     }
 
     #[test]
-    fn malformed_streamed_arguments_are_an_error() {
-        for malformed in [r#"{"city":"#, r#"["pwd"]"#, "42"] {
-            let error =
-                parse_streamed_tool_arguments("test", CODE, "weather", malformed).unwrap_err();
-            assert_eq!(error.code, CODE, "{malformed:?}");
-            assert_eq!(error.category, ErrorCategory::Internal);
-            assert_eq!(error.details.provider.as_deref(), Some("test"));
-            assert!(error.message.contains("'weather'"));
+    fn malformed_streamed_arguments_are_marked_not_substituted() {
+        for (malformed, reason) in [
+            (r#"{"city":"#, "arguments are not valid JSON"),
+            (r#"["pwd"]"#, "arguments must decode to a JSON object"),
+            ("42", "arguments must decode to a JSON object"),
+        ] {
+            let args = streamed_tool_arguments("test", "weather", malformed);
+            let found = adk_core::invalid_tool_arguments_reason(&args).unwrap();
+            assert!(found.starts_with(reason), "{malformed:?}: {found}");
+            assert_eq!(
+                args[adk_core::INVALID_TOOL_ARGUMENTS_KEY]["raw"],
+                malformed,
+                "{malformed:?}"
+            );
         }
     }
 
     #[test]
     fn valid_streamed_arguments_parse() {
         assert_eq!(
-            parse_streamed_tool_arguments("test", CODE, "weather", r#"{"city":"Nairobi"}"#)
-                .unwrap(),
+            streamed_tool_arguments("test", "weather", r#"{"city":"Nairobi"}"#),
             serde_json::json!({"city": "Nairobi"})
         );
+    }
+
+    #[test]
+    fn structured_arguments_that_are_not_objects_are_marked() {
+        let args = tool_call_arguments("test", "weather", Some(&serde_json::json!(7)));
+        assert!(adk_core::invalid_tool_arguments_reason(&args).is_some());
+        assert_eq!(args[adk_core::INVALID_TOOL_ARGUMENTS_KEY]["raw"], "7");
     }
 }

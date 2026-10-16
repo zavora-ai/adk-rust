@@ -127,6 +127,8 @@ Two failures pass through unchanged, with no retry suggested:
 | An authorization or approval refusal (missing scope, access denied, denied by confirmation policy) | Repeating the call is refused again |
 | A timeout of a tool whose `effect()` is `NonIdempotent` | The call may have taken effect, so repeating it could repeat a payment or other side effect |
 
+`LlmAgent` sends the model a tool error's category and code but not its message, so the plugin recognizes both failures by the full message in `ctx.tool_outcome()`. The reflection prompt quotes the result's `"error"` text, which is what the model already receives.
+
 See [Tool Effects](tool-effects.md).
 
 ## When to Use

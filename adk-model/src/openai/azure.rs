@@ -13,7 +13,6 @@ const ERROR_CODES: ErrorCodes = ErrorCodes {
     request: "model.azure_openai.request",
     api_error: "model.azure_openai.api_error",
     parse: "model.azure_openai.parse",
-    invalid_tool_arguments: "model.azure_openai.invalid_tool_arguments",
     status: &[
         (401, "model.azure_openai.unauthorized"),
         (404, "model.azure_openai.not_found"),

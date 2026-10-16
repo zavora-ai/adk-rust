@@ -348,7 +348,11 @@ async fn a_non_idempotent_tool_with_a_retryable_error_runs_once() {
     let events = run(&agent, Invocation::with_config(RunConfig::default())).await;
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert!(responses(&events)[0]["error"].as_str().is_some_and(|e| e.contains("upstream down")));
+    // The model is told the category and code; the message stays local by default.
+    assert_eq!(
+        responses(&events)[0],
+        json!({ "error": "tool 'pay' failed: tool.unavailable (tool.test.down)" })
+    );
 }
 
 #[tokio::test(start_paused = true)]

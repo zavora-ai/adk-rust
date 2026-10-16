@@ -393,6 +393,7 @@ pub trait Session: Send + Sync {
 ///   Rust `Result` / timeout path, never from JSON content inspection.
 /// - `duration` — Wall-clock duration of the tool execution.
 /// - `error_message` — Error message if the tool failed; `None` on success.
+/// - `error` — The structured error if the tool failed; `None` on success.
 /// - `attempt` — Retry attempt number (0 = first attempt, 1 = first retry, etc.).
 ///   Always 0 when retries are not configured.
 #[derive(Debug, Clone)]
@@ -406,7 +407,15 @@ pub struct ToolOutcome {
     /// Wall-clock duration of the tool execution.
     pub duration: std::time::Duration,
     /// Error message if the tool failed. `None` on success.
+    ///
+    /// This is the full message, which the model does not see by default; see
+    /// [`tool_error_response`](crate::tool_error_response).
     pub error_message: Option<String>,
+    /// The structured error if the tool failed. `None` on success.
+    ///
+    /// A timeout is an [`ErrorCategory::Timeout`](crate::ErrorCategory::Timeout) error with code
+    /// `tool.timeout`, and a panic an internal error with code `tool.panicked`.
+    pub error: Option<Arc<crate::AdkError>>,
     /// Retry attempt number (0 = first attempt, 1 = first retry, etc.).
     /// Always 0 when retries are not configured.
     pub attempt: u32,

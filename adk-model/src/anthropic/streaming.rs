@@ -1,7 +1,9 @@
 //! Adapt native SSE events without rebuilding the SDK's message accumulator.
 
 use super::{client::convert_anthropic_error, convert};
-use adk_anthropic::{AccumulatingStream, ContentBlock, ContentBlockDelta, MessageStreamEvent};
+use adk_anthropic::{
+    AccumulatingStream, ContentBlock, ContentBlockDelta, MessageStreamEvent, ToolUseBlock,
+};
 use adk_core::{AdkError, LlmResponseStream};
 use futures::{Stream, StreamExt};
 use serde_json::Value;
@@ -83,23 +85,9 @@ where
                     if message.stop_reason.is_none() {
                         Err(AdkError::model("Anthropic stream ended without a stop reason"))?;
                     }
-                    // The accumulator drops a call that `max_tokens` cut off; report it
-                    // instead of answering as though the model never asked for the tool.
-                    for (id, name, arguments) in tool_calls.values() {
-                        let kept = message.content.iter().any(
-                            |block| matches!(block, ContentBlock::ToolUse(tool) if &tool.id == id),
-                        );
-                        if !kept {
-                            crate::tool_args::parse_streamed_tool_arguments(
-                                "anthropic",
-                                "model.anthropic.invalid_tool_arguments",
-                                name,
-                                arguments,
-                            )?;
-                        }
-                    }
                     // The accumulator keeps malformed streamed arguments as a JSON
-                    // string; a truncated call must never run with substituted input.
+                    // string; a truncated call must never run with substituted input, so
+                    // it is marked and the agent answers it with an error.
                     for block in &mut message.content {
                         if let ContentBlock::ToolUse(tool) = block
                             && !tool.input.is_object()
@@ -108,12 +96,26 @@ where
                                 Value::String(raw) => raw.clone(),
                                 other => other.to_string(),
                             };
-                            tool.input = crate::tool_args::parse_streamed_tool_arguments(
-                                "anthropic",
-                                "model.anthropic.invalid_tool_arguments",
-                                &tool.name,
-                                &raw,
-                            )?;
+                            tool.input =
+                                crate::tool_args::streamed_tool_arguments("anthropic", &tool.name, &raw);
+                        }
+                    }
+                    // The accumulator drops a call that `max_tokens` cut off. It is kept,
+                    // marked as cut off, so the model is told instead of the call vanishing.
+                    for (id, name, arguments) in tool_calls.values() {
+                        let kept = message.content.iter().any(
+                            |block| matches!(block, ContentBlock::ToolUse(tool) if &tool.id == id),
+                        );
+                        if !kept {
+                            tracing::warn!(tool.name = %name, "anthropic tool call was cut off before it finished");
+                            message.content.push(ContentBlock::ToolUse(ToolUseBlock::new(
+                                id.clone(),
+                                name.clone(),
+                                adk_core::invalid_tool_arguments(
+                                    "the call was cut off before its arguments were complete",
+                                    arguments,
+                                ),
+                            )));
                         }
                     }
                     let mut response = convert::from_anthropic_message(&message).0;

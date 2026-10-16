@@ -58,15 +58,22 @@ pub(crate) async fn begin_ledgered_call(
                 ))
             }
         },
+        // A store error can name its connection, so the model is given its code only.
         Ok(None) => match ledger.begin(&ActionRecord::new(key.clone(), name, args, effect)).await {
             Ok(()) => return Ok(Ok(Some(LedgeredCall { ledger, key }))),
-            Err(error) => serde_json::json!({
-                "error": format!("tool '{name}' was not executed: the action ledger could not record the call: {error}")
-            }),
+            Err(error) => {
+                tracing::error!(tool.name = %name, error = %error, "action ledger could not record the call");
+                serde_json::json!({
+                    "error": format!("tool '{name}' was not executed: the action ledger could not record the call: {}", error.redacted())
+                })
+            }
         },
-        Err(error) => serde_json::json!({
-            "error": format!("tool '{name}' was not executed: the action ledger could not be read: {error}")
-        }),
+        Err(error) => {
+            tracing::error!(tool.name = %name, error = %error, "action ledger could not be read");
+            serde_json::json!({
+                "error": format!("tool '{name}' was not executed: the action ledger could not be read: {}", error.redacted())
+            })
+        }
     };
     tracing::warn!(
         tool.name = %name,
@@ -105,7 +112,8 @@ pub(crate) async fn record_outcome_unknown(
 
 impl LedgeredCall {
     /// Records the outcome of a call that ran to an end: `result` when the tool
-    /// returned a value, otherwise `error`.
+    /// returned a value, otherwise `error`, the text the model was given for the
+    /// failure, since a replay of the call is answered with it.
     ///
     /// A call that ended mid-flight (timeout, panic) must not be completed, so
     /// its begun record answers a replay with an unknown outcome.

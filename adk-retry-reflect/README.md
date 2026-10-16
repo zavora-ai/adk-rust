@@ -57,7 +57,7 @@ The reflection template supports these placeholders:
 
 - `{tool_name}` — Name of the failed tool
 - `{args}` — JSON-serialized original arguments
-- `{error}` — Original error message verbatim
+- `{error}` — The `"error"` text of the tool result, as the model receives it
 - `{attempt}` — Current attempt number (1-indexed)
 - `{max_retries}` — Maximum retries configured for this tool
 - `{guidance}` — Optional custom guidance text
@@ -70,7 +70,7 @@ A tool result is considered an error if:
 2. It is a JSON object with `"isError": true`
 3. It is a JSON string starting with `"Error:"` or `"error:"`
 
-Two errors pass through unchanged, with no retry suggested: an authorization or approval refusal, and a timeout of a tool whose `effect()` is `NonIdempotent`, which may already have taken effect.
+Two errors pass through unchanged, with no retry suggested: an authorization or approval refusal, and a timeout of a tool whose `effect()` is `NonIdempotent`, which may already have taken effect. `LlmAgent` sends the model a tool error's category and code but not its message, so the plugin matches both on the full message in `ctx.tool_outcome()` when the agent provides one, and on the result's `"error"` text otherwise.
 
 ## Tracing Events
 

@@ -758,8 +758,10 @@ Return values:
 - `Ok(Some(content))` — skip the tool and answer the call with this content instead. A
   function response part in it is sent with the call's id and tool name; text-only content
   is sent as the tool's error result, `{"error": "<text>"}`
-- `Err(e)` — skip the tool and report the error to the LLM as the tool's result; the run
-  continues and after-tool callbacks do not run for that call
+- `Err(e)` — skip the tool and answer the call with an error; the run continues and
+  after-tool callbacks do not run for that call. The answer names the error's component,
+  category, and code but not its message, unless the agent sets
+  `expose_tool_error_messages(true)`. To tell the model why, return `Ok(Some(content))`
 
 A callback sees the user ID but not the request's scopes. For scope checks, wrap the
 tool with `adk_auth::ScopeGuard`, which reads them from the tool context.
@@ -915,7 +917,10 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
    panicked keeps its begun record and is answered with an `outcome_unknown` response
 9. `on_tool_error` callbacks (plugins first) — when the tool failed, including an RBAC denial
 10. The runner's plugin `after_tool` callbacks, then `AfterToolCallback`,
-    `AfterToolCallbackFull`, and enhanced plugins (`after_tool_call`)
+    `AfterToolCallbackFull`, and enhanced plugins (`after_tool_call`). The first one that fails
+    ends the pipeline and withholds the result, since a redaction or screening stage did not
+    finish; the call is answered with a `result_withheld` response telling the model the tool
+    ran and must not be called again, and its action-ledger record stays completed
 
 > **Note:** An `on_tool_error` callback that returns a fallback value replaces the error,
 > including an access denial. Keep fallbacks to tools whose failures are safe to paper over.

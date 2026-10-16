@@ -173,6 +173,7 @@ impl CallbackContext for SentinelContext {
             success: true,
             duration: std::time::Duration::from_millis(1),
             error_message: None,
+            error: None,
             attempt: 0,
         })
     }

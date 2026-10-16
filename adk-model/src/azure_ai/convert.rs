@@ -231,11 +231,11 @@ pub(crate) fn parse_response(body: &Value) -> LlmResponse {
                 if let Some(func) = tc.get("function") {
                     let name =
                         func.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
-                    let args: Value = func
-                        .get("arguments")
-                        .and_then(|a| a.as_str())
-                        .and_then(|a| serde_json::from_str(a).ok())
-                        .unwrap_or(serde_json::json!({}));
+                    let args = crate::tool_args::tool_call_arguments(
+                        "azure-ai",
+                        &name,
+                        func.get("arguments"),
+                    );
                     let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
                     parts.push(Part::FunctionCall { name, args, id, thought_signature: None });
                 }

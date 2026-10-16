@@ -605,11 +605,7 @@ pub fn from_response(response: &Response) -> LlmResponse {
 
 pub(super) fn from_projection(response: &Projection) -> LlmResponse {
     let terminal_error = super::responses_client::wire::validate(response).err();
-    let parts = if terminal_error.is_none() { output_parts(&response.output) } else { Ok(None) };
-    let (content, argument_error) = match parts {
-        Ok(content) => (content, None),
-        Err(error) => (None, Some(error)),
-    };
+    let content = if terminal_error.is_none() { output_parts(&response.output) } else { None };
 
     let usage_metadata = response.usage.as_ref().map(|usage| UsageMetadata {
         builtin_tool_uses: builtin_tool_uses(&response.output),
@@ -671,12 +667,8 @@ pub(super) fn from_projection(response: &Projection) -> LlmResponse {
         partial: false,
         turn_complete: true,
         interrupted: false,
-        error_code: terminal_error.as_ref().map(|error| error.code.to_owned()).or_else(|| {
-            argument_error
-                .as_ref()
-                .map(|_| "model.openai_responses.invalid_tool_arguments".to_owned())
-        }),
-        error_message: terminal_error.map(|error| error.message).or(argument_error),
+        error_code: terminal_error.as_ref().map(|error| error.code.to_owned()),
+        error_message: terminal_error.map(|error| error.message),
         provider_metadata,
         interaction_id: None,
         model: None,
@@ -685,17 +677,9 @@ pub(super) fn from_projection(response: &Projection) -> LlmResponse {
 }
 
 /// Converts output items to model content, or `None` when they carry no parts.
-///
-/// Returns the argument error of the first function call with invalid JSON arguments.
-pub(super) fn output_parts(output: &[OutputItem]) -> Result<Option<Content>, String> {
-    let parts = output
-        .iter()
-        .map(output_item_to_parts)
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    Ok((!parts.is_empty()).then(|| Content { role: "model".to_string(), parts }))
+pub(super) fn output_parts(output: &[OutputItem]) -> Option<Content> {
+    let parts = output.iter().flat_map(output_item_to_parts).collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| Content { role: "model".to_string(), parts })
 }
 
 /// Convert a single `OutputItem` to zero or more ADK `Part`s.
@@ -704,8 +688,8 @@ pub(super) fn output_parts(output: &[OutputItem]) -> Result<Option<Content>, Str
 /// - `Reasoning` → `Part::Thinking` with concatenated summary text
 /// - `FunctionCall` → `Part::FunctionCall` with parsed JSON args
 /// - Other variants (WebSearchCall, FileSearchCall, etc.) → empty vec (handled in provider_metadata)
-fn output_item_to_parts(item: &OutputItem) -> Result<Vec<Part>, String> {
-    let parts = match item {
+fn output_item_to_parts(item: &OutputItem) -> Vec<Part> {
+    match item {
         // Preserve commentary as a native message in canonical history. It is not
         // answer text and must retain its phase when sent back to the provider.
         OutputItem::Message(msg) if msg.phase == Some(MessagePhase::Commentary) => {
@@ -760,8 +744,8 @@ fn output_item_to_parts(item: &OutputItem) -> Result<Vec<Part>, String> {
         }
         OutputItem::FunctionCall(fc) => {
             let encoded = serde_json::Value::String(fc.arguments.clone());
-            let args = super::convert::decode_tool_call_arguments(Some(&encoded))
-                .map_err(|error| format!("invalid arguments for tool '{}': {error}", fc.name))?;
+            let args =
+                crate::tool_args::tool_call_arguments("openai-responses", &fc.name, Some(&encoded));
             vec![Part::FunctionCall {
                 name: fc.name.clone(),
                 args,
@@ -814,8 +798,7 @@ fn output_item_to_parts(item: &OutputItem) -> Result<Vec<Part>, String> {
             response_item_part(Item::CustomToolCall(call.clone()), false)
         }
         _ => Vec::new(),
-    };
-    Ok(parts)
+    }
 }
 
 fn response_item_part(item: Item, is_output: bool) -> Vec<Part> {
@@ -1247,8 +1230,7 @@ mod tests {
             })),
             id: "ws_123".to_string(),
             status: WebSearchToolCallStatus::Completed,
-        }))
-        .expect("server tool output should convert");
+        }));
 
         assert!(matches!(parts[0], Part::ServerToolCall { .. }));
 
@@ -1273,23 +1255,25 @@ mod tests {
             namespace: None,
             id: None,
             status: None,
-        }))
-        .expect("an empty compatible payload should normalize");
+        }));
         assert!(matches!(
             &empty[0],
             Part::FunctionCall { args, .. } if args == &serde_json::json!({})
         ));
 
-        let error = output_item_to_parts(&OutputItem::FunctionCall(FunctionToolCall {
+        // Truncated arguments are marked, never run with substituted arguments.
+        let truncated = output_item_to_parts(&OutputItem::FunctionCall(FunctionToolCall {
             call_id: "call_invalid".to_string(),
             name: "bash".to_string(),
             arguments: r#"{"command":"#.to_string(),
             namespace: None,
             id: None,
             status: None,
-        }))
-        .expect_err("truncated arguments must remain invalid");
-        assert!(error.contains("bash"));
+        }));
+        assert!(matches!(
+            truncated.as_slice(),
+            [Part::FunctionCall { args, .. }] if adk_core::invalid_tool_arguments_reason(args).is_some()
+        ));
     }
 
     #[test]

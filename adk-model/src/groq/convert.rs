@@ -269,8 +269,11 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
 
             if let Some(tool_calls) = &msg.tool_calls {
                 for tc in tool_calls {
-                    let args: Value = serde_json::from_str(&tc.function.arguments)
-                        .unwrap_or(serde_json::json!({}));
+                    let args = crate::tool_args::tool_call_arguments(
+                        "groq",
+                        &tc.function.name,
+                        Some(&Value::String(tc.function.arguments.clone())),
+                    );
                     parts.push(Part::FunctionCall {
                         name: tc.function.name.clone(),
                         args,

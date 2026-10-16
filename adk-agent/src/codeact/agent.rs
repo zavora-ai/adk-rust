@@ -1009,6 +1009,7 @@ async fn run_authorized_tool(
 
     let started = std::time::Instant::now();
     let mut last_error = String::new();
+    let mut last_failure: Option<Arc<AdkError>> = None;
     let mut value = None;
     // Set when the last attempt ended mid-flight (timeout or panic), so its side
     // effect may or may not have happened.
@@ -1043,15 +1044,29 @@ async fn run_authorized_tool(
                 Ok(Ok(Err(err))) => {
                     last_error = tool_error_message(&err);
                     interrupted = false;
-                    err.is_retryable()
+                    let retryable = err.is_retryable();
+                    last_failure = Some(Arc::new(err));
+                    retryable
                 }
                 Ok(Err(limit)) => {
-                    last_error = format!("tool timed out after {}s", limit.as_secs());
+                    last_error = format!("tool timed out after {limit:?}");
+                    last_failure = Some(Arc::new(AdkError::new(
+                        ErrorComponent::Tool,
+                        ErrorCategory::Timeout,
+                        "tool.timeout",
+                        last_error.clone(),
+                    )));
                     interrupted = true;
                     true
                 }
                 Err(_) => {
                     last_error = format!("tool '{name}' panicked during execution");
+                    last_failure = Some(Arc::new(AdkError::new(
+                        ErrorComponent::Tool,
+                        ErrorCategory::Internal,
+                        "tool.panicked",
+                        last_error.clone(),
+                    )));
                     interrupted = true;
                     false
                 }
@@ -1099,6 +1114,7 @@ async fn run_authorized_tool(
         success: tool_succeeded,
         duration: started.elapsed(),
         error_message: (!tool_succeeded).then(|| last_error.clone()),
+        error: if tool_succeeded { None } else { last_failure },
         attempt: final_attempt,
     };
 
@@ -5005,7 +5021,7 @@ mod tests {
         assert_eq!(
             raised,
             adk_core::outcome_unknown_response(
-                "tool timed out after 0s. The call may have taken effect; check its result before calling it again."
+                "tool timed out after 20ms. The call may have taken effect; check its result before calling it again."
             )
         );
         let key = ledger.begun.lock().unwrap()[0].clone();

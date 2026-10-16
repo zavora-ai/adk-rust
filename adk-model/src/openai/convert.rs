@@ -305,48 +305,37 @@ pub fn convert_tools(
 /// goes through `async-openai`'s typed client.
 #[allow(dead_code)]
 pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse {
-    let content = resp
-        .choices
-        .first()
-        .map(|choice| -> Result<Content, String> {
-            let mut parts = Vec::new();
+    let content = resp.choices.first().map(|choice| {
+        let mut parts = Vec::new();
 
-            // Add text content (skip empty strings from reasoning models)
-            if let Some(text) = &choice.message.content
-                && !text.is_empty()
-            {
-                parts.push(Part::Text { text: text.clone() });
-            }
+        // Add text content (skip empty strings from reasoning models)
+        if let Some(text) = &choice.message.content
+            && !text.is_empty()
+        {
+            parts.push(Part::Text { text: text.clone() });
+        }
 
-            // Add tool calls with IDs
-            if let Some(tool_calls) = &choice.message.tool_calls {
-                for tc in tool_calls {
-                    if let ChatCompletionMessageToolCalls::Function(func_call) = tc {
-                        let encoded =
-                            serde_json::Value::String(func_call.function.arguments.clone());
-                        let args = decode_tool_call_arguments(Some(&encoded)).map_err(|error| {
-                            format!(
-                                "invalid arguments for tool '{}': {error}",
-                                func_call.function.name
-                            )
-                        })?;
-                        parts.push(Part::FunctionCall {
-                            name: func_call.function.name.clone(),
-                            args,
-                            id: Some(func_call.id.clone()),
-                            thought_signature: None,
-                        });
-                    }
+        // Add tool calls with IDs
+        if let Some(tool_calls) = &choice.message.tool_calls {
+            for tc in tool_calls {
+                if let ChatCompletionMessageToolCalls::Function(func_call) = tc {
+                    let encoded = serde_json::Value::String(func_call.function.arguments.clone());
+                    parts.push(Part::FunctionCall {
+                        name: func_call.function.name.clone(),
+                        args: crate::tool_args::tool_call_arguments(
+                            "openai",
+                            &func_call.function.name,
+                            Some(&encoded),
+                        ),
+                        id: Some(func_call.id.clone()),
+                        thought_signature: None,
+                    });
                 }
             }
+        }
 
-            Ok(Content { role: "model".to_string(), parts })
-        })
-        .transpose();
-    let (content, argument_error) = match content {
-        Ok(content) => (content, None),
-        Err(error) => (None, Some(error)),
-    };
+        Content { role: "model".to_string(), parts }
+    });
 
     let usage_metadata = resp.usage.as_ref().map(|u| {
         let mut meta = UsageMetadata {
@@ -373,13 +362,12 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         OaiFinishReason::ContentFilter => FinishReason::Safety,
         OaiFinishReason::FunctionCall => FinishReason::Stop,
     });
-    let tool_call_turn = argument_error.is_none()
-        && (resp.choices.first().is_some_and(|choice| {
-            matches!(
-                choice.finish_reason,
-                Some(OaiFinishReason::ToolCalls | OaiFinishReason::FunctionCall)
-            )
-        }) || content.as_ref().is_some_and(Content::has_function_calls));
+    let tool_call_turn = resp.choices.first().is_some_and(|choice| {
+        matches!(
+            choice.finish_reason,
+            Some(OaiFinishReason::ToolCalls | OaiFinishReason::FunctionCall)
+        )
+    }) || content.as_ref().is_some_and(Content::has_function_calls);
 
     LlmResponse {
         content,
@@ -387,12 +375,10 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         finish_reason,
         citation_metadata: None,
         partial: false,
-        turn_complete: argument_error.is_some() || !tool_call_turn,
+        turn_complete: !tool_call_turn,
         interrupted: false,
-        error_code: argument_error
-            .as_ref()
-            .map(|_| "model.openai.invalid_tool_arguments".to_owned()),
-        error_message: argument_error,
+        error_code: None,
+        error_message: None,
         provider_metadata: None,
         interaction_id: None,
         model: Some(resp.model.clone()).filter(|model| !model.is_empty()),
@@ -438,66 +424,66 @@ fn json_i32(value: Option<&serde_json::Value>) -> Option<i32> {
 ///
 /// Text-encoded tool calls are recognised only for tools in `declared_tools`.
 pub(crate) fn from_raw_openai_response(
+    provider: &str,
     json: &serde_json::Value,
     declared_tools: &HashSet<String>,
-) -> Result<LlmResponse, String> {
+) -> LlmResponse {
     let choice = json.get("choices").and_then(|c| c.get(0));
 
-    let content = choice
-        .map(|choice| -> Result<Content, String> {
-            let message = &choice["message"];
-            let mut parts = Vec::new();
+    let content = choice.map(|choice| {
+        let message = &choice["message"];
+        let mut parts = Vec::new();
 
-            // Extract reasoning_content (returned by reasoning models like o3, gpt-5-mini)
-            // Fallback to "reasoning" field for OpenRouter, Kilo Gateway, SambaNova, Cerebras, Groq
-            let reasoning = message
-                .get("reasoning_content")
-                .or_else(|| message.get("reasoning"))
-                .and_then(|v| v.as_str());
-            if let Some(reasoning) = reasoning
-                && !reasoning.is_empty()
+        // Extract reasoning_content (returned by reasoning models like o3, gpt-5-mini)
+        // Fallback to "reasoning" field for OpenRouter, Kilo Gateway, SambaNova, Cerebras, Groq
+        let reasoning = message
+            .get("reasoning_content")
+            .or_else(|| message.get("reasoning"))
+            .and_then(|v| v.as_str());
+        if let Some(reasoning) = reasoning
+            && !reasoning.is_empty()
+        {
+            parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
+        }
+
+        // Extract visible text content (skip empty strings)
+        if let Some(text) = message.get("content").and_then(|v| v.as_str())
+            && !text.is_empty()
+        {
+            // Check for text-based tool calls (Qwen, Llama, Mistral Nemo format)
+            // to declared tools before adding as plain text
+            if let Some(parsed_parts) =
+                crate::tool_call_parser::parse_declared_tool_calls(text, declared_tools)
             {
-                parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
+                parts.extend(parsed_parts);
+            } else {
+                parts.push(Part::Text { text: text.to_string() });
             }
+        }
 
-            // Extract visible text content (skip empty strings)
-            if let Some(text) = message.get("content").and_then(|v| v.as_str())
-                && !text.is_empty()
-            {
-                // Check for text-based tool calls (Qwen, Llama, Mistral Nemo format)
-                // to declared tools before adding as plain text
-                if let Some(parsed_parts) =
-                    crate::tool_call_parser::parse_declared_tool_calls(text, declared_tools)
-                {
-                    parts.extend(parsed_parts);
-                } else {
-                    parts.push(Part::Text { text: text.to_string() });
+        // Extract structured tool calls (OpenAI native format)
+        if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
+            for tc in tool_calls {
+                let func = &tc["function"];
+                if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                    let args = crate::tool_args::tool_call_arguments(
+                        provider,
+                        name,
+                        func.get("arguments"),
+                    );
+                    let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
+                    parts.push(Part::FunctionCall {
+                        name: name.to_string(),
+                        args,
+                        id,
+                        thought_signature: None,
+                    });
                 }
             }
+        }
 
-            // Extract structured tool calls (OpenAI native format)
-            if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
-                for tc in tool_calls {
-                    let func = &tc["function"];
-                    if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                        let args =
-                            decode_tool_call_arguments(func.get("arguments")).map_err(|error| {
-                                format!("invalid arguments for tool '{name}': {error}")
-                            })?;
-                        let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
-                        parts.push(Part::FunctionCall {
-                            name: name.to_string(),
-                            args,
-                            id,
-                            thought_signature: None,
-                        });
-                    }
-                }
-            }
-
-            Ok(Content { role: "model".to_string(), parts })
-        })
-        .transpose()?;
+        Content { role: "model".to_string(), parts }
+    });
 
     // Parse usage metadata
     let usage_metadata = json.get("usage").and_then(usage_metadata_from_raw);
@@ -518,7 +504,7 @@ pub(crate) fn from_raw_openai_response(
         .is_some_and(|reason| matches!(reason, "tool_calls" | "function_call"))
         || content.as_ref().is_some_and(Content::has_function_calls);
 
-    Ok(LlmResponse {
+    LlmResponse {
         content,
         usage_metadata,
         finish_reason,
@@ -536,7 +522,7 @@ pub(crate) fn from_raw_openai_response(
             .filter(|model| !model.is_empty())
             .map(str::to_string),
         provider: None,
-    })
+    }
 }
 
 pub(crate) use crate::tool_args::decode_tool_call_arguments;
@@ -864,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_response_surfaces_malformed_tool_arguments() {
+    fn typed_response_marks_malformed_tool_arguments() {
         let response: CreateChatCompletionResponse = serde_json::from_value(serde_json::json!({
             "id": "chatcmpl_invalid",
             "object": "chat.completion",
@@ -887,9 +873,13 @@ mod tests {
         .expect("typed response should deserialize");
 
         let converted = from_openai_response(&response);
-        assert_eq!(converted.error_code.as_deref(), Some("model.openai.invalid_tool_arguments"));
-        assert!(converted.content.is_none());
-        assert!(converted.turn_complete);
+        assert!(converted.error_code.is_none());
+        assert!(!converted.turn_complete, "the call still needs an answer");
+        let parts = converted.content.expect("tool content").parts;
+        assert!(matches!(
+            parts.as_slice(),
+            [Part::FunctionCall { args, .. }] if adk_core::invalid_tool_arguments_reason(args).is_some()
+        ));
     }
 
     #[test]
@@ -911,7 +901,7 @@ mod tests {
             }
         });
 
-        let resp = from_raw_openai_response(&json, &HashSet::new()).expect("response should parse");
+        let resp = from_raw_openai_response("openai", &json, &HashSet::new());
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 2);
         assert!(
@@ -934,7 +924,7 @@ mod tests {
     fn json_fence_without_declared_tools_stays_text() {
         let text = "```json\n{\"name\":\"Alice\",\"age\":30}\n```";
 
-        let resp = from_raw_openai_response(&raw_text_response(text), &HashSet::new()).unwrap();
+        let resp = from_raw_openai_response("openai", &raw_text_response(text), &HashSet::new());
 
         assert_eq!(resp.content.unwrap().parts, vec![Part::Text { text: text.to_string() }]);
     }
@@ -944,7 +934,7 @@ mod tests {
         let text = "```json\n{\"name\":\"Alice\",\"age\":30}\n```";
         let declared = HashSet::from(["lookup".to_string()]);
 
-        let resp = from_raw_openai_response(&raw_text_response(text), &declared).unwrap();
+        let resp = from_raw_openai_response("openai", &raw_text_response(text), &declared);
 
         assert_eq!(resp.content.unwrap().parts, vec![Part::Text { text: text.to_string() }]);
     }
@@ -955,7 +945,7 @@ mod tests {
             "```json\n{\"name\":\"lookup\",\"arguments\":{\"id\":7}}\n```\nThen I will summarize.";
         let declared = HashSet::from(["lookup".to_string()]);
 
-        let resp = from_raw_openai_response(&raw_text_response(text), &declared).unwrap();
+        let resp = from_raw_openai_response("openai", &raw_text_response(text), &declared);
 
         assert_eq!(
             resp.content.unwrap().parts,
@@ -989,7 +979,7 @@ mod tests {
             }
         });
 
-        let resp = from_raw_openai_response(&json, &HashSet::new()).expect("response should parse");
+        let resp = from_raw_openai_response("openai", &json, &HashSet::new());
         let content = resp.content.unwrap();
         assert!(content.parts.is_empty(), "empty text should be filtered out");
         assert_eq!(resp.finish_reason, Some(FinishReason::MaxTokens));
@@ -1016,7 +1006,7 @@ mod tests {
             "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 }
         });
 
-        let resp = from_raw_openai_response(&json, &HashSet::new()).expect("response should parse");
+        let resp = from_raw_openai_response("openai", &json, &HashSet::new());
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 1);
         if let Part::FunctionCall { name, args, id, .. } = &content.parts[0] {
@@ -1067,8 +1057,7 @@ mod tests {
             }]
         });
 
-        let response = from_raw_openai_response(&json, &HashSet::new())
-            .expect("compatible arguments should parse");
+        let response = from_raw_openai_response("openai", &json, &HashSet::new());
         let parts = response.content.expect("tool content").parts;
         assert!(matches!(
             &parts[0],
@@ -1088,54 +1077,37 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_response_rejects_truncated_tool_arguments() {
-        let json = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_invalid",
-                        "type": "function",
-                        "function": {
-                            "name": "bash",
-                            "arguments": "{\"command\":\""
-                        }
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }]
-        });
+    fn test_raw_response_marks_malformed_tool_arguments() {
+        for (arguments, reason) in [
+            (serde_json::json!("{\"command\":\""), "not valid JSON"),
+            (serde_json::json!(["pwd"]), "array"),
+        ] {
+            let json = serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call_invalid",
+                            "type": "function",
+                            "function": { "name": "bash", "arguments": arguments }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            });
 
-        let error = from_raw_openai_response(&json, &HashSet::new())
-            .expect_err("truncated tool arguments must remain invalid");
-        assert!(error.contains("bash"));
-    }
-
-    #[test]
-    fn test_raw_response_rejects_non_empty_array_tool_arguments() {
-        let json = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_invalid",
-                        "type": "function",
-                        "function": {
-                            "name": "bash",
-                            "arguments": ["pwd"]
-                        }
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }]
-        });
-
-        let error = from_raw_openai_response(&json, &HashSet::new())
-            .expect_err("non-empty array arguments must remain invalid");
-        assert!(error.contains("bash"));
-        assert!(error.contains("array"));
+            let response = from_raw_openai_response("openai", &json, &HashSet::new());
+            assert!(response.error_code.is_none());
+            assert!(!response.turn_complete, "the call still needs an answer");
+            let parts = response.content.expect("tool content").parts;
+            let [Part::FunctionCall { name, args, .. }] = parts.as_slice() else {
+                panic!("expected one call, got {parts:?}");
+            };
+            assert_eq!(name, "bash");
+            let found = adk_core::invalid_tool_arguments_reason(args).expect("marked arguments");
+            assert!(found.contains(reason), "{found}");
+        }
     }
 
     #[test]
@@ -1148,7 +1120,7 @@ mod tests {
             "usage": { "prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8 }
         });
 
-        let resp = from_raw_openai_response(&json, &HashSet::new()).expect("response should parse");
+        let resp = from_raw_openai_response("openai", &json, &HashSet::new());
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 1);
         assert!(matches!(&content.parts[0], Part::Text { text } if text == "Hello there!"));
@@ -1183,8 +1155,7 @@ mod tests {
             "usage": provider_usage.clone()
         });
 
-        let response =
-            from_raw_openai_response(&json, &HashSet::new()).expect("response should parse");
+        let response = from_raw_openai_response("openai", &json, &HashSet::new());
         let usage = response.usage_metadata.expect("usage should be parsed");
 
         assert_eq!(usage.prompt_token_count, 120);

@@ -202,8 +202,11 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
             },
             quote! {
                 let typed_args: #args_ty = serde_json::from_value(args)
-                    .map_err(|e| adk_tool::AdkError::tool(
-                        format!("invalid arguments for '{}': {e}", #tool_name_str)
+                    .map_err(|e| adk_tool::AdkError::new(
+                        adk_tool::ErrorComponent::Tool,
+                        adk_tool::ErrorCategory::InvalidInput,
+                        adk_tool::TOOL_INVALID_ARGUMENTS_CODE,
+                        format!("invalid arguments for '{}': {e}", #tool_name_str),
                     ))?;
                 #fn_name(typed_args).await
             },
@@ -224,8 +227,11 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
         if let Some(args_ty) = &args_type {
             quote! {
                 let typed_args: #args_ty = serde_json::from_value(args)
-                    .map_err(|e| adk_tool::AdkError::tool(
-                        format!("invalid arguments for '{}': {e}", #tool_name_str)
+                    .map_err(|e| adk_tool::AdkError::new(
+                        adk_tool::ErrorComponent::Tool,
+                        adk_tool::ErrorCategory::InvalidInput,
+                        adk_tool::TOOL_INVALID_ARGUMENTS_CODE,
+                        format!("invalid arguments for '{}': {e}", #tool_name_str),
                     ))?;
                 #fn_name(ctx, typed_args).await
             }

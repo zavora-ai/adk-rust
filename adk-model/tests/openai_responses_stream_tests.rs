@@ -183,7 +183,7 @@ async fn standard_mode_does_not_apply_compatibility_identity_rules() {
 }
 
 #[tokio::test]
-async fn streamed_invalid_arguments_preserve_errors_and_usage_in_both_modes() {
+async fn streamed_invalid_arguments_are_marked_and_keep_usage_in_both_modes() {
     for compatible in [false, true] {
         let results = responses(
             &[completion(json!([{
@@ -196,11 +196,13 @@ async fn streamed_invalid_arguments_preserve_errors_and_usage_in_both_modes() {
         .await;
         assert_eq!(results.len(), 1);
         let result = &results[0];
-        assert_eq!(
-            result.error_code.as_deref(),
-            Some("model.openai_responses.invalid_tool_arguments")
-        );
-        assert!(result.error_message.as_deref().is_some_and(|message| !message.is_empty()));
+        // The call is marked for the agent to answer with an error, not a failed turn.
+        assert!(result.error_code.is_none());
+        let parts = &result.content.as_ref().expect("call content").parts;
+        assert!(matches!(
+            parts.as_slice(),
+            [Part::FunctionCall { args, .. }] if adk_core::invalid_tool_arguments_reason(args).is_some()
+        ));
         assert!(result.turn_complete);
         assert!(!result.partial);
         assert_eq!(result.usage_metadata.as_ref().unwrap().cache_read_input_token_count, Some(42));
@@ -208,7 +210,6 @@ async fn streamed_invalid_arguments_preserve_errors_and_usage_in_both_modes() {
             result.provider_metadata.as_ref().unwrap()["openai"]["response_id"],
             "resp_test"
         );
-        assert!(result.content.as_ref().is_none_or(|content| content.parts.is_empty()));
     }
 }
 

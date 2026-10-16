@@ -370,15 +370,14 @@ impl Llm for DeepSeekClient {
                                                 let tool_calls = sorted_calls
                                                     .into_iter()
                                                     .map(|(_, (id, name, args_str))| {
-                                                        let args = crate::tool_args::parse_streamed_tool_arguments(
+                                                        let args = crate::tool_args::streamed_tool_arguments(
                                                             "deepseek",
-                                                            "model.deepseek.invalid_tool_arguments",
                                                             &name,
                                                             &args_str,
-                                                        )?;
-                                                        Ok((id, name, args))
+                                                        );
+                                                        (id, name, args)
                                                     })
-                                                    .collect::<Result<Vec<_>, AdkError>>()?;
+                                                    .collect::<Vec<_>>();
                                                 let tool_reasoning = convert::pending_reasoning(
                                                     &mut reasoning_buffer,
                                                     thinking_enabled,

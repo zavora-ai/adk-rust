@@ -228,20 +228,19 @@ impl Llm for AzureAIClient {
                                             let calls = sorted
                                                 .into_iter()
                                                 .map(|(_, (id, name, args_str))| {
-                                                    let args = crate::tool_args::parse_streamed_tool_arguments(
+                                                    let args = crate::tool_args::streamed_tool_arguments(
                                                         "azure-ai",
-                                                        "model.azure_ai.invalid_tool_arguments",
                                                         &name,
                                                         &args_str,
-                                                    )?;
-                                                    Ok(Part::FunctionCall {
+                                                    );
+                                                    Part::FunctionCall {
                                                         name,
                                                         args,
                                                         id: Some(id),
                                                         thought_signature: None,
-                                                    })
+                                                    }
                                                 })
-                                                .collect::<Result<Vec<Part>, AdkError>>()?;
+                                                .collect::<Vec<Part>>();
 
                                             let mut parts = llm_resp.content.take().map(|content| content.parts).unwrap_or_default();
                                             parts.extend(calls);

@@ -122,7 +122,7 @@ impl EnhancedPlugin for RetryReflectPlugin {
         tool: Arc<dyn Tool>,
         args: &Value,
         result: Value,
-        _ctx: Arc<dyn CallbackContext>,
+        ctx: Arc<dyn CallbackContext>,
         _plugin_ctx: &PluginContext,
     ) -> Result<AfterToolCallResult> {
         // Step 1: Check if the result is an error
@@ -133,12 +133,17 @@ impl EnhancedPlugin for RetryReflectPlugin {
         let tool_name = tool.name();
 
         // A refusal or a possibly-applied side effect is never worth a retry suggestion.
+        // The function response names only the error's category and code by default, so the
+        // markers match the full message the tool outcome keeps; the prompt and logs use the
+        // response text, which is what the model already sees.
         let error_msg = Self::extract_error_message(&result);
-        if is_authorization_denial(&error_msg) {
+        let local_msg = ctx.tool_outcome().and_then(|outcome| outcome.error_message);
+        let failure = local_msg.as_deref().unwrap_or(&error_msg);
+        if is_authorization_denial(failure) {
             tracing::info!(tool_name = %tool_name, error = %error_msg, "retry_reflect.skipped_authorization_denial");
             return Ok(AfterToolCallResult::Continue(result));
         }
-        if tool.effect() == ToolEffect::NonIdempotent && is_timeout(&error_msg) {
+        if tool.effect() == ToolEffect::NonIdempotent && is_timeout(failure) {
             tracing::warn!(tool_name = %tool_name, error = %error_msg, "retry_reflect.skipped_non_idempotent_timeout");
             return Ok(AfterToolCallResult::Continue(result));
         }

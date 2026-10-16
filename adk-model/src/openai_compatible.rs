@@ -303,8 +303,6 @@ pub(crate) struct ErrorCodes {
     pub(crate) api_error: &'static str,
     /// Response body that is not valid JSON.
     pub(crate) parse: &'static str,
-    /// Tool-call arguments that are not a JSON object.
-    pub(crate) invalid_tool_arguments: &'static str,
     /// Status-specific codes that take precedence over `api_error`.
     pub(crate) status: &'static [(u16, &'static str)],
 }
@@ -315,7 +313,6 @@ impl ErrorCodes {
         request: "model.openai_compat.request",
         api_error: "model.openai_compat.api_error",
         parse: "model.openai_compat.parse",
-        invalid_tool_arguments: "model.openai_compat.invalid_tool_arguments",
         status: &[],
     };
 
@@ -786,20 +783,6 @@ fn append_tool_call_arguments(accumulator: &mut String, arguments: &serde_json::
     }
 }
 
-fn parse_tool_call_arguments(
-    provider_name: &str,
-    error_codes: ErrorCodes,
-    tool_name: &str,
-    arguments: &str,
-) -> Result<serde_json::Value, AdkError> {
-    crate::tool_args::parse_streamed_tool_arguments(
-        provider_name,
-        error_codes.invalid_tool_arguments,
-        tool_name,
-        arguments,
-    )
-}
-
 /// Parse usage metadata from a raw SSE chunk JSON value.
 fn parse_usage_from_chunk(chunk: &serde_json::Value) -> Option<UsageMetadata> {
     chunk.get("usage").and_then(convert::usage_metadata_from_raw)
@@ -1040,20 +1023,19 @@ impl Llm for OpenAICompatible {
                                     let parts: Vec<Part> = sorted_calls
                                         .into_iter()
                                         .map(|(_, (id, name, args_str))| {
-                                            let args = parse_tool_call_arguments(
+                                            let args = crate::tool_args::streamed_tool_arguments(
                                                 &provider_name,
-                                                error_codes,
                                                 &name,
                                                 &args_str,
-                                            )?;
-                                            Ok(Part::FunctionCall {
+                                            );
+                                            Part::FunctionCall {
                                                 name,
                                                 args,
                                                 id: Some(id),
                                                 thought_signature: None,
-                                            })
+                                            }
                                         })
-                                        .collect::<Result<Vec<_>, AdkError>>()?;
+                                        .collect();
 
                                     let response = LlmResponse {
                                         content: Some(Content {
@@ -1226,16 +1208,11 @@ impl Llm for OpenAICompatible {
                 })
                 .await?;
 
-                let adk_response = convert::from_raw_openai_response(&response, &declared_tools).map_err(|error| {
-                    AdkError::new(
-                        ErrorComponent::Model,
-                        ErrorCategory::Internal,
-                        error_codes.invalid_tool_arguments,
-                        format!("{provider_name} returned {error}"),
-                    )
-                    .with_provider(&provider_name)
-                })?;
-                yield adk_response;
+                yield convert::from_raw_openai_response(
+                    &provider_name,
+                    &response,
+                    &declared_tools,
+                );
             };
 
             Ok(crate::usage_tracking::with_priced_usage_tracking(
@@ -1323,61 +1300,18 @@ mod tests {
 
     #[test]
     fn streamed_tool_arguments_require_valid_json() {
-        let parsed = parse_tool_call_arguments(
-            "compatible-provider",
-            ErrorCodes::COMPATIBLE,
-            "bash",
-            r#"{"command":"pwd"}"#,
-        )
-        .expect("valid arguments should parse");
-        assert_eq!(parsed["command"], "pwd");
-
-        assert_eq!(
-            parse_tool_call_arguments("compatible-provider", ErrorCodes::COMPATIBLE, "no_args", "")
-                .expect("an empty compatible payload should normalize"),
-            serde_json::json!({})
-        );
-        assert_eq!(
-            parse_tool_call_arguments(
-                "compatible-provider",
-                ErrorCodes::COMPATIBLE,
-                "no_args",
-                "   "
-            )
-            .expect("a whitespace-only compatible payload should normalize"),
-            serde_json::json!({})
-        );
-        assert_eq!(
-            parse_tool_call_arguments(
-                "compatible-provider",
-                ErrorCodes::COMPATIBLE,
-                "no_args",
-                "[]"
-            )
-            .expect("an empty array compatible payload should normalize"),
-            serde_json::json!({})
-        );
-
-        let error = parse_tool_call_arguments(
-            "compatible-provider",
-            ErrorCodes::COMPATIBLE,
-            "bash",
-            r#"{"command":"#,
-        )
-        .expect_err("truncated arguments must remain invalid");
-        assert_eq!(error.component, ErrorComponent::Model);
-        assert_eq!(error.category, ErrorCategory::Internal);
-        assert_eq!(error.code, "model.openai_compat.invalid_tool_arguments");
-        assert_eq!(error.details.provider.as_deref(), Some("compatible-provider"));
-
-        let error = parse_tool_call_arguments(
-            "compatible-provider",
-            ErrorCodes::COMPATIBLE,
-            "bash",
-            r#"["pwd"]"#,
-        )
-        .expect_err("non-empty array arguments must remain invalid");
-        assert_eq!(error.code, "model.openai_compat.invalid_tool_arguments");
+        let parse = |name: &str, arguments: &str| {
+            crate::tool_args::streamed_tool_arguments("compatible-provider", name, arguments)
+        };
+        assert_eq!(parse("bash", r#"{"command":"pwd"}"#)["command"], "pwd");
+        for empty in ["", "   ", "[]"] {
+            assert_eq!(parse("no_args", empty), serde_json::json!({}), "{empty:?}");
+        }
+        // A truncated or non-object payload is marked, never run with substituted arguments.
+        for malformed in [r#"{"command":"#, r#"["pwd"]"#] {
+            let args = parse("bash", malformed);
+            assert!(adk_core::invalid_tool_arguments_reason(&args).is_some(), "{malformed:?}");
+        }
     }
 
     #[test]
@@ -1386,13 +1320,7 @@ mod tests {
         append_tool_call_arguments(&mut arguments, &serde_json::json!({"command": "pwd"}));
 
         assert_eq!(
-            parse_tool_call_arguments(
-                "compatible-provider",
-                ErrorCodes::COMPATIBLE,
-                "bash",
-                &arguments
-            )
-            .expect("a structured object should normalize"),
+            crate::tool_args::streamed_tool_arguments("compatible-provider", "bash", &arguments),
             serde_json::json!({"command": "pwd"})
         );
     }
@@ -1403,13 +1331,11 @@ mod tests {
             let mut arguments = String::new();
             append_tool_call_arguments(&mut arguments, &placeholder);
             assert_eq!(
-                parse_tool_call_arguments(
+                crate::tool_args::streamed_tool_arguments(
                     "compatible-provider",
-                    ErrorCodes::COMPATIBLE,
                     "no_args",
                     &arguments
-                )
-                .expect("an empty snapshot should remain a no-argument call"),
+                ),
                 serde_json::json!({})
             );
 
@@ -1417,13 +1343,11 @@ mod tests {
             append_tool_call_arguments(&mut arguments, &serde_json::json!(r#": "pwd"}"#));
 
             assert_eq!(
-                parse_tool_call_arguments(
+                crate::tool_args::streamed_tool_arguments(
                     "compatible-provider",
-                    ErrorCodes::COMPATIBLE,
                     "bash",
                     &arguments
-                )
-                .expect("empty snapshots must not prefix string fragments"),
+                ),
                 serde_json::json!({"command": "pwd"})
             );
         }

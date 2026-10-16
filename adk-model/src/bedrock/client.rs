@@ -327,12 +327,11 @@ impl BedrockClient {
                         // If we were accumulating tool arguments, emit the complete FunctionCall.
                         if let (Some(name), Some(id)) = (tool_name.take(), tool_id.take()) {
                             // A zero-argument tool streams no input, which decodes to `{}`.
-                            let args = crate::tool_args::parse_streamed_tool_arguments(
+                            let args = crate::tool_args::streamed_tool_arguments(
                                 "bedrock",
-                                "model.bedrock.invalid_tool_arguments",
                                 &name,
                                 &tool_args_buf,
-                            )?;
+                            );
                             tool_args_buf.clear();
 
                             yield LlmResponse {

@@ -485,6 +485,29 @@ impl AdkError {
     pub fn is_conflict(&self) -> bool {
         self.category == ErrorCategory::Conflict
     }
+
+    /// Describes the error by its component, category, and code, without its message.
+    ///
+    /// A message can carry credentials, internal hosts, or upstream response bodies, so this
+    /// form is what an agent shows a model for a failure whose message stays local. The code is
+    /// a compile-time constant, never caller data.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{AdkError, ErrorCategory, ErrorComponent};
+    ///
+    /// let err = AdkError::new(
+    ///     ErrorComponent::Tool,
+    ///     ErrorCategory::Unavailable,
+    ///     "tool.orders_db.unavailable",
+    ///     "connect postgres://admin:secret@db.internal/prod failed",
+    /// );
+    /// assert_eq!(err.redacted(), "tool.unavailable (tool.orders_db.unavailable)");
+    /// ```
+    pub fn redacted(&self) -> String {
+        format!("{}.{} ({})", self.component, self.category, self.code)
+    }
 }
 
 impl AdkError {
