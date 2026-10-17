@@ -228,16 +228,22 @@ fn media_part(
 /// `prompt_token_count`/`candidates_token_count`/`total_token_count`
 /// (saturating `i64` → `i32`). `total_thought_tokens` and `total_cached_tokens`
 /// populate `thinking_token_count` / `cache_read_input_token_count` only when
-/// positive.
+/// positive. `provider_usage` keeps the `usage` object as received.
 fn usage_to_metadata(usage: &Usage) -> UsageMetadata {
     UsageMetadata {
         prompt_token_count: clamp_i64(usage.total_input_tokens),
         candidates_token_count: clamp_i64(usage.total_output_tokens),
-        total_token_count: clamp_i64(usage.total_tokens),
+        // An unreported (`null` or zero) total is at least the input and output reported.
+        total_token_count: clamp_i64(if usage.total_tokens > 0 {
+            usage.total_tokens
+        } else {
+            usage.total_input_tokens.saturating_add(usage.total_output_tokens)
+        }),
         thinking_token_count: (usage.total_thought_tokens > 0)
             .then(|| clamp_i64(usage.total_thought_tokens)),
         cache_read_input_token_count: (usage.total_cached_tokens > 0)
             .then(|| clamp_i64(usage.total_cached_tokens)),
+        provider_usage: usage.raw.clone().or_else(|| serde_json::to_value(usage).ok()),
         ..Default::default()
     }
 }
@@ -1641,6 +1647,7 @@ mod tests {
             total_tokens: 182,
             input_tokens_by_modality: Vec::new(),
             output_tokens_by_modality: Vec::new(),
+            raw: None,
         });
 
         let response = to_llm_response(&interaction);

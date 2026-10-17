@@ -641,37 +641,94 @@ impl InteractionStatus {
 pub struct ModalityTokens {
     /// The modality the token count applies to.
     pub modality: ResponseModality,
-    /// Number of tokens for the modality.
+    /// Number of tokens for the modality; zero when the API reports `null` or leaves it out.
+    #[serde(default, deserialize_with = "adk_core::nullable_count")]
     pub tokens: i64,
 }
 
 /// Token usage statistics for an interaction.
+///
+/// A count the API reports as `null` or leaves out reads as zero instead of failing the
+/// interaction, and [`raw`](Self::raw) keeps the object exactly as it was sent.
+///
+/// # Example
+///
+/// ```
+/// use adk_gemini::interactions::Usage;
+///
+/// let usage: Usage = serde_json::from_value(serde_json::json!({
+///     "total_input_tokens": null,
+///     "total_output_tokens": 9,
+///     "total_tool_use_tokens": null
+/// }))
+/// .unwrap();
+/// assert_eq!((usage.total_input_tokens, usage.total_output_tokens), (0, 9));
+/// assert!(usage.raw.as_ref().unwrap()["total_input_tokens"].is_null());
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "serde_json::Value")]
 pub struct Usage {
     /// Total input (prompt) tokens.
-    #[serde(default)]
     pub total_input_tokens: i64,
     /// Total output (response) tokens.
-    #[serde(default)]
     pub total_output_tokens: i64,
     /// Total thought tokens (thinking models).
-    #[serde(default)]
     pub total_thought_tokens: i64,
     /// Total cached tokens.
-    #[serde(default)]
     pub total_cached_tokens: i64,
     /// Total tool-use tokens.
-    #[serde(default)]
     pub total_tool_use_tokens: i64,
     /// Total token count for the interaction.
-    #[serde(default)]
     pub total_tokens: i64,
     /// Input tokens broken down by modality.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub input_tokens_by_modality: Vec<ModalityTokens>,
     /// Output tokens broken down by modality.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub output_tokens_by_modality: Vec<ModalityTokens>,
+    /// The `usage` object exactly as the API sent it, including fields this type does not
+    /// model. `None` for a value built in code.
+    #[serde(skip)]
+    pub raw: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct UsageWire {
+    #[serde(default, deserialize_with = "adk_core::nullable_count")]
+    total_input_tokens: i64,
+    #[serde(default, deserialize_with = "adk_core::nullable_count")]
+    total_output_tokens: i64,
+    #[serde(default, deserialize_with = "adk_core::nullable_count")]
+    total_thought_tokens: i64,
+    #[serde(default, deserialize_with = "adk_core::nullable_count")]
+    total_cached_tokens: i64,
+    #[serde(default, deserialize_with = "adk_core::nullable_count")]
+    total_tool_use_tokens: i64,
+    #[serde(default, deserialize_with = "adk_core::nullable_count")]
+    total_tokens: i64,
+    #[serde(default, deserialize_with = "adk_core::nullable_count")]
+    input_tokens_by_modality: Vec<ModalityTokens>,
+    #[serde(default, deserialize_with = "adk_core::nullable_count")]
+    output_tokens_by_modality: Vec<ModalityTokens>,
+}
+
+impl TryFrom<serde_json::Value> for Usage {
+    type Error = serde_json::Error;
+
+    fn try_from(raw: serde_json::Value) -> Result<Self, Self::Error> {
+        let wire = UsageWire::deserialize(&raw)?;
+        Ok(Self {
+            total_input_tokens: wire.total_input_tokens,
+            total_output_tokens: wire.total_output_tokens,
+            total_thought_tokens: wire.total_thought_tokens,
+            total_cached_tokens: wire.total_cached_tokens,
+            total_tool_use_tokens: wire.total_tool_use_tokens,
+            total_tokens: wire.total_tokens,
+            input_tokens_by_modality: wire.input_tokens_by_modality,
+            output_tokens_by_modality: wire.output_tokens_by_modality,
+            raw: Some(raw),
+        })
+    }
 }
 
 /// The `Interaction` resource returned by create/get/cancel.

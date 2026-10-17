@@ -624,6 +624,11 @@ provider reports (web search, file search, Google Search grounding) land in
 `UsageMetadata::builtin_tool_uses`, and their published per-use fees are added to `cost`
 on the vendor's own API.
 
+A token count a provider reports as `null` or leaves out never fails the turn: it reads as
+zero (`None` for the breakdowns), and a missing total is the sum of the reported counts.
+`UsageMetadata::provider_usage` holds the provider's usage object as received, including
+fields the normalized counters do not project.
+
 ```rust
 use adk_core::UsageMetadata;
 use adk_model::PricingCatalog;

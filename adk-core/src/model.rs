@@ -325,6 +325,43 @@ impl UsageMetadata {
     }
 }
 
+/// Deserializes a token count that a provider may report as `null`, reading `null` as zero.
+///
+/// Pair it with `#[serde(default)]` so that a missing count is zero too. Compatible endpoints
+/// report a count they did not compute as `null` or leave it out, and that must not fail the
+/// model turn the usage belongs to. Fields typed `Option<_>` need no helper: serde already
+/// reads `null` there as `None`.
+///
+/// # Example
+///
+/// ```
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Usage {
+///     #[serde(default, deserialize_with = "adk_core::nullable_count")]
+///     input_tokens: u32,
+/// }
+///
+/// let usage: Usage = serde_json::from_str(r#"{"input_tokens": null}"#).unwrap();
+/// assert_eq!(usage.input_tokens, 0);
+/// let usage: Usage = serde_json::from_str("{}").unwrap();
+/// assert_eq!(usage.input_tokens, 0);
+/// let usage: Usage = serde_json::from_str(r#"{"input_tokens": 12}"#).unwrap();
+/// assert_eq!(usage.input_tokens, 12);
+/// ```
+///
+/// # Errors
+///
+/// Returns the deserializer's error when the value is neither `null` nor a `T`.
+pub fn nullable_count<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// How many times the provider ran one kind of built-in tool for a request.
 ///
 /// Kinds are provider-neutral names:

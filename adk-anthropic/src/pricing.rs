@@ -430,6 +430,7 @@ mod tests {
             cache_read_input_tokens: None,
             cache_creation_input_tokens_1h: None,
             server_tool_use: None,
+            raw: None,
         };
         let cost = estimate_cost(ModelPricing::SONNET_46, &usage);
         // 1000 input @ $3/MTok = $0.003, 500 output @ $15/MTok = $0.0075
@@ -447,6 +448,7 @@ mod tests {
             cache_read_input_tokens: None,
             cache_creation_input_tokens_1h: None,
             server_tool_use: None,
+            raw: None,
         };
         let cost = estimate_cost(ModelPricing::SONNET_5, &usage);
         assert!((cost.input_cost - 0.002).abs() < 1e-9);
@@ -462,6 +464,7 @@ mod tests {
             cache_read_input_tokens: Some(2048),
             cache_creation_input_tokens_1h: None,
             server_tool_use: None,
+            raw: None,
         };
         let cost = estimate_cost(ModelPricing::SONNET_46, &usage);
         // cache_read: 2048 @ $0.30/MTok = $0.0006144

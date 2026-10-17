@@ -736,6 +736,36 @@ fn main() {
 }
 ```
 
+### Incomplete usage reports
+
+Compatible endpoints report a token count they did not compute as `null` or leave it out.
+A count like that is unknown, never a reason to fail the turn: the tool call in the same
+response still runs, and the counts that were reported reach `UsageMetadata` and run budgets.
+
+| Field | A `null` or missing count reads as |
+|-------|------------------------------------|
+| `prompt_token_count`, `candidates_token_count` | `0` |
+| `total_token_count` | The sum of the reported prompt and output counts |
+| `cache_read_input_token_count`, `thinking_token_count` and the other breakdowns | `None` |
+
+`UsageMetadata::provider_usage` holds the provider's usage object exactly as received,
+including fields `UsageMetadata` does not project:
+
+| Provider | `provider_usage` |
+|----------|------------------|
+| OpenAI Chat and compatible presets, OpenAI Responses, DeepSeek, Azure AI | The response's `usage` object |
+| Groq | `usage`, or `x_groq.usage` when only that is present, on the finish chunk |
+| Anthropic | `usage`; for a stream, the `message_start` usage with the `message_delta` usage fields applied over it |
+| Gemini | `usageMetadata`, including `toolUsePromptTokenCount`, `trafficType` and `serviceTier` |
+| Gemini Interactions | The interaction's `usage` object |
+| Ollama | The metric fields of the final line (`prompt_eval_count`, `eval_count` and the durations) that Ollama sent |
+| OpenRouter | The usage detail objects (`prompt_tokens_details`, `completion_tokens_details`, `cost_details`) and unknown fields |
+| Bedrock | The Converse SDK's token counts (`inputTokens`, `outputTokens`, `totalTokens`, cache reads and writes) |
+
+> **Note:** Ollama leaves out a metric that is zero, such as `prompt_eval_count` when the
+> whole prompt came from its cache. A non-streaming final line without it still reports
+> `eval_count`.
+
 ### Built-in tool uses and fees
 
 Providers report the built-in tools they ran in `UsageMetadata::builtin_tool_uses`, one

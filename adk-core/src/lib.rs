@@ -239,7 +239,7 @@ pub use metering::{
 pub use model::{
     BuiltinToolUse, CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig,
     FinishReason, GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream,
-    UsageMetadata,
+    UsageMetadata, nullable_count,
 };
 pub use policy::{
     ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyDecision, PolicyRule,

@@ -154,8 +154,9 @@ pub struct ChatCompletionResponse {
     #[serde(rename = "model")]
     pub _model: String,
     pub choices: Vec<Choice>,
+    /// The `usage` object as received; counts are read from it leniently.
     #[serde(default)]
-    pub usage: Option<Usage>,
+    pub usage: Option<Value>,
 }
 
 /// Response choice.
@@ -205,46 +206,17 @@ pub struct DeltaFunction {
     pub arguments: Option<String>,
 }
 
-/// Token usage information.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Usage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
-    /// Tokens used for reasoning (thinking mode).
-    #[serde(default)]
-    pub reasoning_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completion_tokens_details: Option<Value>,
-    /// Cache hit tokens for prefix caching.
-    #[serde(default)]
-    pub prompt_cache_hit_tokens: Option<u32>,
-    /// Non-cached input tokens.
-    #[serde(default)]
-    pub prompt_cache_miss_tokens: Option<u32>,
-}
-
-pub fn usage(u: &Usage) -> UsageMetadata {
-    UsageMetadata {
-        prompt_token_count: u.prompt_tokens as i32,
-        candidates_token_count: u.completion_tokens as i32,
-        total_token_count: u.total_tokens as i32,
-        thinking_token_count: u
-            .reasoning_tokens
-            .or_else(|| {
-                u.completion_tokens_details
-                    .as_ref()?
-                    .get("reasoning_tokens")?
-                    .as_u64()?
-                    .try_into()
-                    .ok()
-            })
-            .map(|tokens| tokens as i32),
-        cache_read_input_token_count: u.prompt_cache_hit_tokens.map(|tokens| tokens as i32),
-        // Cache misses are ordinary input, not separately billed cache writes.
-        provider_usage: serde_json::to_value(u).ok(),
-        ..Default::default()
-    }
+/// Normalizes a DeepSeek `usage` object, keeping it as received. DeepSeek reports cache hits
+/// as `prompt_cache_hit_tokens` and may report `reasoning_tokens` at the top level; a `null`
+/// or missing count never fails the response.
+pub fn usage(u: &Value) -> Option<UsageMetadata> {
+    use crate::usage_json::count;
+    let mut meta = crate::usage_json::chat_completions(u)?;
+    meta.thinking_token_count = count(u, "/reasoning_tokens").or(meta.thinking_token_count);
+    // Cache misses are ordinary input, not separately billed cache writes.
+    meta.cache_read_input_token_count =
+        count(u, "/prompt_cache_hit_tokens").or(meta.cache_read_input_token_count);
+    Some(meta)
 }
 
 /// Convert ADK Content to DeepSeek Message.
@@ -500,7 +472,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         (None, None)
     };
 
-    let usage = response.usage.as_ref().map(usage);
+    let usage = response.usage.as_ref().and_then(usage);
 
     // A turn that emits tool calls is not complete — tool results must still be
     // processed and sent back to the model (issue #401).

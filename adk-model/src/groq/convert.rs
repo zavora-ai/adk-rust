@@ -83,8 +83,30 @@ pub struct ChatCompletionResponse {
     #[serde(rename = "model")]
     pub _model: String,
     pub choices: Vec<Choice>,
+    /// The `usage` object as received; counts are read from it leniently.
     #[serde(default)]
-    pub usage: Option<Usage>,
+    pub usage: Option<Value>,
+    /// Groq's extension object, which carries usage on the final stream chunk.
+    #[serde(default)]
+    pub x_groq: Option<XGroq>,
+}
+
+/// Groq's `x_groq` extension object.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct XGroq {
+    #[serde(default)]
+    pub usage: Option<Value>,
+}
+
+impl ChatCompletionResponse {
+    /// The response's usage: top-level `usage`, else `x_groq.usage`, normalized with the
+    /// object kept as received. A `null` or missing count never fails the response.
+    pub fn usage_metadata(&self) -> Option<UsageMetadata> {
+        self.usage
+            .as_ref()
+            .or_else(|| self.x_groq.as_ref()?.usage.as_ref())
+            .and_then(crate::usage_json::chat_completions)
+    }
 }
 
 /// Response choice.
@@ -130,32 +152,6 @@ pub struct DeltaFunction {
     pub name: Option<String>,
     #[serde(default)]
     pub arguments: Option<String>,
-}
-
-/// Prompt token breakdown details (OpenAI-compatible).
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct PromptTokensDetails {
-    #[serde(default)]
-    pub cached_tokens: Option<u32>,
-}
-
-/// Completion token breakdown details (OpenAI-compatible).
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct CompletionTokensDetails {
-    #[serde(default)]
-    pub reasoning_tokens: Option<u32>,
-}
-
-/// Token usage information.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct Usage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
-    #[serde(default)]
-    pub prompt_tokens_details: Option<PromptTokensDetails>,
-    #[serde(default)]
-    pub completion_tokens_details: Option<CompletionTokensDetails>,
 }
 
 /// Convert ADK Content to Groq Message.
@@ -298,21 +294,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         (None, None)
     };
 
-    let usage = response.usage.as_ref().map(|u| {
-        let mut meta = UsageMetadata {
-            prompt_token_count: u.prompt_tokens as i32,
-            candidates_token_count: u.completion_tokens as i32,
-            total_token_count: u.total_tokens as i32,
-            ..Default::default()
-        };
-        if let Some(ref details) = u.prompt_tokens_details {
-            meta.cache_read_input_token_count = details.cached_tokens.map(|t| t as i32);
-        }
-        if let Some(ref details) = u.completion_tokens_details {
-            meta.thinking_token_count = details.reasoning_tokens.map(|t| t as i32);
-        }
-        meta
-    });
+    let usage = response.usage_metadata();
 
     let turn_complete = content.as_ref().is_none_or(|value| !value.has_function_calls());
 

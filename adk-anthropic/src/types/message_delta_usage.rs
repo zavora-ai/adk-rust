@@ -1,12 +1,16 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use super::usage::nullable_count;
 use crate::types::ServerToolUsage;
 
 /// Message delta usage information.
 ///
 /// Anthropic's API bills and rate-limits by token counts, as tokens represent the
-/// underlying cost to their systems.
+/// underlying cost to their systems. A count the API reports as `null`, or leaves out,
+/// reads as zero (`None` for the optional counts) instead of failing the stream.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(try_from = "Value")]
 pub struct MessageDeltaUsage {
     /// The cumulative number of input tokens used to create the cache entry.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -26,6 +30,41 @@ pub struct MessageDeltaUsage {
     /// The number of server tool requests.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_tool_use: Option<ServerToolUsage>,
+
+    /// The `usage` object exactly as the API sent it, including fields this type does not
+    /// model. `None` for a value built in code.
+    #[serde(skip)]
+    pub raw: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct MessageDeltaUsageWire {
+    #[serde(default)]
+    cache_creation_input_tokens: Option<i32>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<i32>,
+    #[serde(default)]
+    input_tokens: Option<i32>,
+    #[serde(default, deserialize_with = "nullable_count")]
+    output_tokens: i32,
+    #[serde(default)]
+    server_tool_use: Option<ServerToolUsage>,
+}
+
+impl TryFrom<Value> for MessageDeltaUsage {
+    type Error = serde_json::Error;
+
+    fn try_from(raw: Value) -> Result<Self, Self::Error> {
+        let wire = MessageDeltaUsageWire::deserialize(&raw)?;
+        Ok(Self {
+            cache_creation_input_tokens: wire.cache_creation_input_tokens,
+            cache_read_input_tokens: wire.cache_read_input_tokens,
+            input_tokens: wire.input_tokens,
+            output_tokens: wire.output_tokens,
+            server_tool_use: wire.server_tool_use,
+            raw: Some(raw),
+        })
+    }
 }
 
 impl MessageDeltaUsage {
@@ -37,6 +76,7 @@ impl MessageDeltaUsage {
             input_tokens: None,
             output_tokens,
             server_tool_use: None,
+            raw: None,
         }
     }
 
@@ -126,5 +166,12 @@ mod tests {
         assert_eq!(usage.input_tokens, Some(50));
         assert_eq!(usage.output_tokens, 100);
         assert_eq!(usage.server_tool_use, Some(ServerToolUsage::new(5)));
+    }
+
+    #[test]
+    fn null_output_tokens_read_as_zero_and_keep_the_raw_object() {
+        let raw = json!({"output_tokens": null, "input_tokens": null, "service_tier": "batch"});
+        let usage: MessageDeltaUsage = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(usage, MessageDeltaUsage { raw: Some(raw), ..MessageDeltaUsage::new(0) });
     }
 }

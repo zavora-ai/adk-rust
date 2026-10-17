@@ -56,8 +56,8 @@ pub struct BatchError {
 pub enum BatchResult {
     /// The request succeeded.
     Succeeded {
-        /// The completed message.
-        message: Message,
+        /// The completed message, boxed so that the other results stay small.
+        message: Box<Message>,
     },
     /// The request errored.
     Errored {

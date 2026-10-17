@@ -107,8 +107,6 @@ enum Expect {
     Answer(&'static str),
     /// The weather tool runs once and the run persists exactly this answer.
     ToolThenAnswer(&'static str),
-    /// Either outcome is correct; a successful run that silently lost the tool call is not.
-    NoSilentToolLoss(&'static str),
 }
 
 /// What one run left behind.
@@ -181,9 +179,6 @@ fn verdict(expect: Expect, outcome: &Outcome) -> Result<(), String> {
         Expect::Fails => check_fails(outcome),
         Expect::Answer(text) => check_answer(outcome, text, 0),
         Expect::ToolThenAnswer(text) => check_answer(outcome, text, 1),
-        Expect::NoSilentToolLoss(text) => check_fails(outcome)
-            .or_else(|_| check_answer(outcome, text, 1))
-            .map_err(|_| format!("tool call lost without an error; {}", outcome.summary())),
     }
 }
 
@@ -342,7 +337,7 @@ const MODES: [StreamingMode; 2] = [StreamingMode::SSE, StreamingMode::None];
 /// The scripted scenarios: provider, fault, whether the agent has the tool, and the
 /// required outcome.
 fn scripted_scenarios() -> Vec<(Provider, Fault, bool, Expect)> {
-    use Expect::{Answer, Fails, NoSilentToolLoss, ToolThenAnswer};
+    use Expect::{Answer, Fails, ToolThenAnswer};
     use Fault::*;
     use Provider::*;
     let mut scenarios = Vec::new();
@@ -361,7 +356,8 @@ fn scripted_scenarios() -> Vec<(Provider, Fault, bool, Expect)> {
     }
     scenarios.push((OpenAiCompatible, ErrorFinishReason, false, Fails));
     scenarios.push((Groq, ErrorFinishReason, false, Fails));
-    scenarios.push((Groq, ToolCallNullUsage, true, NoSilentToolLoss(TOOL_ANSWER)));
+    // `null` token counts are unknown usage, so the finish chunk decodes and the call runs.
+    scenarios.push((Groq, ToolCallNullUsage, true, ToolThenAnswer(TOOL_ANSWER)));
     scenarios
 }
 

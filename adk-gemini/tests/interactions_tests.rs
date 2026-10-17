@@ -269,3 +269,44 @@ fn unknown_sse_event_falls_back_to_other() {
     let event: InteractionSseEvent = serde_json::from_value(raw).unwrap();
     assert!(matches!(event, InteractionSseEvent::Other(_)));
 }
+
+/// `null` and missing usage counts read as zero instead of failing the interaction, in a
+/// completed body and in the streamed `interaction.completed` event, and `raw` keeps the
+/// usage object as sent.
+#[test]
+fn null_usage_counts_read_as_zero_and_keep_the_raw_object() {
+    let usage = json!({
+        "total_input_tokens": 12,
+        "total_output_tokens": null,
+        "total_thought_tokens": null,
+        "total_tokens": null,
+        "input_tokens_by_modality": [{ "modality": "text", "tokens": null }],
+        "output_tokens_by_modality": null,
+        "total_tool_use_tokens": 3,
+        "billing_tier": "standard"
+    });
+    let body = json!({
+        "id": "v1_usage",
+        "status": "completed",
+        "steps": [],
+        "usage": usage
+    });
+    let interaction: Interaction = serde_json::from_value(body.clone()).unwrap();
+    let parsed = interaction.usage.unwrap();
+    assert_eq!(
+        (parsed.total_input_tokens, parsed.total_output_tokens, parsed.total_tool_use_tokens),
+        (12, 0, 3)
+    );
+    assert_eq!(parsed.input_tokens_by_modality[0].tokens, 0);
+    assert!(parsed.output_tokens_by_modality.is_empty());
+    assert_eq!(parsed.raw.as_ref(), Some(&usage));
+
+    let event: InteractionSseEvent = serde_json::from_value(
+        json!({ "event_type": "interaction.completed", "interaction": body }),
+    )
+    .unwrap();
+    let InteractionSseEvent::InteractionCompleted { interaction, .. } = event else {
+        panic!("expected interaction.completed, got {event:?}");
+    };
+    assert_eq!(interaction.usage.unwrap().raw, Some(usage));
+}

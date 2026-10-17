@@ -2,6 +2,8 @@ use std::ops::Add;
 
 use serde::{Deserialize, Serialize};
 
+use super::usage::nullable_count;
+
 /// Information about server tool usage for a message.
 ///
 /// # Example
@@ -16,15 +18,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Copy, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ServerToolUsage {
     /// The number of web search tool requests.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_count")]
     pub web_search_requests: i32,
 
     /// The number of web fetch tool requests.
-    #[serde(default, skip_serializing_if = "is_zero")]
+    #[serde(default, deserialize_with = "nullable_count", skip_serializing_if = "is_zero")]
     pub web_fetch_requests: i32,
 
     /// The number of code execution tool requests.
-    #[serde(default, skip_serializing_if = "is_zero")]
+    #[serde(default, deserialize_with = "nullable_count", skip_serializing_if = "is_zero")]
     pub code_execution_requests: i32,
 }
 

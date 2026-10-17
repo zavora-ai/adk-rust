@@ -98,6 +98,17 @@ impl AccumulatingStream {
                     if let Some(server_tool) = delta_event.usage.server_tool_use {
                         msg.usage.server_tool_use = Some(server_tool);
                     }
+                    // Delta usage is cumulative, so its fields replace the start's.
+                    if let Some(serde_json::Value::Object(delta)) = &delta_event.usage.raw {
+                        let raw = msg.usage.raw.get_or_insert_with(|| {
+                            Box::new(serde_json::Value::Object(Default::default()))
+                        });
+                        if let serde_json::Value::Object(raw) = raw.as_mut() {
+                            raw.extend(
+                                delta.iter().map(|(key, value)| (key.clone(), value.clone())),
+                            );
+                        }
+                    }
                 }
             }
             MessageStreamEvent::MessageStop(_) => {}
@@ -379,6 +390,37 @@ mod tests {
             assert!(matches!(&message.content[1], ContentBlock::ToolUse(tool)
                 if tool.id == "read" && tool.input == json!({"path":"file.txt"})));
         }
+    }
+
+    /// Null counts in `message_start` and `message_delta` read as zero, and the message keeps
+    /// the start's usage object with the delta's fields applied over it.
+    #[tokio::test]
+    async fn null_usage_counts_accumulate_and_keep_the_raw_usage() {
+        use futures::StreamExt;
+        use serde_json::json;
+        let events: Vec<_> = [
+            json!({"type":"message_start","message":{"id":"fixture","type":"message",
+                "role":"assistant","model":"fixture","content":[],"stop_reason":null,
+                "stop_sequence":null,"usage":{"input_tokens":null,"output_tokens":null,
+                "service_tier":"standard","server_tool_use":{"web_search_requests":null}}}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},
+                "usage":{"output_tokens":null,"input_tokens":7}}),
+            json!({"type":"message_stop"}),
+        ]
+        .into_iter()
+        .map(|value| Ok(serde_json::from_value(value).unwrap()))
+        .collect();
+        let (mut stream, result) = AccumulatingStream::new(stream::iter(events));
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        let message = result.await.unwrap().unwrap();
+        assert_eq!((message.usage.input_tokens, message.usage.output_tokens), (7, 0));
+        assert_eq!(
+            message.usage.raw.as_deref(),
+            Some(&json!({"input_tokens":7,"output_tokens":null,"service_tier":"standard",
+                "server_tool_use":{"web_search_requests":null}}))
+        );
     }
 
     /// A streamed `server_tool_use` keeps the `caller` from `content_block_start`.

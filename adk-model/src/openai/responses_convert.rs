@@ -16,8 +16,8 @@ use async_openai::types::responses::{
     InputItem, InputParam, Item, MessagePhase, OutputItem, OutputMessageContent, Prompt,
     PromptCacheRetention as OaiPromptCacheRetention, Reasoning,
     ReasoningEffort as OaiReasoningEffort, ReasoningItemContent,
-    ReasoningSummary as OaiReasoningSummary, Response, ResponseUsage, Role,
-    ServiceTier as OaiServiceTier, Status, SummaryPart, Tool, Truncation,
+    ReasoningSummary as OaiReasoningSummary, Response, Role, ServiceTier as OaiServiceTier, Status,
+    SummaryPart, Tool, Truncation,
 };
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -607,9 +607,8 @@ pub(super) fn from_projection(response: &Projection) -> LlmResponse {
     let terminal_error = super::responses_client::wire::validate(response).err();
     let content = if terminal_error.is_none() { output_parts(&response.output) } else { None };
 
-    let usage_metadata = response.usage.as_ref().map(|usage| UsageMetadata {
-        builtin_tool_uses: builtin_tool_uses(&response.output),
-        ..convert_usage(usage)
+    let usage_metadata = response.usage.as_ref().and_then(convert_usage).map(|usage| {
+        UsageMetadata { builtin_tool_uses: builtin_tool_uses(&response.output), ..usage }
     });
     let finish_reason = terminal_error.is_none().then(|| map_finish_reason(response)).flatten();
     let provider_metadata = projection_metadata(response);
@@ -856,16 +855,26 @@ fn builtin_tool_uses(output: &[OutputItem]) -> Vec<adk_core::BuiltinToolUse> {
     counts.into_iter().map(|(kind, count)| adk_core::BuiltinToolUse::new(kind, count)).collect()
 }
 
-/// Convert Responses API usage to ADK `UsageMetadata`.
-fn convert_usage(usage: &ResponseUsage) -> UsageMetadata {
-    UsageMetadata {
-        prompt_token_count: usage.input_tokens as i32,
-        candidates_token_count: usage.output_tokens as i32,
-        total_token_count: (usage.input_tokens + usage.output_tokens) as i32,
-        cache_read_input_token_count: Some(usage.input_tokens_details.cached_tokens as i32),
-        thinking_token_count: Some(usage.output_tokens_details.reasoning_tokens as i32),
-        ..Default::default()
+/// Convert a Responses API `usage` object to ADK `UsageMetadata`, keeping the object as
+/// received. A `null` or missing count is unknown: zero for the totals, `None` for the
+/// breakdowns.
+fn convert_usage(usage: &serde_json::Value) -> Option<UsageMetadata> {
+    use crate::usage_json::count;
+    if !usage.is_object() {
+        return None;
     }
+    let input = count(usage, "/input_tokens").unwrap_or_default();
+    let output = count(usage, "/output_tokens").unwrap_or_default();
+    Some(UsageMetadata {
+        prompt_token_count: input,
+        candidates_token_count: output,
+        total_token_count: count(usage, "/total_tokens")
+            .unwrap_or_else(|| input.saturating_add(output)),
+        cache_read_input_token_count: count(usage, "/input_tokens_details/cached_tokens"),
+        thinking_token_count: count(usage, "/output_tokens_details/reasoning_tokens"),
+        provider_usage: Some(usage.clone()),
+        ..Default::default()
+    })
 }
 
 /// Map response status to ADK `FinishReason`.

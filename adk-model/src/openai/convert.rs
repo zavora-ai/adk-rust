@@ -386,35 +386,8 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
     }
 }
 
-/// Normalize one raw Chat Completions `usage` object while retaining the
-/// provider payload for diagnostics and future provider-specific projections.
-pub(crate) fn usage_metadata_from_raw(usage: &serde_json::Value) -> Option<UsageMetadata> {
-    let usage = usage.as_object()?;
-    let prompt_details = usage.get("prompt_tokens_details");
-    let completion_details = usage.get("completion_tokens_details");
-
-    Some(UsageMetadata {
-        prompt_token_count: json_i32(usage.get("prompt_tokens")).unwrap_or_default(),
-        candidates_token_count: json_i32(usage.get("completion_tokens")).unwrap_or_default(),
-        total_token_count: json_i32(usage.get("total_tokens")).unwrap_or_default(),
-        cache_read_input_token_count: prompt_details
-            .and_then(|details| json_i32(details.get("cached_tokens"))),
-        cache_creation_input_token_count: prompt_details
-            .and_then(|details| json_i32(details.get("cache_write_tokens"))),
-        thinking_token_count: completion_details
-            .and_then(|details| json_i32(details.get("reasoning_tokens"))),
-        audio_input_token_count: prompt_details
-            .and_then(|details| json_i32(details.get("audio_tokens"))),
-        audio_output_token_count: completion_details
-            .and_then(|details| json_i32(details.get("audio_tokens"))),
-        provider_usage: Some(serde_json::Value::Object(usage.clone())),
-        ..Default::default()
-    })
-}
-
-fn json_i32(value: Option<&serde_json::Value>) -> Option<i32> {
-    i32::try_from(value?.as_i64()?).ok()
-}
+// Shared with the other Chat Completions providers.
+pub(crate) use crate::usage_json::chat_completions as usage_metadata_from_raw;
 
 /// Convert a raw OpenAI JSON response to ADK LlmResponse.
 ///

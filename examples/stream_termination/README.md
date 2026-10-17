@@ -25,7 +25,7 @@ Azure OpenAI, OpenCode Chat, and every preset), `GroqClient`, `OllamaModel`, and
 | `data-without-space` | Every field written `data:{...}` | Run succeeds with the exact answer |
 | `split-multibyte` | `🙂` split across two network writes | Run succeeds with the exact answer |
 | `tool-call` | A complete tool call, then the answer | The tool runs once; the exact answer is persisted |
-| `tool-call-null-usage` | A Groq finish chunk with `null` token counts | Run fails, or the tool runs; never a success without the tool call |
+| `tool-call-null-usage` | A Groq finish chunk with `null` token counts | The tool runs once; the exact answer is persisted |
 | `direct .../status-failed` | A non-streaming OpenRouter Responses body with `status: "failed"` | `generate_content(_, false)` returns an error |
 
 Live scenarios run when the key is set and show that normal streaming still succeeds in

@@ -347,14 +347,33 @@ mod groq {
     async fn finish_chunk_that_does_not_decode_fails_instead_of_dropping_the_tool_call() {
         let mut chunks = tool_call_chunks(&[r#"{"city":"Paris"}"#]);
         let mut finish = chunk(json!({}), Some("tool_calls"));
-        finish["usage"] =
-            json!({"prompt_tokens": 12, "completion_tokens": null, "total_tokens": null});
+        finish["choices"][0]["finish_reason"] = json!(42);
         chunks.push(finish);
         let mut writes = sse(&chunks);
         writes.push(done());
         let outcome = collect(&client(writes).await, request("openai/gpt-oss-120b"), true).await;
         let (_, error) = assert_fails(outcome, "model.groq.invalid_chunk");
         assert!(!error.message.contains("Paris"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn finish_chunk_with_null_usage_counts_keeps_the_tool_call() {
+        let mut chunks = tool_call_chunks(&[r#"{"city":"Paris"}"#]);
+        let mut finish = chunk(json!({}), Some("tool_calls"));
+        finish["usage"] =
+            json!({"prompt_tokens": 12, "completion_tokens": null, "total_tokens": null});
+        chunks.push(finish);
+        let mut writes = sse(&chunks);
+        writes.push(done());
+        let (responses, error) =
+            collect(&client(writes).await, request("openai/gpt-oss-120b"), true).await;
+        assert!(error.is_none(), "{error:?}");
+        let call = responses
+            .iter()
+            .find(|response| response.content.as_ref().is_some_and(Content::has_function_calls))
+            .expect("the tool call reaches the agent");
+        let usage = call.usage_metadata.as_ref().expect("the call carries the usage");
+        assert_eq!((usage.prompt_token_count, usage.total_token_count), (12, 12));
     }
 
     #[tokio::test]

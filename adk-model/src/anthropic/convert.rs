@@ -345,7 +345,13 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
         total_token_count: prompt_token_count.saturating_add(message.usage.output_tokens),
         cache_read_input_token_count: message.usage.cache_read_input_tokens,
         cache_creation_input_token_count: message.usage.cache_creation_input_tokens,
-        provider_usage: serde_json::to_value(message.usage).ok(),
+        // As received, so fields such as `service_tier` and the `cache_creation` breakdown survive.
+        provider_usage: message
+            .usage
+            .raw
+            .as_deref()
+            .cloned()
+            .or_else(|| serde_json::to_value(&message.usage).ok()),
         builtin_tool_uses: builtin_tool_uses(message),
         ..Default::default()
     });
@@ -989,6 +995,7 @@ mod tests {
                 cache_read_input_tokens: None,
                 cache_creation_input_tokens_1h: None,
                 server_tool_use: None,
+                raw: None,
             },
         };
 
@@ -1031,6 +1038,7 @@ mod tests {
                 cache_read_input_tokens: None,
                 cache_creation_input_tokens_1h: None,
                 server_tool_use: None,
+                raw: None,
             },
         };
 
@@ -1065,6 +1073,7 @@ mod tests {
                 cache_read_input_tokens: None,
                 cache_creation_input_tokens_1h: None,
                 server_tool_use: None,
+                raw: None,
             },
         };
 

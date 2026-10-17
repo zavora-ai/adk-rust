@@ -1021,23 +1021,31 @@ impl GeminiModel {
         };
         let tool_call_turn = content.as_ref().is_some_and(Content::has_function_calls);
 
-        let usage_metadata = resp.usage_metadata.as_ref().map(|u| UsageMetadata {
-            prompt_token_count: u.prompt_token_count.unwrap_or(0),
+        let usage_metadata = resp.usage_metadata.as_ref().map(|u| {
+            let prompt = u.prompt_token_count.unwrap_or(0);
             // Gemini's candidate count excludes the separately reported thoughts.
-            candidates_token_count: u
+            let candidates = u
                 .candidates_token_count
                 .unwrap_or(0)
-                .saturating_add(u.thoughts_token_count.unwrap_or(0)),
-            total_token_count: u.total_token_count.unwrap_or(0),
-            thinking_token_count: u.thoughts_token_count,
-            cache_read_input_token_count: u.cached_content_token_count,
-            provider_usage: serde_json::to_value(u).ok(),
-            builtin_tool_uses: {
-                let mut uses = GeminiBuiltinToolUses::default();
-                uses.observe(resp);
-                uses.uses()
-            },
-            ..Default::default()
+                .saturating_add(u.thoughts_token_count.unwrap_or(0));
+            UsageMetadata {
+                prompt_token_count: prompt,
+                candidates_token_count: candidates,
+                // An unreported total is at least the parts that were reported.
+                total_token_count: u
+                    .total_token_count
+                    .unwrap_or_else(|| prompt.saturating_add(candidates)),
+                thinking_token_count: u.thoughts_token_count,
+                cache_read_input_token_count: u.cached_content_token_count,
+                // As received, so fields such as `toolUsePromptTokenCount` survive.
+                provider_usage: u.raw.clone().or_else(|| serde_json::to_value(u).ok()),
+                builtin_tool_uses: {
+                    let mut uses = GeminiBuiltinToolUses::default();
+                    uses.observe(resp);
+                    uses.uses()
+                },
+                ..Default::default()
+            }
         });
 
         let finish_reason =

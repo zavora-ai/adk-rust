@@ -155,9 +155,13 @@ async fn requires_consumed_fields_and_types() {
             assert_eq!(error.code, "model.openai_responses.parse");
         }
     }
+    // Usage counts are read leniently: a missing total is the sum of the reported counts,
+    // and the usage object is kept as received.
     let mut value = response(json!([]));
     value["usage"] = json!({"input_tokens":1,"output_tokens":2});
-    assert_eq!(unary(&value).await.unwrap_err().code, "model.openai_responses.parse");
+    let usage = unary(&value).await.unwrap().pop().unwrap().usage_metadata.unwrap();
+    assert_eq!(usage.total_token_count, 3);
+    assert_eq!(usage.provider_usage, Some(value["usage"].clone()));
 }
 
 #[tokio::test]

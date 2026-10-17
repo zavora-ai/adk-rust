@@ -329,6 +329,8 @@ pub mod tool_call_parser;
     feature = "azure-ai"
 ))]
 pub(crate) mod tool_result;
+#[cfg(any(feature = "openai", feature = "ollama", feature = "deepseek", feature = "groq"))]
+pub(crate) mod usage_json;
 pub mod usage_tracking;
 
 #[cfg(feature = "anthropic")]

@@ -329,10 +329,12 @@ impl Llm for GroqClient {
                                         })
                                         .collect::<Vec<_>>();
 
-                                    yield convert::create_tool_call_response(
+                                    let mut response = convert::create_tool_call_response(
                                         tool_calls,
                                         finish_reason,
                                     );
+                                    response.usage_metadata = chunk_response.usage_metadata();
+                                    yield response;
                                     continue;
                                 }
 
@@ -354,21 +356,7 @@ impl Llm for GroqClient {
                                             parts,
                                         })
                                     },
-                                    usage_metadata: chunk_response.usage.map(|u| {
-                                        let mut meta = adk_core::UsageMetadata {
-                                            prompt_token_count: u.prompt_tokens as i32,
-                                            candidates_token_count: u.completion_tokens as i32,
-                                            total_token_count: u.total_tokens as i32,
-                                            ..Default::default()
-                                        };
-                                        if let Some(ref details) = u.prompt_tokens_details {
-                                            meta.cache_read_input_token_count = details.cached_tokens.map(|t| t as i32);
-                                        }
-                                        if let Some(ref details) = u.completion_tokens_details {
-                                            meta.thinking_token_count = details.reasoning_tokens.map(|t| t as i32);
-                                        }
-                                        meta
-                                    }),
+                                    usage_metadata: chunk_response.usage_metadata(),
                                     finish_reason,
                                     citation_metadata: None,
                                     partial: false,

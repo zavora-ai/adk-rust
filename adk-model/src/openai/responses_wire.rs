@@ -3,10 +3,10 @@
 use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 use async_openai::types::responses::{
     IncompleteDetails, OutputItem, OutputStatus, Response as SdkResponse, ResponseStreamEvent,
-    ResponseUsage, Status,
+    Status,
 };
 use serde::{Deserialize, de::DeserializeOwned};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::parse;
 
@@ -18,7 +18,9 @@ pub(crate) struct Response {
     pub output: Vec<OutputItem>,
     #[serde(skip)]
     pub output_missing: bool,
-    pub usage: Option<ResponseUsage>,
+    /// The `usage` object as received: counts are read from it leniently, so a `null` or
+    /// missing count never fails the response.
+    pub usage: Option<Value>,
     pub incomplete_details: Option<IncompleteDetails>,
     pub service_tier: Option<Value>,
 }
@@ -30,7 +32,7 @@ impl From<&SdkResponse> for Response {
             status: response.status.clone(),
             output: response.output.clone(),
             output_missing: false,
-            usage: response.usage.clone(),
+            usage: response.usage.as_ref().and_then(|usage| serde_json::to_value(usage).ok()),
             incomplete_details: response.incomplete_details.clone(),
             service_tier: response.service_tier.and_then(|tier| serde_json::to_value(tier).ok()),
         }
@@ -40,7 +42,7 @@ impl From<&SdkResponse> for Response {
 pub(in crate::openai) enum Event {
     Activity,
     Content(Box<ResponseStreamEvent>),
-    Terminal(Response),
+    Terminal(Box<Response>),
 }
 
 fn decode<T: DeserializeOwned>(
@@ -99,7 +101,7 @@ pub(in crate::openai) fn event(value: Value) -> Result<Event, AdkError> {
                     "OpenAI Responses terminal status conflicts",
                 ));
             }
-            Ok(Event::Terminal(projected))
+            Ok(Event::Terminal(Box::new(projected)))
         }
         "response.failed" => {
             let header: Header = decode(
@@ -144,25 +146,13 @@ pub(in crate::openai) fn event(value: Value) -> Result<Event, AdkError> {
 }
 
 pub(in crate::openai) fn response(
-    mut value: Value,
+    value: Value,
     body: &Value,
     layer: parse::Layer,
 ) -> Result<Response, AdkError> {
     let header: Header = decode(value.clone(), body, layer)?;
     if header.status == Status::Failed {
         return Err(stream_error(header.error.as_ref().and_then(|error| error.code.as_deref())));
-    }
-    // Detailed usage is optional on compatible providers; absent breakdowns do
-    // not invalidate the authoritative input/output/total counts.
-    if let Some(usage) = value.get_mut("usage").and_then(Value::as_object_mut) {
-        for (key, details) in [
-            ("input_tokens_details", json!({"cached_tokens":0})),
-            ("output_tokens_details", json!({"reasoning_tokens":0})),
-        ] {
-            if usage.get(key).is_none_or(Value::is_null) {
-                usage.insert(key.into(), details);
-            }
-        }
     }
     let output_missing = value.get("output").is_none();
     if output_missing && !matches!(layer, parse::Layer::StreamEvent) {

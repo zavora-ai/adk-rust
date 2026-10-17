@@ -153,9 +153,28 @@ pub struct Candidate {
     pub index: Option<i32>,
 }
 
-/// Metadata about token usage
+/// Metadata about token usage.
+///
+/// A count the API reports as `null` or leaves out reads as `None` (zero inside the detail
+/// lists) instead of failing the response, and [`raw`](Self::raw) keeps the object exactly as
+/// it was sent, including fields this type does not model.
+///
+/// # Example
+///
+/// ```
+/// use adk_gemini::UsageMetadata;
+///
+/// let usage: UsageMetadata = serde_json::from_value(serde_json::json!({
+///     "promptTokenCount": 12,
+///     "promptTokensDetails": [{"modality": "TEXT", "tokenCount": null}],
+///     "toolUsePromptTokenCount": 30
+/// }))
+/// .unwrap();
+/// assert_eq!(usage.prompt_tokens_details.as_ref().unwrap()[0].token_count, 0);
+/// assert_eq!(usage.raw.as_ref().unwrap()["toolUsePromptTokenCount"], 30);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", try_from = "serde_json::Value")]
 pub struct UsageMetadata {
     /// The number of prompt tokens (null if request processing failed)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -178,16 +197,65 @@ pub struct UsageMetadata {
     /// Detailed cache token information (batch API)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_tokens_details: Option<Vec<PromptTokenDetails>>,
+    /// The `usageMetadata` object exactly as the API sent it, including fields this type
+    /// does not model, such as `toolUsePromptTokenCount` or `trafficType`.
+    ///
+    /// `None` for a value built in code.
+    #[serde(skip)]
+    pub raw: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageMetadataWire {
+    #[serde(default)]
+    prompt_token_count: Option<i32>,
+    #[serde(default)]
+    candidates_token_count: Option<i32>,
+    #[serde(default)]
+    total_token_count: Option<i32>,
+    #[serde(default)]
+    thoughts_token_count: Option<i32>,
+    #[serde(default)]
+    prompt_tokens_details: Option<Vec<PromptTokenDetails>>,
+    #[serde(default)]
+    cached_content_token_count: Option<i32>,
+    #[serde(default)]
+    cache_tokens_details: Option<Vec<PromptTokenDetails>>,
+}
+
+impl TryFrom<serde_json::Value> for UsageMetadata {
+    type Error = serde_json::Error;
+
+    fn try_from(raw: serde_json::Value) -> Result<Self, Self::Error> {
+        let wire = UsageMetadataWire::deserialize(&raw)?;
+        Ok(Self {
+            prompt_token_count: wire.prompt_token_count,
+            candidates_token_count: wire.candidates_token_count,
+            total_token_count: wire.total_token_count,
+            thoughts_token_count: wire.thoughts_token_count,
+            prompt_tokens_details: wire.prompt_tokens_details,
+            cached_content_token_count: wire.cached_content_token_count,
+            cache_tokens_details: wire.cache_tokens_details,
+            raw: Some(raw),
+        })
+    }
 }
 
 /// Details about prompt tokens by modality
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptTokenDetails {
-    /// The modality (e.g., "TEXT")
+    /// The modality (e.g., "TEXT"); `MODALITY_UNSPECIFIED` when the API leaves it out
+    #[serde(default = "unspecified_modality")]
     pub modality: Modality,
-    /// Token count for this modality
+    /// Token count for this modality; zero when the API reports `null` or leaves it out
+    #[serde(default, deserialize_with = "adk_core::nullable_count")]
     pub token_count: i32,
+}
+
+fn unspecified_modality() -> Modality {
+    Modality::ModalityUnspecified
 }
 
 /// Grounding metadata for responses that use grounding tools

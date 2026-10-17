@@ -419,6 +419,45 @@ fn parse_usage_metadata_with_thinking_and_prompt_details() {
     assert_eq!(details[1].token_count, 20);
 }
 
+// ── Usage metadata with null and missing counts ─────────────────────
+
+#[test]
+fn null_usage_counts_parse_and_keep_the_raw_object() {
+    let usage = json!({
+        "promptTokenCount": 30,
+        "candidatesTokenCount": null,
+        "totalTokenCount": null,
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": null},
+            {"modality": "IMAGE"},
+            {"tokenCount": 4}
+        ],
+        "cacheTokensDetails": null,
+        "toolUsePromptTokenCount": 4,
+        "trafficType": "ON_DEMAND"
+    });
+    let json = json!({
+        "candidates": [{
+            "content": {"parts": [{"text": "answer"}], "role": "model"},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": usage
+    });
+
+    let resp: GenerationResponse = serde_json::from_value(json).unwrap();
+    let parsed = resp.usage_metadata.unwrap();
+    assert_eq!(parsed.prompt_token_count, Some(30));
+    assert_eq!(parsed.candidates_token_count, None);
+    assert_eq!(parsed.total_token_count, None);
+    let details = parsed.prompt_tokens_details.as_ref().unwrap();
+    assert_eq!(
+        details.iter().map(|d| (d.modality.clone(), d.token_count)).collect::<Vec<_>>(),
+        vec![(Modality::Text, 0), (Modality::Image, 0), (Modality::ModalityUnspecified, 4)]
+    );
+    assert_eq!(parsed.cache_tokens_details, None);
+    assert_eq!(parsed.raw.as_ref(), Some(&usage));
+}
+
 // ── Vertex numeric prompt token details ─────────────────────────────
 
 #[test]

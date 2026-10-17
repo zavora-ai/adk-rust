@@ -387,7 +387,7 @@ impl Llm for DeepSeekClient {
                                                     finish_reason,
                                                     tool_reasoning,
                                                 );
-                                                response.usage_metadata = chunk_response.usage.as_ref().map(convert::usage);
+                                                response.usage_metadata = chunk_response.usage.as_ref().and_then(convert::usage);
                                                 yield response;
                                                 continue;
                                             }
@@ -413,7 +413,7 @@ impl Llm for DeepSeekClient {
 
                                             yield LlmResponse {
                                                 content,
-                                                usage_metadata: chunk_response.usage.as_ref().map(convert::usage),
+                                                usage_metadata: chunk_response.usage.as_ref().and_then(convert::usage),
                                                 finish_reason,
                                                 partial: false,
                                                 turn_complete,

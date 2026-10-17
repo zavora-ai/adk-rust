@@ -26,8 +26,9 @@ const STREAM_ERROR: &str = "model.ollama.stream_error";
 /// Ollama client for local LLM inference.
 pub struct OllamaModel {
     client: Ollama,
-    /// Streams `/api/chat` directly: `ollama-rs` skips error lines and chunks that end
-    /// inside a UTF-8 character, and does not report a stream that ends before `done`.
+    /// Sends `/api/chat` requests directly: `ollama-rs` skips error lines and chunks that end
+    /// inside a UTF-8 character, does not report a stream that ends before `done`, and drops
+    /// every usage count when a response leaves one out.
     http: reqwest::Client,
     model_name: String,
     config: OllamaConfig,
@@ -210,7 +211,6 @@ impl Llm for OllamaModel {
     ) -> Result<LlmResponseStream> {
         let usage_span = adk_telemetry::llm_generate_span("ollama", &self.model_name, stream);
         let model = self.model_name.clone();
-        let client = self.client.clone();
         let options = self.build_options(&request);
 
         // Convert ADK contents to Ollama messages
@@ -372,16 +372,54 @@ impl Llm for OllamaModel {
                     Err(crate::stream_error::incomplete("ollama", INCOMPLETE_STREAM, "the response finished"))?;
                 }
             } else {
-                // Non-streaming mode
-                let response = client
-                    .send_chat_messages(chat_request)
-                    .await
-                    .map_err(|e| {
-                        let msg = format!("Ollama error: {e}");
-                        ollama_error_to_adk(&msg)
-                    })?;
+                // Non-streaming mode. The body is read as received so that usage reports
+                // whichever counts Ollama sent.
+                let mut body = serde_json::to_value(&chat_request).map_err(|e| {
+                    AdkError::new(
+                        ErrorComponent::Model,
+                        ErrorCategory::Internal,
+                        "model.ollama.request_serialization",
+                        format!("Failed to serialize Ollama request: {e}"),
+                    )
+                    .with_provider("ollama")
+                })?;
+                body["stream"] = serde_json::Value::Bool(false);
 
-                yield convert::chat_response_to_llm_response(&response, false, &declared_tools);
+                let response = http.post(&chat_url).json(&body).send().await.map_err(|e| {
+                    let (category, code) = if e.is_timeout() {
+                        (ErrorCategory::Timeout, "model.ollama.timeout")
+                    } else {
+                        (ErrorCategory::Unavailable, "model.ollama.unavailable")
+                    };
+                    AdkError::new(ErrorComponent::Model, category, code, format!("Ollama error: {e}"))
+                        .with_provider("ollama")
+                })?;
+                let status = response.status();
+                let text = response.text().await.map_err(|e| {
+                    AdkError::new(
+                        ErrorComponent::Model,
+                        ErrorCategory::Unavailable,
+                        "model.ollama.unavailable",
+                        format!("Ollama error: failed to read the response: {e}"),
+                    )
+                    .with_provider("ollama")
+                })?;
+                if !status.is_success() {
+                    Err(ollama_error_to_adk(&format!("Ollama error: {text}"))
+                        .with_upstream_status(status.as_u16()))?;
+                }
+                let line: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+                    ollama_error_to_adk(&format!("Ollama error: invalid response JSON: {e}"))
+                })?;
+                let parsed: ChatMessageResponse = serde_json::from_value(line.clone()).map_err(|e| {
+                    ollama_error_to_adk(&format!("Ollama error: unexpected response shape: {e}"))
+                })?;
+
+                let mut response = convert::chat_response_to_llm_response(&parsed, false, &declared_tools);
+                if parsed.done {
+                    response.usage_metadata = convert::usage(&line);
+                }
+                yield response;
             }
         };
 
