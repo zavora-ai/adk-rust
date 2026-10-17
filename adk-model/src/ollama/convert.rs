@@ -146,7 +146,15 @@ pub fn chat_response_to_llm_response(
         candidates_token_count: i32::try_from(data.eval_count).unwrap_or(i32::MAX),
         total_token_count: i32::try_from(data.prompt_eval_count.saturating_add(data.eval_count))
             .unwrap_or(i32::MAX),
-        provider_usage: serde_json::to_value(data).ok(),
+        // Built field by field: `ollama-rs` 0.3.4 does not implement `Serialize` for this type.
+        provider_usage: Some(serde_json::json!({
+            "total_duration": data.total_duration,
+            "load_duration": data.load_duration,
+            "prompt_eval_count": data.prompt_eval_count,
+            "prompt_eval_duration": data.prompt_eval_duration,
+            "eval_count": data.eval_count,
+            "eval_duration": data.eval_duration,
+        })),
         ..Default::default()
     });
 
@@ -234,5 +242,28 @@ mod tests {
         let message = content_to_chat_message(&content).expect("message should be created");
         assert!(message.content.contains("text/csv"));
         assert!(message.content.contains("https://example.com/data.csv"));
+    }
+
+    #[test]
+    fn typed_final_data_and_the_raw_line_report_the_same_usage() {
+        let line = serde_json::json!({
+            "model": "qwen3",
+            "created_at": "2026-10-17T00:00:00Z",
+            "message": {"role": "assistant", "content": "done"},
+            "done": true,
+            "total_duration": 2000,
+            "load_duration": 10,
+            "prompt_eval_count": 44,
+            "prompt_eval_duration": 300,
+            "eval_count": 8,
+            "eval_duration": 700
+        });
+        let response: ChatMessageResponse = serde_json::from_value(line.clone()).unwrap();
+        let typed = chat_response_to_llm_response(&response, false, &HashSet::new())
+            .usage_metadata
+            .expect("typed final data carries usage");
+        let raw = usage(&line).expect("the raw line carries usage");
+        assert_eq!(serde_json::to_value(&typed).unwrap(), serde_json::to_value(&raw).unwrap());
+        assert_eq!((raw.prompt_token_count, raw.candidates_token_count), (44, 8));
     }
 }
