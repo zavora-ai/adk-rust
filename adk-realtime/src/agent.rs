@@ -101,7 +101,7 @@ pub struct RealtimeAgent {
     after_callbacks: Arc<Vec<AfterAgentCallback>>,
     before_tool_callbacks: Arc<Vec<BeforeToolCallback>>,
     after_tool_callbacks: Arc<Vec<AfterToolCallback>>,
-    tool_timeout: std::time::Duration,
+    tool_results: ToolResultPolicy,
 
     // Realtime-specific callbacks
     on_audio: Option<AudioCallback>,
@@ -171,6 +171,8 @@ pub struct RealtimeAgentBuilder {
     before_tool_callbacks: Vec<BeforeToolCallback>,
     after_tool_callbacks: Vec<AfterToolCallback>,
     tool_timeout: std::time::Duration,
+    tool_result_screen: Option<Arc<dyn adk_core::ToolResultScreen>>,
+    expose_tool_error_messages: bool,
     on_audio: Option<AudioCallback>,
     on_transcript: Option<TranscriptCallback>,
     on_speech_started: Option<SpeechCallback>,
@@ -205,6 +207,8 @@ impl RealtimeAgentBuilder {
             before_tool_callbacks: Vec::new(),
             after_tool_callbacks: Vec::new(),
             tool_timeout: crate::runner::DEFAULT_REALTIME_TOOL_TIMEOUT,
+            tool_result_screen: None,
+            expose_tool_error_messages: false,
             on_audio: None,
             on_transcript: None,
             on_speech_started: None,
@@ -336,6 +340,57 @@ impl RealtimeAgentBuilder {
         self
     }
 
+    /// Screens every tool result before the model and the session see it.
+    ///
+    /// The screen runs on the result the agent is about to send, after the after-tool hooks
+    /// and callbacks, and before the tool event is yielded or the result is sent to the
+    /// provider. A result the screen rewrites is delivered rewritten; a result it withholds, or
+    /// that it cannot decide on (`Err`), is replaced by
+    /// [`result_blocked_response`](adk_core::result_blocked_response), so the agent fails closed.
+    /// `adk-guardrail`'s `ToolGuardrailSet` is a screen, so the same tool-result guardrails
+    /// that `LlmAgent` runs apply here.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_guardrail::{PiiRedactor, ResultTextGuardrail, ToolGuardrailSet};
+    ///
+    /// let agent = RealtimeAgent::builder("voice")
+    ///     .model(model)
+    ///     .tool(lookup_order)
+    ///     .tool_result_screen(Arc::new(
+    ///         ToolGuardrailSet::new().with(ResultTextGuardrail::new(PiiRedactor::new())),
+    ///     ))
+    ///     .build()?;
+    /// ```
+    pub fn tool_result_screen(mut self, screen: Arc<dyn adk_core::ToolResultScreen>) -> Self {
+        self.tool_result_screen = Some(screen);
+        self
+    }
+
+    /// Sends the full message of a tool or tool-callback error to the model.
+    ///
+    /// By default a call that fails with an [`AdkError`] is answered with its component,
+    /// category, and code only ([`tool_error_response`](adk_core::tool_error_response)), because
+    /// the message can quote credentials, internal hosts, or upstream bodies, and the result is
+    /// sent to the provider, can be spoken to the user, and is stored in the session. The
+    /// message is logged when [`RunConfig::record_payloads`](adk_core::RunConfig) is set.
+    /// Timeouts and the agent's own refusals keep their message.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let agent = RealtimeAgent::builder("voice")
+    ///     .model(model)
+    ///     .tool(lookup_order)
+    ///     .expose_tool_error_messages(true)
+    ///     .build()?;
+    /// ```
+    pub fn expose_tool_error_messages(mut self, expose: bool) -> Self {
+        self.expose_tool_error_messages = expose;
+        self
+    }
+
     /// Set callback for audio output events.
     pub fn on_audio(mut self, callback: AudioCallback) -> Self {
         self.on_audio = Some(callback);
@@ -425,7 +480,11 @@ impl RealtimeAgentBuilder {
             after_callbacks: Arc::new(self.after_callbacks),
             before_tool_callbacks: Arc::new(self.before_tool_callbacks),
             after_tool_callbacks: Arc::new(self.after_tool_callbacks),
-            tool_timeout: self.tool_timeout,
+            tool_results: ToolResultPolicy {
+                timeout: self.tool_timeout,
+                screen: self.tool_result_screen,
+                expose_error_messages: self.expose_tool_error_messages,
+            },
             on_audio: self.on_audio,
             on_transcript: self.on_transcript,
             on_speech_started: self.on_speech_started,
@@ -613,7 +672,7 @@ impl Agent for RealtimeAgent {
         let after_callbacks = self.after_callbacks.clone();
         let before_tool_callbacks = self.before_tool_callbacks.clone();
         let after_tool_callbacks = self.after_tool_callbacks.clone();
-        let tool_timeout = self.tool_timeout;
+        let tool_results = self.tool_results.clone();
         let tools = self.tools.clone();
         let toolsets = self.toolsets.clone();
 
@@ -1007,7 +1066,7 @@ impl Agent for RealtimeAgent {
                                         &arguments,
                                         before_tool_callbacks.as_ref(),
                                         after_tool_callbacks.as_ref(),
-                                        tool_timeout,
+                                        &tool_results,
                                     )
                                     .await
                                     {
@@ -1172,6 +1231,17 @@ fn pcm16_mono_wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
     wav
 }
 
+/// How the agent bounds, redacts, and screens tool results.
+#[derive(Clone)]
+struct ToolResultPolicy {
+    /// How long one tool call may run.
+    timeout: std::time::Duration,
+    /// Screens every result before the model and the session see it.
+    screen: Option<Arc<dyn adk_core::ToolResultScreen>>,
+    /// Whether tool and callback error messages reach the model.
+    expose_error_messages: bool,
+}
+
 /// What one realtime tool call produced.
 struct ToolDispatch {
     /// The result sent back to the provider.
@@ -1184,13 +1254,15 @@ struct ToolDispatch {
 
 /// Runs one realtime tool call: its arguments are parsed strictly, the run's invocation
 /// hooks and the agent's before-tool callbacks run, the governed path
-/// ([`adk_core::authorize_tool_call`]) authorizes the call, the tool runs under `timeout`,
-/// and the after-tool hooks and callbacks run.
+/// ([`adk_core::authorize_tool_call`]) authorizes the call, the tool runs under the policy's
+/// timeout, the after-tool hooks and callbacks run, and the policy's screen sees the result.
 ///
 /// The callback contract matches the standard agent loop: a before-callback returning
 /// `Ok(Some(content))` substitutes a result and the tool does **not** run, `Ok(None)`
 /// allows it, and an error refuses it and skips the after callbacks. Malformed arguments
-/// are answered with an error instead of running the tool with `{}`.
+/// are answered with an error instead of running the tool with `{}`. A tool or callback error
+/// reaches the model as its component, category, and code unless the policy exposes messages,
+/// and an after-tool failure withholds the result.
 ///
 /// # Errors
 ///
@@ -1203,7 +1275,7 @@ async fn dispatch_tool(
     arguments: &str,
     before_tool_callbacks: &[BeforeToolCallback],
     after_tool_callbacks: &[AfterToolCallback],
-    timeout: std::time::Duration,
+    policy: &ToolResultPolicy,
 ) -> Result<ToolDispatch> {
     let name = tool.name().to_string();
     let args = match crate::runner::parse_tool_arguments(arguments) {
@@ -1216,11 +1288,33 @@ async fn dispatch_tool(
             });
         }
     };
+    let screened_args = policy.screen.as_ref().map(|_| args.clone());
     let tool_ctx: Arc<dyn ToolContext> =
         Arc::new(RealtimeToolContext::new(ctx.clone(), call_id.to_string()));
     let cb_ctx: Arc<dyn CallbackContext> =
         Arc::new(ToolCallbackContext::new(ctx.clone(), name.clone(), args.clone()));
     let hooks = &ctx.run_config().invocation_hooks;
+    let record_payloads = ctx.run_config().record_payloads;
+    // A message can quote credentials or internal hosts, so it is shown to the model only when
+    // the agent exposes error messages, and logged only when payloads are recorded.
+    let failure = |error: &AdkError| {
+        if policy.expose_error_messages { error.to_string() } else { error.redacted() }
+    };
+    let log_failure = |error: &AdkError, stage: &str| {
+        if record_payloads {
+            tracing::warn!(tool.name = %name, error.code = %error.code, error.message = %error.message, stage, "realtime tool call failed");
+        } else {
+            tracing::warn!(tool.name = %name, error.code = %error.code, stage, "realtime tool call failed");
+        }
+    };
+    let not_run = |error: &AdkError| {
+        serde_json::json!({
+            "error": format!(
+                "tool '{name}' was not run: a before-tool callback failed with {}",
+                failure(error)
+            )
+        })
+    };
 
     let mut short_circuit: Option<serde_json::Value> = None;
     let mut run_after_tool_callbacks = true;
@@ -1232,7 +1326,8 @@ async fn dispatch_tool(
             }
             Ok(None) => continue,
             Err(e) => {
-                short_circuit = Some(serde_json::json!({ "error": e.to_string() }));
+                log_failure(&e, "before_tool");
+                short_circuit = Some(not_run(&e));
                 run_after_tool_callbacks = false;
                 break;
             }
@@ -1247,7 +1342,8 @@ async fn dispatch_tool(
                 }
                 Ok(None) => continue,
                 Err(e) => {
-                    short_circuit = Some(serde_json::json!({ "error": e.to_string() }));
+                    log_failure(&e, "before_tool");
+                    short_circuit = Some(not_run(&e));
                     run_after_tool_callbacks = false;
                     break;
                 }
@@ -1257,6 +1353,7 @@ async fn dispatch_tool(
 
     let mut held = None;
     let mut confirmation = None;
+    let mut executed = false;
     let mut result = match short_circuit {
         Some(result) => result,
         None => {
@@ -1266,10 +1363,15 @@ async fn dispatch_tool(
             match adk_core::authorize_tool_call(&gate, call).await? {
                 adk_core::ToolAuthorization::Execute { args, confirmation: decision } => {
                     confirmation = decision;
+                    executed = true;
+                    let timeout = policy.timeout;
                     match tokio::time::timeout(timeout, tool.execute(tool_ctx.clone(), args)).await
                     {
                         Ok(Ok(value)) => value,
-                        Ok(Err(e)) => serde_json::json!({ "error": e.to_string() }),
+                        Ok(Err(e)) => {
+                            log_failure(&e, "execute");
+                            adk_core::tool_error_response(&name, &e, policy.expose_error_messages)
+                        }
                         Err(_) => serde_json::json!({
                             "error": format!("Tool '{name}' timed out after {timeout:?}")
                         }),
@@ -1290,6 +1392,7 @@ async fn dispatch_tool(
     };
 
     if run_after_tool_callbacks {
+        let mut failed: Option<AdkError> = None;
         let mut replaced = false;
         for hook in hooks {
             match hook.after_tool(cb_ctx.clone()).await {
@@ -1300,25 +1403,47 @@ async fn dispatch_tool(
                 }
                 Ok(None) => continue,
                 Err(e) => {
-                    result = serde_json::json!({ "error": e.to_string() });
-                    replaced = true;
+                    failed = Some(e);
                     break;
                 }
             }
         }
-        for callback in after_tool_callbacks.iter().filter(|_| !replaced) {
-            match callback(cb_ctx.clone()).await {
-                Ok(Some(modified)) => {
-                    result = content_to_tool_result(&modified);
-                    break;
-                }
-                Ok(None) => continue,
-                Err(e) => {
-                    result = serde_json::json!({ "error": e.to_string() });
-                    break;
+        if failed.is_none() && !replaced {
+            for callback in after_tool_callbacks {
+                match callback(cb_ctx.clone()).await {
+                    Ok(Some(modified)) => {
+                        result = content_to_tool_result(&modified);
+                        break;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => {
+                        failed = Some(e);
+                        break;
+                    }
                 }
             }
         }
+        // An after-tool stage is where results are redacted, so the result it did not finish
+        // with is withheld; the model is told the tool ran so it does not repeat the effect.
+        if let Some(error) = failed {
+            log_failure(&error, "after_tool");
+            result = if executed {
+                adk_core::result_withheld_response(&name, &error, policy.expose_error_messages)
+            } else {
+                serde_json::json!({
+                    "error": format!(
+                        "tool '{name}' was not run, and its after-tool pipeline failed with {}",
+                        failure(&error)
+                    )
+                })
+            };
+        }
+    }
+
+    if held.is_none()
+        && let (Some(screen), Some(args)) = (policy.screen.as_ref(), screened_args.as_ref())
+    {
+        result = adk_core::screen_tool_result(screen.as_ref(), &name, args, result).await;
     }
 
     let mut actions = tool_ctx.actions();
@@ -1515,22 +1640,30 @@ mod tool_safety_tests {
         before: Vec<BeforeToolCallback>,
         after: Vec<AfterToolCallback>,
     ) -> Result<ToolDispatch> {
+        let policy = ToolResultPolicy {
+            timeout: std::time::Duration::from_millis(50),
+            screen: None,
+            expose_error_messages: false,
+        };
+        dispatch_with_policy(config, tool, arguments, before, after, &policy).await
+    }
+
+    /// Runs `tool` through the governed realtime dispatch under `config` and `policy`.
+    async fn dispatch_with_policy(
+        config: RunConfig,
+        tool: &Arc<dyn Tool>,
+        arguments: &str,
+        before: Vec<BeforeToolCallback>,
+        after: Vec<AfterToolCallback>,
+        policy: &ToolResultPolicy,
+    ) -> Result<ToolDispatch> {
         let ctx = Arc::new(CapableParent {
             content: Content::new("user"),
             config,
             session: TestSession,
             shared: Arc::new(SharedState::new()),
         }) as Arc<dyn InvocationContext>;
-        dispatch_tool(
-            &ctx,
-            tool,
-            "call-1",
-            arguments,
-            &before,
-            &after,
-            std::time::Duration::from_millis(50),
-        )
-        .await
+        dispatch_tool(&ctx, tool, "call-1", arguments, &before, &after, policy).await
     }
 
     fn counting(executions: &Arc<AtomicUsize>) -> Arc<dyn Tool> {
@@ -1654,9 +1787,14 @@ mod tool_safety_tests {
         let result = dispatch(before, vec![], Arc::clone(&executions)).await;
 
         assert_eq!(executions.load(Ordering::SeqCst), 0, "a refused tool must not run: {result}");
-        assert!(
-            result["error"].as_str().unwrap_or_default().contains("denied by policy"),
-            "the refusal reason must reach the provider: {result}"
+        // A callback that fails is reported by its code, as the standard agent loop does; a
+        // callback that refuses on purpose returns its reason as content instead.
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "error": "tool 'counting' was not run: a before-tool callback failed with \
+                          tool.internal (tool.legacy)"
+            })
         );
     }
 
@@ -1701,7 +1839,7 @@ mod tool_safety_tests {
     }
 
     #[tokio::test]
-    async fn an_after_callback_error_becomes_the_result() {
+    async fn an_after_callback_error_withholds_the_result() {
         let executions = Arc::new(AtomicUsize::new(0));
         let after: Vec<AfterToolCallback> =
             vec![Box::new(|_ctx| Box::pin(async { Err(AdkError::tool("post-check failed")) }))];
@@ -1709,10 +1847,131 @@ mod tool_safety_tests {
         let result = dispatch(vec![], after, Arc::clone(&executions)).await;
 
         assert_eq!(executions.load(Ordering::SeqCst), 1, "the tool ran, as it should have");
-        assert!(
-            result["error"].as_str().unwrap_or_default().contains("post-check failed"),
-            "an after-callback failure must not be dropped: {result}"
+        assert_eq!(result["status"], adk_core::RESULT_WITHHELD_STATUS, "{result}");
+        let error = result["error"].as_str().unwrap_or_default();
+        assert!(error.contains("tool.internal (tool.legacy)"), "{result}");
+        assert!(!error.contains("post-check failed"), "the message stays local: {result}");
+        assert!(!result.to_string().contains("ran\":true"), "the result is withheld: {result}");
+    }
+
+    /// Fails with a message that quotes a credential.
+    struct LeakyTool;
+
+    #[async_trait]
+    impl Tool for LeakyTool {
+        fn name(&self) -> &str {
+            "orders"
+        }
+        fn description(&self) -> &str {
+            "fails with a credential in its message"
+        }
+        async fn execute(
+            &self,
+            _ctx: Arc<dyn ToolContext>,
+            _args: serde_json::Value,
+        ) -> Result<serde_json::Value> {
+            Err(AdkError::new(
+                adk_core::ErrorComponent::Tool,
+                adk_core::ErrorCategory::Unavailable,
+                "tool.orders.unavailable",
+                "connect postgres://admin:hunter2@db.internal/prod failed",
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_errors_reach_the_model_redacted_unless_exposed() {
+        let tool: Arc<dyn Tool> = Arc::new(LeakyTool);
+        let mut policy = ToolResultPolicy {
+            timeout: std::time::Duration::from_millis(50),
+            screen: None,
+            expose_error_messages: false,
+        };
+        let hidden =
+            dispatch_with_policy(RunConfig::default(), &tool, "{}", vec![], vec![], &policy)
+                .await
+                .unwrap()
+                .result;
+        assert_eq!(
+            hidden,
+            serde_json::json!({
+                "error": "tool 'orders' failed: tool.unavailable (tool.orders.unavailable)"
+            })
         );
+
+        policy.expose_error_messages = true;
+        let shown =
+            dispatch_with_policy(RunConfig::default(), &tool, "{}", vec![], vec![], &policy)
+                .await
+                .unwrap()
+                .result;
+        assert!(shown["error"].as_str().unwrap_or_default().contains("hunter2"), "{shown}");
+    }
+
+    /// Replaces every result with a fixed value, or fails when `fail` is set.
+    struct FixedScreen {
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl adk_core::ToolResultScreen for FixedScreen {
+        async fn screen_result(
+            &self,
+            tool_name: &str,
+            _args: &serde_json::Value,
+            result: &serde_json::Value,
+        ) -> std::result::Result<serde_json::Value, String> {
+            if self.fail {
+                return Err("the screening service is unavailable".to_string());
+            }
+            Ok(serde_json::json!({ "screened": tool_name, "had": result.clone() }))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_result_screen_sees_and_rewrites_every_result() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let policy = ToolResultPolicy {
+            timeout: std::time::Duration::from_millis(50),
+            screen: Some(Arc::new(FixedScreen { fail: false })),
+            expose_error_messages: false,
+        };
+        let result = dispatch_with_policy(
+            RunConfig::default(),
+            &counting(&executions),
+            "{}",
+            vec![],
+            vec![],
+            &policy,
+        )
+        .await
+        .unwrap()
+        .result;
+        assert_eq!(result, serde_json::json!({ "screened": "counting", "had": { "ran": true } }));
+    }
+
+    #[tokio::test]
+    async fn a_failing_screen_withholds_the_result() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let policy = ToolResultPolicy {
+            timeout: std::time::Duration::from_millis(50),
+            screen: Some(Arc::new(FixedScreen { fail: true })),
+            expose_error_messages: false,
+        };
+        let result = dispatch_with_policy(
+            RunConfig::default(),
+            &counting(&executions),
+            "{}",
+            vec![],
+            vec![],
+            &policy,
+        )
+        .await
+        .unwrap()
+        .result;
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        assert_eq!(result["status"], adk_core::RESULT_WITHHELD_STATUS, "{result}");
+        assert!(!result.to_string().contains("\"ran\""), "{result}");
     }
 
     #[tokio::test]
@@ -1735,7 +1994,9 @@ mod tool_safety_tests {
 
         assert_eq!(executions.load(Ordering::SeqCst), 0);
         assert_eq!(after_ran.load(Ordering::SeqCst), 0, "matching the standard loop's ordering");
-        assert!(result["error"].as_str().unwrap_or_default().contains("refused"), "{result}");
+        let error = result["error"].as_str().unwrap_or_default();
+        assert!(error.contains("was not run") && error.contains("tool.legacy"), "{result}");
+        assert!(!error.contains("refused"), "the callback's message stays local: {result}");
     }
 
     // ── Context capabilities ──────────────────────────────────────────

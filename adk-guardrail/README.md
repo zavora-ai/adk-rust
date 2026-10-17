@@ -14,6 +14,16 @@ Guardrails framework for ADK agents - input/output validation, content filtering
 - **ContentFilter** - Block harmful content, off-topic responses, max length
 - **SchemaValidator** - Validate JSON output against schemas
 - **GuardrailSet** - Compose multiple guardrails with parallel execution
+- **ToolGuardrail** - Allow, deny, or revise a tool call's arguments, and deliver, revise, or
+  withhold its result (`validate_result`)
+- **ResultTextGuardrail** - Apply any content guardrail, such as `PiiRedactor`, to every text
+  value of a tool result
+
+Output guardrails screen the final response and any text a model writes beside a tool call
+(`Guardrail::validate_preamble`). A block is an `AdkError` with category `InvalidInput` and code
+`guardrail.input_blocked` or `guardrail.output_blocked`, naming the guardrail and its severity
+in `details.metadata`. A `Low` failure passes and is recorded on the output event under
+`adk.guardrail.warnings`.
 
 ## Installation
 
@@ -79,6 +89,15 @@ let agent = LlmAgentBuilder::new("assistant")
     .build()?;
 ```
 
+### Tool Result Guardrails
+
+```rust
+use adk_guardrail::{PiiRedactor, ResultTextGuardrail, ToolGuardrailSet};
+
+// LlmAgentBuilder::tool_guardrails, or a realtime runtime's tool_result_screen.
+let tool_guardrails = ToolGuardrailSet::new().with(ResultTextGuardrail::new(PiiRedactor::new()));
+```
+
 ## Guardrail Results
 
 Each guardrail returns one of three results:
@@ -93,7 +112,7 @@ Each guardrail returns one of three results:
 
 | Level | Description |
 |-------|-------------|
-| `Low` | Minor issue, may continue |
+| `Low` | Minor issue; the content passes and the failure is recorded |
 | `Medium` | Moderate issue, should review |
 | `High` | Serious issue, should block |
 | `Critical` | Dangerous content, must block |

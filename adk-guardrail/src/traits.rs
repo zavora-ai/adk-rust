@@ -53,6 +53,50 @@ pub trait Guardrail: Send + Sync {
     /// Validate content and return result
     async fn validate(&self, content: &Content) -> GuardrailResult;
 
+    /// Validates the text a model writes in a turn that also calls tools, or in a turn the
+    /// provider paused (a preamble).
+    ///
+    /// An agent's output guardrails screen this text before it reaches the client or the
+    /// session, as they screen the final response: a failure blocks the turn and a transform
+    /// rewrites the text. `content` holds only the turn's text parts. Defaults to
+    /// [`validate`](Self::validate); override it when a check describes the complete answer
+    /// rather than any text the user can see, as [`SchemaValidator`](crate::SchemaValidator)
+    /// does for the answer's JSON shape.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Content, Part};
+    /// use adk_guardrail::{Guardrail, GuardrailResult, Severity};
+    /// use async_trait::async_trait;
+    ///
+    /// /// Requires the final answer to cite a source; a preamble needs none.
+    /// struct CitesSource;
+    ///
+    /// #[async_trait]
+    /// impl Guardrail for CitesSource {
+    ///     fn name(&self) -> &str {
+    ///         "cites_source"
+    ///     }
+    ///
+    ///     async fn validate(&self, content: &Content) -> GuardrailResult {
+    ///         let text: String = content.parts.iter().filter_map(Part::text).collect();
+    ///         if text.contains("Source:") {
+    ///             GuardrailResult::Pass
+    ///         } else {
+    ///             GuardrailResult::fail("the answer cites no source", Severity::Medium)
+    ///         }
+    ///     }
+    ///
+    ///     async fn validate_preamble(&self, _content: &Content) -> GuardrailResult {
+    ///         GuardrailResult::Pass
+    ///     }
+    /// }
+    /// ```
+    async fn validate_preamble(&self, content: &Content) -> GuardrailResult {
+        self.validate(content).await
+    }
+
     /// Whether to run in parallel with other guardrails (default: true)
     fn run_parallel(&self) -> bool {
         true

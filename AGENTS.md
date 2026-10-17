@@ -295,7 +295,8 @@ adk-eval/        Evaluation framework: trajectory, semantic, rubric, LLM-judge, 
                  comparison (Wilcoxon), auto-generated test cases, multi-turn conversation
                  metrics. Feature-gated: embedding, ci-helpers, statistics.
 adk-telemetry/   OpenTelemetry 0.32 integration for agent observability
-adk-guardrail/   Input/output guardrails: validation, content filtering, PII redaction
+adk-guardrail/   Input/output guardrails: validation, content filtering, PII redaction, tool
+                 call and tool result guardrails (ResultTextGuardrail), structured block errors
 adk-auth/        Authentication: API keys, JWT, OAuth2, OIDC, SSO, cloud secret providers
                  (AWS Secrets Manager, Azure Key Vault, GCP Secret Manager)
 adk-plugin/      Plugin system for agent lifecycle hooks — EnhancedPlugin trait with tool/model
@@ -705,6 +706,10 @@ Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`
 9. `on_tool_error` (hooks, then callbacks) when the tool failed.
 10. `AfterToolCallback` (hooks, then callbacks), `AfterToolCallbackFull`, then enhanced plugins
     (`after_tool_call`).
+11. Tool guardrails' `ToolGuardrail::validate_result` (`LlmAgent`) on the result the model is
+    about to be sent — a withheld result is answered `result_withheld` — then, for a result that
+    ends the turn, the output guardrails. `RealtimeAgent`, `RealtimeRunner`, and
+    `IntegratedRealtimeRunner` run a `ToolResultScreen` (`tool_result_screen`) at the same point.
 
 A hook or callback that returns a value short-circuits the remaining callbacks of its kind.
 

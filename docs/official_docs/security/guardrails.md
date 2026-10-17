@@ -4,12 +4,13 @@ Input/output validation and content safety using `adk-guardrail`.
 
 ## Overview
 
-Guardrails validate and transform agent inputs and outputs to ensure safety, compliance, and quality. Input guardrails screen a user message before it is saved or reaches a model, output guardrails screen a response before it is returned, and both can:
+Guardrails validate and transform agent inputs and outputs to ensure safety, compliance, and quality. Input guardrails screen a user message before it is saved or reaches a model, output guardrails screen everything a model turn shows the client and the session — the final response and any text written beside a tool call — and tool guardrails screen a tool call's arguments and its result. They can:
 
 - Block harmful or off-topic content
 - Redact PII (emails, phones, SSNs, credit cards)
 - Enforce JSON schema on outputs
 - Limit content length
+- Redact or withhold a tool's result before the model sees it
 
 ## Installation
 
@@ -39,12 +40,19 @@ pub enum GuardrailResult {
 
 ```rust
 pub enum Severity {
-    Low,      // Warning only, doesn't block
-    Medium,   // Blocks but continues other checks
-    High,     // Blocks immediately
-    Critical, // Blocks and fails fast
+    Low,      // Passes; recorded as a warning
+    Medium,   // Blocks once every guardrail in the set has run
+    High,     // Blocks once every guardrail in the set has run
+    Critical, // Blocks and stops the set at once (when `fail_fast` is true)
 }
 ```
+
+A `Low` failure never blocks. The content passes (transformed, if another guardrail
+transformed it), the executor logs the failure at `warn` with the guardrail's name and severity,
+and an agent records the failure on the output event it screened, under the event metadata key
+`adk.guardrail.warnings` (`GUARDRAIL_WARNINGS_KEY`), as a JSON array of
+`{"guardrail", "reason", "severity"}` objects. The client sees it on the event and the session
+keeps it. A low-severity failure of an input guardrail is logged only.
 
 ## PII Redaction
 
@@ -191,6 +199,10 @@ if result.passed {
 }
 ```
 
+`GuardrailExecutor::enforce(&guardrails, &content, phase, preamble)` turns the result into a
+decision: the content to continue with and the low-severity warnings, or a
+`GuardrailError::Blocked` error. Agents screen through it.
+
 ### ExecutionResult
 
 ```rust
@@ -250,6 +262,10 @@ impl Guardrail for ProfanityFilter {
 }
 ```
 
+`validate_preamble` screens text a model writes beside a tool call, or in a turn the provider
+paused, and defaults to `validate`. Override it when a check describes the complete answer
+rather than any text the user sees — see [Text beside a tool call](#text-beside-a-tool-call).
+
 ## Integration with Agents
 
 Guardrails integrate with `LlmAgentBuilder`:
@@ -282,6 +298,104 @@ let agent = LlmAgentBuilder::new("assistant")
     .output_guardrails(output_guardrails)
     .build()?;
 ```
+
+### Text beside a tool call
+
+A model turn that calls tools can also carry text — "Let me look that up", or a sentence that
+repeats the user's details. The client receives that text and the session saves it, so output
+guardrails screen it before either does, with the same outcomes as the final response:
+
+| Outcome | Effect |
+|---------|--------|
+| Pass | The turn is delivered and its calls run |
+| Transform | The text is rewritten in place; the calls are unchanged and run |
+| Block | The run ends with a structured block error; nothing of the turn is sent or saved and its calls do not run |
+
+- **Only the text is shown.** Guardrails screen the turn's text parts through
+  `Guardrail::validate_preamble`, so a function call never reaches a guardrail and always
+  survives a transform. The same applies to a turn the provider paused (Anthropic `pause_turn`).
+- **Answer-shape checks do not apply.** `SchemaValidator` passes a preamble, since it is not the
+  structured answer. `ContentFilter` applies its blocked keywords and maximum length, and skips
+  required topics and the minimum length, which describe a complete answer.
+- **Provider-native messages.** The OpenAI Responses API returns preamble text as a
+  `commentary` message, which the adapter keeps as a native message part so it replays with its
+  phase. Its text is screened as a text part and written back into the message, in the final
+  response too.
+- **Buffered delivery.** Output guardrails need the whole turn, so with output guardrails set an
+  `SSE` or `Bidi` run delivers each model turn as one event instead of streaming partial text.
+  The event's debug copy of the provider response (`gcp.vertex.agent.llm_response`) carries the
+  screened content.
+
+### When a guardrail blocks
+
+A block ends the run with an `AdkError` a caller can tell apart from a failure:
+
+| Field | Input block | Output block |
+|-------|-------------|--------------|
+| `component` | `Guardrail` | `Guardrail` |
+| `category` | `InvalidInput` (HTTP 400, not retryable) | `InvalidInput` (HTTP 400, not retryable) |
+| `code` | `guardrail.input_blocked` (`INPUT_BLOCKED_CODE`) | `guardrail.output_blocked` (`OUTPUT_BLOCKED_CODE`) |
+| `details.metadata["guardrail"]` | Name of the blocking guardrail | Name of the blocking guardrail |
+| `details.metadata["severity"]` | Its severity, such as `"High"` | Its severity |
+| `details.metadata["phase"]` | `"input"` | `"output"` |
+| `details.metadata["failures"]` | Every failure, `Low` ones included | Every failure |
+
+The blocking guardrail is the first whose failure is above `Low`. The message keeps the form
+`output guardrails blocked content: <name> (<severity>): <reason>`. The runner's save-time input
+screening raises the same error.
+
+```rust
+use adk_guardrail::OUTPUT_BLOCKED_CODE;
+
+match stream.next().await {
+    Some(Err(error)) if error.code == OUTPUT_BLOCKED_CODE => {
+        let guardrail = error.details.metadata.get("guardrail");
+        // Show a refusal instead of a server error.
+    }
+    _ => {}
+}
+```
+
+## Tool Result Guardrails
+
+A `ToolGuardrail` screens a call's arguments before the tool runs (`validate_call`) and its
+result before the model and the session see it (`validate_result`). Both default to allowing,
+so a guardrail implements only the side it checks.
+
+| `validate_result` returns | What the model and the session see |
+|---------------------------|------------------------------------|
+| `ToolResultGuardrailResult::Allow` | The result |
+| `ToolResultGuardrailResult::Revise { result, .. }` | `result`, such as the result with fields redacted |
+| `ToolResultGuardrailResult::Withhold { reason, .. }` | `{"status": "result_withheld", "error": "tool '<name>' ran, but its result was withheld: tool guardrail '<guardrail>' (<severity>): <reason>; do not call it again for this request."}` |
+
+`ResultTextGuardrail` applies any content guardrail to every text value of a result, at any
+depth, so the result keeps its JSON shape; a failure above `Low` withholds the result.
+
+```rust
+use adk_agent::LlmAgentBuilder;
+use adk_guardrail::{ContentFilter, PiiRedactor, ResultTextGuardrail, ToolGuardrailSet};
+
+let tool_guardrails = ToolGuardrailSet::new()
+    .with(ResultTextGuardrail::new(PiiRedactor::new()))
+    .with(
+        ResultTextGuardrail::new(ContentFilter::blocked_keywords(vec!["internal only".into()])?)
+            .on_tools(["search_wiki"]),
+    );
+
+let agent = LlmAgentBuilder::new("support")
+    .model(model)
+    .tool(lookup_order)
+    .tool_guardrails(tool_guardrails)
+    .build()?;
+```
+
+`LlmAgent` runs the set on every result it is about to send the model — after the after-tool
+callbacks and plugins, and on a tool's error response too — before the tool event reaches the
+client or the session. A held call's pending response is not screened. A result that ends the
+turn is then screened by the output guardrails as well.
+
+A `ToolGuardrailSet` is also an `adk_core::ToolResultScreen`, which is how the realtime runtimes
+take it (`tool_result_screen`); see [Tools in Realtime Sessions](../realtime/tools.md#screening-tool-results).
 
 ## Input Guardrails and the Session
 
@@ -335,17 +449,27 @@ User Input
     │
     ▼
 ┌─────────────────────┐
-│  Agent Execution    │
+│  Model Turn         │
 └─────────────────────┘
     │
     ▼
 ┌─────────────────────┐
-│  Output Guardrails  │ ← Schema validation, safety checks
+│  Output Guardrails  │ ← final text, and text beside a tool call (validate_preamble)
 │  (parallel)         │
 └─────────────────────┘
     │
+    ▼ (rewritten, or blocked: nothing is sent or saved)
+┌─────────────────────┐
+│  Tool Call          │ ← tool guardrails screen the arguments (validate_call)
+└─────────────────────┘
+    │
     ▼
-Final Response
+┌─────────────────────┐
+│  Tool Result        │ ← tool guardrails screen the result (validate_result)
+└─────────────────────┘
+    │
+    ▼
+Next model turn, or the final response
 ```
 
 ## Examples

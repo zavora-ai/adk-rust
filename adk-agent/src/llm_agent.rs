@@ -24,7 +24,10 @@ use adk_plugin::{
 #[cfg(feature = "skills")]
 use crate::skill_shim::load_skill_index;
 use crate::{
-    guardrails::{GuardrailScreen, GuardrailSet, ToolGuardrailSet, enforce_guardrails},
+    guardrails::{
+        GuardrailScreen, GuardrailSet, Phase, Screened, ToolGuardrailSet, Warnings,
+        enforce_guardrails, screen_model_output, screen_tool_result,
+    },
     invocation_hooks::HookCallbacks,
     skill_shim::{SelectionPolicy, SkillIndex, apply_skill_injection},
     tool_call_markup::normalize_option_content,
@@ -658,19 +661,14 @@ impl LlmAgent {
         input_guardrails: Arc<GuardrailSet>,
     ) -> Result<Arc<dyn InvocationContext>> {
         let content =
-            enforce_guardrails(input_guardrails.as_ref(), ctx.user_content(), "input").await?;
+            enforce_guardrails(input_guardrails.as_ref(), ctx.user_content(), Phase::Input)
+                .await?
+                .content;
         if content.role != ctx.user_content().role || content.parts != ctx.user_content().parts {
             Ok(with_user_content_override(ctx, content))
         } else {
             Ok(ctx)
         }
-    }
-
-    async fn apply_output_guardrails(
-        output_guardrails: &GuardrailSet,
-        content: Content,
-    ) -> Result<Content> {
-        enforce_guardrails(output_guardrails, &content, "output").await
     }
 
     fn history_parts_from_provider_metadata(
@@ -1372,6 +1370,14 @@ impl LlmAgentBuilder {
     /// - Redact PII from responses
     /// - Block harmful content in responses
     ///
+    /// They screen every model turn before the client or the session sees it: the final
+    /// response through `Guardrail::validate`, and the text of a turn that also calls tools, or
+    /// that the provider paused, through `Guardrail::validate_preamble`, so a transform
+    /// rewrites that text and keeps the calls. A block ends the run with an `InvalidInput`
+    /// error coded `guardrail.output_blocked`, and the blocked turn's calls do not run. A
+    /// tool result that ends the turn is screened too. With output guardrails set, an `SSE`
+    /// or `Bidi` run delivers each model turn as one event.
+    ///
     /// Requires the `guardrails` feature.
     pub fn output_guardrails(mut self, guardrails: GuardrailSet) -> Self {
         self.output_guardrails = guardrails;
@@ -1390,6 +1396,11 @@ impl LlmAgentBuilder {
     /// denied call neither prompts the user nor consumes a concurrency permit. A denial is
     /// reported to the model as the tool's result, letting it correct the call rather than
     /// stalling the run.
+    ///
+    /// The set also screens each call's result (`ToolGuardrail::validate_result`) after the
+    /// after-tool callbacks and plugins, before the model, the client, or the session sees it:
+    /// a revision replaces the result, and a withheld result is answered with
+    /// [`result_blocked_response`](adk_core::result_blocked_response).
     ///
     /// Requires the `guardrails` feature.
     ///
@@ -2101,21 +2112,27 @@ struct ToolExecutionResult {
 async fn screen_terminal_tool_output(
     guardrails: &GuardrailSet,
     mut content: Content,
-) -> Result<Content> {
+) -> Result<Screened> {
+    let mut warnings = Warnings::default();
     for part in &mut content.parts {
         if let Part::FunctionResponse { function_response, .. } = part {
             let text = function_response.response.to_string();
-            let screened =
-                enforce_guardrails(guardrails, &Content::new("model").with_text(&text), "output")
-                    .await?;
-            let screened_text: String = screened.parts.iter().filter_map(Part::text).collect();
+            let screened = enforce_guardrails(
+                guardrails,
+                &Content::new("model").with_text(&text),
+                Phase::Output,
+            )
+            .await?;
+            let screened_text: String =
+                screened.content.parts.iter().filter_map(Part::text).collect();
             if screened_text != text {
                 function_response.response = serde_json::from_str(&screened_text)
                     .unwrap_or_else(|_| serde_json::json!({ "result": screened_text }));
             }
+            warnings.extend(screened.warnings);
         }
     }
-    Ok(content)
+    Ok(Screened { content, warnings })
 }
 
 /// Turns a tool callback's substitute content into the response to the call it replaces.
@@ -2319,17 +2336,31 @@ impl ToolExecutor<'_> {
     }
 
     async fn execute(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
+        let screened_call =
+            (!self.tool_guardrails.is_empty()).then(|| (call.name.clone(), call.args.clone()));
         let mut result = self.execute_inner(call).await?;
-        // A result that ends the turn is the final response, so it is screened like one,
-        // before the client or the session sees it.
-        if result.escalate_or_skip && result.pending.is_none() && !self.output_guardrails.is_empty()
+        // Tool guardrails see the result the model is about to be sent, after every after-tool
+        // stage. A held call's pending response is not a result.
+        if let Some((name, args)) = screened_call
+            && result.pending.is_none()
         {
             result.content =
+                screen_tool_result(self.tool_guardrails, &name, &args, result.content).await;
+        }
+        // A result that ends the turn is the final response, so it is screened like one,
+        // before the client or the session sees it.
+        let mut warnings = Warnings::default();
+        if result.escalate_or_skip && result.pending.is_none() && !self.output_guardrails.is_empty()
+        {
+            let screened =
                 screen_terminal_tool_output(self.output_guardrails, result.content).await?;
+            result.content = screened.content;
+            warnings = screened.warnings;
         }
         let mut event = Event::new(self.invocation_id);
         event.author = self.agent_name.to_owned();
         event.branch = self.ctx.branch().to_owned();
+        warnings.record_on(&mut event);
         event.actions = result.actions.clone();
         event.llm_response.content = Some(result.content.clone());
         // Runner commits each result while other calls are still awaiting approval.
@@ -3085,7 +3116,11 @@ impl Agent for LlmAgent {
         let own = if self.input_guardrails.is_empty() {
             None
         } else {
-            Some(enforce_guardrails(self.input_guardrails.as_ref(), content, "input").await?)
+            Some(
+                enforce_guardrails(self.input_guardrails.as_ref(), content, Phase::Input)
+                    .await?
+                    .content,
+            )
         };
         let below =
             adk_core::screen_user_input_with(&self.sub_agents, own.as_ref().unwrap_or(content))
@@ -3532,21 +3567,24 @@ impl Agent for LlmAgent {
                     accumulated_content = cached_response.content.clone();
                     final_provider_metadata = cached_response.provider_metadata.clone();
                     normalize_option_content(&mut accumulated_content);
+                    // Text beside a tool call, or in a paused turn, reaches the client and the
+                    // session as the final text does, so it is screened too.
+                    let mut output_warnings = Warnings::default();
                     if let Some(content) = accumulated_content.take() {
-                        let has_function_calls = content
+                        let preamble = content
                             .parts
                             .iter()
-                            .any(|part| matches!(part, Part::FunctionCall { .. }));
-                        let content = if has_function_calls || Self::continues_turn(final_provider_metadata.as_ref()) {
-                            content
-                        } else {
-                            Self::apply_output_guardrails(output_guardrails.as_ref(), content).await?
-                        };
-                        accumulated_content = Some(content);
+                            .any(|part| matches!(part, Part::FunctionCall { .. }))
+                            || Self::continues_turn(final_provider_metadata.as_ref());
+                        let screened =
+                            screen_model_output(output_guardrails.as_ref(), content, preamble).await?;
+                        accumulated_content = Some(screened.content);
+                        output_warnings = screened.warnings;
                     }
 
                     let mut cached_event = Event::new(&invocation_id);
                     cached_event.author = agent_name.clone();
+                    output_warnings.record_on(&mut cached_event);
                     cached_event.llm_response.content = accumulated_content.clone();
                     cached_event.llm_response.turn_complete = cached_response.turn_complete;
                     cached_event.llm_response.citation_metadata = cached_response.citation_metadata.clone();
@@ -3561,7 +3599,12 @@ impl Agent for LlmAgent {
                         ctx.run_config().record_payloads,
                         ctx.run_config().trace_payload_max_bytes,
                     ));
-                    cached_event.provider_metadata.insert("gcp.vertex.agent.llm_response".to_string(), serde_json::to_string(&cached_response).unwrap_or_default());
+                    // The debug copy carries the screened content, not what the guardrails replaced.
+                    let mut debug_response = cached_response.clone();
+                    if !output_guardrails.is_empty() {
+                        debug_response.content = accumulated_content.clone();
+                    }
+                    cached_event.provider_metadata.insert("gcp.vertex.agent.llm_response".to_string(), serde_json::to_string(&debug_response).unwrap_or_default());
 
                     // Populate long_running_tool_ids for function calls from long-running tools
                     if let Some(ref content) = accumulated_content {
@@ -3794,19 +3837,29 @@ impl Agent for LlmAgent {
 
                     // For None mode: yield single final event with accumulated content
                     if !should_stream_to_client {
+                        // Text beside a tool call, or in a paused turn, reaches the client and
+                        // the session as the final text does, so it is screened too.
+                        let mut output_warnings = Warnings::default();
                         if let Some(content) = accumulated_content.take() {
-                            let has_function_calls = content
+                            let preamble = content
                                 .parts
                                 .iter()
-                                .any(|part| matches!(part, Part::FunctionCall { .. }));
-                            let content = if has_function_calls || Self::continues_turn(final_provider_metadata.as_ref()) {
-                                content
-                            } else {
-                                Self::apply_output_guardrails(output_guardrails.as_ref(), content)
+                                .any(|part| matches!(part, Part::FunctionCall { .. }))
+                                || Self::continues_turn(final_provider_metadata.as_ref());
+                            let screened =
+                                screen_model_output(output_guardrails.as_ref(), content, preamble)
                                     .instrument(llm_span.clone())
-                                    .await?
-                            };
-                            accumulated_content = Some(content);
+                                    .await?;
+                            accumulated_content = Some(screened.content);
+                            output_warnings = screened.warnings;
+                        }
+                        // The debug copy of the last chunk carries the screened content, not
+                        // what the guardrails replaced.
+                        if !output_guardrails.is_empty()
+                            && let Some(last) = last_chunk.as_mut()
+                            && last.content.is_some()
+                        {
+                            last.content = accumulated_content.clone();
                         }
 
                         let long_running_tool_ids = accumulated_content
@@ -3822,6 +3875,7 @@ impl Agent for LlmAgent {
                             last_chunk.as_ref(),
                             long_running_tool_ids,
                         );
+                        output_warnings.record_on(&mut final_event);
                         if metered {
                             final_event.provider_metadata.insert(
                                 adk_core::BUDGET_RECORDED_KEY.to_string(),

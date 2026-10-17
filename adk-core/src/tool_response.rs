@@ -3,7 +3,9 @@
 //! An agent answers every function call with exactly one function response. When the tool
 //! fails, when its result cannot be released, or when the model's arguments cannot be decoded,
 //! these builders produce that response without passing error detail to the model by default.
+//! A [`ToolResultScreen`] decides what of a tool's result the model and the session may see.
 
+use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::AdkError;
@@ -90,6 +92,118 @@ pub fn result_withheld_response(tool_name: &str, error: &AdkError, expose_messag
              result is withheld; do not call it again for this request."
         ),
     })
+}
+
+/// Builds the function response for a call that ran but whose result a [`ToolResultScreen`]
+/// withheld.
+///
+/// The response carries the screen's `reason` and, as [`result_withheld_response`] does, tells
+/// the model not to call the tool again, since its side effect already happened.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{RESULT_WITHHELD_STATUS, result_blocked_response};
+///
+/// let response = result_blocked_response("lookup", "guardrail 'pii' (High): names a patient");
+/// assert_eq!(response["status"], RESULT_WITHHELD_STATUS);
+/// assert!(response["error"].as_str().unwrap().contains("guardrail 'pii'"));
+/// ```
+pub fn result_blocked_response(tool_name: &str, reason: &str) -> Value {
+    json!({
+        "status": RESULT_WITHHELD_STATUS,
+        "error": format!(
+            "tool '{tool_name}' ran, but its result was withheld: {reason}; do not call it again for \
+             this request."
+        ),
+    })
+}
+
+/// Screens a tool's result before the model and the session see it.
+///
+/// An agent runs the screen on every result it is about to send to the model, after its own
+/// after-tool callbacks and plugins, so nothing reaches the provider or the stored tool event
+/// that the screen did not pass. `adk-guardrail`'s `ToolGuardrailSet` implements it, so the
+/// guardrails' `validate_result` checks apply wherever a screen is accepted.
+///
+/// A screen that cannot decide, because the service it relies on is down for example, returns
+/// `Err`, and the result is withheld: the agent fails closed.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{ToolResultScreen, async_trait};
+/// use serde_json::{Value, json};
+///
+/// /// Drops a `secret` field from every result.
+/// struct DropSecrets;
+///
+/// #[async_trait]
+/// impl ToolResultScreen for DropSecrets {
+///     async fn screen_result(&self, _tool: &str, _args: &Value, result: &Value) -> Result<Value, String> {
+///         let mut result = result.clone();
+///         if let Some(fields) = result.as_object_mut() {
+///             fields.remove("secret");
+///         }
+///         Ok(result)
+///     }
+/// }
+///
+/// # futures::executor::block_on(async {
+/// let screened = DropSecrets.screen_result("lookup", &json!({}), &json!({"id": 1, "secret": "s"})).await;
+/// assert_eq!(screened, Ok(json!({"id": 1})));
+/// # });
+/// ```
+#[async_trait]
+pub trait ToolResultScreen: Send + Sync {
+    /// Returns the result to deliver, possibly rewritten, or why it is withheld.
+    ///
+    /// `args` are the arguments the model sent for the call.
+    async fn screen_result(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        result: &Value,
+    ) -> std::result::Result<Value, String>;
+}
+
+/// Runs `screen` on `result`, returning the result to deliver, or the
+/// [`result_blocked_response`] that replaces a withheld one.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{RESULT_WITHHELD_STATUS, ToolResultScreen, async_trait, screen_tool_result};
+/// use serde_json::{Value, json};
+///
+/// struct Unavailable;
+///
+/// #[async_trait]
+/// impl ToolResultScreen for Unavailable {
+///     async fn screen_result(&self, _: &str, _: &Value, _: &Value) -> Result<Value, String> {
+///         Err("the redaction service is unavailable".to_string())
+///     }
+/// }
+///
+/// # futures::executor::block_on(async {
+/// let delivered = screen_tool_result(&Unavailable, "lookup", &json!({}), json!({"ssn": "x"})).await;
+/// assert_eq!(delivered["status"], RESULT_WITHHELD_STATUS);
+/// # });
+/// ```
+pub async fn screen_tool_result(
+    screen: &dyn ToolResultScreen,
+    tool_name: &str,
+    args: &Value,
+    result: Value,
+) -> Value {
+    match screen.screen_result(tool_name, args, &result).await {
+        Ok(screened) => screened,
+        Err(reason) => {
+            // The reason can describe the result, so it goes to the model, not the log.
+            tracing::warn!(tool.name = %tool_name, "tool result withheld by its screen");
+            result_blocked_response(tool_name, &reason)
+        }
+    }
 }
 
 /// Builds the arguments of a function call whose arguments the model sent as something other

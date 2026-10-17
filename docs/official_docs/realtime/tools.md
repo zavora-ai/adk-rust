@@ -154,7 +154,7 @@ now the explicit exception rather than the default for everything.
 If the `before_tool_call` pipeline returns an error, the tool is **refused**:
 
 ```json
-{ "error": "tool guarded was refused: its before-tool plugin pipeline failed (...). Execution is refused rather than proceeding without policy." }
+{ "error": "tool guarded was refused: its before-tool plugin pipeline failed with tool.internal (tool.legacy). Execution is refused rather than proceeding without policy." }
 ```
 
 > **Important:** this path previously logged the plugin error as non-fatal and then executed
@@ -166,10 +166,15 @@ is **withheld**, since result redaction and screening live in after-tool plugins
 receives:
 
 ```json
-{ "error": "tool guarded ran, but its after-tool plugin pipeline failed (...), so its result is withheld; do not call it again for this request." }
+{
+  "status": "result_withheld",
+  "error": "tool 'guarded' ran, but its after-tool pipeline failed with tool.internal (tool.legacy), so its result is withheld; do not call it again for this request."
+}
 ```
 
-The message states that the tool ran, so the model does not repeat a side effect.
+The message states that the tool ran, so the model does not repeat a side effect. Both
+messages name the plugin error's component, category, and code; its message is sent only with
+`expose_tool_error_messages(true)`.
 
 ### The governed path
 
@@ -207,7 +212,50 @@ let runner = RealtimeRunner::builder()
 | The policy denies the call | `{"error": "Tool '<name>' denied by policy: <reason>"}` |
 | The call needs confirmation and no decision exists | `{"error": "Tool '<name>' requires confirmation"}`; `RealtimeAgent` also emits an event carrying the `ToolConfirmationRequest`, and the request is recorded in the approval store |
 | The tool runs past its timeout (default five minutes) | `{"error": "Tool '<name>' timed out after ..."}` |
+| An ADK tool fails | `{"error": "tool '<name>' failed: <component>.<category> (<code>)"}` — the message stays out unless `expose_tool_error_messages(true)` is set |
+| A native handler fails | `{"error": "tool '<name>' failed"}` — the message stays out unless `expose_tool_error_messages(true)` is set |
+| The result screen withholds the result | `{"status": "result_withheld", "error": "tool '<name>' ran, but its result was withheld: <reason>; ..."}` |
 | The kill switch is frozen | Nothing — the session ends with a `governance.frozen` error |
+
+An error message can quote credentials, internal hosts, or upstream bodies, and the provider
+can speak it to the user and the session stores it, so by default it reaches neither.
+`expose_tool_error_messages(true)` on `RealtimeAgentBuilder`, `RealtimeRunnerBuilder`, or
+`IntegratedRealtimeRunnerBuilder` sends it. `RealtimeAgent` logs the message when the run's
+`RunConfig::record_payloads` is set, and `RealtimeRunner` when its `tool_governance` config sets
+it.
+
+## Screening tool results
+
+Each runtime takes a `ToolResultScreen` (`adk_core`) that sees every tool result before the
+model and the session do, and can rewrite it or withhold it:
+
+| Runtime | Builder method | Where the screen runs |
+|---------|----------------|-----------------------|
+| `RealtimeAgent` | `tool_result_screen(screen)` | After the after-tool hooks and callbacks, before the tool event is yielded and the result is sent |
+| `RealtimeRunner` | `tool_result_screen(screen)` | On each native handler's result or error response, before `function_call_output` is sent |
+| `IntegratedRealtimeRunner` | `tool_result_screen(screen)` | After the plugin pipeline, before the transcript records the call, the tool event is persisted, and the result is sent; native handlers as `RealtimeRunner` |
+
+A screen that withholds a result, or returns `Err` because it cannot decide — its redaction
+service is down, for example — replaces the result with a `result_withheld` response, so the
+runtime fails closed. `adk-guardrail`'s `ToolGuardrailSet` is a screen, so the tool-result
+guardrails `LlmAgent` runs through `tool_guardrails` apply here unchanged:
+
+```rust
+use adk_guardrail::{PiiRedactor, ResultTextGuardrail, ToolGuardrailSet};
+use adk_realtime::RealtimeAgent;
+use std::sync::Arc;
+
+let agent = RealtimeAgent::builder("voice")
+    .model(model)
+    .tool(lookup_order)
+    .tool_result_screen(Arc::new(
+        ToolGuardrailSet::new().with(ResultTextGuardrail::new(PiiRedactor::new())),
+    ))
+    .build()?;
+```
+
+A hand-written screen implements `ToolResultScreen::screen_result(tool_name, args, result)`,
+returning `Ok(result)` to deliver, possibly rewritten, or `Err(reason)` to withhold.
 
 The session keeps running while a call is held, so a decision recorded in the approval store
 authorizes the call when the model issues it again.
@@ -222,9 +270,12 @@ standard agent loop. A runner's plugin `before_tool`, `after_tool`, `before_agen
 |------------------|--------|
 | `Ok(None)` | The tool runs |
 | `Ok(Some(content))` from a *before* callback | The content becomes the result; **the tool does not run** |
-| `Err(e)` from a *before* callback | The error becomes the result, the tool does not run, and after-callbacks are skipped |
+| `Err(e)` from a *before* callback | The tool does not run, after-callbacks are skipped, and the result is `{"error": "tool '<name>' was not run: a before-tool callback failed with <component>.<category> (<code>)"}` |
 | `Ok(Some(content))` from an *after* callback | The content replaces the tool's result |
-| `Err(e)` from an *after* callback | The error replaces the tool's result |
+| `Err(e)` from an *after* callback | The result is withheld: a `result_withheld` response telling the model the tool ran |
+
+A callback that refuses on purpose returns its reason as `Ok(Some(content))`; an `Err` is a
+failure, and its message reaches the model only with `expose_tool_error_messages(true)`.
 
 A callback's `Content` is converted to the JSON result the provider expects: a
 `FunctionResponse` part contributes its payload, anything else contributes its text under a

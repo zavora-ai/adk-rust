@@ -5,11 +5,20 @@
 //! ## Overview
 //!
 //! Input guardrails validate the user's message before the agent runs, and output guardrails
-//! validate the final response; the guardrails in one set run concurrently. They can:
+//! validate the final response and any text the model writes beside a tool call
+//! ([`Guardrail::validate_preamble`]); the guardrails in one set run concurrently. They can:
 //! - Block harmful or off-topic content
 //! - Enforce output schemas
 //! - Redact PII (emails, phones, SSNs)
 //! - Allow, deny, or narrow tool-call arguments before a tool runs ([`ToolGuardrail`])
+//! - Deliver, redact, or withhold a tool's result before the model sees it
+//!   ([`ToolGuardrail::validate_result`], [`ResultTextGuardrail`])
+//!
+//! A block is an error with category `InvalidInput`, code [`INPUT_BLOCKED_CODE`] or
+//! [`OUTPUT_BLOCKED_CODE`], and the blocking guardrail's name and severity in its details
+//! ([`GuardrailError::Blocked`]). A [`Severity::Low`] failure does not block: the content passes,
+//! the failure is logged, and an agent records it on the output event under
+//! [`GUARDRAIL_WARNINGS_KEY`].
 //!
 //! No guardrail tracks cost or token usage.
 //!
@@ -54,7 +63,13 @@
 //! produced. The first denial stops evaluation, and a denial is reported to the model as the
 //! tool's result so it can correct the call rather than the run stalling.
 //!
-//! Two implementations ship: [`DeniedArgumentPattern`] refuses calls whose serialized arguments
+//! After the tool runs, [`ToolGuardrail::validate_result`] sees its result, before the model and
+//! the session do, and can revise or withhold it; a withheld result is answered with an error
+//! that tells the model the tool ran. [`ResultTextGuardrail`] applies any content guardrail, such
+//! as [`PiiRedactor`], to every text value of a result. A [`ToolGuardrailSet`] is also an
+//! [`adk_core::ToolResultScreen`], which is how the realtime agents take it.
+//!
+//! Two call guardrails ship: [`DeniedArgumentPattern`] refuses calls whose serialized arguments
 //! match a regular expression, and [`PathAllowList`] confines path-valued arguments to a set of
 //! roots — comparing by path component, resolving each existing component to reject symlink
 //! escapes, and refusing any path with a `..` component or a missing path argument. It is a
@@ -74,13 +89,16 @@ pub mod tool;
 pub mod traits;
 
 pub use content::{ContentFilter, ContentFilterConfig};
-pub use error::{GuardrailError, Result};
-pub use executor::{GuardrailExecutor, GuardrailSet};
+pub use error::{
+    GUARDRAIL_WARNINGS_KEY, GuardrailError, GuardrailFailure, GuardrailPhase, INPUT_BLOCKED_CODE,
+    OUTPUT_BLOCKED_CODE, Result,
+};
+pub use executor::{GuardrailExecutor, GuardrailSet, Screening};
 pub use pii::{PiiRedactor, PiiType};
 #[cfg(feature = "schema")]
 pub use schema::SchemaValidator;
 pub use tool::{
-    DeniedArgumentPattern, PathAllowList, ToolCallDecision, ToolGuardrail, ToolGuardrailResult,
-    ToolGuardrailSet,
+    DeniedArgumentPattern, PathAllowList, ResultTextGuardrail, ToolCallDecision, ToolGuardrail,
+    ToolGuardrailResult, ToolGuardrailSet, ToolResultDecision, ToolResultGuardrailResult,
 };
 pub use traits::{Guardrail, GuardrailResult, Severity};

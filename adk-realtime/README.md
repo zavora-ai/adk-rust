@@ -307,6 +307,8 @@ full-webrtc  ──► full + openai-webrtc
 | `before_tool_callback` | Called before tool execution |
 | `after_tool_callback` | Called after tool execution |
 | `tool_timeout(duration)` | Answer a tool call that runs too long with an error (default 5 min) |
+| `tool_result_screen(screen)` | Rewrite or withhold each tool result before the model and the session see it; a failing screen withholds it (`adk_guardrail::ToolGuardrailSet` is a screen) |
+| `expose_tool_error_messages(bool)` | Send tool and callback error messages to the model (default: component, category, and code only) |
 | Run-wide governance | The run's `ToolPolicy`, kill switch, confirmation, and runner plugin hooks apply to every tool call |
 
 ### Realtime-Specific

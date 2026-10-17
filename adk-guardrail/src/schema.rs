@@ -94,6 +94,11 @@ impl Guardrail for SchemaValidator {
 
         GuardrailResult::Pass
     }
+
+    /// Passes: text written beside a tool call is not the structured answer.
+    async fn validate_preamble(&self, _content: &Content) -> GuardrailResult {
+        GuardrailResult::Pass
+    }
 }
 
 #[cfg(test)]
@@ -143,6 +148,14 @@ mod tests {
             .with_text("Here is the result:\n```json\n{\"name\": \"Bob\"}\n```");
         let result = validator.validate(&content).await;
         assert!(result.is_pass());
+    }
+
+    #[tokio::test]
+    async fn a_preamble_is_not_held_to_the_schema() {
+        let validator = SchemaValidator::new(&test_schema()).unwrap();
+        let content = Content::new("model").with_text("Let me look that up.");
+        assert!(validator.validate_preamble(&content).await.is_pass());
+        assert!(validator.validate(&content).await.is_fail());
     }
 
     #[tokio::test]

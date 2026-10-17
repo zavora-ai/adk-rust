@@ -997,6 +997,10 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
     ends the pipeline and withholds the result, since a redaction or screening stage did not
     finish; the call is answered with a `result_withheld` response telling the model the tool
     ran and must not be called again, and its action-ledger record stays completed
+11. Tool guardrails' `validate_result` (`LlmAgent`), on the result the model is about to be
+    sent — a revision replaces it; a withheld result is answered with a `result_withheld`
+    response. A held call's pending response is not screened. A result that ends the turn
+    (`skip_summarization` or `escalate`) is then screened by the output guardrails
 
 > **Note:** An `on_tool_error` callback that returns a fallback value replaces the error,
 > including an access denial. Keep fallbacks to tools whose failures are safe to paper over.

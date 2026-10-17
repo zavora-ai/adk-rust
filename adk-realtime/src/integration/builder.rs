@@ -68,6 +68,10 @@ pub struct IntegratedRealtimeRunnerBuilder {
     pub(crate) tool_governance: Option<adk_core::RunConfig>,
     /// How long one tool call may run.
     pub(crate) tool_timeout: std::time::Duration,
+    /// Screens every tool result before the model and the session see it.
+    pub(crate) tool_result_screen: Option<Arc<dyn adk_core::ToolResultScreen>>,
+    /// Whether tool and plugin error messages reach the model.
+    pub(crate) expose_tool_error_messages: bool,
 }
 
 impl Default for IntegratedRealtimeRunnerBuilder {
@@ -95,6 +99,8 @@ impl IntegratedRealtimeRunnerBuilder {
             integration_config: IntegrationConfig::default(),
             tool_governance: None,
             tool_timeout: crate::runner::DEFAULT_REALTIME_TOOL_TIMEOUT,
+            tool_result_screen: None,
+            expose_tool_error_messages: false,
         }
     }
 
@@ -280,6 +286,25 @@ impl IntegratedRealtimeRunnerBuilder {
         self
     }
 
+    /// Screens every tool result before the model and the session see it.
+    ///
+    /// For an ADK tool the screen runs after the plugin pipeline, before the tool event is
+    /// persisted and the result is sent; for a native handler it runs as
+    /// [`RealtimeRunnerBuilder::tool_result_screen`](crate::runner::RealtimeRunnerBuilder::tool_result_screen)
+    /// describes. A result it withholds, or cannot decide on, is replaced by
+    /// [`result_blocked_response`](adk_core::result_blocked_response).
+    pub fn tool_result_screen(mut self, screen: Arc<dyn adk_core::ToolResultScreen>) -> Self {
+        self.tool_result_screen = Some(screen);
+        self
+    }
+
+    /// Sends the full message of tool and plugin errors to the model, which by default sees
+    /// their component, category, and code only.
+    pub fn expose_tool_error_messages(mut self, expose: bool) -> Self {
+        self.expose_tool_error_messages = expose;
+        self
+    }
+
     /// Builds the [`IntegratedRealtimeRunner`](super::IntegratedRealtimeRunner).
     ///
     /// Validates required fields, bridges ADK tools via
@@ -319,7 +344,10 @@ impl IntegratedRealtimeRunnerBuilder {
         let mut all_tools = self.native_tools;
         for tool in &self.adk_tools {
             let def = ToolBridgeAdapter::definition(tool.as_ref());
-            let adapter = Arc::new(ToolBridgeAdapter::new(tool.clone(), context_factory.clone()));
+            let adapter = Arc::new(
+                ToolBridgeAdapter::new(tool.clone(), context_factory.clone())
+                    .with_exposed_error_messages(self.expose_tool_error_messages),
+            );
             all_tools.insert(def.name.clone(), (def, adapter as Arc<dyn ToolHandler>));
         }
 
@@ -328,7 +356,11 @@ impl IntegratedRealtimeRunnerBuilder {
             .model(model)
             .config(self.config)
             .runner_config(self.runner_config)
-            .tool_timeout(self.tool_timeout);
+            .tool_timeout(self.tool_timeout)
+            .expose_tool_error_messages(self.expose_tool_error_messages);
+        if let Some(screen) = self.tool_result_screen {
+            runner_builder = runner_builder.tool_result_screen(screen);
+        }
         if let Some(config) = self.tool_governance {
             let scope = adk_core::ApprovalScope::new(
                 &identity.app_name,

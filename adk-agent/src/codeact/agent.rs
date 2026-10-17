@@ -50,7 +50,7 @@ use crate::codeact::error_map::{
 };
 use crate::codeact::output::ScriptOutput;
 use crate::codeact::runtime::{CodeRuntime, ResumeWith, RunStep, RuntimeError, bind_call_args};
-use crate::guardrails::{GuardrailSet, enforce_guardrails};
+use crate::guardrails::{GuardrailSet, Phase, enforce_guardrails};
 use crate::invocation_hooks::HookCallbacks;
 use crate::skill_shim::{SelectionPolicy, SkillIndex, select_skill_prompt_block};
 #[cfg(feature = "enhanced-plugins")]
@@ -772,16 +772,21 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 let original_text = render_final(&value);
                                 let content =
                                     Content::new("model").with_text(original_text.clone());
-                                match enforce_guardrails(&output_guardrails, &content, "output")
+                                match enforce_guardrails(&output_guardrails, &content, Phase::Output)
                                     .await
                                 {
-                                    Ok(c) => {
-                                        let guarded_text: String =
-                                            c.parts.iter().filter_map(|p| p.text()).collect();
+                                    Ok(screened) => {
+                                        let guarded_text: String = screened
+                                            .content
+                                            .parts
+                                            .iter()
+                                            .filter_map(|p| p.text())
+                                            .collect();
                                         if guarded_text != original_text {
                                             stored_value = Value::String(guarded_text);
                                         }
-                                        event.llm_response.content = Some(c);
+                                        screened.warnings.record_on(&mut event);
+                                        event.llm_response.content = Some(screened.content);
                                     }
                                     Err(e) => {
                                         yield Err(e);
@@ -1817,7 +1822,9 @@ impl CodeActAgent {
             return Ok(ctx);
         }
         let content =
-            enforce_guardrails(self.input_guardrails.as_ref(), ctx.user_content(), "input").await?;
+            enforce_guardrails(self.input_guardrails.as_ref(), ctx.user_content(), Phase::Input)
+                .await?
+                .content;
         if content.role != ctx.user_content().role || content.parts != ctx.user_content().parts {
             Ok(crate::workflow::with_user_content_override(ctx, content))
         } else {
@@ -1892,7 +1899,11 @@ impl Agent for CodeActAgent {
         let own = if self.input_guardrails.is_empty() {
             None
         } else {
-            Some(enforce_guardrails(self.input_guardrails.as_ref(), content, "input").await?)
+            Some(
+                enforce_guardrails(self.input_guardrails.as_ref(), content, Phase::Input)
+                    .await?
+                    .content,
+            )
         };
         let below =
             adk_core::screen_user_input_with(&self.sub_agents, own.as_ref().unwrap_or(content))

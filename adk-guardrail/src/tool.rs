@@ -1,13 +1,15 @@
 //! Guardrails for tool calls.
 //!
-//! [`Guardrail`](crate::Guardrail) validates [`Content`](adk_core::Content) — a user message or a
+//! [`Guardrail`] validates [`Content`](adk_core::Content) — a user message or a
 //! model response. It never sees a tool call, so it cannot express "this tool may run, but not
 //! with these arguments." That left argument-level policy with nowhere to live:
 //! [`ToolConfirmationPolicy`](adk_core::ToolConfirmationPolicy) decides per *tool name*, and a
 //! plugin short-circuit is a general-purpose hook rather than a stated policy.
 //!
 //! [`ToolGuardrail`] closes that gap. It runs before a tool executes, sees the tool name and the
-//! arguments, and can allow, deny, or revise.
+//! arguments, and can allow, deny, or revise. After the tool runs, it sees the result too
+//! ([`ToolGuardrail::validate_result`]) and can deliver, rewrite, or withhold it before the model
+//! and the session see it.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -16,7 +18,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::Value;
 
-use crate::Severity;
+use crate::{Guardrail, GuardrailResult, Severity};
 
 /// Outcome of validating a tool call.
 #[derive(Debug, Clone)]
@@ -59,6 +61,39 @@ impl ToolGuardrailResult {
     }
 }
 
+/// Outcome of validating a tool's result.
+#[derive(Debug, Clone)]
+pub enum ToolResultGuardrailResult {
+    /// The result is delivered unchanged.
+    Allow,
+    /// The result is withheld. The model is told the tool ran and why its result is withheld.
+    Withhold {
+        /// Why the result was withheld. Surfaced to the model, so it must not quote the result.
+        reason: String,
+        /// How serious the violation is.
+        severity: Severity,
+    },
+    /// The result is delivered as `result` instead, such as with personal data redacted.
+    Revise {
+        /// The result the model and the session see.
+        result: Value,
+        /// Why the result was changed.
+        reason: String,
+    },
+}
+
+impl ToolResultGuardrailResult {
+    /// Withholds the result.
+    pub fn withhold(reason: impl Into<String>, severity: Severity) -> Self {
+        Self::Withhold { reason: reason.into(), severity }
+    }
+
+    /// Delivers `result` in place of the tool's result.
+    pub fn revise(result: Value, reason: impl Into<String>) -> Self {
+        Self::Revise { result, reason: reason.into() }
+    }
+}
+
 /// Validates a tool call before it executes.
 ///
 /// # Example
@@ -90,8 +125,55 @@ pub trait ToolGuardrail: Send + Sync {
     /// Unique name, used in denial messages and logs.
     fn name(&self) -> &str;
 
-    /// Validates a call to `tool_name` with `args`.
-    async fn validate_call(&self, tool_name: &str, args: &Value) -> ToolGuardrailResult;
+    /// Validates a call to `tool_name` with `args`. Defaults to allowing every call, for a
+    /// guardrail that screens only results.
+    async fn validate_call(&self, _tool_name: &str, _args: &Value) -> ToolGuardrailResult {
+        ToolGuardrailResult::Allow
+    }
+
+    /// Validates the result of a call to `tool_name` with `args`, before the model and the
+    /// session see it. Defaults to delivering every result.
+    ///
+    /// The agent runs it on the result it is about to send, after its after-tool callbacks and
+    /// plugins, and on a tool's error response too. `args` are the arguments the model sent.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_guardrail::{Severity, ToolGuardrail, ToolResultGuardrailResult};
+    /// use async_trait::async_trait;
+    /// use serde_json::Value;
+    ///
+    /// /// Withholds any result that carries a card number field.
+    /// struct NoCardNumbers;
+    ///
+    /// #[async_trait]
+    /// impl ToolGuardrail for NoCardNumbers {
+    ///     fn name(&self) -> &str {
+    ///         "no-card-numbers"
+    ///     }
+    ///
+    ///     async fn validate_result(
+    ///         &self,
+    ///         _tool: &str,
+    ///         _args: &Value,
+    ///         result: &Value,
+    ///     ) -> ToolResultGuardrailResult {
+    ///         if result.get("card_number").is_some() {
+    ///             return ToolResultGuardrailResult::withhold("the result carries a card number", Severity::High);
+    ///         }
+    ///         ToolResultGuardrailResult::Allow
+    ///     }
+    /// }
+    /// ```
+    async fn validate_result(
+        &self,
+        _tool_name: &str,
+        _args: &Value,
+        _result: &Value,
+    ) -> ToolResultGuardrailResult {
+        ToolResultGuardrailResult::Allow
+    }
 
     /// Whether this guardrail applies to `tool_name`. Defaults to every tool.
     ///
@@ -127,6 +209,25 @@ impl ToolCallDecision {
     pub fn is_allowed(&self) -> bool {
         matches!(self, Self::Allow { .. })
     }
+}
+
+/// What a [`ToolGuardrailSet`] decided about a tool's result.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolResultDecision {
+    /// The result to deliver, which may have been revised.
+    Deliver {
+        /// The result the model and the session see.
+        result: Value,
+    },
+    /// The result is withheld.
+    Withhold {
+        /// Guardrail that withheld it.
+        guardrail: String,
+        /// Why.
+        reason: String,
+        /// How serious.
+        severity: Severity,
+    },
 }
 
 /// A collection of [`ToolGuardrail`]s evaluated together.
@@ -220,6 +321,202 @@ impl ToolGuardrailSet {
         }
 
         ToolCallDecision::Allow { args: current }
+    }
+
+    /// Evaluates a tool's result against every applicable guardrail.
+    ///
+    /// Guardrails run in order and revisions compose, as in [`evaluate`](Self::evaluate). The
+    /// first guardrail to withhold the result stops evaluation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_guardrail::{PiiRedactor, ResultTextGuardrail, ToolGuardrailSet, ToolResultDecision};
+    /// use serde_json::json;
+    ///
+    /// # futures::executor::block_on(async {
+    /// let guardrails = ToolGuardrailSet::new().with(ResultTextGuardrail::new(PiiRedactor::new()));
+    /// let decision = guardrails
+    ///     .evaluate_result("lookup", &json!({}), &json!({"ssn": "123-45-6789"}))
+    ///     .await;
+    /// assert_eq!(
+    ///     decision,
+    ///     ToolResultDecision::Deliver { result: json!({"ssn": "[SSN REDACTED]"}) }
+    /// );
+    /// # });
+    /// ```
+    pub async fn evaluate_result(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        result: &Value,
+    ) -> ToolResultDecision {
+        let mut current = result.clone();
+
+        for guardrail in &self.guardrails {
+            if !guardrail.applies_to(tool_name) {
+                continue;
+            }
+
+            match guardrail.validate_result(tool_name, args, &current).await {
+                ToolResultGuardrailResult::Allow => {}
+                ToolResultGuardrailResult::Withhold { reason, severity } => {
+                    tracing::warn!(
+                        guardrail = guardrail.name(),
+                        tool = tool_name,
+                        ?severity,
+                        "tool result withheld by guardrail"
+                    );
+                    return ToolResultDecision::Withhold {
+                        guardrail: guardrail.name().to_string(),
+                        reason,
+                        severity,
+                    };
+                }
+                ToolResultGuardrailResult::Revise { result: revised, reason } => {
+                    tracing::debug!(
+                        guardrail = guardrail.name(),
+                        tool = tool_name,
+                        reason = %reason,
+                        "tool result revised by guardrail"
+                    );
+                    current = revised;
+                }
+            }
+        }
+
+        ToolResultDecision::Deliver { result: current }
+    }
+}
+
+/// Screens results with [`ToolGuardrailSet::evaluate_result`], so a set can be handed to any
+/// agent that accepts a [`ToolResultScreen`](adk_core::ToolResultScreen).
+#[async_trait]
+impl adk_core::ToolResultScreen for ToolGuardrailSet {
+    async fn screen_result(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        result: &Value,
+    ) -> std::result::Result<Value, String> {
+        match self.evaluate_result(tool_name, args, result).await {
+            ToolResultDecision::Deliver { result } => Ok(result),
+            ToolResultDecision::Withhold { guardrail, reason, severity } => {
+                Err(format!("tool guardrail '{guardrail}' ({severity:?}): {reason}"))
+            }
+        }
+    }
+}
+
+/// Applies a content [`Guardrail`] to every text value of a tool's result.
+///
+/// Each string in the result JSON, at any depth, is validated as one text part: a transform
+/// replaces the string, so [`PiiRedactor`](crate::PiiRedactor) redacts a result field by field
+/// and the result keeps its shape, and a failure above [`Severity::Low`] withholds the whole
+/// result. Object keys are not screened.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_guardrail::{ContentFilter, PiiRedactor, ResultTextGuardrail, ToolGuardrailSet};
+///
+/// # fn main() -> Result<(), adk_guardrail::GuardrailError> {
+/// let guardrails = ToolGuardrailSet::new()
+///     .with(ResultTextGuardrail::new(PiiRedactor::new()))
+///     .with(
+///         ResultTextGuardrail::new(ContentFilter::blocked_keywords(vec!["internal only".into()])?)
+///             .on_tools(["search_wiki"]),
+///     );
+/// # Ok(())
+/// # }
+/// ```
+pub struct ResultTextGuardrail<G> {
+    guardrail: G,
+    tools: Option<Vec<String>>,
+}
+
+impl<G: Guardrail> ResultTextGuardrail<G> {
+    /// Applies `guardrail` to the text of every tool's result.
+    pub fn new(guardrail: G) -> Self {
+        Self { guardrail, tools: None }
+    }
+
+    /// Restricts this guardrail to the named tools. Without this it applies to every tool.
+    pub fn on_tools<I, S>(mut self, tools: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.tools = Some(tools.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Screens every string in `value`, returning the failure that withholds the result.
+    async fn screen(&self, value: &mut Value) -> std::result::Result<bool, (String, Severity)> {
+        let mut changed = false;
+        let mut pending = vec![value];
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::String(text) => {
+                    let content = adk_core::Content::new("tool").with_text(text.as_str());
+                    match self.guardrail.validate(&content).await {
+                        GuardrailResult::Pass => {}
+                        GuardrailResult::Fail { severity: Severity::Low, .. } => {
+                            tracing::warn!(
+                                guardrail.name = self.guardrail.name(),
+                                "guardrail flagged a tool result at low severity; the result passes"
+                            );
+                        }
+                        GuardrailResult::Fail { reason, severity } => {
+                            return Err((reason, severity));
+                        }
+                        GuardrailResult::Transform { new_content, .. } => {
+                            let screened: String =
+                                new_content.parts.iter().filter_map(adk_core::Part::text).collect();
+                            if screened != *text {
+                                *text = screened;
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                Value::Array(items) => pending.extend(items.iter_mut()),
+                Value::Object(fields) => pending.extend(fields.values_mut()),
+                Value::Null | Value::Bool(_) | Value::Number(_) => {}
+            }
+        }
+        Ok(changed)
+    }
+}
+
+#[async_trait]
+impl<G: Guardrail> ToolGuardrail for ResultTextGuardrail<G> {
+    fn name(&self) -> &str {
+        self.guardrail.name()
+    }
+
+    fn applies_to(&self, tool_name: &str) -> bool {
+        match &self.tools {
+            Some(tools) => tools.iter().any(|t| t == tool_name),
+            None => true,
+        }
+    }
+
+    async fn validate_result(
+        &self,
+        _tool_name: &str,
+        _args: &Value,
+        result: &Value,
+    ) -> ToolResultGuardrailResult {
+        let mut screened = result.clone();
+        match self.screen(&mut screened).await {
+            Ok(false) => ToolResultGuardrailResult::Allow,
+            Ok(true) => ToolResultGuardrailResult::revise(
+                screened,
+                format!("{} rewrote the result's text", self.guardrail.name()),
+            ),
+            Err((reason, severity)) => ToolResultGuardrailResult::withhold(reason, severity),
+        }
     }
 }
 
@@ -509,7 +806,70 @@ impl ToolGuardrail for PathAllowList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ContentFilter, PiiRedactor};
+    use adk_core::ToolResultScreen;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn result_text_guardrail_redacts_every_string_and_keeps_the_shape() {
+        let guardrails = ToolGuardrailSet::new().with(ResultTextGuardrail::new(PiiRedactor::new()));
+        let result = json!({
+            "order": 42,
+            "customer": {"email": "jane@example.com", "notes": ["ssn 123-45-6789", true]},
+        });
+        assert_eq!(
+            guardrails.evaluate_result("lookup", &json!({}), &result).await,
+            ToolResultDecision::Deliver {
+                result: json!({
+                    "order": 42,
+                    "customer": {"email": "[EMAIL REDACTED]", "notes": ["ssn [SSN REDACTED]", true]},
+                }),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_text_check_withholds_the_result() {
+        let filter = ContentFilter::blocked_keywords(vec!["internal only".into()]).unwrap();
+        let guardrails = ToolGuardrailSet::new().with(ResultTextGuardrail::new(filter));
+        let decision = guardrails
+            .evaluate_result("wiki", &json!({}), &json!({"page": ["INTERNAL ONLY: roadmap"]}))
+            .await;
+        assert!(matches!(
+            decision,
+            ToolResultDecision::Withhold { ref guardrail, severity: Severity::High, .. }
+                if guardrail == "blocked_keywords"
+        ));
+        let screened =
+            guardrails.screen_result("wiki", &json!({}), &json!({"page": "internal only"})).await;
+        assert!(screened.unwrap_err().starts_with("tool guardrail 'blocked_keywords' (High)"));
+    }
+
+    #[tokio::test]
+    async fn result_guardrails_are_scoped_and_compose() {
+        let guardrails = ToolGuardrailSet::new()
+            .with(ResultTextGuardrail::new(PiiRedactor::new()).on_tools(["lookup"]))
+            .with(ResultTextGuardrail::new(
+                ContentFilter::blocked_keywords(vec!["redacted".into()]).unwrap(),
+            ));
+        let other =
+            guardrails.evaluate_result("search", &json!({}), &json!("mail jane@example.com")).await;
+        assert_eq!(other, ToolResultDecision::Deliver { result: json!("mail jane@example.com") });
+        // The second guardrail sees what the first produced.
+        let lookup =
+            guardrails.evaluate_result("lookup", &json!({}), &json!("mail jane@example.com")).await;
+        assert!(matches!(lookup, ToolResultDecision::Withhold { .. }));
+    }
+
+    #[tokio::test]
+    async fn call_guardrails_deliver_results_unchanged() {
+        let guardrails = ToolGuardrailSet::new().with(ForceDryRun);
+        let result = json!({"ok": true});
+        assert_eq!(
+            guardrails.evaluate_result("run", &json!({}), &result).await,
+            ToolResultDecision::Deliver { result }
+        );
+    }
 
     /// Revises rather than denies, so composition can be observed.
     struct ForceDryRun;

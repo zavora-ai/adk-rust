@@ -95,7 +95,7 @@ let agent = LlmAgentBuilder::new("assistant")
 | `require_tool_confirmation(name)` | Require user confirmation for a specific tool |
 | `require_tool_confirmation_for_all()` | Require user confirmation for all tools |
 | `tool_confirmation_policy(policy)` | Set custom tool confirmation policy |
-| `tool_guardrails(set)` | Screen each call's final arguments (`guardrails` feature) |
+| `tool_guardrails(set)` | Screen each call's final arguments, and each result before the model sees it (`guardrails` feature) |
 | `tool_execution_strategy(strategy)` | Tool dispatch mode: `Sequential`, `Parallel`, or `Auto` |
 | `parallelize_agent_delegations(bool)` | Overlap consecutive agent-delegation calls without parallelizing ordinary tools |
 | `disallow_transfer_to_parent(bool)` | Prevent agent from transferring back to parent |
@@ -105,7 +105,7 @@ let agent = LlmAgentBuilder::new("assistant")
 | `output_schema(json)` | Set output JSON schema |
 | `output_key(key)` | Set state key for output |
 | `input_guardrails(set)` | Add input validation guardrails |
-| `output_guardrails(set)` | Add output validation guardrails |
+| `output_guardrails(set)` | Screen the final response and any text written beside a tool call |
 | `before_callback(fn)` | Add before-agent callback |
 | `after_callback(fn)` | Add after-agent callback |
 | `before_model_callback(fn)` | Add before-model callback |

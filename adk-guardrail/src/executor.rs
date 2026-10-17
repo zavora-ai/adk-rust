@@ -1,4 +1,6 @@
-use crate::{Guardrail, GuardrailError, GuardrailResult, Result, Severity};
+use crate::{
+    Guardrail, GuardrailError, GuardrailFailure, GuardrailPhase, GuardrailResult, Result, Severity,
+};
 use adk_core::Content;
 use futures::future::join_all;
 use std::sync::Arc;
@@ -56,12 +58,105 @@ pub struct ExecutionResult {
     pub failures: Vec<(String, String, Severity)>,
 }
 
+/// What [`GuardrailExecutor::enforce`] lets through.
+#[derive(Debug, Clone)]
+pub struct Screening {
+    /// The content to continue with, after any transformation.
+    pub content: Content,
+    /// The [`Severity::Low`] failures, which pass the content.
+    pub warnings: Vec<GuardrailFailure>,
+}
+
 /// Executor for running guardrails in parallel
 pub struct GuardrailExecutor;
 
 impl GuardrailExecutor {
     /// Run all guardrails in parallel, with early exit on critical failures
     pub async fn run(guardrails: &GuardrailSet, content: &Content) -> Result<ExecutionResult> {
+        Self::run_with(guardrails, content, false).await
+    }
+
+    /// Runs every guardrail's [`validate_preamble`](Guardrail::validate_preamble) over the text
+    /// of a model turn that also calls tools, as [`run`](Self::run) runs `validate`.
+    pub async fn run_preamble(
+        guardrails: &GuardrailSet,
+        content: &Content,
+    ) -> Result<ExecutionResult> {
+        Self::run_with(guardrails, content, true).await
+    }
+
+    /// Runs `guardrails` over `content` and turns a failing verdict into a block.
+    ///
+    /// Content passes when no failure is above [`Severity::Low`]; it continues transformed if a
+    /// guardrail transformed it, and the low-severity failures are returned as
+    /// [`Screening::warnings`] and logged at `warn` with the guardrail's name and severity (not
+    /// its reason, which can quote the content). `preamble` selects
+    /// [`validate_preamble`](Guardrail::validate_preamble) over
+    /// [`validate`](Guardrail::validate).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuardrailError::Blocked`] with every failure when a failure is above `Low`,
+    /// including a critical failure that stopped the run early.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::Content;
+    /// use adk_guardrail::{GuardrailExecutor, GuardrailPhase, GuardrailSet, PiiRedactor};
+    ///
+    /// # futures::executor::block_on(async {
+    /// let set = GuardrailSet::new().with(PiiRedactor::new());
+    /// let content = Content::new("model").with_text("Mail ana@example.com");
+    /// let screened = GuardrailExecutor::enforce(&set, &content, GuardrailPhase::Output, false)
+    ///     .await
+    ///     .unwrap();
+    /// assert_eq!(screened.content.parts[0].text(), Some("Mail [EMAIL REDACTED]"));
+    /// # });
+    /// ```
+    pub async fn enforce(
+        guardrails: &GuardrailSet,
+        content: &Content,
+        phase: GuardrailPhase,
+        preamble: bool,
+    ) -> Result<Screening> {
+        let result = match Self::run_with(guardrails, content, preamble).await {
+            Ok(result) => result,
+            Err(GuardrailError::ValidationFailed { name, reason, severity }) => {
+                return Err(GuardrailError::Blocked {
+                    phase,
+                    failures: vec![GuardrailFailure { guardrail: name, reason, severity }],
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        let failures: Vec<GuardrailFailure> = result
+            .failures
+            .into_iter()
+            .map(|(guardrail, reason, severity)| GuardrailFailure { guardrail, reason, severity })
+            .collect();
+        if !result.passed {
+            return Err(GuardrailError::Blocked { phase, failures });
+        }
+        for warning in &failures {
+            tracing::warn!(
+                guardrail.name = %warning.guardrail,
+                guardrail.severity = ?warning.severity,
+                guardrail.phase = %phase,
+                "guardrail flagged content at low severity; the content passes"
+            );
+        }
+        Ok(Screening {
+            content: result.transformed_content.unwrap_or_else(|| content.clone()),
+            warnings: failures,
+        })
+    }
+
+    async fn run_with(
+        guardrails: &GuardrailSet,
+        content: &Content,
+        preamble: bool,
+    ) -> Result<ExecutionResult> {
         if guardrails.is_empty() {
             return Ok(ExecutionResult {
                 passed: true,
@@ -81,7 +176,7 @@ impl GuardrailExecutor {
         if !parallel.is_empty() {
             let futures: Vec<_> = parallel
                 .iter()
-                .map(|g| Self::run_single(Arc::clone(g), &current_content))
+                .map(|g| Self::run_single(Arc::clone(g), &current_content, preamble))
                 .collect();
 
             let results = join_all(futures).await;
@@ -111,7 +206,7 @@ impl GuardrailExecutor {
 
         // Run sequential guardrails
         for guardrail in sequential {
-            let result = Self::run_single(Arc::clone(guardrail), &current_content).await;
+            let result = Self::run_single(Arc::clone(guardrail), &current_content, preamble).await;
             match result {
                 GuardrailResult::Pass => {}
                 GuardrailResult::Fail { reason, severity } => {
@@ -142,8 +237,16 @@ impl GuardrailExecutor {
         Ok(ExecutionResult { passed, transformed_content: transformed, failures: all_failures })
     }
 
-    async fn run_single(guardrail: Arc<dyn Guardrail>, content: &Content) -> GuardrailResult {
-        guardrail.validate(content).await
+    async fn run_single(
+        guardrail: Arc<dyn Guardrail>,
+        content: &Content,
+        preamble: bool,
+    ) -> GuardrailResult {
+        if preamble {
+            guardrail.validate_preamble(content).await
+        } else {
+            guardrail.validate(content).await
+        }
     }
 }
 
@@ -208,6 +311,38 @@ mod tests {
         let content = Content::new("user").with_text("hello");
         let result = GuardrailExecutor::run(&set, &content).await.unwrap();
         assert!(!result.passed);
+    }
+
+    #[tokio::test]
+    async fn enforce_passes_low_severity_failures_as_warnings() {
+        let set = GuardrailSet::new().with(FailGuardrail { severity: Severity::Low });
+        let content = Content::new("model").with_text("hello");
+        let screened = GuardrailExecutor::enforce(&set, &content, GuardrailPhase::Output, false)
+            .await
+            .unwrap();
+        assert_eq!(screened.content.parts, content.parts);
+        assert_eq!(
+            screened.warnings,
+            vec![GuardrailFailure {
+                guardrail: "fail".into(),
+                reason: "test failure".into(),
+                severity: Severity::Low,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn enforce_blocks_a_critical_failure_with_its_phase() {
+        let set = GuardrailSet::new().with(FailGuardrail { severity: Severity::Critical });
+        let content = Content::new("user").with_text("hello");
+        let error = GuardrailExecutor::enforce(&set, &content, GuardrailPhase::Input, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            GuardrailError::Blocked { phase: GuardrailPhase::Input, ref failures }
+                if failures.len() == 1 && failures[0].severity == Severity::Critical
+        ));
     }
 
     #[tokio::test]

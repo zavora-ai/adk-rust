@@ -171,15 +171,10 @@ impl ContentFilter {
     fn extract_text(&self, content: &Content) -> String {
         content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join(" ")
     }
-}
 
-#[async_trait]
-impl Guardrail for ContentFilter {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    async fn validate(&self, content: &Content) -> GuardrailResult {
+    /// Checks `content`; `answer` adds the checks that describe a complete answer (required
+    /// topics and minimum length), which text written beside a tool call is not.
+    fn check(&self, content: &Content, answer: bool) -> GuardrailResult {
         let text = self.extract_text(content);
         let text_lower = text.to_lowercase();
 
@@ -198,7 +193,7 @@ impl Guardrail for ContentFilter {
         }
 
         // Check required topics
-        if !self.config.required_topics.is_empty() {
+        if answer && !self.config.required_topics.is_empty() {
             let has_topic =
                 self.config.required_topics.iter().any(|t| text_lower.contains(&t.to_lowercase()));
             if !has_topic {
@@ -223,6 +218,7 @@ impl Guardrail for ContentFilter {
         }
 
         if let Some(min) = self.config.min_length
+            && answer
             && text.len() < min
         {
             return GuardrailResult::Fail {
@@ -232,6 +228,23 @@ impl Guardrail for ContentFilter {
         }
 
         GuardrailResult::Pass
+    }
+}
+
+#[async_trait]
+impl Guardrail for ContentFilter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn validate(&self, content: &Content) -> GuardrailResult {
+        self.check(content, true)
+    }
+
+    /// Applies the blocked keywords and the maximum length; required topics and the minimum
+    /// length describe a complete answer, so they do not apply to a preamble.
+    async fn validate_preamble(&self, content: &Content) -> GuardrailResult {
+        self.check(content, false)
     }
 }
 
@@ -295,6 +308,25 @@ mod tests {
         let content = Content::new("user").with_text("What is the weather today?");
         let result = filter.validate(&content).await;
         assert!(result.is_fail());
+    }
+
+    #[tokio::test]
+    async fn a_preamble_is_screened_for_keywords_but_not_for_topic() {
+        let filter = ContentFilter::new(
+            "support",
+            ContentFilterConfig {
+                blocked_keywords: vec!["wire the funds".into()],
+                required_topics: vec!["order".into()],
+                min_length: Some(40),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let preamble = Content::new("model").with_text("Let me check.");
+        assert!(filter.validate_preamble(&preamble).await.is_pass());
+        assert!(filter.validate(&preamble).await.is_fail());
+        let blocked = Content::new("model").with_text("I will wire the funds now.");
+        assert!(filter.validate_preamble(&blocked).await.is_fail());
     }
 
     #[tokio::test]
