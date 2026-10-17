@@ -14,7 +14,7 @@ use adk_core::principal::{AgentId, AgentPrincipal, SubjectKind, SubjectRef};
 use adk_core::{
     AdkError, Content, DeclarativePolicy, Event, InMemoryActionLedger, Llm, LlmRequest,
     LlmResponse, LlmResponseStream, Part, Result, RunConfig, SessionId, Tool, ToolApproval,
-    ToolConfirmationRequest, ToolContext, ToolEffect, UserId,
+    ToolContext, ToolEffect, UserId,
 };
 use adk_runner::Runner;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
@@ -266,13 +266,16 @@ async fn one_run_records_each_decision_in_order_then_the_approval_that_resumes_t
         ]
     );
 
-    // An approver approves the held transfer; the next run resumes it.
-    let request = ToolConfirmationRequest {
-        tool_name: "transfer".into(),
-        function_call_id: Some("c3".into()),
-        args: transfer_args.clone(),
-        acting: None,
-    };
+    // An approver approves the held transfer, as surfaced; the next run resumes it.
+    let request = events
+        .iter()
+        .filter_map(|event| event.as_ref().ok())
+        .find_map(|event| event.actions.tool_confirmation.clone())
+        .expect("the transfer is held");
+    assert_eq!(
+        (request.tool_name.as_str(), request.function_call_id.as_deref(), &request.args),
+        ("transfer", Some("c3"), &transfer_args)
+    );
     let config =
         RunConfig::builder().tool_approval(request.fingerprint(), ToolApproval::approve()).build();
     let events = run(&runner, Some(config)).await;

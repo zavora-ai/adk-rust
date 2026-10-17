@@ -192,7 +192,7 @@ An `AgentTool` runs its agent as a delegate. The delegate acts for the caller's 
 | Consumer | What it records or matches |
 |----------|----------------------------|
 | `ToolPolicyRequest::acting` | Every policy evaluation; `DeclarativePolicy` rules match it with `for_agent(glob)`, `for_tenant(tenant)`, and `for_class(class)` |
-| `ToolConfirmationRequest::acting` | Every call held for approval, persisted by every `ApprovalStore` backend |
+| `ToolConfirmationRequest::acting` | Every call held for approval, persisted by every `ApprovalStore` backend. The `AgentId` is part of the request's fingerprint, so a decision for one agent's call never authorizes another agent's call with the same tool name and arguments, and a held call resumes only for the agent that held it. An `AgentTool` delegate's held call carries the delegate's id |
 | `ApprovalRequest::acting` | The request an `ApprovalService` opens for a held call; the requester defaults to the agent's `on_behalf_of` subject, and self-approval checks cover the acting agent |
 | `SpendKey::agent` | Model spend (`LlmSpendRecorder`) and payment spend are keyed by the `AgentId` |
 | `CommerceActor` | Payment tools report the `AgentId` as `actor_id` and the principal's tenant |

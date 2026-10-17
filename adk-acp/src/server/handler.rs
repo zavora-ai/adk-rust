@@ -576,6 +576,10 @@ impl AcpSessionHandler {
         // call under its original ID, so a call the model issues again under a new
         // ID is asked about again rather than authorized by an earlier answer.
         let mut decisions: HashMap<String, ToolConfirmationDecision> = HashMap::new();
+        // Each decision is bound to the fingerprint of the request it answers — the
+        // acting agent, the tool's origin, and the arguments — so a reused call ID on
+        // another agent's call, or on a tool another server answers, is not authorized.
+        let mut fingerprints: HashMap<String, String> = HashMap::new();
         // The first run carries the client's prompt content; every resume run
         // carries an empty user turn so the runner replays persisted history and
         // the agent resumes the held calls before its next model call.
@@ -592,6 +596,7 @@ impl AcpSessionHandler {
             let run_config = RunConfig::builder()
                 .runtime_toolsets(runtime_toolsets.clone())
                 .tool_confirmation_decisions(decisions.clone())
+                .tool_confirmation_fingerprints(fingerprints.clone())
                 .build();
             let runner = Runner::builder()
                 .app_name(&self.app_name)
@@ -676,6 +681,7 @@ impl AcpSessionHandler {
                             .into(),
                     ));
                 };
+                fingerprints.insert(call_id.clone(), confirmation.fingerprint());
                 decisions.insert(call_id, decision);
             }
             is_resume = true;

@@ -174,6 +174,7 @@ impl Fixture {
             function_call_id: Some(unique("call")),
             args: json!({ "amount": amount, "to": "acct:1/main" }),
             acting: None,
+            origin: None,
         };
         (scope, call)
     }

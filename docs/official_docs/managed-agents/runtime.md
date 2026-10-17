@@ -249,6 +249,11 @@ model. With `ManagedStores::with_approval_service`, held calls become approval r
 (quorum, delegation, escalation, expiry) and the service's decision wakes the run;
 `user.tool_confirmation` is then refused.
 
+The decision is recorded under the held request's fingerprint, which names the agent that
+made the call and the tool's origin, so it authorizes only that agent's call on that tool. If
+the resumed turn finds the tool name answered by another MCP server, or the tool redefined,
+it reports the call as not run instead of executing it.
+
 ### Parked Calls on the Durable Runtime
 
 | Store | Holds | In-memory default |

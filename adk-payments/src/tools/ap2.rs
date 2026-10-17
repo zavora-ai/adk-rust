@@ -74,7 +74,7 @@ impl Tool for Ap2PaymentTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let caller = tool_caller(&ctx, self.name(), args.clone());
+        let caller = tool_caller(&ctx, self, args.clone());
         let params: SubmitParams = parse_args(self.name(), args)?;
         let context =
             tool_context(ctx.as_ref(), &params.transaction_id, "", "unknown", params.mode);

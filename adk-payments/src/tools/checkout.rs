@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use adk_core::{
     AdkError, ErrorCategory, ErrorComponent, Result, Tool, ToolConfirmationDecision,
-    ToolConfirmationRequest, ToolContext, ToolEffect, tool_call_fingerprint,
+    ToolConfirmationRequest, ToolContext, ToolEffect, ToolOrigin,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -148,12 +148,14 @@ fn masked_response(summary: SafeTransactionSummary) -> Result<Value> {
 
 /// Routes a payment escalation through the run's tool confirmation flow.
 ///
-/// A static decision for this call ID (bound to its arguments when a fingerprint is
-/// present) answers first, then the run's confirmation handler. Without either, the
-/// call's event carries a `tool_confirmation` request and the payment is deferred.
+/// A static decision for this call ID (bound to the agent, tool, and arguments when a
+/// fingerprint is present) answers first, then the run's confirmation handler. Without
+/// either, the call's event carries a `tool_confirmation` request and the payment is
+/// deferred.
 struct ToolCallApprover {
     ctx: Arc<dyn ToolContext>,
     tool_name: String,
+    origin: ToolOrigin,
     args: Value,
 }
 
@@ -180,12 +182,13 @@ impl PaymentApprover for ToolCallApprover {
             function_call_id: Some(call_id.clone()),
             args: self.args.clone(),
             acting: Some(Box::new(self.ctx.acting_context())),
+            origin: Some(self.origin.clone()),
         };
         if let Some(config) = self.ctx.run_config() {
-            let bound =
-                config.tool_confirmation_fingerprints.get(&call_id).is_none_or(|expected| {
-                    *expected == tool_call_fingerprint(&self.tool_name, &self.args)
-                });
+            let bound = config
+                .tool_confirmation_fingerprints
+                .get(&call_id)
+                .is_none_or(|expected| *expected == request.fingerprint());
             if bound && let Some(decision) = config.tool_confirmation_decisions.get(&call_id) {
                 return Ok(approval(*decision));
             }
@@ -204,7 +207,7 @@ impl PaymentApprover for ToolCallApprover {
 /// the confirmation flow for escalations.
 pub(super) fn tool_caller(
     ctx: &Arc<dyn ToolContext>,
-    tool_name: &str,
+    tool: &dyn Tool,
     args: Value,
 ) -> PaymentCaller {
     let mut caller = PaymentCaller::new()
@@ -212,7 +215,8 @@ pub(super) fn tool_caller(
         .with_agent(ctx.acting_context().agent.id.as_str())
         .with_approver(Arc::new(ToolCallApprover {
             ctx: ctx.clone(),
-            tool_name: tool_name.to_string(),
+            tool_name: tool.name().to_string(),
+            origin: ToolOrigin::of(tool),
             args,
         }));
     if let Some(ledger) = ctx.run_config().and_then(|config| config.spend_ledger.clone()) {
@@ -263,7 +267,7 @@ impl Tool for CreateCheckoutTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let caller = tool_caller(&ctx, self.name(), args.clone());
+        let caller = tool_caller(&ctx, self, args.clone());
         let params: CreateParams = parse_args("checkout_create", args)?;
         // Derived from the idempotency key, so a replayed call names the same transaction
         // instead of opening a second one.
@@ -364,7 +368,7 @@ impl Tool for CompleteCheckoutTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let caller = tool_caller(&ctx, self.name(), args.clone());
+        let caller = tool_caller(&ctx, self, args.clone());
         let params: CompleteParams = parse_args("checkout_complete", args)?;
         let context = tool_context(ctx.as_ref(), &params.transaction_id, "", "unknown", None);
         let command = CompleteCheckoutCommand {

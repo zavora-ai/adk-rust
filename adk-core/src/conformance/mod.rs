@@ -231,6 +231,14 @@ macro_rules! approval_store_conformance_tests {
         }
         $(#[$attr])*
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_decisions_stay_with_their_agent_and_tool() {
+            $crate::conformance::approval_store::decisions_stay_with_their_agent_and_tool(
+                &$harness,
+            )
+            .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn approval_concurrent_take_has_one_winner() {
             $crate::conformance::approval_store::concurrent_take_has_one_winner(&$harness).await;
         }

@@ -914,6 +914,7 @@ mod tests {
                             function_call_id: Some("call-1".to_string()),
                             args: serde_json::json!({"path": "/tmp/report.csv"}),
                             acting: None,
+                            origin: None,
                         });
                         yield Ok(event);
                     }

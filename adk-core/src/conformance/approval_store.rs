@@ -7,6 +7,7 @@
 //! | [`later_decision_replaces_earlier`] | Deciding the same fingerprint again replaces the earlier decision |
 //! | [`expired_decisions_are_discarded`] | A decision past its expiry is taken as `None` |
 //! | [`decisions_stay_in_their_scope`] | A decision in one session never authorizes a call in another |
+//! | [`decisions_stay_with_their_agent_and_tool`] | Calls with one tool name and arguments by different agents, or to tools with different origins, are pending and decided separately |
 //! | [`concurrent_take_has_one_winner`] | Concurrent takes of one decision, across two handles, return it once |
 //! | [`records_survive_a_restart`] | Pending requests and decisions read back unchanged after a restart |
 //! | [`decisions_carry_edits_and_messages`] | `take_approval` returns a decision's edited arguments and message once; `take_decision` reports the bare decision |
@@ -16,8 +17,9 @@
 //! | [`delegations_round_trip`] | Delegations are stored, replaced by ID, listed per delegate by ID, and deleted once |
 //! | [`approval_requests_survive_a_restart`] | Requests and delegations read back unchanged after a restart |
 //!
-//! Every request carries an [`ActingContext`], and the cases compare whole requests,
-//! so each backend proves the acting agent is recorded with the held call.
+//! Every request carries an [`ActingContext`] and a [`ToolOrigin`], and the cases compare
+//! whole requests, so each backend proves the acting agent and the tool's origin are
+//! recorded with the held call.
 //!
 //! `has_decision` may report `true` when no live decision exists (the trait's default
 //! does), so the suite checks only that it never misses a live decision and never
@@ -36,7 +38,7 @@ use crate::{
     ActingContext, AgentId, AgentPrincipal, ApprovalCursor, ApprovalDecision, ApprovalDelegation,
     ApprovalPolicy, ApprovalRequest, ApprovalRequestQuery, ApprovalScope, ApprovalState,
     ApprovalStore, ApproverSelector, DelegationScope, DelegationWindow, PendingApproval,
-    ToolApproval, ToolConfirmationDecision, ToolConfirmationRequest,
+    ToolApproval, ToolConfirmationDecision, ToolConfirmationRequest, ToolOrigin,
 };
 
 /// Opens an [`ApprovalStore`] backend for the conformance suite.
@@ -77,7 +79,12 @@ fn request(amount: u64, call_id: &str) -> ToolConfirmationRequest {
         function_call_id: Some(call_id.into()),
         args: json!({ "amount": amount, "to": "acct:1/main" }),
         // Every case compares whole requests, so each backend proves the acting context
-        // round-trips with the call.
+        // and the tool origin round-trip with the call.
+        origin: Some(ToolOrigin::new(
+            "mcp:conformance",
+            &json!({ "name": "conformance_transfer", "parameters": { "type": "object" } }),
+            Some(&json!({ "destructiveHint": true })),
+        )),
         acting: Some(Box::new(
             ActingContext::new(
                 AgentPrincipal::new(
@@ -219,6 +226,60 @@ pub async fn decisions_stay_in_their_scope<H: ApprovalStoreHarness + ?Sized>(har
         take(&*store, &scope, &fingerprint).await,
         Some(ToolConfirmationDecision::Approve),
         "the decision is still there for its own scope"
+    );
+}
+
+/// Two calls with the same tool name and arguments, made by different agents or to tools
+/// with different origins, are pending separately, and a decision for one is never taken
+/// for another.
+pub async fn decisions_stay_with_their_agent_and_tool<H: ApprovalStoreHarness + ?Sized>(
+    harness: &H,
+) {
+    let store = harness.open().await;
+    let scope = scope();
+    let owner = request(10, "call-1");
+    let mut other_agent = request(10, "call-2");
+    other_agent.acting = Some(Box::new(ActingContext::new(AgentPrincipal::new(
+        AgentId::new("spiffe://conformance.test/agent/intern").unwrap(),
+    ))));
+    let mut other_server = request(10, "call-3");
+    other_server.origin = Some(ToolOrigin::new(
+        "mcp:conformance_mirror",
+        &json!({ "name": "conformance_transfer", "parameters": { "type": "object" } }),
+        Some(&json!({ "destructiveHint": true })),
+    ));
+    let mut redefined = request(10, "call-4");
+    redefined.origin = Some(ToolOrigin::new(
+        "mcp:conformance",
+        &json!({ "name": "conformance_transfer", "parameters": { "type": "object", "required": ["memo"] } }),
+        Some(&json!({ "destructiveHint": true })),
+    ));
+    let calls = [&owner, &other_agent, &other_server, &redefined];
+    for call in calls {
+        store.record_pending(&scope, call).await.expect("record");
+    }
+    let mut listed: Vec<String> =
+        pending(&*store, &scope).await.into_iter().map(|entry| entry.fingerprint).collect();
+    listed.sort();
+    let mut expected: Vec<String> = calls.iter().map(|call| call.fingerprint()).collect();
+    expected.sort();
+    expected.dedup();
+    assert_eq!(expected.len(), 4, "each agent and tool origin has its own fingerprint");
+    assert_eq!(listed, expected, "each call is pending on its own");
+
+    store.decide(&scope, &owner.fingerprint(), ToolApproval::approve()).await.expect("decide");
+    for call in [&other_agent, &other_server, &redefined] {
+        assert_eq!(
+            take(&*store, &scope, &call.fingerprint()).await,
+            None,
+            "the owner's decision does not authorize {:?}",
+            call.function_call_id
+        );
+    }
+    assert_eq!(
+        take(&*store, &scope, &owner.fingerprint()).await,
+        Some(ToolConfirmationDecision::Approve),
+        "the owner's call takes its decision"
     );
 }
 

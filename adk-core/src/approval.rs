@@ -40,6 +40,7 @@
 //!     tool_name: "transfer".into(),
 //!     function_call_id: Some("call-1".into()),
 //!     args: json!({ "amount": 900 }),
+//!     origin: None,
 //!     acting: None,
 //! };
 //! let policy = ApprovalPolicy::new([ApproverSelector::group("finance")]).with_quorum(2);
@@ -475,6 +476,7 @@ impl ApprovalDecision {
 ///     tool_name: "refund".into(),
 ///     function_call_id: Some("call-1".into()),
 ///     args: json!({ "amount": 500, "card": "4242424242424242" }),
+///     origin: None,
 ///     acting: None,
 /// };
 /// let request = ApprovalRequest::new(
@@ -2297,6 +2299,7 @@ mod tests {
             tool_name: "pay".into(),
             function_call_id: Some("c1".into()),
             args: json!({ "amount": 5 }),
+            origin: None,
             acting: None,
         };
         let scope = ApprovalScope::new("app", "u", "s");
@@ -2354,6 +2357,7 @@ mod tests {
             tool_name: "pay".into(),
             function_call_id: Some("c1".into()),
             args: json!({ "to": "acct-secret", "amount": 5 }),
+            origin: None,
             acting: None,
         };
         let scope = ApprovalScope::new("app", "u", "s");

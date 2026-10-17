@@ -632,11 +632,17 @@ let agent = LlmAgentBuilder::new("assistant")
     .build()?;
 ```
 
-A decision binds to the call's fingerprint (`ToolConfirmationRequest::fingerprint()`: tool name
-plus canonical arguments), not its call ID, so it authorizes the same call re-issued by the next
-run. Pass it as `RunConfig::tool_approvals` (valid for the run, optional expiry) or record it in an
-`ApprovalStore` (`RunConfig::approval_store`; consumed by the call it authorizes). Decisions keyed
-by call ID (`RunConfig::tool_confirmation_decisions`) still apply to the exact call they name.
+A decision binds to the call's fingerprint (`ToolConfirmationRequest::fingerprint()`: the acting
+agent's `AgentId`, the tool's `ToolOrigin` — its publisher from `Tool::origin()` and a digest of
+its declaration — the tool name, and the canonical arguments), not its call ID, so it authorizes
+the same agent's same call re-issued by the next run and never another agent's call, a tool of the
+same name another MCP server publishes, or a tool redefined since. Pass it as
+`RunConfig::tool_approvals` (valid for the run, optional expiry) or record it in an
+`ApprovalStore` (`RunConfig::approval_store`; consumed by the call it authorizes); build one ahead
+of any run with `ToolConfirmationRequest::for_tool(tool, args).with_acting_context(..)`. Decisions
+keyed by call ID (`RunConfig::tool_confirmation_decisions`) apply to the call they name; bind each
+to the request's fingerprint with `RunConfig::tool_confirmation_fingerprints`. MCP tools report
+`mcp:{toolset name}` as their origin, and tool wrappers forward `Tool::origin()`.
 
 3. **`BeforeToolCallback`** — programmatic gate. Return `Ok(Some(content))` to skip, `Ok(None)` to allow. `LlmAgent` answers the skipped call with that content: text becomes the call's `{"error": "<text>"}` function response.
 
@@ -665,8 +671,11 @@ governed path.
 A held call resumes deterministically: at the start of each run, before its first model call,
 `LlmAgent` finds its held calls (`adk_core::held_tool_calls`) and dispatches each one that has a
 decision (`adk_core::confirmation_decision_available`) under its original call ID through the
-order below. Its response supersedes the call's `confirmation_pending_response` in the projected
-history; a call without a decision stays held. `CodeActAgent` resumes from its checkpoint.
+order below, as `GovernedCall::resuming(request)`. Its response, authored by the agent that held
+the call (also under a workflow parent), supersedes the call's `confirmation_pending_response` in
+the projected history; a call without a decision stays held. A held call whose agent or tool
+origin no longer matches is answered as not run and its stored decision is spent. `CodeActAgent`
+resumes from its checkpoint.
 
 Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`:
 
@@ -677,8 +686,9 @@ Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`
 3. Run-wide `InvocationHooks` (the runner's `PluginManager`), then `BeforeToolCallback`.
 4. Circuit breaker.
 5. The governed path, `adk_core::authorize_tool_call`, on the final arguments: kill switch →
-   `ToolPolicy` → `ToolGuardrailSet` (a rewrite is checked against the policy again) →
-   confirmation (call-ID decision, fingerprint approval, `ApprovalStore`, handler, or hold).
+   resume binding (a resumed held call's agent and tool origin) → `ToolPolicy` →
+   `ToolGuardrailSet` (a rewrite is checked against the policy again) → confirmation (call-ID
+   decision, fingerprint approval, `ApprovalStore`, handler, or hold).
 6. Action ledger begin (`NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded call is
    answered from its record without executing (`CodeActAgent` raises the answer into the
    script). Shared helper: `adk-agent/src/tool_ledger.rs`.

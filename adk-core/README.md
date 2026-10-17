@@ -302,9 +302,10 @@ rewrites and immediately before `Tool::execute`:
 | Step | Type | Effect |
 |------|------|--------|
 | Kill switch | `GovernanceControl` | A frozen run ends with a `governance.frozen` error |
+| Resume binding | `GovernedCall::resuming` | A resumed held call runs only for the agent that held it, on a tool with the `ToolOrigin` it was held for |
 | Policy | `ToolPolicy`, `DeclarativePolicy` | Allow, deny, or require approval; `DeclarativePolicy` denies unlisted tools |
 | Screen | `ToolCallScreen` | The agent's guardrails; a rewrite is checked against the policy again |
-| Confirmation | `ToolApproval`, `ApprovalStore` | Decisions bind to the call's fingerprint, so they survive a re-issued call ID |
+| Confirmation | `ToolApproval`, `ApprovalStore` | Decisions bind to the call's fingerprint — acting agent, tool origin and declaration digest, tool name, arguments — so they survive a re-issued call ID and never authorize another agent's call or another server's tool |
 | Approval service | `ApprovalService`, `StoreApprovalService`, `ApprovalPolicy` | An inbox over the approval store: quorum, delegation, escalation, expiry, and edit / reject / respond actions with compare-and-swap decisions |
 
 ```rust

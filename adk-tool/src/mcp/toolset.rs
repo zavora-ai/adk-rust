@@ -924,6 +924,7 @@ where
             .is_some_and(|info| info.capabilities.supports_tasks());
         McpTool {
             name: name.into(),
+            origin: format!("mcp:{}", self.name),
             description: String::new(),
             input_schema: None,
             output_schema: None,
@@ -1445,6 +1446,7 @@ where
                 mcp_tool.annotations.as_ref().and_then(|hints| serde_json::to_value(hints).ok());
             let adk_tool = McpTool {
                 name: tool_name,
+                origin: format!("mcp:{}", self.name),
                 description: mcp_tool.description.map(|d| d.to_string()).unwrap_or_default(),
                 input_schema: Some(Value::Object(Arc::unwrap_or_clone(mcp_tool.input_schema))),
                 output_schema: mcp_tool
@@ -1641,6 +1643,8 @@ where
     S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
 {
     name: String,
+    /// `mcp:{toolset name}`, the identity approvals of this tool's calls bind to.
+    origin: String,
     description: String,
     input_schema: Option<Value>,
     output_schema: Option<Value>,
@@ -2112,6 +2116,10 @@ where
 
     fn annotations(&self) -> Option<&Value> {
         self.annotations_json.as_ref()
+    }
+
+    fn origin(&self) -> &str {
+        &self.origin
     }
 
     fn parameters_schema(&self) -> Option<Value> {

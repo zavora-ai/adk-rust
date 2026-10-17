@@ -73,6 +73,10 @@ impl Tool for PrefixedTool {
         self.inner.annotations()
     }
 
+    fn origin(&self) -> &str {
+        self.inner.origin()
+    }
+
     fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
         self.inner.timeout_override()
     }
@@ -415,6 +419,9 @@ mod tests {
         fn annotations(&self) -> Option<&Value> {
             Some(&self.0)
         }
+        fn origin(&self) -> &str {
+            "mcp:server"
+        }
         async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
             Ok(Value::Null)
         }
@@ -430,5 +437,6 @@ mod tests {
         assert_eq!(prefixed.annotations(), Some(&hints));
         assert!(prefixed.is_read_only() && prefixed.is_concurrency_safe());
         assert_eq!(prefixed.effect(), adk_core::ToolEffect::ReadOnly);
+        assert_eq!(prefixed.origin(), "mcp:server", "approvals bind to the server, not the prefix");
     }
 }

@@ -121,8 +121,10 @@ let agent = LlmAgentBuilder::new("assistant")
 after before-tool plugins and callbacks have run, so the run's `ToolPolicy`, the agent's tool
 guardrails, and confirmation all see the arguments that will execute. A call held for
 confirmation is answered with an error result and surfaced as a `ToolConfirmationRequest` event;
-a decision recorded against `request.fingerprint()` authorizes the same call when the next run's
-model issues it again. A frozen `GovernanceControl` ends the run before the next model or tool
+a decision recorded against `request.fingerprint()` authorizes the same agent's same call, to a
+tool with the same origin and declaration, when the next run resumes it or the model issues it
+again. A resumed call whose tool now resolves to another publisher, or was redefined, is answered
+as not run. A frozen `GovernanceControl` ends the run before the next model or tool
 call. See [Tool Authorization](../docs/official_docs/security/tool-authorization.md).
 
 ### Generation Config

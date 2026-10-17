@@ -103,9 +103,10 @@ plugin rewrite, with `adk_core::BuiltinToolGovernor`:
 | `RequireApproval` | Attached only when a decision already exists — a live fingerprint approval in `RunConfig::tool_approvals` or a decision in the run's `ApprovalStore`. Otherwise withheld, and recorded as pending in the store so an approver can decide before the next run |
 
 The provider executes a built-in tool mid-response, so the confirmation handler and call-ID
-decisions do not apply. The fingerprint is `tool_call_fingerprint(tool_name, configuration)`
-(`ToolConfirmationRequest::fingerprint()` with no call ID). A decision taken from the store
-applies to every model request of that invocation.
+decisions do not apply. The fingerprint is that of a `ToolConfirmationRequest` for the tool
+name with its configuration as the arguments, made by the acting agent and carrying the tool's
+`ToolOrigin` (`builtin` and a digest of the declaration when the agent has no `Tool` for it). A
+decision taken from the store applies to every model request of that invocation.
 
 A run without a policy and without a tool-call limit attaches every built-in tool. Under a
 `DeclarativePolicy`, which denies by default, a built-in tool needs a rule that allows it:
@@ -199,8 +200,9 @@ let agent = LlmAgentBuilder::new("assistant")
    calls in the same turn that need no approval still run, and the agent stream ends
 4. Your UI shows the user: "The agent wants to delete `/data/report.csv`. Allow?"
 5. Run again with a decision for the call. Any decision source works: an approval keyed by
-   the request's fingerprint (its tool name and canonical arguments), a decision keyed by its
-   call ID, or the `ApprovalStore`. An empty user turn resumes without adding a message:
+   the request's fingerprint (see [Decisions Authorize One Exact Call](#decisions-authorize-one-exact-call)),
+   a decision keyed by its call ID, or the `ApprovalStore`. An empty user turn resumes without
+   adding a message:
 
 ```rust
 use adk_core::{Content, RunConfig, ToolApproval};
@@ -240,6 +242,7 @@ that has a decision. The decision does not depend on the model issuing the call 
 | Approve | Dispatches the original call — same tool, same model arguments, same call ID — through the full tool path in the [evaluation order](#combining-mechanisms); the governed path finds the decision, and an `ApprovalStore` entry is consumed |
 | Deny | Answers the call with "Tool 'delete_file' execution denied by confirmation policy"; the tool does not run |
 | None yet | Leaves the call held; the run continues to the model, which sees the pending response |
+| Any, but the tool changed | Answers the call as not run, naming what changed, and spends the stored decision: the agent resuming it is not the one that held it, the tool name now resolves to another publisher (another MCP server), or the tool's description, parameters, or annotations changed since the hold. The model can issue the call again, which needs its own approval |
 
 - **One response per call.** The resumed call's response supersedes its confirmation-pending
   response, both in the running turn and in the history projected for later runs, so providers
@@ -259,6 +262,9 @@ that has a decision. The decision does not depend on the model issuing the call 
   `RunConfig::tool_approvals` still covers it, as noted above.
 - **Scope.** Held calls before a compaction, on another branch, or of another agent are not
   resumed. A `Session` that keeps no event log returns no held calls.
+- **Workflows.** A sub-agent of a `SequentialAgent`, `ParallelAgent`, or `LoopAgent` authors
+  its own tool results, so a resumed call's result releases its hold and the call never runs
+  twice, whatever the decision source.
 
 `CodeActAgent` resumes a held call from its checkpoint (`Disposition::AwaitingConfirmation`),
 which already re-dispatches the call through the governed path. Realtime agents answer a held
@@ -293,11 +299,47 @@ once.
 
 ### Decisions Authorize One Exact Call
 
-A decision applies to one exact call: the same tool with the same canonical
-arguments. Keying by tool name would make one approval authorize every call of
-that tool, so an approval for `delete_file` on a scratch path would also authorize
-a call targeting something else. Two calls to the same tool with different
-arguments therefore need two decisions.
+A decision applies to one exact call: made by the same agent, to the same tool, with the same
+canonical arguments. `ToolConfirmationRequest::fingerprint()` is the key, and every part of it
+narrows what the decision authorizes:
+
+| Part | Source | A different value means |
+|------|--------|-------------------------|
+| Acting agent | `ToolConfirmationRequest::acting` — the agent's `AgentId`, `urn:adk:agent:{app}/{agent}` unless configured | Another agent's call with the same tool name and arguments is not authorized; agents sharing a session never share approvals |
+| Tool origin | `ToolOrigin::source`, from `Tool::origin()` — `static` for a tool attached to the agent, `mcp:{toolset name}` for an MCP tool | A tool of the same name another MCP server or toolset publishes is not authorized |
+| Declaration digest | `ToolOrigin::declaration_digest` — SHA-256 of the tool's declaration and annotations | A tool redefined after the approval (new description, parameters, or annotations) is not authorized |
+| Tool name and arguments | `tool_call_fingerprint(tool_name, args)`, canonical over key order | A call with other arguments needs its own decision |
+
+Keying by tool name would make one approval authorize every call of that tool, so an
+approval for `delete_file` on a scratch path would also authorize a call targeting
+something else. Two calls to the same tool with different arguments therefore need two
+decisions. The fingerprint stays the same across runs of the same agent with the same tools,
+so an approval recorded in one run applies to the same call in the next, and a durable
+`ApprovalStore` keeps it across restarts.
+
+Give each `McpToolset` a distinct name with `with_name`: the name is the server's identity in
+approvals. `McpServerManager` names each server's toolset after its server ID. A tool wrapper
+(`ProtectedTool`, `ScopeGuard`, `PrefixedToolset`) forwards the wrapped tool's origin.
+
+To approve a call before any run makes it, build the request the governed path will record:
+
+```rust
+use adk_core::principal::{ActingContext, AgentPrincipal};
+use adk_core::{RunConfig, Tool, ToolApproval, ToolConfirmationRequest};
+use serde_json::json;
+use std::time::Duration;
+
+fn preapprove(transfer: &dyn Tool) -> RunConfig {
+    // The agent `treasurer` of app `ops` acts as `urn:adk:agent:ops/treasurer` by default.
+    let treasurer = ActingContext::new(AgentPrincipal::derived("ops", "treasurer"));
+    let key = ToolConfirmationRequest::for_tool(transfer, json!({ "amount": 40 }))
+        .with_acting_context(treasurer)
+        .fingerprint();
+    RunConfig::builder()
+        .tool_approval(key, ToolApproval::approve().expires_in(Duration::from_secs(3600)))
+        .build()
+}
+```
 
 An unknown fingerprint or call ID means "no decision", which leaves the call
 awaiting confirmation. An expired approval is ignored. The failure direction is
@@ -357,37 +399,37 @@ when a run dispatches that exact call ID again — an agent resuming its held ca
 resuming its checkpointed frontier — and not to a call the model re-issues, which receives a
 new ID.
 
-### Binding a Decision to Its Arguments
+### Binding a Decision to Its Call
 
 When a decision travels through something you do not control — a browser, a queue,
 an external approval service — the call ID could be replayed with different
-arguments. Bind the decision to the arguments it was granted for:
+arguments, and a provider that reuses call IDs can give another agent's call the same
+one. Bind the decision to the request it was granted for:
 
 ```rust
-use adk_core::{RunConfig, ToolConfirmationDecision, tool_call_fingerprint};
-use serde_json::json;
+use adk_core::{RunConfig, ToolConfirmationDecision, ToolConfirmationRequest};
 use std::collections::HashMap;
 
-let approved_args = json!({ "path": "/data/report.csv" });
-
-let mut decisions = HashMap::new();
-decisions.insert("call_abc123".to_string(), ToolConfirmationDecision::Approve);
-
-let mut fingerprints = HashMap::new();
-fingerprints.insert(
-    "call_abc123".to_string(),
-    tool_call_fingerprint("delete_file", &approved_args),
-);
-
-let config = RunConfig::builder()
-    .tool_confirmation_decisions(decisions)
-    .tool_confirmation_fingerprints(fingerprints)
-    .build();
+/// `request` is the ToolConfirmationRequest from the paused run's event.
+fn approve(request: &ToolConfirmationRequest) -> Option<RunConfig> {
+    let call_id = request.function_call_id.clone()?;
+    Some(
+        RunConfig::builder()
+            .tool_confirmation_decisions(HashMap::from([(
+                call_id.clone(),
+                ToolConfirmationDecision::Approve,
+            )]))
+            .tool_confirmation_fingerprints(HashMap::from([(call_id, request.fingerprint())]))
+            .build(),
+    )
+}
 ```
 
-If the call that arrives does not match the fingerprint, the decision is ignored
-and the call is treated as unconfirmed. `tool_call_fingerprint` is canonical over
-key order, so a re-serialized argument object still matches.
+If the call that arrives does not match the fingerprint — other arguments, another agent,
+or a tool with another origin — the decision is ignored and the call is treated as
+unconfirmed. The fingerprint is canonical over key order, so a re-serialized argument
+object still matches. The ACP server binds every decision it receives from a client this
+way.
 
 For decisions that should apply by policy rather than per call, use a
 [`ToolPolicy`](#tool-policy) or implement a `ToolConfirmationHandler` instead of widening the
@@ -929,10 +971,12 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
 4. Circuit breaker
 5. The governed path (`adk_core::authorize_tool_call`) on the final arguments:
    1. Kill switch — a frozen run ends with a `governance.frozen` error
-   2. `ToolPolicy` — a denial becomes the call's result
-   3. Tool guardrails (`ToolGuardrailSet`) — a denial becomes the call's result; a revision is
+   2. Resume binding, for a held call being resumed — another acting agent or another tool
+      origin answers the call as not run and spends its stored decision
+   3. `ToolPolicy` — a denial becomes the call's result
+   4. Tool guardrails (`ToolGuardrailSet`) — a denial becomes the call's result; a revision is
       checked against the policy again
-   4. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
+   5. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
       approval, the `ApprovalStore`, the `ToolConfirmationHandler`, or a hold
 6. Action ledger (`ToolEffect::NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded
    call is answered from its record without executing (`CodeActAgent` raises the answer into

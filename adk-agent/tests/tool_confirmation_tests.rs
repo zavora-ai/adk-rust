@@ -539,9 +539,10 @@ async fn a_matching_fingerprint_still_authorises_the_call() {
     run_config
         .tool_confirmation_decisions
         .insert("call-bound".to_string(), ToolConfirmationDecision::Approve);
-    run_config
-        .tool_confirmation_fingerprints
-        .insert("call-bound".to_string(), adk_core::tool_call_fingerprint("test_tool", &args));
+    // The binding names the agent and the tool, as the request the call surfaced does.
+    let bound = adk_core::ToolConfirmationRequest::for_tool(&CountingTool::new(), args.clone())
+        .with_acting_context(run_config.acting_context_for("test-app", "test-agent", "user-1"));
+    run_config.tool_confirmation_fingerprints.insert("call-bound".to_string(), bound.fingerprint());
 
     let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
     let mut approved = false;

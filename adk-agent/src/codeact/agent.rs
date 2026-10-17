@@ -1353,6 +1353,7 @@ fn suspend_event(invocation_id: &str, agent_name: &str, cp: &CodeActCheckpoint) 
                 function_call_id: Some(cp.call.call_id.to_string()),
                 args: cp.call.args.clone(),
                 acting: None,
+                origin: None,
             });
             // Mark the turn as interrupted and carry a human-readable prompt,
             // mirroring LlmAgent's confirmation interrupt event.

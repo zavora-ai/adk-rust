@@ -78,6 +78,8 @@ struct PendingToolCall {
     args: serde_json::Value,
     id: Option<String>,
     function_call_id: String,
+    /// The held request this call resumes, when it is the call that request describes.
+    resumes: Option<ToolConfirmationRequest>,
 }
 
 fn build_generation_config(
@@ -142,6 +144,7 @@ fn collect_function_calls(content: &Content, invocation_id: &str) -> Vec<Pending
             function_call_id: id
                 .clone()
                 .unwrap_or_else(|| format!("{invocation_id}_{name}_{index}")),
+            resumes: None,
         })
         .collect()
 }
@@ -2168,6 +2171,9 @@ impl ToolDispatchMode {
 
 struct ToolExecutor<'a> {
     ctx: Arc<dyn InvocationContext>,
+    /// The agent the results are authored by. Under a workflow parent the context names the
+    /// parent, but a call's response belongs to the agent that issued it, as its hold does.
+    agent_name: &'a str,
     tool_map: &'a std::collections::HashMap<String, Arc<dyn Tool>>,
     tool_retry_budgets: &'a std::collections::HashMap<String, RetryBudget>,
     default_retry_budget: &'a Option<RetryBudget>,
@@ -2311,7 +2317,7 @@ impl ToolExecutor<'_> {
                 screen_terminal_tool_output(self.output_guardrails, result.content).await?;
         }
         let mut event = Event::new(self.invocation_id);
-        event.author = self.ctx.agent_name().to_owned();
+        event.author = self.agent_name.to_owned();
         event.branch = self.ctx.branch().to_owned();
         event.actions = result.actions.clone();
         event.llm_response.content = Some(result.content.clone());
@@ -2331,7 +2337,7 @@ impl ToolExecutor<'_> {
     }
 
     async fn execute_inner(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
-        let PendingToolCall { index, name, args, id, function_call_id } = call;
+        let PendingToolCall { index, name, args, id, function_call_id, resumes } = call;
         let mut tool_actions = EventActions::default();
         let mut response_content: Option<Content> = None;
         let mut run_after_tool_callbacks = true;
@@ -2496,12 +2502,18 @@ impl ToolExecutor<'_> {
             if !self.tool_guardrails.is_empty() {
                 gate = gate.with_screen(&screen);
             }
-            let call =
+            let mut call =
                 GovernedCall::for_tool(tool.as_ref(), function_call_id.clone(), final_args.clone())
                     .requiring_confirmation(
                         self.tool_confirmation_policy.requires_confirmation(&name)
                             || self.ctx.requires_tool_confirmation(&name),
                     );
+            // The governed path resumes a held call only for the agent and tool it was held
+            // for. A request naming another tool belongs to a delegate the tool runs, whose
+            // own governed path binds it.
+            if let Some(held) = resumes.filter(|held| held.tool_name == name) {
+                call = call.resuming(held);
+            }
             match authorize_tool_call(&gate, call).await {
                 Ok(ToolAuthorization::Execute { args, confirmation }) => {
                     final_args = args;
@@ -2617,7 +2629,7 @@ impl ToolExecutor<'_> {
                 let timeout = tool.timeout_override().unwrap_or(Some(self.tool_timeout));
 
                 let mut started = Event::new(self.invocation_id);
-                started.author = self.ctx.agent_name().to_owned();
+                started.author = self.agent_name.to_owned();
                 started.branch = self.ctx.branch().to_owned();
                 // Partial, as tool progress is: never persisted, never a final response.
                 started.llm_response.partial = true;
@@ -3214,6 +3226,7 @@ impl Agent for LlmAgent {
                             args: held.args,
                             id: held.id,
                             function_call_id,
+                            resumes: Some(held.request),
                         }),
                         Ok(false) => {}
                         Err(error) => {
@@ -3251,6 +3264,7 @@ impl Agent for LlmAgent {
                     tokio::sync::mpsc::channel::<Event>(TOOL_PROGRESS_CAPACITY);
                 let executor = ToolExecutor {
                     ctx: ctx.clone(),
+                    agent_name: &agent_name,
                     tool_map: &tool_map,
                     tool_retry_budgets: &tool_retry_budgets,
                     default_retry_budget: &default_retry_budget,
@@ -4132,6 +4146,7 @@ impl Agent for LlmAgent {
 
                     let executor = ToolExecutor {
                         ctx: ctx.clone(),
+                        agent_name: &agent_name,
                         tool_map: &tool_map,
                         tool_retry_budgets: &tool_retry_budgets,
                         default_retry_budget: &default_retry_budget,

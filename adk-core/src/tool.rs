@@ -133,6 +133,52 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// Returns who publishes this tool: the toolset or server it comes from.
+    ///
+    /// A call held for approval records it in the call's [`ToolOrigin`](crate::ToolOrigin),
+    /// with a digest of [`declaration`](Self::declaration) and
+    /// [`annotations`](Self::annotations), and a decision applies only to calls to a tool
+    /// with the same origin and declaration. A held call that resumes against a tool with
+    /// another origin is answered as not run. MCP tools return `mcp:{toolset name}`; tools
+    /// that wrap another tool forward it. The default,
+    /// [`STATIC_TOOL_ORIGIN`](crate::STATIC_TOOL_ORIGIN), fits a tool compiled into the
+    /// agent.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Result, Tool, ToolContext};
+    /// use serde_json::Value;
+    /// use std::sync::Arc;
+    ///
+    /// /// A tool fetched from a plugin registry, identified by the registry entry.
+    /// struct RegistryTool {
+    ///     origin: String,
+    /// }
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Tool for RegistryTool {
+    ///     fn name(&self) -> &str {
+    ///         "lookup"
+    ///     }
+    ///     fn description(&self) -> &str {
+    ///         "Looks up a customer"
+    ///     }
+    ///     fn origin(&self) -> &str {
+    ///         &self.origin
+    ///     }
+    ///     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    ///         Ok(Value::Null)
+    ///     }
+    /// }
+    ///
+    /// let tool = RegistryTool { origin: "registry:crm@4".into() };
+    /// assert_eq!(tool.origin(), "registry:crm@4");
+    /// ```
+    fn origin(&self) -> &str {
+        crate::STATIC_TOOL_ORIGIN
+    }
+
     /// Returns the scopes required to execute this tool.
     ///
     /// When non-empty, the framework can enforce that the calling user

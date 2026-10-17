@@ -911,16 +911,16 @@ pub enum ToolConfirmationDecision {
     Deny,
 }
 
-/// Produces a canonical fingerprint of a tool call.
+/// Produces a canonical fingerprint of a tool call's name and arguments.
 ///
 /// The fingerprint is the tool name followed by its arguments in canonical JSON
 /// form, with object keys sorted at every level so that two structurally equal
 /// argument sets always produce the same string. It is deliberately readable
 /// rather than hashed, so a mismatch can be diagnosed by inspection.
 ///
-/// Use it with
-/// [`RunConfig::tool_confirmation_fingerprints`](RunConfig::tool_confirmation_fingerprints)
-/// to bind an approval to the exact arguments it was granted for.
+/// It identifies a call, not a decision: approvals are keyed by
+/// [`ToolConfirmationRequest::fingerprint`], which adds the acting agent and the
+/// tool's [`ToolOrigin`] in front of this string.
 ///
 /// # Example
 ///
@@ -1017,6 +1017,102 @@ impl ToolConfirmationPolicy {
     }
 }
 
+/// [`Tool::origin`](crate::Tool::origin) of a tool attached to an agent directly rather than
+/// published by a toolset or server.
+pub const STATIC_TOOL_ORIGIN: &str = "static";
+
+/// [`ToolOrigin::source`] of a provider-executed built-in tool the agent declares without a
+/// [`Tool`](crate::Tool) of its own.
+pub const BUILTIN_TOOL_ORIGIN: &str = "builtin";
+
+/// Who published a tool and what it declared, as recorded on a call held for approval.
+///
+/// The origin is part of the call's [fingerprint](ToolConfirmationRequest::fingerprint), so
+/// an approval granted for a tool one MCP server publishes never authorizes the same name
+/// published by another, and a tool whose description or parameters changed after the
+/// approval needs a new one.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::ToolOrigin;
+/// use serde_json::json;
+///
+/// let wire = json!({ "name": "wire", "parameters": { "type": "object" } });
+/// let a = ToolOrigin::new("mcp:bank_a", &wire, None);
+/// let b = ToolOrigin::new("mcp:bank_b", &wire, None);
+/// assert_eq!(a.declaration_digest, b.declaration_digest);
+/// assert_ne!(a, b);
+///
+/// let redefined = json!({ "name": "wire", "parameters": { "type": "object", "required": ["memo"] } });
+/// assert_ne!(a.declaration_digest, ToolOrigin::new("mcp:bank_a", &redefined, None).declaration_digest);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolOrigin {
+    /// Who publishes the tool, as [`Tool::origin`](crate::Tool::origin) reports it:
+    /// [`STATIC_TOOL_ORIGIN`] for a tool attached to the agent, `mcp:{toolset}` for a tool an
+    /// MCP server publishes.
+    pub source: String,
+    /// `sha256:` followed by the hex SHA-256 of the tool's declaration and annotations in
+    /// canonical JSON.
+    pub declaration_digest: String,
+}
+
+impl ToolOrigin {
+    /// The origin of a tool `source` publishes with `declaration` and `annotations`.
+    pub fn new(
+        source: impl Into<String>,
+        declaration: &Value,
+        annotations: Option<&Value>,
+    ) -> Self {
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write as _;
+
+        let declared =
+            serde_json::json!({ "declaration": declaration, "annotations": annotations });
+        let mut canonical = String::new();
+        write_canonical(&declared, &mut canonical);
+        let mut digest = String::with_capacity(7 + 64);
+        digest.push_str("sha256:");
+        for byte in Sha256::digest(canonical.as_bytes()) {
+            let _ = write!(digest, "{byte:02x}");
+        }
+        Self { source: source.into(), declaration_digest: digest }
+    }
+
+    /// The origin of `tool`: its [`Tool::origin`](crate::Tool::origin) and a digest of its
+    /// [`declaration`](crate::Tool::declaration) and [`annotations`](crate::Tool::annotations).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Result, STATIC_TOOL_ORIGIN, Tool, ToolContext, ToolOrigin};
+    /// use serde_json::Value;
+    /// use std::sync::Arc;
+    ///
+    /// struct Ping;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Tool for Ping {
+    ///     fn name(&self) -> &str {
+    ///         "ping"
+    ///     }
+    ///     fn description(&self) -> &str {
+    ///         "Checks the service is up"
+    ///     }
+    ///     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    ///         Ok(Value::Null)
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(ToolOrigin::of(&Ping).source, STATIC_TOOL_ORIGIN);
+    /// ```
+    pub fn of(tool: &dyn crate::Tool) -> Self {
+        Self::new(tool.origin(), &tool.declaration(), tool.annotations())
+    }
+}
+
 /// Payload describing a tool call awaiting human confirmation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1030,10 +1126,17 @@ pub struct ToolConfirmationRequest {
     pub args: Value,
     /// The agent that made the call and the subject it acted for.
     ///
-    /// Recorded for the approver and the audit trail; it is not part of the
-    /// [`fingerprint`](Self::fingerprint).
+    /// Recorded for the approver and the audit trail. The agent's id is part of the
+    /// [`fingerprint`](Self::fingerprint), so a decision for this call never authorizes
+    /// another agent's call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acting: Option<Box<crate::ActingContext>>,
+    /// Who published the tool and what it declared when the call was held.
+    ///
+    /// Part of the [`fingerprint`](Self::fingerprint). `None` in requests recorded before
+    /// origins were, and in requests for calls the governed path saw without their tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ToolOrigin>,
 }
 
 impl ToolConfirmationRequest {
@@ -1050,7 +1153,61 @@ impl ToolConfirmationRequest {
     /// assert_eq!(request.function_call_id.as_deref(), Some("call-1"));
     /// ```
     pub fn new(tool_name: impl Into<String>, args: Value) -> Self {
-        Self { tool_name: tool_name.into(), function_call_id: None, args, acting: None }
+        Self {
+            tool_name: tool_name.into(),
+            function_call_id: None,
+            args,
+            acting: None,
+            origin: None,
+        }
+    }
+
+    /// A request for a call to `tool` with `args`, carrying the tool's [`ToolOrigin`].
+    ///
+    /// With the acting agent set, its [`fingerprint`](Self::fingerprint) is the key the
+    /// governed path looks a decision up under for that agent's call, so a deployment can
+    /// approve a call before any run makes it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::principal::{ActingContext, AgentPrincipal};
+    /// use adk_core::{Result, Tool, ToolApproval, ToolConfirmationRequest, ToolContext, RunConfig};
+    /// use serde_json::{Value, json};
+    /// use std::sync::Arc;
+    ///
+    /// struct Transfer;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Tool for Transfer {
+    ///     fn name(&self) -> &str {
+    ///         "transfer"
+    ///     }
+    ///     fn description(&self) -> &str {
+    ///         "Moves money out of the treasury"
+    ///     }
+    ///     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    ///         Ok(args)
+    ///     }
+    /// }
+    ///
+    /// // The agent `treasurer` of app `ops` acts as `urn:adk:agent:ops/treasurer` by default.
+    /// let treasurer = ActingContext::new(AgentPrincipal::derived("ops", "treasurer"));
+    /// let key = ToolConfirmationRequest::for_tool(&Transfer, json!({ "amount": 40 }))
+    ///     .with_acting_context(treasurer)
+    ///     .fingerprint();
+    /// let config = RunConfig::builder().tool_approval(key, ToolApproval::approve()).build();
+    /// assert_eq!(config.tool_approvals.len(), 1);
+    /// ```
+    pub fn for_tool(tool: &dyn crate::Tool, args: Value) -> Self {
+        Self::new(tool.name(), args).with_origin(ToolOrigin::of(tool))
+    }
+
+    /// Records the origin of the tool the call was made to.
+    #[must_use]
+    pub fn with_origin(mut self, origin: ToolOrigin) -> Self {
+        self.origin = Some(origin);
+        self
     }
 
     /// Sets the function call ID.
@@ -1067,13 +1224,52 @@ impl ToolConfirmationRequest {
         self
     }
 
-    /// The call's fingerprint: its tool name and canonical arguments.
+    /// The call's fingerprint: the acting agent's id, the tool's [`ToolOrigin`], the tool
+    /// name, and the canonical arguments.
     ///
-    /// This is the key a decision is recorded under in
-    /// [`RunConfig::tool_approvals`] and in an [`ApprovalStore`](crate::ApprovalStore),
-    /// so the decision applies to the same call re-issued under a new call ID.
+    /// This is the key a decision is recorded under in [`RunConfig::tool_approvals`], in
+    /// [`RunConfig::tool_confirmation_fingerprints`], and in an
+    /// [`ApprovalStore`](crate::ApprovalStore), so the decision applies to the same call
+    /// re-issued under a new call ID by the same agent to the same tool. It never applies to
+    /// another agent's call, to a tool of the same name another publisher answers, or to a
+    /// tool whose declaration changed. The parts are separated by U+001F; a missing agent or
+    /// origin leaves its part empty.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::principal::{ActingContext, AgentPrincipal};
+    /// use adk_core::ToolConfirmationRequest;
+    /// use serde_json::json;
+    ///
+    /// let call = |agent: &str| {
+    ///     ToolConfirmationRequest::new("transfer", json!({ "amount": 40 }))
+    ///         .with_acting_context(ActingContext::new(AgentPrincipal::derived("ops", agent)))
+    /// };
+    /// assert_eq!(call("treasurer").fingerprint(), call("treasurer").fingerprint());
+    /// assert_ne!(call("treasurer").fingerprint(), call("intern").fingerprint());
+    /// ```
     pub fn fingerprint(&self) -> String {
-        tool_call_fingerprint(&self.tool_name, &self.args)
+        // Control characters would forge a separator; agent ids already exclude them.
+        let push_clean = |out: &mut String, part: &str| {
+            out.extend(part.chars().map(|c| if c.is_control() { '\u{fffd}' } else { c }));
+        };
+        let call = tool_call_fingerprint(&self.tool_name, &self.args);
+        let mut out = String::with_capacity(call.len() + 160);
+        if let Some(acting) = &self.acting {
+            push_clean(&mut out, acting.agent.id.as_str());
+        }
+        out.push('\u{1f}');
+        if let Some(origin) = &self.origin {
+            push_clean(&mut out, &origin.source);
+            out.push('\u{1f}');
+            push_clean(&mut out, &origin.declaration_digest);
+        } else {
+            out.push('\u{1f}');
+        }
+        out.push('\u{1f}');
+        out.push_str(&call);
+        out
     }
 }
 
@@ -1143,21 +1339,24 @@ pub struct RunConfig {
     /// `delete_file` approval for a scratch path must not authorize a call that
     /// targets a different path.
     ///
-    /// Use [`tool_confirmation_fingerprints`](Self::tool_confirmation_fingerprints)
-    /// to additionally bind a decision to the arguments it was granted for. For
-    /// name-wide or policy-driven decisions, supply a
-    /// [`tool_confirmation_handler`](Self::tool_confirmation_handler) instead.
+    /// A call ID alone does not name the agent: a provider that reuses call IDs gives
+    /// another agent's call the same one. Bind each decision with
+    /// [`tool_confirmation_fingerprints`](Self::tool_confirmation_fingerprints) to the
+    /// agent, tool, and arguments it was granted for. For name-wide or policy-driven
+    /// decisions, supply a [`tool_confirmation_handler`](Self::tool_confirmation_handler)
+    /// instead.
     pub tool_confirmation_decisions: HashMap<String, ToolConfirmationDecision>,
-    /// Optional argument binding for entries in
+    /// Binding for entries in
     /// [`tool_confirmation_decisions`](Self::tool_confirmation_decisions), keyed by
     /// the same function call ID.
     ///
-    /// The value is the fingerprint produced by [`tool_call_fingerprint`] for the
-    /// call the decision was granted for. When an entry is present and the actual
-    /// call does not match it, the decision is ignored and the call is treated as
-    /// unconfirmed — the safe direction. Use this when a decision travels through
-    /// an untrusted round trip, such as a browser, where the arguments could be
-    /// changed while the call ID is replayed.
+    /// The value is the [`ToolConfirmationRequest::fingerprint`] of the request the
+    /// decision was granted for: the acting agent, the tool's origin, the tool name, and
+    /// the arguments. When an entry is present and the actual call does not match it, the
+    /// decision is ignored and the call is treated as unconfirmed — the safe direction.
+    /// Use this whenever a decision travels through a round trip, such as a browser or an
+    /// editor, where the arguments could be changed or another agent's call could carry
+    /// the replayed call ID.
     pub tool_confirmation_fingerprints: HashMap<String, String>,
     /// Optional live decision source for confirmations that have no static
     /// entry in [`tool_confirmation_decisions`](Self::tool_confirmation_decisions).
@@ -1241,10 +1440,12 @@ pub struct RunConfig {
     /// Confirmation decisions keyed by tool-call fingerprint
     /// ([`ToolConfirmationRequest::fingerprint`]).
     ///
-    /// A decision applies to every call with that tool name and those canonical
-    /// arguments in the run, whatever its call ID, until it expires. Record a decision
-    /// in an [`approval_store`](Self::approval_store) instead for one that is consumed by
-    /// the call it authorizes.
+    /// A decision applies to every call in the run by the agent the fingerprint names, to
+    /// a tool with the origin it names, with those canonical arguments, whatever its call
+    /// ID, until it expires. Take the fingerprint from the request a held call surfaced, or
+    /// build it with [`ToolConfirmationRequest::for_tool`]. Record a decision in an
+    /// [`approval_store`](Self::approval_store) instead for one that is consumed by the call
+    /// it authorizes.
     pub tool_approvals: HashMap<String, crate::ToolApproval>,
     /// Where calls held for approval are recorded, and decisions taken from, between runs.
     pub approval_store: Option<Arc<dyn crate::ApprovalStore>>,

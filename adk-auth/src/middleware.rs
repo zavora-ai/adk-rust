@@ -54,6 +54,11 @@ macro_rules! impl_protected_tool {
                 ($inner).effect()
             }
 
+            fn origin(&self) -> &str {
+                let $self_ident = self;
+                ($inner).origin()
+            }
+
             fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
                 let $self_ident = self;
                 ($inner).timeout_override()
@@ -114,6 +119,11 @@ macro_rules! impl_protected_tool {
             fn effect(&self) -> adk_core::ToolEffect {
                 let $self_ident = self;
                 ($inner).effect()
+            }
+
+            fn origin(&self) -> &str {
+                let $self_ident = self;
+                ($inner).origin()
             }
 
             fn timeout_override(&self) -> Option<Option<std::time::Duration>> {

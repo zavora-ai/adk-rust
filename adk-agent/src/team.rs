@@ -2405,6 +2405,10 @@ impl Tool for BoundedDelegateTool {
         self.inner.effect()
     }
 
+    fn origin(&self) -> &str {
+        self.inner.origin()
+    }
+
     fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
         self.inner.timeout_override()
     }

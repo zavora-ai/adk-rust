@@ -167,7 +167,10 @@ pub struct PendingAction {
     /// The model's call ID, when the provider assigned one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function_call_id: Option<String>,
-    /// The key the client's answer is recorded under in the decision store.
+    /// The key the client's answer is recorded under in the decision store: for a
+    /// confirmation, the held request's
+    /// [`fingerprint`](adk_core::ToolConfirmationRequest::fingerprint), which names the acting
+    /// agent and the tool's origin.
     pub decision_key: String,
     /// The call's arguments.
     #[serde(default)]

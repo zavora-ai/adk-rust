@@ -5568,6 +5568,7 @@ mod tests {
             function_call_id: None,
             args: deep_value(),
             acting: None,
+            origin: None,
         });
         assert_depth_error(&confirmation);
 

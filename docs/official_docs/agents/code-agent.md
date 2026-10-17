@@ -49,7 +49,8 @@ freeform prompt. The intended production adapter wraps
 On suspension, the live interpreter continuation is serialized into a
 `CodeActCheckpoint` and written to session state; the next `run()` reads it back
 and resumes — the confirmation decision arrives via `RunConfig::tool_approvals`
-(keyed by the request's fingerprint), an `ApprovalStore`, or
+(keyed by the request's fingerprint, which names the agent and the tool's origin), an
+`ApprovalStore`, or
 `RunConfig::tool_confirmation_decisions` (keyed by call ID), and a long-running result arrives as a
 `FunctionResponse` in the next message. Inline tool calls are bracketed with
 write-ahead (SAVE-BEFORE) and SAVE-AFTER checkpoints: once the SAVE-AFTER

@@ -20,7 +20,9 @@
 //! Errors are problem documents with the service's error code: `409` for
 //! `approval.version_conflict` (re-read and decide again), `403` for self-approval or a
 //! caller who is not an approver, `404` for an unknown request. Request bodies omit the
-//! call's fingerprint, which carries the unredacted arguments.
+//! call's fingerprint, which carries the unredacted arguments. A resolution authorizes only
+//! the call the request describes: the fingerprint names its acting agent and its tool's
+//! [`ToolOrigin`](adk_core::ToolOrigin), shown on the request.
 
 use std::sync::Arc;
 use std::time::Duration;

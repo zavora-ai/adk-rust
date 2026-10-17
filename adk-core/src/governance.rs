@@ -4,13 +4,19 @@
 //! callback rewrites and immediately before `Tool::execute`. The order is fixed:
 //!
 //! 1. The org kill switch ([`GovernanceControl`]) — a frozen run ends with an error.
-//! 2. The run's [`ToolPolicy`](crate::ToolPolicy), on the final arguments.
-//! 3. The agent's tool screen (its guardrails), on the final arguments. A screen that
+//! 2. For a held call being resumed ([`GovernedCall::resuming`]), its binding: the acting
+//!    agent and the tool's [`ToolOrigin`](crate::ToolOrigin) must be the ones the call was
+//!    held for, or the call is refused as not run.
+//! 3. The run's [`ToolPolicy`](crate::ToolPolicy), on the final arguments.
+//! 4. The agent's tool screen (its guardrails), on the final arguments. A screen that
 //!    rewrites the arguments has the rewrite checked against the policy again.
-//! 4. Confirmation, when the agent or the policy asks for it. A decision binds to the
-//!    call's fingerprint — its tool name and canonical arguments — so an argument
-//!    rewrite after approval needs a new approval, and an approval given in one run
-//!    matches the same call re-issued under a new call ID in the next.
+//! 5. Confirmation, when the agent or the policy asks for it. A decision binds to the
+//!    call's [fingerprint](ToolConfirmationRequest::fingerprint) — the acting agent, the
+//!    tool's origin and declaration, the tool name, and the canonical arguments — so an
+//!    argument rewrite after approval needs a new approval, an approval for one agent's
+//!    call never authorizes another agent's, an approval for a tool one server publishes
+//!    never authorizes the name on another server, and an approval given in one run
+//!    matches the same agent's same call re-issued under a new call ID in the next.
 //!
 //! Approval decisions come from, in order: a decision keyed by call ID
 //! ([`RunConfig::tool_confirmation_decisions`]), a decision keyed by fingerprint
@@ -42,9 +48,9 @@ use crate::audit_log::{
 use crate::governance_state::{GovernanceScope, GovernanceState, GovernanceStateStore};
 use crate::principal::SubjectRef;
 use crate::{
-    AdkError, ErrorCategory, ErrorComponent, Event, InvocationContext, Part, PolicyDecision,
-    Result, RunConfig, Tool, ToolConfirmationDecision, ToolConfirmationRequest, ToolEffect,
-    ToolPolicyRequest, tool_call_fingerprint,
+    AdkError, BUILTIN_TOOL_ORIGIN, ErrorCategory, ErrorComponent, Event, InvocationContext, Part,
+    PolicyDecision, Result, RunConfig, Tool, ToolConfirmationDecision, ToolConfirmationRequest,
+    ToolEffect, ToolOrigin, ToolPolicyRequest, tool_call_fingerprint,
 };
 
 /// How long a [`ToolConfirmationHandler`](crate::ToolConfirmationHandler) may take to
@@ -835,7 +841,9 @@ impl ToolApproval {
 /// The identity an approval belongs to.
 ///
 /// Approvals never cross sessions: a decision recorded for one session does not
-/// authorize the same call in another.
+/// authorize the same call in another. Within a session, the decision's
+/// [fingerprint](ToolConfirmationRequest::fingerprint) names the agent and the tool it
+/// was granted for, so agents sharing a session never share approvals.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalScope {
@@ -874,9 +882,12 @@ pub struct PendingApproval {
 ///
 /// When a run holds a call for approval, the governed path records it here. An
 /// approver lists [`pending`](Self::pending) requests, records a decision with
-/// [`decide`](Self::decide), and the next run that makes the same call — same tool,
-/// same canonical arguments, any call ID — takes the decision. Taking consumes it, so
-/// one approval authorizes one execution.
+/// [`decide`](Self::decide), and the next run that makes the same call — same agent,
+/// same tool origin and declaration, same canonical arguments, any call ID — takes the
+/// decision. Taking consumes it, so one approval authorizes one execution.
+///
+/// Stores key entries by the fingerprint string and need no knowledge of what it
+/// contains.
 ///
 /// # Example
 ///
@@ -893,6 +904,7 @@ pub struct PendingApproval {
 ///     function_call_id: Some("call-1".into()),
 ///     args: json!({ "amount": 40 }),
 ///     acting: None,
+///     origin: None,
 /// };
 ///
 /// store.record_pending(&scope, &request).await?;
@@ -1231,6 +1243,11 @@ pub struct GovernedCall {
     /// Whether the agent itself requires confirmation for this call, independent of
     /// the policy.
     pub requires_confirmation: bool,
+    /// Who published the tool and what it declared. [`for_tool`](Self::for_tool) sets it;
+    /// a request held for this call records it.
+    pub origin: Option<ToolOrigin>,
+    /// The held request this call resumes, if it is one. See [`resuming`](Self::resuming).
+    pub resumes: Option<ToolConfirmationRequest>,
 }
 
 impl GovernedCall {
@@ -1246,12 +1263,59 @@ impl GovernedCall {
             args,
             effect: ToolEffect::NonIdempotent,
             requires_confirmation: false,
+            origin: None,
+            resumes: None,
         }
     }
 
-    /// A call to `tool`, taking its name and declared [`Tool::effect`] from the tool.
+    /// A call to `tool`, taking its name, declared [`Tool::effect`], and
+    /// [`ToolOrigin`] from the tool.
     pub fn for_tool(tool: &dyn Tool, function_call_id: impl Into<String>, args: Value) -> Self {
-        Self::new(tool.name(), function_call_id, args).with_effect(tool.effect())
+        let mut call = Self::new(tool.name(), function_call_id, args).with_effect(tool.effect());
+        call.origin = Some(ToolOrigin::of(tool));
+        call
+    }
+
+    /// Marks the call as the resumption of `held`, a call held for confirmation in an
+    /// earlier run.
+    ///
+    /// The governed path refuses it, as not run, unless the acting agent is the one that
+    /// held it and the tool has the origin and declaration it was held for: another MCP
+    /// server answering the tool's name, or a tool redefined after the approval, is not
+    /// the call the approver saw. The refusal consumes any decision for `held` in the
+    /// run's [`ApprovalStore`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{
+    ///     ApprovalScope, GovernedCall, RunConfig, ToolAuthorization, ToolConfirmationRequest,
+    ///     ToolGate, ToolOrigin,
+    /// };
+    /// use serde_json::json;
+    ///
+    /// # futures::executor::block_on(async {
+    /// let config = RunConfig::default();
+    /// let gate = ToolGate::new(&config, "agent", "inv-2", ApprovalScope::new("app", "u", "s"));
+    /// let declared = json!({ "name": "wire" });
+    /// let held = ToolConfirmationRequest::new("wire", json!({ "amount": 40 }))
+    ///     .with_acting_context(gate.acting_context().clone())
+    ///     .with_origin(ToolOrigin::new("mcp:bank_a", &declared, None));
+    ///
+    /// // The tool name now resolves to another server.
+    /// let mut call = GovernedCall::new("wire", "call-1", json!({ "amount": 40 })).resuming(held);
+    /// call.origin = Some(ToolOrigin::new("mcp:bank_b", &declared, None));
+    /// assert!(matches!(
+    ///     adk_core::authorize_tool_call(&gate, call).await?,
+    ///     ToolAuthorization::Refuse { .. }
+    /// ));
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// # }).unwrap();
+    /// ```
+    #[must_use]
+    pub fn resuming(mut self, held: ToolConfirmationRequest) -> Self {
+        self.resumes = Some(held);
+        self
     }
 
     /// Sets the effect the tool declares.
@@ -1457,13 +1521,46 @@ pub async fn authorize_tool_call(
     call: GovernedCall,
 ) -> Result<ToolAuthorization> {
     let config = gate.run_config;
-    let GovernedCall { tool_name, function_call_id, mut args, effect, requires_confirmation } =
-        call;
+    let GovernedCall {
+        tool_name,
+        function_call_id,
+        mut args,
+        effect,
+        requires_confirmation,
+        origin,
+        resumes,
+    } = call;
     let audited =
         AuditedCall { gate, tool_name: &tool_name, function_call_id: &function_call_id, effect };
     if let Err(frozen) = config.check_governance() {
         audited.decision(&args, AuditDecision::Denied, Some(POLICY_REF_GOVERNANCE), None).await?;
         return Err(frozen);
+    }
+
+    if let Some(held) = &resumes
+        && let Some(mismatch) = resume_mismatch(held, &gate.acting, origin.as_ref())
+    {
+        tracing::warn!(
+            tool.name = %tool_name,
+            agent.id = %gate.acting.agent.id,
+            function_call.id = %function_call_id,
+            reason = %mismatch,
+            "held call not resumed: it is not the call it was held for"
+        );
+        // The decision was for the call the approver saw, so it is spent with it.
+        if let Some(store) = &config.approval_store {
+            store.take_approval(&gate.scope, &held.fingerprint()).await?;
+        }
+        audited
+            .decision(&args, AuditDecision::Denied, Some(POLICY_REF_CONFIRMATION), Some(&mismatch))
+            .await?;
+        return Ok(ToolAuthorization::Refuse {
+            reason: format!(
+                "Tool '{tool_name}' was not run: {mismatch}. Call it again if it is still \
+                 needed; the new call needs its own approval."
+            ),
+            confirmation: None,
+        });
     }
 
     let policy_ref = config.tool_policy.as_ref().map(|policy| match policy.policy_ref() {
@@ -1528,6 +1625,7 @@ pub async fn authorize_tool_call(
         function_call_id: Some(function_call_id.clone()),
         args: args.clone(),
         acting: Some(Box::new(gate.acting.clone())),
+        origin,
     };
     let Some((approval, source)) = resolve_confirmation(gate, &request).await? else {
         let held_by = if approval_reason.is_some() {
@@ -1605,6 +1703,40 @@ pub async fn authorize_tool_call(
             })
         }
     }
+}
+
+/// Why `held` cannot resume as a call by `acting`'s agent to a tool with `origin`, or
+/// `None` when it can.
+fn resume_mismatch(
+    held: &ToolConfirmationRequest,
+    acting: &crate::ActingContext,
+    origin: Option<&ToolOrigin>,
+) -> Option<String> {
+    let Some(held_by) = held.acting.as_deref() else {
+        return Some("the hold does not record which agent made the call".to_string());
+    };
+    if held_by.agent.id != acting.agent.id {
+        return Some(format!(
+            "it was held for agent '{}', and '{}' is resuming it",
+            held_by.agent.id, acting.agent.id
+        ));
+    }
+    let (Some(held_origin), Some(origin)) = (held.origin.as_ref(), origin) else {
+        return Some("the hold does not record which tool the call was made to".to_string());
+    };
+    if held_origin.source != origin.source {
+        return Some(format!(
+            "it was held for the tool '{}' publishes, and the name now resolves to '{}'",
+            held_origin.source, origin.source
+        ));
+    }
+    if held_origin.declaration_digest != origin.declaration_digest {
+        return Some(format!(
+            "'{}' changed its description, parameters, or annotations after the call was held",
+            held_origin.source
+        ));
+    }
+    None
 }
 
 /// Re-authorizes a call whose approver substituted `edited` for its arguments.
@@ -1926,6 +2058,7 @@ pub struct HeldToolCall {
 ///     function_call_id: Some("call-1".into()),
 ///     args: json!({ "amount": 5 }),
 ///     acting: None,
+///     origin: None,
 /// });
 ///
 /// let calls = held_tool_calls(&[held], "agent", "");
@@ -2038,6 +2171,7 @@ pub fn held_tool_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<
 ///     function_call_id: Some("call-1".into()),
 ///     args: json!({ "amount": 5 }),
 ///     acting: None,
+///     origin: None,
 /// };
 /// let config =
 ///     RunConfig::builder().tool_approval(request.fingerprint(), ToolApproval::approve()).build();
@@ -2170,9 +2304,12 @@ pub struct WithheldBuiltinTool {
 /// | `RequireApproval` | Attached only when a decision already exists: a live fingerprint approval ([`RunConfig::tool_approvals`]) or a decision in the run's [`ApprovalStore`]. Otherwise withheld and recorded as pending in the store, so an approver can decide before the next run. |
 ///
 /// The provider executes a built-in tool mid-response, so the confirmation handler
-/// and call-ID decisions do not apply. The fingerprint is
-/// [`tool_call_fingerprint`] of the tool name and its configuration. A decision taken
-/// from the store applies for the rest of the invocation.
+/// and call-ID decisions do not apply. The fingerprint is that of a
+/// [`ToolConfirmationRequest`] by the gate's acting agent for the tool name with its
+/// configuration as the arguments, carrying the tool's [`ToolOrigin`] (or
+/// [`BUILTIN_TOOL_ORIGIN`] with the declaration when the agent
+/// has no tool for it). A decision taken from the store applies for the rest of the
+/// invocation.
 ///
 /// Without a policy and without a tool-call limit every built-in tool is attached.
 ///
@@ -2266,9 +2403,17 @@ impl BuiltinToolGovernor {
                     .and_then(builtin_tool_configuration)
                     .cloned()
                     .unwrap_or(Value::Null);
-                let effect =
-                    tools.get(&name).map_or(ToolEffect::NonIdempotent, |tool| tool.effect());
-                self.decide(gate, &name, args, effect).await?
+                let tool = tools.get(&name);
+                let effect = tool.map_or(ToolEffect::NonIdempotent, |tool| tool.effect());
+                let origin = match tool {
+                    Some(tool) => ToolOrigin::of(tool.as_ref()),
+                    None => ToolOrigin::new(
+                        BUILTIN_TOOL_ORIGIN,
+                        declarations.get(&name).unwrap_or(&Value::Null),
+                        None,
+                    ),
+                };
+                self.decide(gate, &name, args, effect, origin).await?
             };
             let Some((cause, reason)) = outcome else {
                 continue;
@@ -2293,6 +2438,7 @@ impl BuiltinToolGovernor {
         name: &str,
         args: Value,
         effect: ToolEffect,
+        origin: ToolOrigin,
     ) -> Result<Option<(BuiltinToolWithholding, String)>> {
         let approval_reason = match evaluate_policy(gate, name, &args, effect).await {
             PolicyDecision::Allow => return Ok(None),
@@ -2302,7 +2448,9 @@ impl BuiltinToolGovernor {
             PolicyDecision::RequireApproval { reason } => reason,
         };
         let config = gate.run_config;
-        let request = ToolConfirmationRequest::new(name, args);
+        let request = ToolConfirmationRequest::new(name, args)
+            .with_acting_context(gate.acting.clone())
+            .with_origin(origin);
         let fingerprint = request.fingerprint();
         let mut decision = self.decisions.get(&fingerprint).copied();
         if decision.is_none()
@@ -2341,13 +2489,25 @@ impl BuiltinToolGovernor {
 mod tests {
     use super::*;
     use crate::{
-        ApprovalService, DeclarativePolicy, PolicyRule, ToolConfirmationHandler,
-        tool_call_fingerprint,
+        ActingContext, AgentPrincipal, ApprovalService, DeclarativePolicy, PolicyRule,
+        ToolConfirmationHandler,
     };
     use serde_json::json;
 
     fn gate(config: &RunConfig) -> ToolGate<'_> {
         ToolGate::new(config, "agent", "inv", ApprovalScope::new("app", "user", "session"))
+    }
+
+    /// The acting context of `agent` in the test app.
+    fn acting(agent: &str) -> ActingContext {
+        ActingContext::new(AgentPrincipal::derived("app", agent))
+    }
+
+    /// The decision key of a call by the test gate's agent to a tool known only by name.
+    fn key(name: &str, args: &Value) -> String {
+        ToolConfirmationRequest::new(name, args.clone())
+            .with_acting_context(acting("agent"))
+            .fingerprint()
     }
 
     struct Native {
@@ -2499,7 +2659,11 @@ mod tests {
         let policy =
             DeclarativePolicy::builder().require_approval("web_search", "sign-off").build();
         let config_args = json!({ "type": "web_search_20250305", "max_uses": 2 });
-        let fingerprint = tool_call_fingerprint("web_search", &config_args);
+        let (_, tools) = native_tools();
+        let fingerprint =
+            ToolConfirmationRequest::for_tool(tools["web_search"].as_ref(), config_args.clone())
+                .with_acting_context(acting("agent"))
+                .fingerprint();
         for (approval, attached) in [(ToolApproval::approve(), true), (ToolApproval::deny(), false)]
         {
             let config = RunConfig::builder()
@@ -2630,7 +2794,7 @@ mod tests {
     #[tokio::test]
     async fn approvals_bind_to_the_fingerprint_and_expire() {
         let args = json!({ "amount": 40 });
-        let fingerprint = tool_call_fingerprint("pay", &args);
+        let fingerprint = key("pay", &args);
         let config = RunConfig::builder()
             .tool_approval(fingerprint.clone(), ToolApproval::approve())
             .build();
@@ -2770,6 +2934,7 @@ mod tests {
             function_call_id: Some(id.into()),
             args,
             acting: None,
+            origin: None,
         });
         event
     }
@@ -2801,6 +2966,7 @@ mod tests {
                     function_call_id: Some("c1".into()),
                     args: json!({ "amount": 500 }),
                     acting: None,
+                    origin: None,
                 },
                 id: Some("c1".into()),
                 name: "pay".into(),
@@ -2836,6 +3002,7 @@ mod tests {
                     function_call_id: Some("c1".into()),
                     args: json!({ "path": "a.txt" }),
                     acting: None,
+                    origin: None,
                 },
                 id: Some("c1".into()),
                 name: "helper".into(),
@@ -2933,6 +3100,7 @@ mod tests {
             function_call_id: Some("c1".into()),
             args: json!({ "amount": 5 }),
             acting: None,
+            origin: None,
         };
         let none = RunConfig::default();
         assert!(!confirmation_decision_available(&gate(&none), &request).await.unwrap());
@@ -2948,7 +3116,7 @@ mod tests {
         let mut rebound = by_id.clone();
         rebound
             .tool_confirmation_fingerprints
-            .insert("c1".into(), tool_call_fingerprint("pay", &json!({ "amount": 6 })));
+            .insert("c1".into(), key("pay", &json!({ "amount": 6 })));
         assert!(!confirmation_decision_available(&gate(&rebound), &request).await.unwrap());
 
         let store = Arc::new(InMemoryApprovalStore::new());
@@ -3002,7 +3170,7 @@ mod tests {
             .build();
         let scope = ApprovalScope::new("app", "user", "session");
         let call = || GovernedCall::new("pay", "c1", json!({ "amount": 900 }));
-        let fingerprint = tool_call_fingerprint("pay", &json!({ "amount": 900 }));
+        let fingerprint = key("pay", &json!({ "amount": 900 }));
 
         // An edit the policy allows executes with the edited arguments.
         let edit = ToolApproval::approve().with_edited_args(json!({ "amount": 400 }));
@@ -3046,7 +3214,7 @@ mod tests {
         let screened = gate(&config).with_screen(&screen);
         let small = || GovernedCall::new("pay", "c2", json!({ "amount": 100 }));
         let edit = ToolApproval::approve().with_edited_args(json!({ "amount": 800 }));
-        let small_fingerprint = tool_call_fingerprint("pay", &json!({ "amount": 100 }));
+        let small_fingerprint = key("pay", &json!({ "amount": 100 }));
         store.decide(&scope, &small_fingerprint, edit).await.unwrap();
         assert_eq!(
             authorize_tool_call(&screened, small()).await.unwrap(),
@@ -3058,10 +3226,166 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn approvals_bind_to_the_acting_agent_and_the_tool_origin() {
+        let args = json!({ "amount": 40 });
+        let declared = json!({ "name": "pay", "parameters": { "type": "object" } });
+        let origin = ToolOrigin::new("mcp:bank_a", &declared, None);
+        let owner = ToolConfirmationRequest::new("pay", args.clone())
+            .with_acting_context(acting("agent"))
+            .with_origin(origin.clone());
+        let call = |origin: ToolOrigin| {
+            let mut call =
+                GovernedCall::new("pay", "c-new", args.clone()).requiring_confirmation(true);
+            call.origin = Some(origin);
+            call
+        };
+        let other_server = ToolOrigin::new("mcp:bank_b", &declared, None);
+        let redefined = ToolOrigin::new(
+            "mcp:bank_a",
+            &json!({ "name": "pay", "parameters": { "type": "object", "required": ["memo"] } }),
+            None,
+        );
+
+        // A run-wide approval for the owner's call.
+        let config = RunConfig::builder()
+            .tool_approval(owner.fingerprint(), ToolApproval::approve())
+            .build();
+        let scope = || ApprovalScope::new("app", "user", "session");
+        let intern = ToolGate::new(&config, "intern", "inv", scope());
+        for (gate, origin, why) in [
+            (&intern, origin.clone(), "another agent"),
+            (&gate(&config), other_server.clone(), "another server"),
+            (&gate(&config), redefined.clone(), "a redefined tool"),
+        ] {
+            assert!(
+                matches!(
+                    authorize_tool_call(gate, call(origin)).await.unwrap(),
+                    ToolAuthorization::Pending { .. }
+                ),
+                "{why} is not authorized"
+            );
+        }
+        assert!(matches!(
+            authorize_tool_call(&gate(&config), call(origin.clone())).await.unwrap(),
+            ToolAuthorization::Execute {
+                confirmation: Some(ToolConfirmationDecision::Approve),
+                ..
+            }
+        ));
+
+        // A stored decision for the owner's call is left for the owner.
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let stored = RunConfig::builder().approval_store(store.clone()).build();
+        store.decide(&scope(), &owner.fingerprint(), ToolApproval::approve()).await.unwrap();
+        let intern = ToolGate::new(&stored, "intern", "inv", scope());
+        let ToolAuthorization::Pending { request, .. } =
+            authorize_tool_call(&intern, call(origin.clone())).await.unwrap()
+        else {
+            panic!("another agent's call must wait for its own approval");
+        };
+        assert_eq!(request.acting.map(|acting| acting.agent), Some(acting("intern").agent));
+        assert_eq!(request.origin.as_ref(), Some(&origin));
+        assert!(matches!(
+            authorize_tool_call(&gate(&stored), call(origin)).await.unwrap(),
+            ToolAuthorization::Execute {
+                confirmation: Some(ToolConfirmationDecision::Approve),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_resumed_call_runs_only_for_its_agent_and_tool() {
+        let args = json!({ "amount": 40 });
+        let declared = json!({ "name": "pay" });
+        let origin = ToolOrigin::new("mcp:bank_a", &declared, None);
+        let held = ToolConfirmationRequest::new("pay", args.clone())
+            .with_function_call_id("c1")
+            .with_acting_context(acting("agent"))
+            .with_origin(origin.clone());
+        let resume = |origin: Option<ToolOrigin>, held: ToolConfirmationRequest| {
+            let mut call = GovernedCall::new("pay", "c1", args.clone())
+                .requiring_confirmation(true)
+                .resuming(held);
+            call.origin = origin;
+            call
+        };
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let config = RunConfig::builder().approval_store(store.clone()).build();
+        let scope = ApprovalScope::new("app", "user", "session");
+
+        let unrecorded = ToolConfirmationRequest { origin: None, ..held.clone() };
+        let other_agent =
+            ToolConfirmationRequest { acting: Some(Box::new(acting("intern"))), ..held.clone() };
+        for (origin, held, expected) in [
+            (
+                Some(ToolOrigin::new("mcp:bank_b", &declared, None)),
+                held.clone(),
+                "now resolves to 'mcp:bank_b'",
+            ),
+            (
+                Some(ToolOrigin::new("mcp:bank_a", &json!({ "name": "pay", "x": 1 }), None)),
+                held.clone(),
+                "changed its description",
+            ),
+            (Some(origin.clone()), other_agent, "held for agent 'urn:adk:agent:app/intern'"),
+            (Some(origin.clone()), unrecorded, "does not record which tool"),
+            (None, held.clone(), "does not record which tool"),
+        ] {
+            store.decide(&scope, &held.fingerprint(), ToolApproval::approve()).await.unwrap();
+            let ToolAuthorization::Refuse { reason, confirmation } =
+                authorize_tool_call(&gate(&config), resume(origin, held.clone())).await.unwrap()
+            else {
+                panic!("a mismatched resume must be refused ({expected})");
+            };
+            assert!(reason.contains("was not run") && reason.contains(expected), "{reason}");
+            assert_eq!(confirmation, None);
+            assert!(
+                !store.has_decision(&scope, &held.fingerprint()).await.unwrap(),
+                "the refusal spends the decision ({expected})"
+            );
+        }
+
+        store.decide(&scope, &held.fingerprint(), ToolApproval::approve()).await.unwrap();
+        assert_eq!(
+            authorize_tool_call(&gate(&config), resume(Some(origin), held)).await.unwrap(),
+            ToolAuthorization::Execute {
+                args,
+                confirmation: Some(ToolConfirmationDecision::Approve),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_builtin_tool_approval_binds_to_its_agent() {
+        let policy =
+            DeclarativePolicy::builder().require_approval("web_search", "sign-off").build();
+        let (_, tools) = native_tools();
+        let config_args = json!({ "type": "web_search_20250305", "max_uses": 2 });
+        let fingerprint =
+            ToolConfirmationRequest::for_tool(tools["web_search"].as_ref(), config_args)
+                .with_acting_context(acting("agent"))
+                .fingerprint();
+        let config = RunConfig::builder()
+            .tool_policy(Arc::new(policy))
+            .tool_approval(fingerprint, ToolApproval::approve())
+            .build();
+        let intern =
+            ToolGate::new(&config, "intern", "inv", ApprovalScope::new("app", "user", "session"));
+        let (mut declarations, tools) = native_tools();
+        let withheld =
+            BuiltinToolGovernor::new().govern(&intern, &mut declarations, &tools).await.unwrap();
+        assert!(
+            withheld.iter().any(|w| w.tool_name == "web_search"
+                && w.cause == BuiltinToolWithholding::ApprovalRequired)
+        );
+    }
+
+    #[tokio::test]
     async fn a_denial_reports_the_approvers_message() {
         let config = RunConfig::builder()
             .tool_approval(
-                tool_call_fingerprint("pay", &json!({})),
+                key("pay", &json!({})),
                 ToolApproval::deny().with_message("the approver responded instead: use INV-43"),
             )
             .build();

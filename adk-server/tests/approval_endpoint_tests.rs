@@ -84,6 +84,7 @@ async fn submit(fx: &Fixture, quorum: u32) -> ApprovalRequest {
         function_call_id: Some("call-1".into()),
         args: json!({ "amount": 900, "iban": "DE00 secret" }),
         acting: None,
+        origin: None,
     };
     let scope = ApprovalScope::new("bank", "carol", "s1");
     fx.store.record_pending(&scope, &call).await.unwrap();

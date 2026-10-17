@@ -18,6 +18,7 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
 | **Delegation** | A subject lets another decide in their place within a time window and an application or tool scope |
 | **Notification** | `ApprovalNotifier` hears submission, escalation, decisions, resolution, expiry, and cancellation; `adk-server` ships a signed webhook notifier |
 | **Resume** | A resolution is written to the store under the call's fingerprint, wakes the durable run waiting for it, and is otherwise taken by the next run, which resumes the held call |
+| **Binding** | The fingerprint names the acting agent and the tool's origin, so a resolution authorizes only the agent that held the call, on the tool it was held for; a held call that resumes against another MCP server or a redefined tool is answered as not run |
 
 ## How a Held Call Becomes a Request
 
@@ -172,7 +173,8 @@ let ticker = adk_server::approvals::spawn_approval_ticker(service, Duration::fro
 Every route requires an authenticated caller and answers `401` otherwise. The caller is
 `human(user_id)` in the groups named by its scopes; `ApprovalEndpoints::with_identity` changes
 the mapping. Responses omit the call's fingerprint, which carries the unredacted arguments;
-approvers see `argsRedacted`.
+approvers see `argsRedacted`, the acting agent, and the tool's `origin` (its publisher and
+declaration digest) on the request.
 
 ## Webhook Notifications
 

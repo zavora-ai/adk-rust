@@ -58,6 +58,7 @@ impl Agent for ConfirmationAgent {
                     function_call_id: Some("call-1".to_string()),
                     args: json!({ "path": "/tmp/report.txt" }),
                     acting: None,
+                    origin: None,
                 });
                 yield Ok(event);
             }
