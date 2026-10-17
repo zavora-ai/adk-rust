@@ -791,7 +791,9 @@ fn map_error(e: async_openai::error::OpenAIError, layer: parse::Layer) -> AdkErr
     if let Some(error) = responses_errors::mapped_http_error(&e) {
         return error;
     }
+    // An unknown stream event quotes its data, which can carry generated text.
     let error_string = e.to_string();
+    let error_string = adk_core::upstream_excerpt(&error_string);
 
     if let async_openai::error::OpenAIError::ApiError(ref api_err) = e {
         return responses_errors::map_api_error(api_err);

@@ -71,6 +71,16 @@ fn trace_json_payload<T: serde::Serialize>(
     format!("{}...[truncated {} bytes]", &json[..end], json.len() - end)
 }
 
+/// The text logged for an error message or a denial reason: the text when the run records
+/// payloads, else a placeholder.
+///
+/// Provider errors can echo prompts, and tool errors and guardrail reasons can quote
+/// arguments and credentials, so their text follows the same rule as payloads. Log the content-free part
+/// with [`AdkError::diagnostics`](adk_core::AdkError::diagnostics) beside it.
+fn traced_message(run_config: &adk_core::RunConfig, message: &str) -> String {
+    trace_json_payload(&message, run_config.record_payloads, run_config.trace_payload_max_bytes)
+}
+
 #[derive(Debug, Clone)]
 struct PendingToolCall {
     index: usize,
@@ -522,7 +532,8 @@ impl ToolSetup {
                     tracing::warn!(
                         agent.name = %ctx.agent_name(),
                         toolset.name = %toolset.name(),
-                        error = %error,
+                        error = %error.diagnostics(),
+                        error.message = %traced_message(ctx.run_config(), &error.message),
                         "toolset failed to resolve its tools; continuing without them"
                     );
                     continue;
@@ -2326,14 +2337,9 @@ impl ToolExecutor<'_> {
         Ok(result)
     }
 
-    /// The text logged for an error message: the message when payloads are recorded, else a
-    /// placeholder, since a message can carry credentials.
+    /// The text logged for an error message, see [`traced_message`].
     fn logged_message(&self, message: &str) -> String {
-        trace_json_payload(
-            &message,
-            self.ctx.run_config().record_payloads,
-            self.ctx.run_config().trace_payload_max_bytes,
-        )
+        traced_message(self.ctx.run_config(), message)
     }
 
     async fn execute_inner(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
@@ -2520,6 +2526,12 @@ impl ToolExecutor<'_> {
                     tool_actions.tool_confirmation_decision = confirmation;
                 }
                 Ok(ToolAuthorization::Refuse { reason, confirmation }) => {
+                    // A guardrail's reason can quote the arguments it refused.
+                    tracing::debug!(
+                        tool.name = %name,
+                        reason = %self.logged_message(&reason),
+                        "tool call refused"
+                    );
                     tool_actions.tool_confirmation_decision = confirmation;
                     response_content = Some(error_response(reason));
                     run_after_tool_callbacks = false;
@@ -3605,6 +3617,16 @@ impl Agent for LlmAgent {
                     {
                         Ok(stream) => stream,
                         Err(error) => {
+                            // Provider errors can echo the prompt, so the message follows the
+                            // payload rule.
+                            llm_span.in_scope(|| {
+                                tracing::warn!(
+                                    agent.name = %agent_name,
+                                    error = %error.diagnostics(),
+                                    error.message = %traced_message(ctx.run_config(), &error.message),
+                                    "model call failed"
+                                )
+                            });
                             yield Err(error);
                             return;
                         }
@@ -3631,6 +3653,14 @@ impl Agent for LlmAgent {
                         let mut chunk = match chunk_result {
                             Ok(c) => c,
                             Err(e) => {
+                                llm_span.in_scope(|| {
+                                    tracing::warn!(
+                                        agent.name = %agent_name,
+                                        error = %e.diagnostics(),
+                                        error.message = %traced_message(ctx.run_config(), &e.message),
+                                        "model stream failed"
+                                    )
+                                });
                                 yield Err(e);
                                 return;
                             }
@@ -3809,18 +3839,13 @@ impl Agent for LlmAgent {
                     if let Some(ref last) = last_chunk
                         && let Some(ref code) = last.error_code
                     {
+                        // Provider text can echo the request, so the caller gets a bounded
+                        // excerpt and the log follows the payload rule.
                         let message = last
                             .error_message
-                            .clone()
-                            .unwrap_or_else(|| "provider reported a terminal error".to_string());
-                        llm_span.in_scope(|| {
-                            tracing::error!(
-                                error.code = %code,
-                                error.message = %message,
-                                agent = %agent_name,
-                                "model reported a terminal error"
-                            )
-                        });
+                            .as_deref()
+                            .map(adk_core::upstream_excerpt)
+                            .unwrap_or("provider reported a terminal error");
                         // The provider's own code is preserved in the ADK error code
                         // so retry policy and telemetry can key on it.
                         // Built before the yield point: a borrow may not cross it.
@@ -3838,6 +3863,14 @@ impl Agent for LlmAgent {
                             format!("{code}: {message}"),
                         )
                         .with_details(details);
+                        llm_span.in_scope(|| {
+                            tracing::error!(
+                                error = %provider_error.diagnostics(),
+                                error.message = %traced_message(ctx.run_config(), message),
+                                agent = %agent_name,
+                                "model reported a terminal error"
+                            )
+                        });
                         yield Err(provider_error);
                         return;
                     }

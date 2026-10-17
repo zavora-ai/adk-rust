@@ -57,9 +57,15 @@ impl std::fmt::Display for AnthropicApiError {
 impl std::error::Error for AnthropicApiError {}
 
 impl From<AnthropicApiError> for AdkError {
+    /// The message quotes at most [`adk_core::UPSTREAM_EXCERPT_BYTES`] of the API's message,
+    /// which can echo the request.
     fn from(err: AnthropicApiError) -> Self {
         use adk_core::ErrorComponent;
-        let msg = err.to_string();
+        let msg = AnthropicApiError {
+            message: adk_core::upstream_excerpt(&err.message).to_string(),
+            ..err.clone()
+        }
+        .to_string();
         // Anthropic documents `api_error` (500) and `overloaded_error` (529) as transient.
         let category = crate::retry::category_for_status_code(err.status_code);
         let mut adk_err =

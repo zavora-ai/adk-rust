@@ -141,7 +141,10 @@ fn ollama_error_to_adk(msg: &str) -> AdkError {
         } else {
             (ErrorCategory::Internal, "model.ollama.error")
         };
-    AdkError::new(ErrorComponent::Model, category, code, msg).with_provider("ollama")
+    // Classified on the whole text; the message quotes a bounded excerpt, since a response
+    // body can echo the request.
+    AdkError::new(ErrorComponent::Model, category, code, adk_core::upstream_excerpt(msg))
+        .with_provider("ollama")
 }
 
 /// Map a `serde_json::Value` to an Ollama `FormatType`. This is used for structured JSON output
@@ -278,7 +281,7 @@ impl Llm for OllamaModel {
                         .unwrap_or(body);
                     let message = format!(
                         "Ollama stream error: HTTP {status}: {}",
-                        crate::stream_error::excerpt(&detail)
+                        adk_core::upstream_excerpt(&detail)
                     );
                     Err(ollama_error_to_adk(&message).with_upstream_status(status.as_u16()))?;
                     return;
@@ -411,10 +414,16 @@ impl Llm for OllamaModel {
                         .with_upstream_status(status.as_u16()))?;
                 }
                 let line: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-                    ollama_error_to_adk(&format!("Ollama error: invalid response JSON: {e}"))
+                    ollama_error_to_adk(&format!(
+                        "Ollama error: invalid response JSON: {}",
+                        adk_core::json_error_summary(&e)
+                    ))
                 })?;
                 let parsed: ChatMessageResponse = serde_json::from_value(line.clone()).map_err(|e| {
-                    ollama_error_to_adk(&format!("Ollama error: unexpected response shape: {e}"))
+                    ollama_error_to_adk(&format!(
+                        "Ollama error: unexpected response shape: {}",
+                        adk_core::json_error_summary(&e)
+                    ))
                 })?;
 
                 let mut response = convert::chat_response_to_llm_response(&parsed, false, &declared_tools);

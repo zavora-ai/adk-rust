@@ -409,7 +409,9 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
                     .with_stop_reason(response.stop_reason))
             }
             Ok(Err(e)) => {
-                tracing::warn!(error = %e, "sampling handler returned error");
+                // A model error can echo the sampled prompt, so only its content-free part
+                // is logged.
+                tracing::warn!(error = %e.diagnostics(), "sampling handler returned error");
                 Err(rmcp::ErrorData::new(
                     rmcp::model::ErrorCode::INTERNAL_ERROR,
                     format!("sampling handler error: {e}"),

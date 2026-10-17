@@ -66,6 +66,7 @@ impl OpenAIResponsesClient {
 
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
+            let error_body = adk_core::upstream_excerpt(&error_body);
             return Err(AdkError::new(
                 ErrorComponent::Model,
                 ErrorCategory::Internal,
@@ -93,7 +94,10 @@ impl OpenAIResponsesClient {
                 ErrorComponent::Model,
                 ErrorCategory::Internal,
                 "model.openai_responses.parse",
-                format!("Failed to parse compaction response JSON: {e}"),
+                format!(
+                    "Failed to parse compaction response JSON: {}",
+                    adk_core::json_error_summary(&e)
+                ),
             )
             .with_provider("openai-responses")
         })?;

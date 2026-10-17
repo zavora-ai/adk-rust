@@ -6,9 +6,6 @@ use std::{fmt, time::Duration};
 
 use crate::retry::{parse_retry_after, with_retry_after};
 
-/// Longest raw error body quoted in an error message.
-const BODY_EXCERPT_BYTES: usize = 512;
-
 struct HttpError {
     error: ApiErrorResponse,
     retry_after: Option<Duration>,
@@ -86,8 +83,8 @@ fn api_error(
             code: value.get("code").and_then(serde_json::Value::as_str).map(str::to_owned),
         };
     }
-    let excerpt = String::from_utf8_lossy(&bytes[..bytes.len().min(BODY_EXCERPT_BYTES)]);
-    let excerpt = excerpt.trim();
+    let body = String::from_utf8_lossy(bytes);
+    let excerpt = adk_core::upstream_excerpt(&body);
     let message = if excerpt.is_empty() {
         format!("HTTP {status}")
     } else {
@@ -135,7 +132,8 @@ pub(super) fn map_api_error(api_err: &ApiErrorResponse) -> AdkError {
         ErrorComponent::Model,
         category,
         code,
-        format!("OpenAI Responses API error: {api_err}"),
+        // The API's message can echo the request.
+        format!("OpenAI Responses API error: {}", adk_core::upstream_excerpt(&api_err.to_string())),
     )
     .with_provider("openai-responses")
     .with_upstream_status(status_code);
@@ -160,9 +158,30 @@ mod tests {
             "HTTP 502 Bad Gateway: upstream timed out"
         );
         assert_eq!(api_error(status, b"", false).message, "HTTP 502 Bad Gateway");
-        let long = "x".repeat(BODY_EXCERPT_BYTES * 2);
+        let long = "x".repeat(adk_core::UPSTREAM_EXCERPT_BYTES * 2);
         let message = api_error(status, long.as_bytes(), false).message;
-        assert_eq!(message.len(), "HTTP 502 Bad Gateway: ".len() + BODY_EXCERPT_BYTES);
+        assert_eq!(
+            message.len(),
+            "HTTP 502 Bad Gateway: ".len() + adk_core::UPSTREAM_EXCERPT_BYTES
+        );
+    }
+
+    #[test]
+    fn bounds_an_echoed_api_message() {
+        let error = ApiErrorResponse {
+            status_code: reqwest_openai::StatusCode::BAD_REQUEST,
+            api_error: ApiError {
+                message: format!("Invalid value: '{}'", "x".repeat(4096)),
+                r#type: Some("invalid_request_error".into()),
+                param: None,
+                code: None,
+            },
+        };
+        let mapped = map_api_error(&error);
+        assert_eq!(
+            mapped.message.len(),
+            "OpenAI Responses API error: ".len() + adk_core::UPSTREAM_EXCERPT_BYTES
+        );
     }
 
     #[test]

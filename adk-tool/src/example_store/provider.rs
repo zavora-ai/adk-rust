@@ -140,8 +140,9 @@ impl ExampleStoreProvider {
                         Ok(BeforeModelResult::Continue(request))
                     }
                     Err(error) if provider.fail_open => {
+                        // The search key is the user's last message, which an error can echo.
                         tracing::warn!(
-                            error = %error,
+                            error = %error.diagnostics(),
                             "example store retrieval failed — continuing without examples"
                         );
                         Ok(BeforeModelResult::Continue(request))

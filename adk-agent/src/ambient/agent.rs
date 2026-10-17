@@ -239,8 +239,10 @@ impl AmbientAgent {
                         Ok(mut event_stream) => {
                             while let Some(result) = event_stream.next().await {
                                 let failed = result.is_err();
+                                // A run error can echo the prompt, so only its content-free
+                                // part is logged.
                                 if let Err(ref e) = result {
-                                    tracing::warn!(error = %e, "ambient agent invocation error");
+                                    tracing::warn!(error = %e.diagnostics(), "ambient agent invocation error");
                                 }
 
                                 // Delivered when a caller asked for output, instead of being
@@ -258,7 +260,7 @@ impl AmbientAgent {
                             }
                         }
                         Err(e) => {
-                            tracing::warn!(error = %e, "ambient agent trigger handler failed");
+                            tracing::warn!(error = %e.diagnostics(), "ambient agent trigger handler failed");
                             if let Some(ref tx) = output_tx {
                                 let _ = tx.send(Err(e)).await;
                             }

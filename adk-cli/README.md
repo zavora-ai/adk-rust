@@ -256,7 +256,10 @@ axum::serve(listener, app).await?;
 | `ThinkingDisplayMode::Hide` | Suppress all thinking content (both `<think>` tags and `Thinking` parts) |
 
 The `StreamPrinter` type handles rendering of streamed response parts including
-text, thinking blocks, function calls/responses, inline data, and file data.
+text, thinking blocks, function calls/responses, inline data, and file data. It prints
+terminal control characters other than newline and tab as `\u{..}` escapes, so model or
+tool output cannot inject escape sequences into the terminal; stream errors are printed the
+same way. `StreamPrinter::with_writer` renders to any `std::io::Write` instead of stdout.
 
 ## Configuration Priority
 
