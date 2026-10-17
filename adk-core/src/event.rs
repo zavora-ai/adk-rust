@@ -110,6 +110,44 @@ pub struct EventActions {
     /// [`Agent::screen_user_input`](crate::Agent::screen_user_input).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub input_screened: bool,
+    /// Set on a confirmation event: where each workflow agent the event passed through had
+    /// reached when the call was held, keyed by the workflow agent's name.
+    ///
+    /// A workflow agent whose last run stopped on a hold that is still held resumes at
+    /// this position instead of starting over. See
+    /// [`workflow_resume_positions`](crate::workflow_resume_positions).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub workflow_positions: HashMap<String, WorkflowPosition>,
+}
+
+/// Where a workflow agent was when a call held for confirmation stopped it.
+///
+/// Recorded in [`EventActions::workflow_positions`] by `SequentialAgent`, `LoopAgent`,
+/// `ParallelAgent`, `ConditionalAgent` and `LlmConditionalAgent`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::WorkflowPosition;
+///
+/// let position = WorkflowPosition::new(1, "reviewer");
+/// assert_eq!(position.iteration, 1);
+/// assert_eq!(position.sub_agent, "reviewer");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowPosition {
+    /// The loop iteration, counted from 0; always 0 for a workflow that does not loop.
+    #[serde(default)]
+    pub iteration: u32,
+    /// The sub-agent that held the call, or that contains the agent that did.
+    pub sub_agent: String,
+}
+
+impl WorkflowPosition {
+    /// Creates a position at `sub_agent` in loop iteration `iteration`.
+    pub fn new(iteration: u32, sub_agent: impl Into<String>) -> Self {
+        Self { iteration, sub_agent: sub_agent.into() }
+    }
 }
 
 /// A typed, borrowed view of a single tool call carried by an [`Event`].

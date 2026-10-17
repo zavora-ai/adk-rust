@@ -211,7 +211,7 @@ pub use error::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Result, R
 pub use event::{
     Event, EventActions, EventCompaction, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER,
     TOOL_PROGRESS_CALL_ID_KEY, TOOL_PROGRESS_STREAM_KEY, ToolCallView, ToolResultView,
-    event_belongs_to_branch,
+    WorkflowPosition, event_belongs_to_branch,
 };
 pub use event_stream::EventTextDeltas;
 pub use governance::{
@@ -221,7 +221,8 @@ pub use governance::{
     GovernanceWatch, GovernedCall, HeldToolCall, InMemoryApprovalStore, PendingApproval,
     ToolApproval, ToolAuthorization, ToolCallScreen, ToolGate, WithheldBuiltinTool,
     authorize_tool_call, builtin_tool_configuration, confirmation_decision_available,
-    confirmation_pending_response, held_tool_calls, is_confirmation_pending,
+    confirmation_pending_response, held_call_compaction_limit, held_tool_calls,
+    is_confirmation_pending, supersede_pending_responses, workflow_resume_positions,
 };
 pub use governance_state::{
     GovernanceScope, GovernanceState, GovernanceStateStore, InMemoryGovernanceStateStore,
@@ -279,7 +280,7 @@ pub use tool_response::{
 };
 pub use types::{
     BlobResourceContents, Content, EmbeddedResource, FileDataPart, FunctionResponseData,
-    InlineDataPart, MAX_INLINE_DATA_SIZE, Part, TextResourceContents,
+    GENERATED_CALL_ID_PREFIX, InlineDataPart, MAX_INLINE_DATA_SIZE, Part, TextResourceContents,
 };
 pub use url::Url;
 

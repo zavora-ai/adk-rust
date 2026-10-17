@@ -3,7 +3,7 @@ use crate::skill_shim::load_skill_index;
 use crate::skill_shim::{SelectionPolicy, SkillIndex};
 use adk_core::{
     AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Event, EventStream,
-    InvocationContext, Result, SharedState,
+    InvocationContext, Result, SharedState, WorkflowPosition,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -143,6 +143,16 @@ impl Agent for ParallelAgent {
         let agent_name = self.name.clone();
         let invocation_id = run_ctx.invocation_id().to_string();
         let shared_state_enabled = self.shared_state_enabled;
+        // A run that resumes a hold runs only the sub-agents still holding calls; the
+        // siblings that finished in the run that held them do not run again.
+        let resuming: Vec<String> = run_ctx
+            .session()
+            .workflow_resume_positions(&agent_name, run_ctx.branch())
+            .into_iter()
+            .map(|position| position.sub_agent)
+            .filter(|name| sub_agents.iter().any(|agent| agent.name() == name))
+            .collect();
+        let names: Vec<String> = sub_agents.iter().map(|agent| agent.name().to_string()).collect();
 
         let s = stream! {
             use futures::stream::{StreamExt, select_all};
@@ -214,6 +224,9 @@ impl Agent for ParallelAgent {
                 let mut per_agent: Vec<BranchStream> = Vec::with_capacity(sub_agents.len());
 
                 for (index, agent) in sub_agents.into_iter().enumerate() {
+                    if !resuming.is_empty() && !resuming.iter().any(|name| name == agent.name()) {
+                        continue;
+                    }
                     let base: Arc<dyn InvocationContext> = if let Some(ref shared) = shared {
                         Arc::new(SharedStateContext::new(run_ctx.clone(), shared.clone()))
                     } else {
@@ -267,10 +280,20 @@ impl Agent for ParallelAgent {
             // "whichever failed first" would be a race; the lowest index matches
             // the declared sub-agent order this agent was constructed with.
             let mut failures: Vec<(usize, adk_core::AdkError)> = Vec::new();
+            let mut held = false;
 
             while let Some((index, event_result)) = merged.next().await {
                 match event_result {
-                    Ok(event) => yield Ok(event),
+                    Ok(mut event) => {
+                        if event.actions.tool_confirmation.is_some() {
+                            held = true;
+                            event.actions.workflow_positions.insert(
+                                agent_name.clone(),
+                                WorkflowPosition::new(0, names[index].clone()),
+                            );
+                        }
+                        yield Ok(event);
+                    }
                     Err(e) => failures.push((index, e)),
                 }
             }
@@ -278,6 +301,13 @@ impl Agent for ParallelAgent {
             // After all agents complete, propagate the first error if any
             if let Some((_, e)) = failures.into_iter().min_by_key(|(index, _)| *index) {
                 yield Err(e);
+                return;
+            }
+
+            // A held call pauses the workflow once every branch has finished; the next run
+            // resumes the branches that hold calls, and the after-agent callbacks wait for it.
+            if held {
+                tracing::info!(agent.name = %agent_name, "workflow paused on a held tool call");
                 return;
             }
 

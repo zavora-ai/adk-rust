@@ -17,7 +17,13 @@
 
 use adk_core::{Content, Part};
 
-/// Normalize content by converting tool call markup in text parts to FunctionCall parts.
+/// Normalize model content: convert tool call markup in text parts to `FunctionCall` parts,
+/// and give each function call without an ID a generated one.
+///
+/// The generated ID ([`adk_core::GENERATED_CALL_ID_PREFIX`]) identifies the call, its
+/// response and any confirmation request for it across runs, so two calls to one tool from
+/// a provider that sends no IDs (Ollama, tool call markup) stay apart. `LlmAgent` removes
+/// these IDs from the contents it sends to a model.
 pub fn normalize_content(content: &mut Content) {
     let parts = std::mem::take(&mut content.parts);
     let mut normalized = Vec::new();
@@ -32,9 +38,10 @@ pub fn normalize_content(content: &mut Content) {
     }
 
     content.parts = normalized;
+    content.assign_call_ids();
 }
 
-/// Normalize `Option<Content>` by converting tool call markup.
+/// Normalize `Option<Content>`; see [`normalize_content`].
 pub fn normalize_option_content(content: &mut Option<Content>) {
     if let Some(content) = content {
         normalize_content(content);
@@ -270,5 +277,39 @@ test_tool
         assert!(
             matches!(&content.parts[0], Part::FunctionCall { name, .. } if name == "test_tool")
         );
+    }
+
+    #[test]
+    fn calls_without_ids_get_distinct_generated_ids_and_provider_ids_stay() {
+        let call = |id: Option<&str>| Part::FunctionCall {
+            name: "transfer".to_string(),
+            args: serde_json::json!({}),
+            id: id.map(str::to_string),
+            thought_signature: None,
+        };
+        let mut content = Content {
+            role: "model".to_string(),
+            parts: vec![call(None), call(None), call(Some("c1"))],
+        };
+
+        normalize_content(&mut content);
+        let ids: Vec<String> = content
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::FunctionCall { id, .. } => id.clone(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids.len(), 3);
+        assert!(ids[0].starts_with(adk_core::GENERATED_CALL_ID_PREFIX));
+        assert!(ids[1].starts_with(adk_core::GENERATED_CALL_ID_PREFIX));
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(ids[2], "c1");
+
+        // Normalizing again keeps the IDs already given.
+        let before = content.parts.clone();
+        normalize_content(&mut content);
+        assert_eq!(content.parts, before);
     }
 }

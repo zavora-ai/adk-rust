@@ -1469,10 +1469,12 @@ impl AgentToolSession {
                 }
             }
         }
+        // A resumed call's response takes its pending response's place.
         if let Some(content) = &event.llm_response.content
             && let Ok(mut history) = self.history.write()
+            && let Some(rest) = adk_core::supersede_pending_responses(&mut history, content.clone())
         {
-            history.push(content.clone());
+            history.push(rest);
         }
         if !event.llm_response.partial
             && let Ok(mut events) = self.events.write()
@@ -1515,6 +1517,17 @@ impl Session for AgentToolSession {
         self.events
             .read()
             .map(|events| adk_core::held_tool_calls(&events, agent_name, branch))
+            .unwrap_or_default()
+    }
+
+    fn workflow_resume_positions(
+        &self,
+        workflow: &str,
+        branch: &str,
+    ) -> Vec<adk_core::WorkflowPosition> {
+        self.events
+            .read()
+            .map(|events| adk_core::workflow_resume_positions(&events, workflow, branch))
             .unwrap_or_default()
     }
 }

@@ -427,6 +427,18 @@ impl adk_core::Session for MutableSession {
         };
         adk_core::held_tool_calls(&events, agent_name, branch)
     }
+
+    fn workflow_resume_positions(
+        &self,
+        workflow: &str,
+        branch: &str,
+    ) -> Vec<adk_core::WorkflowPosition> {
+        let Ok(events) = self.events.read() else {
+            tracing::error!("events RwLock poisoned in workflow_resume_positions — returning none");
+            return Vec::new();
+        };
+        adk_core::workflow_resume_positions(&events, workflow, branch)
+    }
 }
 
 impl adk_core::State for MutableSession {

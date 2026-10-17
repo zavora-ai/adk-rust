@@ -123,6 +123,26 @@ With `compaction_interval: 3` and `overlap_size: 1`:
 
 After invocation 6, the agent sees: `[Summary B, event 6 overlap events, event 7+]`
 
+## Calls Held for Confirmation
+
+Compaction never covers a tool call that is still held for confirmation. A compaction hides
+every event up to its end, and an agent resumes only the held calls it can still see, so a
+compacted held call would leave its approval with nothing to resume, and a durable run holding
+it would complete instead of parking.
+
+Every compaction the runner applies stops before the earliest event that issued a call still
+held, by any agent on any branch (`adk_core::held_call_compaction_limit`):
+
+| Compaction | Effect of a held call |
+|------------|-----------------------|
+| Session compaction (`EventsCompactionConfig`) | The window ends before the held call, whatever `overlap_size` allows; with nothing before it, the run skips compaction |
+| Intra-invocation compaction (`IntraCompactionConfig`) | The summarized events end before the held call; the call and every later event are kept |
+| Context compaction (`CompactionConfig`, any `CompactionStrategy`) | The strategy receives only the events before the held call; the call and every later event are appended unchanged |
+
+Once the call is answered — resumed with a decision, or issued again and run — the next
+compaction covers it as usual. A call that is never decided keeps the events from it onward
+uncompacted; deny it to release them.
+
 ## Notes
 
 - Compaction failure is non-fatal — the runner logs a warning and continues

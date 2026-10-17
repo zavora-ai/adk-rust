@@ -29,7 +29,15 @@
 //! calls with [`held_tool_calls`] and, for each one with a decision
 //! ([`confirmation_decision_available`]), dispatches the original call again through
 //! the same path, so the decision authorizes or refuses it without the model issuing
-//! it a second time. The call's real response supersedes the pending one.
+//! it a second time. The call's real response supersedes the pending one
+//! ([`supersede_pending_responses`]).
+//!
+//! A held call survives what happens to the session while it waits: compaction never
+//! covers it ([`held_call_compaction_limit`]), a workflow agent that it stopped resumes at
+//! the sub-agent holding it ([`workflow_resume_positions`]), and a call its provider sent
+//! without an ID carries a generated one
+//! ([`GENERATED_CALL_ID_PREFIX`](crate::GENERATED_CALL_ID_PREFIX)), so two calls to one
+//! tool keep their own arguments.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -2026,7 +2034,9 @@ pub struct HeldToolCall {
     /// The request the agent surfaced. Its arguments are the call's final ones,
     /// after plugin and callback rewrites; its fingerprint is the decision key.
     pub request: ToolConfirmationRequest,
-    /// The call's ID as the model issued it; `None` when the provider omitted it.
+    /// The call's ID: the one the model issued, or the one the agent generated for a
+    /// call its provider sent without one ([`GENERATED_CALL_ID_PREFIX`](crate::GENERATED_CALL_ID_PREFIX)).
+    /// `None` only for a call held before agents generated IDs.
     pub id: Option<String>,
     /// The tool the model called, the one the agent resumes.
     pub name: String,
@@ -2042,8 +2052,14 @@ pub struct HeldToolCall {
 /// [`confirmation_pending_response`] answers nothing. A later hold of a call with the
 /// same fingerprint replaces an earlier one, so one decision resumes one call.
 ///
+/// A call is matched to its request by call ID. An agent gives every call its
+/// provider sent without an ID a generated one before saving it, so two calls to one
+/// tool in one turn keep their own arguments. Calls saved without an ID by an earlier
+/// release are matched by tool name within their invocation.
+///
 /// Only events visible on `branch` and newer than the latest compaction count, as in
-/// the conversation history the agent sees.
+/// the conversation history the agent sees. The runner never compacts a held call
+/// (see [`held_call_compaction_limit`]).
 ///
 /// # Example
 ///
@@ -2066,16 +2082,30 @@ pub struct HeldToolCall {
 /// assert_eq!(calls[0].request.tool_name, "pay");
 /// ```
 pub fn held_tool_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<HeldToolCall> {
+    scan_held_calls(events, agent_name, branch).into_iter().map(|held| held.call).collect()
+}
+
+/// A held call with the positions of the events that issued and held it.
+struct ScannedHold {
+    call: HeldToolCall,
+    /// The event whose function call the hold resumes, or the hold itself when that
+    /// call is not in the log.
+    issued_at: usize,
+    /// The event that carries the request.
+    held_at: usize,
+}
+
+fn scan_held_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<ScannedHold> {
     let boundary = events
         .iter()
         .rev()
         .find_map(|event| event.actions.compaction.as_ref().map(|c| c.end_timestamp));
-    // Calls the agent issued, by ID; idless calls by invocation and name.
-    let mut issued = HashMap::<String, (String, Value)>::new();
-    let mut idless = Vec::<(String, String, Value)>::new();
-    let mut held = Vec::<HeldToolCall>::new();
+    // Calls the agent issued, by ID; calls saved without one by invocation and name.
+    let mut issued = HashMap::<String, (String, Value, usize)>::new();
+    let mut idless = Vec::<(String, String, Value, usize)>::new();
+    let mut held = Vec::<ScannedHold>::new();
 
-    for event in events {
+    for (index, event) in events.iter().enumerate() {
         if event.llm_response.partial
             || event.actions.compaction.is_some()
             || boundary.is_some_and(|end| event.timestamp <= end)
@@ -2092,9 +2122,14 @@ pub fn held_tool_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<
             match part {
                 Part::FunctionCall { name, args, id, .. } if own => match id {
                     Some(id) => {
-                        issued.insert(id.clone(), (name.clone(), args.clone()));
+                        issued.insert(id.clone(), (name.clone(), args.clone(), index));
                     }
-                    None => idless.push((event.invocation_id.clone(), name.clone(), args.clone())),
+                    None => idless.push((
+                        event.invocation_id.clone(),
+                        name.clone(),
+                        args.clone(),
+                        index,
+                    )),
                 },
                 Part::FunctionResponse { function_response, id, .. }
                     if !is_confirmation_pending(&function_response.response) =>
@@ -2103,16 +2138,17 @@ pub fn held_tool_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<
                         Some(id) => {
                             let answered = issued
                                 .get(id)
-                                .map(|(name, args)| tool_call_fingerprint(name, args));
-                            held.retain(|call| {
+                                .map(|(name, args, _)| tool_call_fingerprint(name, args));
+                            held.retain(|hold| {
+                                let call = &hold.call;
                                 call.request.function_call_id.as_deref() != Some(id)
                                     && call.id.as_deref() != Some(id)
                                     && answered.as_deref()
                                         != Some(&tool_call_fingerprint(&call.name, &call.args))
                             });
                         }
-                        None => held.retain(|call| {
-                            call.id.is_some() || call.name != function_response.name
+                        None => held.retain(|hold| {
+                            hold.call.id.is_some() || hold.call.name != function_response.name
                         }),
                     }
                 }
@@ -2120,28 +2156,253 @@ pub fn held_tool_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<
             }
         }
         if own && let Some(request) = &event.actions.tool_confirmation {
-            let (id, name, args) = match request.function_call_id.as_deref() {
+            let (id, name, args, issued_at) = match request.function_call_id.as_deref() {
                 Some(call_id) if issued.contains_key(call_id) => {
-                    let (name, args) = &issued[call_id];
-                    (Some(call_id.to_string()), name.clone(), args.clone())
+                    let (name, args, at) = &issued[call_id];
+                    (Some(call_id.to_string()), name.clone(), args.clone(), *at)
                 }
-                _ => match idless.iter().rev().find(|(invocation, name, _)| {
+                _ => match idless.iter().rev().find(|(invocation, name, _, _)| {
                     *invocation == event.invocation_id && *name == request.tool_name
                 }) {
-                    Some((_, name, args)) => (None, name.clone(), args.clone()),
+                    Some((_, name, args, at)) => (None, name.clone(), args.clone(), *at),
                     None => (
                         request.function_call_id.clone(),
                         request.tool_name.clone(),
                         request.args.clone(),
+                        index,
                     ),
                 },
             };
             let fingerprint = request.fingerprint();
-            held.retain(|call| call.request.fingerprint() != fingerprint);
-            held.push(HeldToolCall { request: request.clone(), id, name, args });
+            held.retain(|hold| hold.call.request.fingerprint() != fingerprint);
+            held.push(ScannedHold {
+                call: HeldToolCall { request: request.clone(), id, name, args },
+                issued_at,
+                held_at: index,
+            });
         }
     }
     held
+}
+
+/// Every hold in `events`, by any agent on any branch.
+fn scan_all_held_calls(events: &[Event]) -> Vec<ScannedHold> {
+    let mut holders = Vec::<(&str, &str)>::new();
+    for event in events {
+        if event.actions.tool_confirmation.is_some()
+            && !holders.contains(&(event.author.as_str(), event.branch.as_str()))
+        {
+            holders.push((event.author.as_str(), event.branch.as_str()));
+        }
+    }
+    let mut held = Vec::<ScannedHold>::new();
+    for (agent, branch) in holders {
+        for hold in scan_held_calls(events, agent, branch) {
+            if !held.iter().any(|known| known.held_at == hold.held_at) {
+                held.push(hold);
+            }
+        }
+    }
+    held
+}
+
+/// Returns how many leading events of `events`, at most `end`, a compaction may cover
+/// without hiding a call still held for confirmation.
+///
+/// A compaction hides every event up to its end timestamp, and an agent finds held
+/// calls only among the events a compaction left visible, so compacting a held call
+/// would leave its approval with nothing to resume. The limit therefore stops before
+/// the first event that is not older than the earliest event that issued a held call,
+/// by any agent on any branch. The runner applies it to session compaction,
+/// intra-invocation compaction and context compaction alike.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{Content, Event, Part, ToolConfirmationRequest, held_call_compaction_limit};
+/// use serde_json::json;
+///
+/// let mut ask = Event::new("inv-1");
+/// ask.author = "user".into();
+/// ask.llm_response.content = Some(Content::new("user").with_text("pay 5"));
+/// let mut call = Event::new("inv-1");
+/// call.author = "ops".into();
+/// call.llm_response.content = Some(Content {
+///     role: "model".into(),
+///     parts: vec![Part::FunctionCall {
+///         name: "pay".into(),
+///         args: json!({ "amount": 5 }),
+///         id: Some("c1".into()),
+///         thought_signature: None,
+///     }],
+/// });
+/// let mut hold = Event::new("inv-1");
+/// hold.author = "ops".into();
+/// hold.actions.tool_confirmation = Some(ToolConfirmationRequest {
+///     tool_name: "pay".into(),
+///     function_call_id: Some("c1".into()),
+///     args: json!({ "amount": 5 }),
+///     acting: None,
+///     origin: None,
+/// });
+///
+/// let events = vec![ask, call, hold];
+/// // Only the user message before the held call may be compacted.
+/// assert_eq!(held_call_compaction_limit(&events, events.len()), 1);
+/// assert_eq!(held_call_compaction_limit(&events[..1], 1), 1);
+/// ```
+pub fn held_call_compaction_limit(events: &[Event], end: usize) -> usize {
+    let end = end.min(events.len());
+    let earliest = scan_all_held_calls(events)
+        .iter()
+        .map(|hold| events[hold.issued_at].timestamp.min(events[hold.held_at].timestamp))
+        .min();
+    match earliest {
+        Some(from) => events[..end].iter().position(|event| event.timestamp >= from).unwrap_or(end),
+        None => end,
+    }
+}
+
+/// Returns where `workflow` resumes: the positions it recorded on the holds that
+/// stopped its last run, while those calls are still held.
+///
+/// A workflow agent records its [`WorkflowPosition`](crate::WorkflowPosition) on each
+/// confirmation event that passes through it ([`EventActions::workflow_positions`](crate::EventActions::workflow_positions)).
+/// A recorded hold counts while its call is still held and the agent that held it has
+/// not run in a later invocation; of those, the holds from the latest invocation are
+/// the ones that stopped the workflow. An empty result means the workflow starts over.
+///
+/// `branch` is the workflow's own branch; holds recorded on it or below it count.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{Event, ToolConfirmationRequest, WorkflowPosition, workflow_resume_positions};
+/// use serde_json::json;
+///
+/// let mut hold = Event::new("inv-1");
+/// hold.author = "ops".into();
+/// hold.actions.tool_confirmation = Some(ToolConfirmationRequest {
+///     tool_name: "pay".into(),
+///     function_call_id: Some("c1".into()),
+///     args: json!({ "amount": 5 }),
+///     acting: None,
+///     origin: None,
+/// });
+/// hold.actions.workflow_positions.insert("pipeline".into(), WorkflowPosition::new(0, "ops"));
+///
+/// let mut events = vec![hold];
+/// assert_eq!(workflow_resume_positions(&events, "pipeline", ""), vec![WorkflowPosition::new(0, "ops")]);
+///
+/// // Once `ops` runs again in a later invocation, the hold no longer stops the workflow.
+/// let mut later = Event::new("inv-2");
+/// later.author = "ops".into();
+/// events.push(later);
+/// assert!(workflow_resume_positions(&events, "pipeline", "").is_empty());
+/// ```
+pub fn workflow_resume_positions(
+    events: &[Event],
+    workflow: &str,
+    branch: &str,
+) -> Vec<crate::WorkflowPosition> {
+    let within = |event_branch: &str| {
+        branch.is_empty()
+            || event_branch == branch
+            || event_branch.strip_prefix(branch).is_some_and(|rest| rest.starts_with('.'))
+    };
+    let stopping = scan_all_held_calls(events)
+        .into_iter()
+        .filter(|hold| {
+            let event = &events[hold.held_at];
+            event.actions.workflow_positions.contains_key(workflow)
+                && within(&event.branch)
+                && !events[hold.held_at + 1..].iter().any(|later| {
+                    later.author == event.author && later.invocation_id != event.invocation_id
+                })
+        })
+        .map(|hold| hold.held_at)
+        .collect::<Vec<_>>();
+    let Some(last) = stopping.iter().max().map(|&index| &events[index].invocation_id) else {
+        return Vec::new();
+    };
+    let mut held_at = stopping
+        .iter()
+        .copied()
+        .filter(|&index| events[index].invocation_id == *last)
+        .collect::<Vec<_>>();
+    held_at.sort_unstable();
+    let mut positions = Vec::new();
+    for index in held_at {
+        let position = &events[index].actions.workflow_positions[workflow];
+        if !positions.contains(position) {
+            positions.push(position.clone());
+        }
+    }
+    positions
+}
+
+/// Puts each function response in `content` in the place of the pending response to
+/// the same call in `history`, and returns the parts that answered no pending call.
+///
+/// A call held for confirmation is answered with a [`confirmation_pending_response`];
+/// when a later run resumes it, its new response takes the pending one's place, so the
+/// history keeps one response per call and providers that reject a second response
+/// accept it. A response matches the latest pending response with its call ID; one
+/// without an ID, as saved by an earlier release, matches the latest pending response
+/// to the same tool that has none either.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{
+///     Content, FunctionResponseData, Part, confirmation_pending_response,
+///     supersede_pending_responses,
+/// };
+/// use serde_json::json;
+///
+/// let response = |value| Part::FunctionResponse {
+///     function_response: FunctionResponseData::new("pay", value),
+///     id: Some("c1".into()),
+///     annotations: None,
+/// };
+/// let mut history =
+///     vec![Content { role: "function".into(), parts: vec![response(confirmation_pending_response("held"))] }];
+/// let resumed = Content { role: "function".into(), parts: vec![response(json!({ "paid": 5 }))] };
+///
+/// assert!(supersede_pending_responses(&mut history, resumed).is_none());
+/// assert_eq!(history.len(), 1);
+/// assert!(matches!(&history[0].parts[0], Part::FunctionResponse { function_response, .. }
+///     if function_response.response == json!({ "paid": 5 })));
+/// ```
+pub fn supersede_pending_responses(
+    history: &mut [crate::Content],
+    content: crate::Content,
+) -> Option<crate::Content> {
+    let mut unplaced = Vec::new();
+    for part in content.parts {
+        let slot = match &part {
+            Part::FunctionResponse { function_response, id, .. } => history
+                .iter_mut()
+                .rev()
+                .flat_map(|held| held.parts.iter_mut().rev())
+                .find(|candidate| match candidate {
+                    Part::FunctionResponse {
+                        function_response: pending, id: pending_id, ..
+                    } => {
+                        is_confirmation_pending(&pending.response)
+                            && pending_id == id
+                            && (id.is_some() || pending.name == function_response.name)
+                    }
+                    _ => false,
+                }),
+            _ => None,
+        };
+        match slot {
+            Some(slot) => *slot = part,
+            None => unplaced.push(part),
+        }
+    }
+    (!unplaced.is_empty()).then_some(crate::Content { role: content.role, parts: unplaced })
 }
 
 /// Whether a decision for `request` may be available to the governed path.
@@ -3091,6 +3352,201 @@ mod tests {
         }
         assert!(held_tool_calls(&branched, "ops", "root.right").is_empty());
         assert_eq!(held_tool_calls(&branched, "ops", "root.left").len(), 1);
+    }
+
+    /// Run 1 of agent `ops`: two `transfer` calls with generated IDs, both held.
+    fn two_held_transfers() -> Vec<Event> {
+        let a = "adk-call-a";
+        let b = "adk-call-b";
+        vec![
+            event("user", "inv-1", vec![Part::Text { text: "send 10 and 20".into() }]),
+            event(
+                "ops",
+                "inv-1",
+                vec![
+                    function_call("transfer", json!({ "amount": 10 }), a),
+                    function_call("transfer", json!({ "amount": 20 }), b),
+                ],
+            ),
+            event(
+                "ops",
+                "inv-1",
+                vec![
+                    function_response("transfer", confirmation_pending_response("held"), a),
+                    function_response("transfer", confirmation_pending_response("held"), b),
+                ],
+            ),
+            hold("ops", "inv-1", "transfer", json!({ "amount": 10 }), a),
+            hold("ops", "inv-1", "transfer", json!({ "amount": 20 }), b),
+        ]
+    }
+
+    #[test]
+    fn two_calls_to_one_tool_keep_their_arguments_and_are_answered_apart() {
+        let mut events = two_held_transfers();
+        let amounts = |events: &[Event]| {
+            held_tool_calls(events, "ops", "")
+                .into_iter()
+                .map(|call| (call.id.unwrap_or_default(), call.args["amount"].clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            amounts(&events),
+            vec![("adk-call-a".to_string(), json!(10)), ("adk-call-b".to_string(), json!(20))]
+        );
+
+        events.push(event("user", "inv-2", vec![Part::Text { text: String::new() }]));
+        events.push(event(
+            "ops",
+            "inv-2",
+            vec![function_response("transfer", json!({ "status": "sent" }), "adk-call-a")],
+        ));
+        assert_eq!(amounts(&events), vec![("adk-call-b".to_string(), json!(20))]);
+    }
+
+    /// `events` one millisecond apart, in order, as a session saves them.
+    fn timed(mut events: Vec<Event>) -> Vec<Event> {
+        let start = chrono::Utc::now();
+        for (index, event) in events.iter_mut().enumerate() {
+            event.timestamp = start + chrono::Duration::milliseconds(index as i64);
+        }
+        events
+    }
+
+    #[test]
+    fn compaction_stops_before_the_earliest_held_call() {
+        let mut events = vec![event("user", "inv-0", vec![Part::Text { text: "hi".into() }])];
+        events.push(event("ops", "inv-0", vec![Part::Text { text: "hello".into() }]));
+        events.extend(held_run());
+        let mut events = timed(events);
+        // The held call's model event is at index 3, after `user` at index 2.
+        assert_eq!(held_call_compaction_limit(&events, events.len()), 3);
+        assert_eq!(held_call_compaction_limit(&events, 1), 1, "never past the requested end");
+
+        // Once answered, nothing holds compaction back.
+        events.push(event(
+            "ops",
+            "inv-2",
+            vec![function_response("pay", json!({ "ok": 1 }), "c1")],
+        ));
+        assert_eq!(held_call_compaction_limit(&events, events.len()), events.len());
+    }
+
+    #[test]
+    fn compaction_limit_counts_holds_of_every_agent_and_branch() {
+        let mut left = held_run();
+        for event in &mut left {
+            event.branch = "fan.left".into();
+        }
+        let mut events = vec![event("user", "inv-0", vec![Part::Text { text: "hi".into() }])];
+        events.extend(left);
+        let events = timed(events);
+        assert_eq!(held_call_compaction_limit(&events, events.len()), 2);
+    }
+
+    #[test]
+    fn compaction_limit_stops_at_an_event_newer_than_the_held_call() {
+        // Concurrent branches can save an event before the held call with a later time;
+        // compacting it would move the boundary past the held call.
+        let mut events = timed(held_run());
+        let mut late = event("fast", "inv-1", vec![Part::Text { text: "done".into() }]);
+        late.timestamp = events[1].timestamp + chrono::Duration::milliseconds(5);
+        events.insert(1, late);
+        assert_eq!(held_call_compaction_limit(&events, events.len()), 1);
+    }
+
+    fn stamped(mut event: Event, workflow: &str, position: crate::WorkflowPosition) -> Event {
+        event.actions.workflow_positions.insert(workflow.into(), position);
+        event
+    }
+
+    #[test]
+    fn a_workflow_resumes_where_its_last_run_held_a_call() {
+        let mut events = held_run();
+        events[3] = stamped(events[3].clone(), "pipeline", crate::WorkflowPosition::new(1, "ops"));
+        assert_eq!(
+            workflow_resume_positions(&events, "pipeline", ""),
+            vec![crate::WorkflowPosition::new(1, "ops")]
+        );
+        assert!(workflow_resume_positions(&events, "other", "").is_empty());
+        assert!(
+            workflow_resume_positions(&events, "pipeline", "elsewhere").is_empty(),
+            "a hold on another branch does not resume this workflow"
+        );
+    }
+
+    #[test]
+    fn a_workflow_starts_over_once_the_hold_is_answered_or_its_agent_ran_again() {
+        let mut stopped = held_run();
+        stopped[3] =
+            stamped(stopped[3].clone(), "pipeline", crate::WorkflowPosition::new(0, "ops"));
+
+        let mut answered = stopped.clone();
+        answered.push(event(
+            "ops",
+            "inv-2",
+            vec![function_response("pay", json!({ "ok": 1 }), "c1")],
+        ));
+        assert!(workflow_resume_positions(&answered, "pipeline", "").is_empty());
+
+        // The resumed agent ran without a decision and the workflow went on: the call is
+        // still held, but it no longer stops the workflow.
+        let mut moved_on = stopped;
+        moved_on.push(event("ops", "inv-2", vec![Part::Text { text: "still waiting".into() }]));
+        assert_eq!(held_tool_calls(&moved_on, "ops", "").len(), 1);
+        assert!(workflow_resume_positions(&moved_on, "pipeline", "").is_empty());
+    }
+
+    #[test]
+    fn a_parallel_workflow_resumes_every_branch_its_last_run_held() {
+        let branch = |events: Vec<Event>, name: &str| {
+            events
+                .into_iter()
+                .map(|mut event| {
+                    event.branch = format!("fan.{name}");
+                    event.author = event.author.replace("ops", name);
+                    if event.actions.tool_confirmation.is_some() {
+                        event = stamped(event, "fan", crate::WorkflowPosition::new(0, name));
+                    }
+                    event
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut events = branch(held_run(), "left");
+        events.extend(branch(held_run().split_off(1), "right"));
+        assert_eq!(
+            workflow_resume_positions(&events, "fan", ""),
+            vec![crate::WorkflowPosition::new(0, "left"), crate::WorkflowPosition::new(0, "right")]
+        );
+    }
+
+    #[test]
+    fn a_resumed_response_takes_the_pending_responses_place() {
+        let pending = |id: &str| crate::Content {
+            role: "function".into(),
+            parts: vec![function_response("transfer", confirmation_pending_response("held"), id)],
+        };
+        let mut history = vec![pending("adk-call-a"), pending("adk-call-b")];
+        let resumed = crate::Content {
+            role: "function".into(),
+            parts: vec![function_response("transfer", json!({ "status": "sent" }), "adk-call-a")],
+        };
+        assert!(supersede_pending_responses(&mut history, resumed).is_none());
+        assert_eq!(
+            history[0].parts,
+            vec![function_response("transfer", json!({ "status": "sent" }), "adk-call-a")]
+        );
+        assert_eq!(history[1].parts, pending("adk-call-b").parts, "the other call stays pending");
+
+        let unrelated = crate::Content {
+            role: "function".into(),
+            parts: vec![function_response("lookup", json!({ "rows": 1 }), "c9")],
+        };
+        assert_eq!(
+            supersede_pending_responses(&mut history, unrelated.clone()).map(|rest| rest.parts),
+            Some(unrelated.parts),
+            "a response to no pending call is returned"
+        );
     }
 
     #[tokio::test]

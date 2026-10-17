@@ -1880,6 +1880,9 @@ impl Runner {
                             // Not enough user messages to satisfy overlap — skip compaction
                             0
                         };
+                        // A held call must stay visible for its approval to resume it.
+                        let compact_up_to =
+                            adk_core::held_call_compaction_limit(&all_events, compact_up_to);
 
                         if compact_up_to > 0 {
                             let events_to_compact = &all_events[..compact_up_to];
