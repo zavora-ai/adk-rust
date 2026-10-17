@@ -333,7 +333,9 @@ impl Llm for OllamaModel {
                             yield convert::text_delta_response(&response.message.content);
                         }
 
-                        // Yield tool calls if present in this chunk
+                        // Yield tool calls if present in this chunk. They are part of the
+                        // turn the `done` line ends, so they arrive partial: a second terminal
+                        // response would be saved as a second event with the same ID.
                         if !response.message.tool_calls.is_empty() {
                             let mut parts = Vec::new();
                             for tool_call in &response.message.tool_calls {
@@ -349,7 +351,7 @@ impl Llm for OllamaModel {
                                 usage_metadata: None,
                                 finish_reason: None,
                                 citation_metadata: None,
-                                partial: false,
+                                partial: true,
                                 turn_complete: false,
                                 interrupted: false,
                                 error_code: None,
