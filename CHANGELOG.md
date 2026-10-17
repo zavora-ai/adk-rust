@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Gemini Live context window compression** (`adk-realtime`):
+  `RealtimeConfig::with_context_window_compression` sends
+  `setup.contextWindowCompression` with a sliding window and an optional
+  `triggerTokens`. Google documents that Live sessions without it end after about
+  2 minutes with video and about 15 audio-only; with it only the ~10-minute
+  connection limit remains.
+
 ## [3.0.0] - 2026-10-10
 
 ## [2.3.0] - 2026-10-09

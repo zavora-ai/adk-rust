@@ -131,6 +131,48 @@ struct GeminiSetup {
     /// every existing server-VAD session relies on.
     #[serde(skip_serializing_if = "Option::is_none")]
     realtime_input_config: Option<GeminiRealtimeInputConfig>,
+    /// Only sent when the caller asked for it
+    /// ([`RealtimeConfig::with_context_window_compression`]). Google documents that without
+    /// it a session ends after about 2 minutes with video and about 15 audio-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_window_compression: Option<GeminiContextWindowCompression>,
+}
+
+/// `setup.contextWindowCompression`.
+///
+/// `slidingWindow` is the only mechanism Google defines; an empty one keeps the server's
+/// defaults (compress at 80% of the context window, cut back to half of that).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiContextWindowCompression {
+    sliding_window: GeminiSlidingWindow,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trigger_tokens: Option<u64>,
+}
+
+/// `setup.contextWindowCompression.slidingWindow`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiSlidingWindow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_tokens: Option<u64>,
+}
+
+impl GeminiContextWindowCompression {
+    /// Reads `extra.context_window_compression`: `true` for the server defaults, or an object
+    /// with optional `trigger_tokens` / `target_tokens`. Anything else leaves it off.
+    fn from_extra(extra: Option<&Value>) -> Option<Self> {
+        match extra?.get("context_window_compression")? {
+            Value::Bool(true) => Some(Self::default()),
+            Value::Object(opts) => Some(Self {
+                sliding_window: GeminiSlidingWindow {
+                    target_tokens: opts.get("target_tokens").and_then(Value::as_u64),
+                },
+                trigger_tokens: opts.get("trigger_tokens").and_then(Value::as_u64),
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// `setup.realtimeInputConfig`.
@@ -754,6 +796,9 @@ impl GeminiRealtimeSession {
 
         let tools = convert_tools(config.tools, dialect);
 
+        let context_window_compression =
+            GeminiContextWindowCompression::from_extra(config.extra.as_ref());
+
         // Functionally extract the token if it exists in the prior state map
         let handle = config
             .extra
@@ -780,6 +825,7 @@ impl GeminiRealtimeSession {
                 input_audio_transcription: transcription.clone(),
                 output_audio_transcription: transcription,
                 realtime_input_config,
+                context_window_compression,
             }),
             ..Default::default()
         }
@@ -1574,6 +1620,7 @@ mod tests {
             input_audio_transcription: None,
             output_audio_transcription: None,
             realtime_input_config: None,
+            context_window_compression: None,
         };
         let wrapper = GeminiClientMessage { setup: Some(setup), ..Default::default() };
         let js = serde_json::to_value(&wrapper).unwrap();
@@ -1619,6 +1666,53 @@ mod tests {
             RealtimeConfig { extra: Some(json!(["not", "an", "object"])), ..Default::default() };
         let extra = config.with_language("fr-FR").extra.unwrap();
         assert_eq!(extra, json!({"language_code": "fr-FR"}));
+    }
+
+    #[test]
+    fn test_context_window_compression_sends_a_sliding_window() {
+        let js = setup_json(RealtimeConfig::default().with_context_window_compression(None));
+        assert_eq!(js["setup"]["contextWindowCompression"], json!({"slidingWindow": {}}));
+
+        let js = setup_json(
+            RealtimeConfig::default()
+                .with_language("en-US")
+                .with_context_window_compression(Some(25_600)),
+        );
+        assert_eq!(
+            js["setup"]["contextWindowCompression"],
+            json!({"slidingWindow": {}, "triggerTokens": 25_600})
+        );
+        assert_eq!(js["setup"]["generationConfig"]["speechConfig"]["languageCode"], json!("en-US"));
+
+        let config = RealtimeConfig {
+            extra: Some(json!({
+                "context_window_compression": {"trigger_tokens": 32_000, "target_tokens": 16_000}
+            })),
+            ..Default::default()
+        };
+        assert_eq!(
+            setup_json(config)["setup"]["contextWindowCompression"],
+            json!({"slidingWindow": {"targetTokens": 16_000}, "triggerTokens": 32_000})
+        );
+    }
+
+    #[test]
+    fn test_context_window_compression_is_absent_unless_asked() {
+        assert!(
+            setup_json(RealtimeConfig::default())["setup"]
+                .get("contextWindowCompression")
+                .is_none()
+        );
+        for off in [json!(false), json!(null), json!("yes"), json!(1)] {
+            let config = RealtimeConfig {
+                extra: Some(json!({"context_window_compression": off})),
+                ..Default::default()
+            };
+            assert!(
+                setup_json(config)["setup"].get("contextWindowCompression").is_none(),
+                "{off} must not turn compression on"
+            );
+        }
     }
 
     #[test]
