@@ -181,7 +181,7 @@ let config = RunnerConfig {
 };
 ```
 
-Compaction runs after each invocation completes. When the user-event count reaches the interval, older events are summarized into a single compacted event. The `BaseEventsSummarizer` and `EventsCompactionConfig` types are re-exported from `adk-core` for convenience.
+Compaction runs after each invocation completes. When the user-event count reaches the interval, older events are summarized into a single compacted event. The `BaseEventsSummarizer` and `EventsCompactionConfig` types are re-exported from `adk-core` for convenience. No compaction covers a tool call still held for confirmation: session, intra-invocation and context compaction all stop before it, so its approval can still resume it.
 
 See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/context-compaction.md) for the full guide.
 
