@@ -759,6 +759,9 @@ See [Ollama library](https://ollama.com/library) for all available models.
 - **Credential hygiene** - Provider configs redact the API key in `Debug` output and omit it when serialized
 - **Generation Config** - Temperature, top_p, top_k, max_tokens
 - **Token Usage Telemetry** - Automatic `gen_ai.usage.*` span recording for all providers via `adk-telemetry`
+- **Test doubles** - `ScriptedLlm` answers each call with the next `ScriptedResponse` (text,
+  function calls, streamed chunks, a stream error, a failed call, usage) and records every
+  request; `MockLlm` replays the same responses on every call
 
 ## Native Response and Request Fidelity
 

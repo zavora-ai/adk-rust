@@ -271,7 +271,7 @@ An identical `ManagedAgentDef` run against all five providers produces byte-iden
 
 ## Testing with ScriptedLlm
 
-`ScriptedLlm` is a deterministic LLM test double that exercises the full runtime pipeline. Only the provider API call is replaced:
+`ScriptedLlm` is a deterministic LLM test double that exercises the full runtime pipeline. Only the provider API call is replaced. It is `adk_model::ScriptedLlm`, re-exported: each model call gets the next scripted turn, `requests()` returns what the runtime sent on every call, and a call past the last turn fails with `model.scripted.exhausted`:
 
 ```rust,ignore
 use adk_managed::testing::{ScriptedLlm, ScriptedTurn, ScriptedToolCall};
@@ -343,7 +343,7 @@ adk-managed/src/
 ├── event_mapping.rs        # Provider-neutral Runner → SessionEvent mapping
 ├── schema_normalization.rs # Cross-provider MCP schema normalization
 ├── usage.rs                # Uniform usage reporting
-└── testing.rs              # ScriptedLlm, ScriptedTurn, ScriptedToolCall
+└── testing.rs              # ScriptedTurn, ScriptedToolCall; re-exports adk_model::ScriptedLlm
 ```
 
 ## Feature Flags

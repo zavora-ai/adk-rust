@@ -592,26 +592,44 @@ async fn test_full_workflow() {
 
 ### Mock Testing
 
-Use `MockLlm` for testing without API calls:
+Use `ScriptedLlm` to test an agent without API calls. It answers each model call with the
+next scripted reply and records every request, so a test can script a tool loop and assert
+on what the agent sent:
 
 ```rust
-use adk_model::MockLlm;
+use std::sync::Arc;
+
+use adk_agent::LlmAgentBuilder;
+use adk_model::{ScriptedLlm, ScriptedResponse};
+use serde_json::json;
 
 #[tokio::test]
-async fn test_agent_with_mock() {
-    let mock = MockLlm::new(vec![
-        "First response".to_string(),
-        "Second response".to_string(),
-    ]);
+async fn test_agent_with_scripted_model() {
+    let llm = Arc::new(ScriptedLlm::new(
+        "scripted",
+        [
+            // First model call: ask for a tool.
+            ScriptedResponse::function_call("get_weather", json!({ "city": "Nairobi" })),
+            // Second model call, after the tool result: answer.
+            ScriptedResponse::text("It is sunny in Nairobi."),
+        ],
+    ));
 
     let agent = LlmAgentBuilder::new("test")
-        .model(Arc::new(mock))
+        .model(llm.clone())
+        .tool(Arc::new(GetWeather))
         .build()
         .unwrap();
 
-    // Test agent behavior
+    // Run the agent through a Runner, then assert on the requests:
+    // llm.requests()[1] carries the get_weather function response.
 }
 ```
+
+A call past the end of the script fails with `adk_model::SCRIPT_EXHAUSTED_CODE`.
+`ScriptedResponse` also scripts streamed chunks, a stream that ends in an error, a failed call,
+and reported usage. `MockLlm` replays the same responses on every call, so it suits a single
+model turn only.
 
 ### Test Commands
 
