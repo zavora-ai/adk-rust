@@ -531,11 +531,12 @@ impl Tool for Tick {
 pub struct WriteRecord {
     /// When the call started, in Unix milliseconds.
     pub at_ms: i64,
-    /// `claim`, `heartbeat`, `set_checkpoint`, `wait`, or `finish`.
+    /// `claim`, `poll` (a claim that returned no run), `heartbeat`, `set_checkpoint`,
+    /// `wait`, or `finish`.
     pub op: String,
-    /// The epoch the write carried, or the epoch a claim returned.
+    /// The epoch the write carried, or the epoch a claim returned; 0 for a poll.
     pub epoch: u64,
-    /// `ok`, or the error code that refused the write.
+    /// `ok`, `none` for a poll that found nothing, or the error code that refused the call.
     pub outcome: String,
 }
 
@@ -560,8 +561,8 @@ impl WriteRecord {
     }
 }
 
-/// Records every fenced write and successful claim this process makes, so the test can
-/// see what a worker tried to write and what the backend answered.
+/// Records every fenced write and claim this process makes, so the test can see what a
+/// worker tried to write and what the backend answered.
 pub struct RecordingRunStore {
     inner: Arc<dyn DurableRunStore>,
     log: PathBuf,
@@ -573,18 +574,25 @@ pub struct RecordingRunStore {
 /// The heartbeat creates `reached` and waits for `resume` before it is sent, so the
 /// test can stop the process there. A paused worker sends no renewal, and once resumed
 /// the heartbeat is the first write it makes — with the epoch of the lease it lost.
+///
+/// The stall holds `quiet` from before `reached` exists until it resumes. The process's
+/// other store calls take `quiet` too, so none is in flight when the test stops it: a
+/// process stopped inside a store transaction keeps that transaction's locks, which on
+/// Neo4j blocks the recovering process's claims until the stopped one resumes.
 pub struct HeartbeatStall {
     /// Created when the first heartbeat is about to be sent.
     pub reached: PathBuf,
     /// The heartbeat is sent once this exists.
     pub resume: PathBuf,
+    /// Held while the stall is reached and not yet resumed.
+    pub quiet: Arc<tokio::sync::Mutex<()>>,
     armed: std::sync::atomic::AtomicBool,
 }
 
 impl HeartbeatStall {
-    /// Stalls the first heartbeat until `resume` exists.
-    pub fn new(reached: PathBuf, resume: PathBuf) -> Self {
-        Self { reached, resume, armed: std::sync::atomic::AtomicBool::new(true) }
+    /// Stalls the first heartbeat until `resume` exists, holding `quiet` meanwhile.
+    pub fn new(reached: PathBuf, resume: PathBuf, quiet: Arc<tokio::sync::Mutex<()>>) -> Self {
+        Self { reached, resume, quiet, armed: std::sync::atomic::AtomicBool::new(true) }
     }
 }
 
@@ -619,8 +627,10 @@ impl DurableRunStore for RecordingRunStore {
     async fn claim(&self, queue: &str, worker: &str, ttl: Duration) -> Result<Option<ClaimedRun>> {
         let started = now_ms();
         let claimed = self.inner.claim(queue, worker, ttl).await;
-        if let Ok(Some(run)) = &claimed {
-            self.record(started, "claim", run.epoch, &claimed);
+        match &claimed {
+            Ok(Some(run)) => self.record(started, "claim", run.epoch, &claimed),
+            Ok(None) => append_line(&self.log, &format!("{started} poll 0 none")),
+            Err(_) => self.record(started, "poll", 0, &claimed),
         }
         claimed
     }
@@ -629,6 +639,7 @@ impl DurableRunStore for RecordingRunStore {
         if let Some(stall) = &self.stall
             && stall.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
         {
+            let _quiet = stall.quiet.lock().await;
             std::fs::write(&stall.reached, b"").expect("stall marker written");
             wait_for_file(&stall.resume).await;
         }

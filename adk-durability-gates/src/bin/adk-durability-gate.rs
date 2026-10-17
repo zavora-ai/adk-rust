@@ -43,15 +43,22 @@ async fn main() {
 }
 
 /// Runs the payment agent until the run named by `ADK_GATE_RUN` is terminal.
+///
+/// The worker runs one attempt at a time, so while it holds the run its claim loop makes
+/// no store call, and a stalled heartbeat leaves the process with no store call in flight.
 async fn payment_worker() {
     let stores = Backend::from_process_env().open().await;
+    let quiet = Arc::new(tokio::sync::Mutex::new(()));
     let mut recording =
         RecordingRunStore::new(Arc::clone(&stores.runs), var("ADK_GATE_WRITES").into());
     if let (Ok(reached), Ok(resume)) =
         (std::env::var("ADK_GATE_STALL_REACHED"), std::env::var("ADK_GATE_STALL_RESUME"))
     {
-        recording =
-            recording.with_heartbeat_stall(HeartbeatStall::new(reached.into(), resume.into()));
+        recording = recording.with_heartbeat_stall(HeartbeatStall::new(
+            reached.into(),
+            resume.into(),
+            Arc::clone(&quiet),
+        ));
     }
     let runs: Arc<dyn DurableRunStore> = Arc::new(recording);
     let after = match var("ADK_GATE_AFTER_CHARGE").as_str() {
@@ -82,12 +89,16 @@ async fn payment_worker() {
                 .with_worker_id(var("ADK_GATE_WORKER"))
                 .with_queue(var("ADK_GATE_QUEUE"))
                 .with_lease_ttl(millis("ADK_GATE_LEASE_MS"))
-                .with_poll_interval(Duration::from_millis(100)),
+                .with_poll_interval(Duration::from_millis(100))
+                .with_max_concurrent_runs(1),
         )
         .spawn();
     let run_id = var("ADK_GATE_RUN");
     loop {
-        let run = stores.runs.get(&run_id).await.expect("read run").expect("run exists");
+        let run = {
+            let _quiet = quiet.lock().await;
+            stores.runs.get(&run_id).await.expect("read run").expect("run exists")
+        };
         if run.state.is_terminal() {
             break;
         }

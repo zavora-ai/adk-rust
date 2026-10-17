@@ -202,7 +202,9 @@ same store and queue shares the work.
 One attempt of a claimed run:
 
 1. `claim` returns the run with a fencing epoch. A worker whose governance control refuses work
-   (frozen, or a stale fail-closed mirror) claims nothing.
+   (frozen, or a stale fail-closed mirror) claims nothing. A claim already in flight when the
+   control starts refusing can still return a run; the worker checks the control again and
+   hands that run back unstarted, as **Kill switch** below describes.
 2. The worker records the checkpoint with `set_checkpoint` before any progress is made.
 3. A heartbeat every `lease_ttl / 3` extends the lease. A heartbeat that reports a cancellation
    request stops the run cooperatively; one refused with `run_store.stale_epoch` drops the
@@ -216,6 +218,19 @@ model response, tool call, and tool result. Each checks that the lease is still 
 the last successful heartbeat was sent less than `lease_ttl` ago. When it is not, the hook never
 returns and the worker drops the attempt, so a stalled worker makes no further model call, tool
 call, session write, or store write.
+
+**Kill switch.** The worker reads its governance control before each claim, and again before it
+runs what the claim returned, because a claim can return after a freeze landed:
+
+| Refused | Worker |
+|---------|--------|
+| Once the claim returns | Hands the run back unstarted |
+| By the runner before the agent produced an event (the runner's start check, or the agent's check before its first model call) | Hands the run back unstarted, when the worker's own control also refuses |
+| After the run made a model or tool call | Ends the attempt with the control's error (`governance.frozen` is not retried; `governance.stale` is) |
+
+A run handed back is parked with `wait` until the time it was claimed: it is `Waiting`,
+claimable at once — by this worker once its control allows work again — and the claim that
+resumes it counts no further attempt, so a freeze never uses up a queued run's attempts.
 
 | `WorkerHandle` method | Effect |
 |-----------------------|--------|
@@ -458,7 +473,7 @@ The atomic primitive each guarantee needs:
 |---------|-----------|---------|-------|
 | Redis | Every conditional change is one Lua script | One hash per lease and run; sorted sets of ready runs (by enqueue order), timers (delays, waits, lease expiry), key holders, and due schedules | No key expiry: deadlines are timestamps compared in the scripts, so the durable truth never depends on eviction. Each store keeps its keys under one hash tag, so it runs on Redis Cluster on one slot per store |
 | MongoDB | On a replica set (one node is enough) or sharded cluster, every enqueue is one multi-document transaction; everything else is a single-document write: filtered `findOneAndUpdate`, revision-filtered replace, unique indexes | `adk_leases`, `adk_runs` (record as JSON plus queried fields), `adk_run_keys`, `adk_schedules`, `adk_governance` | A concurrency key's `adk_run_keys` document lists its unfinished holders in order; only the first is claimable. `MongoRunStore::supports_transactions` detects the server type from `hello` (`with_transactions` overrides it). A standalone `mongod` uses a weaker fallback with two windows: a `Reject` that loses admission deletes the run it inserted, which a concurrent enqueue with the same idempotency key can briefly see as `Existing`; and a keyed run whose enqueue stopped before admission is admitted by a claim a minute later |
-| Neo4j | Transactions that write-lock a lock node before reading | `AdkLease`, `AdkRun` (record as JSON), `AdkRunQueue`, `AdkSchedule`, `AdkGovernanceState` nodes | Enqueues and claims serialize per queue on the `AdkRunQueue` node; worker writes lock the run node. Transient errors such as deadlocks are retried up to 30 times. Every store call runs to completion on its own task, so a caller that drops the call (as the worker drops an in-flight heartbeat) never returns a connection to the pool mid-exchange |
+| Neo4j | Transactions that write-lock a lock node before reading | `AdkLease`, `AdkRun` (record as JSON), `AdkRunQueue`, `AdkSchedule`, `AdkGovernanceState` nodes | Enqueues and claims serialize per queue on the `AdkRunQueue` node; worker writes lock the run node. Transient errors such as deadlocks are retried up to 30 times. A transaction keeps its locks while its client is paused, so a replica stopped inside a claim blocks every claim and enqueue in that queue until it resumes; set the server's `db.transaction.timeout` to bound that. Every store call runs to completion on its own task, so a caller that drops the call (as the worker drops an in-flight heartbeat) never returns a connection to the pool mid-exchange |
 | Firestore | Read-write transactions that read documents by ID only | `adk_leases`, `adk_runs`, `adk_run_queues`, `adk_run_keys`, `adk_run_key_holders`, `adk_schedules`, `adk_governance` | Enqueues serialize per queue on the `adk_run_queues` document. A claim queries candidates outside any transaction, then re-reads and claims each in its own transaction. A concurrency key's holders live in one document. Every query ranges over one field, so no composite index is needed. Claims take the run that became claimable first, then the oldest enqueued; for undelayed queued runs that is enqueue order |
 
 ### SQL stores
@@ -601,8 +616,8 @@ backend.
 |------|-----------|----------------|
 | `crash_mid_payment` | two workers | the worker running a non-idempotent charge is SIGKILLed mid-call; the other claims the run only after the lease expired, at the next epoch; exactly one charge; the run completes with the call answered `outcome_unknown` |
 | `one_firing_per_schedule` | three schedulers | an interval, a per-second cron, and five one-shot schedules race for at least four seconds and until the recurring ones fired 12 and 3 times; every occurrence before each schedule's cursor has exactly one run, no run is for a time that is no occurrence, and the processes' own counts of created runs sum to the runs stored |
-| `stalled_worker` | two workers | the worker holding a charged run is SIGSTOPped at its heartbeat past the lease; the other recovers the run and holds it; after SIGCONT the paused worker's heartbeat is refused with `run_store.stale_epoch`, it writes nothing that succeeds, and the charge happened once |
-| `kill_switch` | three replicas and a writer | a freeze written by the test process reaches every replica within three poll intervals (300 ms); no model or tool call starts after a replica froze; no run is claimed and no schedule fires or advances while frozen; after unfreezing the missed occurrence fires once; a replica cut off from the governance store goes stale at its 1 s limit and claims nothing while its peers keep working |
+| `stalled_worker` | two workers | the worker holding a charged run is SIGSTOPped at its heartbeat, with no store call in flight, past the lease; the other recovers the run and holds it; after SIGCONT the paused worker's heartbeat is refused with `run_store.stale_epoch`, it writes nothing that succeeds, and the charge happened once |
+| `kill_switch` | three replicas and a writer | a freeze written by the test process reaches every replica within three poll intervals (300 ms); no model or tool call starts after a replica froze; no run starts and no schedule fires or advances while frozen, and a run a claim in flight returns after the freeze is handed back `Waiting` at attempt 1; after unfreezing every queued run completes and the missed occurrence fires once; a replica cut off from the governance store goes stale at its 1 s limit and starts no run while its peers keep working |
 
 The gates use a 2 s run lease, a 100 ms governance poll interval, and a 1 s staleness limit, so
 each finishes in seconds. Gates sharing one server run one at a time (nextest test groups in
