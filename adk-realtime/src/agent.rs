@@ -1302,9 +1302,20 @@ async fn dispatch_tool(
     };
     let log_failure = |error: &AdkError, stage: &str| {
         if record_payloads {
-            tracing::warn!(tool.name = %name, error.code = %error.code, error.message = %error.message, stage, "realtime tool call failed");
+            tracing::warn!(
+                tool.name = %name,
+                error = %error.diagnostics(),
+                error.message = %error.message,
+                stage,
+                "realtime tool call failed"
+            );
         } else {
-            tracing::warn!(tool.name = %name, error.code = %error.code, stage, "realtime tool call failed");
+            tracing::warn!(
+                tool.name = %name,
+                error = %error.diagnostics(),
+                stage,
+                "realtime tool call failed"
+            );
         }
     };
     let not_run = |error: &AdkError| {

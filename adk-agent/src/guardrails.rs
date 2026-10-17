@@ -365,18 +365,20 @@ impl adk_core::ToolCallScreen for GuardrailScreen<'_> {
 /// (`ToolGuardrail::validate_result`) before the model and the session see them.
 ///
 /// A withheld result is replaced by `adk_core::result_blocked_response`, and its inline and
-/// file data are dropped with it.
+/// file data are dropped with it. Returns the screened content and the reason for each
+/// withheld response, which the caller logs under the payload rule.
 #[cfg(feature = "guardrails")]
 pub(crate) async fn screen_tool_result(
     guardrails: &ToolGuardrailSet,
     tool_name: &str,
     args: &serde_json::Value,
     mut content: Content,
-) -> Content {
+) -> (Content, Vec<String>) {
     use adk_core::ToolResultScreen as _;
 
+    let mut withheld = Vec::new();
     if guardrails.is_empty() {
-        return content;
+        return (content, withheld);
     }
     for part in &mut content.parts {
         let Part::FunctionResponse { function_response, .. } = part else { continue };
@@ -386,10 +388,11 @@ pub(crate) async fn screen_tool_result(
                 function_response.response = adk_core::result_blocked_response(tool_name, &reason);
                 function_response.inline_data.clear();
                 function_response.file_data.clear();
+                withheld.push(reason);
             }
         }
     }
-    content
+    (content, withheld)
 }
 
 #[cfg(not(feature = "guardrails"))]
@@ -398,6 +401,6 @@ pub(crate) async fn screen_tool_result(
     _tool_name: &str,
     _args: &serde_json::Value,
     content: Content,
-) -> Content {
-    content
+) -> (Content, Vec<String>) {
+    (content, Vec::new())
 }

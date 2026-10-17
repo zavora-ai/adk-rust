@@ -398,3 +398,88 @@ async fn guardrail_denial_reasons_follow_the_payload_rule() {
         }
     }
 }
+
+#[cfg(feature = "guardrails")]
+#[tokio::test]
+async fn tool_result_withhold_reasons_follow_the_payload_rule() {
+    use adk_agent::guardrails::{
+        Severity, ToolGuardrail, ToolGuardrailSet, ToolResultGuardrailResult,
+    };
+
+    struct CallsLookup(AtomicUsize);
+
+    #[async_trait]
+    impl Llm for CallsLookup {
+        fn name(&self) -> &str {
+            "calls-lookup"
+        }
+
+        async fn generate_content(
+            &self,
+            _req: LlmRequest,
+            _stream: bool,
+        ) -> Result<LlmResponseStream> {
+            let part = if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                Part::FunctionCall {
+                    name: "lookup".to_string(),
+                    args: serde_json::json!({}),
+                    id: Some("call-1".to_string()),
+                    thought_signature: None,
+                }
+            } else {
+                Part::Text { text: "Done.".to_string() }
+            };
+            let mut response =
+                LlmResponse::new(Content { role: "model".to_string(), parts: vec![part] });
+            response.finish_reason = Some(FinishReason::Stop);
+            Ok(Box::pin(futures::stream::iter([Ok(response)])))
+        }
+    }
+
+    /// Withholds every result, with a reason that quotes it.
+    struct WithholdsAccounts;
+
+    #[async_trait]
+    impl ToolGuardrail for WithholdsAccounts {
+        fn name(&self) -> &str {
+            "withholds-accounts"
+        }
+
+        async fn validate_result(
+            &self,
+            _tool: &str,
+            _args: &serde_json::Value,
+            result: &serde_json::Value,
+        ) -> ToolResultGuardrailResult {
+            ToolResultGuardrailResult::withhold(
+                format!("the result names {}", result["account"]),
+                Severity::High,
+            )
+        }
+    }
+
+    for record_payloads in [false, true] {
+        let lookup = FunctionTool::new("lookup", "looks up an account", |_ctx, _args| async {
+            Ok(serde_json::json!({ "account": SECRET }))
+        });
+        let agent = LlmAgentBuilder::new("assistant")
+            .model(Arc::new(CallsLookup(AtomicUsize::new(0))))
+            .tool(Arc::new(lookup))
+            .tool_guardrails(ToolGuardrailSet::new().with(WithholdsAccounts))
+            .build()
+            .unwrap();
+        let (values, error) =
+            record_run(agent, RunConfig { record_payloads, ..RunConfig::default() }).await;
+
+        assert!(error.is_none(), "{error:?}");
+        assert!(values.contains(&"guardrail=withholds-accounts".to_string()), "{values:#?}");
+        assert_eq!(
+            values.iter().any(|value| value.starts_with("reason=") && value.contains(SECRET)),
+            record_payloads,
+            "the withhold reason is logged only when payloads are recorded: {values:#?}"
+        );
+        if !record_payloads {
+            assert!(leaks(&values).is_empty(), "the withheld result reached tracing: {values:#?}");
+        }
+    }
+}

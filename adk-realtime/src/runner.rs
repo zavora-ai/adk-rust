@@ -1191,8 +1191,9 @@ impl RealtimeRunner {
         }
     }
 
-    /// Whether tool payloads may be logged, from the governance config's `record_payloads`.
-    fn records_payloads(&self) -> bool {
+    /// Whether tool error messages may be logged: the `record_payloads` of the config passed to
+    /// [`RealtimeRunnerBuilder::tool_governance`]. Without one, only content-free fields are.
+    pub(crate) fn records_payloads(&self) -> bool {
         self.governance.as_ref().is_some_and(|governance| governance.config.record_payloads)
     }
 
@@ -1225,9 +1226,18 @@ impl RealtimeRunner {
                             Ok(Err(e)) => {
                                 // A message can quote credentials or internal hosts.
                                 if self.records_payloads() {
-                                    tracing::warn!(tool.name = %name, error = %e, "realtime tool handler failed");
+                                    tracing::warn!(
+                                        tool.name = %name,
+                                        error.kind = e.kind(),
+                                        error.message = %e,
+                                        "realtime tool handler failed"
+                                    );
                                 } else {
-                                    tracing::warn!(tool.name = %name, "realtime tool handler failed");
+                                    tracing::warn!(
+                                        tool.name = %name,
+                                        error.kind = e.kind(),
+                                        "realtime tool handler failed"
+                                    );
                                 }
                                 if self.expose_tool_error_messages {
                                     serde_json::json!({ "error": e.to_string() })
@@ -1566,6 +1576,55 @@ mod runner_tests {
         runner.dispatch_tool_call("c2", "lookup", "{}").await.unwrap();
         let output = counts.last_output.lock().clone().unwrap();
         assert!(output["error"].as_str().unwrap_or_default().contains("hunter2"), "{output}");
+    }
+
+    /// Records every event field the runner logs.
+    #[derive(Clone, Default)]
+    struct Logged(Arc<parking_lot::Mutex<Vec<String>>>);
+
+    struct LoggedValues<'a>(&'a mut Vec<String>);
+
+    impl tracing::field::Visit for LoggedValues<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.push(format!("{}={value:?}", field.name()));
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Logged {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            event.record(&mut LoggedValues(&mut self.0.lock()));
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handler_error_messages_are_logged_only_under_the_payload_rule() {
+        use tracing_subscriber::layer::SubscriberExt;
+
+        for record_payloads in [false, true] {
+            let logged = Logged::default();
+            let _guard = tracing::subscriber::set_default(
+                tracing_subscriber::registry().with(logged.clone()),
+            );
+            let counts = Arc::new(Counts::default());
+            let config = adk_core::RunConfig { record_payloads, ..adk_core::RunConfig::default() };
+            let runner = lookup_runner(Arc::clone(&counts), true, |b| {
+                b.tool_governance(config, adk_core::ApprovalScope::new("voice", "user", "s"))
+            })
+            .await;
+            runner.dispatch_tool_call("c1", "lookup", "{}").await.unwrap();
+
+            let values = logged.0.lock().clone();
+            assert!(values.contains(&"error.kind=\"tool\"".to_string()), "{values:#?}");
+            assert_eq!(
+                values.iter().any(|value| value.contains("hunter2")),
+                record_payloads,
+                "the message is logged only when payloads are recorded: {values:#?}"
+            );
+        }
     }
 
     #[tokio::test]

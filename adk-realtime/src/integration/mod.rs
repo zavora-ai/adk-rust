@@ -694,11 +694,20 @@ impl IntegratedRealtimeRunner {
                             // screening live, so the unscreened result is withheld. The tool has
                             // already run, and the model is told so it does not repeat a side
                             // effect.
-                            tracing::error!(
-                                tool = tool.name(),
-                                error.code = %e.code,
-                                "after_tool_call plugin failed; withholding the tool result"
-                            );
+                            if self.runner.records_payloads() {
+                                tracing::error!(
+                                    tool = tool.name(),
+                                    error = %e.diagnostics(),
+                                    error.message = %e.message,
+                                    "after_tool_call plugin failed; withholding the tool result"
+                                );
+                            } else {
+                                tracing::error!(
+                                    tool = tool.name(),
+                                    error = %e.diagnostics(),
+                                    "after_tool_call plugin failed; withholding the tool result"
+                                );
+                            }
                             adk_core::result_withheld_response(
                                 tool.name(),
                                 &e,
@@ -711,11 +720,20 @@ impl IntegratedRealtimeRunner {
                     // Fail closed. A before-tool plugin is where authorization, redaction, and
                     // policy live, so executing the tool when that pipeline fails turns a
                     // broken guard into no guard. The model receives the error instead.
-                    tracing::error!(
-                        tool = tool.name(),
-                        error.code = %e.code,
-                        "before_tool_call plugin failed; refusing the tool"
-                    );
+                    if self.runner.records_payloads() {
+                        tracing::error!(
+                            tool = tool.name(),
+                            error = %e.diagnostics(),
+                            error.message = %e.message,
+                            "before_tool_call plugin failed; refusing the tool"
+                        );
+                    } else {
+                        tracing::error!(
+                            tool = tool.name(),
+                            error = %e.diagnostics(),
+                            "before_tool_call plugin failed; refusing the tool"
+                        );
+                    }
                     let failure = if self.runner.exposes_tool_error_messages() {
                         e.to_string()
                     } else {
@@ -790,7 +808,20 @@ impl IntegratedRealtimeRunner {
                 match tokio::time::timeout(timeout, execution).await {
                     Ok(Ok(value)) => value,
                     Ok(Err(e)) => {
-                        tracing::warn!(tool = tool.name(), error.code = %e.code, "realtime tool failed");
+                        if self.runner.records_payloads() {
+                            tracing::warn!(
+                                tool = tool.name(),
+                                error = %e.diagnostics(),
+                                error.message = %e.message,
+                                "realtime tool failed"
+                            );
+                        } else {
+                            tracing::warn!(
+                                tool = tool.name(),
+                                error = %e.diagnostics(),
+                                "realtime tool failed"
+                            );
+                        }
                         adk_core::tool_error_response(
                             tool.name(),
                             &e,

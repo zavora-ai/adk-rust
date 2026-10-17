@@ -92,6 +92,31 @@ impl From<crate::livekit::LiveKitError> for RealtimeError {
 }
 
 impl RealtimeError {
+    /// The error's variant as a fixed name, which carries none of its message and so may be
+    /// logged whatever the payload rule.
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::ConnectionError(_) => "connection",
+            Self::MessageError(_) => "message",
+            Self::AuthError(_) => "auth",
+            Self::NotConnected => "not_connected",
+            Self::SessionClosed => "session_closed",
+            Self::ConfigError(_) => "config",
+            Self::AudioFormatError(_) => "audio_format",
+            Self::ToolError(_) => "tool",
+            Self::ServerError { .. } => "server",
+            Self::Timeout(_) => "timeout",
+            Self::SerializationError(_) => "serialization",
+            Self::ProviderError(_) => "provider",
+            Self::IoError(_) => "io",
+            Self::OpusCodecError(_) => "opus_codec",
+            Self::WebRTCError(_) => "webrtc",
+            Self::LiveKitError(_) => "livekit",
+            #[cfg(feature = "livekit")]
+            Self::LiveKitNativeError(_) => "livekit_native",
+        }
+    }
+
     /// Create a new connection error.
     pub fn connection<S: Into<String>>(msg: S) -> Self {
         Self::ConnectionError(msg.into())

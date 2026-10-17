@@ -2344,8 +2344,17 @@ impl ToolExecutor<'_> {
         if let Some((name, args)) = screened_call
             && result.pending.is_none()
         {
-            result.content =
+            let (content, withheld) =
                 screen_tool_result(self.tool_guardrails, &name, &args, result.content).await;
+            result.content = content;
+            for reason in withheld {
+                // A guardrail's reason can describe the result it withheld.
+                tracing::debug!(
+                    tool.name = %name,
+                    reason = %self.logged_message(&reason),
+                    "tool result withheld"
+                );
+            }
         }
         // A result that ends the turn is the final response, so it is screened like one,
         // before the client or the session sees it.

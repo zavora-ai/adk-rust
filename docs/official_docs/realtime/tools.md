@@ -220,9 +220,12 @@ let runner = RealtimeRunner::builder()
 An error message can quote credentials, internal hosts, or upstream bodies, and the provider
 can speak it to the user and the session stores it, so by default it reaches neither.
 `expose_tool_error_messages(true)` on `RealtimeAgentBuilder`, `RealtimeRunnerBuilder`, or
-`IntegratedRealtimeRunnerBuilder` sends it. `RealtimeAgent` logs the message when the run's
-`RunConfig::record_payloads` is set, and `RealtimeRunner` when its `tool_governance` config sets
-it.
+`IntegratedRealtimeRunnerBuilder` sends it. Exposing a message to the model and logging it are
+separate: every failure is logged by its content-free part (an `AdkError`'s
+`diagnostics()`, a native handler error's kind), and the message is added only under the payload
+rule — the run's `RunConfig::record_payloads` for `RealtimeAgent`, and the `record_payloads` of the
+`tool_governance` config for `RealtimeRunner` and `IntegratedRealtimeRunner`. A runner built
+without `tool_governance` never logs the message.
 
 ## Screening tool results
 

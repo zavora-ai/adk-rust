@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use adk_core::Content;
 use adk_guardrail::{
-    Guardrail, GuardrailExecutor, GuardrailResult, GuardrailSet, PathAllowList, ToolCallDecision,
-    ToolGuardrail, ToolGuardrailResult, ToolGuardrailSet,
+    Guardrail, GuardrailExecutor, GuardrailResult, GuardrailSet, PathAllowList, Severity,
+    ToolCallDecision, ToolGuardrail, ToolGuardrailResult, ToolGuardrailSet, ToolResultDecision,
+    ToolResultGuardrailResult,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -126,5 +127,53 @@ async fn transform_reasons_are_not_logged() {
         values.iter().filter(|value| *value == "guardrail=\"redact-account\"").count(),
         2,
         "both the parallel and the sequential transform are logged: {values:#?}"
+    );
+}
+
+/// Revises a result on `lookup` and withholds one on `export`, quoting the result each time.
+struct ScreensAccounts;
+
+#[async_trait]
+impl ToolGuardrail for ScreensAccounts {
+    fn name(&self) -> &str {
+        "screens-accounts"
+    }
+
+    async fn validate_result(
+        &self,
+        tool: &str,
+        _args: &Value,
+        result: &Value,
+    ) -> ToolResultGuardrailResult {
+        let reason = format!("the result names {}", result["account"]);
+        if tool == "export" {
+            ToolResultGuardrailResult::withhold(reason, Severity::High)
+        } else {
+            ToolResultGuardrailResult::revise(json!({"account": "[redacted]"}), reason)
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tool_result_guardrail_reasons_are_returned_but_not_logged() {
+    let guardrails = ToolGuardrailSet::new().with(ScreensAccounts);
+    let (recorded, _guard) = recording();
+
+    let revised =
+        guardrails.evaluate_result("lookup", &json!({}), &json!({"account": SECRET})).await;
+    assert_eq!(revised, ToolResultDecision::Deliver { result: json!({"account": "[redacted]"}) });
+    let withheld =
+        guardrails.evaluate_result("export", &json!({}), &json!({"account": SECRET})).await;
+    let ToolResultDecision::Withhold { reason, .. } = withheld else {
+        panic!("the result is withheld")
+    };
+    assert!(reason.contains(SECRET), "the caller still gets the reason: {reason}");
+
+    let values = recorded.values();
+    assert!(values.iter().all(|value| !value.contains(SECRET)), "{values:#?}");
+    assert_eq!(
+        values.iter().filter(|value| *value == "guardrail=\"screens-accounts\"").count(),
+        2,
+        "the revision and the withholding are both logged: {values:#?}"
     );
 }

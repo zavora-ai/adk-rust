@@ -361,6 +361,8 @@ impl ToolGuardrailSet {
             match guardrail.validate_result(tool_name, args, &current).await {
                 ToolResultGuardrailResult::Allow => {}
                 ToolResultGuardrailResult::Withhold { reason, severity } => {
+                    // The reason is returned to the caller, which sends it to the model, but
+                    // is not logged.
                     tracing::warn!(
                         guardrail = guardrail.name(),
                         tool = tool_name,
@@ -373,11 +375,11 @@ impl ToolGuardrailSet {
                         severity,
                     };
                 }
-                ToolResultGuardrailResult::Revise { result: revised, reason } => {
+                // A reason can quote the result it replaced, so it is not logged.
+                ToolResultGuardrailResult::Revise { result: revised, reason: _ } => {
                     tracing::debug!(
                         guardrail = guardrail.name(),
                         tool = tool_name,
-                        reason = %reason,
                         "tool result revised by guardrail"
                     );
                     current = revised;

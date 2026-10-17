@@ -14,4 +14,6 @@
   the result (`result_withheld`), on `RealtimeAgent`, `RealtimeRunner`,
   `IntegratedRealtimeRunner`, and `ToolBridgeAdapter`. Call `expose_tool_error_messages(true)`
   on the builder (or `ToolBridgeAdapter::with_exposed_error_messages(true)`) to send the full
-  message as before.
+  message as before. Logs carry each failure's diagnostics, and its message only under
+  `record_payloads`: the run's for `RealtimeAgent`, the `tool_governance` config's for the
+  runners.
