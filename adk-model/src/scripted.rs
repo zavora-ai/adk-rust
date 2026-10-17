@@ -1,4 +1,4 @@
-//! A scripted [`Llm`] for tests: one scripted reply per call, with every request recorded.
+//! A scripted [`Llm`](adk_core::Llm) for tests: one scripted reply per call, with every request recorded.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
