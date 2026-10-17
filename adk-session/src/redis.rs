@@ -6,22 +6,56 @@
 //!
 //! # Data Model
 //!
-//! | Key Pattern | Type | Contents |
-//! |---|---|---|
-//! | `{app}:{user}:{session}` | Hash | Session metadata + state |
-//! | `{app}:{user}:{session}:events` | Sorted Set | Events scored by timestamp |
-//! | `app_state:{app}` | Hash | App-level state |
-//! | `user_state:{app}:{user}` | Hash | User-level state |
-//! | `sessions_idx:{app}:{user}` | Set | Session IDs for list lookups |
-//! | `session_lookup:{session}` | String | Reverse lookup to `{app}:{user}` |
+//! The service picks its key layout from the connection: a standalone server (or Sentinel)
+//! keeps the names every release has written, and a Redis Cluster connection (`cluster_nodes`
+//! or a `redis-cluster://` URL) puts each session's keys under one hash tag.
 //!
-//! Each `{segment}` is percent-encoded (`%` → `%25`, `:` → `%3A`) so an identifier
-//! containing `:` cannot spill into the next segment, and an app name equal to one
-//! of the key-family prefixes (`app_state`, `user_state`, `sessions_idx`,
-//! `session_lookup`) has its first byte encoded too (`user_state` → `%75ser_state`)
-//! in the keys that start with the app name. Identifiers without these characters
-//! or names produce the same keys as before the encoding was introduced.
+//! | Contents | Type | Standalone key | Cluster key |
+//! |---|---|---|---|
+//! | Session metadata + session-tier state | Hash | `<app>:<user>:<session>` | `adk:session:{<app>:<user>:<session>}` |
+//! | Events scored by timestamp | Sorted Set | `<app>:<user>:<session>:events` | `adk:session:{<app>:<user>:<session>}:events` |
+//! | App-tier state | Hash | `app_state:<app>` | `adk:app_state:{<app>}` |
+//! | User-tier state | Hash | `user_state:<app>:<user>` | `adk:user_state:{<app>:<user>}` |
+//! | Session IDs for list lookups | Set | `sessions_idx:<app>:<user>` | `adk:sessions_idx:{<app>:<user>}` |
+//! | Reverse lookup to `<app>:<user>` | String | `session_lookup:<session>` | `adk:session_lookup:{<session>}` |
+//!
+//! Each `<segment>` is percent-encoded (`%` → `%25`, `:` → `%3A`) so an identifier
+//! containing `:` cannot spill into the next segment. In the standalone layout an app name
+//! equal to one of the key-family prefixes (`app_state`, `user_state`, `sessions_idx`,
+//! `session_lookup`) has its first byte encoded too (`user_state` → `%75ser_state`) in the
+//! keys that start with the app name, and identifiers without these characters or names
+//! produce the same keys as before the encoding was introduced. The cluster layout also
+//! encodes `{` (`%7B`) and `}` (`%7D`), so no identifier can move a key's hash slot.
+//!
+//! Standalone servers keep the standalone layout so sessions written by earlier releases
+//! stay readable. Moving a deployment from a standalone server to a cluster means copying
+//! its keys to the cluster names.
+//!
+//! # Atomicity
+//!
+//! | Operation | Standalone | Cluster |
+//! |---|---|---|
+//! | `create` | One `MULTI`/`EXEC`: session hash, app and user tier fields, index entry, lookup | Index entry, lookup, and the app and user tier fields first, then the session hash |
+//! | `append_event` | One script: event, session-tier compare-and-swap, app and user tier fields | One script: event and session-tier compare-and-swap; then the app and the user tier fields, one `HSET` each |
+//! | `delete` | One `MULTI`/`EXEC`: session hash, events, lookup, index entry | Session hash and events in one `DEL`, then the lookup and the index entry |
+//! | `delete_all_sessions` | One `MULTI`/`EXEC` over every session of the user | Each session as in `delete`, then the index |
+//!
+//! A Redis Cluster runs a script or transaction only when every key it names hashes to one
+//! slot, and the app and user tiers are shared by many sessions, so in cluster mode they are
+//! written outside the session's script. The session tier keeps its compare-and-swap, and
+//! tier fields are still written one field at a time, so concurrent writers of different
+//! fields keep each other's values. What changes in cluster mode:
+//!
+//! - A reader can see an appended event before its app and user tier fields.
+//! - An append that fails after its script returns an error with the event already stored.
+//! - A `create` that fails part-way can leave its app and user tier fields, and an index
+//!   entry and a lookup for a session that does not exist; `list` skips such entries and
+//!   `get` reports the session as not found.
+//!
+//! Every operation validates its identifiers (non-empty, at most
+//! [`MAX_ID_LEN`](adk_core::identity::MAX_ID_LEN) bytes, no NUL) before it sends a command.
 
+use crate::service::{validate_scope, validate_session_id};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -29,7 +63,6 @@ use crate::{
 use adk_core::{ErrorCategory, ErrorComponent, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use fred::clients::Transaction;
 use fred::prelude::*;
 use serde_json::Value;
 use std::borrow::Cow;
@@ -130,6 +163,25 @@ fn encode_segment(segment: &str) -> Cow<'_, str> {
     Cow::Owned(encoded)
 }
 
+/// Percent-encodes `%`, `:`, `{`, and `}`, so a segment of a cluster key can neither spill
+/// into the next segment nor move the key's hash slot.
+fn encode_cluster_segment(segment: &str) -> Cow<'_, str> {
+    if !segment.contains([':', '%', '{', '}']) {
+        return Cow::Borrowed(segment);
+    }
+    let mut encoded = String::with_capacity(segment.len() + 8);
+    for c in segment.chars() {
+        match c {
+            '%' => encoded.push_str("%25"),
+            ':' => encoded.push_str("%3A"),
+            '{' => encoded.push_str("%7B"),
+            '}' => encoded.push_str("%7D"),
+            other => encoded.push(other),
+        }
+    }
+    Cow::Owned(encoded)
+}
+
 /// Reverses [`encode_segment`].
 ///
 /// Only `%25` and `%3A` are decoded; any other `%` is kept as written, so
@@ -171,12 +223,12 @@ fn leading_app_segment(app: &str) -> Cow<'_, str> {
     encoded
 }
 
-/// Session metadata hash key: `{app}:{user}:{session}`.
+/// Session metadata hash key of the standalone layout: `<app>:<user>:<session>`.
 pub fn session_key(app: &str, user: &str, session: &str) -> String {
     format!("{}:{}:{}", leading_app_segment(app), encode_segment(user), encode_segment(session))
 }
 
-/// Events sorted set key: `{app}:{user}:{session}:events`.
+/// Events sorted set key of the standalone layout: `<app>:<user>:<session>:events`.
 pub fn events_key(app: &str, user: &str, session: &str) -> String {
     format!(
         "{}:{}:{}:events",
@@ -186,27 +238,22 @@ pub fn events_key(app: &str, user: &str, session: &str) -> String {
     )
 }
 
-/// App-level state hash key: `app_state:{app}`.
+/// App-level state hash key of the standalone layout: `app_state:<app>`.
 pub fn app_state_key(app: &str) -> String {
     format!("app_state:{}", encode_segment(app))
 }
 
-/// User-level state hash key: `user_state:{app}:{user}`.
+/// User-level state hash key of the standalone layout: `user_state:<app>:<user>`.
 pub fn user_state_key(app: &str, user: &str) -> String {
     format!("user_state:{}:{}", encode_segment(app), encode_segment(user))
 }
 
-/// Session index set key: `sessions_idx:{app}:{user}`.
+/// Session index set key of the standalone layout: `sessions_idx:<app>:<user>`.
 pub fn index_key(app: &str, user: &str) -> String {
     format!("sessions_idx:{}:{}", encode_segment(app), encode_segment(user))
 }
 
-/// Reverse lookup key: `session_lookup:{session}` → `{app}:{user}`.
-fn lookup_key(session: &str) -> String {
-    format!("session_lookup:{}", encode_segment(session))
-}
-
-/// Reverse lookup value naming the owner of a session: `{app}:{user}`.
+/// Reverse lookup value naming the owner of a session: `<app>:<user>`.
 fn lookup_value(app: &str, user: &str) -> String {
     format!("{}:{}", encode_segment(app), encode_segment(user))
 }
@@ -217,12 +264,87 @@ fn parse_lookup_value(value: &str) -> Option<(String, String)> {
     Some((decode_segment(app).into_owned(), decode_segment(user).into_owned()))
 }
 
+/// The hash tag shared by one session's keys in the cluster layout.
+fn cluster_session_tag(app: &str, user: &str, session: &str) -> String {
+    format!(
+        "{{{}:{}:{}}}",
+        encode_cluster_segment(app),
+        encode_cluster_segment(user),
+        encode_cluster_segment(session)
+    )
+}
+
+/// Which key names a [`RedisSessionService`] reads and writes; see the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyLayout {
+    /// The names every release has written to a standalone server.
+    Standalone,
+    /// Hash-tagged names, so each session's keys share one Redis Cluster slot.
+    Cluster,
+}
+
+impl KeyLayout {
+    fn session(self, app: &str, user: &str, session: &str) -> String {
+        match self {
+            Self::Standalone => session_key(app, user, session),
+            Self::Cluster => format!("adk:session:{}", cluster_session_tag(app, user, session)),
+        }
+    }
+
+    fn events(self, app: &str, user: &str, session: &str) -> String {
+        match self {
+            Self::Standalone => events_key(app, user, session),
+            Self::Cluster => {
+                format!("adk:session:{}:events", cluster_session_tag(app, user, session))
+            }
+        }
+    }
+
+    fn app_state(self, app: &str) -> String {
+        match self {
+            Self::Standalone => app_state_key(app),
+            Self::Cluster => format!("adk:app_state:{{{}}}", encode_cluster_segment(app)),
+        }
+    }
+
+    fn user_state(self, app: &str, user: &str) -> String {
+        match self {
+            Self::Standalone => user_state_key(app, user),
+            Self::Cluster => format!(
+                "adk:user_state:{{{}:{}}}",
+                encode_cluster_segment(app),
+                encode_cluster_segment(user)
+            ),
+        }
+    }
+
+    fn index(self, app: &str, user: &str) -> String {
+        match self {
+            Self::Standalone => index_key(app, user),
+            Self::Cluster => format!(
+                "adk:sessions_idx:{{{}:{}}}",
+                encode_cluster_segment(app),
+                encode_cluster_segment(user)
+            ),
+        }
+    }
+
+    fn lookup(self, session: &str) -> String {
+        match self {
+            Self::Standalone => format!("session_lookup:{}", encode_segment(session)),
+            Self::Cluster => {
+                format!("adk:session_lookup:{{{}}}", encode_cluster_segment(session))
+            }
+        }
+    }
+}
+
 /// Appends an event and its state delta in one atomic step.
 ///
-/// `KEYS`: session hash, events sorted set, app state hash, user state hash.
-/// `ARGV`: session-tier write flag (`"1"`), the `state` value the session hash must still
-/// hold, its replacement, `updated_at`, the event score, the event JSON, then for the app
-/// and the user tier a field count followed by that many field/value pairs.
+/// `KEYS`: session hash, events sorted set, then the state tier hashes written in the same
+/// step (app, user), if any. `ARGV`: session-tier write flag (`"1"`), the `state` value the
+/// session hash must still hold, its replacement, `updated_at`, the event score, the event
+/// JSON, then for each tier key a field count followed by that many field/value pairs.
 ///
 /// Returns `1` when applied, `0` when the session tier changed since it was read, and `-1`
 /// when the session does not exist.
@@ -243,7 +365,7 @@ end
 redis.call('HSET', KEYS[1], 'updated_at', ARGV[4])
 redis.call('ZADD', KEYS[2], ARGV[5], ARGV[6])
 local index = 7
-for tier = 3, 4 do
+for tier = 3, #KEYS do
   local count = tonumber(ARGV[index])
   index = index + 1
   for _ = 1, count do
@@ -258,11 +380,112 @@ return 1
 /// changing between the read and the write.
 const MAX_STATE_WRITE_ATTEMPTS: usize = 32;
 
+/// Serializes each state value to JSON, the form the state hashes store.
+fn state_fields(state: &HashMap<String, Value>) -> Result<Vec<(String, String)>> {
+    state
+        .iter()
+        .map(|(key, value)| {
+            serde_json::to_string(value).map(|serialized| (key.clone(), serialized)).map_err(|e| {
+                adk_core::AdkError::session(format!("serialize state value failed: {e}"))
+            })
+        })
+        .collect()
+}
+
+/// Writes the fields of `state` into the hash at `key`; nothing when `state` is empty.
+///
+/// `client` is a client or a transaction, so the same writes run inside `MULTI`/`EXEC` on a
+/// standalone server and as single commands on a cluster.
+async fn write_state_hash<C: HashesInterface + Sync>(
+    client: &C,
+    key: &str,
+    state: &HashMap<String, Value>,
+) -> Result<()> {
+    if state.is_empty() {
+        return Ok(());
+    }
+    let _: () = client
+        .hset(key, state_fields(state)?)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("redis hset failed: {e}")))?;
+    Ok(())
+}
+
+/// The keys and values [`SessionService::create`] writes for one session.
+struct NewSession<'a> {
+    session_key: String,
+    session_fields: Vec<(String, String)>,
+    app_key: String,
+    app_delta: &'a HashMap<String, Value>,
+    user_key: String,
+    user_delta: &'a HashMap<String, Value>,
+    index_key: String,
+    lookup_key: String,
+    lookup_value: String,
+    session_id: &'a str,
+}
+
+/// Writes `new` through `client`, the session hash last.
+///
+/// Until the session hash exists, `get` reports the session as not found, `list` skips its
+/// index entry, and an append through its lookup finds no session, so on a cluster, where
+/// these writes are separate commands, a failure part-way leaves no session that can be read
+/// without its index entry, lookup, or initial tier fields.
+async fn write_new_session<C>(client: &C, new: NewSession<'_>) -> Result<()>
+where
+    C: HashesInterface + KeysInterface + SetsInterface + Sync,
+{
+    let _: () = client
+        .sadd(&new.index_key, new.session_id)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("redis sadd failed: {e}")))?;
+    let _: () = client
+        .set(&new.lookup_key, new.lookup_value, None, None, false)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("redis set failed: {e}")))?;
+    // Only the delta's fields, so concurrent writers of other fields are kept.
+    write_state_hash(client, &new.app_key, new.app_delta).await?;
+    write_state_hash(client, &new.user_key, new.user_delta).await?;
+    let _: () = client
+        .hset(&new.session_key, new.session_fields)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("redis hset failed: {e}")))?;
+    Ok(())
+}
+
+/// Removes one session through `client`: its hash and events first, in one `DEL` (one slot
+/// in either layout), then its lookup and index entry.
+async fn remove_session<C>(
+    client: &C,
+    layout: KeyLayout,
+    app: &str,
+    user: &str,
+    session: &str,
+) -> Result<()>
+where
+    C: KeysInterface + SetsInterface + Sync,
+{
+    let _: () = client
+        .del(vec![layout.session(app, user, session), layout.events(app, user, session)])
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
+    let _: () = client
+        .del(layout.lookup(session))
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
+    let _: () = client
+        .srem(layout.index(app, user), session)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("redis srem failed: {e}")))?;
+    Ok(())
+}
+
 /// Redis-backed session service.
 ///
 /// Stores sessions using Redis hashes, events as sorted sets scored by
 /// timestamp, and three-tier state (app, user, session) as separate hashes.
-/// Supports optional TTL on session keys and cluster mode.
+/// Supports optional TTL on session keys and Redis Cluster, where each session's keys
+/// share one hash tag (see the module docs for both key layouts).
 ///
 /// # Example
 ///
@@ -279,10 +502,16 @@ const MAX_STATE_WRITE_ATTEMPTS: usize = 32;
 pub struct RedisSessionService {
     client: Client,
     ttl: Option<Duration>,
+    layout: KeyLayout,
 }
 
 impl RedisSessionService {
     /// Connect to Redis (standalone or cluster).
+    ///
+    /// A connection with `cluster_nodes`, or a `redis-cluster://` URL, uses the cluster key
+    /// layout; any other connection uses the standalone layout.
+    ///
+    /// # Errors
     ///
     /// Returns an error with "redis connection failed" context if the
     /// connection cannot be established.
@@ -305,6 +534,11 @@ impl RedisSessionService {
             Config::from_url(&config.url)
                 .map_err(|e| adk_core::AdkError::session(format!("redis connection failed: {e}")))?
         };
+        let layout = if redis_config.server.is_clustered() {
+            KeyLayout::Cluster
+        } else {
+            KeyLayout::Standalone
+        };
 
         let client = Builder::from_config(redis_config)
             .build()
@@ -315,7 +549,7 @@ impl RedisSessionService {
             .await
             .map_err(|e| adk_core::AdkError::session(format!("redis connection failed: {e}")))?;
 
-        Ok(Self { client, ttl: config.ttl })
+        Ok(Self { client, ttl: config.ttl, layout })
     }
 
     /// Apply TTL to session-related keys if configured.
@@ -349,35 +583,14 @@ impl RedisSessionService {
         Ok(map)
     }
 
-    /// Write a `HashMap<String, Value>` into a Redis hash within a transaction.
-    async fn write_state_hash(
-        trx: &Transaction,
-        key: &str,
-        state: &HashMap<String, Value>,
-    ) -> Result<()> {
-        if state.is_empty() {
-            return Ok(());
-        }
-        let mut fields: Vec<(String, String)> = Vec::with_capacity(state.len());
-        for (k, v) in state {
-            let serialized = serde_json::to_string(v).map_err(|e| {
-                adk_core::AdkError::session(format!("serialize state value failed: {e}"))
-            })?;
-            fields.push((k.clone(), serialized));
-        }
-        let _: () = trx
-            .hset(key, fields)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis hset failed: {e}")))?;
-        Ok(())
-    }
-
     /// Applies `event` to the session `(app_name, user_id, session_id)` and refreshes
     /// its TTL.
     ///
     /// The app and user tiers receive only the fields in the delta. The session tier is a
     /// single JSON field, so [`APPEND_EVENT_SCRIPT`] replaces it only while it still holds
-    /// the value the delta was merged into, and a changed value is merged again.
+    /// the value the delta was merged into, and a changed value is merged again. On a
+    /// cluster the app and user tiers live in other slots than the session, so they are
+    /// written after the script instead of by it.
     async fn apply_event(
         &self,
         app_name: &str,
@@ -388,14 +601,16 @@ impl RedisSessionService {
         let (app_delta, user_delta, session_delta) =
             state_utils::extract_state_deltas(&event.actions.state_delta);
 
-        let session_k = session_key(app_name, user_id, session_id);
-        let events_k = events_key(app_name, user_id, session_id);
-        let keys = vec![
-            session_k.clone(),
-            events_k.clone(),
-            app_state_key(app_name),
-            user_state_key(app_name, user_id),
-        ];
+        let layout = self.layout;
+        let session_k = layout.session(app_name, user_id, session_id);
+        let events_k = layout.events(app_name, user_id, session_id);
+        let app_k = layout.app_state(app_name);
+        let user_k = layout.user_state(app_name, user_id);
+        let tiers_in_script = match layout {
+            KeyLayout::Standalone => true,
+            KeyLayout::Cluster => false,
+        };
+        let mut keys = vec![session_k.clone(), events_k.clone()];
 
         let event_json = serde_json::to_string(event)
             .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
@@ -405,14 +620,14 @@ impl RedisSessionService {
             event.timestamp.timestamp_millis().to_string(),
             event_json,
         ];
-        for delta in [&app_delta, &user_delta] {
-            tail.push(delta.len().to_string());
-            for (key, value) in delta {
-                let serialized = serde_json::to_string(value).map_err(|e| {
-                    adk_core::AdkError::session(format!("serialize state value failed: {e}"))
-                })?;
-                tail.push(key.clone());
-                tail.push(serialized);
+        if tiers_in_script {
+            for (key, delta) in [(&app_k, &app_delta), (&user_k, &user_delta)] {
+                keys.push(key.clone());
+                tail.push(delta.len().to_string());
+                for (field, value) in state_fields(delta)? {
+                    tail.push(field);
+                    tail.push(value);
+                }
             }
         }
 
@@ -447,7 +662,13 @@ impl RedisSessionService {
                 .await
                 .map_err(|e| adk_core::AdkError::session(format!("redis eval failed: {e}")))?;
             match outcome {
-                1 => return self.apply_ttl(&session_k, &events_k).await,
+                1 => {
+                    if !tiers_in_script {
+                        write_state_hash(&self.client, &app_k, &app_delta).await?;
+                        write_state_hash(&self.client, &user_k, &user_delta).await?;
+                    }
+                    return self.apply_ttl(&session_k, &events_k).await;
+                }
                 -1 => return Err(adk_core::AdkError::session("session not found")),
                 _ => continue,
             }
@@ -469,62 +690,55 @@ impl RedisSessionService {
 impl SessionService for RedisSessionService {
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let now = Utc::now();
+        let layout = self.layout;
 
         let (app_delta, user_delta, session_state) = state_utils::extract_state_deltas(&req.state);
 
-        // Atomic write via MULTI/EXEC
-        let trx = self.client.multi();
-
-        // Session metadata hash
-        let session_k = session_key(&req.app_name, &req.user_id, &session_id);
+        let session_k = layout.session(&req.app_name, &req.user_id, &session_id);
+        let app_k = layout.app_state(&req.app_name);
+        let user_k = layout.user_state(&req.app_name, &req.user_id);
         let state_json = serde_json::to_string(&session_state)
             .map_err(|e| adk_core::AdkError::session(format!("serialize state failed: {e}")))?;
-        let session_fields: Vec<(String, String)> = vec![
-            ("app_name".into(), req.app_name.clone()),
-            ("user_id".into(), req.user_id.clone()),
-            ("session_id".into(), session_id.clone()),
-            ("state".into(), state_json),
-            ("created_at".into(), now.to_rfc3339()),
-            ("updated_at".into(), now.to_rfc3339()),
-        ];
-        let _: () = trx
-            .hset(&session_k, session_fields)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis hset failed: {e}")))?;
+        let new = NewSession {
+            session_key: session_k.clone(),
+            session_fields: vec![
+                ("app_name".into(), req.app_name.clone()),
+                ("user_id".into(), req.user_id.clone()),
+                ("session_id".into(), session_id.clone()),
+                ("state".into(), state_json),
+                ("created_at".into(), now.to_rfc3339()),
+                ("updated_at".into(), now.to_rfc3339()),
+            ],
+            app_key: app_k.clone(),
+            app_delta: &app_delta,
+            user_key: user_k.clone(),
+            user_delta: &user_delta,
+            index_key: layout.index(&req.app_name, &req.user_id),
+            lookup_key: layout.lookup(&session_id),
+            lookup_value: lookup_value(&req.app_name, &req.user_id),
+            session_id: &session_id,
+        };
 
-        // Only the delta's fields, so concurrent writers of other fields are kept.
-        Self::write_state_hash(&trx, &app_state_key(&req.app_name), &app_delta).await?;
-        Self::write_state_hash(&trx, &user_state_key(&req.app_name, &req.user_id), &user_delta)
-            .await?;
-
-        // Add session ID to index set
-        let idx_k = index_key(&req.app_name, &req.user_id);
-        let _: () = trx
-            .sadd(&idx_k, &session_id)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis sadd failed: {e}")))?;
-
-        // Reverse lookup: session_id → app_name:user_id
-        let lk = lookup_key(&session_id);
-        let lookup_val = lookup_value(&req.app_name, &req.user_id);
-        let _: () = trx
-            .set(&lk, lookup_val, None, None, false)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis set failed: {e}")))?;
-
-        let _: () = trx
-            .exec(true)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis transaction failed: {e}")))?;
+        match layout {
+            KeyLayout::Standalone => {
+                let trx = self.client.multi();
+                write_new_session(&trx, new).await?;
+                let _: () = trx.exec(true).await.map_err(|e| {
+                    adk_core::AdkError::session(format!("redis transaction failed: {e}"))
+                })?;
+            }
+            KeyLayout::Cluster => write_new_session(&self.client, new).await?,
+        }
 
         // Apply TTL outside transaction
-        let events_k = events_key(&req.app_name, &req.user_id, &session_id);
+        let events_k = layout.events(&req.app_name, &req.user_id, &session_id);
         self.apply_ttl(&session_k, &events_k).await?;
 
-        let app_state = self.read_state_hash(&app_state_key(&req.app_name)).await?;
-        let user_state = self.read_state_hash(&user_state_key(&req.app_name, &req.user_id)).await?;
+        let app_state = self.read_state_hash(&app_k).await?;
+        let user_state = self.read_state_hash(&user_k).await?;
 
         Ok(Box::new(RedisSession {
             app_name: req.app_name,
@@ -539,7 +753,8 @@ impl SessionService for RedisSessionService {
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id, session_id = %req.session_id))]
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
         req.try_identity()?;
-        let session_k = session_key(&req.app_name, &req.user_id, &req.session_id);
+        let layout = self.layout;
+        let session_k = layout.session(&req.app_name, &req.user_id, &req.session_id);
 
         let exists: bool = self
             .client
@@ -561,11 +776,12 @@ impl SessionService for RedisSessionService {
 
         let stored_state: HashMap<String, Value> =
             raw.get("state").and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
-        let app_state = self.read_state_hash(&app_state_key(&req.app_name)).await?;
-        let user_state = self.read_state_hash(&user_state_key(&req.app_name, &req.user_id)).await?;
+        let app_state = self.read_state_hash(&layout.app_state(&req.app_name)).await?;
+        let user_state =
+            self.read_state_hash(&layout.user_state(&req.app_name, &req.user_id)).await?;
 
         // Read events from sorted set (ordered by score = timestamp millis)
-        let events_k = events_key(&req.app_name, &req.user_id, &req.session_id);
+        let events_k = layout.events(&req.app_name, &req.user_id, &req.session_id);
         let raw_events: Vec<(String, f64)> = self
             .client
             .zrange(&events_k, 0, -1, None, false, None, true)
@@ -612,22 +828,24 @@ impl SessionService for RedisSessionService {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
-        let idx_k = index_key(&req.app_name, &req.user_id);
+        validate_scope(&req.app_name, &req.user_id)?;
+        let layout = self.layout;
         let session_ids: Vec<String> = self
             .client
-            .smembers(&idx_k)
+            .smembers(layout.index(&req.app_name, &req.user_id))
             .await
             .map_err(|e| adk_core::AdkError::session(format!("redis smembers failed: {e}")))?;
 
         let offset = req.offset.unwrap_or(0);
         let limit = req.limit.unwrap_or(usize::MAX);
 
-        let app_state = self.read_state_hash(&app_state_key(&req.app_name)).await?;
-        let user_state = self.read_state_hash(&user_state_key(&req.app_name, &req.user_id)).await?;
+        let app_state = self.read_state_hash(&layout.app_state(&req.app_name)).await?;
+        let user_state =
+            self.read_state_hash(&layout.user_state(&req.app_name, &req.user_id)).await?;
 
         let mut sessions: Vec<Box<dyn Session>> = Vec::new();
         for sid in session_ids.into_iter().skip(offset).take(limit) {
-            let session_k = session_key(&req.app_name, &req.user_id, &sid);
+            let session_k = layout.session(&req.app_name, &req.user_id, &sid);
             let raw: HashMap<String, String> =
                 self.client.hgetall(&session_k).await.map_err(|e| {
                     adk_core::AdkError::session(format!("redis hgetall failed: {e}"))
@@ -658,38 +876,34 @@ impl SessionService for RedisSessionService {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id, session_id = %req.session_id))]
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
-        let session_k = session_key(&req.app_name, &req.user_id, &req.session_id);
-        let events_k = events_key(&req.app_name, &req.user_id, &req.session_id);
-        let idx_k = index_key(&req.app_name, &req.user_id);
-        let lk = lookup_key(&req.session_id);
-
-        let trx = self.client.multi();
-        let _: () = trx
-            .del(vec![session_k, events_k, lk])
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
-        let _: () = trx
-            .srem(&idx_k, &req.session_id)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis srem failed: {e}")))?;
-        let _: () = trx
-            .exec(true)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis transaction failed: {e}")))?;
-
+        req.try_identity()?;
+        let layout = self.layout;
+        match layout {
+            KeyLayout::Standalone => {
+                let trx = self.client.multi();
+                remove_session(&trx, layout, &req.app_name, &req.user_id, &req.session_id).await?;
+                let _: () = trx.exec(true).await.map_err(|e| {
+                    adk_core::AdkError::session(format!("redis transaction failed: {e}"))
+                })?;
+            }
+            KeyLayout::Cluster => {
+                remove_session(&self.client, layout, &req.app_name, &req.user_id, &req.session_id)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
     #[instrument(skip_all, fields(session_id = %session_id))]
     async fn append_event(&self, session_id: &str, mut event: Event) -> Result<()> {
+        validate_session_id(session_id)?;
         // Strip temp: keys
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
 
         // Use reverse lookup to find app_name and user_id
-        let lk = lookup_key(session_id);
         let lookup_val: Option<String> = self
             .client
-            .get(&lk)
+            .get(self.layout.lookup(session_id))
             .await
             .map_err(|e| adk_core::AdkError::session(format!("redis get failed: {e}")))?;
 
@@ -723,7 +937,9 @@ impl SessionService for RedisSessionService {
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
-        let idx_k = index_key(app_name, user_id);
+        validate_scope(app_name, user_id)?;
+        let layout = self.layout;
+        let idx_k = layout.index(app_name, user_id);
         let session_ids: Vec<String> = self
             .client
             .smembers(&idx_k)
@@ -734,24 +950,30 @@ impl SessionService for RedisSessionService {
             return Ok(());
         }
 
-        let trx = self.client.multi();
-        for sid in &session_ids {
-            let sk = session_key(app_name, user_id, sid);
-            let ek = events_key(app_name, user_id, sid);
-            let lk = lookup_key(sid);
-            let _: () = trx
-                .del(vec![sk, ek, lk])
-                .await
-                .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
+        match layout {
+            KeyLayout::Standalone => {
+                let trx = self.client.multi();
+                for sid in &session_ids {
+                    remove_session(&trx, layout, app_name, user_id, sid).await?;
+                }
+                let _: () = trx
+                    .del(&idx_k)
+                    .await
+                    .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
+                let _: () = trx.exec(true).await.map_err(|e| {
+                    adk_core::AdkError::session(format!("redis transaction failed: {e}"))
+                })?;
+            }
+            KeyLayout::Cluster => {
+                for sid in &session_ids {
+                    remove_session(&self.client, layout, app_name, user_id, sid).await?;
+                }
+                let _: () =
+                    self.client.del(&idx_k).await.map_err(|e| {
+                        adk_core::AdkError::session(format!("redis del failed: {e}"))
+                    })?;
+            }
         }
-        let _: () = trx
-            .del(&idx_k)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
-        let _: () = trx
-            .exec(true)
-            .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis transaction failed: {e}")))?;
 
         Ok(())
     }
@@ -908,7 +1130,106 @@ mod tests {
 
     #[test]
     fn test_lookup_key_is_encoded() {
-        assert_eq!(lookup_key("s:1"), "session_lookup:s%3A1");
-        assert_ne!(lookup_key("u:s"), session_key("session_lookup", "u", "s"));
+        let lookup = |session| KeyLayout::Standalone.lookup(session);
+        assert_eq!(lookup("s:1"), "session_lookup:s%3A1");
+        assert_ne!(lookup("u:s"), session_key("session_lookup", "u", "s"));
+    }
+
+    /// Every key of one session in the cluster layout, in the order the session's script
+    /// names them, followed by the shared tier, index, and lookup keys.
+    fn cluster_keys(app: &str, user: &str, session: &str) -> [String; 6] {
+        let layout = KeyLayout::Cluster;
+        [
+            layout.session(app, user, session),
+            layout.events(app, user, session),
+            layout.app_state(app),
+            layout.user_state(app, user),
+            layout.index(app, user),
+            layout.lookup(session),
+        ]
+    }
+
+    #[test]
+    fn cluster_keys_of_one_session_share_a_hash_slot() {
+        for (app, user, session) in [
+            ("app", "user", "session"),
+            ("a:b", "{u}", "s}{"),
+            ("{", "}", "{}"),
+            ("100%", "%7B", "x{y}z"),
+        ] {
+            let [session_k, events_k, _, user_k, index_k, _] = cluster_keys(app, user, session);
+            assert_eq!(
+                fred::util::redis_keyslot(session_k.as_bytes()),
+                fred::util::redis_keyslot(events_k.as_bytes()),
+                "{session_k} and {events_k}"
+            );
+            assert_eq!(
+                fred::util::redis_keyslot(user_k.as_bytes()),
+                fred::util::redis_keyslot(index_k.as_bytes()),
+                "{user_k} and {index_k}"
+            );
+        }
+    }
+
+    #[test]
+    fn cluster_keys_encode_hash_tag_delimiters() {
+        assert_eq!(
+            cluster_keys("a:b", "{u}", "s}{"),
+            [
+                "adk:session:{a%3Ab:%7Bu%7D:s%7D%7B}".to_string(),
+                "adk:session:{a%3Ab:%7Bu%7D:s%7D%7B}:events".to_string(),
+                "adk:app_state:{a%3Ab}".to_string(),
+                "adk:user_state:{a%3Ab:%7Bu%7D}".to_string(),
+                "adk:sessions_idx:{a%3Ab:%7Bu%7D}".to_string(),
+                "adk:session_lookup:{s%7D%7B}".to_string(),
+            ]
+        );
+        // Redis hashes the text between the first `{` and the next `}`; unencoded, `{x}` in
+        // a user ID would become the hash tag of every session that user owns.
+        let key = KeyLayout::Cluster.session("a", "{x}", "1");
+        let open = key.find('{').unwrap();
+        let close = open + key[open..].find('}').unwrap();
+        assert_eq!(&key[open + 1..close], "a:%7Bx%7D:1");
+    }
+
+    #[test]
+    fn cluster_keys_of_different_identities_never_collide() {
+        let identities = [
+            ("a:b", "c", "s"),
+            ("a", "b:c", "s"),
+            ("a", "b", "c:s"),
+            ("{a}", "b", "s"),
+            ("%7Ba%7D", "b", "s"),
+            ("a", "u", "s:events"),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for (app, user, session) in identities {
+            let [session_k, events_k, ..] = cluster_keys(app, user, session);
+            assert!(seen.insert(session_k.clone()), "{session_k} collided");
+            assert!(seen.insert(events_k.clone()), "{events_k} collided");
+        }
+    }
+
+    #[test]
+    fn standalone_layout_keeps_existing_key_names() {
+        let layout = KeyLayout::Standalone;
+        assert_eq!(
+            [
+                layout.session("app", "{u}", "s"),
+                layout.events("app", "{u}", "s"),
+                layout.app_state("app"),
+                layout.user_state("app", "{u}"),
+                layout.index("app", "{u}"),
+                layout.lookup("{s}"),
+            ],
+            [
+                "app:{u}:s".to_string(),
+                "app:{u}:s:events".to_string(),
+                "app_state:app".to_string(),
+                "user_state:app:{u}".to_string(),
+                "sessions_idx:app:{u}".to_string(),
+                "session_lookup:{s}".to_string(),
+            ]
+        );
     }
 }

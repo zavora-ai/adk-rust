@@ -1,3 +1,4 @@
+use crate::service::{validate_scope, validate_session_id};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -186,6 +187,7 @@ impl SessionService for InMemorySessionService {
     }
 
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        validate_scope(&req.app_name, &req.user_id)?;
         let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
         let offset = req.offset.unwrap_or(0);
         let limit = req.limit.unwrap_or(usize::MAX);
@@ -242,6 +244,7 @@ impl SessionService for InMemorySessionService {
     }
 
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        validate_scope(app_name, user_id)?;
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         sessions.retain(|_, data| {
             !(data.identity.app_name.as_ref() == app_name
@@ -251,6 +254,7 @@ impl SessionService for InMemorySessionService {
     }
 
     async fn append_event(&self, session_id: &str, mut event: Event) -> Result<()> {
+        validate_session_id(session_id)?;
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
 
         let (app_name, user_id, app_delta, user_delta, _session_delta) = {
@@ -370,6 +374,7 @@ impl SessionService for InMemorySessionService {
     }
 
     async fn rewind(&self, session_id: &str, target_event_id: &str) -> Result<Box<dyn Session>> {
+        validate_session_id(session_id)?;
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
 
         // Find the session by session_id
@@ -428,6 +433,7 @@ impl SessionService for InMemorySessionService {
     }
 
     async fn rewind_steps(&self, session_id: &str, steps: usize) -> Result<Box<dyn Session>> {
+        validate_session_id(session_id)?;
         if steps == 0 {
             // Return the session unchanged
             let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());

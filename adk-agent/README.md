@@ -553,7 +553,9 @@ let compaction_config = EventsCompactionConfig {
 };
 ```
 
-Pass `compaction_config` to `RunnerConfig` to enable automatic compaction.
+Pass `compaction_config` to `RunnerConfig` to enable automatic compaction. Each summary's input
+includes the previous summary and the window's function calls and responses, so older turns and
+tool results carry forward through repeated compaction.
 
 ## Features
 

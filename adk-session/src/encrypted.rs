@@ -77,6 +77,7 @@
 use crate::encryption_key::EncryptionKey;
 use crate::service::{
     AppendEventRequest, CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService,
+    validate_scope, validate_session_id,
 };
 use crate::session::{KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER, Session};
 use crate::state::State;
@@ -536,6 +537,7 @@ impl<S: SessionService> EncryptedSession<S> {
 impl<S: SessionService> SessionService for EncryptedSession<S> {
     async fn create(&self, mut req: CreateRequest) -> Result<Box<dyn Session>> {
         let session_id = req.session_id.get_or_insert_with(|| Uuid::new_v4().to_string()).clone();
+        req.try_identity()?;
         let app_name = req.app_name.clone();
         let user_id = req.user_id.clone();
         let id =
@@ -548,6 +550,7 @@ impl<S: SessionService> SessionService for EncryptedSession<S> {
     }
 
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let app_name = req.app_name.clone();
         let user_id = req.user_id.clone();
         let session_id = req.session_id.clone();
@@ -563,6 +566,7 @@ impl<S: SessionService> SessionService for EncryptedSession<S> {
     }
 
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        validate_scope(&req.app_name, &req.user_id)?;
         let app_name = req.app_name.clone();
         let user_id = req.user_id.clone();
         let sessions = self.inner.list(req).await?;
@@ -582,13 +586,15 @@ impl<S: SessionService> SessionService for EncryptedSession<S> {
     }
 
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
+        req.try_identity()?;
         self.inner.delete(req).await
     }
 
-    /// Always fails: ciphertext is bound to the full session identity, which a bare session
-    /// ID does not determine. Use
+    /// Always fails, with an invalid-input error for an invalid session ID: ciphertext is bound
+    /// to the full session identity, which a bare session ID does not determine. Use
     /// [`append_event_for_identity`](SessionService::append_event_for_identity).
     async fn append_event(&self, session_id: &str, _event: Event) -> Result<()> {
+        validate_session_id(session_id)?;
         Err(AdkError::new(
             ErrorComponent::Session,
             ErrorCategory::Unsupported,
@@ -609,6 +615,7 @@ impl<S: SessionService> SessionService for EncryptedSession<S> {
     }
 
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        validate_scope(app_name, user_id)?;
         self.inner.delete_all_sessions(app_name, user_id).await
     }
 

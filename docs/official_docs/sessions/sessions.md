@@ -122,6 +122,24 @@ let request = DeleteRequest {
 };
 ```
 
+### Identifier Validation
+
+Every backend validates the identifiers a call carries before it reads or writes storage, and
+rejects an invalid one with an `InvalidInput` error. An identifier is valid when it is
+non-empty, at most `MAX_ID_LEN` (512) bytes, and free of NUL characters — the `AppName`,
+`UserId`, and `SessionId` rules.
+
+| Method | Validated identifiers |
+|--------|-----------------------|
+| `create` | `app_name`, `user_id`, and `session_id` when one is given |
+| `get`, `delete` | `app_name`, `user_id`, `session_id` |
+| `list`, `delete_all_sessions` | `app_name`, `user_id` |
+| `append_event` | `session_id` |
+| `append_event_for_identity`, `get_for_identity`, `delete_for_identity` | Validated when the `AdkIdentity` is built |
+
+`CreateRequest::try_identity()` validates `app_name` and `user_id` even when `session_id` is
+`None`, so a custom backend can validate a create request with one call.
+
 ## SessionService Implementations
 
 ### Choosing a Backend
@@ -565,10 +583,23 @@ async fn main() -> anyhow::Result<()> {
 Stores sessions in Redis. Ideal for low-latency, high-throughput deployments.
 
 ```rust
-use adk_session::{RedisSessionService, RedisSessionConfig};
+use adk_session::{RedisSessionConfig, RedisSessionService};
 
-let config = RedisSessionConfig::new("redis://localhost:6379");
-let session_service = RedisSessionService::new(config).await?;
+// Standalone server (or Sentinel)
+let session_service = RedisSessionService::new(RedisSessionConfig {
+    url: "redis://localhost:6379".to_string(),
+    ttl: None,
+    cluster_nodes: None,
+})
+.await?;
+
+// Redis Cluster: seed nodes as host:port
+let cluster_service = RedisSessionService::new(RedisSessionConfig {
+    url: "redis-cluster://10.0.0.1:6379".to_string(),
+    ttl: None,
+    cluster_nodes: Some(vec!["10.0.0.1:6379".to_string(), "10.0.0.2:6379".to_string()]),
+})
+.await?;
 ```
 
 > **Note**: Requires the `redis` feature flag:
@@ -576,7 +607,41 @@ let session_service = RedisSessionService::new(config).await?;
 > adk-session = { version = "3.0.0", features = ["redis"] }
 > ```
 
-Appends run as a Lua script (`EVAL`) so the event and its state delta are written in one atomic step; the server must allow scripting.
+The service picks its key layout from the connection. A standalone server keeps the key names
+earlier releases wrote, so existing sessions stay readable. A cluster connection (`cluster_nodes`,
+or a `redis-cluster://` URL) puts each session's hash and event set under one hash tag, with `{`
+and `}` in identifiers percent-encoded so no identifier can move a key's slot:
+
+| Data | Standalone key | Cluster key |
+|------|----------------|-------------|
+| Session hash | `<app>:<user>:<session>` | `adk:session:{<app>:<user>:<session>}` |
+| Events | `<app>:<user>:<session>:events` | `adk:session:{<app>:<user>:<session>}:events` |
+| App state | `app_state:<app>` | `adk:app_state:{<app>}` |
+| User state | `user_state:<app>:<user>` | `adk:user_state:{<app>:<user>}` |
+| Session index | `sessions_idx:<app>:<user>` | `adk:sessions_idx:{<app>:<user>}` |
+| Session lookup | `session_lookup:<session>` | `adk:session_lookup:{<session>}` |
+
+Moving existing data from a standalone server to a cluster means copying its keys to the
+cluster names.
+
+| Operation | Standalone | Cluster |
+|-----------|------------|---------|
+| Append | One Lua script (`EVAL`) writes the event and the session, user, and app state fields | One script writes the event and the session tier; the user and app tier fields follow, one `HSET` each |
+| Create | One `MULTI`/`EXEC` | Index entry, lookup, and tier fields first; the session hash last |
+| Delete | One `MULTI`/`EXEC` | Session hash and events in one `DEL`; then the lookup and the index entry |
+
+Redis Cluster runs a script or transaction only when all its keys share one slot, and the app
+and user tiers are shared by many sessions, so in cluster mode:
+
+- A reader can see an appended event before its app and user tier fields.
+- An append that fails after its script returns an error with the event already stored.
+- A create that fails part-way can leave its app and user tier fields, and an index entry and a
+  lookup for a session that does not exist; `list` skips them and `get` reports the session as
+  not found.
+
+The session tier keeps its compare-and-swap in both layouts, and tier fields are written one
+field at a time, so concurrent writers of different fields keep each other's values. The server
+must allow scripting.
 
 ### FirestoreSessionService
 

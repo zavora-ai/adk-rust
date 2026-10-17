@@ -57,19 +57,16 @@ impl CreateRequest {
     ///
     /// Because `CreateRequest` allows `session_id` to be `None` (the backend
     /// generates one), this returns `Ok(None)` when no session ID is present.
+    /// The app name and user ID are validated either way, so a backend can call
+    /// this once to validate every identifier the request carries.
     ///
     /// # Errors
     ///
     /// Returns an error if any of the constituent identifiers fail validation.
     pub fn try_identity(&self) -> Result<Option<AdkIdentity>> {
-        let Some(sid) = self.try_session_id()? else {
-            return Ok(None);
-        };
-        Ok(Some(AdkIdentity {
-            app_name: self.try_app_name()?,
-            user_id: self.try_user_id()?,
-            session_id: sid,
-        }))
+        let app_name = self.try_app_name()?;
+        let user_id = self.try_user_id()?;
+        Ok(self.try_session_id()?.map(|session_id| AdkIdentity { app_name, user_id, session_id }))
     }
 }
 
@@ -104,6 +101,19 @@ impl GetRequest {
             session_id: SessionId::try_from(self.session_id.as_str())?,
         })
     }
+}
+
+/// Validates the `(app_name, user_id)` scope addressed by `list` and `delete_all_sessions`.
+pub(crate) fn validate_scope(app_name: &str, user_id: &str) -> Result<()> {
+    AppName::try_from(app_name)?;
+    UserId::try_from(user_id)?;
+    Ok(())
+}
+
+/// Validates a session ID addressed on its own, as by `append_event` and `rewind`.
+pub(crate) fn validate_session_id(session_id: &str) -> Result<()> {
+    SessionId::try_from(session_id)?;
+    Ok(())
 }
 
 /// Builds the canonical error returned when a session identity has no matching record.
@@ -216,6 +226,13 @@ impl DeleteRequest {
 ///
 /// Implementations manage the full lifecycle of sessions: creation, retrieval,
 /// listing, deletion, and event appending.
+///
+/// Every method validates the app names, user IDs, and session IDs it receives against the
+/// [`AppName`], [`UserId`], and [`SessionId`] rules (non-empty, at most
+/// [`MAX_ID_LEN`](adk_core::identity::MAX_ID_LEN) bytes, no NUL) before it reads or writes
+/// storage, and rejects an invalid one with an
+/// [`InvalidInput`](adk_core::ErrorCategory::InvalidInput) error. The built-in backends all
+/// follow this rule.
 #[async_trait]
 pub trait SessionService: Send + Sync {
     /// Create a new session and return it.
@@ -308,9 +325,9 @@ pub trait SessionService: Send + Sync {
     ///
     /// Removes all sessions and their associated events. Useful for
     /// bulk cleanup and GDPR right-to-erasure compliance.
-    /// The default implementation returns an error.
+    /// The default implementation validates the identifiers, then returns an error.
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
-        let _ = (app_name, user_id);
+        validate_scope(app_name, user_id)?;
         Err(adk_core::AdkError::session("delete_all_sessions not implemented"))
     }
 

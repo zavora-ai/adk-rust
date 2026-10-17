@@ -16,6 +16,7 @@
 //! service.migrate().await?;
 //! ```
 
+use crate::service::{validate_scope, validate_session_id};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -475,6 +476,7 @@ impl MongoSessionService {
 impl SessionService for MongoSessionService {
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let now = Utc::now();
         let bson_now = chrono_to_bson_dt(now);
@@ -574,6 +576,7 @@ impl SessionService for MongoSessionService {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        validate_scope(&req.app_name, &req.user_id)?;
         let sess_coll = self.db.collection::<Document>("sessions");
         let opts = FindOptions::builder()
             .sort(doc! { "updated_at": -1 })
@@ -616,6 +619,7 @@ impl SessionService for MongoSessionService {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id, session_id = %req.session_id))]
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
+        req.try_identity()?;
         let ev_coll = self.db.collection::<Document>("events");
         let sess_coll = self.db.collection::<Document>("sessions");
         let filter = doc! { "app_name": &req.app_name, "user_id": &req.user_id, "session_id": &req.session_id };
@@ -631,6 +635,7 @@ impl SessionService for MongoSessionService {
 
     #[instrument(skip_all, fields(session_id = %session_id))]
     async fn append_event(&self, session_id: &str, mut event: Event) -> Result<()> {
+        validate_session_id(session_id)?;
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
 
         let sess_coll = self.db.collection::<Document>("sessions");
@@ -677,6 +682,7 @@ impl SessionService for MongoSessionService {
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        validate_scope(app_name, user_id)?;
         let filter = doc! { "app_name": app_name, "user_id": user_id };
         let ev_coll = self.db.collection::<Document>("events");
         let sess_coll = self.db.collection::<Document>("sessions");

@@ -1,3 +1,4 @@
+use crate::service::{validate_scope, validate_session_id};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -358,6 +359,7 @@ async fn apply_event(
 impl SessionService for PostgresSessionService {
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let now = Utc::now();
 
@@ -496,6 +498,7 @@ impl SessionService for PostgresSessionService {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        validate_scope(&req.app_name, &req.user_id)?;
         let limit = req.limit.unwrap_or(i64::MAX as usize) as i64;
         let offset = req.offset.unwrap_or(0) as i64;
 
@@ -538,6 +541,7 @@ impl SessionService for PostgresSessionService {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id, session_id = %req.session_id))]
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
+        req.try_identity()?;
         // CASCADE handles events deletion automatically in PostgreSQL
         sqlx::query(
             "DELETE FROM sessions WHERE app_name = $1 AND user_id = $2 AND session_id = $3",
@@ -554,6 +558,7 @@ impl SessionService for PostgresSessionService {
 
     #[instrument(skip_all, fields(session_id = %session_id))]
     async fn append_event(&self, session_id: &str, mut event: Event) -> Result<()> {
+        validate_session_id(session_id)?;
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
 
         let mut tx = self
@@ -624,6 +629,7 @@ impl SessionService for PostgresSessionService {
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        validate_scope(app_name, user_id)?;
         // CASCADE handles events deletion automatically
         sqlx::query("DELETE FROM sessions WHERE app_name = $1 AND user_id = $2")
             .bind(app_name)

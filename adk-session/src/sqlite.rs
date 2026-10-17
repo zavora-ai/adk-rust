@@ -1,3 +1,4 @@
+use crate::service::{validate_scope, validate_session_id};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -363,6 +364,7 @@ async fn apply_event(
 #[async_trait]
 impl SessionService for SqliteSessionService {
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let now = Utc::now();
 
@@ -470,6 +472,7 @@ impl SessionService for SqliteSessionService {
     }
 
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        validate_scope(&req.app_name, &req.user_id)?;
         let limit = req.limit.map(|l| l as i64).unwrap_or(i64::MAX);
         let offset = req.offset.unwrap_or(0) as i64;
 
@@ -514,6 +517,7 @@ impl SessionService for SqliteSessionService {
     }
 
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
+        req.try_identity()?;
         let mut tx = self
             .pool
             .begin()
@@ -546,6 +550,7 @@ impl SessionService for SqliteSessionService {
     }
 
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        validate_scope(app_name, user_id)?;
         let mut tx = self
             .pool
             .begin()
@@ -578,6 +583,7 @@ impl SessionService for SqliteSessionService {
     }
 
     async fn append_event(&self, session_id: &str, mut event: Event) -> Result<()> {
+        validate_session_id(session_id)?;
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
 
         let mut tx = self
@@ -643,6 +649,7 @@ impl SessionService for SqliteSessionService {
     }
 
     async fn rewind(&self, session_id: &str, target_event_id: &str) -> Result<Box<dyn Session>> {
+        validate_session_id(session_id)?;
         let mut tx = self
             .pool
             .begin_with(BEGIN_WRITE)
@@ -784,6 +791,7 @@ impl SessionService for SqliteSessionService {
     }
 
     async fn rewind_steps(&self, session_id: &str, steps: usize) -> Result<Box<dyn Session>> {
+        validate_session_id(session_id)?;
         if steps == 0 {
             // Look up session and return it unchanged
             let session_row =

@@ -15,12 +15,13 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 - **Durable stores** - `SpendLedger`, `ActionLedger`, and `ApprovalStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each behind its backend's feature and proven by the `adk-core` conformance suites; the approval stores also hold the requests and delegations of the `adk-core` approval service
 - **Durable runtime stores** - `LeaseStore`, `DurableRunStore`, `ScheduleStore`, and `GovernanceStateStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each proven by the `adk-core` conformance suites
 - **PostgresSessionService** - PostgreSQL-backed persistence (`postgres` feature)
-- **RedisSessionService** - Redis-backed persistence (`redis` feature)
+- **RedisSessionService** - Redis-backed persistence on a standalone server or Redis Cluster, where each session's keys share one hash tag (`redis` feature)
 - **MongoSessionService** - MongoDB-backed persistence (`mongodb` feature)
 - **Neo4jSessionService** - Neo4j-backed persistence (`neo4j` feature)
 - **FirestoreSessionService** - Firestore-backed persistence (`firestore` feature)
 - **VertexAiSessionService** - Vertex AI Session API backend (`vertex-session` feature)
 - **Schema Migrations** - Versioned, forward-only migrations for all database backends
+- **Identifier validation** - Every backend rejects an empty, oversized, or NUL-containing app name, user ID, or session ID with an `InvalidInput` error before it touches storage
 
 ## Installation
 

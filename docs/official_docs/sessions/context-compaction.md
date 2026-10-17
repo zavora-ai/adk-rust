@@ -13,6 +13,24 @@ Invocations 4-6: [Summary A, event3, event4, event5, event6] → Summarized into
 
 The `overlap_size` parameter controls how many events from the previous window carry over into the next summary, preserving continuity.
 
+### What the Summarizer Reads
+
+`LlmEventSummarizer` summarizes the window as the model sees it:
+
+| Input | How it reaches the summary prompt |
+|-------|-----------------------------------|
+| The most recent earlier summary in the window | First, as `summary of earlier conversation: …`; the events it covers are left out |
+| Text | `<author>: <text>` |
+| Function calls | `<author>: [function call] <name>(<arguments JSON>)` |
+| Function responses | `<author>: [function response] <name>: <response JSON>`, plus any attached file or inline data references |
+| Inline data, file data, embedded resources, server tool calls and responses | A one-line reference (MIME type, size or URI, resource text) |
+| Thinking parts and streamed partial events | Left out |
+
+Each summary therefore carries the one before it, so facts from older turns and tool results
+survive repeated compaction. This matters with `RunConfig::history_max_events`: the runner then
+loads only the most recent events, so an older turn reaches the model only through the
+summaries.
+
 ## Configuration
 
 Add compaction to your runner configuration:

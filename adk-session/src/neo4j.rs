@@ -23,6 +23,7 @@
 //! ```
 
 use crate::neo4j_stores::{Inline, detached};
+use crate::service::{validate_scope, validate_session_id};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -579,7 +580,6 @@ impl SessionService for Inline<Neo4jSessionService> {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id, session_id = %req.session_id))]
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
-        req.try_identity()?;
         let mut row_stream = self
             .graph
             .execute(
@@ -889,26 +889,31 @@ impl SessionService for Inline<Neo4jSessionService> {
 #[async_trait]
 impl SessionService for Neo4jSessionService {
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let inline = Inline(self.clone());
         detached(async move { inline.create(req).await }).await
     }
 
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let inline = Inline(self.clone());
         detached(async move { inline.get(req).await }).await
     }
 
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        validate_scope(&req.app_name, &req.user_id)?;
         let inline = Inline(self.clone());
         detached(async move { inline.list(req).await }).await
     }
 
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
+        req.try_identity()?;
         let inline = Inline(self.clone());
         detached(async move { inline.delete(req).await }).await
     }
 
     async fn append_event(&self, session_id: &str, event: Event) -> Result<()> {
+        validate_session_id(session_id)?;
         let inline = Inline(self.clone());
         let session_id = session_id.to_owned();
         detached(async move { inline.append_event(&session_id, event).await }).await
@@ -920,6 +925,7 @@ impl SessionService for Neo4jSessionService {
     }
 
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        validate_scope(app_name, user_id)?;
         let inline = Inline(self.clone());
         let app_name = app_name.to_owned();
         let user_id = user_id.to_owned();

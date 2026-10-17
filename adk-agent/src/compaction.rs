@@ -5,8 +5,8 @@
 //! Rust equivalent of ADK Python's `LlmEventSummarizer`.
 
 use adk_core::{
-    BaseEventsSummarizer, Content, Event, EventActions, EventCompaction, Llm, LlmRequest, Part,
-    Result,
+    BaseEventsSummarizer, Content, EmbeddedResource, Event, EventActions, EventCompaction, Llm,
+    LlmRequest, Part, Result,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -23,6 +23,12 @@ The summary should be concise and capture the essence of the interaction.\n\n\
 /// When called with a list of events, this formats the events, generates a
 /// summary using an LLM, and returns a new [`Event`] containing the summary
 /// within an [`EventCompaction`].
+///
+/// The summarizer's input is the window as the model sees it: the most recent earlier
+/// summary in the window (an event carrying [`EventActions::compaction`]) replaces the events
+/// it covers, so its content carries into the new summary, and every later event contributes
+/// its text, function calls and responses, file and inline data references, and embedded
+/// resources. Thinking parts and streamed partial events are left out.
 ///
 /// The summary call goes through [`adk_core::generate_metered`], so when the
 /// runner compacts a session it counts against the run's budget and spend
@@ -45,19 +51,71 @@ impl LlmEventSummarizer {
         self
     }
 
-    fn format_events_for_prompt(events: &[Event]) -> String {
-        let mut lines = Vec::new();
+    /// Renders the window the summary replaces: the latest earlier summary, then each event
+    /// after the span that summary covers.
+    fn format_events_for_prompt(events: &[Event], earlier: Option<&EventCompaction>) -> String {
+        let mut lines: Vec<String> = earlier
+            .into_iter()
+            .flat_map(|compaction| compaction.compacted_content.parts.iter())
+            .filter_map(render_part)
+            .map(|summary| format!("summary of earlier conversation: {summary}"))
+            .collect();
         for event in events {
+            let covered = earlier.is_some_and(|c| event.timestamp <= c.end_timestamp);
+            if event.actions.compaction.is_some() || event.llm_response.partial || covered {
+                continue;
+            }
             if let Some(content) = &event.llm_response.content {
-                for part in &content.parts {
-                    if let Part::Text { text } = part {
-                        lines.push(format!("{}: {}", event.author, text));
-                    }
+                for rendered in content.parts.iter().filter_map(render_part) {
+                    lines.push(format!("{}: {rendered}", event.author));
                 }
             }
         }
         lines.join("\n")
     }
+}
+
+/// A one-line rendering of `part` for the summarizer prompt; `None` for thinking.
+fn render_part(part: &Part) -> Option<String> {
+    let json = |value: &serde_json::Value| value.to_string();
+    Some(match part {
+        Part::Text { text } => text.clone(),
+        Part::Thinking { .. } => return None,
+        Part::FunctionCall { name, args, .. } => format!("[function call] {name}({})", json(args)),
+        Part::FunctionResponse { function_response, .. } => {
+            let mut rendered = format!(
+                "[function response] {}: {}",
+                function_response.name,
+                json(&function_response.response)
+            );
+            for data in &function_response.inline_data {
+                rendered.push_str(&format!(" [inline data: {}]", data.mime_type));
+            }
+            for file in &function_response.file_data {
+                rendered.push_str(&format!(" [file: {} ({})]", file.file_uri, file.mime_type));
+            }
+            rendered
+        }
+        Part::InlineData { mime_type, data, .. } => {
+            format!("[inline data: {mime_type}, {} bytes]", data.len())
+        }
+        Part::FileData { mime_type, file_uri, .. } => format!("[file: {file_uri} ({mime_type})]"),
+        Part::ServerToolCall { server_tool_call } => {
+            format!("[server tool call] {}", json(server_tool_call))
+        }
+        Part::ServerToolResponse { server_tool_response } => {
+            format!("[server tool response] {}", json(server_tool_response))
+        }
+        Part::EmbeddedResource { resource } => match resource {
+            EmbeddedResource::Text(text) => format!("[resource {}] {}", text.uri, text.text),
+            EmbeddedResource::Blob(blob) => format!(
+                "[resource {}: {}, {} bytes]",
+                blob.uri,
+                blob.mime_type.as_deref().unwrap_or("application/octet-stream"),
+                blob.data.len()
+            ),
+        },
+    })
 }
 
 #[async_trait]
@@ -67,7 +125,8 @@ impl BaseEventsSummarizer for LlmEventSummarizer {
             return Ok(None);
         }
 
-        let conversation_history = Self::format_events_for_prompt(events);
+        let earlier = events.iter().rev().find_map(|event| event.actions.compaction.as_ref());
+        let conversation_history = Self::format_events_for_prompt(events, earlier);
         let prompt = self.prompt_template.replace("{conversation_history}", &conversation_history);
 
         let request = LlmRequest {
@@ -104,7 +163,14 @@ impl BaseEventsSummarizer for LlmEventSummarizer {
         // Ensure the compacted content has the role 'model'
         summary.role = "model".to_string();
 
-        let start_timestamp = events.first().map(|e| e.timestamp).unwrap_or_default();
+        // A new summary also stands in for the span the earlier one covered.
+        let start_timestamp = events
+            .first()
+            .map(|e| e.timestamp)
+            .into_iter()
+            .chain(earlier.map(|compaction| compaction.start_timestamp))
+            .min()
+            .unwrap_or_default();
         let end_timestamp = events.last().map(|e| e.timestamp).unwrap_or_default();
 
         let compaction =
