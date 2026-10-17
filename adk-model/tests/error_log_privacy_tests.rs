@@ -18,7 +18,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use adk_core::{AdkError, Content, Llm, LlmRequest, UPSTREAM_EXCERPT_BYTES};
+use adk_core::{Content, Llm, LlmRequest, UPSTREAM_EXCERPT_BYTES};
 use futures::StreamExt;
 use serde_json::json;
 use tracing::field::{Field, Visit};
@@ -355,6 +355,7 @@ async fn undecodable_responses_are_described_without_their_content() {
 #[cfg(feature = "anthropic")]
 #[test]
 fn anthropic_api_errors_quote_a_bounded_message() {
+    use adk_core::AdkError;
     use adk_model::anthropic::AnthropicApiError;
 
     let error: AdkError = AnthropicApiError {
