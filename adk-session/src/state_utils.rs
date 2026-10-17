@@ -68,3 +68,17 @@ pub(crate) fn merge_current_tiers(
     let (_, _, session) = extract_state_deltas(stored);
     merge_states(app, user, &session)
 }
+
+/// Rebuilds the session tier from the state a session was created with and the state deltas
+/// of `events`, applied in order.
+pub(crate) fn rebuild_session_state(
+    initial: &HashMap<String, Value>,
+    events: &[crate::Event],
+) -> HashMap<String, Value> {
+    let (_, _, mut state) = extract_state_deltas(initial);
+    for event in events {
+        let (_, _, delta) = extract_state_deltas(&event.actions.state_delta);
+        state.extend(delta);
+    }
+    state
+}

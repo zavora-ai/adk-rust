@@ -174,3 +174,31 @@ async fn test_delete_session() {
 
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn test_append_by_id_errors_are_typed() {
+    let service = InMemorySessionService::new();
+
+    let missing = service.append_event("missing", Event::new("inv")).await.unwrap_err();
+    assert_eq!(
+        (missing.category, missing.code),
+        (adk_core::ErrorCategory::NotFound, "session.not_found")
+    );
+
+    for user in ["alice", "bob"] {
+        service
+            .create(CreateRequest {
+                app_name: "app".to_string(),
+                user_id: user.to_string(),
+                session_id: Some("shared".to_string()),
+                state: HashMap::new(),
+            })
+            .await
+            .unwrap();
+    }
+    let ambiguous = service.append_event("shared", Event::new("inv")).await.unwrap_err();
+    assert_eq!(
+        (ambiguous.category, ambiguous.code),
+        (adk_core::ErrorCategory::InvalidInput, "session.ambiguous_id")
+    );
+}

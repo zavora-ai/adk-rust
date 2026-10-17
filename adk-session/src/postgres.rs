@@ -1,4 +1,7 @@
-use crate::service::{validate_scope, validate_session_id};
+use crate::service::{
+    ambiguous_session_id, session_already_exists, session_id_not_found, session_not_found_for,
+    validate_scope, validate_session_id,
+};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -88,11 +91,14 @@ impl PostgresSessionService {
     ///
     /// Each entry is `(version, description, sql)`. Version 1 is the baseline
     /// that creates the initial schema with PostgreSQL-native types (`JSONB`,
-    /// `TIMESTAMPTZ`) and indexes for common query patterns.
-    const PG_SESSION_MIGRATIONS: &'static [(i64, &'static str, &'static str)] = &[(
-        1,
-        "create initial session tables",
-        "\
+    /// `TIMESTAMPTZ`) and indexes for common query patterns. Version 2 adds `events.seq`, an
+    /// insertion sequence that orders events with equal timestamps; existing rows are numbered
+    /// in their physical order.
+    const PG_SESSION_MIGRATIONS: &'static [(i64, &'static str, &'static str)] = &[
+        (
+            1,
+            "create initial session tables",
+            "\
 CREATE TABLE IF NOT EXISTS sessions (\
     app_name TEXT NOT NULL, \
     user_id TEXT NOT NULL, \
@@ -133,7 +139,15 @@ CREATE TABLE IF NOT EXISTS user_states (\
 );\
 CREATE INDEX IF NOT EXISTS idx_sessions_app_user ON sessions(app_name, user_id);\
 CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, timestamp);",
-    )];
+        ),
+        (
+            2,
+            "order events with equal timestamps by insertion",
+            "ALTER TABLE events ADD COLUMN IF NOT EXISTS seq BIGSERIAL;\
+CREATE INDEX IF NOT EXISTS idx_events_session_order \
+    ON events(app_name, user_id, session_id, timestamp, seq);",
+        ),
+    ];
 
     /// Create the required tables and indexes if they do not exist.
     ///
@@ -213,17 +227,108 @@ CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, timestamp
 
 type StateMap = HashMap<String, Value>;
 
+/// Marks a string stored in escaped form.
+///
+/// `JSONB` cannot hold U+0000, so a string or object key that contains it is stored as this
+/// prefix followed by the string with `%` written as `%25` and U+0000 as `%00`. A string that
+/// already starts with the prefix is escaped the same way, so reading back is exact. The prefix
+/// starts with a private-use character, and strings without U+0000 are stored unchanged.
+const NUL_ESCAPE_PREFIX: &str = "\u{e000}adk-nul:";
+
+fn needs_escape(text: &str) -> bool {
+    text.contains('\0') || text.starts_with(NUL_ESCAPE_PREFIX)
+}
+
+fn escape_text(text: String) -> String {
+    if !needs_escape(&text) {
+        return text;
+    }
+    let mut escaped = String::with_capacity(NUL_ESCAPE_PREFIX.len() + text.len() + 8);
+    escaped.push_str(NUL_ESCAPE_PREFIX);
+    for c in text.chars() {
+        match c {
+            '%' => escaped.push_str("%25"),
+            '\0' => escaped.push_str("%00"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+fn unescape_text(text: String) -> String {
+    let Some(rest) = text.strip_prefix(NUL_ESCAPE_PREFIX) else { return text };
+    let mut decoded = String::with_capacity(rest.len());
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            decoded.push(c);
+            continue;
+        }
+        let code: String = chars.by_ref().take(2).collect();
+        match code.as_str() {
+            "25" => decoded.push('%'),
+            "00" => decoded.push('\0'),
+            other => {
+                decoded.push('%');
+                decoded.push_str(other);
+            }
+        }
+    }
+    decoded
+}
+
+/// Rewrites every string and object key of `value` with `rewrite`, in place.
+fn rewrite_strings(value: &mut Value, rewrite: fn(String) -> String, applies: fn(&str) -> bool) {
+    match value {
+        Value::String(text) => {
+            if applies(text) {
+                *text = rewrite(std::mem::take(text));
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                rewrite_strings(item, rewrite, applies);
+            }
+        }
+        Value::Object(map) => {
+            if map.keys().any(|key| applies(key)) {
+                *map = std::mem::take(map)
+                    .into_iter()
+                    .map(|(key, value)| (if applies(&key) { rewrite(key) } else { key }, value))
+                    .collect();
+            }
+            for item in map.values_mut() {
+                rewrite_strings(item, rewrite, applies);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+/// Serializes `value` for a `JSONB` column; see [`NUL_ESCAPE_PREFIX`].
+fn to_jsonb<T: serde::Serialize + ?Sized>(value: &T) -> Result<Value> {
+    let mut value = serde_json::to_value(value)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+    rewrite_strings(&mut value, escape_text, needs_escape);
+    Ok(value)
+}
+
+/// Reverses [`to_jsonb`] on a value read from a `JSONB` column.
+fn from_jsonb(mut value: Value) -> Value {
+    rewrite_strings(&mut value, unescape_text, |text| text.starts_with(NUL_ESCAPE_PREFIX));
+    value
+}
+
 /// Converts a stored `JSONB` state object; a missing row or a non-object is empty state.
 fn decode_state(value: Option<Value>) -> StateMap {
-    match value {
+    match value.map(from_jsonb) {
         Some(Value::Object(map)) => map.into_iter().collect(),
         _ => HashMap::new(),
     }
 }
 
 fn encode_state(state: &StateMap) -> Result<Value> {
-    serde_json::to_value(state)
-        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))
+    to_jsonb(state)
 }
 
 /// Reads the current app and user state tiers.
@@ -321,17 +426,14 @@ async fn apply_event(
     .await
     .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
     if updated.rows_affected() == 0 {
-        return Err(adk_core::AdkError::session("session not found"));
+        return Err(session_not_found_for(app_name, user_id, session_id));
     }
 
     apply_tier_deltas(conn, app_name, user_id, &app_delta, &user_delta, event.timestamp).await?;
 
-    let llm_response_value = serde_json::to_value(&event.llm_response)
-        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-    let actions_value = serde_json::to_value(&event.actions)
-        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-    let tool_ids_value = serde_json::to_value(&event.long_running_tool_ids)
-        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+    let llm_response_value = to_jsonb(&event.llm_response)?;
+    let actions_value = to_jsonb(&event.actions)?;
+    let tool_ids_value = to_jsonb(&event.long_running_tool_ids)?;
 
     sqlx::query(
         r#"INSERT INTO events (id, app_name, user_id, session_id, invocation_id, branch, author, timestamp, llm_response, actions, long_running_tool_ids)
@@ -387,7 +489,13 @@ impl SessionService for PostgresSessionService {
         .bind(now)
         .execute(&mut *tx)
         .await
-        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
+        .map_err(|e| match e {
+            // The failed insert aborts the transaction, which rolls back the tier writes above.
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                session_already_exists(&req.app_name, &req.user_id, &session_id)
+            }
+            other => adk_core::AdkError::session(format!("insert failed: {other}")),
+        })?;
 
         tx.commit()
             .await
@@ -436,8 +544,8 @@ impl SessionService for PostgresSessionService {
                  SELECT * FROM events \
                  WHERE app_name = $1 AND user_id = $2 AND session_id = $3 \
                    AND ($4::timestamptz IS NULL OR timestamp >= $4) \
-                 ORDER BY timestamp DESC, id DESC LIMIT $5\
-             ) recent ORDER BY timestamp, id",
+                 ORDER BY timestamp DESC, seq DESC LIMIT $5\
+             ) recent ORDER BY timestamp, seq",
         )
         .bind(&req.app_name)
         .bind(&req.user_id)
@@ -450,14 +558,14 @@ impl SessionService for PostgresSessionService {
         .into_iter()
         .filter_map(|row| {
             let event_id: String = row.get("id");
-            let decoded =
-                serde_json::from_value(row.get("llm_response")).and_then(|llm_response| {
-                    Ok((
-                        llm_response,
-                        serde_json::from_value(row.get("actions"))?,
-                        serde_json::from_value(row.get("long_running_tool_ids"))?,
-                    ))
-                });
+            let column = |name: &str| from_jsonb(row.get(name));
+            let decoded = serde_json::from_value(column("llm_response")).and_then(|llm_response| {
+                Ok((
+                    llm_response,
+                    serde_json::from_value(column("actions"))?,
+                    serde_json::from_value(column("long_running_tool_ids"))?,
+                ))
+            });
             let (llm_response, actions, long_running_tool_ids) = match decoded {
                 Ok(parts) => parts,
                 Err(error) => {
@@ -511,7 +619,7 @@ impl SessionService for PostgresSessionService {
         let rows = sqlx::query(
             "SELECT session_id, state, updated_at FROM sessions \
              WHERE app_name = $1 AND user_id = $2 \
-             ORDER BY updated_at DESC LIMIT $3 OFFSET $4",
+             ORDER BY updated_at DESC, session_id DESC LIMIT $3 OFFSET $4",
         )
         .bind(&req.app_name)
         .bind(&req.user_id)
@@ -575,12 +683,10 @@ impl SessionService for PostgresSessionService {
                 .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         if session_rows.is_empty() {
-            return Err(adk_core::AdkError::session("session not found"));
+            return Err(session_id_not_found(session_id));
         }
         if session_rows.len() > 1 {
-            return Err(adk_core::AdkError::session(format!(
-                "ambiguous session_id '{session_id}'; expected a unique session identifier"
-            )));
+            return Err(ambiguous_session_id(session_id));
         }
 
         let row = &session_rows[0];
@@ -714,5 +820,34 @@ impl Events for PostgresSession {
 
     fn at(&self, index: usize) -> Option<&Event> {
         self.events.get(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn jsonb_escaping_round_trips_nul_percent_and_the_prefix() {
+        let original = json!({
+            "plain": "no escape needed",
+            "nul": "PK\u{0}\u{3}binary",
+            "percent": "100% and %00 and \u{0}",
+            "lookalike": format!("{NUL_ESCAPE_PREFIX}%00 literal"),
+            "key\u{0}with nul": ["a\u{0}b", {"nested\u{0}": "c\u{0}"}],
+            "numbers": [1, 2.5, null, true],
+        });
+
+        let stored = to_jsonb(&original).unwrap();
+        assert!(!stored.to_string().contains("\\u0000"), "no U+0000 reaches JSONB: {stored}");
+        assert_eq!(stored["plain"], json!("no escape needed"), "plain strings are stored as is");
+        assert_eq!(from_jsonb(stored), original);
+    }
+
+    #[test]
+    fn jsonb_reading_leaves_unescaped_strings_alone() {
+        let legacy = json!({"text": "50% off", "odd": "%zz"});
+        assert_eq!(from_jsonb(legacy.clone()), legacy);
     }
 }

@@ -22,9 +22,9 @@ async fn fresh_db_migrate_creates_tables_and_registry() {
     // Run migrate
     svc.migrate().await.unwrap();
 
-    // After migrate: schema_version should be 1
+    // After migrate: schema_version is the latest version
     let v = svc.schema_version().await.unwrap();
-    assert_eq!(v, 1, "schema_version should be 1 after migrate");
+    assert_eq!(v, 2, "schema_version should be 2 after migrate");
 }
 
 /// Idempotence: calling migrate() twice is a no-op the second time.
@@ -40,7 +40,7 @@ async fn migrate_twice_is_idempotent() {
     let v2 = svc.schema_version().await.unwrap();
 
     assert_eq!(v1, v2, "schema_version should not change on second migrate");
-    assert_eq!(v2, 1);
+    assert_eq!(v2, 2);
 }
 
 /// After migration, full CRUD works: create session, get, list, delete.
@@ -140,9 +140,9 @@ async fn baseline_detection_on_preexisting_tables() {
     let svc = SqliteSessionService::from_pool(pool);
     svc.migrate().await.unwrap();
 
-    // Should detect baseline and record v1
+    // Should detect the baseline, record v1, then apply v2
     let v = svc.schema_version().await.unwrap();
-    assert_eq!(v, 1, "baseline should be recorded as v1");
+    assert_eq!(v, 2, "baseline should be recorded as v1 and v2 applied");
 
     // The pre-existing row should still be there
     let row =

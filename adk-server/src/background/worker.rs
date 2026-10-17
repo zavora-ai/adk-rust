@@ -1170,21 +1170,28 @@ async fn ensure_session(
         UserId::try_from(user_id)?,
         SessionId::try_from(session_id)?,
     );
-    // Backends report a missing session differently (some as `session.not_found`, some
-    // as an internal error), so any read failure is followed by a create, and the read
-    // error is returned when the create fails too.
+    // Only a missing session is created: any other read failure is returned, so a transient
+    // backend error never replaces the stored session. A create that loses a race to another
+    // worker reads the session that worker created.
     match runner.session_service().get_for_identity(&identity).await {
-        Ok(session) => Ok(session),
-        Err(read_error) => runner
-            .session_service()
-            .create(adk_session::CreateRequest {
-                app_name: runner.app_name().to_string(),
-                user_id: user_id.to_string(),
-                session_id: Some(session_id.to_string()),
-                state: std::collections::HashMap::new(),
-            })
-            .await
-            .map_err(|_| read_error),
+        Err(error) if error.is_not_found() => {
+            let created = runner
+                .session_service()
+                .create(adk_session::CreateRequest {
+                    app_name: runner.app_name().to_string(),
+                    user_id: user_id.to_string(),
+                    session_id: Some(session_id.to_string()),
+                    state: std::collections::HashMap::new(),
+                })
+                .await;
+            match created {
+                Err(error) if error.is_conflict() => {
+                    runner.session_service().get_for_identity(&identity).await
+                }
+                other => other,
+            }
+        }
+        other => other,
     }
 }
 

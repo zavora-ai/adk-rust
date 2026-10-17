@@ -16,7 +16,10 @@
 //! service.migrate().await?;
 //! ```
 
-use crate::service::{validate_scope, validate_session_id};
+use crate::service::{
+    session_already_exists, session_id_not_found, session_not_found_for, validate_scope,
+    validate_session_id,
+};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -25,7 +28,7 @@ use adk_core::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use mongodb::bson::{self, Document, doc};
-use mongodb::options::{FindOptions, IndexOptions, UpdateOptions};
+use mongodb::options::{FindOptions, IndexOptions, ReturnDocument, UpdateOptions};
 use mongodb::{Client, Database, IndexModel};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -86,7 +89,7 @@ impl MongoSessionService {
     const REGISTRY_COLLECTION: &'static str = "_adk_session_migrations";
 
     const MONGO_SESSION_MIGRATIONS: &'static [(i64, &'static str)] =
-        &[(1, "create initial indexes")];
+        &[(1, "create initial indexes"), (2, "index events in read order")];
 
     /// Run versioned migrations for MongoDB session storage.
     pub async fn migrate(&self) -> Result<()> {
@@ -229,6 +232,7 @@ impl MongoSessionService {
 async fn run_mongo_session_step(db: &Database, version: i64) -> Result<()> {
     match version {
         1 => mongo_session_v1(db).await,
+        2 => mongo_session_v2(db).await,
         _ => Err(adk_core::AdkError::session(format!("unknown migration version: {version}"))),
     }
 }
@@ -290,6 +294,31 @@ async fn mongo_session_v1(db: &Database) -> Result<()> {
         .map_err(|e| adk_core::AdkError::session(format!("index creation failed: {e}")))?;
 
     Ok(())
+}
+
+/// Indexes events by session and read order: timestamp, then the append sequence `seq`.
+async fn mongo_session_v2(db: &Database) -> Result<()> {
+    db.collection::<Document>("events")
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! {
+                    "app_name": 1, "user_id": 1, "session_id": 1, "timestamp": 1, "seq": 1,
+                })
+                .options(IndexOptions::builder().name("idx_events_read_order".to_string()).build())
+                .build(),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("index creation failed: {e}")))?;
+    Ok(())
+}
+
+/// Whether `error` is a duplicate-key violation of a unique index.
+fn is_duplicate_key(error: &mongodb::error::Error) -> bool {
+    use mongodb::error::{ErrorKind, WriteFailure};
+    match &*error.kind {
+        ErrorKind::Write(WriteFailure::WriteError(write)) => write.code == 11000,
+        _ => false,
+    }
 }
 
 // ── BSON helpers ──
@@ -438,17 +467,33 @@ impl MongoSessionService {
             state_utils::extract_state_deltas(&event.actions.state_delta);
         let bson_ts = chrono_to_bson_dt(event.timestamp);
 
+        // `event_seq` counts the session's appends; it orders events with equal timestamps,
+        // which millisecond BSON dates make common.
+        let mut pipeline = merge_state_pipeline(&session_delta, bson_ts)?;
+        if let Some(set) =
+            pipeline.first_mut().and_then(|stage| stage.get_document_mut("$set").ok())
+        {
+            set.insert(
+                "event_seq",
+                doc! { "$add": [{ "$toLong": { "$ifNull": ["$event_seq", 0] } }, 1] },
+            );
+        }
         let updated = with_optional_session!(
-            sess_coll.update_one(
-                doc! { "app_name": app_name, "user_id": user_id, "session_id": session_id },
-                merge_state_pipeline(&session_delta, bson_ts)?
-            ),
+            sess_coll
+                .find_one_and_update(
+                    doc! { "app_name": app_name, "user_id": user_id, "session_id": session_id },
+                    pipeline
+                )
+                .return_document(ReturnDocument::After)
+                .projection(doc! { "event_seq": 1 }),
             txn.as_mut()
         )
-        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
-        if updated.matched_count == 0 {
-            return Err(adk_core::AdkError::session("session not found"));
-        }
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?
+        .ok_or_else(|| session_not_found_for(app_name, user_id, session_id))?;
+        let seq = updated
+            .get_i64("event_seq")
+            .or_else(|_| updated.get_i32("event_seq").map(i64::from))
+            .unwrap_or_default();
 
         self.apply_tier_deltas(txn, app_name, user_id, &app_delta, &user_delta, bson_ts).await?;
 
@@ -462,7 +507,7 @@ impl MongoSessionService {
             ev_coll.insert_one(doc! {
                 "id": &event.id, "session_id": session_id, "app_name": app_name, "user_id": user_id,
                 "invocation_id": &event.invocation_id, "branch": &event.branch, "author": &event.author,
-                "timestamp": bson_ts, "llm_response": llm_bson, "actions": act_bson, "long_running_tool_ids": tid_bson,
+                "timestamp": bson_ts, "seq": seq, "llm_response": llm_bson, "actions": act_bson, "long_running_tool_ids": tid_bson,
             }), txn.as_mut()
         ).map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
@@ -484,7 +529,31 @@ impl SessionService for MongoSessionService {
 
         let sess_coll = self.db.collection::<Document>("sessions");
 
+        let conflict = || session_already_exists(&req.app_name, &req.user_id, &session_id);
+        let identity = doc! {
+            "app_name": &req.app_name, "user_id": &req.user_id, "session_id": &session_id,
+        };
         let mut txn = self.maybe_start_transaction().await?;
+
+        // The session document is written before the tiers, so a create that conflicts writes
+        // nothing even without a transaction; the unique index catches a concurrent create.
+        let existing = with_optional_session!(sess_coll.find_one(identity.clone()), txn.as_mut())
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
+        if existing.is_some() {
+            return Err(conflict());
+        }
+        let session_bson = state_to_bson(&session_state)?;
+        let mut session_doc = identity;
+        session_doc.insert("state", session_bson);
+        session_doc.insert("created_at", bson_now);
+        session_doc.insert("updated_at", bson_now);
+        with_optional_session!(sess_coll.insert_one(session_doc), txn.as_mut()).map_err(|e| {
+            if is_duplicate_key(&e) {
+                conflict()
+            } else {
+                adk_core::AdkError::session(format!("insert failed: {e}"))
+            }
+        })?;
 
         self.apply_tier_deltas(
             &mut txn,
@@ -497,16 +566,6 @@ impl SessionService for MongoSessionService {
         .await?;
         let (app_state, user_state) =
             self.read_tiers(&mut txn, &req.app_name, &req.user_id).await?;
-
-        let session_bson = state_to_bson(&session_state)?;
-        with_optional_session!(
-            sess_coll.insert_one(doc! {
-                "app_name": &req.app_name, "user_id": &req.user_id, "session_id": &session_id,
-                "state": &session_bson, "created_at": bson_now, "updated_at": bson_now,
-            }),
-            txn.as_mut()
-        )
-        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         MongoSessionService::maybe_commit(&mut txn).await?;
 
@@ -540,7 +599,7 @@ impl SessionService for MongoSessionService {
         let events_coll = self.db.collection::<Document>("events");
         let mut cursor = events_coll
             .find(doc! { "app_name": &req.app_name, "user_id": &req.user_id, "session_id": &req.session_id })
-            .with_options(FindOptions::builder().sort(doc! { "timestamp": 1 }).build())
+            .with_options(FindOptions::builder().sort(doc! { "timestamp": 1, "seq": 1 }).build())
             .await.map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut events: Vec<Event> = Vec::new();
@@ -579,7 +638,7 @@ impl SessionService for MongoSessionService {
         validate_scope(&req.app_name, &req.user_id)?;
         let sess_coll = self.db.collection::<Document>("sessions");
         let opts = FindOptions::builder()
-            .sort(doc! { "updated_at": -1 })
+            .sort(doc! { "updated_at": -1, "session_id": -1 })
             .limit(req.limit.map(|l| l as i64))
             .skip(req.offset.map(|o| o as u64))
             .build();
@@ -647,7 +706,7 @@ impl SessionService for MongoSessionService {
             txn.as_mut()
         )
         .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-        .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
+        .ok_or_else(|| session_id_not_found(session_id))?;
 
         let app_name = session_doc.get_str("app_name").unwrap_or_default().to_string();
         let user_id = session_doc.get_str("user_id").unwrap_or_default().to_string();

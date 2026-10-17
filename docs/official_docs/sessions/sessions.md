@@ -66,8 +66,97 @@ pub trait SessionService: Send + Sync {
     
     /// Append an event to a session
     async fn append_event(&self, session_id: &str, event: Event) -> Result<()>;
+
+    /// Rewind a session to an event, or by a number of events (default: Unsupported)
+    async fn rewind(&self, identity: &AdkIdentity, target_event_id: &str) -> Result<Box<dyn Session>>;
+    async fn rewind_steps(&self, identity: &AdkIdentity, steps: usize) -> Result<Box<dyn Session>>;
 }
 ```
+
+The trait also has identity-addressed methods (`get_for_identity`, `append_event_for_identity`,
+`delete_for_identity`), `delete_all_sessions`, and `health_check`; see
+[Typed Session Identity](#typed-session-identity).
+
+### Behaviour Every Backend Follows
+
+| Operation | Behaviour |
+|-----------|-----------|
+| `create` with an existing `(app_name, user_id, session_id)` | Fails with `session.already_exists` (`Conflict`, HTTP 409) and writes nothing: the existing session keeps its events and state, and the app and user tiers are untouched |
+| `get` of a missing session | Fails with `session.not_found` (`NotFound`, HTTP 404); a backend failure is never reported as not found |
+| `append_event`, `append_event_for_identity` to a missing session | Fails with `session.not_found` |
+| Event order | Timestamp order; events with equal timestamps keep their append order |
+| `list` | Most recently updated first; equal update times by session ID, descending, so `offset`/`limit` pages are stable |
+| `rewind`, `rewind_steps` | Change only the session the identity names, and rebuild its state from the state it was created with plus the remaining events' deltas; app and user state are not rewound |
+
+Strings containing U+0000 in event content and state read back unchanged. PostgreSQL stores
+them in an escaped form, since `JSONB` cannot hold U+0000; strings without U+0000 are stored as
+they are.
+
+Rewind is implemented by `InMemorySessionService`, `SqliteSessionService`, and
+`EncryptedSession` over either; the other backends return `session.rewind.unsupported`.
+
+```rust
+use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
+use adk_session::{InMemorySessionService, SessionService};
+
+async fn drop_last_turn(service: &InMemorySessionService) -> adk_core::Result<()> {
+    let identity = AdkIdentity::new(
+        AppName::try_from("my_app")?,
+        UserId::try_from("user_123")?,
+        SessionId::try_from("session_abc")?,
+    );
+    // The last turn is the user message and the model's reply.
+    let session = service.rewind_steps(&identity, 2).await?;
+    println!("{} events remain", session.events().len());
+    Ok(())
+}
+```
+
+### Get or Create
+
+Create a session only when `get` reports it missing, and read it again when `create` loses a
+race to a concurrent request. Creating on any `get` error turns one transient backend failure
+into an attempt to replace the session.
+
+```rust
+use adk_session::{CreateRequest, GetRequest, Session, SessionService};
+use std::collections::HashMap;
+
+async fn get_or_create(
+    service: &dyn SessionService,
+    app_name: &str,
+    user_id: &str,
+    session_id: &str,
+) -> adk_core::Result<Box<dyn Session>> {
+    let get = || GetRequest {
+        app_name: app_name.to_string(),
+        user_id: user_id.to_string(),
+        session_id: session_id.to_string(),
+        num_recent_events: None,
+        after: None,
+    };
+    match service.get(get()).await {
+        Err(error) if error.is_not_found() => {
+            let created = service
+                .create(CreateRequest {
+                    app_name: app_name.to_string(),
+                    user_id: user_id.to_string(),
+                    session_id: Some(session_id.to_string()),
+                    state: HashMap::new(),
+                })
+                .await;
+            match created {
+                Err(error) if error.is_conflict() => service.get(get()).await,
+                other => other,
+            }
+        }
+        other => other,
+    }
+}
+```
+
+`adk-server`'s `/api/run` and `/api/run_sse`, both A2A executors, the background worker, and
+the runner's externally triggered invocations follow this pattern.
 
 ## Request Types
 
@@ -619,25 +708,34 @@ and `}` in identifiers percent-encoded so no identifier can move a key's slot:
 | App state | `app_state:<app>` | `adk:app_state:{<app>}` |
 | User state | `user_state:<app>:<user>` | `adk:user_state:{<app>:<user>}` |
 | Session index | `sessions_idx:<app>:<user>` | `adk:sessions_idx:{<app>:<user>}` |
+| Session index by update time | `sessions_idx:<app>:<user>:updated` | `adk:sessions_idx:{<app>:<user>}:updated` |
 | Session lookup | `session_lookup:<session>` | `adk:session_lookup:{<session>}` |
+
+Each event is scored one above the highest score in its set, so events keep their append order,
+and `get` then orders them by timestamp. Events written by earlier releases are scored by their
+millisecond timestamp and keep their order; events appended to such a session sort after them.
+`list` pages through the update-time index, newest first. Sessions created by earlier releases
+are only in the set index; the first `list` of their user adds them to the update-time index.
 
 Moving existing data from a standalone server to a cluster means copying its keys to the
 cluster names.
 
 | Operation | Standalone | Cluster |
 |-----------|------------|---------|
-| Append | One Lua script (`EVAL`) writes the event and the session, user, and app state fields | One script writes the event and the session tier; the user and app tier fields follow, one `HSET` each |
-| Create | One `MULTI`/`EXEC` | Index entry, lookup, and tier fields first; the session hash last |
-| Delete | One `MULTI`/`EXEC` | Session hash and events in one `DEL`; then the lookup and the index entry |
+| Append | One Lua script (`EVAL`) writes the event, the update-time index entry, and the session, user, and app state fields | One script writes the event and the session tier; the update-time index entry and the user and app tier fields follow, one command each |
+| Create | One script, which writes nothing when the session exists | A check that the session is absent; index entries, lookup, and tier fields; the session hash last, in a script that writes nothing when it exists |
+| Delete | One `MULTI`/`EXEC` | Session hash and events in one `DEL`; then the lookup and the index entries |
 
 Redis Cluster runs a script or transaction only when all its keys share one slot, and the app
 and user tiers are shared by many sessions, so in cluster mode:
 
 - A reader can see an appended event before its app and user tier fields.
 - An append that fails after its script returns an error with the event already stored.
-- A create that fails part-way can leave its app and user tier fields, and an index entry and a
-  lookup for a session that does not exist; `list` skips them and `get` reports the session as
-  not found.
+- A create that fails part-way can leave its app and user tier fields, and index entries and a
+  lookup for a session that does not exist; `list` skips and removes them, and `get` reports the
+  session as not found.
+- Of two creates racing for one identity, the one that loses fails with `session.already_exists`
+  after writing its app and user tier fields.
 
 The session tier keeps its compare-and-swap in both layouts, and tier fields are written one
 field at a time, so concurrent writers of different fields keep each other's values. The server
@@ -668,7 +766,7 @@ A session ID is unique within an app, and the owning `user_id` is a field of the
 
 | Operation | Session missing, or owned by another user |
 |-----------|-------------------------------------------|
-| `create` | Fails with `session.already_exists` when the ID is taken in the app |
+| `create` | Fails with `session.already_exists` (`Conflict`) when the ID is taken in the app |
 | `get`, `append_event_for_identity` | Fails with `session.not_found` |
 | `delete` | No-op, identical to deleting a missing session |
 | `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed |
@@ -683,6 +781,12 @@ A new session never inherits events left under its path. App names, user IDs, an
 ## Schema Migrations
 
 All database-backed session services (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned, forward-only migration system. Migrations are tracked in a `_schema_migrations` registry table.
+
+| Backend | Version 2 |
+|---------|-----------|
+| SQLite | Adds `sessions.initial_state`, the state a session was created with, which rewind rebuilds from. Sessions created before it rewind to their keys that no event has written |
+| PostgreSQL | Adds `events.seq`, an insertion sequence that orders events with equal timestamps; existing rows are numbered in their physical order |
+| MongoDB | Adds the `idx_events_read_order` index on the event read order (timestamp, then `seq`) |
 
 ### Encrypted Sessions
 
@@ -832,6 +936,9 @@ let session = service.create(CreateRequest {
     state: HashMap::new(),
 }).await?;
 ```
+
+A second `create` with the same app, user, and session ID fails with `session.already_exists`
+and leaves the first session as it was; see [Get or Create](#get-or-create).
 
 ### 2. Retrieval
 

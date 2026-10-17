@@ -21,7 +21,7 @@
 //!
 //! | Operation | Session missing, or owned by another user |
 //! |-----------|-------------------------------------------|
-//! | `create` | Fails with `session.already_exists` when the ID is taken in the app |
+//! | `create` | Fails with `session.already_exists` (`Conflict`) when the ID is taken in the app |
 //! | `get`, `append_event_for_identity` | Fails with `session.not_found` |
 //! | `delete` | No-op, identical to deleting a missing session |
 //! | `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed |
@@ -181,6 +181,9 @@ struct SessionDoc {
     created_at: DateTime<Utc>,
     #[serde(with = "firestore::serialize_as_timestamp")]
     updated_at: DateTime<Utc>,
+    /// Appends so far; the next event's `seq`.
+    #[serde(default)]
+    event_seq: i64,
 }
 
 /// Firestore document for an event.
@@ -195,6 +198,10 @@ struct EventDoc {
     llm_response: Value,
     actions: Value,
     long_running_tool_ids: Value,
+    /// Position among the session's appends; orders events with equal timestamps. Absent on
+    /// events written by earlier releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    seq: Option<i64>,
 }
 
 /// Firestore document for app-level state.
@@ -234,6 +241,7 @@ fn event_to_doc(event: &Event) -> Result<EventDoc> {
         llm_response,
         actions,
         long_running_tool_ids,
+        seq: None,
     })
 }
 
@@ -302,7 +310,7 @@ fn validate_identity(app_name: &str, user_id: &str, session_id: &str) -> Result<
 fn session_already_exists(app_name: &str, session_id: &str) -> AdkError {
     AdkError::new(
         ErrorComponent::Session,
-        ErrorCategory::InvalidInput,
+        ErrorCategory::Conflict,
         "session.already_exists",
         format!(
             "session '{session_id}' already exists in app '{app_name}'; omit session_id to \
@@ -676,6 +684,7 @@ impl SessionStore for FirestoreStore {
                 (SessionWrite::Merge(merge), Some(current)) => Some(SessionDoc {
                     state: merge.apply(&current.state, true),
                     updated_at: merge.updated_at,
+                    event_seq: current.event_seq + i64::from(commit.event.is_some()),
                     ..current
                 }),
                 // The `Owned` guard above guarantees a current document.
@@ -736,13 +745,17 @@ impl SessionStore for FirestoreStore {
                     .map_err(|e| firestore_error("write failed", e))?;
             }
             if let Some(event) = &commit.event {
+                let event = EventDoc {
+                    seq: session_doc.as_ref().map(|doc| doc.event_seq),
+                    ..event.clone()
+                };
                 self.db
                     .fluent()
                     .update()
                     .in_col(EVENTS_COLLECTION)
                     .document_id(&event.id)
                     .parent(&events_parent)
-                    .object(event)
+                    .object(&event)
                     .add_to_transaction(&mut transaction)
                     .map_err(|e| firestore_error("write failed", e))?;
             }
@@ -847,6 +860,7 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
                 state: session_state.clone(),
                 created_at: now,
                 updated_at: now,
+                event_seq: 0,
             }),
             app_state: StateMerge::non_empty(app_delta, now),
             user_state: StateMerge::non_empty(user_delta, now),
@@ -883,7 +897,9 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
 
         let app_state = self.store.app_state(&req.app_name).await?;
         let user_state = self.store.user_state(&req.app_name, &req.user_id).await?;
-        let event_docs = self.store.events(&req.app_name, &req.session_id).await?;
+        let mut event_docs = self.store.events(&req.app_name, &req.session_id).await?;
+        // Stable, so events of earlier releases (no `seq`) keep the store's order.
+        event_docs.sort_by_key(|doc| (doc.timestamp, doc.seq));
         let mut events = decode_event_docs(&event_docs, &req.session_id);
 
         if let Some(num) = req.num_recent_events {
@@ -917,7 +933,9 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
             .into_iter()
             .filter(|doc| doc.app_name == req.app_name && doc.user_id == req.user_id)
             .collect();
-        docs.sort_by_key(|doc| std::cmp::Reverse(doc.updated_at));
+        docs.sort_by(|a, b| {
+            b.updated_at.cmp(&a.updated_at).then_with(|| b.session_id.cmp(&a.session_id))
+        });
 
         let app_state = self.store.app_state(&req.app_name).await?;
         let user_state = self.store.user_state(&req.app_name, &req.user_id).await?;
@@ -1194,7 +1212,8 @@ mod tests {
             let data = self.data.lock().unwrap();
             let mut events =
                 data.events.get(&key(app_name, session_id)).cloned().unwrap_or_default();
-            events.sort_by_key(|event| event.timestamp);
+            // Firestore orders equal `timestamp` values by document ID, the event ID.
+            events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
             Ok(events)
         }
 
@@ -1245,6 +1264,7 @@ mod tests {
                     let doc = data.sessions.get_mut(&session_key).expect("guarded by Owned");
                     doc.state = merge.apply(&doc.state, true);
                     doc.updated_at = merge.updated_at;
+                    doc.event_seq += i64::from(commit.event.is_some());
                 }
                 SessionWrite::Delete => {
                     data.sessions.remove(&session_key);
@@ -1266,7 +1286,8 @@ mod tests {
                     .insert(user_key, UserStateDoc { state, updated_at: merge.updated_at });
             }
             if let Some(event) = commit.event {
-                data.events.entry(session_key).or_default().push(event);
+                let seq = data.sessions.get(&session_key).map(|doc| doc.event_seq);
+                data.events.entry(session_key).or_default().push(EventDoc { seq, ..event });
             }
             Ok(CommitOutcome::Committed)
         }
@@ -1363,7 +1384,7 @@ mod tests {
             .await
             .err()
             .expect("taking over another user's session id must fail");
-        assert_error(&error, ErrorCategory::InvalidInput, "session.already_exists");
+        assert_error(&error, ErrorCategory::Conflict, "session.already_exists");
 
         assert_eq!(stored(&core, "app", "s1"), before);
         let bob_get = core.get(get_req("app", "bob", "s1")).await.err().unwrap();
@@ -1381,7 +1402,7 @@ mod tests {
             .await
             .err()
             .expect("recreating an existing session must fail");
-        assert_error(&error, ErrorCategory::InvalidInput, "session.already_exists");
+        assert_error(&error, ErrorCategory::Conflict, "session.already_exists");
         assert_eq!(stored(&core, "app", "s1"), before);
     }
 
@@ -1443,6 +1464,7 @@ mod tests {
             state: serde_json::from_value(json!({"owner": "mallory"})).unwrap(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            event_seq: 0,
         };
         let replacement = takeover.clone();
         *core.store.before_commit.lock().unwrap() = Some(Box::new(move |data: &mut FakeData| {
@@ -1481,6 +1503,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn events_with_equal_timestamps_read_back_in_append_order() {
+        let core = service();
+        core.create(create_req("app", "alice", "s1", json!({}))).await.unwrap();
+        let at = Utc::now();
+        // Document IDs sort opposite to the append order.
+        let ids = ["e-c", "e-b", "e-a"];
+        for id in ids {
+            let mut event = event_with_delta(id, json!({}));
+            event.timestamp = at;
+            core.append_event_for_identity(append_req("app", "alice", "s1", event)).await.unwrap();
+        }
+
+        let session = core.get(get_req("app", "alice", "s1")).await.unwrap();
+        let read: Vec<String> = session.events().all().into_iter().map(|event| event.id).collect();
+        assert_eq!(read, ids);
+    }
+
+    #[tokio::test]
+    async fn list_orders_equal_update_times_by_session_id_descending() {
+        let core = service();
+        let at = Utc::now();
+        for session in ["s1", "s3", "s2"] {
+            core.create(create_req("app", "alice", session, json!({}))).await.unwrap();
+            let mut event = event_with_delta(&format!("{session}-e"), json!({}));
+            event.timestamp = at;
+            core.append_event_for_identity(append_req("app", "alice", session, event))
+                .await
+                .unwrap();
+        }
+
+        let listed = core
+            .list(ListRequest {
+                app_name: "app".to_string(),
+                user_id: "alice".to_string(),
+                limit: None,
+                offset: None,
+            })
+            .await
+            .unwrap();
+        let ids: Vec<&str> = listed.iter().map(|session| session.id()).collect();
+        assert_eq!(ids, ["s3", "s2", "s1"]);
+    }
+
+    #[tokio::test]
     async fn list_and_delete_all_are_scoped_to_the_caller() {
         let core = service();
         for (app, user, session) in [
@@ -1499,6 +1565,7 @@ mod tests {
             state: HashMap::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            event_seq: 0,
         };
         core.store.data.lock().unwrap().sessions.insert(key("app", "forged"), forged);
 

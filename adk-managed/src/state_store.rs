@@ -592,16 +592,30 @@ impl ManagedStateStore for SessionServiceStateStore {
                     stored.keys().filter(|key| key.starts_with(EVENT_KEY_PREFIX)).count()
                 }
                 None => {
-                    self.service
+                    let created = self
+                        .service
                         .create(adk_session::CreateRequest {
                             app_name: self.app_name.clone(),
                             user_id: self.user_id.clone(),
                             session_id: Some(session_id.to_string()),
                             state: HashMap::new(),
                         })
-                        .await
-                        .map_err(|e| Self::failed("create", e))?;
-                    0
+                        .await;
+                    match created {
+                        Ok(_) => 0,
+                        // Another instance created it first; count what that instance wrote.
+                        Err(error) if error.is_conflict() => self
+                            .stored(session_id)
+                            .await?
+                            .map(|stored| {
+                                stored
+                                    .keys()
+                                    .filter(|key| key.starts_with(EVENT_KEY_PREFIX))
+                                    .count()
+                            })
+                            .unwrap_or_default(),
+                        Err(error) => return Err(Self::failed("create", error)),
+                    }
                 }
             },
         };

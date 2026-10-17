@@ -1063,9 +1063,11 @@ impl SessionService for VertexAiSessionService {
                     ));
                 }
                 if direct.user_id == req.user_id {
-                    return Err(Self::invalid_input(format!(
-                        "legacy vertex session '{session_id}' already exists for the requested app and user",
-                    )));
+                    return Err(crate::service::session_already_exists(
+                        &req.app_name,
+                        &req.user_id,
+                        &session_id,
+                    ));
                 }
             }
         }
@@ -1092,7 +1094,11 @@ impl SessionService for VertexAiSessionService {
                     &identity,
                     "existing create resource",
                 )? {
-                    return Err(error);
+                    return Err(crate::service::session_already_exists(
+                        &req.app_name,
+                        &req.user_id,
+                        &session_id,
+                    ));
                 }
                 return Err(Self::session_error(
                     "vertex create remote ID collides with a foreign or mismatched session resource",

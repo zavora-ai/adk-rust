@@ -371,4 +371,118 @@ mod tests {
             ])
         );
     }
+
+    fn identity(app: &str, user: &str, session: &str) -> adk_core::AdkIdentity {
+        adk_core::AdkIdentity::new(
+            app.try_into().unwrap(),
+            user.try_into().unwrap(),
+            session.try_into().unwrap(),
+        )
+    }
+
+    fn delta_event(key: &str, value: serde_json::Value) -> Event {
+        let mut event = Event::new("inv");
+        event.actions.state_delta.insert(key.to_string(), value);
+        event
+    }
+
+    /// Sessions created before `initial_state` was recorded rewind to their keys that no event
+    /// has written.
+    #[tokio::test]
+    async fn test_sqlite_rewind_of_a_session_without_recorded_initial_state() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
+        service.migrate().await.unwrap();
+        assert_eq!(service.schema_version().await.unwrap(), 2);
+        service
+            .create(CreateRequest {
+                app_name: "app".to_string(),
+                user_id: "u1".to_string(),
+                session_id: Some("legacy".to_string()),
+                state: HashMap::from([
+                    ("tier".to_string(), json!("gold")),
+                    ("mode".to_string(), json!("initial")),
+                ]),
+            })
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sessions SET initial_state = NULL WHERE session_id = 'legacy'")
+            .execute(service.pool())
+            .await
+            .unwrap();
+        let id = identity("app", "u1", "legacy");
+        for event in [delta_event("mode", json!("changed")), delta_event("step", json!(1))] {
+            service
+                .append_event_for_identity(AppendEventRequest { identity: id.clone(), event })
+                .await
+                .unwrap();
+        }
+
+        let rewound = service.rewind_steps(&id, 2).await.unwrap();
+        assert_eq!(
+            [rewound.state().get("tier"), rewound.state().get("mode"), rewound.state().get("step")],
+            [Some(json!("gold")), None, None]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_append_by_id_errors_are_typed() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
+        service.migrate().await.unwrap();
+
+        let missing = service.append_event("missing", Event::new("inv")).await.unwrap_err();
+        assert_eq!(
+            (missing.category, missing.code),
+            (adk_core::ErrorCategory::NotFound, "session.not_found")
+        );
+
+        for user in ["alice", "bob"] {
+            service
+                .create(CreateRequest {
+                    app_name: "app".to_string(),
+                    user_id: user.to_string(),
+                    session_id: Some("shared".to_string()),
+                    state: HashMap::new(),
+                })
+                .await
+                .unwrap();
+        }
+        let ambiguous = service.append_event("shared", Event::new("inv")).await.unwrap_err();
+        assert_eq!(
+            (ambiguous.category, ambiguous.code),
+            (adk_core::ErrorCategory::InvalidInput, "session.ambiguous_id")
+        );
+    }
+
+    /// Rewinding to an event keeps earlier events that share its timestamp.
+    #[tokio::test]
+    async fn test_sqlite_rewind_keeps_earlier_events_with_the_target_timestamp() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
+        service.migrate().await.unwrap();
+        service
+            .create(CreateRequest {
+                app_name: "app".to_string(),
+                user_id: "u1".to_string(),
+                session_id: Some("tied".to_string()),
+                state: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        let id = identity("app", "u1", "tied");
+        let at = Utc::now();
+        let mut ids = Vec::new();
+        for n in 0..4 {
+            let mut event = delta_event("n", json!(n));
+            event.timestamp = at;
+            ids.push(event.id.clone());
+            service
+                .append_event_for_identity(AppendEventRequest { identity: id.clone(), event })
+                .await
+                .unwrap();
+        }
+
+        let rewound = service.rewind(&id, &ids[2]).await.unwrap();
+        let kept: Vec<String> = rewound.events().all().into_iter().map(|e| e.id).collect();
+        assert_eq!(kept, ids[..3]);
+        assert_eq!(rewound.state().get("n"), Some(json!(2)));
+    }
 }

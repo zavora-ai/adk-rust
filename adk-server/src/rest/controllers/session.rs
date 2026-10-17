@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 #[derive(Clone)]
 pub struct SessionController {
@@ -50,6 +50,19 @@ fn authorize_user_id(
         Some(context) => Ok(context.user_id.clone()),
         None => Ok(user_id.to_string()),
     }
+}
+
+/// The HTTP status for a session-service error: 404 for a missing session, 409 for a create
+/// that names an existing session, 400 for an invalid identifier, and 5xx for a backend failure.
+fn error_status(operation: &'static str, error: &adk_core::AdkError) -> StatusCode {
+    let status =
+        StatusCode::from_u16(error.http_status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    if status.is_server_error() {
+        error!(error = %error, operation, "session request failed");
+    } else {
+        debug!(error = %error, operation, "session request rejected");
+    }
+    status
 }
 
 fn effective_user_id(request_context: &Option<adk_core::RequestContext>, user_id: &str) -> String {
@@ -106,10 +119,7 @@ pub async fn create_session(
             state: std::collections::HashMap::new(),
         })
         .await
-        .map_err(|e| {
-            error!(error = %e, "session create failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| error_status("create", &e))?;
 
     let response = SessionController::session_to_response(session.as_ref());
 
@@ -135,10 +145,7 @@ pub async fn get_session(
             after: None,
         })
         .await
-        .map_err(|e| {
-            error!(error = %e, "session get failed");
-            StatusCode::NOT_FOUND
-        })?;
+        .map_err(|e| error_status("get", &e))?;
 
     Ok(Json(SessionController::session_to_response(session.as_ref())))
 }
@@ -154,10 +161,7 @@ pub async fn delete_session(
         .session_service
         .delete(adk_session::DeleteRequest { app_name, user_id, session_id })
         .await
-        .map_err(|e| {
-            error!(error = %e, "session delete failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| error_status("delete", &e))?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -245,10 +249,7 @@ pub async fn create_session_from_path(
             },
         })
         .await
-        .map_err(|e| {
-            error!(error = %e, "session create from path failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| error_status("create", &e))?;
 
     Ok(Json(SessionController::session_to_response(session.as_ref())))
 }
@@ -272,10 +273,7 @@ pub async fn get_session_from_path(
             after: None,
         })
         .await
-        .map_err(|e| {
-            error!(error = %e, "session get from path failed");
-            StatusCode::NOT_FOUND
-        })?;
+        .map_err(|e| error_status("get", &e))?;
 
     Ok(Json(SessionController::session_to_response(session.as_ref())))
 }
@@ -293,10 +291,7 @@ pub async fn delete_session_from_path(
         .session_service
         .delete(adk_session::DeleteRequest { app_name: params.app_name, user_id, session_id })
         .await
-        .map_err(|e| {
-            error!(error = %e, "session delete from path failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| error_status("delete", &e))?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -320,10 +315,7 @@ pub async fn list_sessions(
             offset: None,
         })
         .await
-        .map_err(|e| {
-            error!(error = %e, "session list failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| error_status("list", &e))?;
 
     tracing::info!("Found {} sessions", sessions.len());
 

@@ -288,9 +288,10 @@ impl RequestHandler {
             caller.map_or_else(|| format!("a2a-{context_id}"), |context| context.user_id.clone());
         let session_id = context_id.to_string();
 
-        // Ensure session exists
+        // Only a missing session is created: a read that fails for another reason must not
+        // replace the stored conversation. A create that loses a race finds the session.
         let session_service = &runner_config.session_service;
-        let get_result = session_service
+        let existing = session_service
             .get(GetRequest {
                 app_name: app_name.clone(),
                 user_id: user_id.clone(),
@@ -299,17 +300,26 @@ impl RequestHandler {
                 after: None,
             })
             .await;
-
-        if get_result.is_err() {
-            session_service
-                .create(CreateRequest {
-                    app_name: app_name.clone(),
-                    user_id: user_id.clone(),
-                    session_id: Some(session_id.clone()),
-                    state: std::collections::HashMap::new(),
-                })
-                .await
-                .map_err(|e| A2aError::Internal { message: format!("session create: {e}") })?;
+        match existing {
+            Ok(_) => {}
+            Err(error) if error.is_not_found() => {
+                let created = session_service
+                    .create(CreateRequest {
+                        app_name: app_name.clone(),
+                        user_id: user_id.clone(),
+                        session_id: Some(session_id.clone()),
+                        state: std::collections::HashMap::new(),
+                    })
+                    .await;
+                if let Err(error) = created
+                    && !error.is_conflict()
+                {
+                    return Err(A2aError::Internal { message: format!("session create: {error}") });
+                }
+            }
+            Err(error) => {
+                return Err(A2aError::Internal { message: format!("session lookup: {error}") });
+            }
         }
 
         // Convert v1 message parts to ADK Content
@@ -1365,6 +1375,126 @@ mod tests {
             extensions: None,
             metadata: None,
         }
+    }
+
+    /// Fails the next `get` with a transient error when armed.
+    struct FlakySessions {
+        inner: adk_session::InMemorySessionService,
+        fail_next_get: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl adk_session::SessionService for FlakySessions {
+        async fn create(
+            &self,
+            req: adk_session::CreateRequest,
+        ) -> adk_core::Result<Box<dyn adk_session::Session>> {
+            self.inner.create(req).await
+        }
+
+        async fn get(
+            &self,
+            req: adk_session::GetRequest,
+        ) -> adk_core::Result<Box<dyn adk_session::Session>> {
+            if self.fail_next_get.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return Err(adk_core::AdkError::unavailable(
+                    adk_core::ErrorComponent::Session,
+                    "session.backend.timeout",
+                    "the session backend timed out",
+                ));
+            }
+            self.inner.get(req).await
+        }
+
+        async fn list(
+            &self,
+            req: adk_session::ListRequest,
+        ) -> adk_core::Result<Vec<Box<dyn adk_session::Session>>> {
+            self.inner.list(req).await
+        }
+
+        async fn delete(&self, req: adk_session::DeleteRequest) -> adk_core::Result<()> {
+            self.inner.delete(req).await
+        }
+
+        async fn append_event(
+            &self,
+            session_id: &str,
+            event: adk_core::Event,
+        ) -> adk_core::Result<()> {
+            self.inner.append_event(session_id, event).await
+        }
+
+        async fn append_event_for_identity(
+            &self,
+            req: adk_session::AppendEventRequest,
+        ) -> adk_core::Result<()> {
+            self.inner.append_event_for_identity(req).await
+        }
+    }
+
+    /// A transient failure reading the context's session fails the message and leaves the
+    /// stored session as it was, instead of creating it again over its history.
+    #[tokio::test]
+    async fn message_send_keeps_the_session_when_its_lookup_fails() {
+        use adk_session::SessionService;
+
+        let sessions = Arc::new(FlakySessions {
+            inner: adk_session::InMemorySessionService::new(),
+            fail_next_get: std::sync::atomic::AtomicBool::new(false),
+        });
+        let identity = adk_core::AdkIdentity::new(
+            "a2a-stream-test".try_into().unwrap(),
+            "a2a-ctx-kept".try_into().unwrap(),
+            "ctx-kept".try_into().unwrap(),
+        );
+        sessions
+            .create(adk_session::CreateRequest {
+                app_name: "a2a-stream-test".to_string(),
+                user_id: "a2a-ctx-kept".to_string(),
+                session_id: Some("ctx-kept".to_string()),
+                state: std::collections::HashMap::from([(
+                    "plan".to_string(),
+                    serde_json::json!("gold"),
+                )]),
+            })
+            .await
+            .unwrap();
+        sessions
+            .append_event_for_identity(adk_session::AppendEventRequest {
+                identity: identity.clone(),
+                event: adk_core::Event::new("earlier"),
+            })
+            .await
+            .unwrap();
+
+        let store: Arc<dyn TaskStore> = Arc::new(InMemoryTaskStore::new());
+        let handler = RequestHandler::with_runner(
+            Arc::new(V1Executor::new(store.clone())),
+            store,
+            Arc::new(NoOpPushNotificationSender),
+            Arc::new(RwLock::new(CachedAgentCard::new(make_test_agent_card()))),
+            Arc::new(
+                adk_runner::Runner::builder()
+                    .app_name("a2a-stream-test")
+                    .agent(Arc::new(ChunkingAgent { chunks: vec!["answer".into()] }))
+                    .session_service(sessions.clone())
+                    .build_config(),
+            ),
+        );
+        let mut message = make_test_message();
+        message.context_id = Some(a2a_protocol_types::ContextId::new("ctx-kept"));
+
+        sessions.fail_next_get.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(task) = handler.message_send(message).await {
+            assert_ne!(task.status.state, TaskState::Completed);
+        }
+
+        let stored = sessions.inner.get_for_identity(&identity).await.unwrap();
+        assert_eq!(
+            (stored.events().len(), stored.state().get("plan")),
+            (1, Some(serde_json::json!("gold")))
+        );
     }
 
     // ── message_send ─────────────────────────────────────────────────────

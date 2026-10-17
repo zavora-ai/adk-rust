@@ -461,7 +461,11 @@ async fn standalone_existing_data() -> anyhow::Result<Verdict> {
     let label = std::env::var("SESSION_SEED_LABEL").unwrap_or_else(|_| "this build".to_string());
     let expect_from = std::env::var("EXPECT_SEED_FROM").ok();
 
-    let existed = sessions.get(get_request(LEGACY_USER, LEGACY_SESSION)).await.is_ok();
+    let existed = match sessions.get(get_request(LEGACY_USER, LEGACY_SESSION)).await {
+        Ok(_) => true,
+        Err(error) if error.is_not_found() => false,
+        Err(error) => return Err(error.into()),
+    };
     if !existed {
         sessions
             .create(CreateRequest {

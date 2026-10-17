@@ -23,7 +23,10 @@
 //! ```
 
 use crate::neo4j_stores::{Inline, detached};
-use crate::service::{validate_scope, validate_session_id};
+use crate::service::{
+    session_already_exists, session_id_not_found, session_not_found_for, validate_scope,
+    validate_session_id,
+};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -339,8 +342,9 @@ async fn write_event(
             neo4rs::query(
                 "MATCH (s:Session {session_id: $session_id, app_name: $app_name, \
                         user_id: $user_id}) \
-                 SET s += $delta, s.updated_at = $now \
-                 RETURN s.session_id AS session_id",
+                 SET s += $delta, s.updated_at = $now, \
+                     s.event_seq = coalesce(s.event_seq, 0) + 1 \
+                 RETURN s.event_seq AS seq",
             )
             .param("session_id", session_id.to_string())
             .param("app_name", app_name.to_string())
@@ -350,14 +354,14 @@ async fn write_event(
         )
         .await
         .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
-    if updated
+    // `event_seq` counts the session's appends; it orders events with equal timestamps.
+    let seq = updated
         .next(&mut *txn)
         .await
         .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?
-        .is_none()
-    {
-        return Err(adk_core::AdkError::session("session not found"));
-    }
+        .ok_or_else(|| session_not_found_for(app_name, user_id, session_id))?
+        .get::<i64>("seq")
+        .unwrap_or_default();
 
     if !app_delta.is_empty() {
         txn.run(
@@ -406,6 +410,7 @@ async fn write_event(
                  branch: $branch, \
                  author: $author, \
                  timestamp: $timestamp, \
+                 seq: $seq, \
                  llm_response: $llm_response, \
                  actions: $actions, \
                  long_running_tool_ids: $long_running_tool_ids \
@@ -419,6 +424,7 @@ async fn write_event(
         .param("branch", event.branch.clone())
         .param("author", event.author.clone())
         .param("timestamp", event.timestamp.to_rfc3339())
+        .param("seq", seq)
         .param("llm_response", llm_response_json)
         .param("actions", actions_json)
         .param("long_running_tool_ids", tool_ids_json),
@@ -472,11 +478,34 @@ impl SessionService for Inline<Neo4jSessionService> {
 
         let (app_delta, user_delta, session_state) = state_utils::extract_state_deltas(&req.state);
 
+        let conflict = || session_already_exists(&req.app_name, &req.user_id, &session_id);
         let mut txn = self
             .graph
             .start_txn()
             .await
             .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
+
+        let mut existing = txn
+            .execute(
+                neo4rs::query(
+                    "MATCH (s:Session {app_name: $app_name, user_id: $user_id, \
+                            session_id: $session_id}) \
+                     RETURN s.session_id AS session_id",
+                )
+                .param("app_name", req.app_name.clone())
+                .param("user_id", req.user_id.clone())
+                .param("session_id", session_id.clone()),
+            )
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
+        if existing
+            .next(&mut txn)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+            .is_some()
+        {
+            return Err(conflict());
+        }
 
         txn.run(
             neo4rs::query(
@@ -522,7 +551,14 @@ impl SessionService for Inline<Neo4jSessionService> {
             .param("now", now_str.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
+        .map_err(|e| {
+            // The `session_unique` constraint rejects a concurrent create of the same identity.
+            if e.to_string().contains("ConstraintValidationFailed") {
+                conflict()
+            } else {
+                adk_core::AdkError::session(format!("create failed: {e}"))
+            }
+        })?;
 
         // Create relationships: Session -> AppState, Session -> UserState
         txn.run(
@@ -630,7 +666,7 @@ impl SessionService for Inline<Neo4jSessionService> {
                             e.timestamp AS timestamp, e.llm_response AS llm_response, \
                             e.actions AS actions, \
                             e.long_running_tool_ids AS long_running_tool_ids \
-                     ORDER BY e.timestamp",
+                     ORDER BY e.timestamp, e.seq",
                 )
                 .param("app_name", req.app_name.clone())
                 .param("user_id", req.user_id.clone())
@@ -706,7 +742,7 @@ impl SessionService for Inline<Neo4jSessionService> {
                     "MATCH (s:Session {{app_name: $app_name, user_id: $user_id}}) \
                      RETURN s.session_id AS session_id, s.state AS state, \
                             {} AS state_entries, s.updated_at AS updated_at \
-                     ORDER BY s.updated_at DESC \
+                     ORDER BY s.updated_at DESC, s.session_id DESC \
                      SKIP $offset LIMIT $limit",
                     state_entries("s"),
                 ))
@@ -804,7 +840,7 @@ impl SessionService for Inline<Neo4jSessionService> {
             .next(&mut txn)
             .await
             .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
+            .ok_or_else(|| session_id_not_found(session_id))?;
 
         let app_name = row.get::<String>("app_name").unwrap_or_default();
         let user_id = row.get::<String>("user_id").unwrap_or_default();

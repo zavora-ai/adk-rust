@@ -54,6 +54,9 @@
 //! runner uses. `create` without a `session_id` generates a UUID v4 in the wrapper so the
 //! initial state can be bound to the session.
 //!
+//! `rewind` and `rewind_steps` forward to the inner service and decrypt its result.
+//! `rewind_steps` counts only the events callers see, so key-rotation events are not steps.
+//!
 //! # Data Written by Earlier Releases
 //!
 //! Earlier releases stored `create` state as one `__encrypted_state` blob without associated
@@ -77,7 +80,7 @@
 use crate::encryption_key::EncryptionKey;
 use crate::service::{
     AppendEventRequest, CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService,
-    validate_scope, validate_session_id,
+    rewind_steps_exceed, validate_scope, validate_session_id,
 };
 use crate::session::{KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER, Session};
 use crate::state::State;
@@ -617,6 +620,39 @@ impl<S: SessionService> SessionService for EncryptedSession<S> {
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
         validate_scope(app_name, user_id)?;
         self.inner.delete_all_sessions(app_name, user_id).await
+    }
+
+    async fn rewind(
+        &self,
+        identity: &AdkIdentity,
+        target_event_id: &str,
+    ) -> Result<Box<dyn Session>> {
+        let session = self.inner.rewind(identity, target_event_id).await?;
+        let (decrypted, _) =
+            self.open_session(&SessionIdentity::from(identity), session.as_ref())?;
+        Ok(Box::new(decrypted))
+    }
+
+    /// Counts `steps` over the events callers see; key-rotation events are stored but not
+    /// returned, so they do not count.
+    async fn rewind_steps(&self, identity: &AdkIdentity, steps: usize) -> Result<Box<dyn Session>> {
+        if steps == 0 {
+            return self.get_for_identity(identity).await;
+        }
+        let stored = self.inner.get_for_identity(identity).await?.events().all();
+        let visible: Vec<&Event> =
+            stored.iter().filter(|event| event.author != ROTATION_AUTHOR).collect();
+        let keep = visible
+            .len()
+            .checked_sub(steps)
+            .ok_or_else(|| rewind_steps_exceed(identity, steps, visible.len()))?;
+        let session = match keep.checked_sub(1) {
+            Some(last) => self.inner.rewind(identity, &visible[last].id).await?,
+            None => self.inner.rewind_steps(identity, stored.len()).await?,
+        };
+        let (decrypted, _) =
+            self.open_session(&SessionIdentity::from(identity), session.as_ref())?;
+        Ok(Box::new(decrypted))
     }
 
     async fn health_check(&self) -> Result<()> {

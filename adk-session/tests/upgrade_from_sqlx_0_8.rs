@@ -1,6 +1,6 @@
 //! Databases written by adk-session 2.3.0, the last SQLx 0.8 release, open with the
-//! current crate: the data reads back, the migration registry continues without a
-//! repeated or failed step, and new writes land.
+//! current crate: the data reads back, the migration registry records the baseline and then
+//! applies version 2 without a repeated or failed step, and new writes land.
 //!
 //! The fixtures and the program that wrote them are in `tests/fixtures/sqlx-0.8/`. The
 //! SQLite test runs by default; the PostgreSQL test creates and drops a database on the
@@ -109,7 +109,7 @@ async fn a_2_3_sqlite_database_upgrades() {
     let service = SqliteSessionService::new(&url).await.expect("open");
     service.migrate().await.expect("migrate");
     service.migrate().await.expect("migrate is idempotent");
-    assert_eq!(service.schema_version().await.expect("schema version"), 1);
+    assert_eq!(service.schema_version().await.expect("schema version"), 2);
     assert_upgraded(&service).await;
 
     let mut conn = SqliteConnection::connect(&url).await.expect("connect");
@@ -118,7 +118,7 @@ async fn a_2_3_sqlite_database_upgrades() {
             .fetch_all(&mut conn)
             .await
             .expect("read registry");
-    assert_eq!(registry, [1]);
+    assert_eq!(registry, [1, 2]);
     conn.close().await.expect("close");
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
@@ -155,14 +155,14 @@ async fn a_2_3_postgres_database_upgrades() {
     let service = PostgresSessionService::from_pool(pool.clone());
     service.migrate().await.expect("migrate");
     service.migrate().await.expect("migrate is idempotent");
-    assert_eq!(service.schema_version().await.expect("schema version"), 1);
+    assert_eq!(service.schema_version().await.expect("schema version"), 2);
     assert_upgraded(&service).await;
     let registry: Vec<i64> =
         sqlx::query_scalar("SELECT version FROM _adk_session_migrations ORDER BY version")
             .fetch_all(&pool)
             .await
             .expect("read registry");
-    assert_eq!(registry, [1]);
+    assert_eq!(registry, [1, 2]);
 
     pool.close().await;
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {database} WITH (FORCE)")))

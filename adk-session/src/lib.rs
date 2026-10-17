@@ -243,7 +243,7 @@ pub use postgres::PostgresSessionService;
 #[cfg(feature = "redis")]
 pub use redis::{
     RedisSessionConfig, RedisSessionService, app_state_key, events_key, index_key, session_key,
-    user_state_key,
+    updated_index_key, user_state_key,
 };
 #[cfg(feature = "vertex-session")]
 pub use vertex::{VertexAiSessionConfig, VertexAiSessionService};

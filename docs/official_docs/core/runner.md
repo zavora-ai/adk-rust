@@ -270,7 +270,7 @@ the raw-session-ID `append_event` path entirely.
 │                  1. Session Retrieval                       │
 │                                                             │
 │   SessionService.get(app_name, user_id, session_id)        │
-│   → Creates new session if not exists                       │
+│   → Fails with session.not_found when it does not exist     │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼

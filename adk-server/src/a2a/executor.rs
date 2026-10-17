@@ -299,11 +299,14 @@ impl Executor {
         })
     }
 
+    /// Creates the session when it does not exist.
+    ///
+    /// Only a `session.not_found` read creates it; any other read failure is returned, so a
+    /// transient backend error never replaces the stored conversation. A create that loses a
+    /// race to a concurrent request finds the session that request created.
     async fn prepare_session(&self, user_id: &str, session_id: &str) -> Result<()> {
         let session_service = &self.config.runner_config.session_service;
-
-        // Try to get existing session
-        let get_result = session_service
+        let existing = session_service
             .get(GetRequest {
                 app_name: self.config.app_name.clone(),
                 user_id: user_id.to_string(),
@@ -312,21 +315,24 @@ impl Executor {
                 after: None,
             })
             .await;
-
-        if get_result.is_ok() {
-            return Ok(());
+        match existing {
+            Ok(_) => Ok(()),
+            Err(error) if error.is_not_found() => {
+                match session_service
+                    .create(CreateRequest {
+                        app_name: self.config.app_name.clone(),
+                        user_id: user_id.to_string(),
+                        session_id: Some(session_id.to_string()),
+                        state: std::collections::HashMap::new(),
+                    })
+                    .await
+                {
+                    Ok(_) => Ok(()),
+                    Err(error) if error.is_conflict() => Ok(()),
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
         }
-
-        // Create new session
-        session_service
-            .create(CreateRequest {
-                app_name: self.config.app_name.clone(),
-                user_id: user_id.to_string(),
-                session_id: Some(session_id.to_string()),
-                state: std::collections::HashMap::new(),
-            })
-            .await?;
-
-        Ok(())
     }
 }

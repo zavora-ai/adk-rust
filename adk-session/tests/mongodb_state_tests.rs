@@ -61,3 +61,15 @@ async fn mongodb_state_concurrent_writes_keep_every_delta() {
     )
     .await;
 }
+
+#[tokio::test]
+#[ignore = "requires a MongoDB server at MONGODB_URL"]
+async fn mongodb_session_integrity_contract() {
+    let service = service().await;
+    let app = run_app("integrity");
+    common::integrity_contract::assert_create_and_append_errors_contract(&service, &app).await;
+    common::integrity_contract::assert_event_order_contract(&service, &app).await;
+    common::integrity_contract::assert_nul_round_trip_contract(&service, &app).await;
+    common::integrity_contract::assert_list_order_contract(&service, &app).await;
+    common::integrity_contract::assert_rewind_unsupported(&service, &app).await;
+}

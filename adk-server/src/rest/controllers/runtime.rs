@@ -688,6 +688,67 @@ async fn apply_state_delta_to_session(
         .map_err(adk_err_to_runtime)
 }
 
+/// Creates the session when it does not exist and applies `state_delta` to it when it does.
+///
+/// Only a `session.not_found` read creates the session, with `state_delta` as its initial
+/// state. Any other read failure is returned, so a transient backend error never replaces a
+/// stored session. A create that loses a race to a concurrent request finds the session that
+/// request created and applies `state_delta` to it.
+async fn ensure_session(
+    session_service: &std::sync::Arc<dyn adk_session::SessionService>,
+    app_name: &str,
+    user_id: &str,
+    session_id: &str,
+    state_delta: HashMap<String, Value>,
+) -> Result<(), RuntimeError> {
+    let existing = session_service
+        .get(adk_session::GetRequest {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await;
+    match existing {
+        Ok(_) => {
+            apply_state_delta_to_session(
+                session_service,
+                app_name,
+                user_id,
+                session_id,
+                state_delta,
+            )
+            .await
+        }
+        Err(error) if error.is_not_found() => {
+            let created = session_service
+                .create(adk_session::CreateRequest {
+                    app_name: app_name.to_string(),
+                    user_id: user_id.to_string(),
+                    session_id: Some(session_id.to_string()),
+                    state: state_delta.clone(),
+                })
+                .await;
+            match created {
+                Ok(_) => Ok(()),
+                Err(error) if error.is_conflict() => {
+                    apply_state_delta_to_session(
+                        session_service,
+                        app_name,
+                        user_id,
+                        session_id,
+                        state_delta,
+                    )
+                    .await
+                }
+                Err(error) => Err(adk_err_to_runtime(error)),
+            }
+        }
+        Err(error) => Err(adk_err_to_runtime(error)),
+    }
+}
+
 fn merge_runtime_state_delta(
     body_delta: HashMap<String, Value>,
     ag_ui_delta: HashMap<String, Value>,
@@ -1281,7 +1342,7 @@ pub async fn run_sse(
                 after: None,
             })
             .await
-            .map_err(|_| (StatusCode::NOT_FOUND, "session not found".to_string()))?;
+            .map_err(adk_err_to_runtime)?;
 
         // Load agent
         let agent = controller
@@ -1419,42 +1480,14 @@ pub async fn run_sse_compat(
         ag_ui_input.as_ref().map(ag_ui_state_delta).unwrap_or_default(),
     );
 
-    // Validate session exists or create it
-    let session_result = controller
-        .config
-        .session_service
-        .get(adk_session::GetRequest {
-            app_name: app_name.clone(),
-            user_id: effective_user_id.clone(),
-            session_id: session_id.clone(),
-            num_recent_events: None,
-            after: None,
-        })
-        .await;
-
-    // If session doesn't exist, create it
-    if session_result.is_err() {
-        controller
-            .config
-            .session_service
-            .create(adk_session::CreateRequest {
-                app_name: app_name.clone(),
-                user_id: effective_user_id.clone(),
-                session_id: Some(session_id.clone()),
-                state: merged_state_delta.clone(),
-            })
-            .await
-            .map_err(adk_err_to_runtime)?;
-    } else {
-        apply_state_delta_to_session(
-            &controller.config.session_service,
-            &app_name,
-            &effective_user_id,
-            &session_id,
-            merged_state_delta.clone(),
-        )
-        .await?;
-    }
+    ensure_session(
+        &controller.config.session_service,
+        &app_name,
+        &effective_user_id,
+        &session_id,
+        merged_state_delta.clone(),
+    )
+    .await?;
 
     if ui_profile == UiProfile::McpApps {
         if let Some(initialize) = mcp_apps_initialize {
@@ -1576,41 +1609,15 @@ pub async fn run_collect(
 
     let state_delta = body_state_delta(req.state_delta.as_ref())?;
 
-    // Validate session exists or create it (same behavior as /run_sse)
-    let session_result = controller
-        .config
-        .session_service
-        .get(adk_session::GetRequest {
-            app_name: app_name.clone(),
-            user_id: effective_user_id.clone(),
-            session_id: session_id.clone(),
-            num_recent_events: None,
-            after: None,
-        })
-        .await;
-
-    if session_result.is_err() {
-        controller
-            .config
-            .session_service
-            .create(adk_session::CreateRequest {
-                app_name: app_name.clone(),
-                user_id: effective_user_id.clone(),
-                session_id: Some(session_id.clone()),
-                state: state_delta.clone(),
-            })
-            .await
-            .map_err(adk_err_to_runtime)?;
-    } else {
-        apply_state_delta_to_session(
-            &controller.config.session_service,
-            &app_name,
-            &effective_user_id,
-            &session_id,
-            state_delta,
-        )
-        .await?;
-    }
+    // Same behavior as /run_sse.
+    ensure_session(
+        &controller.config.session_service,
+        &app_name,
+        &effective_user_id,
+        &session_id,
+        state_delta,
+    )
+    .await?;
 
     // Load agent
     let agent =

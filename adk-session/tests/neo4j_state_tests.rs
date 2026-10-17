@@ -104,3 +104,15 @@ async fn neo4j_state_keeps_tiers_written_by_earlier_releases() {
         [("app:theme".to_string(), json!("dark")), ("app:plan".to_string(), json!("free"))].into();
     assert_eq!(fetched.state().all(), expected);
 }
+
+#[tokio::test]
+#[ignore = "requires a Neo4j server at NEO4J_URI"]
+async fn neo4j_session_integrity_contract() {
+    let service = service().await;
+    let app = run_app("integrity");
+    common::integrity_contract::assert_create_and_append_errors_contract(&service, &app).await;
+    common::integrity_contract::assert_event_order_contract(&service, &app).await;
+    common::integrity_contract::assert_nul_round_trip_contract(&service, &app).await;
+    common::integrity_contract::assert_list_order_contract(&service, &app).await;
+    common::integrity_contract::assert_rewind_unsupported(&service, &app).await;
+}

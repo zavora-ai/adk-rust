@@ -886,6 +886,17 @@ async fn test_vertex_service_contract_uses_canonical_bodies_and_lros() {
 }
 
 #[tokio::test]
+async fn test_vertex_create_and_append_errors_are_typed() {
+    let (_state, service, server) = test_service().await;
+
+    common::integrity_contract::assert_create_and_append_errors_contract(&service, "1001").await;
+    common::integrity_contract::assert_rewind_unsupported(&service, "1001").await;
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn test_vertex_pagination_applies_limit_offset_and_rejects_token_loops() {
     let (state, service, server) = test_service().await;
     for session_id in ["page-a", "page-b", "page-c", "page-d", "page-e"] {

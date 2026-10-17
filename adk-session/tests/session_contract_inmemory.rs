@@ -27,3 +27,34 @@ async fn test_inmemory_event_filter_contract() {
     let service = InMemorySessionService::new();
     common::state_contract::assert_event_filter_contract(&service, "filter_app", "user1").await;
 }
+
+#[tokio::test]
+async fn test_inmemory_create_and_append_errors() {
+    let service = InMemorySessionService::new();
+    common::integrity_contract::assert_create_and_append_errors_contract(&service, "errors_app")
+        .await;
+}
+
+#[tokio::test]
+async fn test_inmemory_event_order() {
+    let service = InMemorySessionService::new();
+    common::integrity_contract::assert_event_order_contract(&service, "order_app").await;
+}
+
+#[tokio::test]
+async fn test_inmemory_nul_round_trip() {
+    let service = InMemorySessionService::new();
+    common::integrity_contract::assert_nul_round_trip_contract(&service, "nul_app").await;
+}
+
+#[tokio::test]
+async fn test_inmemory_list_order() {
+    let service = InMemorySessionService::new();
+    common::integrity_contract::assert_list_order_contract(&service, "list_app").await;
+}
+
+#[tokio::test]
+async fn test_inmemory_rewind_contract() {
+    let service = InMemorySessionService::new();
+    common::integrity_contract::assert_rewind_contract(&service, "rewind_app").await;
+}

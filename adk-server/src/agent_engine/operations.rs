@@ -581,7 +581,7 @@ pub(crate) async fn resolve_session(
     match existing {
         Ok(_) => Ok((session_id, false)),
         Err(err) if err.is_not_found() => {
-            state
+            let created = state
                 .session_service()
                 .create(adk_session::CreateRequest {
                     app_name: state.app_name().to_string(),
@@ -589,8 +589,13 @@ pub(crate) async fn resolve_session(
                     session_id: Some(session_id.clone()),
                     state: initial_state,
                 })
-                .await?;
-            Ok((session_id, true))
+                .await;
+            match created {
+                Ok(_) => Ok((session_id, true)),
+                // A concurrent request created it first.
+                Err(err) if err.is_conflict() => Ok((session_id, false)),
+                Err(err) => Err(err),
+            }
         }
         Err(err) => Err(err),
     }

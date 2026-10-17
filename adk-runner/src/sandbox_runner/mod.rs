@@ -193,7 +193,8 @@ impl SandboxRunner {
 
         let agent_loop_future = async {
             if create_session {
-                self.inner
+                let created = self
+                    .inner
                     .session_service()
                     .create(adk_session::CreateRequest {
                         app_name: app_name.to_string(),
@@ -201,7 +202,13 @@ impl SandboxRunner {
                         session_id: Some(session_id.to_string()),
                         state: std::collections::HashMap::new(),
                     })
-                    .await?;
+                    .await;
+                // A concurrent run created the session first.
+                if let Err(error) = created
+                    && !error.is_conflict()
+                {
+                    return Err(error);
+                }
             }
 
             let mut events = self

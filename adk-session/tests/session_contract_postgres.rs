@@ -24,15 +24,32 @@ fn run_app(prefix: &str) -> String {
     format!("{prefix}-{}", uuid::Uuid::new_v4())
 }
 
+async fn service() -> PostgresSessionService {
+    let service = PostgresSessionService::new(&database_url()).await.expect("connect to postgres");
+    service.migrate().await.expect("migrate session tables");
+    service
+}
+
 #[tokio::test]
 #[ignore = "requires a PostgreSQL server at DATABASE_URL"]
 async fn test_postgres_service_contract() {
-    let service = PostgresSessionService::new(&database_url()).await.expect("connect to postgres");
-    service.migrate().await.expect("migrate session tables");
+    let service = service().await;
     common::session_contract::assert_session_contract(
         &service,
         &run_app("contract"),
         &run_app("contract-other"),
     )
     .await;
+}
+
+#[tokio::test]
+#[ignore = "requires a PostgreSQL server at DATABASE_URL"]
+async fn test_postgres_integrity_contract() {
+    let service = service().await;
+    let app = run_app("integrity");
+    common::integrity_contract::assert_create_and_append_errors_contract(&service, &app).await;
+    common::integrity_contract::assert_event_order_contract(&service, &app).await;
+    common::integrity_contract::assert_nul_round_trip_contract(&service, &app).await;
+    common::integrity_contract::assert_list_order_contract(&service, &app).await;
+    common::integrity_contract::assert_rewind_unsupported(&service, &app).await;
 }

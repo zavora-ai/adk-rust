@@ -22,6 +22,8 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 - **VertexAiSessionService** - Vertex AI Session API backend (`vertex-session` feature)
 - **Schema Migrations** - Versioned, forward-only migrations for all database backends
 - **Identifier validation** - Every backend rejects an empty, oversized, or NUL-containing app name, user ID, or session ID with an `InvalidInput` error before it touches storage
+- **One session contract** - On every backend, `create` for an existing identity fails with `session.already_exists` and writes nothing, appends to a missing session fail with `session.not_found`, events with equal timestamps keep their append order, and `list` returns the most recently updated session first; the shared conformance suite checks each backend
+- **Rewind** - `rewind` and `rewind_steps` address a session by its full identity and keep the state it was created with (in-memory, SQLite, and `EncryptedSession`)
 
 ## Installation
 
@@ -249,7 +251,7 @@ match the request:
 
 | Operation | Session missing, or owned by another user |
 |-----------|-------------------------------------------|
-| `create` | Fails with `session.already_exists` when the ID is taken in the app |
+| `create` | Fails with `session.already_exists` (`Conflict`) when the ID is taken in the app |
 | `get`, `append_event_for_identity` | Fails with `session.not_found` |
 | `delete` | No-op, identical to deleting a missing session |
 | `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed |

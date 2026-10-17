@@ -209,3 +209,138 @@ async fn redis_cluster_event_filters() {
     )
     .await;
 }
+
+async fn assert_integrity(service: &RedisSessionService) {
+    let app = run_app("integrity:{app}");
+    common::integrity_contract::assert_create_and_append_errors_contract(service, &app).await;
+    common::integrity_contract::assert_event_order_contract(service, &app).await;
+    common::integrity_contract::assert_nul_round_trip_contract(service, &app).await;
+    common::integrity_contract::assert_list_order_contract(service, &app).await;
+    common::integrity_contract::assert_rewind_unsupported(service, &app).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a Redis server at REDIS_URL"]
+async fn redis_standalone_integrity_contract() {
+    assert_integrity(&standalone().await).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a Redis Cluster at REDIS_CLUSTER_NODES"]
+async fn redis_cluster_integrity_contract() {
+    assert_integrity(&cluster().await).await;
+}
+
+/// Sessions a standalone server holds from earlier releases — events scored by millisecond
+/// timestamp, sessions only in the set index — stay readable, keep their order when appended
+/// to, and are listed newest first.
+#[tokio::test]
+#[ignore = "requires a Redis server at REDIS_URL"]
+async fn redis_standalone_reads_data_written_by_earlier_releases() {
+    use adk_session::{events_key, index_key, session_key};
+    use chrono::{Duration, TimeZone, Utc};
+    use fred::prelude::*;
+
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let raw = Builder::from_config(Config::from_url(&url).unwrap()).build().unwrap();
+    raw.init().await.unwrap();
+
+    let app = run_app("legacy");
+    let user = "user1";
+    let base = Utc.timestamp_millis_opt(1_700_000_000_000).unwrap();
+    let mut legacy_ids = Vec::new();
+    for (session, updated) in [("old", 0), ("older", -60)] {
+        let updated_at = base + Duration::seconds(updated);
+        let _: () = raw
+            .hset(
+                session_key(&app, user, session),
+                vec![
+                    ("app_name", app.clone()),
+                    ("user_id", user.to_string()),
+                    ("session_id", session.to_string()),
+                    ("state", r#"{"seeded":true}"#.to_string()),
+                    ("created_at", updated_at.to_rfc3339()),
+                    ("updated_at", updated_at.to_rfc3339()),
+                ],
+            )
+            .await
+            .unwrap();
+        let _: () = raw.sadd(index_key(&app, user), session).await.unwrap();
+        for n in 0..2 {
+            let mut event = Event::new("legacy");
+            event.timestamp = updated_at - Duration::seconds(2 - n);
+            if session == "old" {
+                legacy_ids.push(event.id.clone());
+            }
+            let _: () = raw
+                .zadd(
+                    events_key(&app, user, session),
+                    None,
+                    None,
+                    false,
+                    false,
+                    (
+                        event.timestamp.timestamp_millis() as f64,
+                        serde_json::to_string(&event).unwrap(),
+                    ),
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let service = standalone().await;
+    let new_event = Event::new("current");
+    let mut expected = legacy_ids.clone();
+    expected.push(new_event.id.clone());
+    service
+        .append_event_for_identity(AppendEventRequest {
+            identity: adk_core::identity::AdkIdentity::new(
+                app.as_str().try_into().unwrap(),
+                user.try_into().unwrap(),
+                "old".try_into().unwrap(),
+            ),
+            event: new_event,
+        })
+        .await
+        .unwrap();
+    let session = service
+        .get(GetRequest {
+            app_name: app.clone(),
+            user_id: user.to_string(),
+            session_id: "old".to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap();
+    let read: Vec<String> = session.events().all().into_iter().map(|event| event.id).collect();
+    assert_eq!(read, expected, "legacy events first, the new one after them");
+    assert_eq!(session.state().get("seeded"), Some(json!(true)));
+
+    service
+        .create(CreateRequest {
+            app_name: app.clone(),
+            user_id: user.to_string(),
+            session_id: Some("new".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let listed: Vec<String> = service
+        .list(ListRequest {
+            app_name: app.clone(),
+            user_id: user.to_string(),
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap()
+        .iter()
+        .map(|session| session.id().to_string())
+        .collect();
+    assert_eq!(listed, ["new", "old", "older"]);
+
+    service.delete_all_sessions(&app, user).await.unwrap();
+    let _: () = raw.quit().await.unwrap();
+}

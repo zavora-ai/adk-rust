@@ -2,6 +2,8 @@
 //! inner store directly to check what is persisted.
 #![cfg(feature = "encrypted-session")]
 
+mod common;
+
 use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
 use adk_core::{AdkError, Content, ErrorCategory, Part};
 use adk_session::{
@@ -482,4 +484,57 @@ async fn legacy_data_is_rejected_by_default_and_migrated_on_opt_in() {
 
     let again = migrating.get(get_req("alice", "s1")).await.unwrap();
     assert_eq!(again.state().all(), session.state().all());
+}
+
+fn encrypted_in_memory() -> EncryptedSession<InMemorySessionService> {
+    EncryptedSession::new(InMemorySessionService::new(), EncryptionKey::generate(), vec![])
+}
+
+#[tokio::test]
+async fn encrypted_session_integrity_contract() {
+    let service = encrypted_in_memory();
+    common::integrity_contract::assert_create_and_append_errors_contract(&service, APP).await;
+    common::integrity_contract::assert_event_order_contract(&service, APP).await;
+    common::integrity_contract::assert_nul_round_trip_contract(&service, APP).await;
+    common::integrity_contract::assert_list_order_contract(&service, APP).await;
+}
+
+#[tokio::test]
+async fn encrypted_session_rewind_contract() {
+    common::integrity_contract::assert_rewind_contract(&encrypted_in_memory(), APP).await;
+}
+
+/// Key-rotation events are stored in the inner service but hidden from callers, so they do not
+/// count as rewind steps.
+#[tokio::test]
+async fn rewind_steps_count_only_visible_events() {
+    let old = EncryptedSession::new(InMemorySessionService::new(), key(1), vec![]);
+    old.create(create_req("rotating", "s1", json!({"plan": "gold"}))).await.unwrap();
+    for text in ["one", "two"] {
+        let mut event = Event::new("inv");
+        event.author = "user".to_string();
+        event.set_content(Content::new("user").with_text(text));
+        old.append_event_for_identity(AppendEventRequest {
+            identity: identity("rotating", "s1"),
+            event,
+        })
+        .await
+        .unwrap();
+    }
+
+    // Reading under a new key appends a rotation event to the inner service.
+    let rotated = EncryptedSession::new(old.into_inner(), key(2), vec![key(1)]);
+    assert_eq!(rotated.get(get_req("rotating", "s1")).await.unwrap().events().len(), 2);
+    assert_eq!(rotated.inner().get(get_req("rotating", "s1")).await.unwrap().events().len(), 3);
+
+    let rewound = rotated.rewind_steps(&identity("rotating", "s1"), 1).await.unwrap();
+    let texts: Vec<String> = rewound
+        .events()
+        .all()
+        .iter()
+        .filter_map(|event| event.llm_response.content.as_ref())
+        .flat_map(|content| content.parts.iter().filter_map(Part::text).map(str::to_string))
+        .collect();
+    assert_eq!(texts, ["one"]);
+    assert_eq!(rewound.state().get("plan"), Some(json!("gold")));
 }

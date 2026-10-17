@@ -2,7 +2,7 @@
 //!
 //! Uses `fred` for async Redis operations with support for standalone
 //! and cluster deployments. Sessions are stored as Redis hashes, events
-//! as sorted sets (scored by timestamp), and state tiers as separate hashes.
+//! as sorted sets (scored by append sequence), and state tiers as separate hashes.
 //!
 //! # Data Model
 //!
@@ -13,10 +13,11 @@
 //! | Contents | Type | Standalone key | Cluster key |
 //! |---|---|---|---|
 //! | Session metadata + session-tier state | Hash | `<app>:<user>:<session>` | `adk:session:{<app>:<user>:<session>}` |
-//! | Events scored by timestamp | Sorted Set | `<app>:<user>:<session>:events` | `adk:session:{<app>:<user>:<session>}:events` |
+//! | Events scored by append sequence | Sorted Set | `<app>:<user>:<session>:events` | `adk:session:{<app>:<user>:<session>}:events` |
 //! | App-tier state | Hash | `app_state:<app>` | `adk:app_state:{<app>}` |
 //! | User-tier state | Hash | `user_state:<app>:<user>` | `adk:user_state:{<app>:<user>}` |
-//! | Session IDs for list lookups | Set | `sessions_idx:<app>:<user>` | `adk:sessions_idx:{<app>:<user>}` |
+//! | Session IDs of an app and user | Set | `sessions_idx:<app>:<user>` | `adk:sessions_idx:{<app>:<user>}` |
+//! | Session IDs scored by last update (µs) | Sorted Set | `sessions_idx:<app>:<user>:updated` | `adk:sessions_idx:{<app>:<user>}:updated` |
 //! | Reverse lookup to `<app>:<user>` | String | `session_lookup:<session>` | `adk:session_lookup:{<session>}` |
 //!
 //! Each `<segment>` is percent-encoded (`%` → `%25`, `:` → `%3A`) so an identifier
@@ -31,13 +32,25 @@
 //! stay readable. Moving a deployment from a standalone server to a cluster means copying
 //! its keys to the cluster names.
 //!
+//! # Ordering
+//!
+//! Each event is scored one above the highest score in its sorted set, so reads return
+//! events in append order, and `get` then orders them by timestamp, keeping append order
+//! among equal timestamps. Events written by earlier releases are scored by their timestamp
+//! in milliseconds, so they keep their order, and events appended to such a session are
+//! scored after them.
+//!
+//! `list` pages through the `:updated` sorted set, newest first, with ties by session ID
+//! descending. Sessions created by earlier releases are in the set index only; `list` adds
+//! them to the sorted set, scored by their `updated_at`, when the two indexes differ in size.
+//!
 //! # Atomicity
 //!
 //! | Operation | Standalone | Cluster |
 //! |---|---|---|
-//! | `create` | One `MULTI`/`EXEC`: session hash, app and user tier fields, index entry, lookup | Index entry, lookup, and the app and user tier fields first, then the session hash |
-//! | `append_event` | One script: event, session-tier compare-and-swap, app and user tier fields | One script: event and session-tier compare-and-swap; then the app and the user tier fields, one `HSET` each |
-//! | `delete` | One `MULTI`/`EXEC`: session hash, events, lookup, index entry | Session hash and events in one `DEL`, then the lookup and the index entry |
+//! | `create` | One script that writes nothing when the session hash exists: session hash, app and user tier fields, index entries, lookup | A check that the session hash is absent; index entries, lookup, and the app and user tier fields; then the session hash, in a script that writes nothing when it exists |
+//! | `append_event` | One script: event, session-tier compare-and-swap, update-time index entry, app and user tier fields | One script: event and session-tier compare-and-swap; then the update-time index entry and the app and the user tier fields, one command each |
+//! | `delete` | One `MULTI`/`EXEC`: session hash, events, lookup, index entries | Session hash and events in one `DEL`, then the lookup and the index entries |
 //! | `delete_all_sessions` | One `MULTI`/`EXEC` over every session of the user | Each session as in `delete`, then the index |
 //!
 //! A Redis Cluster runs a script or transaction only when every key it names hashes to one
@@ -48,14 +61,19 @@
 //!
 //! - A reader can see an appended event before its app and user tier fields.
 //! - An append that fails after its script returns an error with the event already stored.
-//! - A `create` that fails part-way can leave its app and user tier fields, and an index
-//!   entry and a lookup for a session that does not exist; `list` skips such entries and
-//!   `get` reports the session as not found.
+//! - A `create` that fails part-way can leave its app and user tier fields, and index
+//!   entries and a lookup for a session that does not exist; `list` skips and removes such
+//!   entries, and `get` reports the session as not found.
+//! - Of two `create` calls racing for one identity, the one that loses fails with
+//!   `session.already_exists` after its app and user tier fields are written.
 //!
 //! Every operation validates its identifiers (non-empty, at most
 //! [`MAX_ID_LEN`](adk_core::identity::MAX_ID_LEN) bytes, no NUL) before it sends a command.
 
-use crate::service::{validate_scope, validate_session_id};
+use crate::service::{
+    session_already_exists, session_id_not_found, session_not_found_for, validate_scope,
+    validate_session_id,
+};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
@@ -253,6 +271,12 @@ pub fn index_key(app: &str, user: &str) -> String {
     format!("sessions_idx:{}:{}", encode_segment(app), encode_segment(user))
 }
 
+/// Session index sorted set, scored by last update, of the standalone layout:
+/// `sessions_idx:<app>:<user>:updated`.
+pub fn updated_index_key(app: &str, user: &str) -> String {
+    format!("{}:updated", index_key(app, user))
+}
+
 /// Reverse lookup value naming the owner of a session: `<app>:<user>`.
 fn lookup_value(app: &str, user: &str) -> String {
     format!("{}:{}", encode_segment(app), encode_segment(user))
@@ -329,6 +353,13 @@ impl KeyLayout {
         }
     }
 
+    fn updated_index(self, app: &str, user: &str) -> String {
+        match self {
+            Self::Standalone => updated_index_key(app, user),
+            Self::Cluster => format!("{}:updated", self.index(app, user)),
+        }
+    }
+
     fn lookup(self, session: &str) -> String {
         match self {
             Self::Standalone => format!("session_lookup:{}", encode_segment(session)),
@@ -341,13 +372,14 @@ impl KeyLayout {
 
 /// Appends an event and its state delta in one atomic step.
 ///
-/// `KEYS`: session hash, events sorted set, then the state tier hashes written in the same
-/// step (app, user), if any. `ARGV`: session-tier write flag (`"1"`), the `state` value the
-/// session hash must still hold, its replacement, `updated_at`, the event score, the event
-/// JSON, then for each tier key a field count followed by that many field/value pairs.
+/// `KEYS`: session hash, events sorted set, then the update-time index and the state tier
+/// hashes written in the same step (app, user), if any. `ARGV`: session-tier write flag
+/// (`"1"`), the `state` value the session hash must still hold, its replacement,
+/// `updated_at`, the event JSON, whether `KEYS[3]` is the update-time index (`"1"`), its score
+/// and member, then for each tier key a field count followed by that many field/value pairs.
 ///
-/// Returns `1` when applied, `0` when the session tier changed since it was read, and `-1`
-/// when the session does not exist.
+/// The event is scored one above the highest score in the set. Returns `1` when applied, `0`
+/// when the session tier changed since it was read, and `-1` when the session does not exist.
 const APPEND_EVENT_SCRIPT: &str = r"
 if redis.call('EXISTS', KEYS[1]) == 0 then
   return -1
@@ -363,9 +395,19 @@ if ARGV[1] == '1' then
   redis.call('HSET', KEYS[1], 'state', ARGV[3])
 end
 redis.call('HSET', KEYS[1], 'updated_at', ARGV[4])
-redis.call('ZADD', KEYS[2], ARGV[5], ARGV[6])
-local index = 7
-for tier = 3, #KEYS do
+local last = redis.call('ZRANGE', KEYS[2], -1, -1, 'WITHSCORES')
+local score = 1
+if last[2] then
+  score = math.floor(tonumber(last[2])) + 1
+end
+redis.call('ZADD', KEYS[2], string.format('%.0f', score), ARGV[5])
+local first_tier = 3
+if ARGV[6] == '1' then
+  redis.call('ZADD', KEYS[3], ARGV[7], ARGV[8])
+  first_tier = 4
+end
+local index = 9
+for tier = first_tier, #KEYS do
   local count = tonumber(ARGV[index])
   index = index + 1
   for _ = 1, count do
@@ -375,6 +417,51 @@ for tier = 3, #KEYS do
 end
 return 1
 ";
+
+/// Creates a session in one atomic step on a standalone server, writing nothing when the
+/// session hash exists.
+///
+/// `KEYS`: session hash, index set, update-time index, lookup, app tier hash, user tier hash.
+/// `ARGV`: session ID, update-time score, lookup value, then for the app tier, the user tier,
+/// and the session hash a field count followed by that many field/value pairs.
+///
+/// Returns `1` when created and `0` when the session already exists.
+const CREATE_SESSION_SCRIPT: &str = r"
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  return 0
+end
+redis.call('SADD', KEYS[2], ARGV[1])
+redis.call('ZADD', KEYS[3], ARGV[2], ARGV[1])
+redis.call('SET', KEYS[4], ARGV[3])
+local index = 4
+for _, key in ipairs({KEYS[5], KEYS[6], KEYS[1]}) do
+  local count = tonumber(ARGV[index])
+  index = index + 1
+  for _ = 1, count do
+    redis.call('HSET', key, ARGV[index], ARGV[index + 1])
+    index = index + 2
+  end
+end
+return 1
+";
+
+/// Writes the session hash unless it exists. `KEYS[1]`: the session hash; `ARGV`: its
+/// field/value pairs. Returns `1` when written and `0` when the session already exists.
+const CREATE_SESSION_HASH_SCRIPT: &str = r"
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  return 0
+end
+for index = 1, #ARGV, 2 do
+  redis.call('HSET', KEYS[1], ARGV[index], ARGV[index + 1])
+end
+return 1
+";
+
+/// The update-time index score of `at`: microseconds since the epoch, exact in a double until
+/// the year 2255.
+fn updated_score(at: DateTime<Utc>) -> String {
+    at.timestamp_micros().to_string()
+}
 
 /// Attempts [`APPEND_EVENT_SCRIPT`] makes before giving up on a session whose state keeps
 /// changing between the read and the write.
@@ -420,41 +507,95 @@ struct NewSession<'a> {
     user_key: String,
     user_delta: &'a HashMap<String, Value>,
     index_key: String,
+    updated_index_key: String,
+    updated_at: DateTime<Utc>,
     lookup_key: String,
     lookup_value: String,
     session_id: &'a str,
 }
 
-/// Writes `new` through `client`, the session hash last.
-///
-/// Until the session hash exists, `get` reports the session as not found, `list` skips its
-/// index entry, and an append through its lookup finds no session, so on a cluster, where
-/// these writes are separate commands, a failure part-way leaves no session that can be read
-/// without its index entry, lookup, or initial tier fields.
-async fn write_new_session<C>(client: &C, new: NewSession<'_>) -> Result<()>
-where
-    C: HashesInterface + KeysInterface + SetsInterface + Sync,
-{
-    let _: () = client
-        .sadd(&new.index_key, new.session_id)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("redis sadd failed: {e}")))?;
-    let _: () = client
-        .set(&new.lookup_key, new.lookup_value, None, None, false)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("redis set failed: {e}")))?;
-    // Only the delta's fields, so concurrent writers of other fields are kept.
-    write_state_hash(client, &new.app_key, new.app_delta).await?;
-    write_state_hash(client, &new.user_key, new.user_delta).await?;
-    let _: () = client
-        .hset(&new.session_key, new.session_fields)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("redis hset failed: {e}")))?;
-    Ok(())
+/// Appends a field count and the fields to `args`.
+fn push_fields(args: &mut Vec<String>, fields: Vec<(String, String)>) {
+    args.push(fields.len().to_string());
+    for (field, value) in fields {
+        args.push(field);
+        args.push(value);
+    }
+}
+
+impl NewSession<'_> {
+    /// Creates the session on a standalone server with [`CREATE_SESSION_SCRIPT`]; `false`
+    /// when it already exists.
+    async fn create_standalone(self, client: &Client) -> Result<bool> {
+        let keys = vec![
+            self.session_key,
+            self.index_key,
+            self.updated_index_key,
+            self.lookup_key,
+            self.app_key,
+            self.user_key,
+        ];
+        let mut args =
+            vec![self.session_id.to_string(), updated_score(self.updated_at), self.lookup_value];
+        push_fields(&mut args, state_fields(self.app_delta)?);
+        push_fields(&mut args, state_fields(self.user_delta)?);
+        push_fields(&mut args, self.session_fields);
+        let created: i64 = client
+            .eval(CREATE_SESSION_SCRIPT, keys, args)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis eval failed: {e}")))?;
+        Ok(created == 1)
+    }
+
+    /// Creates the session on a cluster, where its keys span several slots: the index
+    /// entries, lookup, and tier fields first, then the session hash unless it exists; `false`
+    /// when it already exists.
+    ///
+    /// Until the session hash exists, `get` reports the session as not found, `list` skips its
+    /// index entries, and an append through its lookup finds no session, so a failure part-way
+    /// leaves no session that can be read without its index entries, lookup, or tier fields.
+    async fn create_clustered(self, client: &Client) -> Result<bool> {
+        let exists: bool = client
+            .exists(&self.session_key)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis exists failed: {e}")))?;
+        if exists {
+            return Ok(false);
+        }
+        let _: () = client
+            .sadd(&self.index_key, self.session_id)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis sadd failed: {e}")))?;
+        let _: () = client
+            .zadd(
+                &self.updated_index_key,
+                None,
+                None,
+                false,
+                false,
+                (self.updated_at.timestamp_micros() as f64, self.session_id),
+            )
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis zadd failed: {e}")))?;
+        let _: () = client
+            .set(&self.lookup_key, self.lookup_value, None, None, false)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis set failed: {e}")))?;
+        // Only the delta's fields, so concurrent writers of other fields are kept.
+        write_state_hash(client, &self.app_key, self.app_delta).await?;
+        write_state_hash(client, &self.user_key, self.user_delta).await?;
+        let args: Vec<String> =
+            self.session_fields.into_iter().flat_map(|(field, value)| [field, value]).collect();
+        let created: i64 = client
+            .eval(CREATE_SESSION_HASH_SCRIPT, vec![self.session_key], args)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis eval failed: {e}")))?;
+        Ok(created == 1)
+    }
 }
 
 /// Removes one session through `client`: its hash and events first, in one `DEL` (one slot
-/// in either layout), then its lookup and index entry.
+/// in either layout), then its lookup and index entries.
 async fn remove_session<C>(
     client: &C,
     layout: KeyLayout,
@@ -463,7 +604,7 @@ async fn remove_session<C>(
     session: &str,
 ) -> Result<()>
 where
-    C: KeysInterface + SetsInterface + Sync,
+    C: KeysInterface + SetsInterface + SortedSetsInterface + Sync,
 {
     let _: () = client
         .del(vec![layout.session(app, user, session), layout.events(app, user, session)])
@@ -477,13 +618,17 @@ where
         .srem(layout.index(app, user), session)
         .await
         .map_err(|e| adk_core::AdkError::session(format!("redis srem failed: {e}")))?;
+    let _: () = client
+        .zrem(layout.updated_index(app, user), session)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("redis zrem failed: {e}")))?;
     Ok(())
 }
 
 /// Redis-backed session service.
 ///
 /// Stores sessions using Redis hashes, events as sorted sets scored by
-/// timestamp, and three-tier state (app, user, session) as separate hashes.
+/// append sequence, and three-tier state (app, user, session) as separate hashes.
 /// Supports optional TTL on session keys and Redis Cluster, where each session's keys
 /// share one hash tag (see the module docs for both key layouts).
 ///
@@ -583,6 +728,84 @@ impl RedisSessionService {
         Ok(map)
     }
 
+    /// Adds the sessions of `(app_name, user_id)` that only the set index holds — sessions
+    /// created by earlier releases — to the update-time index, scored by their `updated_at`,
+    /// and drops set entries whose session no longer exists.
+    async fn index_legacy_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        let layout = self.layout;
+        let (idx_k, updated_k) =
+            (layout.index(app_name, user_id), layout.updated_index(app_name, user_id));
+        let in_set: u64 = self
+            .client
+            .scard(&idx_k)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis scard failed: {e}")))?;
+        let in_sorted_set: u64 = self
+            .client
+            .zcard(&updated_k)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis zcard failed: {e}")))?;
+        if in_set == in_sorted_set {
+            return Ok(());
+        }
+
+        let members: Vec<String> = self
+            .client
+            .smembers(&idx_k)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis smembers failed: {e}")))?;
+        for sid in members {
+            let indexed: Option<f64> =
+                self.client.zscore(&updated_k, &sid).await.map_err(|e| {
+                    adk_core::AdkError::session(format!("redis zscore failed: {e}"))
+                })?;
+            if indexed.is_some() {
+                continue;
+            }
+            let updated_at: Option<String> = self
+                .client
+                .hget(layout.session(app_name, user_id, &sid), "updated_at")
+                .await
+                .map_err(|e| adk_core::AdkError::session(format!("redis hget failed: {e}")))?;
+            match updated_at.and_then(|at| at.parse::<DateTime<Utc>>().ok()) {
+                Some(at) => {
+                    let _: () = self
+                        .client
+                        .zadd(
+                            &updated_k,
+                            None,
+                            None,
+                            false,
+                            false,
+                            (at.timestamp_micros() as f64, sid.as_str()),
+                        )
+                        .await
+                        .map_err(|e| {
+                            adk_core::AdkError::session(format!("redis zadd failed: {e}"))
+                        })?;
+                }
+                None => self.unindex(app_name, user_id, &sid).await?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes a session whose hash does not exist from both indexes.
+    async fn unindex(&self, app_name: &str, user_id: &str, session_id: &str) -> Result<()> {
+        let layout = self.layout;
+        let _: () = self
+            .client
+            .srem(layout.index(app_name, user_id), session_id)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis srem failed: {e}")))?;
+        let _: () = self
+            .client
+            .zrem(layout.updated_index(app_name, user_id), session_id)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis zrem failed: {e}")))?;
+        Ok(())
+    }
+
     /// Applies `event` to the session `(app_name, user_id, session_id)` and refreshes
     /// its TTL.
     ///
@@ -604,9 +827,10 @@ impl RedisSessionService {
         let layout = self.layout;
         let session_k = layout.session(app_name, user_id, session_id);
         let events_k = layout.events(app_name, user_id, session_id);
+        let updated_k = layout.updated_index(app_name, user_id);
         let app_k = layout.app_state(app_name);
         let user_k = layout.user_state(app_name, user_id);
-        let tiers_in_script = match layout {
+        let in_script = match layout {
             KeyLayout::Standalone => true,
             KeyLayout::Cluster => false,
         };
@@ -614,21 +838,18 @@ impl RedisSessionService {
 
         let event_json = serde_json::to_string(event)
             .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-        // ARGV[4..]: updated_at, score, event, then each tier's field count and fields.
-        let mut tail = vec![
-            event.timestamp.to_rfc3339(),
-            event.timestamp.timestamp_millis().to_string(),
-            event_json,
-        ];
-        if tiers_in_script {
+        // ARGV[4..]: updated_at, event, the update-time index flag, score, and member, then
+        // each tier's field count and fields.
+        let mut tail = vec![event.timestamp.to_rfc3339(), event_json];
+        if in_script {
+            keys.push(updated_k.clone());
+            tail.extend(["1".to_string(), updated_score(event.timestamp), session_id.to_string()]);
             for (key, delta) in [(&app_k, &app_delta), (&user_k, &user_delta)] {
                 keys.push(key.clone());
-                tail.push(delta.len().to_string());
-                for (field, value) in state_fields(delta)? {
-                    tail.push(field);
-                    tail.push(value);
-                }
+                push_fields(&mut tail, state_fields(delta)?);
             }
+        } else {
+            tail.extend(["0".to_string(), String::new(), String::new()]);
         }
 
         for _ in 0..MAX_STATE_WRITE_ATTEMPTS {
@@ -663,13 +884,27 @@ impl RedisSessionService {
                 .map_err(|e| adk_core::AdkError::session(format!("redis eval failed: {e}")))?;
             match outcome {
                 1 => {
-                    if !tiers_in_script {
+                    if !in_script {
+                        let _: () = self
+                            .client
+                            .zadd(
+                                &updated_k,
+                                None,
+                                None,
+                                false,
+                                false,
+                                (event.timestamp.timestamp_micros() as f64, session_id),
+                            )
+                            .await
+                            .map_err(|e| {
+                                adk_core::AdkError::session(format!("redis zadd failed: {e}"))
+                            })?;
                         write_state_hash(&self.client, &app_k, &app_delta).await?;
                         write_state_hash(&self.client, &user_k, &user_delta).await?;
                     }
                     return self.apply_ttl(&session_k, &events_k).await;
                 }
-                -1 => return Err(adk_core::AdkError::session("session not found")),
+                -1 => return Err(session_not_found_for(app_name, user_id, session_id)),
                 _ => continue,
             }
         }
@@ -717,23 +952,22 @@ impl SessionService for RedisSessionService {
             user_key: user_k.clone(),
             user_delta: &user_delta,
             index_key: layout.index(&req.app_name, &req.user_id),
+            updated_index_key: layout.updated_index(&req.app_name, &req.user_id),
+            updated_at: now,
             lookup_key: layout.lookup(&session_id),
             lookup_value: lookup_value(&req.app_name, &req.user_id),
             session_id: &session_id,
         };
 
-        match layout {
-            KeyLayout::Standalone => {
-                let trx = self.client.multi();
-                write_new_session(&trx, new).await?;
-                let _: () = trx.exec(true).await.map_err(|e| {
-                    adk_core::AdkError::session(format!("redis transaction failed: {e}"))
-                })?;
-            }
-            KeyLayout::Cluster => write_new_session(&self.client, new).await?,
+        let created = match layout {
+            KeyLayout::Standalone => new.create_standalone(&self.client).await?,
+            KeyLayout::Cluster => new.create_clustered(&self.client).await?,
+        };
+        if !created {
+            return Err(session_already_exists(&req.app_name, &req.user_id, &session_id));
         }
 
-        // Apply TTL outside transaction
+        // Apply TTL outside the script
         let events_k = layout.events(&req.app_name, &req.user_id, &session_id);
         self.apply_ttl(&session_k, &events_k).await?;
 
@@ -780,7 +1014,7 @@ impl SessionService for RedisSessionService {
         let user_state =
             self.read_state_hash(&layout.user_state(&req.app_name, &req.user_id)).await?;
 
-        // Read events from sorted set (ordered by score = timestamp millis)
+        // Read events from the sorted set, in score (append) order
         let events_k = layout.events(&req.app_name, &req.user_id, &req.session_id);
         let raw_events: Vec<(String, f64)> = self
             .client
@@ -808,9 +1042,11 @@ impl SessionService for RedisSessionService {
             })
             .collect();
 
+        // Scores are append order; a stable sort keeps it among equal timestamps.
+        events.sort_by_key(|event| event.timestamp);
         if let Some(num) = req.num_recent_events {
             let start = events.len().saturating_sub(num);
-            events = events[start..].to_vec();
+            events.drain(..start);
         }
         if let Some(after) = req.after {
             events.retain(|e| e.timestamp >= after);
@@ -830,21 +1066,30 @@ impl SessionService for RedisSessionService {
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
         validate_scope(&req.app_name, &req.user_id)?;
         let layout = self.layout;
+        let updated_k = layout.updated_index(&req.app_name, &req.user_id);
+        self.index_legacy_sessions(&req.app_name, &req.user_id).await?;
+
+        if req.limit == Some(0) {
+            return Ok(Vec::new());
+        }
+        let offset = req.offset.unwrap_or(0);
+        let start = i64::try_from(offset).unwrap_or(i64::MAX);
+        let stop = req.limit.map_or(-1, |limit| {
+            i64::try_from(offset.saturating_add(limit)).map_or(i64::MAX, |end| end - 1)
+        });
+        // Reversed: newest first, equal scores by member descending.
         let session_ids: Vec<String> = self
             .client
-            .smembers(layout.index(&req.app_name, &req.user_id))
+            .zrange(&updated_k, start, stop, None, true, None, false)
             .await
-            .map_err(|e| adk_core::AdkError::session(format!("redis smembers failed: {e}")))?;
-
-        let offset = req.offset.unwrap_or(0);
-        let limit = req.limit.unwrap_or(usize::MAX);
+            .map_err(|e| adk_core::AdkError::session(format!("redis zrange failed: {e}")))?;
 
         let app_state = self.read_state_hash(&layout.app_state(&req.app_name)).await?;
         let user_state =
             self.read_state_hash(&layout.user_state(&req.app_name, &req.user_id)).await?;
 
         let mut sessions: Vec<Box<dyn Session>> = Vec::new();
-        for sid in session_ids.into_iter().skip(offset).take(limit) {
+        for sid in session_ids {
             let session_k = layout.session(&req.app_name, &req.user_id, &sid);
             let raw: HashMap<String, String> =
                 self.client.hgetall(&session_k).await.map_err(|e| {
@@ -852,7 +1097,9 @@ impl SessionService for RedisSessionService {
                 })?;
 
             if raw.is_empty() {
-                continue; // Key expired or was deleted
+                // Expired, or left by a create that failed part-way.
+                self.unindex(&req.app_name, &req.user_id, &sid).await?;
+                continue;
             }
 
             let stored_state: HashMap<String, Value> =
@@ -907,8 +1154,7 @@ impl SessionService for RedisSessionService {
             .await
             .map_err(|e| adk_core::AdkError::session(format!("redis get failed: {e}")))?;
 
-        let lookup_val =
-            lookup_val.ok_or_else(|| adk_core::AdkError::session("session not found"))?;
+        let lookup_val = lookup_val.ok_or_else(|| session_id_not_found(session_id))?;
 
         let (app_name, user_id) = parse_lookup_value(&lookup_val)
             .ok_or_else(|| adk_core::AdkError::session("corrupt session lookup entry"))?;
@@ -957,7 +1203,7 @@ impl SessionService for RedisSessionService {
                     remove_session(&trx, layout, app_name, user_id, sid).await?;
                 }
                 let _: () = trx
-                    .del(&idx_k)
+                    .del(vec![idx_k.clone(), layout.updated_index(app_name, user_id)])
                     .await
                     .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
                 let _: () = trx.exec(true).await.map_err(|e| {
@@ -968,10 +1214,12 @@ impl SessionService for RedisSessionService {
                 for sid in &session_ids {
                     remove_session(&self.client, layout, app_name, user_id, sid).await?;
                 }
-                let _: () =
-                    self.client.del(&idx_k).await.map_err(|e| {
-                        adk_core::AdkError::session(format!("redis del failed: {e}"))
-                    })?;
+                // The set and the sorted set share the `{<app>:<user>}` hash tag.
+                let _: () = self
+                    .client
+                    .del(vec![idx_k.clone(), layout.updated_index(app_name, user_id)])
+                    .await
+                    .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
             }
         }
 
