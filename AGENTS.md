@@ -99,7 +99,7 @@ or strip the three `[target.*]` linker sections — the shared
 bash-only, so use `./scripts/setup-dev.ps1`. Use the MSVC toolchain
 (`x86_64-pc-windows-msvc`) with Visual Studio Build Tools for the C/C++
 compiler; `.cargo/config.toml` pins `rust-lld` as the linker, which ships with
-rustup. Three further constraints:
+rustup. Four further constraints:
 
 - `adk-sandbox`'s Windows AppContainer enforcer is unimplemented and reports
   itself unavailable — `sandbox-windows` compiles but does not enforce.
@@ -114,10 +114,8 @@ rustup. Three further constraints:
   `a_working_program_still_runs` fails in a plain shell where `LIB` is unset.
 - Keep Git's `usr/bin` off `PATH` ahead of the toolchain: it ships a GNU
   `link.exe` that shadows the MSVC linker, which once made sandboxed Rust
-  compilation resolve the wrong one. The same directory holds the only `echo`
-  binary on Windows (`echo` is a cmd builtin), so
-  `adk-bench`'s `test_external_runner_invalid_json` cannot pass without
-  accepting that hazard. It is the one expected Windows failure.
+  compilation resolve the wrong one. `adk-bench`'s external-runner tests run
+  their scripts with Windows PowerShell 5.1 and need nothing from Git.
 
 ### Verifying a fresh setup
 
@@ -143,10 +141,9 @@ cargo clippy -p adk-rust --features full --all-targets -- -D warnings
 cargo test -p adk-rust --features full --doc
 ```
 
-On Linux and macOS a clean setup runs the full suite with zero failures. On
-Windows, expect 4050/4051 from a Developer PowerShell — the single failure is
-`test_external_runner_invalid_json`, explained under
-[Platform notes](#platform-notes). Any failure carrying `program not found` is a
+A clean setup runs the full suite with zero failures on Linux, macOS, and
+Windows — on Windows from a Developer PowerShell, as
+[Platform notes](#platform-notes) explains. Any failure carrying `program not found` is a
 missing host tool, not a regression — diagnose the environment before assuming
 the workspace is broken.
 

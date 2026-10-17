@@ -154,7 +154,7 @@ impl ExternalRunner {
     ///
     /// # Errors
     ///
-    /// - [`BenchError::ExternalTimeout`](crate::BenchError::ExternalTimeout) if the subprocess exceeds the configured timeout
+    /// - [`BenchError::ExternalTimeout`](crate::BenchError::ExternalTimeout) if the subprocess exceeds the configured timeout; the subprocess is killed
     /// - [`BenchError::ExternalRunner`](crate::BenchError::ExternalRunner) if the subprocess exits with non-zero status or emits invalid JSON
     pub async fn run(
         &self,
@@ -201,6 +201,10 @@ impl ExternalRunner {
         // Capture stdout and stderr.
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
+
+        // Dropping the timed-out `output()` future kills the subprocess; without this it
+        // keeps running after the runner has reported the timeout.
+        cmd.kill_on_drop(true);
 
         debug!(
             framework = %config.name,
@@ -391,6 +395,16 @@ mod tests {
         }
     }
 
+    /// A runner whose timeout cannot fire while a test runs.
+    ///
+    /// Only `test_external_runner_timeout` exercises the timeout. The other tests start a
+    /// real shell, and Windows PowerShell 5.1 takes from under one second to over ten seconds
+    /// to start on a loaded runner, so any finite budget races the shell's startup instead of
+    /// testing the runner. nextest's `slow-timeout` still ends a script that hangs.
+    fn runner_without_timeout() -> ExternalRunner {
+        ExternalRunner::new(u64::MAX)
+    }
+
     #[test]
     fn test_external_metrics_output_deserialize() {
         let json = r#"{
@@ -564,7 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_external_runner_non_zero_exit() {
-        let runner = ExternalRunner::new(10);
+        let runner = runner_without_timeout();
         let (_dir, command, args) = script("exit 1");
         let config = ExternalFrameworkConfig {
             name: "failing-script".to_string(),
@@ -587,7 +601,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_external_runner_invalid_json() {
-        let runner = ExternalRunner::new(10);
+        let runner = runner_without_timeout();
         // `echo` is a shell builtin on Windows with no executable to spawn, so go
         // through the platform shell rather than invoking it directly.
         let emit =
@@ -643,7 +657,7 @@ mod tests {
         // Use a shell command that outputs valid EBP JSON, ignoring extra args.
         let ebp_json = r#"{"framework":"test","cold_start_us":1000,"first_llm_call_epoch_ns":99999999999999999,"loop_overhead":{"min_us":10,"max_us":100,"mean_us":50,"median_us":45,"p95_us":90,"p99_us":95,"count":5}}"#;
 
-        let runner = ExternalRunner::new(10);
+        let runner = runner_without_timeout();
         // Single quotes on both platforms: inside a script file the JSON needs no
         // escaping, and quoting keeps the braces and spaces intact.
         let emit = format!("echo '{ebp_json}'");
@@ -671,7 +685,7 @@ mod tests {
     #[tokio::test]
     async fn test_external_runner_env_injection() {
         // Verify that BENCH_START_EPOCH_NS is injected and custom env vars are passed.
-        let runner = ExternalRunner::new(10);
+        let runner = runner_without_timeout();
         // Both branches add 5_000_000ns to the injected start timestamp and emit it
         // as first_llm_call_epoch_ns, so the runner derives cold_start_us = 5000.
         // The cast to [long] matters: the timestamp exceeds 32 bits, which is also
