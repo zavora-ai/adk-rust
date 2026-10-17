@@ -84,6 +84,11 @@ pub struct EventActions {
     /// Whether to escalate to a human operator.
     pub escalate: bool,
     /// Tool confirmation request awaiting human approval.
+    ///
+    /// A tool that sets it on its context's actions holds its own call for the request,
+    /// as an agent tool does when its delegate holds a call: the agent answers the call as
+    /// pending, ends the run on the request, and resumes the call once the request has a
+    /// decision.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_confirmation: Option<ToolConfirmationRequest>,
     /// Decision for a pending tool confirmation.

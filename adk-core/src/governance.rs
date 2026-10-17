@@ -1883,6 +1883,12 @@ pub fn is_confirmation_pending(response: &Value) -> bool {
 ///
 /// Returned by [`held_tool_calls`]. An agent resumes it at the start of a later run
 /// once a decision exists for it.
+///
+/// The held call is usually the call the request describes. An agent tool whose
+/// delegated agent held a call of its own holds the agent-tool call instead: its
+/// request describes the delegated agent's call, so `name` and `args` name the
+/// agent-tool call the agent resumes, while the request's fingerprint stays the key
+/// of the decision the delegated call needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeldToolCall {
     /// The request the agent surfaced. Its arguments are the call's final ones,
@@ -1890,6 +1896,8 @@ pub struct HeldToolCall {
     pub request: ToolConfirmationRequest,
     /// The call's ID as the model issued it; `None` when the provider omitted it.
     pub id: Option<String>,
+    /// The tool the model called, the one the agent resumes.
+    pub name: String,
     /// The arguments as the model issued them, before plugin and callback rewrites.
     pub args: Value,
 }
@@ -1967,14 +1975,11 @@ pub fn held_tool_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<
                                 call.request.function_call_id.as_deref() != Some(id)
                                     && call.id.as_deref() != Some(id)
                                     && answered.as_deref()
-                                        != Some(&tool_call_fingerprint(
-                                            &call.request.tool_name,
-                                            &call.args,
-                                        ))
+                                        != Some(&tool_call_fingerprint(&call.name, &call.args))
                             });
                         }
                         None => held.retain(|call| {
-                            call.id.is_some() || call.request.tool_name != function_response.name
+                            call.id.is_some() || call.name != function_response.name
                         }),
                     }
                 }
@@ -1982,20 +1987,25 @@ pub fn held_tool_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<
             }
         }
         if own && let Some(request) = &event.actions.tool_confirmation {
-            let (id, args) = match request.function_call_id.as_deref() {
+            let (id, name, args) = match request.function_call_id.as_deref() {
                 Some(call_id) if issued.contains_key(call_id) => {
-                    (Some(call_id.to_string()), issued[call_id].1.clone())
+                    let (name, args) = &issued[call_id];
+                    (Some(call_id.to_string()), name.clone(), args.clone())
                 }
                 _ => match idless.iter().rev().find(|(invocation, name, _)| {
                     *invocation == event.invocation_id && *name == request.tool_name
                 }) {
-                    Some((_, _, args)) => (None, args.clone()),
-                    None => (request.function_call_id.clone(), request.args.clone()),
+                    Some((_, name, args)) => (None, name.clone(), args.clone()),
+                    None => (
+                        request.function_call_id.clone(),
+                        request.tool_name.clone(),
+                        request.args.clone(),
+                    ),
                 },
             };
             let fingerprint = request.fingerprint();
             held.retain(|call| call.request.fingerprint() != fingerprint);
-            held.push(HeldToolCall { request: request.clone(), id, args });
+            held.push(HeldToolCall { request: request.clone(), id, name, args });
         }
     }
     held
@@ -2793,10 +2803,53 @@ mod tests {
                     acting: None,
                 },
                 id: Some("c1".into()),
+                name: "pay".into(),
                 args: json!({ "amount": 5 }),
             }]
         );
         assert!(held_tool_calls(&events, "other", "").is_empty(), "holds belong to their agent");
+    }
+
+    #[test]
+    fn an_agent_tool_call_held_for_its_delegates_call_resumes_as_the_agent_tool_call() {
+        let events = vec![
+            event("user", "inv-1", vec![Part::Text { text: "clean up".into() }]),
+            event(
+                "ops",
+                "inv-1",
+                vec![function_call("helper", json!({ "request": "delete a.txt" }), "c1")],
+            ),
+            event(
+                "ops",
+                "inv-1",
+                vec![function_response("helper", confirmation_pending_response("held"), "c1")],
+            ),
+            // The request describes the delegate's call; its ID is the agent-tool call's.
+            hold("ops", "inv-1", "delete_file", json!({ "path": "a.txt" }), "c1"),
+        ];
+        let held = held_tool_calls(&events, "ops", "");
+        assert_eq!(
+            held,
+            vec![HeldToolCall {
+                request: ToolConfirmationRequest {
+                    tool_name: "delete_file".into(),
+                    function_call_id: Some("c1".into()),
+                    args: json!({ "path": "a.txt" }),
+                    acting: None,
+                },
+                id: Some("c1".into()),
+                name: "helper".into(),
+                args: json!({ "request": "delete a.txt" }),
+            }]
+        );
+
+        let mut answered = events;
+        answered.push(event(
+            "ops",
+            "inv-2",
+            vec![function_response("helper", json!({ "response": "deleted" }), "c1")],
+        ));
+        assert!(held_tool_calls(&answered, "ops", "").is_empty());
     }
 
     #[test]

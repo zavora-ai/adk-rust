@@ -162,10 +162,25 @@ let coordinator = LlmAgentBuilder::new("coordinator")
 ### How It Works
 
 1. The parent agent decides to call the wrapped agent as a tool
-2. `AgentTool` creates an invocation context with `StreamingMode::None`
+2. `AgentTool` creates an invocation context with `StreamingMode::None`, in the parent's
+   session scope, and a run config derived from the parent's (see below)
 3. The sub-agent runs to completion and accumulates its full response
-4. The response text is returned to the parent agent
+4. The response is returned to the parent agent
 5. State deltas and artifact deltas are forwarded to the parent context
+
+### What the Delegate Inherits
+
+The delegate's run config is built from the caller's field by field:
+
+| Fields | Delegate gets |
+|--------|---------------|
+| `budget`, `budget_tracker`, `governance`, `tool_policy`, `tool_approvals`, `approval_store`, `approval_service`, `durable_run_id`, `action_ledger`, `spend_ledger`, `llm_spend_estimate`, `audit`, `invocation_hooks`, `tool_confirmation_handler`, `tool_confirmation_timeout`, `tool_concurrency`, `max_transfer_depth`, `auto_cache`, `record_payloads`, `trace_payload_max_bytes`, `history_max_events` | The caller's, shared for the whole invocation |
+| `acting` | The caller's, with the delegate's principal and the caller appended to the delegation chain |
+| `transfer_targets`, `parent_agent` | The delegate's own topology (`Agent::configure_run`, `Agent::transfer_targets_for`), never the caller's handoff targets |
+| `cached_content` | None; a context cache is built for one agent's instructions and tools |
+| `runtime_toolsets` | None; invocation toolsets are attached for the caller's agent |
+| `tool_confirmation_decisions`, `tool_confirmation_fingerprints` | None, except a decision for the delegate's held call on resume (see [Calls Held Inside an Agent Tool](../security/tool-authorization.md#calls-held-inside-an-agent-tool)) |
+| `streaming_mode` | `StreamingMode::None` |
 
 ### Tool Details
 
@@ -174,7 +189,28 @@ let coordinator = LlmAgentBuilder::new("coordinator")
 | Name | Same as the wrapped agent's name |
 | Description | Same as the wrapped agent's description |
 | Parameters | `request`: string (the input to send to the sub-agent) |
-| Returns | `{"response": "..."}` with the sub-agent's text output |
+| Returns | `{"response": "..."}` with the sub-agent's text output; the tool result the sub-agent ended on when it ended on one (a tool that skips summarization, or a nested `AgentTool` with `skip_summarization(true)`), or `{"responses": [{"name", "response"}, ...]}` for several |
+
+### Failures and Timeouts
+
+| Outcome | `ReturnErrorObject` (default) | `Propagate` |
+|---------|-------------------------------|-------------|
+| The sub-agent fails | `{"error": "...", "agent": "..."}` result | The sub-agent's error, with its category and code |
+| The delegation runs past `timeout` | `Timeout` tool error | `Timeout` tool error |
+| The sub-agent holds a call for confirmation | The call is held by the parent | The call is held by the parent |
+
+A timeout is a failed call in both modes, so `on_tool_error`, the circuit breaker, retries and
+the action ledger see it. The calling agent enforces the limit itself and reports
+`tool.timeout`; a `NonIdempotent` delegation cut mid-flight is answered with an unknown outcome.
+Executed directly, the tool returns `tool.agent.timeout`.
+
+### Forwarded Events
+
+With `forward_events(true)`, the sub-agent's events are emitted on the parent's event stream.
+A complete event waits for the client like a tool result does, so it always reaches the
+session. A partial event that cannot be delivered within 100 ms is dropped; the first drop is
+logged at `warn`, the total at the end of the call, and one `[adk: forwarded events dropped]`
+progress event on the `events` stream precedes the next delivered partial event.
 
 ### Key Behavior
 

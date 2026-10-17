@@ -231,6 +231,11 @@ let researcher = AgentTool::new(research_agent.clone());
 let bounded = AgentTool::new(research_agent).timeout(Duration::from_secs(45 * 60));
 ```
 
+A delegation that runs past its limit is a failed call with a `Timeout` error, whichever
+failure mode the agent tool uses. The calling agent enforces the limit and handles it like any
+tool timeout: a `NonIdempotent` delegation, the default, is answered with
+`{"status": "outcome_unknown"}` and its ledger record stays begun.
+
 ## Related
 
 - [Function Tools](function-tools.md) - Tool metadata attributes and builders

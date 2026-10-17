@@ -1606,6 +1606,13 @@ const TOOL_PROGRESS_MAX_TOTAL_BYTES: usize = 1024 * 1024;
 /// Text appended in place of progress output that was not forwarded.
 const TOOL_PROGRESS_TRUNCATION_MARKER: &str = "[adk: tool progress truncated]";
 
+/// Progress stream that carries the marker for dropped forwarded events.
+const FORWARDED_EVENTS_STREAM: &str = "events";
+
+/// Text emitted once, ahead of the next forwarded event, after a tool's forwarded partial
+/// events were dropped.
+const FORWARDED_EVENTS_DROPPED_MARKER: &str = "[adk: forwarded events dropped]";
+
 /// Truncates `text` to at most `max_bytes`, never splitting a character.
 fn truncate_on_char_boundary(text: &str, max_bytes: usize) -> &str {
     if text.len() <= max_bytes {
@@ -1630,6 +1637,29 @@ struct AgentToolContext {
     progress_bytes: std::sync::atomic::AtomicUsize,
     /// Set once the truncation marker has been emitted, so it is emitted once.
     progress_truncated: std::sync::atomic::AtomicBool,
+    /// Forwarded partial events dropped because the consumer did not keep up.
+    events_dropped: std::sync::atomic::AtomicUsize,
+    /// Set once the marker for dropped forwarded events has been sent.
+    events_drop_marked: std::sync::atomic::AtomicBool,
+}
+
+impl Drop for AgentToolContext {
+    fn drop(&mut self) {
+        let dropped = *self.events_dropped.get_mut();
+        if dropped == 0 {
+            return;
+        }
+        tracing::warn!(
+            function_call.id = %self.function_call_id,
+            events.dropped = dropped,
+            "forwarded partial events were dropped for this tool call"
+        );
+        if !*self.events_drop_marked.get_mut()
+            && let Some(tx) = &self.progress_tx
+        {
+            let _ = tx.try_send(self.events_dropped_marker());
+        }
+    }
 }
 
 impl AgentToolContext {
@@ -1642,6 +1672,8 @@ impl AgentToolContext {
             progress_tx: None,
             progress_bytes: std::sync::atomic::AtomicUsize::new(0),
             progress_truncated: std::sync::atomic::AtomicBool::new(false),
+            events_dropped: std::sync::atomic::AtomicUsize::new(0),
+            events_drop_marked: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1727,6 +1759,17 @@ impl AgentToolContext {
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
         }
+    }
+
+    /// The marker that stands in for forwarded partial events this call dropped.
+    fn events_dropped_marker(&self) -> Event {
+        Event::tool_progress(
+            self.parent_ctx.invocation_id(),
+            self.parent_ctx.agent_name(),
+            &self.function_call_id,
+            FORWARDED_EVENTS_STREAM,
+            FORWARDED_EVENTS_DROPPED_MARKER,
+        )
     }
 
     /// Emits the truncation marker once for this call.
@@ -1865,10 +1908,40 @@ impl ToolContext for AgentToolContext {
     }
 
     async fn emit_event(&self, event: Event) {
-        if let Some(tx) = &self.progress_tx
-            && !tx.is_closed()
+        use std::sync::atomic::Ordering;
+
+        let Some(tx) = &self.progress_tx else {
+            return;
+        };
+        if tx.is_closed() {
+            return;
+        }
+        // A complete event becomes session history, so it waits for the consumer as a tool
+        // result does. Only a partial event, which is never persisted, may be dropped.
+        if !event.llm_response.partial {
+            let _ = tx.send(event).await;
+            return;
+        }
+        // A consumer that missed partial events is told so before the next one reaches it.
+        if self.events_dropped.load(Ordering::Relaxed) > 0
+            && !self.events_drop_marked.load(Ordering::Relaxed)
+            && tokio::time::timeout(
+                TOOL_PROGRESS_SEND_TIMEOUT,
+                tx.send(self.events_dropped_marker()),
+            )
+            .await
+            .is_ok_and(|sent| sent.is_ok())
         {
-            let _ = tokio::time::timeout(TOOL_PROGRESS_SEND_TIMEOUT, tx.send(event)).await;
+            self.events_drop_marked.store(true, Ordering::Relaxed);
+        }
+        if tokio::time::timeout(TOOL_PROGRESS_SEND_TIMEOUT, tx.send(event)).await.is_ok() {
+            return;
+        }
+        if self.events_dropped.fetch_add(1, Ordering::Relaxed) == 0 {
+            tracing::warn!(
+                function_call.id = %self.function_call_id,
+                "consumer is not keeping up; forwarded partial events are being dropped"
+            );
         }
     }
 
@@ -2766,6 +2839,25 @@ impl ToolExecutor<'_> {
                 if tool_actions.tool_confirmation_decision.is_none() {
                     tool_actions.tool_confirmation_decision = confirmation_decision;
                 }
+                // An agent tool whose delegate held a call of its own holds this call with it:
+                // the run ends on the delegate's request, and this call resumes once that
+                // request has a decision.
+                let final_function_response = match tool_actions.tool_confirmation.take() {
+                    Some(request) => {
+                        tool_actions.skip_summarization = false;
+                        tool_actions.escalate = false;
+                        pending_confirmation = Some(request);
+                        run_after_tool_callbacks = false;
+                        if adk_core::is_confirmation_pending(&final_function_response) {
+                            final_function_response
+                        } else {
+                            adk_core::confirmation_pending_response(format!(
+                                "Tool '{name}' is waiting for a confirmation"
+                            ))
+                        }
+                    }
+                    None => final_function_response,
+                };
                 executed_tool = Some(tool.clone());
                 executed_tool_response = Some(final_function_response.clone());
                 response_content = Some(Content {
@@ -3118,7 +3210,7 @@ impl Agent for LlmAgent {
                     match adk_core::confirmation_decision_available(&gate, &held.request).await {
                         Ok(true) => resumed_calls.push(PendingToolCall {
                             index: resumed_calls.len(),
-                            name: held.request.tool_name,
+                            name: held.name,
                             args: held.args,
                             id: held.id,
                             function_call_id,

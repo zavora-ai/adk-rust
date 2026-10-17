@@ -29,10 +29,11 @@
 
 use adk_core::{
     Agent, Artifacts, CallbackContext, Content, Event, InvocationContext, Memory, Part,
-    ReadonlyContext, Result, RunConfig, Session, State, Tool, ToolContext,
+    ReadonlyContext, Result, RunConfig, Session, State, Tool, ToolConfirmationRequest, ToolContext,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::AtomicBool};
@@ -116,14 +117,119 @@ struct AgentToolChildConfig {
     artifact_prefixes: Option<Arc<Vec<String>>>,
     forward_memory: bool,
     forward_shared_state: bool,
-    session_snapshot: AgentToolSessionSnapshot,
+    session: Arc<AgentToolSession>,
     run_config: RunConfig,
     delegation_depth: u32,
     max_delegation_depth: Option<u32>,
-    history_max_events: Option<usize>,
-    state_keys: Option<Arc<HashSet<String>>>,
     orchestration_root_invocation_id: String,
     orchestration_edge_id: String,
+}
+
+/// How much later than its caller the agent tool enforces its own timeout.
+///
+/// Timers fire on whole milliseconds, so the margin puts the agent tool's deadline on a later
+/// tick than that of a caller enforcing the same limit.
+const CALLER_TIMEOUT_GRACE: Duration = Duration::from_millis(5);
+
+/// Session-state key prefix of the record a held delegation resumes from.
+const HELD_DELEGATION_STATE_PREFIX: &str = "adk:agent_tool:held:";
+
+/// A delegation that held one of its delegate's calls for confirmation.
+///
+/// Stored in the caller's session state, under the caller's call, so a later run that
+/// resumes that call rebuilds the delegate's session and the delegate resumes its own
+/// held call as the same call, without asking its model again.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeldDelegation {
+    /// Fingerprint of the agent-tool call the delegation ran for.
+    call: String,
+    /// The agent that held the call: the wrapped agent or one of its handoff targets.
+    agent: String,
+    /// The delegate's request, under the delegate's own call ID.
+    request: ToolConfirmationRequest,
+    /// The state the delegation started with.
+    state: HashMap<String, Value>,
+    /// The history the delegation started with.
+    history: Vec<Content>,
+    /// The request the delegation was given.
+    user_content: Content,
+    /// The delegate's events so far.
+    events: Vec<Event>,
+}
+
+/// Builds the run config of a delegated invocation from its caller's.
+///
+/// Every field is named, so a new one has to be classed as shared with the delegate or as
+/// belonging to the caller's own agent.
+fn delegated_run_config(parent: RunConfig) -> RunConfig {
+    let RunConfig {
+        streaming_mode: _,
+        tool_confirmation_decisions: _,
+        tool_confirmation_fingerprints: _,
+        tool_confirmation_handler,
+        runtime_toolsets: _,
+        cached_content: _,
+        transfer_targets: _,
+        parent_agent: _,
+        auto_cache,
+        history_max_events,
+        tool_concurrency,
+        record_payloads,
+        trace_payload_max_bytes,
+        max_transfer_depth,
+        invocation_hooks,
+        budget,
+        budget_tracker,
+        action_ledger,
+        tool_policy,
+        governance,
+        tool_approvals,
+        approval_store,
+        approval_service,
+        durable_run_id,
+        tool_confirmation_timeout,
+        spend_ledger,
+        llm_spend_estimate,
+        audit,
+        acting,
+    } = parent;
+    RunConfig {
+        // The delegate's output is read whole.
+        streaming_mode: adk_core::StreamingMode::None,
+        // Call-ID decisions name the caller's calls; the delegate's calls have their own IDs.
+        tool_confirmation_decisions: HashMap::new(),
+        tool_confirmation_fingerprints: HashMap::new(),
+        // The handoff topology, the invocation's toolsets and the context cache were built
+        // for the caller's agent. The delegate's own topology is applied by the caller.
+        runtime_toolsets: Vec::new(),
+        cached_content: None,
+        transfer_targets: Vec::new(),
+        parent_agent: None,
+        // Limits, governance, approvals, ledgers and identity span the whole invocation.
+        tool_confirmation_handler,
+        auto_cache,
+        history_max_events,
+        tool_concurrency,
+        record_payloads,
+        trace_payload_max_bytes,
+        max_transfer_depth,
+        invocation_hooks,
+        budget,
+        budget_tracker,
+        action_ledger,
+        tool_policy,
+        governance,
+        tool_approvals,
+        approval_store,
+        approval_service,
+        durable_run_id,
+        tool_confirmation_timeout,
+        spend_ledger,
+        llm_spend_estimate,
+        audit,
+        acting,
+    }
 }
 
 /// Configuration options for AgentTool behavior.
@@ -169,6 +275,18 @@ impl Default for AgentToolConfig {
 /// When the parent LLM generates a function call targeting this tool,
 /// the framework executes the wrapped agent, captures its final response,
 /// and returns it as the tool's result.
+///
+/// The wrapped agent runs as a delegate of its caller. It shares the caller's budget,
+/// governance, tool policy, approvals, ledgers, audit trail and session scope, and acts for
+/// the caller's subject. It does not inherit the caller's handoff targets, context cache,
+/// invocation toolsets or call-ID decisions; its own topology comes from
+/// [`Agent::configure_run`] and [`Agent::transfer_targets_for`].
+///
+/// A call the delegate holds for confirmation holds this call too: the tool sets
+/// [`EventActions::tool_confirmation`](adk_core::EventActions::tool_confirmation) to the
+/// delegate's request under the caller's call ID and records the delegate's session in the
+/// caller's session state. When the caller resumes the call, the delegate resumes its held
+/// call from that session.
 pub struct AgentTool {
     agent: Arc<dyn Agent>,
     config: AgentToolConfig,
@@ -206,6 +324,20 @@ impl AgentTool {
     ///
     /// The parent agent applies this instead of its own tool timeout. Without
     /// one, the delegation runs until it finishes or the run is cancelled.
+    ///
+    /// A delegation that runs past it is a failed call with an
+    /// [`ErrorCategory::Timeout`](adk_core::ErrorCategory::Timeout) error in every
+    /// [`AgentToolFailureMode`]: `tool.timeout` from a calling agent that enforces the
+    /// limit, or `tool.agent.timeout` when the tool is executed directly.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_tool::AgentTool;
+    /// use std::time::Duration;
+    ///
+    /// let research = AgentTool::new(researcher).timeout(Duration::from_secs(20 * 60));
+    /// ```
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.config.timeout = Some(timeout);
         self
@@ -433,39 +565,79 @@ impl AgentTool {
         }
     }
 
-    /// Extract the final response text from agent events.
+    /// Extracts the delegation's output from its events.
+    ///
+    /// The output is the text of the final response. A delegate that ends on a tool result,
+    /// as one whose tool skips summarization does, hands back that result: the payload of a
+    /// single function response, or `{"responses": [{"name", "response"}, ...]}` for several.
     fn extract_response(events: &[Event]) -> Value {
-        // Collect all text responses from final events
-        let mut responses = Vec::new();
+        let function_responses = |event: &Event| {
+            let responses: Vec<_> = event
+                .llm_response
+                .content
+                .iter()
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| match part {
+                    Part::FunctionResponse { function_response, .. } => Some(function_response),
+                    _ => None,
+                })
+                .collect();
+            match responses.as_slice() {
+                [] => None,
+                [response] => Some(response.response.clone()),
+                responses => Some(json!({
+                    "responses": responses
+                        .iter()
+                        .map(|response| json!({
+                            "name": response.name,
+                            "response": response.response,
+                        }))
+                        .collect::<Vec<_>>()
+                })),
+            }
+        };
 
-        for event in events.iter().rev() {
-            if event.is_final_response() {
-                if let Some(content) = &event.llm_response.content {
-                    for part in &content.parts {
-                        if let Part::Text { text } = part {
-                            responses.push(text.clone());
-                        }
-                    }
-                }
-                break; // Only get the last final response
+        if let Some(event) = events.iter().rev().find(|event| event.is_final_response()) {
+            let text: String = event
+                .llm_response
+                .content
+                .iter()
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| match part {
+                    Part::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let has_text =
+                event.llm_response.content.iter().any(|content| {
+                    content.parts.iter().any(|part| matches!(part, Part::Text { .. }))
+                });
+            if has_text {
+                return json!({ "response": text });
+            }
+            if let Some(payload) = function_responses(event) {
+                return payload;
             }
         }
 
-        if responses.is_empty() {
-            // Try to get any text from the last event
-            if let Some(last_event) = events.last()
-                && let Some(content) = &last_event.llm_response.content
+        if let Some(last_event) = events.last() {
+            if let Some(text) = last_event
+                .llm_response
+                .content
+                .iter()
+                .flat_map(|content| content.parts.iter())
+                .find_map(|part| match part {
+                    Part::Text { text } => Some(text),
+                    _ => None,
+                })
             {
-                for part in &content.parts {
-                    if let Part::Text { text } = part {
-                        return json!({ "response": text });
-                    }
-                }
+                return json!({ "response": text });
             }
-            json!({ "response": "No response from agent" })
-        } else {
-            json!({ "response": responses.concat() })
+            if let Some(payload) = function_responses(last_event) {
+                return payload;
+            }
         }
+        json!({ "response": "No response from agent" })
     }
 
     fn project_parent_history(history: Vec<Content>, max_events: Option<usize>) -> Vec<Content> {
@@ -583,7 +755,24 @@ impl Tool for AgentTool {
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         adk_telemetry::debug!("Executing agent tool: {}", self.agent.name());
 
-        let mut parent_run_config = ctx.run_config().cloned().unwrap_or_default();
+        let parent_run_config = ctx.run_config().cloned().unwrap_or_default();
+        // A decision the caller gave this call by its ID was given for the request this call
+        // surfaced when its delegate held a call; it is handed to that call below.
+        let call_decision =
+            parent_run_config.tool_confirmation_decisions.get(ctx.function_call_id()).copied().map(
+                |decision| {
+                    let bound = parent_run_config
+                        .tool_confirmation_fingerprints
+                        .get(ctx.function_call_id())
+                        .cloned();
+                    (decision, bound)
+                },
+            );
+        let mut child_run_config = delegated_run_config(parent_run_config);
+        self.agent.configure_run(self.agent.name(), &mut child_run_config);
+        if let Some(targets) = self.agent.transfer_targets_for(self.agent.name()) {
+            child_run_config.transfer_targets = targets;
+        }
         let caller = ctx.acting_context();
         let delegate = self.runtime.principal.clone().unwrap_or_else(|| {
             let mut derived = adk_core::AgentPrincipal::derived(ctx.app_name(), self.agent.name());
@@ -593,9 +782,9 @@ impl Tool for AgentTool {
         // The delegate acts for the caller's subject, with the caller appended to the chain;
         // the subject was admitted when the caller's run started.
         let delegated = caller.delegate(delegate);
-        parent_run_config.acting.principals.insert(self.agent.name().to_string(), delegated.agent);
-        parent_run_config.acting.on_behalf_of = delegated.on_behalf_of;
-        parent_run_config.acting.delegation_chain = delegated.delegation_chain;
+        child_run_config.acting.principals.insert(self.agent.name().to_string(), delegated.agent);
+        child_run_config.acting.on_behalf_of = delegated.on_behalf_of;
+        child_run_config.acting.delegation_chain = delegated.delegation_chain;
         let child_depth = ctx.delegation_depth().saturating_add(1);
         let max_depth = self.runtime.max_delegation_depth.or(ctx.max_delegation_depth());
         if max_depth.is_some_and(|max| child_depth > max) {
@@ -612,26 +801,99 @@ impl Tool for AgentTool {
         let request_text = self.extract_request(&args);
         let parent_state_baseline =
             ctx.session().map(|session| session.state().all()).unwrap_or_default();
-
-        // Create user content for the sub-agent
         let user_content = Content::new("user").with_text(&request_text);
+
+        // A delegation that held a call in an earlier run resumes from where it stopped, so the
+        // held call runs as the same call once it has a decision.
+        let held_key = format!(
+            "{HELD_DELEGATION_STATE_PREFIX}{}",
+            adk_core::json_digest(&json!([ctx.agent_name(), self.name(), ctx.function_call_id()]))
+        );
+        let call_fingerprint = adk_core::tool_call_fingerprint(self.name(), &args);
+        let resumed = ctx
+            .session()
+            .and_then(|session| session.state().get(&held_key))
+            .and_then(|value| serde_json::from_value::<HeldDelegation>(value).ok())
+            .filter(|held| held.call == call_fingerprint)
+            .and_then(|held| {
+                let agent = if held.agent == self.agent.name() {
+                    Some(self.agent.clone())
+                } else {
+                    self.runtime.handoff_agents.get(&held.agent).cloned()
+                };
+                agent.map(|agent| (agent, held))
+            });
+
+        let (start_agent, session, child_user_content, origin_user_content) = match resumed {
+            Some((agent, held)) => {
+                // Whatever this run ends with replaces the record.
+                let mut actions = ctx.actions();
+                actions.state_delta.insert(held_key.clone(), Value::Null);
+                ctx.set_actions(actions);
+                if let Some((decision, bound)) = call_decision
+                    && let Some(held_call_id) = held.request.function_call_id.clone()
+                {
+                    let fingerprint = held.request.fingerprint();
+                    if bound.is_none_or(|bound| bound == fingerprint) {
+                        child_run_config
+                            .tool_confirmation_decisions
+                            .insert(held_call_id.clone(), decision);
+                        child_run_config
+                            .tool_confirmation_fingerprints
+                            .insert(held_call_id, fingerprint);
+                    }
+                }
+                tracing::info!(
+                    agent_tool.name = %self.agent.name(),
+                    agent.name = %held.agent,
+                    tool.name = %held.request.tool_name,
+                    "resuming a delegation that held a call for confirmation"
+                );
+                let session = AgentToolSession::resume(
+                    ctx.session_id().to_string(),
+                    ctx.app_name().to_string(),
+                    ctx.user_id().to_string(),
+                    &held,
+                );
+                // A run that resumes held calls carries no new user input.
+                (agent, session, Content::new("user"), held.user_content)
+            }
+            None => {
+                let (mut state, history) = match (self.runtime.session_snapshot, ctx.session()) {
+                    (AgentToolSessionSnapshot::Parent, Some(session)) => {
+                        (session.state().all(), session.conversation_history())
+                    }
+                    _ => (HashMap::new(), Vec::new()),
+                };
+                state.retain(|key, _| {
+                    !key.starts_with(HELD_DELEGATION_STATE_PREFIX)
+                        && self.runtime.state_keys.as_ref().is_none_or(|keys| keys.contains(key))
+                });
+                let session = AgentToolSession::new(
+                    ctx.session_id().to_string(),
+                    ctx.app_name().to_string(),
+                    ctx.user_id().to_string(),
+                    state,
+                    AgentTool::project_parent_history(history, self.runtime.history_max_events),
+                );
+                (self.agent.clone(), session, user_content.clone(), user_content)
+            }
+        };
 
         // Create an isolated context for the sub-agent
         let sub_ctx = Arc::new(AgentToolInvocationContext::new(
             ctx.clone(),
             self.agent.clone(),
-            user_content.clone(),
+            child_user_content,
             AgentToolChildConfig {
                 forward_artifacts: self.config.forward_artifacts,
                 artifact_prefixes: self.runtime.artifact_prefixes.clone(),
                 forward_memory: self.runtime.forward_memory,
                 forward_shared_state: self.runtime.forward_shared_state,
-                session_snapshot: self.runtime.session_snapshot,
-                run_config: parent_run_config,
+                session: Arc::new(session),
+                run_config: child_run_config,
                 delegation_depth: child_depth,
                 max_delegation_depth: max_depth,
-                history_max_events: self.runtime.history_max_events,
-                state_keys: self.runtime.state_keys.clone(),
                 orchestration_root_invocation_id: ctx
                     .orchestration_root_invocation_id()
                     .to_string(),
@@ -644,12 +906,18 @@ impl Tool for AgentTool {
 
         // Execute the sub-agent
         let execution = async {
-            let mut active_agent = self.agent.clone();
-            let mut active_ctx = sub_ctx.clone();
+            // A delegation held by one of its handoff targets resumes in that target.
+            let mut active_ctx = if Arc::ptr_eq(&start_agent, &self.agent) {
+                sub_ctx.clone()
+            } else {
+                Arc::new(sub_ctx.for_agent(start_agent.clone()))
+            };
+            let mut active_agent = start_agent;
             let mut transfer_depth = 0_u32;
             let mut events = Vec::new();
             let mut state_delta = HashMap::new();
             let mut artifact_delta = HashMap::new();
+            let mut hold = None;
 
             loop {
                 let mut event_stream = active_agent.run(active_ctx.clone()).await?;
@@ -668,7 +936,22 @@ impl Tool for AgentTool {
                                     transfer = Some(target.clone());
                                 }
                             }
-                            state_delta.extend(event.actions.state_delta.clone());
+                            if hold.is_none()
+                                && let Some(request) = &event.actions.tool_confirmation
+                            {
+                                hold = Some((active_agent.name().to_string(), request.clone()));
+                            }
+                            // A delegation's own resume records are not the caller's state.
+                            state_delta.extend(
+                                event
+                                    .actions
+                                    .state_delta
+                                    .iter()
+                                    .filter(|(key, _)| {
+                                        !key.starts_with(HELD_DELEGATION_STATE_PREFIX)
+                                    })
+                                    .map(|(key, value)| (key.clone(), value.clone())),
+                            );
                             artifact_delta.extend(event.actions.artifact_delta.clone());
                             sub_ctx.session.apply_event(&event);
                             if self.runtime.forward_events {
@@ -678,6 +961,8 @@ impl Tool for AgentTool {
                                     // Do not let the parent Runner execute the same handoff again.
                                     forwarded.actions.transfer_to_agent = None;
                                 }
+                                // The caller surfaces the delegate's hold as its own call's.
+                                forwarded.actions.tool_confirmation = None;
                                 ctx.emit_event(forwarded).await;
                             }
                             events.push(event);
@@ -717,17 +1002,25 @@ impl Tool for AgentTool {
                 active_agent = target;
             }
 
-            Ok((events, state_delta, artifact_delta))
+            Ok((events, state_delta, artifact_delta, hold))
         };
 
-        // Apply timeout if configured
+        // A delegation that runs out of time is a failed call, so retries, error hooks, the
+        // circuit breaker and the action ledger all see it as one. A caller that enforces the
+        // limit itself through `timeout_override` reaches it first and reports its own timeout,
+        // which treats a delegation cut mid-flight as one whose effects are unknown.
         let result = if let Some(timeout_duration) = self.config.timeout {
-            match tokio::time::timeout(timeout_duration, execution).await {
+            match tokio::time::timeout(timeout_duration + CALLER_TIMEOUT_GRACE, execution).await {
                 Ok(r) => r,
                 Err(_) => {
-                    return self.failure(format!(
-                        "agent '{}' execution timed out after {timeout_duration:?}",
-                        self.agent.name()
+                    return Err(adk_core::AdkError::new(
+                        adk_core::ErrorComponent::Tool,
+                        adk_core::ErrorCategory::Timeout,
+                        "tool.agent.timeout",
+                        format!(
+                            "agent '{}' execution timed out after {timeout_duration:?}",
+                            self.agent.name()
+                        ),
                     ));
                 }
             }
@@ -736,7 +1029,7 @@ impl Tool for AgentTool {
         };
 
         match result {
-            Ok((events, mut state_delta, artifact_delta)) => {
+            Ok((events, mut state_delta, artifact_delta, hold)) => {
                 if let Some(allowed) = &self.runtime.output_state_keys {
                     if let Some(key) = state_delta.keys().find(|key| !allowed.contains(*key)) {
                         return self.state_policy_failure(format!(
@@ -769,16 +1062,55 @@ impl Tool for AgentTool {
                         self.agent.name()
                     ));
                 }
+                // A held delegation has no output yet, so it does not end the caller's turn.
+                let skip_summarization = self.config.skip_summarization && hold.is_none();
                 // Forward state_delta and artifact_delta to parent context
-                if !state_delta.is_empty()
-                    || !artifact_delta.is_empty()
-                    || self.config.skip_summarization
-                {
+                if !state_delta.is_empty() || !artifact_delta.is_empty() || skip_summarization {
                     let mut parent_actions = ctx.actions();
                     parent_actions.state_delta.extend(state_delta);
                     parent_actions.artifact_delta.extend(artifact_delta);
-                    parent_actions.skip_summarization |= self.config.skip_summarization;
+                    parent_actions.skip_summarization |= skip_summarization;
                     ctx.set_actions(parent_actions);
+                }
+
+                // The delegate held a call for confirmation: this call is held with it, under
+                // the delegate's request, and the delegation is recorded so it resumes.
+                if let Some((agent, request)) = hold {
+                    let surfaced = ToolConfirmationRequest {
+                        function_call_id: Some(ctx.function_call_id().to_string()),
+                        ..request.clone()
+                    };
+                    let reason = format!(
+                        "agent '{agent}' is waiting for a decision on tool '{}'",
+                        request.tool_name
+                    );
+                    let record = HeldDelegation {
+                        call: call_fingerprint,
+                        agent,
+                        request,
+                        state: sub_ctx.session.initial_state.clone(),
+                        history: sub_ctx.session.initial_history.clone(),
+                        user_content: origin_user_content,
+                        events: sub_ctx.session.events(),
+                    };
+                    let record = serde_json::to_value(record).map_err(|error| {
+                        adk_core::AdkError::new(
+                            adk_core::ErrorComponent::Tool,
+                            adk_core::ErrorCategory::Internal,
+                            "tool.agent.hold_not_recorded",
+                            format!("the held delegation could not be recorded: {error}"),
+                        )
+                    })?;
+                    let mut parent_actions = ctx.actions();
+                    parent_actions.state_delta.insert(held_key, record);
+                    parent_actions.tool_confirmation = Some(surfaced);
+                    ctx.set_actions(parent_actions);
+                    tracing::info!(
+                        agent_tool.name = %self.agent.name(),
+                        confirmation.reason = %reason,
+                        "delegated agent held a call for confirmation"
+                    );
+                    return Ok(adk_core::confirmation_pending_response(reason));
                 }
 
                 // Extract and return the response
@@ -792,7 +1124,23 @@ impl Tool for AgentTool {
 
                 Ok(response)
             }
-            Err(e) => self.failure(format!("agent execution failed: {e}")),
+            Err(error) => match self.runtime.failure_mode {
+                AgentToolFailureMode::ReturnErrorObject => Ok(json!({
+                    "error": format!("agent execution failed: {error}"),
+                    "agent": self.agent.name()
+                })),
+                // The delegate's error keeps its category and code, so the caller can tell a
+                // timeout or rate limit from an internal failure.
+                AgentToolFailureMode::Propagate => {
+                    let mut error = error;
+                    error.message = format!(
+                        "agent '{}' execution failed: {}",
+                        self.agent.name(),
+                        error.message
+                    );
+                    Err(error)
+                }
+            },
         }
     }
 }
@@ -828,39 +1176,19 @@ impl AgentToolInvocationContext {
             artifact_prefixes,
             forward_memory,
             forward_shared_state,
-            session_snapshot,
-            mut run_config,
+            session,
+            run_config,
             delegation_depth,
             max_delegation_depth,
-            history_max_events,
-            state_keys,
             orchestration_root_invocation_id,
             orchestration_edge_id,
         } = child_config;
-        let invocation_id = format!("agent-tool-{}", uuid::Uuid::new_v4());
-        let (mut state, mut history) = match (session_snapshot, parent_ctx.session()) {
-            (AgentToolSessionSnapshot::Parent, Some(session)) => {
-                (session.state().all(), session.conversation_history())
-            }
-            _ => (HashMap::new(), Vec::new()),
-        };
-        if let Some(keys) = state_keys {
-            state.retain(|key, _| keys.contains(key));
-        }
-        history = AgentTool::project_parent_history(history, history_max_events);
-        run_config.streaming_mode = adk_core::StreamingMode::None;
         Self {
-            session: Arc::new(AgentToolSession::new(
-                invocation_id.clone(),
-                parent_ctx.app_name().to_string(),
-                parent_ctx.user_id().to_string(),
-                state,
-                history,
-            )),
+            session,
             parent_ctx,
             agent,
             user_content,
-            invocation_id,
+            invocation_id: format!("agent-tool-{}", uuid::Uuid::new_v4()),
             ended: Arc::new(AtomicBool::new(false)),
             forward_artifacts,
             artifact_prefixes,
@@ -876,7 +1204,12 @@ impl AgentToolInvocationContext {
 
     fn for_agent(&self, agent: Arc<dyn Agent>) -> Self {
         let mut run_config = self.run_config.clone();
+        run_config.transfer_targets = Vec::new();
+        run_config.parent_agent = None;
         agent.configure_run(agent.name(), &mut run_config);
+        if let Some(targets) = agent.transfer_targets_for(agent.name()) {
+            run_config.transfer_targets = targets;
+        }
         Self {
             parent_ctx: self.parent_ctx.clone(),
             agent,
@@ -915,9 +1248,10 @@ impl ReadonlyContext for AgentToolInvocationContext {
         self.parent_ctx.app_name()
     }
 
+    // The delegate runs inside the caller's session: its history and state are its own, but
+    // its approvals, policy requests and audit records belong to the caller's session.
     fn session_id(&self) -> &str {
-        // Use a unique session ID for the sub-agent
-        &self.invocation_id
+        self.session.id()
     }
 
     fn branch(&self) -> &str {
@@ -1067,6 +1401,12 @@ struct AgentToolSession {
     user_id: String,
     state: std::sync::RwLock<HashMap<String, Value>>,
     history: std::sync::RwLock<Vec<Content>>,
+    /// The state and history the delegation started with, kept so a held delegation can be
+    /// rebuilt.
+    initial_state: HashMap<String, Value>,
+    initial_history: Vec<Content>,
+    /// The delegated agents' complete events, which their held calls are read from.
+    events: std::sync::RwLock<Vec<Event>>,
 }
 
 impl AgentToolSession {
@@ -1081,9 +1421,42 @@ impl AgentToolSession {
             id,
             app_name,
             user_id,
-            state: std::sync::RwLock::new(state),
-            history: std::sync::RwLock::new(history),
+            state: std::sync::RwLock::new(state.clone()),
+            history: std::sync::RwLock::new(history.clone()),
+            initial_state: state,
+            initial_history: history,
+            events: std::sync::RwLock::new(Vec::new()),
         }
+    }
+
+    /// Rebuilds the session of a delegation that held a call.
+    ///
+    /// The history is the one the delegate's model saw, ending on an empty user turn, as a
+    /// session does when a run resumes held calls.
+    fn resume(id: String, app_name: String, user_id: String, held: &HeldDelegation) -> Self {
+        let mut history = held.history.clone();
+        // The delegate was given the request as its current user turn.
+        match history.iter().rposition(|content| content.role == "user") {
+            Some(index) => history[index] = held.user_content.clone(),
+            None => history.push(held.user_content.clone()),
+        }
+        let session = Self {
+            id,
+            app_name,
+            user_id,
+            state: std::sync::RwLock::new(held.state.clone()),
+            history: std::sync::RwLock::new(history),
+            initial_state: held.state.clone(),
+            initial_history: held.history.clone(),
+            events: std::sync::RwLock::new(Vec::new()),
+        };
+        for event in &held.events {
+            session.apply_event(event);
+        }
+        if let Ok(mut history) = session.history.write() {
+            history.push(Content::new("user"));
+        }
+        session
     }
 
     fn apply_event(&self, event: &Event) {
@@ -1101,6 +1474,19 @@ impl AgentToolSession {
         {
             history.push(content.clone());
         }
+        if !event.llm_response.partial
+            && let Ok(mut events) = self.events.write()
+        {
+            // Provider debug copies are not needed to resume, and would be stored again.
+            let mut kept = event.clone();
+            kept.provider_metadata.clear();
+            kept.llm_request = None;
+            events.push(kept);
+        }
+    }
+
+    fn events(&self) -> Vec<Event> {
+        self.events.read().map(|events| events.clone()).unwrap_or_default()
     }
 }
 
@@ -1123,6 +1509,13 @@ impl Session for AgentToolSession {
 
     fn conversation_history(&self) -> Vec<Content> {
         self.history.read().map(|history| history.clone()).unwrap_or_default()
+    }
+
+    fn held_tool_calls(&self, agent_name: &str, branch: &str) -> Vec<adk_core::HeldToolCall> {
+        self.events
+            .read()
+            .map(|events| adk_core::held_tool_calls(&events, agent_name, branch))
+            .unwrap_or_default()
     }
 }
 
@@ -1940,14 +2333,307 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn timeout_obeys_failure_mode() {
-        let tool = AgentTool::new(Arc::new(PendingAgent))
-            .timeout(Duration::from_millis(1))
-            .propagate_failures(true);
-        let error = tool
-            .execute(Arc::new(TestToolContext::new()), json!({"request": "wait"}))
+    async fn a_timeout_is_a_timeout_error_in_every_failure_mode() {
+        for propagate in [false, true] {
+            let tool = AgentTool::new(Arc::new(PendingAgent))
+                .timeout(Duration::from_millis(1))
+                .propagate_failures(propagate);
+            let error = tool
+                .execute(Arc::new(TestToolContext::new()), json!({"request": "wait"}))
+                .await
+                .unwrap_err();
+            assert_eq!(error.category, adk_core::ErrorCategory::Timeout);
+            assert_eq!(error.code, "tool.agent.timeout");
+            assert!(error.message.contains("timed out after 1ms"), "{}", error.message);
+        }
+    }
+
+    struct RateLimitedAgent;
+
+    #[async_trait]
+    impl Agent for RateLimitedAgent {
+        fn name(&self) -> &str {
+            "rate_limited"
+        }
+        fn description(&self) -> &str {
+            "fails with a rate limit"
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<adk_core::EventStream> {
+            Err(adk_core::AdkError::new(
+                adk_core::ErrorComponent::Model,
+                adk_core::ErrorCategory::RateLimited,
+                "model.test.rate_limited",
+                "slow down",
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn propagated_failures_keep_the_delegates_category_and_code() {
+        let error = AgentTool::new(Arc::new(RateLimitedAgent))
+            .propagate_failures(true)
+            .execute(Arc::new(TestToolContext::new()), json!({"request": "go"}))
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("timed out"));
+        assert_eq!(error.category, adk_core::ErrorCategory::RateLimited);
+        assert_eq!(error.code, "model.test.rate_limited");
+        assert_eq!(error.message, "agent 'rate_limited' execution failed: slow down");
+    }
+
+    fn function_response_event(responses: &[(&str, Value)], skip: bool) -> Event {
+        let mut event = Event::new("inv");
+        event.actions.skip_summarization = skip;
+        event.llm_response.content = Some(Content {
+            role: "function".to_string(),
+            parts: responses
+                .iter()
+                .map(|(name, response)| Part::FunctionResponse {
+                    function_response: adk_core::FunctionResponseData::new(*name, response.clone()),
+                    id: Some(format!("{name}-id")),
+                    annotations: None,
+                })
+                .collect(),
+        });
+        event
+    }
+
+    #[test]
+    fn a_delegate_that_ends_on_a_tool_result_hands_back_its_payload() {
+        let single = function_response_event(&[("compute", json!({"answer": 42}))], true);
+        assert_eq!(AgentTool::extract_response(&[single]), json!({"answer": 42}));
+
+        let several = function_response_event(
+            &[("first", json!({"a": 1})), ("second", json!({"b": 2}))],
+            true,
+        );
+        assert_eq!(
+            AgentTool::extract_response(&[several]),
+            json!({"responses": [
+                {"name": "first", "response": {"a": 1}},
+                {"name": "second", "response": {"b": 2}},
+            ]})
+        );
+
+        // A delegate ending on an escalating tool result is not a final response; its
+        // result is still the delegation's output.
+        let escalated = function_response_event(&[("stop", json!({"done": true}))], false);
+        assert_eq!(AgentTool::extract_response(&[escalated]), json!({"done": true}));
+
+        let mut empty_text = Event::new("inv");
+        empty_text.llm_response.content = Some(Content::new("model").with_text(""));
+        assert_eq!(AgentTool::extract_response(&[empty_text]), json!({"response": ""}));
+        assert_eq!(AgentTool::extract_response(&[]), json!({"response": "No response from agent"}));
+    }
+
+    struct RunConfigProbe {
+        seen: Arc<Mutex<Option<(RunConfig, String)>>>,
+    }
+
+    #[async_trait]
+    impl Agent for RunConfigProbe {
+        fn name(&self) -> &str {
+            "probe"
+        }
+        fn description(&self) -> &str {
+            "records the delegated run config"
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<adk_core::EventStream> {
+            *self.seen.lock().unwrap() =
+                Some((ctx.run_config().clone(), ctx.session_id().to_string()));
+            let mut event = Event::new(ctx.invocation_id());
+            event.llm_response.content = Some(Content::new("model").with_text("done"));
+            Ok(Box::pin(futures::stream::iter([Ok(event)])))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_delegate_gets_the_shared_run_config_without_its_callers_agent_scoped_fields() {
+        let tracker = Arc::new(adk_core::BudgetTracker::new(adk_core::RunBudget::default()));
+        let mut parent = TestToolContext::new();
+        parent.run_config = RunConfig {
+            transfer_targets: vec!["coordinator".to_string(), "peer".to_string()],
+            parent_agent: Some("coordinator".to_string()),
+            cached_content: Some("cachedContents/coordinator".to_string()),
+            runtime_toolsets: vec![adk_core::RuntimeToolset::new(Arc::new(
+                crate::BasicToolset::new("client", Vec::new()),
+            ))],
+            tool_confirmation_decisions: HashMap::from([(
+                "call-1".to_string(),
+                adk_core::ToolConfirmationDecision::Approve,
+            )]),
+            tool_confirmation_fingerprints: HashMap::from([(
+                "call-1".to_string(),
+                "fingerprint".to_string(),
+            )]),
+            tool_approvals: HashMap::from([(
+                "fingerprint".to_string(),
+                adk_core::ToolApproval::approve(),
+            )]),
+            budget_tracker: Some(tracker.clone()),
+            durable_run_id: Some("run-1".to_string()),
+            max_transfer_depth: Some(3),
+            record_payloads: true,
+            ..RunConfig::default()
+        };
+        let seen = Arc::new(Mutex::new(None));
+        AgentTool::new(Arc::new(RunConfigProbe { seen: seen.clone() }))
+            .execute(Arc::new(parent), json!({"request": "inspect"}))
+            .await
+            .unwrap();
+
+        let (config, session_id) = seen.lock().unwrap().take().expect("the delegate ran");
+        assert!(config.transfer_targets.is_empty());
+        assert_eq!(config.parent_agent, None);
+        assert_eq!(config.cached_content, None);
+        assert!(config.runtime_toolsets.is_empty());
+        assert!(config.tool_confirmation_decisions.is_empty());
+        assert!(config.tool_confirmation_fingerprints.is_empty());
+        assert_eq!(config.streaming_mode, StreamingMode::None);
+        assert!(config.tool_approvals.contains_key("fingerprint"));
+        assert!(config.budget_tracker.is_some_and(|shared| Arc::ptr_eq(&shared, &tracker)));
+        assert_eq!(config.durable_run_id.as_deref(), Some("run-1"));
+        assert_eq!(config.max_transfer_depth, Some(3));
+        assert!(config.record_payloads);
+        // Approvals, policy requests and audit records of the delegate belong to the
+        // caller's session.
+        assert_eq!(session_id, "parent-session");
+    }
+
+    /// What a resumed delegate saw: its held calls, its user turn, and its run config.
+    type Resumed = (Vec<adk_core::HeldToolCall>, Content, RunConfig);
+
+    /// Holds a call on its first run; on the run that resumes, reports what it resumed.
+    struct HoldingAgent {
+        resumed: Arc<Mutex<Option<Resumed>>>,
+    }
+
+    #[async_trait]
+    impl Agent for HoldingAgent {
+        fn name(&self) -> &str {
+            "holder"
+        }
+        fn description(&self) -> &str {
+            "holds a call for confirmation"
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<adk_core::EventStream> {
+            let held = ctx.session().held_tool_calls("holder", ctx.branch());
+            if !held.is_empty() {
+                *self.resumed.lock().unwrap() =
+                    Some((held, ctx.user_content().clone(), ctx.run_config().clone()));
+                let mut done = Event::new(ctx.invocation_id());
+                done.author = "holder".to_string();
+                done.llm_response.content = Some(Content::new("model").with_text("deleted"));
+                return Ok(Box::pin(futures::stream::iter([Ok(done)])));
+            }
+            let args = json!({"path": "a.txt"});
+            let mut issued = Event::new(ctx.invocation_id());
+            issued.author = "holder".to_string();
+            issued.llm_response.content = Some(Content {
+                role: "model".to_string(),
+                parts: vec![Part::FunctionCall {
+                    name: "delete_file".to_string(),
+                    args: args.clone(),
+                    id: Some("inner-1".to_string()),
+                    thought_signature: None,
+                }],
+            });
+            let mut pending = Event::new(ctx.invocation_id());
+            pending.author = "holder".to_string();
+            pending.llm_response.content = Some(Content {
+                role: "function".to_string(),
+                parts: vec![Part::FunctionResponse {
+                    function_response: adk_core::FunctionResponseData::new(
+                        "delete_file",
+                        adk_core::confirmation_pending_response("held"),
+                    ),
+                    id: Some("inner-1".to_string()),
+                    annotations: None,
+                }],
+            });
+            let mut hold = Event::new(ctx.invocation_id());
+            hold.author = "holder".to_string();
+            hold.llm_response.content =
+                Some(Content::new("model").with_text("confirmation required"));
+            hold.actions.tool_confirmation = Some(
+                ToolConfirmationRequest::new("delete_file", args)
+                    .with_function_call_id("inner-1")
+                    .with_acting_context(ctx.acting_context()),
+            );
+            Ok(Box::pin(futures::stream::iter([Ok(issued), Ok(pending), Ok(hold)])))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_delegates_hold_holds_the_call_and_resumes_where_it_stopped() {
+        let resumed = Arc::new(Mutex::new(None));
+        let tool = AgentTool::new(Arc::new(HoldingAgent { resumed: resumed.clone() }))
+            .forward_events(true)
+            .skip_summarization(true);
+        let args = json!({"request": "delete a.txt"});
+
+        let first = Arc::new(TestToolContext::new());
+        let response = tool.execute(first.clone(), args.clone()).await.unwrap();
+        assert!(adk_core::is_confirmation_pending(&response), "{response}");
+        let actions = first.actions();
+        assert!(!actions.skip_summarization, "a held delegation does not end the turn");
+        let surfaced = actions.tool_confirmation.expect("the call is held with the delegate");
+        assert_eq!(surfaced.tool_name, "delete_file");
+        assert_eq!(surfaced.args, json!({"path": "a.txt"}));
+        assert_eq!(surfaced.function_call_id.as_deref(), Some("call-1"));
+        assert_eq!(
+            surfaced.acting.as_ref().map(|acting| acting.agent.id.as_str()),
+            Some("urn:adk:agent:parent-app/holder")
+        );
+        let (key, record) = actions
+            .state_delta
+            .iter()
+            .find(|(key, _)| key.starts_with(HELD_DELEGATION_STATE_PREFIX))
+            .expect("the held delegation is recorded");
+        assert!(
+            first
+                .emitted_events
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|event| event.actions.tool_confirmation.is_none()),
+            "the delegate's own request is not forwarded"
+        );
+
+        // The next run carries the record in session state and a decision for the call.
+        let mut second = TestToolContext::new();
+        second.session.state.write().unwrap().insert(key.clone(), record.clone());
+        second.run_config.tool_confirmation_decisions =
+            HashMap::from([("call-1".to_string(), adk_core::ToolConfirmationDecision::Approve)]);
+        second.run_config.tool_confirmation_fingerprints =
+            HashMap::from([("call-1".to_string(), surfaced.fingerprint())]);
+        let second = Arc::new(second);
+        let response = tool.execute(second.clone(), args).await.unwrap();
+        assert_eq!(response, json!({"response": "deleted"}));
+        assert_eq!(second.actions().state_delta.get(key), Some(&Value::Null));
+        assert!(second.actions().skip_summarization);
+
+        let (held, user_content, config) = resumed.lock().unwrap().take().expect("it resumed");
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].id.as_deref(), Some("inner-1"));
+        assert_eq!(held[0].name, "delete_file");
+        assert!(user_content.parts.is_empty(), "a resuming run carries no new input");
+        // The caller's decision for its own call reaches the call it was surfaced for.
+        assert_eq!(
+            config.tool_confirmation_decisions.get("inner-1"),
+            Some(&adk_core::ToolConfirmationDecision::Approve)
+        );
+        assert_eq!(
+            config.tool_confirmation_fingerprints.get("inner-1"),
+            Some(&surfaced.fingerprint())
+        );
     }
 }

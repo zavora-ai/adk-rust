@@ -264,6 +264,33 @@ that has a decision. The decision does not depend on the model issuing the call 
 which already re-dispatches the call through the governed path. Realtime agents answer a held
 call with the reason inside the live session and have no later run to resume it in.
 
+### Calls Held Inside an Agent Tool
+
+An agent behind an `AgentTool` runs in its caller's approval scope: its policy requests,
+`ApprovalStore` entries, approval-service submissions and audit records name the caller's
+session. A call it holds is held by the caller too:
+
+1. The delegate's run ends on its hold, as a top-level run does.
+2. The `AgentTool` call is answered with a confirmation-pending response, and the caller's run
+   ends with a `ToolConfirmationRequest` for the delegate's call: its tool name, arguments and
+   acting context, under the caller's call ID.
+3. A decision for that request — by fingerprint, in the `ApprovalStore`, or by the call ID it
+   carries — resumes the caller's `AgentTool` call at the start of the next run.
+4. The `AgentTool` rebuilds the delegate's session, stored under the call in the caller's
+   session state, and the delegate resumes its own held call with the decision. The
+   delegate's model is not asked to issue the call again.
+
+| Approver records | Reaches the delegate's call as |
+|------------------|--------------------------------|
+| A fingerprint approval or an `ApprovalStore` decision for the request | The same decision, since the fingerprint is the delegate's call |
+| A call-ID decision for the request's `function_call_id` | A call-ID decision for the delegate's own call ID, bound to the request's fingerprint |
+
+The same holds through any depth of nested agent tools: each level surfaces the request under
+its own caller's call ID. One request is surfaced per `AgentTool` call; a delegate that holds
+several calls in one turn surfaces the next one after the first is decided. The delegate's own
+confirmation events are not forwarded by `forward_events(true)`, so each held call is surfaced
+once.
+
 ### Decisions Authorize One Exact Call
 
 A decision applies to one exact call: the same tool with the same canonical

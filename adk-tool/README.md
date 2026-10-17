@@ -13,7 +13,7 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 - **FunctionTool** - Create tools from async Rust functions
 - **StatefulTool\<S\>** - Wrap shared state (`Arc<S>`) with a tool handler
 - **SimpleToolContext** - Lightweight `ToolContext` for non-agent callers (testing, MCP servers)
-- **AgentTool** - Use agents as callable tools for composition (runs sub-agents in non-streaming mode for reliable response capture)
+- **AgentTool** - Use agents as callable tools for composition (runs sub-agents in non-streaming mode for reliable response capture; the delegate shares the caller's limits, governance and approval scope but not its handoff topology, context cache or invocation toolsets, and a call it holds for confirmation is held and resumed by the caller)
 - **GoogleSearchTool** - Web search via Gemini's grounding
 - **Provider-native wrappers** - Typed declarations for Gemini, Anthropic, and OpenAI built-in tools, each declaring a `ToolEffect` (search and fetch are `ReadOnly`) so a run's `ToolPolicy` can attach or withhold them per request
 - **McpToolset** - Model Context Protocol integration (local & remote servers)
