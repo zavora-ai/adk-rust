@@ -685,13 +685,15 @@ mod tests {
 
     #[tokio::test]
     async fn an_expired_reservation_stops_holding_budget() {
+        let clock = crate::ManualClock::new(Utc.with_ymd_and_hms(2026, 10, 15, 12, 0, 0).unwrap());
         let ledger = InMemorySpendLedger::new(daily_cap("acme", 100))
-            .with_reservation_ttl(Duration::from_millis(20));
+            .with_reservation_ttl(Duration::from_secs(60))
+            .with_clock(Arc::new(clock.clone()));
         let key = SpendKey::org("acme");
         let abandoned = ledger.reserve(&key, 100).await.unwrap();
         assert!(ledger.reserve(&key, 1).await.is_err());
 
-        tokio::time::sleep(Duration::from_millis(60)).await;
+        clock.advance(Duration::from_secs(61));
         let next = ledger.reserve(&key, 100).await.expect("the expired hold is released");
         ledger.release(next).await.unwrap();
 
