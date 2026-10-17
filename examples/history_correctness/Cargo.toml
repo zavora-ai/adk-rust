@@ -1,0 +1,25 @@
+[package]
+name = "history-correctness"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Workflow sub-agents, history windows, compaction, temp state and streamed turns produce provider-valid history"
+
+[workspace]
+
+[dependencies]
+adk-agent = { path = "../../adk-agent" }
+adk-core = { path = "../../adk-core" }
+adk-model = { path = "../../adk-model", default-features = false, features = ["openai", "anthropic", "gemini"] }
+adk-runner = { path = "../../adk-runner", features = ["context-compaction"] }
+adk-session = { path = "../../adk-session", features = ["sqlite"] }
+adk-tool = { path = "../../adk-tool" }
+anyhow = "1.0"
+async-trait = "0.1"
+axum = "0.8"
+dotenvy = "0.15"
+futures = "0.3"
+serde_json = "1.0"
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
