@@ -1275,6 +1275,83 @@ async fn a_held_call_parks_the_run_and_a_wake_resumes_it() {
     );
 }
 
+/// Summarizes any window into one line, ending where the window ends.
+struct OneLineSummarizer;
+
+#[async_trait]
+impl adk_core::BaseEventsSummarizer for OneLineSummarizer {
+    async fn summarize_events(
+        &self,
+        events: &[adk_core::Event],
+    ) -> Result<Option<adk_core::Event>> {
+        let (Some(first), Some(last)) = (events.first(), events.last()) else {
+            return Ok(None);
+        };
+        let mut event = adk_core::Event::new("compaction");
+        event.author = "system".to_string();
+        event.actions.compaction = Some(adk_core::EventCompaction {
+            start_timestamp: first.timestamp,
+            end_timestamp: last.timestamp,
+            compacted_content: Content::new("model").with_text("summary"),
+        });
+        Ok(Some(event))
+    }
+}
+
+/// Compaction after every run never covers a held call, so the run still parks as
+/// `Waiting` and the approval resumes the call once.
+#[tokio::test]
+async fn a_held_call_parks_the_run_when_compaction_runs_after_it() {
+    use adk_core::{ApprovalScope, ApprovalStore, InMemoryApprovalStore, ToolApproval};
+
+    let sessions = Arc::new(InMemorySessionService::new());
+    let approvals = Arc::new(InMemoryApprovalStore::new());
+    let executions = Arc::new(AtomicUsize::new(0));
+    let agent = LlmAgentBuilder::new("ops")
+        .model(Arc::new(TransferModel) as Arc<dyn Llm>)
+        .tool(Arc::new(TransferTool { executions: Arc::clone(&executions) }))
+        .require_tool_confirmation("transfer")
+        .build()
+        .unwrap();
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    let runner = Arc::new(
+        Runner::builder()
+            .app_name("ops")
+            .agent(Arc::new(agent))
+            .session_service(Arc::clone(&sessions) as Arc<dyn SessionService>)
+            .approval_store(Arc::clone(&approvals) as Arc<dyn ApprovalStore>)
+            .durable_run_store(Arc::clone(&runs))
+            .compaction_config(adk_core::EventsCompactionConfig {
+                compaction_interval: 1,
+                overlap_size: 0,
+                summarizer: Arc::new(OneLineSummarizer),
+            })
+            .build()
+            .unwrap(),
+    );
+    let run = NewRun::new("default", "ops", "alice", "ops", json!("send 50 USD"))
+        .with_session_id("pay-1");
+    let Enqueued::Created(run) = runs.enqueue(run).await.unwrap() else {
+        panic!("a new run");
+    };
+    let worker = DurableWorker::new(Arc::clone(&runs))
+        .with_agent("ops", runner)
+        .with_config(worker_config("w").with_approval_timeout(Some(Duration::from_secs(600))));
+
+    let parked = worker.run_next().await.unwrap().expect("the queued run");
+    assert_eq!(parked.state, RunState::Waiting, "{parked:?}");
+    let scope = ApprovalScope::new("ops", "alice", "pay-1");
+    let pending = approvals.pending(&scope).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+
+    approvals.decide(&scope, &pending[0].fingerprint, ToolApproval::approve()).await.unwrap();
+    runs.wake(&run.run_id).await.unwrap();
+    let finished = worker.run_next().await.unwrap().expect("the woken run");
+    assert_eq!(finished.state, RunState::Completed, "{finished:?}");
+    assert_eq!(executions.load(Ordering::SeqCst), 1, "the approved call executes once");
+}
+
 /// `POST /runs/{id}/wake` reaches the store.
 #[tokio::test]
 async fn the_wake_route_wakes_a_run() {

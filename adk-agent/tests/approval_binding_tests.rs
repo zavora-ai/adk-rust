@@ -249,7 +249,7 @@ fn amount() -> Value {
 }
 
 /// `Sequential[b, a]`, both with their own `transfer` held for confirmation. `a` transfers
-/// in run 1; `b` issues the same call in run 2.
+/// in run 1; `b` issues the same call the next time the workflow starts over.
 async fn pair(config: RunConfig) -> (Harness, Arc<Transfer>, Arc<Transfer>) {
     let a_tool = Transfer::new("static");
     let b_tool = Transfer::new("static");
@@ -284,11 +284,14 @@ async fn an_approval_for_one_agents_held_call_does_not_authorize_another_agents_
     let first = harness.run("pay", None).await;
     let [request] = held(&first).try_into().expect("a holds one call");
     assert_eq!(agent_id(&request), "urn:adk:agent:governed/a");
+    // Without a decision the paused turn finishes at a, and a's call stays held.
+    harness.run("later", None).await;
     store.decide(&scope(), &request.fingerprint(), ToolApproval::approve()).await.unwrap();
 
-    let second = harness.run("continue", None).await;
+    // The next turn starts over, so b issues the same call while a's approval waits.
+    let third = harness.run("continue", None).await;
     assert_eq!(b_tool.executions(), 0, "a's approval does not authorize b's call");
-    let b_held: Vec<String> = held(&second).iter().map(agent_id).collect();
+    let b_held: Vec<String> = held(&third).iter().map(agent_id).collect();
     assert_eq!(b_held, ["urn:adk:agent:governed/b"], "b's call is held for its own approval");
     let pending: Vec<String> = store
         .pending(&scope())
@@ -298,9 +301,10 @@ async fn an_approval_for_one_agents_held_call_does_not_authorize_another_agents_
         .map(|entry| agent_id(&entry.request))
         .collect();
     assert_eq!(pending, ["urn:adk:agent:governed/b"]);
-    assert_eq!(a_tool.executions(), 1, "a's held call resumes with its approval");
+    assert_eq!(a_tool.executions(), 0, "the workflow stops at b's hold");
 
-    harness.run("anything else?", None).await;
+    // The paused turn resumes at b and moves on to a, whose call runs with its approval.
+    harness.run("", None).await;
     assert_eq!((a_tool.executions(), b_tool.executions()), (1, 0));
 }
 

@@ -449,6 +449,10 @@ pub fn is_token_limit_error(err: &AdkError) -> bool {
 /// `max_retries` times. If compaction cannot reduce the context below the
 /// budget after all retries, a [`ContextOverflowError`] is returned.
 ///
+/// The strategy is given only the events before the earliest call still held for
+/// confirmation ([`adk_core::held_call_compaction_limit`]); that call and every later
+/// event are kept as they are, so an approval given later still resumes the call.
+///
 /// # Arguments
 ///
 /// * `config` — the compaction configuration (strategy, budget, max_retries)
@@ -486,7 +490,12 @@ pub async fn apply_compaction_with_retry(
             "applying context compaction"
         );
 
+        // The strategy sees only the events before the earliest held call; that call and
+        // everything after it stay, so its approval can still resume it.
+        let held_from = adk_core::held_call_compaction_limit(&current_events, current_events.len());
+        let kept = current_events.split_off(held_from);
         current_events = config.strategy.compact(current_events, config.context_budget).await?;
+        current_events.extend(kept);
 
         // Estimate token count after compaction using a simple heuristic:
         // ~4 chars per token (same as adk-core's estimate_tokens).
@@ -554,6 +563,69 @@ mod tests {
                 event
             })
             .collect()
+    }
+
+    /// `before` user messages, then a `transfer` call `ops` holds for confirmation (call,
+    /// pending response, request), then `after` user messages, one millisecond apart.
+    fn with_held_call(before: usize, after: usize) -> Vec<Event> {
+        let mut events = make_events(before);
+        let mut call = Event::new("inv-held");
+        call.author = "ops".to_string();
+        call.set_content(Content {
+            role: "model".to_string(),
+            parts: vec![adk_core::Part::FunctionCall {
+                name: "transfer".to_string(),
+                args: serde_json::json!({ "amount": 10 }),
+                id: Some("c1".to_string()),
+                thought_signature: None,
+            }],
+        });
+        let mut pending = Event::new("inv-held");
+        pending.author = "ops".to_string();
+        pending.set_content(Content {
+            role: "function".to_string(),
+            parts: vec![adk_core::Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new(
+                    "transfer",
+                    adk_core::confirmation_pending_response("held"),
+                ),
+                id: Some("c1".to_string()),
+                annotations: None,
+            }],
+        });
+        let mut hold = Event::new("inv-held");
+        hold.author = "ops".to_string();
+        hold.actions.tool_confirmation = Some(adk_core::ToolConfirmationRequest {
+            tool_name: "transfer".to_string(),
+            function_call_id: Some("c1".to_string()),
+            args: serde_json::json!({ "amount": 10 }),
+            acting: None,
+            origin: None,
+        });
+        events.extend([call, pending, hold]);
+        events.extend(make_events(after));
+        let start = chrono::Utc::now();
+        for (index, event) in events.iter_mut().enumerate() {
+            event.timestamp = start + chrono::Duration::milliseconds(index as i64);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn context_compaction_keeps_a_held_call_and_everything_after_it() {
+        let events = with_held_call(8, 3);
+        let config = CompactionConfig::new(
+            Box::new(TruncationCompaction { preserve_recent: 1 }),
+            usize::MAX,
+        );
+        let compacted = apply_compaction_with_retry(&config, events.clone()).await.unwrap();
+
+        let ids =
+            |events: &[Event]| events.iter().map(|event| event.id.clone()).collect::<Vec<_>>();
+        // Truncation kept the first and last of the 8 events before the held call.
+        assert_eq!(ids(&compacted[..2]), ids(&[events[0].clone(), events[7].clone()]));
+        assert_eq!(ids(&compacted[2..]), ids(&events[8..]), "the held call and later events stay");
+        assert_eq!(adk_core::held_tool_calls(&compacted, "ops", "").len(), 1);
     }
 
     struct PricedSummaryModel;

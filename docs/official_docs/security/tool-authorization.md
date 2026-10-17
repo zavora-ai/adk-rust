@@ -251,8 +251,10 @@ that has a decision. The decision does not depend on the model issuing the call 
   session like any other tool result.
 - **Model context.** The resume run's empty user turn and the "Tool confirmation required"
   notice are not sent to the model; they carry nothing the model said or needs.
-- **Run budget.** The resumed calls are reserved as one batch. A batch that does not fit ends
-  the run with `ResourceExhausted` and leaves the calls held.
+- **Run budget.** A held call has not run, so its tool-call reservation is returned when it is
+  held. The resumed calls are reserved as one batch, and a batch that does not fit ends the run
+  with `ResourceExhausted` and leaves the calls held. A call held and then resumed counts once,
+  also against a `BudgetTracker` shared across runs.
 - **Still held.** A held call stays held across runs until a real response answers it, or the
   same call, re-issued, is executed or refused. A newer hold of the same call replaces the
   older one, so one decision resumes one call.
@@ -260,10 +262,23 @@ that has a decision. The decision does not depend on the model issuing the call 
   the call takes the normal path as a new call: a consumed `ApprovalStore` decision does not
   authorize it, and a call-ID decision names a different ID. A fingerprint approval in
   `RunConfig::tool_approvals` still covers it, as noted above.
-- **Scope.** Held calls before a compaction, on another branch, or of another agent are not
-  resumed. A `Session` that keeps no event log returns no held calls.
-- **Workflows.** A sub-agent of a `SequentialAgent`, `ParallelAgent`, or `LoopAgent` authors
-  its own tool results, so a resumed call's result releases its hold and the call never runs
+- **Scope.** Held calls on another branch or of another agent are not resumed. A `Session`
+  that keeps no event log returns no held calls.
+- **Compaction.** Session, intra-invocation and context compaction all stop before the
+  earliest call still held (`adk_core::held_call_compaction_limit`), so a held call stays
+  visible, its approval resumes it, and a durable run holding it parks as `Waiting`. See
+  [Context Compaction](../sessions/context-compaction.md#calls-held-for-confirmation).
+- **Calls without IDs.** A provider that sends tool calls without IDs — Ollama, or tool-call
+  markup in text — gets a generated ID for each call (`adk-call-…`,
+  `adk_core::GENERATED_CALL_ID_PREFIX`) before the model event is saved. The call, its
+  responses and its confirmation request share that ID, so two calls to one tool in one turn
+  keep their own arguments and a decision for one resumes exactly that one. `LlmAgent` removes
+  generated IDs from the contents it sends to the model.
+- **Workflows.** A workflow agent stops when a sub-agent holds a call, and the next run
+  resumes at that sub-agent: sub-agents that finished in that turn, completed loop
+  iterations, and routing decisions are not repeated (see
+  [Workflow Agents](../agents/workflow-agents.md#held-tool-calls)). Each sub-agent authors its
+  own tool results, so a resumed call's result releases its hold and the call never runs
   twice, whatever the decision source.
 - **A call that ends the turn.** A resumed call that sets `escalate` or `skip_summarization`
   ends the turn before any model call. When the run also brought a user message, it fails with

@@ -474,6 +474,36 @@ mod ollama {
     }
 
     #[tokio::test]
+    async fn streamed_tool_calls_are_partial_and_only_done_ends_the_turn() {
+        let calls = json!({
+            "model": "qwen3.5",
+            "created_at": "2026-10-16T00:00:00Z",
+            "message": {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "transfer", "arguments": {"amount": 10}}},
+                {"function": {"name": "transfer", "arguments": {"amount": 20}}},
+            ]},
+            "done": false,
+        });
+        let model = client(vec![format!("{calls}\n").into_bytes(), line("", true)]).await;
+        let (responses, error) = collect(&model, request("qwen3.5"), true).await;
+        assert!(error.is_none(), "{error:?}");
+
+        let terminal: Vec<_> = responses.iter().filter(|response| !response.partial).collect();
+        assert_eq!(terminal.len(), 1, "one terminal response per turn: {responses:?}");
+        assert!(terminal[0].turn_complete);
+        let streamed_calls: Vec<_> = responses
+            .iter()
+            .filter(|response| response.partial)
+            .flat_map(|response| response.content.iter().flat_map(|content| content.parts.iter()))
+            .filter_map(|part| match part {
+                Part::FunctionCall { args, .. } => Some(args["amount"].clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(streamed_calls, vec![json!(10), json!(20)]);
+    }
+
+    #[tokio::test]
     async fn utf8_split_across_network_writes_is_exact() {
         let answer = "Café ☕ in 東京 🙂.";
         let mut writes = split_inside(line(answer, false), "🙂");
