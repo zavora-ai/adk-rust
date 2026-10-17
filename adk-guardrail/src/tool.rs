@@ -194,10 +194,11 @@ impl ToolGuardrailSet {
             match guardrail.validate_call(tool_name, &current).await {
                 ToolGuardrailResult::Allow => {}
                 ToolGuardrailResult::Deny { reason, severity } => {
+                    // A reason can quote the arguments, such as a refused path, so it is
+                    // returned to the caller but not logged.
                     tracing::warn!(
                         guardrail = guardrail.name(),
                         tool = tool_name,
-                        reason = %reason,
                         ?severity,
                         "tool call denied by guardrail"
                     );
@@ -207,11 +208,10 @@ impl ToolGuardrailSet {
                         severity,
                     };
                 }
-                ToolGuardrailResult::ReviseArgs { args: revised, reason } => {
+                ToolGuardrailResult::ReviseArgs { args: revised, reason: _ } => {
                     tracing::debug!(
                         guardrail = guardrail.name(),
                         tool = tool_name,
-                        reason = %reason,
                         "tool call arguments revised by guardrail"
                     );
                     current = revised;

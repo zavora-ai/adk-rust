@@ -87,6 +87,7 @@ impl ConversationsClient {
 
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
+            let error_body = adk_core::upstream_excerpt(&error_body);
             return Err(AdkError::new(
                 ErrorComponent::Model,
                 ErrorCategory::Internal,
@@ -186,6 +187,7 @@ impl ConversationsClient {
 
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
+            let error_body = adk_core::upstream_excerpt(&error_body);
             return Err(AdkError::new(
                 ErrorComponent::Model,
                 ErrorCategory::Internal,
@@ -267,6 +269,7 @@ impl ConversationsClient {
 
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
+            let error_body = adk_core::upstream_excerpt(&error_body);
             return Err(AdkError::new(
                 ErrorComponent::Model,
                 ErrorCategory::Internal,

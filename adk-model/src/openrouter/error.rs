@@ -173,13 +173,12 @@ pub(crate) fn response_failed_to_adk_error(error: Option<&Value>) -> AdkError {
     mapped
 }
 
-/// Longest upstream detail appended to an error message; `raw` can be a full response body.
-const MAX_UPSTREAM_DETAIL_BYTES: usize = 512;
-
 /// Appends the upstream provider's own explanation to OpenRouter's message.
 ///
 /// For upstream failures OpenRouter's message is generic ("Provider returned error") and
 /// the actionable text is in `metadata.raw`, with the provider in `metadata.provider_name`.
+/// Both can echo the request, and `raw` can be a full response body, so each is cut to
+/// [`adk_core::UPSTREAM_EXCERPT_BYTES`].
 fn with_upstream_detail(
     message: &str,
     provider_name: Option<&str>,
@@ -192,17 +191,14 @@ fn with_upstream_detail(
             other => other.to_string(),
         })
         .filter(|raw| !raw.is_empty() && raw != message);
+    let message = adk_core::upstream_excerpt(message);
     let Some(raw) = raw else {
         return message.to_string();
     };
     let provider = provider_name.or_else(|| {
         metadata.and_then(|metadata| metadata.get("provider_name")).and_then(Value::as_str)
     });
-    let detail = if raw.len() > MAX_UPSTREAM_DETAIL_BYTES {
-        format!("{}…", &raw[..raw.floor_char_boundary(MAX_UPSTREAM_DETAIL_BYTES)])
-    } else {
-        raw
-    };
+    let detail = adk_core::upstream_excerpt(&raw);
     match provider {
         Some(provider) => format!("{message} ({provider}): {detail}"),
         None => format!("{message}: {detail}"),
@@ -319,11 +315,12 @@ fn retry_after_from_metadata_value(metadata: &Value) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_UPSTREAM_DETAIL_BYTES, api_error_to_adk_error, parse_retry_after_value,
-        stream_error_to_adk_error, with_upstream_detail,
+        api_error_to_adk_error, parse_retry_after_value, stream_error_to_adk_error,
+        with_upstream_detail,
     };
     use crate::openrouter::stream::OpenRouterStreamError;
     use adk_core::ErrorCategory;
+    use adk_core::UPSTREAM_EXCERPT_BYTES;
     use chrono::Utc;
     use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
     use serde_json::json;
@@ -486,10 +483,13 @@ mod tests {
 
     #[test]
     fn upstream_detail_is_capped_and_skipped_when_redundant() {
-        let long = "é".repeat(MAX_UPSTREAM_DETAIL_BYTES);
+        let long = "é".repeat(UPSTREAM_EXCERPT_BYTES);
         let message = with_upstream_detail("failed", None, Some(&json!({"raw": long})));
-        assert!(message.len() <= "failed: ".len() + MAX_UPSTREAM_DETAIL_BYTES + "…".len());
-        assert!(message.ends_with('…'));
+        assert!(message.len() <= "failed: ".len() + UPSTREAM_EXCERPT_BYTES);
+        assert!(message.ends_with('é'));
+
+        let echoed = format!("Invalid value: {}", "x".repeat(4 * UPSTREAM_EXCERPT_BYTES));
+        assert_eq!(with_upstream_detail(&echoed, None, None).len(), UPSTREAM_EXCERPT_BYTES);
 
         assert_eq!(with_upstream_detail("same", None, Some(&json!({"raw": "same"}))), "same");
         assert_eq!(with_upstream_detail("plain", Some("x"), Some(&json!({}))), "plain");

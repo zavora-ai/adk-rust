@@ -100,8 +100,9 @@ impl IntraInvocationCompactor {
                 Ok(None)
             }
             Err(e) => {
+                // A summarizer's model error can echo the history it was given.
                 tracing::warn!(
-                    error = %e,
+                    error = %e.diagnostics(),
                     "intra-invocation compaction failed, continuing with uncompacted history"
                 );
                 Ok(None)

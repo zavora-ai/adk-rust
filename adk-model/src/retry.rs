@@ -293,13 +293,14 @@ where
                     delay
                 };
 
+                // The message can echo the request, and the client sees no `RunConfig`, so
+                // only the content-free part is logged.
                 adk_telemetry::warn!(
                     attempt = attempt,
                     max_retries = retry_config.max_retries,
                     delay_ms = effective_delay.as_millis(),
-                    error.code = error.code,
-                    error = %error,
-                    "Provider request failed with retryable error; retrying"
+                    error = %error.diagnostics(),
+                    "provider request failed with a retryable error; retrying"
                 );
                 tokio::time::sleep(effective_delay).await;
                 delay = next_retry_delay(delay, retry_config);

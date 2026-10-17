@@ -748,7 +748,10 @@ async fn send_request(
             ErrorComponent::Model,
             crate::retry::category_for_status_code(status_code),
             error_codes.for_status(status_code),
-            format!("{provider_name} API error (HTTP {status}): {body}"),
+            format!(
+                "{provider_name} API error (HTTP {status}): {}",
+                adk_core::upstream_excerpt(&body)
+            ),
         )
         .with_upstream_status(status_code)
         .with_provider(provider_name);

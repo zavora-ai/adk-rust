@@ -165,6 +165,73 @@ use adk_core::RunConfig;
 let run_config = RunConfig { record_payloads: true, ..RunConfig::default() };
 ```
 
+### Errors in spans and logs
+
+Error messages follow the same rule as payloads. A provider's 400 response can echo the
+prompt, a tool error can quote a connection string, and a guardrail denial quotes the
+argument it refused, so each failure is logged in two parts:
+
+| Part | Logged | Example |
+|------|--------|---------|
+| Diagnostics: component, category, code, upstream status, provider, provider code, request ID | Always, as `error`, from `AdkError::diagnostics()` | `model.invalid_input (model.gemini.bad_request); status 400; provider gemini` |
+| Message text: `error.message`, a guardrail's `reason` | Only with `record_payloads`, under the same truncation | `[omitted: set RunConfig::record_payloads to record payloads]` |
+
+| Source | What is logged |
+|--------|----------------|
+| `LlmAgent` model calls, streams, and provider-reported errors | Diagnostics, plus the message under `record_payloads` |
+| `LlmAgent` toolset, tool, and callback failures | Diagnostics, plus the message under `record_payloads` |
+| `LlmAgent` refused tool calls (DEBUG `tool call refused`) | The refusal reason under `record_payloads` |
+| `adk-guardrail` tool guardrail denials, revisions, and content transforms | Guardrail name, tool, and severity; never the reason |
+| `adk-model` clients, the retry loop, and `adk-gemini` | Diagnostics only; clients see no `RunConfig` |
+| `adk-runner` cache creation and compaction failures | Diagnostics only |
+
+The error returned to the caller keeps its message, but a message that quotes an upstream
+body carries at most `adk_core::UPSTREAM_EXCERPT_BYTES` (512 bytes) of it, and an
+undecodable response is described by `adk_core::json_error_summary` — its error class and
+position — rather than quoted. Log a caller-side error the same way:
+
+```rust
+use adk_core::AdkError;
+
+fn log_failure(error: &AdkError) {
+    tracing::warn!(error = %error.diagnostics(), "turn failed");
+}
+```
+
+### Keeping one run out of a trace
+
+`record_payloads` is read from each run's `RunConfig`, so it holds inside any caller span.
+To keep a run's spans and events out of the caller's trace entirely, drive the run with
+`NoSubscriber`. The runner and agent execute in the task that polls the stream, so nothing
+the run records reaches the caller's subscriber, while the caller's own events around it
+still do:
+
+```rust
+use adk_core::{AdkError, Content, Result};
+use adk_runner::Runner;
+use futures::StreamExt;
+use tracing::instrument::WithSubscriber;
+
+async fn run_untraced(runner: &Runner, session_id: &str, text: &str) -> Result<usize> {
+    async {
+        let mut events = runner
+            .run_str("user", session_id, Content::new("user").with_text(text))
+            .await?;
+        let mut count = 0;
+        while let Some(event) = events.next().await {
+            event?;
+            count += 1;
+        }
+        Ok::<_, AdkError>(count)
+    }
+    .with_subscriber(tracing::subscriber::NoSubscriber::default())
+    .await
+}
+```
+
+Tasks that a tool or toolset spawns, such as an MCP client's connection task, record with
+the global subscriber.
+
 ## Logging Macros
 
 Use the standard `tracing` macros for logging:

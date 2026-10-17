@@ -391,7 +391,10 @@ impl Launcher {
                                             current_agent = evt.author.clone();
                                             // Only show agent label in multi-agent scenarios
                                             if printed_header {
-                                                print!("\x1b[33m[{current_agent}]\x1b[0m ");
+                                                print!(
+                                                    "\x1b[33m[{}]\x1b[0m ",
+                                                    terminal_safe(&current_agent)
+                                                );
                                                 let _ = io::stdout().flush();
                                             }
                                             printed_header = true;
@@ -399,7 +402,10 @@ impl Launcher {
 
                                         // Show agent transfer requests
                                         if let Some(target) = &evt.actions.transfer_to_agent {
-                                            print!("\x1b[90m[transfer -> {target}]\x1b[0m ");
+                                            print!(
+                                                "\x1b[90m[transfer -> {}]\x1b[0m ",
+                                                terminal_safe(target)
+                                            );
                                             let _ = io::stdout().flush();
                                         }
 
@@ -410,7 +416,10 @@ impl Launcher {
                                         }
                                     }
                                     Err(e) => {
-                                        error!("stream error: {e}");
+                                        // The message is shown here, escaped; the log line
+                                        // stays content-free, since it can be exported.
+                                        eprintln!("\nError: {}", terminal_safe(&e.to_string()));
+                                        error!(error = %e.diagnostics(), "stream error");
                                     }
                                 }
                             }
@@ -627,27 +636,77 @@ fn is_exit_command(input: &str) -> bool {
     matches!(input, "quit" | "exit" | "/quit" | "/exit")
 }
 
+/// Escapes terminal control characters in model- or tool-controlled text.
+///
+/// Newlines and tabs are kept. Every other control character, such as the `ESC` that starts
+/// an ANSI or OSC sequence or a C1 `CSI`, is written as its `\u{..}` escape, so printed text
+/// cannot move the cursor, rewrite the screen or window title, or set the clipboard.
+pub(crate) fn terminal_safe(text: &str) -> std::borrow::Cow<'_, str> {
+    let unsafe_char = |c: char| c.is_control() && c != '\n' && c != '\t';
+    if !text.chars().any(unsafe_char) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut escaped = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        if unsafe_char(c) {
+            escaped.extend(c.escape_unicode());
+        } else {
+            escaped.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(escaped)
+}
+
 /// Handles streaming output with special rendering for think blocks,
 /// tool calls, function responses, and inline/file data.
-pub struct StreamPrinter {
+///
+/// Model and tool text is printed with terminal control characters escaped, apart from
+/// newlines and tabs, so a response cannot inject escape sequences into the terminal.
+pub struct StreamPrinter<W: Write = io::Stdout> {
     thinking_mode: ThinkingDisplayMode,
     in_think_block: bool,
     in_thinking_part_stream: bool,
     think_buffer: String,
+    out: W,
 }
 
 impl StreamPrinter {
-    /// Create a printer with the selected thinking display mode.
+    /// Create a printer that writes to stdout with the selected thinking display mode.
     pub fn new(thinking_mode: ThinkingDisplayMode) -> Self {
+        Self::with_writer(thinking_mode, io::stdout())
+    }
+}
+
+impl<W: Write> StreamPrinter<W> {
+    /// Create a printer that writes to `out` instead of stdout.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::launcher::{StreamPrinter, ThinkingDisplayMode};
+    /// use adk_core::Part;
+    ///
+    /// let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, std::io::sink());
+    /// printer.handle_part(&Part::Text { text: "hello".into() });
+    /// printer.finish();
+    /// ```
+    pub fn with_writer(thinking_mode: ThinkingDisplayMode, out: W) -> Self {
         Self {
             thinking_mode,
             in_think_block: false,
             in_thinking_part_stream: false,
             think_buffer: String::new(),
+            out,
         }
     }
 
-    /// Process a single response part, rendering it to stdout.
+    /// Writes `text` with terminal control characters escaped, then flushes.
+    fn emit(&mut self, text: &str) {
+        let _ = self.out.write_all(terminal_safe(text).as_bytes());
+        let _ = self.out.flush();
+    }
+
+    /// Process a single response part, rendering it to the printer's writer.
     pub fn handle_part(&mut self, part: &Part) {
         match part {
             Part::Text { text } => {
@@ -660,18 +719,15 @@ impl StreamPrinter {
                     return;
                 }
                 if !self.in_thinking_part_stream {
-                    print!("\n[thinking] ");
-                    let _ = io::stdout().flush();
+                    self.emit("\n[thinking] ");
                     self.in_thinking_part_stream = true;
                 }
                 self.think_buffer.push_str(thinking);
-                print!("{thinking}");
-                let _ = io::stdout().flush();
+                self.emit(thinking);
             }
             Part::FunctionCall { name, args, .. } => {
                 self.flush_pending_thinking();
-                print!("\n[tool-call] {name} {args}\n");
-                let _ = io::stdout().flush();
+                self.emit(&format!("\n[tool-call] {name} {args}\n"));
             }
             Part::FunctionResponse { function_response, .. } => {
                 self.flush_pending_thinking();
@@ -679,43 +735,38 @@ impl StreamPrinter {
             }
             Part::InlineData { mime_type, data, .. } => {
                 self.flush_pending_thinking();
-                print!("\n[inline-data] mime={mime_type} bytes={}\n", data.len());
-                let _ = io::stdout().flush();
+                self.emit(&format!("\n[inline-data] mime={mime_type} bytes={}\n", data.len()));
             }
             Part::FileData { mime_type, file_uri, .. } => {
                 self.flush_pending_thinking();
-                print!("\n[file-data] mime={mime_type} uri={file_uri}\n");
-                let _ = io::stdout().flush();
+                self.emit(&format!("\n[file-data] mime={mime_type} uri={file_uri}\n"));
             }
             Part::ServerToolCall { server_tool_call } => {
                 self.flush_pending_thinking();
-                print!("\n[server-tool-call] {server_tool_call}\n");
-                let _ = io::stdout().flush();
+                self.emit(&format!("\n[server-tool-call] {server_tool_call}\n"));
             }
             Part::ServerToolResponse { server_tool_response } => {
                 self.flush_pending_thinking();
-                print!("\n[server-tool-response] {}B\n", server_tool_response.to_string().len());
-                let _ = io::stdout().flush();
+                self.emit(&format!(
+                    "\n[server-tool-response] {}B\n",
+                    server_tool_response.to_string().len()
+                ));
             }
             Part::EmbeddedResource { resource } => {
                 self.flush_pending_thinking();
-                match resource {
-                    adk_core::EmbeddedResource::Text(text) => {
-                        print!(
-                            "\n[embedded-resource] uri={} text-len={}\n",
-                            text.uri,
-                            text.text.len()
-                        );
-                    }
-                    adk_core::EmbeddedResource::Blob(blob) => {
-                        print!(
-                            "\n[embedded-resource] uri={} bytes={}\n",
-                            blob.uri,
-                            blob.data.len()
-                        );
-                    }
-                }
-                let _ = io::stdout().flush();
+                let line = match resource {
+                    adk_core::EmbeddedResource::Text(text) => format!(
+                        "\n[embedded-resource] uri={} text-len={}\n",
+                        text.uri,
+                        text.text.len()
+                    ),
+                    adk_core::EmbeddedResource::Blob(blob) => format!(
+                        "\n[embedded-resource] uri={} bytes={}\n",
+                        blob.uri,
+                        blob.data.len()
+                    ),
+                };
+                self.emit(&line);
             }
         }
     }
@@ -738,8 +789,7 @@ impl StreamPrinter {
 
             visible.push_str(remaining);
             if !visible.is_empty() {
-                print!("{visible}");
-                let _ = io::stdout().flush();
+                self.emit(&visible);
             }
             return;
         }
@@ -763,15 +813,13 @@ impl StreamPrinter {
             } else if let Some(start_idx) = remaining.find(THINK_START) {
                 let visible = &remaining[..start_idx];
                 if !visible.is_empty() {
-                    print!("{visible}");
-                    let _ = io::stdout().flush();
+                    self.emit(visible);
                 }
                 self.in_think_block = true;
                 self.think_buffer.clear();
                 remaining = &remaining[start_idx + THINK_START.len()..];
             } else {
-                print!("{remaining}");
-                let _ = io::stdout().flush();
+                self.emit(remaining);
                 break;
             }
         }
@@ -780,8 +828,8 @@ impl StreamPrinter {
     fn flush_think(&mut self) {
         let content = self.think_buffer.trim();
         if !content.is_empty() {
-            print!("\n[think] {content}\n");
-            let _ = io::stdout().flush();
+            let line = format!("\n[think] {content}\n");
+            self.emit(&line);
         }
         self.think_buffer.clear();
     }
@@ -791,15 +839,13 @@ impl StreamPrinter {
         self.flush_pending_thinking();
     }
 
-    fn print_tool_response(&self, name: &str, response: &Value) {
-        print!("\n[tool-response] {name} {response}\n");
-        let _ = io::stdout().flush();
+    fn print_tool_response(&mut self, name: &str, response: &Value) {
+        self.emit(&format!("\n[tool-response] {name} {response}\n"));
     }
 
     fn flush_part_thinking_if_needed(&mut self) {
         if self.in_thinking_part_stream {
-            println!();
-            let _ = io::stdout().flush();
+            self.emit("\n");
             self.think_buffer.clear();
             self.in_thinking_part_stream = false;
         }
@@ -816,8 +862,8 @@ impl StreamPrinter {
     fn flush_think_with_label(&mut self, label: &str) {
         let content = self.think_buffer.trim();
         if !content.is_empty() {
-            print!("\n[{label}] {content}\n");
-            let _ = io::stdout().flush();
+            let line = format!("\n[{label}] {content}\n");
+            self.emit(&line);
         }
         self.think_buffer.clear();
     }
@@ -1047,6 +1093,96 @@ mod tests {
 
         assert!(!printer.in_think_block);
         assert!(printer.think_buffer.is_empty());
+    }
+
+    /// A writer whose bytes the test can read after the printer is done.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    /// An OSC 52 sequence, which sets the terminal clipboard, then a cursor move.
+    const PLANTED: &str = "\x1b]52;c;cm0gLXJmIH4=\x07\x1b[2J\u{9b}31m";
+
+    #[test]
+    fn terminal_safe_escapes_control_characters_but_keeps_newlines_and_tabs() {
+        assert_eq!(terminal_safe(PLANTED), "\\u{1b}]52;c;cm0gLXJmIH4=\\u{7}\\u{1b}[2J\\u{9b}31m");
+        assert_eq!(terminal_safe("line\n\tindented\r"), "line\n\tindented\\u{d}");
+        assert!(matches!(terminal_safe("plain text"), std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn stream_printer_escapes_planted_sequences_in_every_line() {
+        let captured = Captured::default();
+        let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, captured.clone());
+
+        printer.handle_part(&Part::Text { text: format!("answer {PLANTED}") });
+        printer.handle_part(&Part::Text { text: format!("<think>plan {PLANTED}</think>") });
+        printer.handle_part(&Part::Thinking {
+            thinking: format!("reasoning {PLANTED}"),
+            signature: None,
+        });
+        printer.handle_part(&Part::FunctionCall {
+            name: format!("tool{PLANTED}"),
+            args: serde_json::json!({"q": PLANTED}),
+            id: None,
+            thought_signature: None,
+        });
+        printer.handle_part(&Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(
+                format!("tool{PLANTED}"),
+                serde_json::json!({"r": PLANTED}),
+            ),
+            id: None,
+            annotations: None,
+        });
+        printer.handle_part(&Part::FileData {
+            mime_type: format!("image/png{PLANTED}"),
+            file_uri: format!("https://example.com/{PLANTED}"),
+            annotations: None,
+        });
+        printer.handle_part(&Part::EmbeddedResource {
+            resource: adk_core::EmbeddedResource::Text(adk_core::TextResourceContents::new(
+                format!("file:///{PLANTED}"),
+                None,
+                "body",
+            )),
+        });
+        printer.handle_part(&Part::Text { text: format!("<think>unclosed {PLANTED}") });
+        printer.finish();
+
+        let output = captured.text();
+        assert!(
+            !output.chars().any(|c| c.is_control() && c != '\n' && c != '\t'),
+            "raw control characters reached the terminal: {output:?}"
+        );
+        for line in [
+            "answer \\u{1b}]52",
+            "[think] plan \\u{1b}]52",
+            "[thinking] reasoning \\u{1b}]52",
+            "[tool-call] tool\\u{1b}]52",
+            "[tool-response] tool\\u{1b}]52",
+            "uri=https://example.com/\\u{1b}]52",
+            "[embedded-resource] uri=file:///\\u{1b}]52",
+            "[think] unclosed \\u{1b}]52",
+        ] {
+            assert!(output.contains(line), "missing {line:?} in {output:?}");
+        }
     }
 
     #[test]

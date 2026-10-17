@@ -835,6 +835,8 @@ OpenAI-compatible, Azure OpenAI, Azure AI Inference, Anthropic, DeepSeek, Groq).
 | Text-encoded tool calls | Recognised only when the request declares the named tool; a ` ```json ` fence also needs an `arguments` or `parameters` object |
 | Tool order | Anthropic and Bedrock send tool definitions sorted by name, so the prompt-cache prefix is stable |
 | API keys | Provider configs redact the key in `Debug` output and omit it when serialized |
+| Error messages | Every client, Gemini, Ollama, and OpenRouter included, quotes an HTTP error body or a provider's error message up to `adk_core::UPSTREAM_EXCERPT_BYTES` (512 bytes), since it can echo the prompt or tool arguments. A response that cannot be decoded is described by its decoder error class and position (`adk_core::json_error_summary`), never quoted |
+| Logs | Clients, the retry loop, and `adk-gemini` log a failure's diagnostics (`AdkError::diagnostics()`: category, code, upstream status, provider, provider code, request ID) and never its message, a response body, or a response; see [Errors in spans and logs](../observability/telemetry.md#errors-in-spans-and-logs) |
 | Redirects | Anthropic, Gemini, OpenAI, OpenAI-compatible, Azure OpenAI, Azure AI Inference and DeepSeek clients return a 3xx response as an error instead of following it |
 | Inline PDFs | OpenAI and Azure OpenAI receive a `file` part; other OpenAI-compatible providers receive the text fallback |
 
@@ -884,7 +886,7 @@ state is not written, and no tool from the turn runs.
   `model.openrouter.bad_gateway`, `Unavailable`), else `Internal`.
 - **Undecodable chunks** fail with `model.openai_compat.parse`, `model.azure_openai.parse`,
   `model.groq.invalid_chunk`, or `model.ollama.stream_chunk` (`Internal`). The message names
-  only the decoder's error class and column, never the chunk. A chunk that cannot be decoded
+  only the decoder's error class and position, never the chunk. A chunk that cannot be decoded
   after the response finished, such as a cut-off usage trailer, is ignored.
 - **Unknown finish reasons** map to `FinishReason::Other`, not `Stop`.
 - **SSE framing**: `data:` fields are read with or without the space after the colon, a

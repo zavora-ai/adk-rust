@@ -191,7 +191,9 @@ pub(crate) fn gemini_error_to_adk(e: &adk_gemini::ClientError) -> adk_core::AdkE
         msg
     }
 
+    // A response body can echo the request, so the message quotes a bounded excerpt.
     let message = format_error_chain(e);
+    let message = adk_core::upstream_excerpt(&message);
 
     // Response text can mention a different status; only the transport may
     // establish an upstream HTTP status.
@@ -1565,8 +1567,9 @@ impl GeminiModel {
         if stream {
             adk_telemetry::debug!("Executing streaming request");
             let response_stream = builder.execute_stream().await.map_err(|e| {
-                adk_telemetry::error!(error = %e, "Model request failed");
-                gemini_error_to_adk(&e)
+                let error = gemini_error_to_adk(&e);
+                adk_telemetry::error!(error = %error.diagnostics(), "model request failed");
+                error
             })?;
 
             let mapped_stream = async_stream::stream! {
@@ -1594,15 +1597,16 @@ impl GeminiModel {
                                     }
                                 }
                                 Err(e) => {
-                                    adk_telemetry::error!(error = %e, "Failed to convert response");
+                                    adk_telemetry::error!(error = %e.diagnostics(), "failed to convert response");
                                     yield Err(e);
                                     return;
                                 }
                             }
                         }
                         Err(e) => {
-                            adk_telemetry::error!(error = %e, "Stream error");
-                            yield Err(gemini_error_to_adk(&e));
+                            let error = gemini_error_to_adk(&e);
+                            adk_telemetry::error!(error = %error.diagnostics(), "stream error");
+                            yield Err(error);
                             return;
                         }
                     }
@@ -1622,8 +1626,9 @@ impl GeminiModel {
         } else {
             adk_telemetry::debug!("Executing blocking request");
             let response = builder.execute().await.map_err(|e| {
-                adk_telemetry::error!(error = %e, "Model request failed");
-                gemini_error_to_adk(&e)
+                let error = gemini_error_to_adk(&e);
+                adk_telemetry::error!(error = %error.diagnostics(), "model request failed");
+                error
             })?;
 
             let llm_response = Self::convert_response(&response)?;
@@ -1944,8 +1949,9 @@ impl GeminiModel {
                         }
                     }
                     Err(e) => {
-                        adk_telemetry::error!(error = %e, "Interaction stream error");
-                        yield Err(gemini_error_to_adk(&e));
+                        let error = gemini_error_to_adk(&e);
+                        adk_telemetry::error!(error = %error.diagnostics(), "interaction stream error");
+                        yield Err(error);
                         return;
                     }
                 }

@@ -265,7 +265,10 @@ impl Llm for DeepSeekClient {
                             ErrorComponent::Model,
                             crate::retry::category_for_status_code(status_code),
                             "model.deepseek.api_error",
-                            format!("DeepSeek API error (HTTP {status}): {error_text}"),
+                            format!(
+                                "DeepSeek API error (HTTP {status}): {}",
+                                adk_core::upstream_excerpt(&error_text)
+                            ),
                         ).with_upstream_status(status_code).with_provider("deepseek");
                         return Err(crate::retry::with_retry_after(
                             crate::error_metadata::from_body(error, &error_text),
@@ -456,7 +459,8 @@ impl Llm for DeepSeekClient {
 
                 let chat_response: ChatCompletionResponse = serde_json::from_str(&response_text)
                     .map_err(|e| AdkError::model(format!(
-                        "failed to parse response: {e} - {response_text}"
+                        "failed to parse response: {}",
+                        adk_core::json_error_summary(&e)
                     )))?;
 
                 yield convert::from_response(&chat_response);

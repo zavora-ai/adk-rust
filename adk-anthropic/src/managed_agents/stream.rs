@@ -173,11 +173,11 @@ impl SseState {
             // Parse the SSE event block
             match parse_sse_event(&event_block) {
                 Some(Ok(session_event)) => return Some(Ok(session_event)),
-                Some(Err(err)) => {
-                    // Invalid JSON — log warning, skip event, continue
+                Some(Err(_)) => {
+                    // The block carries session content, and a serde data error quotes a
+                    // value from it, so only its size is logged.
                     tracing::warn!(
-                        error = %err,
-                        event_block = %event_block,
+                        sse.event_bytes = event_block.len(),
                         "skipping SSE event with invalid JSON"
                     );
                     continue;

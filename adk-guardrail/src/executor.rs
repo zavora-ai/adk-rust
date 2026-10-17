@@ -100,12 +100,9 @@ impl GuardrailExecutor {
                             });
                         }
                     }
-                    GuardrailResult::Transform { new_content, reason } => {
-                        tracing::debug!(
-                            guardrail = guardrail.name(),
-                            reason = %reason,
-                            "Content transformed"
-                        );
+                    // A transform reason can quote the content it replaced, so it is not logged.
+                    GuardrailResult::Transform { new_content, reason: _ } => {
+                        tracing::debug!(guardrail = guardrail.name(), "content transformed");
                         current_content = new_content;
                     }
                 }
@@ -127,12 +124,8 @@ impl GuardrailExecutor {
                         });
                     }
                 }
-                GuardrailResult::Transform { new_content, reason } => {
-                    tracing::debug!(
-                        guardrail = guardrail.name(),
-                        reason = %reason,
-                        "Content transformed"
-                    );
+                GuardrailResult::Transform { new_content, reason: _ } => {
+                    tracing::debug!(guardrail = guardrail.name(), "content transformed");
                     current_content = new_content;
                 }
             }
