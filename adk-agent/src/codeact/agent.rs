@@ -1140,7 +1140,7 @@ async fn run_authorized_tool(
                     }
                     Ok(None) => continue,
                     Err(err) => {
-                        tracing::warn!(error = %err, "on_tool_error callback failed");
+                        tracing::warn!(error = %err.diagnostics(), "on_tool_error callback failed");
                         break;
                     }
                 }

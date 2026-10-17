@@ -1195,8 +1195,9 @@ impl Runner {
                                 }
                         }
                         Err(e) => {
+                            // A model error can echo the cached instruction.
                             tracing::warn!(
-                                error = %e,
+                                error = %e.diagnostics(),
                                 "cache creation failed, proceeding without cache"
                             );
                         }
@@ -1278,7 +1279,7 @@ impl Runner {
                     }
                     Ok(None) => {} // No compaction needed
                     Err(e) => {
-                        tracing::warn!(error = %e, "intra-invocation compaction check failed");
+                        tracing::warn!(error = %e.diagnostics(), "intra-invocation compaction check failed");
                     }
                 }
             }
@@ -1310,7 +1311,7 @@ impl Runner {
                         Err(e) => {
                             // Proactive compaction failed — proceed anyway and let the
                             // model reject the request if it's truly too large.
-                            tracing::warn!(error = %e, "proactive context compaction failed, proceeding with full context");
+                            tracing::warn!(error = %e.diagnostics(), "proactive context compaction failed, proceeding with full context");
                         }
                     }
                 }
@@ -1337,7 +1338,7 @@ impl Runner {
                     // Token limit error on agent.run() — apply compaction and retry
                     let cc_config = context_compaction.as_ref().unwrap();
                     tracing::warn!(
-                        error = %e,
+                        error = %e.diagnostics(),
                         "agent execution failed with token limit error, attempting compaction"
                     );
                     let session_events = ctx.mutable_session().events_snapshot();
@@ -1911,7 +1912,7 @@ impl Runner {
                                 }
                                 Err(e) => {
                                     // Compaction failure is non-fatal — log and continue
-                                    tracing::warn!(error = %e, "Context compaction failed");
+                                    tracing::warn!(error = %e.diagnostics(), "Context compaction failed");
                                 }
                             }
                         }

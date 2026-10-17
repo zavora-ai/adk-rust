@@ -29,7 +29,7 @@ use std::{
     fmt::{self, Formatter},
     sync::{Arc, LazyLock},
 };
-use tracing::{Level, Span, instrument};
+use tracing::{Span, instrument};
 use url::Url;
 
 use crate::batch::model::*;
@@ -527,6 +527,58 @@ pub enum Error {
     },
 }
 
+/// Logs a failed call by its kind and status.
+///
+/// A response body or error message can echo the request — prompts, tool arguments, file
+/// contents — so neither is logged; the caller receives them in the returned error.
+fn log_failure(error: &Error) {
+    let kind = match error {
+        Error::InvalidApiKey { .. } => "invalid_api_key",
+        Error::ConstructUrl { .. } => "construct_url",
+        Error::PerformRequestNew { .. } | Error::PerformRequest { .. } => "perform_request",
+        Error::BadResponse { .. } => "bad_response",
+        Error::ErrorInResponse { .. } => "error_in_response",
+        Error::MissingResponseHeader { .. } => "missing_response_header",
+        Error::BadPart { .. } => "bad_part",
+        Error::Deserialize { .. } => "deserialize",
+        Error::DecodeResponse { .. } => "decode_response",
+        Error::UrlParse { .. } => "url_parse",
+        #[cfg(feature = "vertex")]
+        Error::GoogleCloudAuth { .. } => "google_cloud_auth",
+        #[cfg(feature = "vertex")]
+        Error::GoogleCloudCredentialHeaders { .. } => "google_cloud_credential_headers",
+        Error::GoogleCloudCredentialHeadersUnavailable => {
+            "google_cloud_credential_headers_unavailable"
+        }
+        Error::GoogleCloudCredentialParse { .. } => "google_cloud_credential_parse",
+        #[cfg(feature = "vertex")]
+        Error::GoogleCloudClientBuild { .. } => "google_cloud_client_build",
+        #[cfg(feature = "vertex")]
+        Error::GoogleCloudRequest { .. } => "google_cloud_request",
+        Error::GoogleCloudRequestSerialize { .. } => "google_cloud_request_serialize",
+        Error::GoogleCloudRequestDeserialize { .. } => "google_cloud_request_deserialize",
+        Error::GoogleCloudResponseSerialize { .. } => "google_cloud_response_serialize",
+        Error::GoogleCloudResponseDeserialize { .. } => "google_cloud_response_deserialize",
+        Error::GoogleCloudRequestNotObject => "google_cloud_request_not_object",
+        Error::MissingGoogleCloudConfig => "missing_google_cloud_config",
+        Error::MissingGoogleCloudAuth => "missing_google_cloud_auth",
+        Error::MissingGoogleCloudProjectId => "missing_google_cloud_project_id",
+        Error::MissingApiKey => "missing_api_key",
+        Error::GoogleCloudUnsupported { .. } => "google_cloud_unsupported",
+        Error::TokioRuntime { .. } => "tokio_runtime",
+        Error::GoogleCloudInitThreadPanicked => "google_cloud_init_thread_panicked",
+        Error::Io { .. } => "io",
+        Error::InvalidGenerationConfig { .. } => "invalid_generation_config",
+        Error::Validation { .. } => "validation",
+    };
+    let status = match error {
+        Error::BadResponse { code, .. } => Some(*code),
+        Error::ErrorInResponse { code, .. } => *code,
+        _ => None,
+    };
+    tracing::error!(error.kind = kind, http.status = status, "gemini request failed");
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // GeminiClient — thin facade over a backend trait object
 // ══════════════════════════════════════════════════════════════════════
@@ -640,20 +692,21 @@ impl GeminiClient {
         usage.thoughts_tokens,
         usage.cached_content_tokens,
         usage.total_tokens,
-    ), ret(level = Level::TRACE), err)]
+    ))]
     pub(crate) async fn generate_content_raw(
         &self,
         request: GenerateContentRequest,
         vertex_rag_store: Option<crate::tools::model::VertexRagStore>,
     ) -> Result<GenerationResponse, Error> {
         if let Some(ref gc) = request.generation_config {
-            self.validate_generation_config(gc)?;
+            self.validate_generation_config(gc).inspect_err(log_failure)?;
         }
 
         let response = match vertex_rag_store {
-            Some(store) => self.backend.generate_content_with_vertex_rag(request, store).await?,
-            None => self.backend.generate_content(request).await?,
-        };
+            Some(store) => self.backend.generate_content_with_vertex_rag(request, store).await,
+            None => self.backend.generate_content(request).await,
+        }
+        .inspect_err(log_failure)?;
 
         if let Some(usage) = &response.usage_metadata {
             #[rustfmt::skip]
@@ -676,14 +729,14 @@ impl GeminiClient {
         system.instruction.present = request.system_instruction.is_some(),
         cached.content.present = request.cached_content.is_some(),
         vertex.rag_store.present = vertex_rag_store.is_some(),
-    ), err)]
+    ))]
     pub(crate) async fn generate_content_stream(
         &self,
         request: GenerateContentRequest,
         vertex_rag_store: Option<crate::tools::model::VertexRagStore>,
     ) -> Result<backend::BackendStream<GenerationResponse>, Error> {
         if let Some(ref gc) = request.generation_config {
-            self.validate_generation_config(gc)?;
+            self.validate_generation_config(gc).inspect_err(log_failure)?;
         }
 
         match vertex_rag_store {
@@ -692,6 +745,7 @@ impl GeminiClient {
             }
             None => self.backend.generate_content_stream(request).await,
         }
+        .inspect_err(log_failure)
     }
 
     #[instrument(skip_all, fields(
@@ -851,30 +905,32 @@ impl GeminiClient {
         tools.count = request.tools.len(),
         background = request.background,
         previous.interaction.present = request.previous_interaction_id.is_some(),
-    ), err)]
+    ))]
     pub(crate) async fn create_interaction(
         &self,
         request: crate::interactions::CreateInteractionRequest,
     ) -> Result<crate::interactions::Interaction, Error> {
         if let Some(ref gc) = request.generation_config {
-            validate_interaction_generation_config_for_model(request.model.as_deref(), gc)?;
+            validate_interaction_generation_config_for_model(request.model.as_deref(), gc)
+                .inspect_err(log_failure)?;
         }
-        self.backend.create_interaction(request).await
+        self.backend.create_interaction(request).await.inspect_err(log_failure)
     }
 
     #[cfg(feature = "interactions")]
     #[instrument(skip_all, fields(
         model = request.model.as_deref(),
         agent = request.agent.as_deref(),
-    ), err)]
+    ))]
     pub(crate) async fn create_interaction_stream(
         &self,
         request: crate::interactions::CreateInteractionRequest,
     ) -> Result<backend::BackendStream<crate::interactions::InteractionSseEvent>, Error> {
         if let Some(ref gc) = request.generation_config {
-            validate_interaction_generation_config_for_model(request.model.as_deref(), gc)?;
+            validate_interaction_generation_config_for_model(request.model.as_deref(), gc)
+                .inspect_err(log_failure)?;
         }
-        self.backend.create_interaction_stream(request).await
+        self.backend.create_interaction_stream(request).await.inspect_err(log_failure)
     }
 
     #[cfg(feature = "interactions")]

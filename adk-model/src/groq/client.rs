@@ -193,7 +193,10 @@ impl Llm for GroqClient {
                             ErrorComponent::Model,
                             crate::retry::category_for_status_code(status_code),
                             "model.groq.api_error",
-                            format!("Groq API error (HTTP {status}): {error_text}"),
+                            format!(
+                                "Groq API error (HTTP {status}): {}",
+                                adk_core::upstream_excerpt(&error_text)
+                            ),
                         ).with_upstream_status(status_code).with_provider("groq");
                         return Err(crate::retry::with_retry_after(error, retry_after));
                     }
@@ -417,7 +420,8 @@ impl Llm for GroqClient {
 
                 let chat_response: ChatCompletionResponse = serde_json::from_str(&response_text)
                     .map_err(|e| AdkError::model(format!(
-                        "Failed to parse response: {e} - {response_text}"
+                        "Failed to parse response: {}",
+                        adk_core::json_error_summary(&e)
                     )))?;
 
                 yield convert::from_response(&chat_response);

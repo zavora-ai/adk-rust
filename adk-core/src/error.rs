@@ -508,6 +508,124 @@ impl AdkError {
     pub fn redacted(&self) -> String {
         format!("{}.{} ({})", self.component, self.category, self.code)
     }
+
+    /// Describes the error for a log line or span field without its message.
+    ///
+    /// The form is [`redacted`](Self::redacted) followed by the upstream status, provider,
+    /// provider error code, and request ID when they are set. A provider error code or
+    /// request ID is shown only when it is a short identifier, since both come from the
+    /// upstream response.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{AdkError, ErrorCategory, ErrorComponent};
+    ///
+    /// let err = AdkError::new(
+    ///     ErrorComponent::Model,
+    ///     ErrorCategory::InvalidInput,
+    ///     "model.gemini.bad_request",
+    ///     "Invalid value at 'contents[0]' (acct-7731)",
+    /// )
+    /// .with_upstream_status(400)
+    /// .with_provider("gemini");
+    /// assert_eq!(
+    ///     err.diagnostics().to_string(),
+    ///     "model.invalid_input (model.gemini.bad_request); status 400; provider gemini"
+    /// );
+    /// ```
+    pub fn diagnostics(&self) -> ErrorDiagnostics<'_> {
+        ErrorDiagnostics(self)
+    }
+}
+
+/// An [`AdkError`] described by everything but its message, from [`AdkError::diagnostics`].
+#[derive(Debug, Clone, Copy)]
+pub struct ErrorDiagnostics<'a>(&'a AdkError);
+
+impl fmt::Display for ErrorDiagnostics<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let error = self.0;
+        write!(f, "{}.{} ({})", error.component, error.category, error.code)?;
+        let details = &error.details;
+        if let Some(status) = details.upstream_status_code {
+            write!(f, "; status {status}")?;
+        }
+        if let Some(provider) = details.provider.as_deref().filter(|value| is_identifier(value)) {
+            write!(f, "; provider {provider}")?;
+        }
+        if let Some(code) = details
+            .metadata
+            .get("provider_error_code")
+            .and_then(Value::as_str)
+            .filter(|value| is_identifier(value))
+        {
+            write!(f, "; provider code {code}")?;
+        }
+        if let Some(request_id) = details.request_id.as_deref().filter(|value| is_identifier(value))
+        {
+            write!(f, "; request id {request_id}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether `value` is short and limited to ASCII alphanumerics, `_`, `.`, `-`, and `:`.
+fn is_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_.-:".contains(&byte))
+}
+
+/// Longest excerpt of upstream text, such as a provider's HTTP error body, that an error
+/// message quotes.
+pub const UPSTREAM_EXCERPT_BYTES: usize = 512;
+
+/// Returns `text` trimmed and cut to at most [`UPSTREAM_EXCERPT_BYTES`] at a character
+/// boundary.
+///
+/// Provider error bodies can echo the request — prompts, tool arguments, file contents — and
+/// can be arbitrarily long, so an error message quotes at most this much of one.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{UPSTREAM_EXCERPT_BYTES, upstream_excerpt};
+///
+/// let body = "x".repeat(4 * UPSTREAM_EXCERPT_BYTES);
+/// assert_eq!(upstream_excerpt(&body).len(), UPSTREAM_EXCERPT_BYTES);
+/// assert_eq!(upstream_excerpt("  bad request \n"), "bad request");
+/// ```
+pub fn upstream_excerpt(text: &str) -> &str {
+    let text = text.trim();
+    &text[..text.floor_char_boundary(UPSTREAM_EXCERPT_BYTES)]
+}
+
+/// Describes a JSON decoding error by its class and position, without the text it quotes.
+///
+/// A `serde_json` data error quotes the offending value, such as `invalid type: string
+/// "..."`, and a provider response carries generated text and tool arguments, so an error
+/// message about an undecodable response uses this description instead.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::json_error_summary;
+///
+/// let error = serde_json::from_str::<u32>(r#""acct-7731""#).unwrap_err();
+/// assert_eq!(json_error_summary(&error), "schema error at line 1 column 11");
+/// ```
+pub fn json_error_summary(error: &serde_json::Error) -> String {
+    let class = match error.classify() {
+        serde_json::error::Category::Io => "io",
+        serde_json::error::Category::Syntax => "syntax",
+        serde_json::error::Category::Data => "schema",
+        serde_json::error::Category::Eof => "truncated input",
+    };
+    match error.line() {
+        0 => format!("{class} error"),
+        line => format!("{class} error at line {line} column {}", error.column()),
+    }
 }
 
 impl AdkError {
@@ -580,6 +698,57 @@ mod tests {
             "session xyz not found",
         );
         assert_eq!(err.to_string(), "session.not_found: session xyz not found");
+    }
+
+    #[test]
+    fn diagnostics_name_every_detail_but_the_message() {
+        let mut err = AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::InvalidInput,
+            "model.openai.bad_request",
+            "Invalid value: 'acct-7731-secret'",
+        )
+        .with_upstream_status(400)
+        .with_provider("openai")
+        .with_request_id("req_123");
+        err.details.metadata.insert("provider_error_code".into(), json!("invalid_value"));
+
+        assert_eq!(
+            err.diagnostics().to_string(),
+            "model.invalid_input (model.openai.bad_request); status 400; provider openai; \
+             provider code invalid_value; request id req_123"
+        );
+    }
+
+    #[test]
+    fn diagnostics_omit_upstream_values_that_are_not_identifiers() {
+        let mut err =
+            AdkError::new(ErrorComponent::Model, ErrorCategory::Internal, "model.x", "boom")
+                .with_request_id("req 1 acct-7731-secret")
+                .with_provider("open\u{1b}]ai");
+        err.details.metadata.insert("provider_error_code".into(), json!("a b"));
+
+        assert_eq!(err.diagnostics().to_string(), "model.internal (model.x)");
+    }
+
+    #[test]
+    fn upstream_excerpt_trims_and_cuts_at_a_character_boundary() {
+        let long = format!("  {}🙂tail", "x".repeat(UPSTREAM_EXCERPT_BYTES - 2));
+        assert_eq!(upstream_excerpt(&long), "x".repeat(UPSTREAM_EXCERPT_BYTES - 2));
+        assert_eq!(upstream_excerpt(" short \n"), "short");
+        assert_eq!(upstream_excerpt(""), "");
+    }
+
+    #[test]
+    fn json_error_summary_never_quotes_the_input() {
+        let data = serde_json::from_str::<u32>(r#""acct-7731-secret""#).unwrap_err();
+        assert_eq!(json_error_summary(&data), "schema error at line 1 column 18");
+        let syntax = serde_json::from_str::<Value>("{acct-7731-secret").unwrap_err();
+        assert_eq!(json_error_summary(&syntax), "syntax error at line 1 column 2");
+        let eof = serde_json::from_str::<Value>(r#"{"a": "acct"#).unwrap_err();
+        assert_eq!(json_error_summary(&eof), "truncated input error at line 1 column 11");
+        let from_value = serde_json::from_value::<u32>(json!("acct-7731-secret")).unwrap_err();
+        assert_eq!(json_error_summary(&from_value), "schema error");
     }
 
     #[test]

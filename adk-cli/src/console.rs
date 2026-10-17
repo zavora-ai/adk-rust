@@ -13,7 +13,7 @@ use rustyline::DefaultEditor;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::launcher::StreamPrinter;
+use crate::launcher::{StreamPrinter, terminal_safe};
 
 /// Run an interactive console session with the given agent.
 ///
@@ -74,7 +74,7 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
                             }
                         }
                         Err(e) => {
-                            eprintln!("\nError: {e}");
+                            eprintln!("\nError: {}", terminal_safe(&e.to_string()));
                         }
                     }
                 }

@@ -162,7 +162,10 @@ impl Llm for AzureAIClient {
                             ErrorComponent::Model,
                             crate::retry::category_for_status_code(status_code),
                             "model.azure_ai.api_error",
-                            format!("Azure AI error for endpoint={endpoint}, status={status}: {error_text}"),
+                            format!(
+                                "Azure AI error for endpoint={endpoint}, status={status}: {}",
+                                adk_core::upstream_excerpt(&error_text)
+                            ),
                         ).with_upstream_status(status_code).with_provider("azure-ai");
                         return Err(crate::retry::with_retry_after(
                             crate::error_metadata::from_body(error, &error_text),
@@ -277,7 +280,8 @@ impl Llm for AzureAIClient {
 
                 let response_json: Value = serde_json::from_str(&response_text)
                     .map_err(|e| AdkError::model(format!(
-                        "Azure AI response parse failed: {e}"
+                        "Azure AI response parse failed: {}",
+                        adk_core::json_error_summary(&e)
                     )))?;
 
                 yield convert::parse_response(&response_json);

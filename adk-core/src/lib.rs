@@ -207,7 +207,10 @@ pub use credential::{
     AgentCredential, CredentialBroker, CredentialKind, CredentialSecret, IdentitySource,
     RevocationScope, ScopedToken, StaticIdentitySource, resource_indicator,
 };
-pub use error::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Result, RetryHint};
+pub use error::{
+    AdkError, ErrorCategory, ErrorComponent, ErrorDetails, ErrorDiagnostics, Result, RetryHint,
+    UPSTREAM_EXCERPT_BYTES, json_error_summary, upstream_excerpt,
+};
 pub use event::{
     Event, EventActions, EventCompaction, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER,
     TOOL_PROGRESS_CALL_ID_KEY, TOOL_PROGRESS_STREAM_KEY, ToolCallView, ToolResultView,

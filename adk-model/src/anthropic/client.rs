@@ -456,15 +456,10 @@ pub(super) fn convert_anthropic_error(e: adk_anthropic::Error) -> AdkError {
         Span::current().record("anthropic.request_id", rid.as_str());
     }
 
-    // Requirement 11.4: Record error type and message as a span event on failure
-    tracing::error!(
-        error.type_ = %api_error.error_type,
-        error.message = %api_error.message,
-        error.status_code = api_error.status_code,
-        "anthropic api error"
-    );
-
-    crate::retry::with_retry_after(api_error.into(), retry_after)
+    // The message can echo the request, so only the content-free part is logged.
+    let error = crate::retry::with_retry_after(api_error.into(), retry_after);
+    tracing::error!(error = %error.diagnostics(), "anthropic api error");
+    error
 }
 
 /// Build an [`AnthropicApiError`] from an `adk_anthropic::Error`, extracting the

@@ -2,21 +2,12 @@
 //! mid-stream.
 //!
 //! No message quotes a raw chunk. A provider's own error message is cut to
-//! [`MESSAGE_EXCERPT_BYTES`], and a chunk that cannot be decoded is described only by the
+//! [`adk_core::UPSTREAM_EXCERPT_BYTES`], and a chunk that cannot be decoded is described only by the
 //! decoder's error class and position, because chunks carry generated text and tool
 //! arguments.
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 use serde_json::Value;
-
-/// Longest provider error message quoted in a stream error.
-pub(crate) const MESSAGE_EXCERPT_BYTES: usize = 512;
-
-/// Returns `text` trimmed and cut to at most [`MESSAGE_EXCERPT_BYTES`] at a character boundary.
-pub(crate) fn excerpt(text: &str) -> &str {
-    let text = text.trim();
-    &text[..text.floor_char_boundary(MESSAGE_EXCERPT_BYTES)]
-}
 
 /// The stream ended before the provider's terminal event, so the answer or a tool call may
 /// be truncated. Retryable: the request can be sent again.
@@ -50,19 +41,13 @@ pub(crate) fn undecodable(
     error: &serde_json::Error,
 ) -> AdkError {
     // Data errors can quote the offending value, so only the class and position are kept.
-    let class = match error.classify() {
-        serde_json::error::Category::Io => "io",
-        serde_json::error::Category::Syntax => "syntax",
-        serde_json::error::Category::Data => "schema",
-        serde_json::error::Category::Eof => "truncated",
-    };
     AdkError::new(
         ErrorComponent::Model,
         ErrorCategory::Internal,
         code,
         format!(
-            "{provider} sent a stream chunk that could not be decoded ({class} error at column {})",
-            error.column()
+            "{provider} sent a stream chunk that could not be decoded ({})",
+            adk_core::json_error_summary(error)
         ),
     )
     .with_provider(provider)
@@ -100,7 +85,7 @@ pub(crate) fn reported(provider: &str, code: &'static str, error: &Value) -> Adk
         Value::String(message) => Some(message.as_str()),
         _ => field("message").and_then(Value::as_str),
     }
-    .map(excerpt)
+    .map(adk_core::upstream_excerpt)
     .filter(|message| !message.is_empty());
     let message = match message {
         Some(message) => format!("{provider} reported an error during generation: {message}"),
@@ -120,14 +105,6 @@ mod tests {
     use serde_json::json;
 
     const CODE: &str = "model.test.stream_error";
-
-    #[test]
-    fn excerpt_cuts_at_a_character_boundary() {
-        let long = format!("  {}🙂tail", "x".repeat(MESSAGE_EXCERPT_BYTES - 2));
-        let cut = excerpt(&long);
-        assert_eq!(cut, "x".repeat(MESSAGE_EXCERPT_BYTES - 2));
-        assert_eq!(excerpt("  short  "), "short");
-    }
 
     #[test]
     fn reported_classifies_openai_shaped_errors() {
@@ -177,11 +154,11 @@ mod tests {
 
     #[test]
     fn reported_bounds_the_provider_message() {
-        let long = "y".repeat(MESSAGE_EXCERPT_BYTES * 4);
+        let long = "y".repeat(adk_core::UPSTREAM_EXCERPT_BYTES * 4);
         let error = reported("openai", CODE, &json!({"message": long}));
         assert_eq!(
             error.message.len(),
-            "openai reported an error during generation: ".len() + MESSAGE_EXCERPT_BYTES
+            "openai reported an error during generation: ".len() + adk_core::UPSTREAM_EXCERPT_BYTES
         );
     }
 

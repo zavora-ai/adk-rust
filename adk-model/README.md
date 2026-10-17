@@ -757,6 +757,9 @@ See [Ollama library](https://ollama.com/library) for all available models.
 - **Retry** - Automatic retry with exponential backoff for 408, 429, 500, 502, 503, 504, and 529;
   a `Retry-After` delay is honoured up to `RetryConfig::max_delay`
 - **Credential hygiene** - Provider configs redact the API key in `Debug` output and omit it when serialized
+- **Error privacy** - Error messages quote at most 512 bytes of an upstream error body, and clients
+  log a failure's code, category, and status, never its message or a response body (see
+  "Errors in spans and logs" in `docs/official_docs/observability/telemetry.md`)
 - **Generation Config** - Temperature, top_p, top_k, max_tokens
 - **Token Usage Telemetry** - Automatic `gen_ai.usage.*` span recording for all providers via `adk-telemetry`
 - **Test doubles** - `ScriptedLlm` answers each call with the next `ScriptedResponse` (text,

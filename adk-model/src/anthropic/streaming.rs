@@ -43,9 +43,9 @@ where
                     if let Some(request_id) = &error.request_id {
                         Span::current().record("anthropic.request_id", request_id.as_str());
                     }
+                    // The message can echo the request, so only the content-free part is logged.
                     tracing::error!(
                         error.type_ = %error.error_type,
-                        error.message = %error.message,
                         error.status_code = error.status_code,
                         "anthropic stream error"
                     );
