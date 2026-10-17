@@ -20,6 +20,7 @@ playground versions are being finalized:
 - `examples/bedrock_test` — Bedrock smoke testing
 - `examples/payments` — agentic commerce scenario index for ACP/AP2 validation paths
 - `examples/developer_ergonomics` — developer ergonomics validation (RunnerConfigBuilder, ToolExecutionStrategy, SimpleToolContext, StatefulTool, run_str, #[tool] attributes)
+- `examples/approval_scoping` — approvals bound to the agent that held the call and the tool it was held for: two agents in a `SequentialAgent` sharing a tool name, a held MCP call whose name moves to another server or whose tool is redefined, and fingerprints reused across runs, over the SQLite approval store with a scripted OpenAI-compatible server and live OpenAI
 - `examples/acp_client_host` — vendor-neutral ACP client with streamed updates, async permissions, and a workspace-bounded filesystem
 - `examples/acp_kiro` — external coding-agent delegation, persistent sessions, and concurrent cancellation
 - `examples/acp_server` — expose a tool-using ADK-Rust agent to an editor through stable ACP v1
@@ -27,7 +28,6 @@ playground versions are being finalized:
 - `examples/acp_full_protocol` — no-API-key, Runner-backed ACP v1 server-direction reference with an end-to-end validating test (embedded-resource + multimodal prompts, permission bridge, `session/load` replay, usage/tool-call updates)
 - `examples/tool_outcomes` — what `LlmAgent` tells the model when an after-tool stage fails, a tool errors with a credential in its message, a tool times out, or the model sends malformed tool-call JSON, against a scripted OpenAI-compatible server and live OpenAI
 - `examples/agent_tool_isolation` — what an agent behind an `AgentTool` inherits from its caller (topology, context cache, invocation toolsets), what it hands back when it ends on a tool result, and how its timeouts, held confirmations and forwarded events reach the caller, against scripted OpenAI-compatible servers and live OpenAI
-- `examples/approval_scoping` — approvals bound to the agent that held the call and the tool it was held for: two agents in a `SequentialAgent` sharing a tool name, a held MCP call whose name moves to another server or whose tool is redefined, and fingerprints reused across runs, over the SQLite approval store with a scripted OpenAI-compatible server and live OpenAI
 - `examples/autonomy_validation` — live OpenAI and Anthropic check of the autonomy-readiness Phase 0 fixes (agent transfer history, runner plugin denial, path guardrails, failing toolsets, shared session state, functional resume, eval judges, Anthropic web search replay and 1-hour cache pricing), asserting on history, counters, and usage
 
 ## Validated Feature Examples
