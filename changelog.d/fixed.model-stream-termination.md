@@ -12,8 +12,8 @@
   `response.failed` event, and a non-streaming OpenRouter Responses body with status `failed`
   are errors with the provider's category and code, quoting at most 512 bytes of its message.
   OpenRouter `response.incomplete` finishes with `MaxTokens` or `Safety`, or fails for any
-  other reason. A Groq chunk that does not decode, such as a finish chunk with `null` token
-  counts, fails the turn instead of silently dropping its tool call. Unknown Chat Completions
+  other reason. A Groq chunk that does not decode fails the turn instead of silently
+  dropping its tool call. Unknown Chat Completions
   finish reasons map to `FinishReason::Other` instead of `Stop`.
 - **SSE framing** (`adk-model`): `data:` fields without a space after the colon are read by
   the OpenAI-compatible and Groq parsers, and Groq, Ollama, and OpenRouter decode a UTF-8
