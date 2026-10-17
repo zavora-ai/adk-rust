@@ -223,11 +223,14 @@ impl Turn {
     }
 }
 
+/// Decides, from the events received so far, that the run has shown what it needs to.
+type StopWhen = Box<dyn Fn(&[Event]) -> bool + Send>;
+
 async fn run_agent(
     agent: Arc<dyn Agent>,
     text: &str,
     mode: StreamingMode,
-    stop_after: Option<Box<dyn Fn(&[Event]) -> bool + Send>>,
+    stop_after: Option<StopWhen>,
 ) -> anyhow::Result<Turn> {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     sessions
@@ -569,7 +572,7 @@ async fn realtime_agent_error_redacted() -> anyhow::Result<Verdict> {
         (!turn.saved_json().contains(SECRET), "the session holds no credential".into()),
     ]);
     let (exposed, _) =
-        run_realtime_agent(Behaviour::CredentialError, |b| setup::realtime_agent_exposes_errors(b))
+        run_realtime_agent(Behaviour::CredentialError, setup::realtime_agent_exposes_errors)
             .await?;
     checks.push((
         exposed.tool_outputs().join(" ").contains(SECRET_HOST),
@@ -739,7 +742,7 @@ async fn live_openai_realtime() -> anyhow::Result<Verdict> {
         .tool(tool);
     let agent = setup::realtime_agent_screen(builder, false).build()?;
     // The live session stays open, so the run stops at the first answer after the tool result.
-    let stop: Box<dyn Fn(&[Event]) -> bool + Send> = Box::new(|events: &[Event]| {
+    let stop: StopWhen = Box::new(|events: &[Event]| {
         let answered_tool = events.iter().any(|event| {
             event.llm_response.content.as_ref().is_some_and(|content| {
                 content.parts.iter().any(|part| matches!(part, Part::FunctionResponse { .. }))
