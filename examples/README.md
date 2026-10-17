@@ -16,6 +16,7 @@ playground versions are being finalized:
 - `examples/gemini3_builtin_tools` — full Gemini native-tool example matrix plus multi-turn mixed-tool validation
 - `examples/gemini_ws_outcomes` — Gemini error objects, cut streams, blocked prompts, and block-type finish reasons, the Interactions stream's terminal event, and the Responses WebSocket transport's abandoned, incomplete, closed, failed, and rejected-handshake responses, against scripted local upstreams, plus live Gemini and OpenAI WebSocket happy paths
 - `examples/openai_responses` — end-to-end OpenAI Responses validation
+- `examples/stream_termination` — model streams that end early, end mid tool call, or carry an error frame fail the run instead of persisting a truncated answer, for the OpenAI-compatible, Groq, Ollama, and OpenRouter clients against a scripted local upstream, plus live OpenAI, Groq, and OpenRouter happy paths
 - `examples/openrouter` — end-to-end OpenRouter validation through the ADK agent stack
 - `examples/bedrock_test` — Bedrock smoke testing
 - `examples/payments` — agentic commerce scenario index for ACP/AP2 validation paths
@@ -27,7 +28,6 @@ playground versions are being finalized:
 - `examples/acp_full_protocol` — no-API-key, Runner-backed ACP v1 server-direction reference with an end-to-end validating test (embedded-resource + multimodal prompts, permission bridge, `session/load` replay, usage/tool-call updates)
 - `examples/tool_outcomes` — what `LlmAgent` tells the model when an after-tool stage fails, a tool errors with a credential in its message, a tool times out, or the model sends malformed tool-call JSON, against a scripted OpenAI-compatible server and live OpenAI
 - `examples/agent_tool_isolation` — what an agent behind an `AgentTool` inherits from its caller (topology, context cache, invocation toolsets), what it hands back when it ends on a tool result, and how its timeouts, held confirmations and forwarded events reach the caller, against scripted OpenAI-compatible servers and live OpenAI
-- `examples/stream_termination` — model streams that end early, end mid tool call, or carry an error frame fail the run instead of persisting a truncated answer, for the OpenAI-compatible, Groq, Ollama, and OpenRouter clients against a scripted local upstream, plus live OpenAI, Groq, and OpenRouter happy paths
 - `examples/autonomy_validation` — live OpenAI and Anthropic check of the autonomy-readiness Phase 0 fixes (agent transfer history, runner plugin denial, path guardrails, failing toolsets, shared session state, functional resume, eval judges, Anthropic web search replay and 1-hour cache pricing), asserting on history, counters, and usage
 
 ## Validated Feature Examples
