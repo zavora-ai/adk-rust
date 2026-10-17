@@ -3,9 +3,10 @@
 //! An agent's model request carries the conversation as the agent sees it. Its own turns go
 //! back as model turns; what another agent said, called and got back is context, so it goes
 //! back as user-role text the agent reads, never as turns the agent appears to have taken
-//! ([`other_agent_context`]). Events a tool publishes on its own branch ([`tool_branch`]) are
-//! progress for observers, not context. A history cut — a window of recent events, or a
-//! compaction — keeps every function response with its call ([`balanced_cut`]).
+//! ([`other_agent_context`](crate::history::other_agent_context)). Events a tool publishes on
+//! its own branch ([`tool_branch`](crate::history::tool_branch)) are progress for observers,
+//! not context. A history cut — a window of recent events, or a compaction — keeps every
+//! function response with its call ([`balanced_cut`](crate::history::balanced_cut)).
 
 use std::collections::{HashMap, HashSet};
 
