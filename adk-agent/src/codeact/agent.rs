@@ -2640,7 +2640,8 @@ impl CodeActAgentBuilder {
     /// Build the [`CodeActAgent`].
     ///
     /// # Errors
-    /// Returns a config error if the model or runtime was not set.
+    /// Returns a config error if the model or runtime was not set, and an
+    /// error with code `agent.duplicate_tool_name` when two tools share a name.
     pub fn build(self) -> adk_core::Result<CodeActAgent> {
         let model = self.model.ok_or_else(|| AdkError::config("CodeActAgent requires a model"))?;
         let runtime =
@@ -2654,6 +2655,7 @@ impl CodeActAgentBuilder {
                 return Err(AdkError::agent(format!("duplicate sub-agent name: {}", agent.name())));
             }
         }
+        adk_core::ensure_unique_tool_names(&self.name, &self.tools)?;
 
         let capabilities = runtime.capabilities();
         if !capabilities.supports_suspension {
@@ -3434,6 +3436,20 @@ mod tests {
     #[test]
     fn builder_requires_model_and_runtime() {
         assert!(CodeActAgent::builder().build().unwrap_err().message.contains("model"));
+    }
+
+    #[test]
+    fn builder_rejects_two_tools_with_one_name() {
+        let builder = || {
+            CodeActAgent::builder()
+                .model(FakeLlm::new("noop"))
+                .runtime(Arc::new(ScriptedRuntime::new(vec![])))
+                .tool(echo_tool())
+        };
+        let err = builder().tool(echo_tool()).build().unwrap_err();
+        assert_eq!(err.code, adk_core::DUPLICATE_TOOL_NAME_CODE);
+        assert!(err.message.contains("'echo'"), "{}", err.message);
+        assert!(builder().build().is_ok());
     }
 
     #[tokio::test]

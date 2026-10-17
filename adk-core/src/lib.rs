@@ -268,8 +268,8 @@ pub use spend::{
     SpendError, SpendKey, SpendLedger, SpendLimit, SpendLimits, SpendPeriod, usd_to_micro_usd,
 };
 pub use tool::{
-    RetryBudget, Tool, ToolContext, ToolEffect, ToolExecutionStrategy, ToolPredicate, ToolRegistry,
-    Toolset, ValidationMode,
+    DUPLICATE_TOOL_NAME_CODE, RetryBudget, Tool, ToolContext, ToolEffect, ToolExecutionStrategy,
+    ToolPredicate, ToolRegistry, Toolset, ValidationMode, ensure_unique_tool_names,
 };
 pub use tool_concurrency::{ConcurrencyPermit, ToolConcurrencyManager};
 pub use tool_response::{

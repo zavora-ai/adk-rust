@@ -669,6 +669,65 @@ pub trait ToolRegistry: Send + Sync {
 /// A predicate function for filtering tools.
 pub type ToolPredicate = Box<dyn Fn(&dyn Tool) -> bool + Send + Sync>;
 
+/// The error code for an agent built with two static tools of one name.
+pub const DUPLICATE_TOOL_NAME_CODE: &str = "agent.duplicate_tool_name";
+
+/// Checks that no two of `tools` share a name.
+///
+/// A model calls a tool by name, so with two tools of one name only one can
+/// ever be called. Agent builders call this on their static tool list, naming
+/// the agent being built as `agent_name`.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+///
+/// use adk_core::{DUPLICATE_TOOL_NAME_CODE, Result, Tool, ToolContext, ensure_unique_tool_names};
+/// use async_trait::async_trait;
+/// use serde_json::Value;
+///
+/// struct Lookup;
+///
+/// #[async_trait]
+/// impl Tool for Lookup {
+///     fn name(&self) -> &str {
+///         "lookup"
+///     }
+///     fn description(&self) -> &str {
+///         "Looks things up"
+///     }
+///     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+///         Ok(args)
+///     }
+/// }
+///
+/// let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Lookup), Arc::new(Lookup)];
+/// let err = ensure_unique_tool_names("support", &tools).unwrap_err();
+/// assert_eq!(err.code, DUPLICATE_TOOL_NAME_CODE);
+/// assert!(ensure_unique_tool_names("support", &tools[..1]).is_ok());
+/// ```
+///
+/// # Errors
+///
+/// Returns an [`ErrorCategory::InvalidInput`](crate::ErrorCategory::InvalidInput)
+/// error with code [`DUPLICATE_TOOL_NAME_CODE`] naming the first repeated name.
+pub fn ensure_unique_tool_names(agent_name: &str, tools: &[Arc<dyn Tool>]) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    match tools.iter().map(|tool| tool.name()).find(|name| !seen.insert(*name)) {
+        Some(name) => Err(crate::AdkError::new(
+            crate::ErrorComponent::Agent,
+            crate::ErrorCategory::InvalidInput,
+            DUPLICATE_TOOL_NAME_CODE,
+            format!(
+                "agent '{agent_name}' has two tools named '{name}'; the model calls tools by \
+                 name, so only one could ever run. Rename one of them or register it once."
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
