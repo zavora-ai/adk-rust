@@ -1,19 +1,23 @@
 //! Property tests for node timeout enforcement.
 //!
 //! **Feature: runtime-reliability-sprint, Property 2: Timeout Precision**
-//! *For any* node with `run_timeout = D`, the node SHALL be cancelled within D + 200ms
-//! of starting execution.
+//! *For any* node with `run_timeout = D`, the node SHALL be cancelled when its timer for D
+//! elapses on the runtime clock.
 //! **Validates: Requirements 3.2, 4.2**
+//!
+//! Each case runs on a paused Tokio clock, so the timer fires at exactly D. How late a
+//! loaded host schedules the timer after that is outside what the timeout controls.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use adk_graph::error::GraphError;
 use adk_graph::node::{ExecutionConfig, FunctionNode, NodeContext, NodeOutput};
 use adk_graph::state::State;
 use adk_graph::timeout::{OnTimeout, TimeoutPolicy, execute_with_timeout};
 use proptest::prelude::*;
+use tokio::time::Instant;
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -22,11 +26,16 @@ fn make_ctx() -> NodeContext {
     NodeContext::new(State::new(), ExecutionConfig::default(), 0)
 }
 
+/// A runtime whose clock advances only to the next pending timer.
+fn paused_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap()
+}
+
 // ── Property 2: Timeout Precision (Fail policy) ───────────────────────
 //
 // **Feature: runtime-reliability-sprint, Property 2: Timeout Precision**
-// *For any* timeout duration D in [50ms, 500ms], a node that sleeps for D + 1000ms
-// SHALL be cancelled with `GraphError::NodeTimedOut` within D + 200ms of starting.
+// *For any* timeout duration D in [50ms, 300ms], a node that sleeps for D + 1000ms
+// SHALL be cancelled with `GraphError::NodeTimedOut` exactly D after it starts.
 // **Validates: Requirements 3.2, 4.2**
 
 proptest! {
@@ -36,12 +45,7 @@ proptest! {
     fn prop_timeout_fail_triggers_within_precision(
         timeout_ms in 50u64..=300u64
     ) {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-
-        rt.block_on(async {
+        paused_runtime().block_on(async {
             let d = Duration::from_millis(timeout_ms);
 
             // Node sleeps for D + 1000ms — guaranteed to exceed timeout
@@ -61,10 +65,10 @@ proptest! {
             let result = execute_with_timeout(&node, &ctx, &policy).await;
             let elapsed = start.elapsed();
 
-            // Assert the result is NodeTimedOut
             match &result {
-                Err(GraphError::NodeTimedOut { node, .. }) => {
+                Err(GraphError::NodeTimedOut { node, elapsed: reported }) => {
                     prop_assert_eq!(node.as_str(), "sleepy");
+                    prop_assert_eq!(*reported, d);
                 }
                 Err(other) => {
                     prop_assert!(false, "expected NodeTimedOut, got: {:?}", other);
@@ -74,26 +78,14 @@ proptest! {
                 }
             }
 
-            // Assert elapsed time is between D and D + 200ms
-            prop_assert!(
-                elapsed >= d,
-                "elapsed {:?} < timeout {:?}",
-                elapsed,
-                d
-            );
-            prop_assert!(
-                elapsed <= d + Duration::from_millis(200),
-                "elapsed {:?} > timeout + 200ms ({:?})",
-                elapsed,
-                d + Duration::from_millis(200)
-            );
+            prop_assert_eq!(elapsed, d);
 
             Ok(())
         })?;
     }
 }
 
-// ── Property 2b: Skip policy returns Ok with empty output within D + 200ms ──
+// ── Property 2b: Skip policy returns Ok with empty output exactly at D ──
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(100))]
@@ -102,12 +94,7 @@ proptest! {
     fn prop_timeout_skip_returns_empty_within_precision(
         timeout_ms in 50u64..=300u64
     ) {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-
-        rt.block_on(async {
+        paused_runtime().block_on(async {
             let d = Duration::from_millis(timeout_ms);
 
             let node = FunctionNode::new("sleepy_skip", move |_ctx| async move {
@@ -140,19 +127,7 @@ proptest! {
                 }
             }
 
-            // Assert elapsed time is between D and D + 200ms
-            prop_assert!(
-                elapsed >= d,
-                "elapsed {:?} < timeout {:?}",
-                elapsed,
-                d
-            );
-            prop_assert!(
-                elapsed <= d + Duration::from_millis(200),
-                "elapsed {:?} > timeout + 200ms ({:?})",
-                elapsed,
-                d + Duration::from_millis(200)
-            );
+            prop_assert_eq!(elapsed, d);
 
             Ok(())
         })?;
@@ -169,12 +144,7 @@ proptest! {
         timeout_ms in 50u64..=100u64,
         max_attempts in 2usize..=4usize
     ) {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-
-        rt.block_on(async {
+        paused_runtime().block_on(async {
             let d = Duration::from_millis(timeout_ms);
             let attempt_count = Arc::new(AtomicUsize::new(0));
             let count_clone = attempt_count.clone();
