@@ -289,6 +289,15 @@ ollama pull llama3.2
 ollama list
 ```
 
+### "stream ended before the response finished" or "reported an error during generation"
+
+A streamed response is complete only when Ollama sends a line with `"done": true`. A stream
+that ends without one fails with `model.ollama.incomplete_stream` (retryable), and an
+`{"error": "..."}` line fails with `model.ollama.stream_error`, quoting Ollama's message.
+Both usually mean the model runner stopped: check the `ollama serve` log for an
+out-of-memory or crashed runner. See
+[Stream Termination](providers.md#stream-termination) for every provider's rules.
+
 ---
 
 ## Running Examples

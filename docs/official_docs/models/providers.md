@@ -822,6 +822,83 @@ fn build() -> Result<GroqClient, adk_core::AdkError> {
 }
 ```
 
+### Stream Termination
+
+A streamed response is complete only when the provider sends its terminal event. A stream
+that ends without one, ends while a tool call is still arriving, or reports an error fails
+with an `AdkError` instead of returning the text received so far as a successful answer.
+`LlmAgent` then fails the run: the session stores no answer for the turn, `output_key`
+state is not written, and no tool from the turn runs.
+
+| Client | Complete when the stream sends | Ends early | Error inside the stream |
+|--------|--------------------------------|------------|-------------------------|
+| `OpenAIClient` Chat Completions, `OpenAICompatible` and its presets, OpenCode Chat | a `finish_reason`, or `data: [DONE]` with no tool call still arriving | `model.openai_compat.incomplete_stream` | `model.openai_compat.stream_error` |
+| `AzureOpenAIClient` | the same | `model.azure_openai.incomplete_stream` | `model.azure_openai.stream_error` |
+| `GroqClient` | the same | `model.groq.incomplete_stream` | `model.groq.stream_error` |
+| `OllamaModel` | a line with `"done": true` | `model.ollama.incomplete_stream` | `model.ollama.stream_error` |
+| `OpenRouterClient`, Chat Completions | a `finish_reason`, or `data: [DONE]` with no tool call still arriving | `model.openrouter.chat_stream_incomplete` | From the error's HTTP code, else `model.openrouter.stream_error` |
+| `OpenRouterClient`, Responses | `response.completed` or `response.incomplete` | `model.openrouter.responses_stream_incomplete` | `response.failed`: from the error's HTTP code, else `model.openrouter.response_failed` |
+
+- **Ends early** errors, and a connection that fails mid-stream, are
+  `ErrorCategory::Unavailable`, so the request can be retried.
+- **Error inside the stream** covers a chunk with a top-level `error` object (an Ollama
+  `{"error": "..."}` line included) and a chunk that finishes with `finish_reason: "error"`.
+  For the OpenAI-compatible, Azure OpenAI, Groq, and Ollama clients, and an OpenRouter
+  chunk that only finishes with `error`, the category follows a numeric `code` in the HTTP
+  error range, else the provider code (`rate_limit_exceeded` is `RateLimited`,
+  `invalid_request_error` is `InvalidInput`), else `Unavailable`. The provider's message is
+  quoted up to 512 bytes and its code is kept in `details.metadata["provider_error_code"]`.
+  A Chat Completions body with an `error` object and HTTP 200 fails the same way without
+  streaming. OpenRouter error objects, in Chat Completions chunks and in `response.failed`,
+  take the status-specific code and category of a numeric `code` (502 is
+  `model.openrouter.bad_gateway`, `Unavailable`), else `Internal`.
+- **Undecodable chunks** fail with `model.openai_compat.parse`, `model.azure_openai.parse`,
+  `model.groq.invalid_chunk`, or `model.ollama.stream_chunk` (`Internal`). The message names
+  only the decoder's error class and column, never the chunk. A chunk that cannot be decoded
+  after the response finished, such as a cut-off usage trailer, is ignored.
+- **Unknown finish reasons** map to `FinishReason::Other`, not `Stop`.
+- **SSE framing**: `data:` fields are read with or without the space after the colon, a
+  last line without a line ending is read, and a UTF-8 character split across network
+  chunks is decoded whole.
+- **OpenRouter Responses**: `response.incomplete` for `max_output_tokens` finishes with
+  `FinishReason::MaxTokens` and for `content_filter` with `FinishReason::Safety`; any other
+  reason fails with `model.openrouter.response_incomplete`, and a `cancelled` status with
+  `model.openrouter.response_cancelled`. A non-streaming response with status `failed`
+  fails with `model.openrouter.response_failed`. Text and reasoning stream as partial
+  deltas; tool calls arrive in the terminal response, whose content is complete and
+  replaces the deltas. A tool call that is unfinished or unnamed fails the turn instead of
+  being dropped, and arguments that are not a JSON object are marked as described under
+  "Malformed tool arguments", in Chat Completions and Responses.
+
+```rust
+use adk_core::{AdkError, Llm, LlmRequest};
+use adk_model::groq::GroqClient;
+use futures::StreamExt;
+
+/// Returns the complete streamed text, sending the request again once when the stream
+/// ends early.
+async fn answer(client: &GroqClient, request: LlmRequest) -> Result<String, AdkError> {
+    match stream_text(client, request.clone()).await {
+        Err(error) if error.is_retryable() => stream_text(client, request).await,
+        result => result,
+    }
+}
+
+async fn stream_text(client: &GroqClient, request: LlmRequest) -> Result<String, AdkError> {
+    let mut stream = client.generate_content(request, true).await?;
+    let mut text = String::new();
+    while let Some(response) = stream.next().await {
+        // A truncated stream ends here with an error, never with a partial answer.
+        let response = response?;
+        // Groq sends each piece of text once, in deltas or in the finishing chunk.
+        for part in response.content.iter().flat_map(|content| &content.parts) {
+            text.push_str(part.text().unwrap_or_default());
+        }
+    }
+    Ok(text)
+}
+```
+
 ### Request Adapters and Explicit Endpoints
 
 `OpenAICompatible` (and so every OpenAI-compatible preset) and `OpenAIResponsesClient`

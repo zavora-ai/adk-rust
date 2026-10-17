@@ -267,6 +267,8 @@ pub mod deepseek;
     feature = "azure-ai",
     feature = "deepseek",
     feature = "gemini",
+    feature = "groq",
+    feature = "ollama",
     feature = "openai",
     feature = "openrouter"
 ))]
@@ -297,15 +299,24 @@ pub mod pricing;
 pub mod provider;
 /// Retry logic with exponential backoff for transient provider errors.
 pub mod retry;
-#[cfg(any(feature = "openai", feature = "deepseek", feature = "azure-ai"))]
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "azure-ai",
+    feature = "groq",
+    feature = "ollama"
+))]
 mod sse;
+#[cfg(any(feature = "openai", feature = "groq", feature = "ollama", feature = "openrouter"))]
+mod stream_error;
 #[cfg(any(
     feature = "openai",
     feature = "anthropic",
     feature = "deepseek",
     feature = "groq",
     feature = "bedrock",
-    feature = "azure-ai"
+    feature = "azure-ai",
+    feature = "openrouter"
 ))]
 pub(crate) mod tool_args;
 pub mod tool_call_parser;

@@ -1,0 +1,694 @@
+//! Streams that end before their terminal event, end mid tool call, or carry an error
+//! frame fail instead of returning a truncated success, and `data:` fields without a space
+//! or UTF-8 characters split across network writes decode exactly.
+//!
+//! The upstream is a raw HTTP server that sends each scripted write as its own chunk, so a
+//! test controls where the client sees a network boundary.
+#![cfg(any(feature = "openai", feature = "groq", feature = "ollama", feature = "openrouter"))]
+
+use adk_core::{AdkError, Content, Llm, LlmRequest, LlmResponse, Part};
+use futures::StreamExt;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+
+/// Serves every request with `writes`, each as a separate HTTP chunk, then ends the
+/// response cleanly, as a proxy does when the upstream stopped early.
+async fn serve(content_type: &'static str, writes: Vec<Vec<u8>>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    let writes = Arc::new(writes);
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let writes = writes.clone();
+            tokio::spawn(async move {
+                let mut received = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                let header_end = loop {
+                    let Ok(read) = socket.read(&mut buffer).await else { return };
+                    if read == 0 {
+                        return;
+                    }
+                    received.extend_from_slice(&buffer[..read]);
+                    if let Some(end) = received.windows(4).position(|window| window == b"\r\n\r\n")
+                    {
+                        break end + 4;
+                    }
+                };
+                let head = String::from_utf8_lossy(&received[..header_end]).to_ascii_lowercase();
+                let length = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while received.len() < header_end + length {
+                    let Ok(read) = socket.read(&mut buffer).await else { return };
+                    if read == 0 {
+                        return;
+                    }
+                    received.extend_from_slice(&buffer[..read]);
+                }
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n"
+                );
+                if socket.write_all(header.as_bytes()).await.is_err() {
+                    return;
+                }
+                for write in writes.iter() {
+                    let mut frame = format!("{:x}\r\n", write.len()).into_bytes();
+                    frame.extend_from_slice(write);
+                    frame.extend_from_slice(b"\r\n");
+                    if socket.write_all(&frame).await.is_err() || socket.flush().await.is_err() {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                }
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    base
+}
+
+/// Splits `bytes` in the middle of the first occurrence of `needle`; a write without it
+/// stays whole.
+#[cfg(any(feature = "groq", feature = "ollama", feature = "openrouter"))]
+fn split_inside(bytes: Vec<u8>, needle: &str) -> Vec<Vec<u8>> {
+    let needle = needle.as_bytes();
+    match bytes.windows(needle.len()).position(|window| window == needle) {
+        Some(start) => {
+            let split = start + needle.len() / 2;
+            vec![bytes[..split].to_vec(), bytes[split..].to_vec()]
+        }
+        None => vec![bytes],
+    }
+}
+
+fn request(model: &str) -> LlmRequest {
+    LlmRequest::new(model, vec![Content::new("user").with_text("What is the capital of France?")])
+}
+
+/// Collects every response and the error that ended the stream, if any.
+async fn collect(
+    model: &dyn Llm,
+    request: LlmRequest,
+    stream: bool,
+) -> (Vec<LlmResponse>, Option<AdkError>) {
+    let mut responses = Vec::new();
+    let mut stream = match model.generate_content(request, stream).await {
+        Ok(stream) => stream,
+        Err(error) => return (responses, Some(error)),
+    };
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(response) => responses.push(response),
+            Err(error) => return (responses, Some(error)),
+        }
+    }
+    (responses, None)
+}
+
+fn text(responses: &[LlmResponse]) -> String {
+    responses
+        .iter()
+        .filter(|response| response.partial)
+        .filter_map(|response| response.content.as_ref())
+        .flat_map(|content| content.parts.iter())
+        .filter_map(Part::text)
+        .collect()
+}
+
+fn function_calls(responses: &[LlmResponse]) -> usize {
+    responses
+        .iter()
+        .filter_map(|response| response.content.as_ref())
+        .flat_map(|content| content.parts.iter())
+        .filter(|part| matches!(part, Part::FunctionCall { .. }))
+        .count()
+}
+
+/// Asserts the stream failed with `code` and yielded neither a tool call nor a final
+/// response, and returns what it yielded before failing.
+#[track_caller]
+fn assert_fails(
+    outcome: (Vec<LlmResponse>, Option<AdkError>),
+    code: &str,
+) -> (Vec<LlmResponse>, AdkError) {
+    let (responses, error) = outcome;
+    let Some(error) = error else { panic!("expected {code}, got Ok {responses:?}") };
+    assert_eq!(error.code, code, "{error}");
+    assert_eq!(function_calls(&responses), 0, "a failed stream yielded a tool call");
+    assert!(
+        responses.iter().all(|response| response.partial),
+        "a failed stream yielded a final response: {responses:?}"
+    );
+    (responses, error)
+}
+
+/// Chat Completions chunks, shared by the OpenAI-compatible, Groq, and OpenRouter Chat wires.
+#[cfg(any(feature = "openai", feature = "groq", feature = "openrouter"))]
+mod chat {
+    use serde_json::{Value, json};
+
+    pub fn sse(lines: &[Value]) -> Vec<Vec<u8>> {
+        lines.iter().map(|value| format!("data: {value}\n\n").into_bytes()).collect()
+    }
+
+    pub fn done() -> Vec<u8> {
+        b"data: [DONE]\n\n".to_vec()
+    }
+
+    pub fn chunk(delta: Value, finish_reason: Option<&str>) -> Value {
+        json!({
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 1_760_000_000,
+            "model": "scripted",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        })
+    }
+
+    pub fn text_chunk(text: &str) -> Value {
+        chunk(json!({"content": text}), None)
+    }
+
+    pub fn tool_call_chunks(arguments: &[&str]) -> Vec<Value> {
+        let mut chunks = vec![chunk(
+            json!({"role": "assistant", "tool_calls": [{
+                "index": 0, "id": "call_1", "type": "function",
+                "function": {"name": "get_weather", "arguments": ""},
+            }]}),
+            None,
+        )];
+        chunks.extend(arguments.iter().map(|fragment| {
+            chunk(json!({"tool_calls": [{"index": 0, "function": {"arguments": fragment}}]}), None)
+        }));
+        chunks
+    }
+
+    #[cfg(any(feature = "openai", feature = "groq"))]
+    pub fn openai_error() -> Value {
+        json!({"error": {"message": "The server had an error.", "type": "server_error", "code": "server_error"}})
+    }
+
+    pub fn finished_text(texts: &[&str]) -> Vec<Vec<u8>> {
+        let mut chunks: Vec<Value> = texts.iter().map(|text| text_chunk(text)).collect();
+        chunks.push(chunk(json!({}), Some("stop")));
+        let mut writes = sse(&chunks);
+        writes.push(done());
+        writes
+    }
+}
+
+#[cfg(feature = "openai")]
+mod openai_compatible {
+    use super::chat::*;
+    use super::*;
+    use adk_core::{ErrorCategory, FinishReason};
+    use adk_model::openai::OpenAIClient;
+    use serde_json::json;
+
+    async fn client(writes: Vec<Vec<u8>>) -> OpenAIClient {
+        let base = serve("text/event-stream", writes).await;
+        OpenAIClient::compatible("sk-test", format!("{base}/v1"), "scripted").expect("client")
+    }
+
+    #[tokio::test]
+    async fn stream_without_a_finish_reason_or_done_fails() {
+        let model =
+            client(sse(&[text_chunk("The capital of France "), text_chunk("is Par")])).await;
+        let outcome = collect(&model, request("scripted"), true).await;
+        let (responses, error) = assert_fails(outcome, "model.openai_compat.incomplete_stream");
+        assert_eq!(error.category, ErrorCategory::Unavailable);
+        assert!(error.is_retryable());
+        assert_eq!(text(&responses), "The capital of France is Par");
+    }
+
+    #[tokio::test]
+    async fn stream_cut_mid_tool_call_fails() {
+        let model = client(sse(&tool_call_chunks(&[r#"{"city":"Par"#]))).await;
+        let outcome = collect(&model, request("scripted"), true).await;
+        assert_fails(outcome, "model.openai_compat.incomplete_stream");
+    }
+
+    #[tokio::test]
+    async fn done_with_unfinished_tool_calls_fails() {
+        let mut writes = sse(&tool_call_chunks(&[r#"{"city":"Paris"}"#]));
+        writes.push(done());
+        let outcome = collect(&client(writes).await, request("scripted"), true).await;
+        assert_fails(outcome, "model.openai_compat.incomplete_stream");
+    }
+
+    #[tokio::test]
+    async fn error_chunk_fails_even_when_done_follows() {
+        let mut writes = sse(&[text_chunk("The capital of France "), openai_error()]);
+        writes.push(done());
+        let outcome = collect(&client(writes).await, request("scripted"), true).await;
+        let (_, error) = assert_fails(outcome, "model.openai_compat.stream_error");
+        assert_eq!(error.category, ErrorCategory::Unavailable);
+        assert!(error.message.contains("The server had an error."), "{error}");
+        assert_eq!(error.details.metadata["provider_error_code"], "server_error");
+    }
+
+    #[tokio::test]
+    async fn error_finish_reason_fails() {
+        let mut writes = sse(&[text_chunk("The capital"), chunk(json!({}), Some("error"))]);
+        writes.push(done());
+        let outcome = collect(&client(writes).await, request("scripted"), true).await;
+        assert_fails(outcome, "model.openai_compat.stream_error");
+    }
+
+    #[tokio::test]
+    async fn unknown_finish_reason_is_other() {
+        let mut writes = sse(&[text_chunk("Paris."), chunk(json!({}), Some("end_turn"))]);
+        writes.push(done());
+        let (responses, error) = collect(&client(writes).await, request("scripted"), true).await;
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(
+            responses.last().and_then(|response| response.finish_reason),
+            Some(FinishReason::Other)
+        );
+    }
+
+    #[tokio::test]
+    async fn data_fields_without_a_space_decode() {
+        let writes = finished_text(&["The capital of France ", "is Paris."])
+            .into_iter()
+            .map(|write| {
+                String::from_utf8(write).expect("utf8").replacen("data: ", "data:", 1).into_bytes()
+            })
+            .collect();
+        let (responses, error) = collect(&client(writes).await, request("scripted"), true).await;
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(text(&responses), "The capital of France is Paris.");
+        assert_eq!(
+            responses.last().and_then(|response| response.finish_reason),
+            Some(FinishReason::Stop)
+        );
+    }
+
+    #[tokio::test]
+    async fn last_line_without_a_line_ending_is_read() {
+        let mut writes = sse(&[text_chunk("Paris.")]);
+        writes.push(b"data: [DONE]".to_vec());
+        let (responses, error) = collect(&client(writes).await, request("scripted"), true).await;
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(text(&responses), "Paris.");
+    }
+
+    #[tokio::test]
+    async fn non_streaming_error_body_fails() {
+        let model = client(vec![openai_error().to_string().into_bytes()]).await;
+        let outcome = collect(&model, request("scripted"), false).await;
+        let error = outcome.1.expect("an error body must fail");
+        assert_eq!(error.code, "model.openai_compat.stream_error");
+    }
+}
+
+#[cfg(feature = "groq")]
+mod groq {
+    use super::chat::*;
+    use super::*;
+    use adk_model::groq::{GroqClient, GroqConfig};
+    use serde_json::json;
+
+    async fn client(writes: Vec<Vec<u8>>) -> GroqClient {
+        let base = serve("text/event-stream", writes).await;
+        GroqClient::new(GroqConfig::new("gsk-test", "openai/gpt-oss-120b").with_base_url(base))
+            .expect("client")
+    }
+
+    #[tokio::test]
+    async fn stream_without_a_finish_reason_or_done_fails() {
+        let model =
+            client(sse(&[text_chunk("The capital of France "), text_chunk("is Par")])).await;
+        let outcome = collect(&model, request("openai/gpt-oss-120b"), true).await;
+        assert_fails(outcome, "model.groq.incomplete_stream");
+    }
+
+    #[tokio::test]
+    async fn stream_cut_mid_tool_call_fails() {
+        let model = client(sse(&tool_call_chunks(&[r#"{"city":"Par"#]))).await;
+        let outcome = collect(&model, request("openai/gpt-oss-120b"), true).await;
+        assert_fails(outcome, "model.groq.incomplete_stream");
+    }
+
+    #[tokio::test]
+    async fn error_chunk_fails_even_when_done_follows() {
+        let mut writes = sse(&[text_chunk("The capital of France "), openai_error()]);
+        writes.push(done());
+        let outcome = collect(&client(writes).await, request("openai/gpt-oss-120b"), true).await;
+        assert_fails(outcome, "model.groq.stream_error");
+    }
+
+    #[tokio::test]
+    async fn finish_chunk_that_does_not_decode_fails_instead_of_dropping_the_tool_call() {
+        let mut chunks = tool_call_chunks(&[r#"{"city":"Paris"}"#]);
+        let mut finish = chunk(json!({}), Some("tool_calls"));
+        finish["usage"] =
+            json!({"prompt_tokens": 12, "completion_tokens": null, "total_tokens": null});
+        chunks.push(finish);
+        let mut writes = sse(&chunks);
+        writes.push(done());
+        let outcome = collect(&client(writes).await, request("openai/gpt-oss-120b"), true).await;
+        let (_, error) = assert_fails(outcome, "model.groq.invalid_chunk");
+        assert!(!error.message.contains("Paris"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn utf8_split_across_network_writes_is_exact() {
+        let answer = "Café ☕ in 東京 🙂.";
+        let writes = finished_text(&[answer])
+            .into_iter()
+            .flat_map(|write| split_inside(write, "🙂"))
+            .collect();
+        let (responses, error) =
+            collect(&client(writes).await, request("openai/gpt-oss-120b"), true).await;
+        assert!(error.is_none(), "{error:?}");
+        let final_text: String = responses
+            .iter()
+            .filter_map(|response| response.content.as_ref())
+            .flat_map(|content| content.parts.iter())
+            .filter_map(Part::text)
+            .collect();
+        assert_eq!(final_text, answer);
+    }
+
+    #[tokio::test]
+    async fn data_fields_without_a_space_decode() {
+        let writes = finished_text(&["Paris."])
+            .into_iter()
+            .map(|write| {
+                String::from_utf8(write).expect("utf8").replacen("data: ", "data:", 1).into_bytes()
+            })
+            .collect();
+        let (responses, error) =
+            collect(&client(writes).await, request("openai/gpt-oss-120b"), true).await;
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(text(&responses), "Paris.");
+    }
+}
+
+#[cfg(feature = "ollama")]
+mod ollama {
+    use super::*;
+    use adk_model::ollama::{OllamaConfig, OllamaModel};
+    use serde_json::json;
+
+    fn line(content: &str, done: bool) -> Vec<u8> {
+        let mut value = json!({
+            "model": "qwen3.5",
+            "created_at": "2026-10-16T00:00:00Z",
+            "message": {"role": "assistant", "content": content},
+            "done": done,
+        });
+        if done {
+            for (key, count) in [
+                ("total_duration", 10),
+                ("load_duration", 1),
+                ("prompt_eval_count", 12),
+                ("prompt_eval_duration", 1),
+                ("eval_count", 7),
+                ("eval_duration", 1),
+            ] {
+                value[key] = json!(count);
+            }
+        }
+        format!("{value}\n").into_bytes()
+    }
+
+    async fn client(writes: Vec<Vec<u8>>) -> OllamaModel {
+        let base = serve("application/x-ndjson", writes).await;
+        OllamaModel::new(OllamaConfig::with_host(base, "qwen3.5")).expect("client")
+    }
+
+    #[tokio::test]
+    async fn complete_stream_succeeds() {
+        let model = client(vec![line("Paris", false), line(".", false), line("", true)]).await;
+        let (responses, error) = collect(&model, request("qwen3.5"), true).await;
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(text(&responses), "Paris.");
+        assert!(responses.last().is_some_and(|response| response.turn_complete));
+    }
+
+    #[tokio::test]
+    async fn stream_without_done_fails() {
+        let model =
+            client(vec![line("The capital of France ", false), line("is Par", false)]).await;
+        let outcome = collect(&model, request("qwen3.5"), true).await;
+        let (_, error) = assert_fails(outcome, "model.ollama.incomplete_stream");
+        assert!(error.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn error_line_fails() {
+        let model = client(vec![
+            line("The capital of France ", false),
+            b"{\"error\":\"model runner has unexpectedly stopped\"}\n".to_vec(),
+        ])
+        .await;
+        let outcome = collect(&model, request("qwen3.5"), true).await;
+        let (_, error) = assert_fails(outcome, "model.ollama.stream_error");
+        assert!(error.message.contains("model runner has unexpectedly stopped"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn utf8_split_across_network_writes_is_exact() {
+        let answer = "Café ☕ in 東京 🙂.";
+        let mut writes = split_inside(line(answer, false), "🙂");
+        writes.push(line("", true));
+        let (responses, error) = collect(&client(writes).await, request("qwen3.5"), true).await;
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(text(&responses), answer);
+    }
+}
+
+#[cfg(feature = "openrouter")]
+mod openrouter {
+    use super::chat::*;
+    use super::*;
+    use adk_core::FinishReason;
+    use adk_model::openrouter::{OpenRouterApiMode, OpenRouterClient, OpenRouterConfig};
+    use serde_json::{Value, json};
+
+    const MODEL: &str = "openai/gpt-4.1-mini";
+
+    async fn client(
+        mode: OpenRouterApiMode,
+        content_type: &'static str,
+        writes: Vec<Vec<u8>>,
+    ) -> OpenRouterClient {
+        let base = serve(content_type, writes).await;
+        OpenRouterClient::new(
+            OpenRouterConfig::new("sk-or-test", MODEL)
+                .with_base_url(base)
+                .with_default_api_mode(mode),
+        )
+        .expect("client")
+    }
+
+    async fn chat(writes: Vec<Vec<u8>>) -> OpenRouterClient {
+        client(OpenRouterApiMode::ChatCompletions, "text/event-stream", writes).await
+    }
+
+    async fn responses(writes: Vec<Vec<u8>>) -> OpenRouterClient {
+        client(OpenRouterApiMode::Responses, "text/event-stream", writes).await
+    }
+
+    fn event(kind: &str, mut fields: Value) -> Value {
+        fields["type"] = json!(kind);
+        fields
+    }
+
+    fn delta(text: &str) -> Value {
+        event(
+            "response.output_text.delta",
+            json!({"item_id": "msg_1", "output_index": 0, "delta": text}),
+        )
+    }
+
+    fn terminal(kind: &str, status: &str, text: &str, extra: Value) -> Value {
+        let mut response = json!({
+            "id": "resp_1",
+            "status": status,
+            "output": [{
+                "id": "msg_1", "type": "message", "role": "assistant", "status": "completed",
+                "content": [{"type": "output_text", "text": text}],
+            }],
+            "usage": {"input_tokens": 12, "output_tokens": 7, "total_tokens": 19},
+        });
+        if let (Some(response), Some(extra)) = (response.as_object_mut(), extra.as_object()) {
+            response.extend(extra.clone());
+        }
+        event(kind, json!({"response": response}))
+    }
+
+    #[tokio::test]
+    async fn chat_stream_without_a_finish_reason_or_done_fails() {
+        let model = chat(sse(&[text_chunk("The capital of France "), text_chunk("is Par")])).await;
+        let outcome = collect(&model, request(MODEL), true).await;
+        assert_fails(outcome, "model.openrouter.chat_stream_incomplete");
+    }
+
+    #[tokio::test]
+    async fn chat_stream_cut_mid_tool_call_fails() {
+        let model = chat(sse(&tool_call_chunks(&[r#"{"city":"Par"#]))).await;
+        let outcome = collect(&model, request(MODEL), true).await;
+        assert_fails(outcome, "model.openrouter.chat_stream_incomplete");
+    }
+
+    #[tokio::test]
+    async fn chat_tool_call_with_invalid_arguments_is_marked_instead_of_dropped() {
+        let mut chunks = tool_call_chunks(&[r#"{"city":"Par"#]);
+        chunks.push(chunk(json!({}), Some("length")));
+        let mut writes = sse(&chunks);
+        writes.push(done());
+        let (responses, error) = collect(&chat(writes).await, request(MODEL), true).await;
+        assert!(error.is_none(), "{error:?}");
+        let args = responses
+            .iter()
+            .filter_map(|response| response.content.as_ref())
+            .flat_map(|content| content.parts.iter())
+            .find_map(|part| match part {
+                Part::FunctionCall { args, .. } => Some(args.clone()),
+                _ => None,
+            })
+            .expect("the call is emitted");
+        assert!(adk_core::invalid_tool_arguments_reason(&args).is_some(), "{args}");
+    }
+
+    #[tokio::test]
+    async fn chat_utf8_split_across_network_writes_is_exact() {
+        let answer = "Café ☕ in 東京 🙂.";
+        let writes = finished_text(&[answer])
+            .into_iter()
+            .flat_map(|write| split_inside(write, "🙂"))
+            .collect();
+        let (responses, error) = collect(&chat(writes).await, request(MODEL), true).await;
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(text(&responses), answer);
+    }
+
+    #[tokio::test]
+    async fn responses_stream_without_a_terminal_event_fails() {
+        let mut writes = sse(&[delta("The capital of France "), delta("is Par")]);
+        writes.push(done());
+        let outcome = collect(&responses(writes).await, request(MODEL), true).await;
+        let (_, error) = assert_fails(outcome, "model.openrouter.responses_stream_incomplete");
+        assert!(error.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn responses_stream_cut_mid_tool_call_fails() {
+        let writes = sse(&[
+            event(
+                "response.output_item.added",
+                json!({"output_index": 0, "item": {"id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "", "status": "in_progress"}}),
+            ),
+            event(
+                "response.function_call_arguments.delta",
+                json!({"item_id": "fc_1", "delta": r#"{"city":"Par"#}),
+            ),
+        ]);
+        let outcome = collect(&responses(writes).await, request(MODEL), true).await;
+        assert_fails(outcome, "model.openrouter.responses_stream_incomplete");
+    }
+
+    #[tokio::test]
+    async fn responses_failed_event_fails() {
+        let failed = event(
+            "response.failed",
+            json!({"response": {"id": "resp_1", "status": "failed", "output": [],
+                "error": {"code": "server_error", "message": "The model failed to generate a response."}}}),
+        );
+        let mut writes = sse(&[delta("The capital of France "), failed]);
+        writes.push(done());
+        let outcome = collect(&responses(writes).await, request(MODEL), true).await;
+        let (_, error) = assert_fails(outcome, "model.openrouter.response_failed");
+        assert!(error.message.contains("The model failed to generate a response."), "{error}");
+    }
+
+    #[tokio::test]
+    async fn responses_incomplete_at_the_output_limit_finishes_with_max_tokens() {
+        let mut writes = sse(&[
+            delta("One, two, "),
+            terminal(
+                "response.incomplete",
+                "incomplete",
+                "One, two, ",
+                json!({"incomplete_details": {"reason": "max_output_tokens"}}),
+            ),
+        ]);
+        writes.push(done());
+        let (responses, error) = collect(&responses(writes).await, request(MODEL), true).await;
+        assert!(error.is_none(), "{error:?}");
+        let last = responses.last().expect("terminal response");
+        assert_eq!(last.finish_reason, Some(FinishReason::MaxTokens));
+        assert!(last.turn_complete && !last.partial);
+    }
+
+    #[tokio::test]
+    async fn responses_incomplete_for_another_reason_fails() {
+        let writes = sse(&[terminal(
+            "response.incomplete",
+            "incomplete",
+            "One, two, ",
+            json!({"incomplete_details": {"reason": "interrupted"}}),
+        )]);
+        let outcome = collect(&responses(writes).await, request(MODEL), true).await;
+        assert_fails(outcome, "model.openrouter.response_incomplete");
+    }
+
+    #[tokio::test]
+    async fn responses_terminal_content_replaces_the_streamed_deltas() {
+        let mut writes = sse(&[
+            delta("The capital of France "),
+            delta("is Paris."),
+            terminal(
+                "response.completed",
+                "completed",
+                "The capital of France is Paris.",
+                json!({}),
+            ),
+        ]);
+        writes.push(done());
+        let (responses, error) = collect(&responses(writes).await, request(MODEL), true).await;
+        assert!(error.is_none(), "{error:?}");
+        let last = responses.last().expect("terminal response");
+        assert_eq!(
+            last.provider_metadata.as_ref().and_then(|metadata| metadata.get("content_complete")),
+            Some(&json!(true))
+        );
+        assert_eq!(text(&responses), "The capital of France is Paris.");
+    }
+
+    #[tokio::test]
+    async fn responses_utf8_split_across_network_writes_is_exact() {
+        let answer = "Café ☕ in 東京 🙂.";
+        let writes = sse(&[delta(answer)])
+            .into_iter()
+            .flat_map(|write| split_inside(write, "🙂"))
+            .chain(sse(&[terminal("response.completed", "completed", answer, json!({}))]))
+            .collect();
+        let (responses, error) = collect(&responses(writes).await, request(MODEL), true).await;
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(text(&responses), answer);
+    }
+
+    #[tokio::test]
+    async fn non_streaming_failed_response_fails() {
+        let body = json!({"id": "resp_1", "object": "response", "status": "failed", "output": [],
+            "error": {"code": "server_error", "message": "The model failed to generate a response."}});
+        let model = client(
+            OpenRouterApiMode::Responses,
+            "application/json",
+            vec![body.to_string().into_bytes()],
+        )
+        .await;
+        let outcome = collect(&model, request(MODEL), false).await;
+        let error = outcome.1.expect("a failed response must be an error");
+        assert_eq!(error.code, "model.openrouter.response_failed");
+    }
+}

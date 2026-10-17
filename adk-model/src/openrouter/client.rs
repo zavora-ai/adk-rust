@@ -196,7 +196,7 @@ impl OpenRouterClient {
                     .with_source(err)
                 })?;
 
-                for frame in decoder.push(&String::from_utf8_lossy(&chunk)) {
+                for frame in decoder.push_bytes(&chunk)? {
                     if let Some(item) = parse_chat_stream_frame(&frame)? {
                         match item {
                             super::stream::OpenRouterChatStreamItem::Error(error) => {
@@ -338,7 +338,7 @@ impl OpenRouterClient {
                     .with_source(err)
                 })?;
 
-                for frame in decoder.push(&String::from_utf8_lossy(&chunk)) {
+                for frame in decoder.push_bytes(&chunk)? {
                     if let Some(item) = parse_responses_stream_frame(&frame)? {
                         match item {
                             super::stream::OpenRouterResponsesStreamItem::Error(error) => {

@@ -152,6 +152,27 @@ pub fn stream_error_to_adk_error(
     error
 }
 
+/// Normalize the `error` object of a Responses API response whose status is `failed`,
+/// from a non-streaming body or a `response.failed` stream event.
+pub(crate) fn response_failed_to_adk_error(error: Option<&Value>) -> AdkError {
+    let Some(error) = error.filter(|error| !error.is_null()) else {
+        return AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::Internal,
+            "model.openrouter.response_failed",
+            "OpenRouter response failed without error details",
+        )
+        .with_provider("openrouter");
+    };
+    let stream_error = crate::openrouter::stream::parse_stream_error(&json!({ "error": error }));
+    let mut mapped = stream_error_to_adk_error(&stream_error, None);
+    // Without an HTTP status the failure has no status-specific code.
+    if mapped.details.upstream_status_code.is_none() {
+        mapped.code = "model.openrouter.response_failed";
+    }
+    mapped
+}
+
 /// Longest upstream detail appended to an error message; `raw` can be a full response body.
 const MAX_UPSTREAM_DETAIL_BYTES: usize = 512;
 

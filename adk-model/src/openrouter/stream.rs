@@ -212,6 +212,8 @@ pub fn parse_responses_stream_frame(
 #[derive(Debug, Default)]
 pub struct OpenRouterSseDecoder {
     buffer: String,
+    /// Bytes of a UTF-8 character whose remaining bytes have not arrived yet.
+    partial_utf8: Vec<u8>,
 }
 
 impl OpenRouterSseDecoder {
@@ -222,7 +224,11 @@ impl OpenRouterSseDecoder {
 
     /// Push a UTF-8 text chunk into the decoder and return any completed SSE frames.
     pub fn push(&mut self, chunk: &str) -> Vec<OpenRouterSseFrame> {
-        self.buffer.push_str(&chunk.replace("\r\n", "\n"));
+        self.buffer.push_str(chunk);
+        // Normalized over the whole buffer, so a `\r\n` split across two chunks still joins.
+        if self.buffer.contains("\r\n") {
+            self.buffer = self.buffer.replace("\r\n", "\n");
+        }
 
         let mut frames = Vec::new();
 
@@ -236,6 +242,51 @@ impl OpenRouterSseDecoder {
         }
 
         frames
+    }
+
+    /// Push raw network bytes and return any completed SSE frames.
+    ///
+    /// A chunk may end inside a multi-byte UTF-8 character; its leading bytes wait for the
+    /// next chunk instead of being decoded as replacement characters.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::openrouter::OpenRouterSseDecoder;
+    ///
+    /// let frame = "data: {\"delta\":\"🙂\"}\n\n".as_bytes();
+    /// let mut decoder = OpenRouterSseDecoder::new();
+    /// // Byte 18 falls inside the four-byte emoji.
+    /// assert!(decoder.push_bytes(&frame[..18])?.is_empty());
+    /// let frames = decoder.push_bytes(&frame[18..])?;
+    /// assert_eq!(frames[0].data, "{\"delta\":\"🙂\"}");
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bytes are not valid UTF-8.
+    pub fn push_bytes(&mut self, chunk: &[u8]) -> Result<Vec<OpenRouterSseFrame>, AdkError> {
+        let invalid = || {
+            AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Internal,
+                "model.openrouter.stream_invalid_utf8",
+                "OpenRouter stream emitted bytes that are not valid UTF-8",
+            )
+            .with_provider("openrouter")
+        };
+        self.partial_utf8.extend_from_slice(chunk);
+        let complete = match std::str::from_utf8(&self.partial_utf8) {
+            Ok(_) => self.partial_utf8.len(),
+            // `error_len() == None` means the input ends inside a character.
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(_) => return Err(invalid()),
+        };
+        let text =
+            std::str::from_utf8(&self.partial_utf8[..complete]).map_err(|_| invalid())?.to_owned();
+        self.partial_utf8.drain(..complete);
+        Ok(self.push(&text))
     }
 
     /// Drain any remaining complete frame buffered in the decoder.
@@ -260,7 +311,7 @@ fn parse_frame_json(
     })
 }
 
-fn parse_stream_error(value: &serde_json::Value) -> OpenRouterStreamError {
+pub(super) fn parse_stream_error(value: &serde_json::Value) -> OpenRouterStreamError {
     let error = value.get("error").unwrap_or(value);
     let mut stream_error = OpenRouterStreamError::default();
 
@@ -327,6 +378,25 @@ mod tests {
         assert!(first.is_empty());
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].data, "{\"type\":\"response.output_text.delta\",\"delta\":\"hel\"}");
+    }
+
+    #[test]
+    fn sse_decoder_keeps_characters_split_across_byte_chunks() {
+        let body = "data: {\"delta\":\"é中🙂\"}\r\n\r\n".as_bytes();
+        for split in 1..body.len() {
+            let mut decoder = OpenRouterSseDecoder::new();
+            let mut frames = decoder.push_bytes(&body[..split]).expect("valid prefix");
+            frames.extend(decoder.push_bytes(&body[split..]).expect("valid suffix"));
+            assert_eq!(frames.len(), 1, "split at {split}");
+            assert_eq!(frames[0].data, "{\"delta\":\"é中🙂\"}", "split at {split}");
+        }
+    }
+
+    #[test]
+    fn sse_decoder_rejects_invalid_utf8() {
+        let mut decoder = OpenRouterSseDecoder::new();
+        let error = decoder.push_bytes(b"data: \xc3(\n\n").expect_err("invalid UTF-8");
+        assert_eq!(error.code, "model.openrouter.stream_invalid_utf8");
     }
 
     #[test]
