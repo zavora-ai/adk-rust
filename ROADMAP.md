@@ -1,6 +1,6 @@
 # ADK-Rust Roadmap
 
-> **Last updated:** June 2026
+> **Last updated:** October 2026
 >
 > ADK-Rust aims to become the best Rust-native platform for building, orchestrating, and deploying production AI agents across cloud, edge, enterprise, and emerging spatial environments.
 
@@ -102,6 +102,72 @@ Autonomous agents that do vertically integrated tasks well, demonstrating:
 | Device-embedded agents | 🔮 | Agents on phones, cars, TVs with capability awareness |
 | Hardware interfaces | 🔮 | Robotics integration layer |
 | Platform consolidation | 🔮 | Unified deployment across cloud/edge/device |
+
+---
+
+## Hardening Backlog 🔮
+
+Gaps from the October 2026 review that remain open after the fixes in #848–#868. Each row names the follow-up fix and the pull request that recorded it.
+
+### Realtime
+
+| Gap | Fix | Origin |
+|-----|-----|--------|
+| A reconnect carries in-flight tool state onto the new connection | Defer a queued reconnect while tool calls are outstanding; reset the pending-response flags and drop outputs from the old connection | October 2026 review |
+| Barge-in neither truncates played audio nor clears provider buffers | Track played milliseconds per item; on interruption send `conversation.item.truncate` (WebSocket) and `output_audio_buffer.clear` (WebRTC), and call `clear_buffer` (LiveKit) | October 2026 review |
+| Event iteration continues, or hangs, after a session closes | A closing flag that makes `next_event` and `receive_raw` return `None`; drop the WebRTC sender on close; bound Gemini's close | October 2026 review |
+| Provider options leak into the OpenAI session config, and transcription options are limited | Strip `language_code`, `thinking_level` and `resumeToken` before merging `extra`; merge `extra` recursively; add language and prompt to `TranscriptionConfig` | October 2026 review |
+| No content guardrails on the model's own text or transcript events | Run output guardrails on realtime text and transcripts, as `LlmAgent` does for final text | #857 |
+| A runner built without `tool_governance` has no payload switch, and error messages logged under `record_payloads` are not length-capped | Give realtime runners their own `record_payloads` and apply `trace_payload_max_bytes` | #857 |
+
+### Guardrails
+
+| Gap | Fix | Origin |
+|-----|-----|--------|
+| A blocked output always ends the run with an error | An option to emit and persist a replacement message on block | October 2026 review |
+| Output guardrails do not see model thinking text | Screen thinking parts before they reach the client or the session | #857 |
+
+### Held calls and delegation
+
+| Gap | Fix | Origin |
+|-----|-----|--------|
+| `CodeActAgent`, realtime runners and graph tool nodes ignore an `AgentTool` delegate's hold | Surface the delegate's `ToolConfirmationRequest` and resume it, as `LlmAgent` does | #852 |
+| A delegate that holds several calls in one turn surfaces them one at a time; an `AgentTool` that itself requires confirmation is asked again when it resumes | Surface every held call of the turn; carry the caller's approval across the resume | #852 |
+| A call-ID decision passed without its fingerprint matches on the call ID alone | Bind call-ID decisions to the held request's fingerprint inside the approval check | #853 |
+| When one `ParallelAgent` branch fails while another holds a call, the failed branch is not re-run on resume | Record failed branches in the workflow position and re-run them | #860 |
+| A held call that is never decided keeps compaction from covering anything after it | An expiry for undecided holds, after which the call is answered as not run | #860 |
+
+### Models
+
+| Gap | Fix | Origin |
+|-----|-----|--------|
+| `OpenRouterClient` Chat Completions drops `refusal` | Surface it as Chat Completions now does: refusal text with `FinishReason::Safety` | #861 |
+| OpenAI Responses refusals finish with `FinishReason::Stop` | Finish them with `FinishReason::Safety` | #861 |
+| A refusal under `output_schema` goes through schema correction retries | Skip correction retries when a turn finishes with `FinishReason::Safety` | #861 |
+| DeepSeek `finish_reason: "insufficient_system_resource"` maps to `Stop`, so a cut-off answer counts as complete | Map it to an incomplete-stream error | #861 |
+| DeepSeek and Azure AI streams lack the #850 framing fixes | Read `data:` without a space and a last line without a line ending; map unknown finish reasons to `Other` | #861 |
+| OpenRouter keeps the raw upstream body uncut in `AdkError` metadata | Bound it with the shared 512-byte excerpt helper | #859 |
+| Bedrock stream outcomes are verified by code reading only | A scripted Converse-stream test for truncation, error events and blocked content | October 2026 review |
+
+### Sandbox, computer use and durability
+
+| Gap | Fix | Origin |
+|-----|-----|--------|
+| The Unix-local sandbox environment allowlist is fixed | Expose it on the client or sandbox config | October 2026 review |
+| The computer-use graph has no deny path | Accept an explicit denial on resume and route it to the `blocked` result | October 2026 review |
+| On Neo4j, a paused client keeps its transaction's locks indefinitely | A per-transaction timeout once the driver supports one; until then the server's `db.transaction.timeout` bounds it | #865 |
+| No run-level switch keeps a run out of the caller's trace | A `RunConfig` switch; the `NoSubscriber` recipe in the telemetry docs covers it today | #859 |
+
+### Build, CI and supply chain
+
+| Gap | Fix | Origin |
+|-----|-----|--------|
+| Merge-queue builds skip the standalone examples, so lockfile drift between two pull requests can reach `main` | Run `cargo metadata --locked` over every example lockfile in the merge queue | #868 |
+| `examples/tier_examples/*` lockfiles are stale, and `scripts/check-examples-compile.sh` does not reach them | Include them in the script, or remove them | #864 |
+| `cargo clippy -p adk-model` with a single provider feature (`groq`, `ollama`, `deepseek`, `azure-ai`) fails on an unused helper | Gate the helper on the features that use it | #850 |
+| `cargo clippy -p adk-payments --features ap2 --all-targets` fails in the ap2 test files | Fix the test-file lints | #853 |
+| `zip` 0.6.6 reaches the `livekit` build through `webrtc-sys-build`, under a reviewed exception | Remove the exception once `webrtc-sys-build` moves to zip 9 | #864 |
+| No fuzzing | `cargo-fuzz` targets for the stream decoders, the text tool-call parser, sandbox path resolution, Responses parsing, A2A decoding and the schema adapters before 3.0; an OSS-Fuzz submission after | October 2026 review |
 
 ---
 
