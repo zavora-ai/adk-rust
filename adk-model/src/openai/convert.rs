@@ -402,6 +402,12 @@ pub(crate) fn from_raw_openai_response(
     declared_tools: &HashSet<String>,
 ) -> LlmResponse {
     let choice = json.get("choices").and_then(|c| c.get(0));
+    // The model declined in `message.refusal`: the refusal is the answer text, and the turn
+    // finishes with `Safety`.
+    let refusal = choice
+        .and_then(|choice| choice.pointer("/message/refusal"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|refusal| !refusal.is_empty());
 
     let content = choice.map(|choice| {
         let message = &choice["message"];
@@ -434,6 +440,10 @@ pub(crate) fn from_raw_openai_response(
             }
         }
 
+        if let Some(refusal) = refusal {
+            parts.push(Part::Text { text: refusal.to_string() });
+        }
+
         // Extract structured tool calls (OpenAI native format)
         if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
             for tc in tool_calls {
@@ -462,13 +472,16 @@ pub(crate) fn from_raw_openai_response(
     let usage_metadata = json.get("usage").and_then(usage_metadata_from_raw);
 
     // Parse finish reason
-    let finish_reason =
+    let finish_reason = if refusal.is_some() {
+        Some(FinishReason::Safety)
+    } else {
         choice.and_then(|c| c.get("finish_reason")).and_then(|v| v.as_str()).map(|fr| match fr {
             "stop" | "tool_calls" | "function_call" => FinishReason::Stop,
             "length" => FinishReason::MaxTokens,
             "content_filter" => FinishReason::Safety,
             _ => FinishReason::Other,
-        });
+        })
+    };
     let tool_call_turn = choice
         .and_then(|choice| choice.get("finish_reason"))
         .and_then(serde_json::Value::as_str)

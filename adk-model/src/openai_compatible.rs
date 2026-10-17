@@ -904,6 +904,8 @@ impl Llm for OpenAICompatible {
                 // A finish reason or `[DONE]` marks a complete response; without one the
                 // answer or a tool call may be truncated.
                 let mut finished = false;
+                // The model declined in `delta.refusal`, so the turn finishes with `Safety`.
+                let mut refused = false;
                 let mut ended = false;
 
                 while !ended {
@@ -1051,6 +1053,21 @@ impl Llm for OpenAICompatible {
                                     };
                                 }
 
+                            // A refusal is the turn's answer text; it never encodes a tool call.
+                            if let Some(refusal) = delta.get("refusal").and_then(|v| v.as_str())
+                                && !refusal.is_empty() {
+                                    refused = true;
+                                    yield LlmResponse {
+                                        content: Some(Content {
+                                            role: "model".to_string(),
+                                            parts: vec![Part::Text { text: refusal.to_string() }],
+                                        }),
+                                        partial: true,
+                                        turn_complete: false,
+                                        ..Default::default()
+                                    };
+                                }
+
                             // Check for finish_reason → emit final response.
                             if let Some(ref fr) = finish_reason_str {
                                 if fr == "error" {
@@ -1061,7 +1078,11 @@ impl Llm for OpenAICompatible {
                                     ))?;
                                 }
                                 finished = true;
-                                let finish_reason = Some(parse_finish_reason(fr));
+                                let finish_reason = Some(if refused {
+                                    FinishReason::Safety
+                                } else {
+                                    parse_finish_reason(fr)
+                                });
 
                                 // Emit accumulated tool calls if any.
                                 if !tool_call_accumulators.is_empty() {

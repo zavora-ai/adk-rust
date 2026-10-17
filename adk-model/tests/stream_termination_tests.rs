@@ -4,7 +4,14 @@
 //!
 //! The upstream is a raw HTTP server that sends each scripted write as its own chunk, so a
 //! test controls where the client sees a network boundary.
-#![cfg(any(feature = "openai", feature = "groq", feature = "ollama", feature = "openrouter"))]
+#![cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "azure-ai",
+    feature = "groq",
+    feature = "ollama",
+    feature = "openrouter"
+))]
 
 use adk_core::{AdkError, Content, Llm, LlmRequest, LlmResponse, Part};
 use futures::StreamExt;
@@ -147,8 +154,15 @@ fn assert_fails(
     (responses, error)
 }
 
-/// Chat Completions chunks, shared by the OpenAI-compatible, Groq, and OpenRouter Chat wires.
-#[cfg(any(feature = "openai", feature = "groq", feature = "openrouter"))]
+/// Chat Completions chunks, shared by the OpenAI-compatible, DeepSeek, Azure AI, Groq, and
+/// OpenRouter Chat wires.
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "azure-ai",
+    feature = "groq",
+    feature = "openrouter"
+))]
 mod chat {
     use serde_json::{Value, json};
 
@@ -188,7 +202,7 @@ mod chat {
         chunks
     }
 
-    #[cfg(any(feature = "openai", feature = "groq"))]
+    #[cfg(any(feature = "openai", feature = "deepseek", feature = "azure-ai", feature = "groq"))]
     pub fn openai_error() -> Value {
         json!({"error": {"message": "The server had an error.", "type": "server_error", "code": "server_error"}})
     }
@@ -306,6 +320,92 @@ mod openai_compatible {
         assert_eq!(error.code, "model.openai_compat.stream_error");
     }
 }
+
+/// DeepSeek and Azure AI report a stream's failures with the same codes and categories as
+/// the other Chat Completions clients.
+#[cfg(any(feature = "deepseek", feature = "azure-ai"))]
+macro_rules! chat_stream_failures {
+    ($provider:ident, $prefix:literal, $client:expr) => {
+        mod $provider {
+            use super::chat::*;
+            use super::*;
+            use adk_core::{ErrorCategory, FinishReason};
+
+            #[tokio::test]
+            async fn complete_stream_succeeds() {
+                let writes = finished_text(&["The capital of France ", "is Paris."]);
+                let base = serve("text/event-stream", writes).await;
+                let (responses, error) = collect(&$client(base), request("scripted"), true).await;
+                assert!(error.is_none(), "{error:?}");
+                assert_eq!(text(&responses), "The capital of France is Paris.");
+                assert_eq!(
+                    responses.last().and_then(|response| response.finish_reason),
+                    Some(FinishReason::Stop)
+                );
+            }
+
+            #[tokio::test]
+            async fn error_chunk_fails_with_the_provider_message_and_category() {
+                let mut writes = sse(&[text_chunk("The capital of France "), openai_error()]);
+                writes.push(done());
+                let base = serve("text/event-stream", writes).await;
+                let outcome = collect(&$client(base), request("scripted"), true).await;
+                let (responses, error) = assert_fails(outcome, concat!($prefix, ".stream_error"));
+                assert_eq!(text(&responses), "The capital of France ");
+                assert_eq!(error.category, ErrorCategory::Unavailable);
+                assert!(error.is_retryable());
+                assert!(error.message.contains("The server had an error."), "{error}");
+                assert_eq!(error.details.metadata["provider_error_code"], "server_error");
+            }
+
+            #[tokio::test]
+            async fn stream_without_a_finish_reason_fails() {
+                let writes = sse(&[text_chunk("The capital of France "), text_chunk("is Par")]);
+                let base = serve("text/event-stream", writes).await;
+                let outcome = collect(&$client(base), request("scripted"), true).await;
+                let (_, error) = assert_fails(outcome, concat!($prefix, ".incomplete_stream"));
+                assert_eq!(error.category, ErrorCategory::Unavailable);
+                assert!(error.is_retryable());
+            }
+
+            #[tokio::test]
+            async fn stream_cut_mid_tool_call_fails() {
+                let base =
+                    serve("text/event-stream", sse(&tool_call_chunks(&[r#"{"city":"Par"#]))).await;
+                let outcome = collect(&$client(base), request("scripted"), true).await;
+                assert_fails(outcome, concat!($prefix, ".incomplete_stream"));
+            }
+
+            #[tokio::test]
+            async fn chunk_that_does_not_decode_fails_without_quoting_it() {
+                let mut writes = sse(&[text_chunk("The capital of France ")]);
+                writes.push(b"data: {\"choices\": [{\"delta\": \"Paris\n\n".to_vec());
+                let base = serve("text/event-stream", writes).await;
+                let outcome = collect(&$client(base), request("scripted"), true).await;
+                let (_, error) = assert_fails(outcome, concat!($prefix, ".invalid_chunk"));
+                assert!(!error.message.contains("Paris"), "{error}");
+            }
+        }
+    };
+}
+
+#[cfg(feature = "deepseek")]
+chat_stream_failures!(deepseek, "model.deepseek", |base: String| {
+    adk_model::deepseek::DeepSeekClient::new(
+        adk_model::deepseek::DeepSeekConfig::new("sk-test", "deepseek-flash").with_base_url(base),
+    )
+    .expect("client")
+});
+
+#[cfg(feature = "azure-ai")]
+chat_stream_failures!(azure_ai, "model.azure_ai", |base: String| {
+    adk_model::azure_ai::AzureAIClient::new(adk_model::azure_ai::AzureAIConfig::new(
+        base,
+        "azure-test",
+        "mistral-large",
+    ))
+    .expect("client")
+});
 
 #[cfg(feature = "groq")]
 mod groq {

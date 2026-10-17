@@ -15,6 +15,7 @@ use ollama_rs::generation::parameters::{FormatType, JsonStructure};
 use ollama_rs::generation::tools::{ToolFunctionInfo, ToolInfo, ToolType};
 use ollama_rs::models::ModelOptions;
 use schemars::Schema;
+use serde::Deserialize;
 
 /// Stream that ended, or whose connection failed, before the `done` line.
 const INCOMPLETE_STREAM: &str = "model.ollama.incomplete_stream";
@@ -321,7 +322,8 @@ impl Llm for OllamaModel {
                         if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
                             Err(crate::stream_error::reported("ollama", STREAM_ERROR, error))?;
                         }
-                        let response: ChatMessageResponse = serde_json::from_value(value).map_err(|error| {
+                        // Kept as received: the final line's usage is read from it.
+                        let response = ChatMessageResponse::deserialize(&value).map_err(|error| {
                             crate::stream_error::undecodable("ollama", INVALID_CHUNK, &error)
                         })?;
 
@@ -367,7 +369,7 @@ impl Llm for OllamaModel {
                         // If done, yield final response with metadata
                         if response.done {
                             done = true;
-                            yield convert::chat_response_to_llm_response(&response, false, &declared_tools);
+                            yield convert::chat_response_to_llm_response(&response, &value, false, &declared_tools);
                         }
                     }
                 }
@@ -424,11 +426,7 @@ impl Llm for OllamaModel {
                     ))
                 })?;
 
-                let mut response = convert::chat_response_to_llm_response(&parsed, false, &declared_tools);
-                if parsed.done {
-                    response.usage_metadata = convert::usage(&line);
-                }
-                yield response;
+                yield convert::chat_response_to_llm_response(&parsed, &line, false, &declared_tools);
             }
         };
 

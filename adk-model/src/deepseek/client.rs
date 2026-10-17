@@ -18,6 +18,13 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 
+/// Stream that ended, or whose connection failed, before a finish reason.
+const INCOMPLETE_STREAM: &str = "model.deepseek.incomplete_stream";
+/// Stream chunk that is not valid JSON or not a chat completion chunk.
+const INVALID_CHUNK: &str = "model.deepseek.invalid_chunk";
+/// Error frame DeepSeek sent inside the stream.
+const STREAM_ERROR: &str = "model.deepseek.stream_error";
+
 /// DeepSeek client for V4 and legacy models.
 ///
 /// # V4 Models
@@ -290,8 +297,9 @@ impl Llm for DeepSeekClient {
                 let mut reasoning_buffer = String::new();
 
                 while let Some(chunk_result) = byte_stream.next().await {
-                    let chunk = chunk_result
-                        .map_err(|e| AdkError::model(format!("stream read error: {e}")))?;
+                    let chunk = chunk_result.map_err(|error| {
+                        crate::stream_error::interrupted("deepseek", INCOMPLETE_STREAM, &error)
+                    })?;
 
                     buffer.extend_from_slice(&chunk);
 
@@ -302,7 +310,13 @@ impl Llm for DeepSeekClient {
                         }
 
                         if let Some(data) = line.strip_prefix("data: ") {
-                            match serde_json::from_str::<ChatCompletionResponse>(data) {
+                            let value = serde_json::from_str::<serde_json::Value>(data).map_err(|error| {
+                                crate::stream_error::undecodable("deepseek", INVALID_CHUNK, &error)
+                            })?;
+                            if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+                                Err(crate::stream_error::reported("deepseek", STREAM_ERROR, error))?;
+                            }
+                            match serde_json::from_value::<ChatCompletionResponse>(value) {
                                 Ok(chunk_response) => {
                                     if let Some(choice) = chunk_response.choices.first() {
                                         if let Some(delta) = &choice.delta {
@@ -442,15 +456,19 @@ impl Llm for DeepSeekClient {
                                         }
                                     }
                                 }
-                                Err(_) => {
-                                    Err(AdkError::model("invalid DeepSeek event data"))?;
+                                Err(error) => {
+                                    Err(crate::stream_error::undecodable("deepseek", INVALID_CHUNK, &error))?;
                                 }
                             }
                         }
                     }
                 }
                 if !finished || buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
-                    Err(AdkError::model("incomplete DeepSeek event stream"))?;
+                    Err(crate::stream_error::incomplete(
+                        "deepseek",
+                        INCOMPLETE_STREAM,
+                        "the response finished",
+                    ))?;
                 }
             } else {
                 // Non-streaming mode

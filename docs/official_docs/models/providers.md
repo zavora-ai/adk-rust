@@ -271,6 +271,13 @@ let agent = LlmAgentBuilder::new("data_extractor")
 // Response is guaranteed to be valid JSON matching the schema
 ```
 
+When the model declines a request, Chat Completions sends the refusal in `message.refusal`
+(streamed as `delta.refusal`) with `content: null`. `OpenAIClient`, `OpenAICompatible` and
+its presets, `AzureOpenAIClient`, and OpenCode Chat return the refusal as the response's
+text and finish it with `FinishReason::Safety`. `error_code` stays unset, since a refusal is
+an answer, not a failure; with `output_schema` set, `LlmAgent` validates the refusal text
+like any other answer.
+
 For strict mode with nested objects, include `additionalProperties: false` at each level:
 
 ```rust
@@ -763,7 +770,7 @@ including fields `UsageMetadata` does not project:
 | Bedrock | The Converse SDK's token counts (`inputTokens`, `outputTokens`, `totalTokens`, cache reads and writes) |
 
 > **Note:** Ollama leaves out a metric that is zero, such as `prompt_eval_count` when the
-> whole prompt came from its cache. A non-streaming final line without it still reports
+> whole prompt came from its cache. A final line without it, streamed or not, still reports
 > `eval_count`.
 
 ### Built-in tool uses and fees
@@ -901,6 +908,15 @@ state is not written, and no tool from the turn runs.
   replaces the deltas. A tool call that is unfinished or unnamed fails the turn instead of
   being dropped, and arguments that are not a JSON object are marked as described under
   "Malformed tool arguments", in Chat Completions and Responses.
+
+`DeepSeekClient` and `AzureAIClient` streams are complete when a chunk carries a
+`finish_reason`. Their failures take the categories above, and an error object's message
+and code are kept the same way:
+
+| Client | Ends early | Error inside the stream | Undecodable chunk |
+|--------|------------|-------------------------|-------------------|
+| `DeepSeekClient` | `model.deepseek.incomplete_stream` | `model.deepseek.stream_error` | `model.deepseek.invalid_chunk` |
+| `AzureAIClient` | `model.azure_ai.incomplete_stream` | `model.azure_ai.stream_error` | `model.azure_ai.invalid_chunk` |
 
 ```rust
 use adk_core::{AdkError, Llm, LlmRequest};

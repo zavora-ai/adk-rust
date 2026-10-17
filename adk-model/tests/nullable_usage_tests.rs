@@ -505,4 +505,19 @@ mod ollama {
     async fn unary_missing_prompt_eval_count() {
         assert_turn(&turn(Body::Json(done_line()), false).await, (0, 6, 6), &metrics());
     }
+
+    /// A streamed turn: the tool call on its own line, then the final line with the metrics.
+    #[tokio::test]
+    async fn streaming_missing_prompt_eval_count() {
+        let mut call = done_line();
+        call["done"] = json!(false);
+        for key in ["done_reason", "total_duration", "eval_count", "eval_duration"] {
+            call.as_object_mut().unwrap().remove(key);
+        }
+        let mut done = done_line();
+        done["message"] = json!({"role": "assistant", "content": ""});
+        // Ollama streams newline-delimited JSON; the content type does not matter.
+        let body = Body::Sse(format!("{call}\n{done}\n"));
+        assert_turn(&turn(body, true).await, (0, 6, 6), &metrics());
+    }
 }

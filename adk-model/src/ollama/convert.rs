@@ -90,9 +90,11 @@ pub fn usage(line: &Value) -> Option<UsageMetadata> {
 
 /// Convert Ollama ChatMessageResponse to ADK LlmResponse.
 ///
-/// Text-encoded tool calls are recognised only for tools in `declared_tools`.
+/// `line` is the same `/api/chat` line as received; a final line's usage is read from it with
+/// [`usage`]. Text-encoded tool calls are recognised only for tools in `declared_tools`.
 pub fn chat_response_to_llm_response(
     response: &ChatMessageResponse,
+    line: &Value,
     partial: bool,
     declared_tools: &HashSet<String>,
 ) -> LlmResponse {
@@ -139,24 +141,8 @@ pub fn chat_response_to_llm_response(
     // Determine finish reason
     let finish_reason = if response.done { Some(FinishReason::Stop) } else { None };
 
-    // `ollama-rs` keeps the metrics only when all six are present; a caller holding the line
-    // as received replaces this with `usage`, which reports whichever counts are present.
-    let usage_metadata = response.final_data.as_ref().map(|data| UsageMetadata {
-        prompt_token_count: i32::try_from(data.prompt_eval_count).unwrap_or(i32::MAX),
-        candidates_token_count: i32::try_from(data.eval_count).unwrap_or(i32::MAX),
-        total_token_count: i32::try_from(data.prompt_eval_count.saturating_add(data.eval_count))
-            .unwrap_or(i32::MAX),
-        // Built field by field: `ollama-rs` 0.3.4 does not implement `Serialize` for this type.
-        provider_usage: Some(serde_json::json!({
-            "total_duration": data.total_duration,
-            "load_duration": data.load_duration,
-            "prompt_eval_count": data.prompt_eval_count,
-            "prompt_eval_duration": data.prompt_eval_duration,
-            "eval_count": data.eval_count,
-            "eval_duration": data.eval_duration,
-        })),
-        ..Default::default()
-    });
+    // Not `response.final_data`: `ollama-rs` keeps the metrics only when all six are present.
+    let usage_metadata = if response.done { usage(line) } else { None };
 
     LlmResponse {
         content,
@@ -245,8 +231,8 @@ mod tests {
     }
 
     #[test]
-    fn typed_final_data_and_the_raw_line_report_the_same_usage() {
-        let line = serde_json::json!({
+    fn final_response_reads_usage_from_the_line_as_received() {
+        let mut line = serde_json::json!({
             "model": "qwen3",
             "created_at": "2026-10-17T00:00:00Z",
             "message": {"role": "assistant", "content": "done"},
@@ -258,12 +244,49 @@ mod tests {
             "eval_count": 8,
             "eval_duration": 700
         });
-        let response: ChatMessageResponse = serde_json::from_value(line.clone()).unwrap();
-        let typed = chat_response_to_llm_response(&response, false, &HashSet::new())
-            .usage_metadata
-            .expect("typed final data carries usage");
-        let raw = usage(&line).expect("the raw line carries usage");
-        assert_eq!(serde_json::to_value(&typed).unwrap(), serde_json::to_value(&raw).unwrap());
-        assert_eq!((raw.prompt_token_count, raw.candidates_token_count), (44, 8));
+        let final_usage = |line: &Value| {
+            let response: ChatMessageResponse = serde_json::from_value(line.clone()).unwrap();
+            chat_response_to_llm_response(&response, line, false, &HashSet::new())
+                .usage_metadata
+                .map(|usage| serde_json::to_value(usage).unwrap())
+        };
+        assert_eq!(
+            final_usage(&line),
+            Some(serde_json::json!({
+                "prompt_token_count": 44,
+                "candidates_token_count": 8,
+                "total_token_count": 52,
+                "provider_usage": {
+                    "total_duration": 2000,
+                    "load_duration": 10,
+                    "prompt_eval_count": 44,
+                    "prompt_eval_duration": 300,
+                    "eval_count": 8,
+                    "eval_duration": 700
+                }
+            }))
+        );
+
+        // Ollama leaves out a zero metric; `ollama-rs` then drops every count.
+        let object = line.as_object_mut().unwrap();
+        object.remove("prompt_eval_count");
+        object.remove("prompt_eval_duration");
+        assert_eq!(
+            final_usage(&line),
+            Some(serde_json::json!({
+                "prompt_token_count": 0,
+                "candidates_token_count": 8,
+                "total_token_count": 8,
+                "provider_usage": {
+                    "total_duration": 2000,
+                    "load_duration": 10,
+                    "eval_count": 8,
+                    "eval_duration": 700
+                }
+            }))
+        );
+
+        line["done"] = serde_json::json!(false);
+        assert_eq!(final_usage(&line), None);
     }
 }

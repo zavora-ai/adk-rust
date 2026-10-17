@@ -12,6 +12,13 @@ use futures::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
 
+/// Stream that ended, or whose connection failed, before a finish reason.
+const INCOMPLETE_STREAM: &str = "model.azure_ai.incomplete_stream";
+/// Stream chunk that is not valid JSON.
+const INVALID_CHUNK: &str = "model.azure_ai.invalid_chunk";
+/// Error frame the endpoint sent inside the stream.
+const STREAM_ERROR: &str = "model.azure_ai.stream_error";
+
 /// Azure AI Inference client for models hosted on Azure AI endpoints.
 ///
 /// Supports models like Cohere, Llama, and Mistral deployed via Azure AI
@@ -189,8 +196,9 @@ impl Llm for AzureAIClient {
                     std::collections::HashMap::new();
 
                 while let Some(chunk_result) = byte_stream.next().await {
-                    let chunk = chunk_result
-                        .map_err(|e| AdkError::model(format!("Azure AI stream error: {e}")))?;
+                    let chunk = chunk_result.map_err(|error| {
+                        crate::stream_error::interrupted("azure-ai", INCOMPLETE_STREAM, &error)
+                    })?;
 
                     buffer.extend_from_slice(&chunk);
 
@@ -203,6 +211,9 @@ impl Llm for AzureAIClient {
                         if let Some(data) = line.strip_prefix("data: ") {
                             match serde_json::from_str::<Value>(data) {
                                 Ok(chunk_json) => {
+                                    if let Some(error) = chunk_json.get("error").filter(|error| !error.is_null()) {
+                                        Err(crate::stream_error::reported("azure-ai", STREAM_ERROR, error))?;
+                                    }
                                     // Accumulate tool call deltas
                                     accumulate_tool_calls(&chunk_json, &mut tool_call_accumulators);
 
@@ -261,13 +272,17 @@ impl Llm for AzureAIClient {
                                         yield llm_resp;
                                     }
                                 }
-                                Err(_) => Err(AdkError::model("invalid Azure AI event data"))?,
+                                Err(error) => Err(crate::stream_error::undecodable("azure-ai", INVALID_CHUNK, &error))?,
                             }
                         }
                     }
                 }
                 if !finished || buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
-                    Err(AdkError::model("incomplete Azure AI event stream"))?;
+                    Err(crate::stream_error::incomplete(
+                        "azure-ai",
+                        INCOMPLETE_STREAM,
+                        "the response finished",
+                    ))?;
                 }
                 if let Some(response) = terminal {
                     yield response;

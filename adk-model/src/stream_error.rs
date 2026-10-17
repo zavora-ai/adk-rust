@@ -22,7 +22,13 @@ pub(crate) fn incomplete(provider: &str, code: &'static str, unfinished: &str) -
 }
 
 /// The connection failed while the stream was being read. Retryable.
-#[cfg(any(feature = "openai", feature = "groq", feature = "ollama"))]
+#[cfg(any(
+    feature = "openai",
+    feature = "groq",
+    feature = "ollama",
+    feature = "deepseek",
+    feature = "azure-ai"
+))]
 pub(crate) fn interrupted(provider: &str, code: &'static str, error: &reqwest::Error) -> AdkError {
     AdkError::new(
         ErrorComponent::Model,
@@ -34,7 +40,13 @@ pub(crate) fn interrupted(provider: &str, code: &'static str, error: &reqwest::E
 }
 
 /// A stream chunk that is not valid JSON or does not match the provider's chunk schema.
-#[cfg(any(feature = "openai", feature = "groq", feature = "ollama"))]
+#[cfg(any(
+    feature = "openai",
+    feature = "groq",
+    feature = "ollama",
+    feature = "deepseek",
+    feature = "azure-ai"
+))]
 pub(crate) fn undecodable(
     provider: &str,
     code: &'static str,
