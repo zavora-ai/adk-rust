@@ -156,6 +156,26 @@ let response = client.generate_content()
     .execute().await?;
 ```
 
+### Failed, Blocked, and Unfinished Responses
+
+`GeminiModel` reports every Gemini response that does not end normally, on the
+`generateContent` and `streamGenerateContent` paths alike:
+
+| Response | Result |
+|----------|--------|
+| An `error` object in a successful body or stream event | An `AdkError` categorized by the object's `code` or `status` (`UNAVAILABLE` → `Unavailable`, `RESOURCE_EXHAUSTED` → `RateLimited`); `details.metadata["provider_error_code"]` holds the code, and `details.upstream_status_code` stays unset because the HTTP status was a success |
+| A stream that ends before any chunk carries `finishReason` | `model.gemini.unfinished_stream`, `Unavailable` (retryable) |
+| A prompt blocked through `promptFeedback.blockReason` | A final response with `FinishReason::Safety`, `error_code` set to the block reason (for example `PROHIBITED_CONTENT`), and no content; `LlmAgent` ends the run with `model.provider_error` |
+| `finishReason` `SAFETY`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`, or `MODEL_ARMOR` | `FinishReason::Safety` |
+| `finishReason` `RECITATION` | `FinishReason::Recitation` |
+| `finishReason` `LANGUAGE`, `MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL`, `TOO_MANY_TOOL_CALLS`, or `OTHER` | `FinishReason::Other` |
+
+`examples/gemini_ws_outcomes` runs each case against a scripted local upstream:
+
+```bash
+cargo run --manifest-path examples/gemini_ws_outcomes/Cargo.toml
+```
+
 ### Example Output
 
 ```

@@ -37,7 +37,7 @@ impl From<&SdkResponse> for Response {
     }
 }
 
-pub(super) enum Event {
+pub(in crate::openai) enum Event {
     Activity,
     Content(Box<ResponseStreamEvent>),
     Terminal(Response),
@@ -77,7 +77,7 @@ struct Header {
     error: Option<Failure>,
 }
 
-pub(super) fn event(value: Value) -> Result<Event, AdkError> {
+pub(in crate::openai) fn event(value: Value) -> Result<Event, AdkError> {
     let kind: Kind = decode(value.clone(), &value, parse::Layer::StreamEvent)?;
     match kind.r#type.as_str() {
         "response.created" | "response.in_progress" | "response.queued" => {
@@ -143,7 +143,7 @@ pub(super) fn event(value: Value) -> Result<Event, AdkError> {
     }
 }
 
-pub(super) fn response(
+pub(in crate::openai) fn response(
     mut value: Value,
     body: &Value,
     layer: parse::Layer,
@@ -250,7 +250,7 @@ pub(in crate::openai) fn missing_output() -> AdkError {
 
 /// OpenAI's documented `response.error.code` values. Only these leave this boundary: a
 /// compatible provider's code is free text and can echo request content.
-const DOCUMENTED_ERROR_CODES: &[&str] = &[
+pub(in crate::openai) const DOCUMENTED_ERROR_CODES: &[&str] = &[
     "server_error",
     "rate_limit_exceeded",
     "invalid_prompt",

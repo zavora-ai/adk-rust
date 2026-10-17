@@ -339,6 +339,27 @@ pub enum Error {
         description: Option<String>,
     },
 
+    /// A successful (2xx) response, or one event of a response stream, carried a
+    /// top-level `error` object instead of generated content.
+    ///
+    /// The transport status was a success, so `code` is the status the error object
+    /// reports, not an HTTP status of the response.
+    #[snafu(display(
+        "server reported an error inside a successful response; status {}; message: {}",
+        status.as_deref().unwrap_or("none"),
+        message.as_deref().unwrap_or("none")
+    ))]
+    ErrorInResponse {
+        /// The error object's numeric `code`, an HTTP-style status such as 503.
+        code: Option<u16>,
+        /// The error object's `status`, a Google RPC status name such as `UNAVAILABLE`.
+        status: Option<String>,
+        /// The error object's `message`.
+        message: Option<String>,
+        /// The response body or event data that carried the error object.
+        description: String,
+    },
+
     /// A required response header was missing.
     MissingResponseHeader {
         /// The name of the missing header.

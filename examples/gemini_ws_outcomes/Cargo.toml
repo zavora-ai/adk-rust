@@ -1,0 +1,22 @@
+[package]
+name = "gemini-ws-outcomes"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Gemini streams and the OpenAI Responses WebSocket transport report errors, blocks, and truncation instead of a silent success"
+
+[workspace]
+
+[dependencies]
+adk-agent = { path = "../../adk-agent" }
+adk-core = { path = "../../adk-core", features = ["rustls"] }
+adk-model = { path = "../../adk-model", default-features = false, features = ["gemini", "gemini-interactions", "openai-ws"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+anyhow = "1.0"
+async-openai = { version = "0.41", default-features = false, features = ["rustls", "responses"] }
+dotenvy = "0.15"
+futures = "0.3"
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["full"] }
+tokio-tungstenite = "0.28"

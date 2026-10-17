@@ -13,9 +13,8 @@ use crate::{
         ListCachedContentsResponse,
     },
     client::{
-        BadResponseSnafu, ConstructUrlSnafu, DecodeResponseSnafu, DeserializeSnafu, Error,
-        InvalidApiKeySnafu, MissingResponseHeaderSnafu, Model, PerformRequestNewSnafu,
-        UrlParseSnafu,
+        BadResponseSnafu, ConstructUrlSnafu, DecodeResponseSnafu, Error, InvalidApiKeySnafu,
+        MissingResponseHeaderSnafu, Model, PerformRequestNewSnafu, UrlParseSnafu,
     },
     embedding::{
         BatchContentEmbeddingResponse, BatchEmbedContentsRequest, ContentEmbeddingResponse,
@@ -213,7 +212,16 @@ impl GeminiBackend for StudioBackend {
             request.strip_vertex_unsupported_fields();
         }
         let url = self.build_url("generateContent")?;
-        self.post_json(url, &request).await
+        let response = self
+            .http_client
+            .post(url)
+            .json(&request)
+            .send()
+            .await
+            .context(PerformRequestNewSnafu)?;
+        let body =
+            Self::check_response(response).await?.text().await.context(DecodeResponseSnafu)?;
+        super::decode_generation_response(&body)
     }
 
     async fn generate_content_stream(
@@ -239,9 +247,7 @@ impl GeminiBackend for StudioBackend {
             .bytes_stream()
             .eventsource()
             .map_err(|e| Error::BadPart { source: e })
-            .and_then(|event| async move {
-                serde_json::from_str::<GenerationResponse>(&event.data).context(DeserializeSnafu)
-            });
+            .and_then(|event| async move { super::decode_generation_response(&event.data) });
 
         Ok(Box::pin(stream))
     }
@@ -507,7 +513,7 @@ impl GeminiBackend for StudioBackend {
             .map_err(|e| Error::BadPart { source: e })
             .and_then(|event| async move {
                 serde_json::from_str::<crate::interactions::InteractionSseEvent>(&event.data)
-                    .context(DeserializeSnafu)
+                    .context(crate::client::DeserializeSnafu)
             });
 
         Ok(Box::pin(stream))

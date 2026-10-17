@@ -41,7 +41,7 @@ pub use azure::AzureOpenAIClient;
 pub use client::OpenAIClient;
 pub use config::{
     AzureConfig, OpenAIConfig, OpenAIReasoningEffort, OpenAIResponsesConfig, PromptCacheRetention,
-    ReasoningEffort, ReasoningSummary, ResponsesTransport, ServiceTier,
+    ReasoningEffort, ReasoningSummary, ServiceTier,
 };
 #[cfg(feature = "openai-conversations")]
 pub use conversations::ConversationsClient;

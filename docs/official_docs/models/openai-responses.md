@@ -498,6 +498,81 @@ match runner.run(uid, sid, message).await {
 
 ---
 
+## WebSocket Transport
+
+With the `openai-ws` feature, `WsTransport` sends Responses requests over one persistent
+WebSocket connection ([WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode))
+instead of one HTTP request each. It is used directly, not as an `Llm`, and yields the same
+`LlmResponse` chunks as the HTTP stream: partial deltas, then one final chunk with the rest
+of the response.
+
+```toml
+[dependencies]
+adk-model = { version = "3.0.0", features = ["openai-ws"] }
+anyhow = "1"
+async-openai = { version = "0.41", default-features = false, features = ["rustls", "responses"] }
+futures = "0.3"
+tokio = { version = "1", features = ["full"] }
+```
+
+```rust
+use adk_model::openai::{OpenAIResponsesConfig, WsTransport};
+use async_openai::types::responses::{CreateResponseArgs, InputParam};
+use futures::StreamExt;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let config = OpenAIResponsesConfig::new(std::env::var("OPENAI_API_KEY")?, "gpt-5.6-terra");
+    let transport = WsTransport::connect(&config).await?;
+    let request = CreateResponseArgs::default()
+        .model("gpt-5.6-terra")
+        .input(InputParam::Text("What is the capital of France?".into()))
+        .build()?;
+    let mut stream = transport.send_request(request).await?;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        for part in chunk.content.iter().flat_map(|content| &content.parts) {
+            if let Some(text) = part.text() {
+                print!("{text}");
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+| Situation | Behaviour |
+|-----------|-----------|
+| Request frame | Sent as a `response.create` event; `stream` and `background` are HTTP fields and are not sent |
+| Requests on one transport | One response at a time; a request waits until the previous stream ends or is dropped |
+| Stream dropped before its terminal event | The connection is discarded and the next request opens a new one, so no frame of the abandoned response reaches it |
+| Connection the server closed while idle | The next request reconnects |
+| Close or end of the connection before a terminal event | `model.openai_responses.unfinished_stream`, `Unavailable` |
+| `response.incomplete` at `max_output_tokens` or `content_filter` | A final chunk with `FinishReason::MaxTokens` or `FinishReason::Safety` |
+| Other `incomplete`, `response.cancelled`, or `response.failed` | The errors in [Failed and unfinished responses](#failed-and-unfinished-responses) |
+| An event, including a completed response, that does not match the Responses schema | `model.openai_responses.parse` |
+| `error` event | `model.openai_responses.ws_error`, categorized by the event's documented code or its `status` |
+| Event type this version does not know, carrying a terminal `response.status` | Ends the response by that status |
+| Handshake | Retried under `RetryConfig` for network errors, 408, 429, and 5xx; any other 4xx (for example 401) and an invalid URL fail at once with the status's category |
+
+`WsTransport::connect` retries handshakes under `RetryConfig::default()`;
+`WsTransport::connect_with_retry_config` takes the policy, which also governs reconnects.
+A response continued with `previous_response_id` after a reconnect needs `store = true`:
+the connection-local cache of an unstored response is lost with the old connection.
+
+`OpenAIResponsesClient` always uses HTTP. The former `OpenAIResponsesConfig::with_transport`
+option and the `ResponsesTransport` enum were never read and are removed; use `WsTransport`
+for WebSocket mode.
+
+`examples/gemini_ws_outcomes` runs each WebSocket case against a scripted local server and,
+when `OPENAI_API_KEY` is set, against the live endpoint:
+
+```bash
+cargo run --manifest-path examples/gemini_ws_outcomes/Cargo.toml
+```
+
+---
+
 ## Background Mode & Cancellation
 
 For long-running requests, submit with `background: true` and poll for completion:

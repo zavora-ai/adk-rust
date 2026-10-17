@@ -201,7 +201,13 @@ pub(crate) fn gemini_error_to_adk(e: &adk_gemini::ClientError) -> adk_core::AdkE
         adk_gemini::ClientError::GoogleCloudRequest { source } => source.http_status_code(),
         _ => None,
     };
-    let (category, code) = match status_code {
+    // An error object inside a successful response reports its own status; the
+    // transport status stays unset.
+    let reported_status = match e {
+        adk_gemini::ClientError::ErrorInResponse { code, .. } => *code,
+        _ => None,
+    };
+    let (category, code) = match status_code.or(reported_status) {
         Some(401) => (ErrorCategory::Unauthorized, "model.gemini.unauthorized"),
         Some(403) => (ErrorCategory::Forbidden, "model.gemini.forbidden"),
         Some(404) => (ErrorCategory::NotFound, "model.gemini.not_found"),
@@ -221,7 +227,8 @@ pub(crate) fn gemini_error_to_adk(e: &adk_gemini::ClientError) -> adk_core::AdkE
     // One rule for every backend: the first `ErrorInfo.reason`, then the error
     // object's string `code`, then its `status`.
     let provider_code = match e {
-        adk_gemini::ClientError::BadResponse { description: Some(body), .. } => {
+        adk_gemini::ClientError::BadResponse { description: Some(body), .. }
+        | adk_gemini::ClientError::ErrorInResponse { description: body, .. } => {
             crate::error_metadata::code_from_body(body)
         }
         #[cfg(feature = "gemini-vertex")]
@@ -291,24 +298,30 @@ fn error_without_status(error: &adk_gemini::ClientError) -> (ErrorCategory, &'st
         #[cfg(feature = "gemini-vertex")]
         adk_gemini::ClientError::GoogleCloudRequest { source } => {
             if let Some(status) = source.status() {
-                match status.code.name() {
-                    "RESOURCE_EXHAUSTED" => {
-                        (ErrorCategory::RateLimited, "model.gemini.rate_limited")
-                    }
-                    "UNAVAILABLE" => (ErrorCategory::Unavailable, "model.gemini.unavailable"),
-                    "DEADLINE_EXCEEDED" => (ErrorCategory::Timeout, "model.gemini.timeout"),
-                    "UNAUTHENTICATED" => (ErrorCategory::Unauthorized, "model.gemini.unauthorized"),
-                    "PERMISSION_DENIED" => (ErrorCategory::Forbidden, "model.gemini.forbidden"),
-                    "NOT_FOUND" => (ErrorCategory::NotFound, "model.gemini.not_found"),
-                    "INVALID_ARGUMENT" => (ErrorCategory::InvalidInput, "model.gemini.bad_request"),
-                    _ => (ErrorCategory::Internal, "model.gemini.internal"),
-                }
+                category_for_rpc_status(status.code.name())
             } else if is_gax_connection_failure(&source.to_string()) {
                 (ErrorCategory::Unavailable, "model.gemini.unavailable")
             } else {
                 (ErrorCategory::Internal, "model.gemini.internal")
             }
         }
+        adk_gemini::ClientError::ErrorInResponse { status: Some(status), .. } => {
+            category_for_rpc_status(status)
+        }
+        _ => (ErrorCategory::Internal, "model.gemini.internal"),
+    }
+}
+
+/// Classifies a Google RPC status name such as `UNAVAILABLE`.
+fn category_for_rpc_status(name: &str) -> (ErrorCategory, &'static str) {
+    match name {
+        "RESOURCE_EXHAUSTED" => (ErrorCategory::RateLimited, "model.gemini.rate_limited"),
+        "UNAVAILABLE" => (ErrorCategory::Unavailable, "model.gemini.unavailable"),
+        "DEADLINE_EXCEEDED" => (ErrorCategory::Timeout, "model.gemini.timeout"),
+        "UNAUTHENTICATED" => (ErrorCategory::Unauthorized, "model.gemini.unauthorized"),
+        "PERMISSION_DENIED" => (ErrorCategory::Forbidden, "model.gemini.forbidden"),
+        "NOT_FOUND" => (ErrorCategory::NotFound, "model.gemini.not_found"),
+        "INVALID_ARGUMENT" => (ErrorCategory::InvalidInput, "model.gemini.bad_request"),
         _ => (ErrorCategory::Internal, "model.gemini.internal"),
     }
 }
@@ -1031,10 +1044,38 @@ impl GeminiModel {
             resp.candidates.first().and_then(|c| c.finish_reason.as_ref()).map(|fr| match fr {
                 adk_gemini::FinishReason::Stop => FinishReason::Stop,
                 adk_gemini::FinishReason::MaxTokens => FinishReason::MaxTokens,
-                adk_gemini::FinishReason::Safety => FinishReason::Safety,
+                adk_gemini::FinishReason::Safety
+                | adk_gemini::FinishReason::Blocklist
+                | adk_gemini::FinishReason::ProhibitedContent
+                | adk_gemini::FinishReason::Spii
+                | adk_gemini::FinishReason::ImageSafety
+                | adk_gemini::FinishReason::ModelArmor => FinishReason::Safety,
                 adk_gemini::FinishReason::Recitation => FinishReason::Recitation,
-                _ => FinishReason::Other,
+                adk_gemini::FinishReason::FinishReasonUnspecified
+                | adk_gemini::FinishReason::Language
+                | adk_gemini::FinishReason::Other
+                | adk_gemini::FinishReason::MalformedFunctionCall
+                | adk_gemini::FinishReason::UnexpectedToolCall
+                | adk_gemini::FinishReason::TooManyToolCalls => FinishReason::Other,
             });
+        // A blocked prompt has no candidates: it ends the turn as a safety stop, and
+        // `error_code` marks it as a failure rather than an empty answer.
+        let block_reason = resp
+            .prompt_feedback
+            .as_ref()
+            .and_then(|feedback| feedback.block_reason.as_ref())
+            .and_then(|reason| match reason {
+                adk_gemini::BlockReason::BlockReasonUnspecified => None,
+                adk_gemini::BlockReason::Safety => Some("SAFETY"),
+                adk_gemini::BlockReason::Other => Some("OTHER"),
+                adk_gemini::BlockReason::Blocklist => Some("BLOCKLIST"),
+                adk_gemini::BlockReason::ProhibitedContent => Some("PROHIBITED_CONTENT"),
+                adk_gemini::BlockReason::ModelArmor => Some("MODEL_ARMOR"),
+                adk_gemini::BlockReason::Jailbreak => Some("JAILBREAK"),
+                adk_gemini::BlockReason::ImageSafety => Some("IMAGE_SAFETY"),
+            });
+        let finish_reason =
+            if block_reason.is_some() { Some(FinishReason::Safety) } else { finish_reason };
 
         let citation_metadata =
             resp.candidates.first().and_then(|c| c.citation_metadata.as_ref()).map(|meta| {
@@ -1070,8 +1111,9 @@ impl GeminiModel {
             partial: false,
             turn_complete: !tool_call_turn,
             interrupted: false,
-            error_code: None,
-            error_message: None,
+            error_code: block_reason.map(str::to_owned),
+            error_message: block_reason
+                .map(|reason| format!("Gemini blocked the prompt (blockReason {reason})")),
             provider_metadata,
             interaction_id: None,
             model: resp.model_version.clone().filter(|version| !version.is_empty()),
@@ -1522,6 +1564,8 @@ impl GeminiModel {
             let mapped_stream = async_stream::stream! {
                 let mut stream = response_stream;
                 let mut saw_partial_chunk = false;
+                // Only a chunk with `finishReason` (or a prompt block) ends a Gemini turn.
+                let mut finished = false;
                 // Gemini reports usage cumulatively per chunk; built-in tool uses follow suit.
                 let mut builtin_uses = GeminiBuiltinToolUses::default();
                 while let Some(result) = stream.try_next().await.transpose() {
@@ -1533,6 +1577,7 @@ impl GeminiModel {
                                     if let Some(usage) = llm_resp.usage_metadata.as_mut() {
                                         usage.builtin_tool_uses = builtin_uses.uses();
                                     }
+                                    finished |= llm_resp.finish_reason.is_some();
                                     let (chunks, next_saw_partial) =
                                         Self::stream_chunks_from_response(llm_resp, saw_partial_chunk);
                                     saw_partial_chunk = next_saw_partial;
@@ -1543,14 +1588,25 @@ impl GeminiModel {
                                 Err(e) => {
                                     adk_telemetry::error!(error = %e, "Failed to convert response");
                                     yield Err(e);
+                                    return;
                                 }
                             }
                         }
                         Err(e) => {
                             adk_telemetry::error!(error = %e, "Stream error");
                             yield Err(gemini_error_to_adk(&e));
+                            return;
                         }
                     }
+                }
+                if !finished {
+                    yield Err(adk_core::AdkError::new(
+                        ErrorComponent::Model,
+                        ErrorCategory::Unavailable,
+                        "model.gemini.unfinished_stream",
+                        "Gemini stream ended before any chunk carried a finish reason",
+                    )
+                    .with_provider("gemini"));
                 }
             };
 
@@ -1801,7 +1857,9 @@ impl GeminiModel {
     /// `execute_with_retry` (which wraps this in `generate_content`) can retry
     /// transient setup failures. Errors that occur *after* the stream starts
     /// are yielded into the stream and not retried, mirroring the
-    /// generateContent streaming path.
+    /// generateContent streaming path. The stream fails when it ends before
+    /// `interaction.completed`, and when the interaction reaches `failed` or
+    /// `budget_exceeded`.
     ///
     /// The stale-continuation fallback used by the non-streaming path is not
     /// applied here: a `NotFound` on stream setup surfaces as a normal error
@@ -1840,21 +1898,57 @@ impl GeminiModel {
             .map_err(|e| gemini_error_to_adk(&e))?;
 
         let mapped = async_stream::stream! {
+            use adk_gemini::interactions::{InteractionSseEvent, InteractionStatus};
+
             let mut sse_stream = sse_stream;
             let mut acc = SseAccumulator::new();
             while let Some(result) = sse_stream.try_next().await.transpose() {
                 match result {
                     Ok(event) => {
-                        if let Some(chunk) = sse_event_to_chunk(event, &mut acc) {
-                            yield chunk;
+                        // A terminal failure status fails the turn, whether it arrives on
+                        // `interaction.completed` or as a status update.
+                        let (status, completed) = match &event {
+                            InteractionSseEvent::InteractionCompleted { interaction, .. } => {
+                                (Some(interaction.status), true)
+                            }
+                            InteractionSseEvent::InteractionStatusUpdate {
+                                status:
+                                    status @ (InteractionStatus::Failed
+                                    | InteractionStatus::BudgetExceeded),
+                                ..
+                            } => (Some(*status), false),
+                            _ => (None, false),
+                        };
+                        if let Some(Err(error)) = status.map(interaction_status_to_result) {
+                            yield Err(error);
+                            return;
+                        }
+                        match sse_event_to_chunk(event, &mut acc) {
+                            Some(Err(error)) => {
+                                yield Err(error);
+                                return;
+                            }
+                            Some(Ok(chunk)) => yield Ok(chunk),
+                            None => {}
+                        }
+                        if completed {
+                            return;
                         }
                     }
                     Err(e) => {
                         adk_telemetry::error!(error = %e, "Interaction stream error");
                         yield Err(gemini_error_to_adk(&e));
+                        return;
                     }
                 }
             }
+            yield Err(adk_core::AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Unavailable,
+                "model.gemini.interactions.unfinished_stream",
+                "Gemini interaction stream ended before interaction.completed",
+            )
+            .with_provider("gemini"));
         };
 
         Ok(Box::pin(mapped))

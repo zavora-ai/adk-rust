@@ -25,11 +25,11 @@ use crate::{
         ListCachedContentsResponse,
     },
     client::{
-        BadResponseSnafu, DecodeResponseSnafu, DeserializeSnafu, Error,
-        GoogleCloudCredentialHeadersSnafu, GoogleCloudCredentialHeadersUnavailableSnafu,
-        GoogleCloudRequestDeserializeSnafu, GoogleCloudRequestNotObjectSnafu,
-        GoogleCloudRequestSerializeSnafu, GoogleCloudResponseDeserializeSnafu,
-        GoogleCloudResponseSerializeSnafu, Model, UrlParseSnafu, ValidationSnafu,
+        BadResponseSnafu, DecodeResponseSnafu, Error, GoogleCloudCredentialHeadersSnafu,
+        GoogleCloudCredentialHeadersUnavailableSnafu, GoogleCloudRequestDeserializeSnafu,
+        GoogleCloudRequestNotObjectSnafu, GoogleCloudRequestSerializeSnafu,
+        GoogleCloudResponseDeserializeSnafu, GoogleCloudResponseSerializeSnafu, Model,
+        UrlParseSnafu, ValidationSnafu,
     },
     embedding::{ContentEmbeddingResponse, EmbedContentRequest},
     generation::{GenerateContentRequest, GenerationResponse},
@@ -219,9 +219,7 @@ impl VertexBackend {
             .bytes_stream()
             .eventsource()
             .map_err(|e| Error::BadPart { source: e })
-            .and_then(|event| async move {
-                serde_json::from_str::<GenerationResponse>(&event.data).context(DeserializeSnafu)
-            });
+            .and_then(|event| async move { super::decode_generation_response(&event.data) });
 
         Ok(Box::pin(stream))
     }

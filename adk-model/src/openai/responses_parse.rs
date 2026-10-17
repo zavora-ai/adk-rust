@@ -5,7 +5,7 @@ use serde::Serialize;
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum Layer {
+pub(in crate::openai) enum Layer {
     StreamSetup,
     StreamEvent,
     ResponseBody,
@@ -24,7 +24,7 @@ struct Diagnostic {
     event_type: Option<String>,
 }
 
-pub(super) fn error(error: &serde_json::Error, body: &str, layer: Layer) -> AdkError {
+pub(in crate::openai) fn error(error: &serde_json::Error, body: &str, layer: Layer) -> AdkError {
     let category = match error.classify() {
         serde_json::error::Category::Io => "io",
         serde_json::error::Category::Syntax => "syntax",

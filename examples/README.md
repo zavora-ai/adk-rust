@@ -14,6 +14,7 @@ playground versions are being finalized:
 - `examples/openai_server_tools` — full OpenAI native-tool example matrix covering every exported wrapper
 - `examples/anthropic_server_tools` — full Anthropic native-tool example matrix for the pinned `claudius` surface
 - `examples/gemini3_builtin_tools` — full Gemini native-tool example matrix plus multi-turn mixed-tool validation
+- `examples/gemini_ws_outcomes` — Gemini error objects, cut streams, blocked prompts, and block-type finish reasons, the Interactions stream's terminal event, and the Responses WebSocket transport's abandoned, incomplete, closed, failed, and rejected-handshake responses, against scripted local upstreams, plus live Gemini and OpenAI WebSocket happy paths
 - `examples/openai_responses` — end-to-end OpenAI Responses validation
 - `examples/openrouter` — end-to-end OpenRouter validation through the ADK agent stack
 - `examples/bedrock_test` — Bedrock smoke testing

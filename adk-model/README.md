@@ -271,11 +271,12 @@ let cancelled = client.cancel_response("resp_abc123").await?;
 
 #### Additional Responses API Examples
 
-Six standalone example crates demonstrate specific features:
+Seven standalone example crates demonstrate specific features:
 
 | Example | Feature |
 |---------|---------|
 | `examples/openai_ws_minimal/` | WebSocket transport (low-latency) |
+| `examples/gemini_ws_outcomes/` | WebSocket transport outcomes: abandoned, incomplete, closed, and failed responses, handshake retry |
 | `examples/openai_background/` | Background mode (submit & poll) |
 | `examples/openai_conversations/` | Conversations API lifecycle |
 | `examples/openai_builtin_tools/` | Built-in tools (image gen, web search) |

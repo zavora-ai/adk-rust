@@ -1,7 +1,7 @@
 //! OpenAI Responses API client implementation.
 
 #[path = "responses_parse.rs"]
-mod parse;
+pub(super) mod parse;
 #[path = "responses_wire.rs"]
 pub(super) mod wire;
 use super::config::{OpenAIReasoningEffort, OpenAIResponsesConfig, ReasoningSummary};

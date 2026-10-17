@@ -36,6 +36,31 @@ use std::pin::Pin;
 /// A boxed, pinned stream of results — the common return type for streaming operations.
 pub type BackendStream<T> = Pin<Box<dyn Stream<Item = Result<T, Error>> + Send>>;
 
+/// Decodes a `generateContent` body or one `streamGenerateContent` event.
+///
+/// Every field of [`GenerationResponse`] is optional, so an `{"error": {...}}` object
+/// would otherwise decode as an empty response; it becomes [`Error::ErrorInResponse`].
+pub(crate) fn decode_generation_response(data: &str) -> Result<GenerationResponse, Error> {
+    use snafu::ResultExt;
+
+    let value: serde_json::Value =
+        serde_json::from_str(data).context(crate::client::DeserializeSnafu)?;
+    if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+        let text =
+            |key: &str| error.get(key).and_then(serde_json::Value::as_str).map(str::to_owned);
+        return Err(Error::ErrorInResponse {
+            code: error
+                .get("code")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|code| u16::try_from(code).ok()),
+            status: text("status"),
+            message: text("message"),
+            description: data.to_owned(),
+        });
+    }
+    serde_json::from_value(value).context(crate::client::DeserializeSnafu)
+}
+
 /// Trait defining the interface for Gemini backends (AI Studio REST vs Vertex AI).
 ///
 /// Required methods cover the core operations (generate, stream, embed).
@@ -310,5 +335,40 @@ pub trait GeminiBackend: Send + Sync + std::fmt::Debug {
     #[cfg(feature = "interactions")]
     async fn download_environment(&self, _env_id: &str) -> Result<Vec<u8>, Error> {
         Err(Error::GoogleCloudUnsupported { operation: "downloadEnvironment" })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_object_is_an_error_not_an_empty_response() {
+        let data =
+            r#"{"error":{"code":503,"message":"The model is overloaded.","status":"UNAVAILABLE"}}"#;
+        let error = decode_generation_response(data).expect_err("an error object must fail");
+        match error {
+            Error::ErrorInResponse { code, status, message, description } => {
+                assert_eq!(
+                    (code, status.as_deref(), message.as_deref(), description.as_str()),
+                    (Some(503), Some("UNAVAILABLE"), Some("The model is overloaded."), data)
+                );
+            }
+            other => panic!("expected ErrorInResponse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generation_chunks_still_decode() {
+        let response = decode_generation_response(
+            r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(response.text(), "hi");
+        assert!(matches!(
+            decode_generation_response(r#"{"candidates":[{"content":"#),
+            Err(Error::Deserialize { .. })
+        ));
+        assert!(decode_generation_response(r#"{"error":null,"candidates":[]}"#).is_ok());
     }
 }

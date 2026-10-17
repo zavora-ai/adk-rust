@@ -72,7 +72,7 @@ all-providers = ["gemini", "openai", "anthropic", "deepseek", "ollama", "groq", 
 
 [dev-dependencies]
 proptest = "1.5"
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 futures = "0.3"
 wiremock = "0.6"

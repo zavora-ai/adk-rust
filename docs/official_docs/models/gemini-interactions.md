@@ -328,6 +328,18 @@ let model = GeminiModel::new(api_key, "gemini-3.7-flash")?
 > continuation and background execution; the transport then sends transcript
 > input, exactly like generateContent.
 
+## Terminal outcomes
+
+A turn ends only on a terminal outcome, in streaming and non-streaming mode:
+
+| Outcome | Result |
+|---------|--------|
+| `completed` or `requires_action` | The final chunk, with the accumulated function calls on a tool-call turn |
+| `failed`, on `interaction.completed` or an `interaction.status_update` | `model.gemini.interactions.failed` |
+| `budget_exceeded` | `model.gemini.interactions.budget_exceeded` |
+| An `error` event | The mapped stream error |
+| A stream that ends before `interaction.completed` | `model.gemini.interactions.unfinished_stream`, `Unavailable` (retryable) |
+
 ## Supported targets (allowlist)
 
 The Interactions API supports a fixed set of targets. `use_interactions_api(true)`

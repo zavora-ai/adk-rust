@@ -191,19 +191,6 @@ impl AzureConfig {
     }
 }
 
-/// Transport mode for the Responses API.
-///
-/// Controls whether the client uses standard HTTP/SSE or a persistent
-/// WebSocket connection for lower-latency agentic workflows.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ResponsesTransport {
-    /// Standard HTTP/SSE (default).
-    #[default]
-    Http,
-    /// Persistent WebSocket connection (requires `openai-ws` feature).
-    WebSocket,
-}
-
 /// Service tier for processing priority.
 ///
 /// Controls the processing priority for API requests. Priority tier
@@ -282,9 +269,6 @@ pub struct OpenAIResponsesConfig {
     /// Reasoning summary mode for o-series models.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_summary: Option<ReasoningSummary>,
-    /// Transport mode (HTTP or WebSocket).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transport: Option<ResponsesTransport>,
     /// Default service tier for processing priority.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<ServiceTier>,
@@ -309,7 +293,6 @@ impl std::fmt::Debug for OpenAIResponsesConfig {
             .field("base_url", &self.base_url)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("reasoning_summary", &self.reasoning_summary)
-            .field("transport", &self.transport)
             .field("service_tier", &self.service_tier)
             .field("prompt_cache_retention", &self.prompt_cache_retention)
             .field("open_responses_mode", &self.open_responses_mode)
@@ -328,7 +311,6 @@ impl OpenAIResponsesConfig {
             base_url: None,
             reasoning_effort: None,
             reasoning_summary: None,
-            transport: None,
             service_tier: None,
             prompt_cache_retention: None,
             open_responses_mode: None,
@@ -367,15 +349,6 @@ impl OpenAIResponsesConfig {
     #[must_use]
     pub fn with_reasoning_summary(mut self, summary: ReasoningSummary) -> Self {
         self.reasoning_summary = Some(summary);
-        self
-    }
-
-    /// Set the transport mode (HTTP or WebSocket).
-    ///
-    /// Defaults to HTTP when not set. WebSocket requires the `openai-ws` feature.
-    #[must_use]
-    pub fn with_transport(mut self, transport: ResponsesTransport) -> Self {
-        self.transport = Some(transport);
         self
     }
 
