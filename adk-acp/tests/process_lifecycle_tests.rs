@@ -13,7 +13,9 @@ const LIMIT: Duration = Duration::from_secs(15);
 
 fn agent(mode: &str) -> AcpAgentConfig {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_acp_agent.py");
-    AcpAgentConfig::new(format!("python3 {script} {mode}"))
+    // Quoted because the command is split with POSIX shell rules, which would drop the
+    // backslashes of a Windows `CARGO_MANIFEST_DIR`.
+    AcpAgentConfig::new(format!("python3 '{script}' {mode}"))
 }
 
 #[tokio::test]

@@ -27,6 +27,10 @@ use crate::permissions::{PermissionPolicy, PermissionRequest, outcome_for};
 #[derive(Clone)]
 pub struct AcpAgentConfig {
     /// Command to spawn the agent (e.g., "claude-code" or "codex --model o3").
+    ///
+    /// The string is split into words with POSIX shell rules, so a backslash escapes the next
+    /// character. Single-quote an argument that contains backslashes, such as a Windows path:
+    /// `python3 'C:\agents\agent.py'`.
     pub command: String,
     /// Working directory for the agent session.
     pub working_dir: PathBuf,
@@ -71,7 +75,7 @@ impl std::fmt::Debug for AcpAgentConfig {
 }
 
 impl AcpAgentConfig {
-    /// Create a new config with a command string.
+    /// Create a new config with a command string, split as described on [`Self::command`].
     pub fn new(command: impl Into<String>) -> Self {
         Self {
             command: command.into(),
@@ -486,5 +490,11 @@ mod tests {
         assert!(debug.contains("private-tools"));
         assert!(!debug.contains("top-secret-agent-token"));
         assert!(!debug.contains("top-secret-mcp-token"));
+    }
+
+    #[test]
+    fn a_single_quoted_windows_path_keeps_its_backslashes() {
+        let agent = build_agent(&AcpAgentConfig::new(r"python3 'D:\a\agent.py' normal")).unwrap();
+        assert_eq!(agent.config().arguments(), [r"D:\a\agent.py", "normal"]);
     }
 }
