@@ -894,6 +894,223 @@ async fn a_freeze_reaches_every_replica_and_no_schedule_fires_while_frozen() {
     mirrors.iter().for_each(tokio::task::JoinHandle::abort);
 }
 
+/// Answers every request with `done` and counts the calls.
+#[derive(Default)]
+struct AnswerModel {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl Llm for AnswerModel {
+    fn name(&self) -> &str {
+        "answer"
+    }
+
+    async fn generate_content(&self, _req: LlmRequest, _stream: bool) -> Result<LlmResponseStream> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let response = LlmResponse {
+            content: Some(Content::new("model").with_text("done")),
+            turn_complete: true,
+            ..Default::default()
+        };
+        Ok(Box::pin(futures::stream::iter([Ok(response)])))
+    }
+}
+
+/// A run store that freezes `control` once, inside the first call named `on`: `claim`, as
+/// a freeze that lands while a claim is in flight, or `set_checkpoint`, which the worker
+/// records after the claim and before the runner starts the agent.
+struct FreezingStore {
+    inner: InMemoryRunStore,
+    control: GovernanceControl,
+    on: &'static str,
+    armed: AtomicBool,
+}
+
+impl FreezingStore {
+    fn new(control: &GovernanceControl, on: &'static str) -> Self {
+        Self {
+            inner: InMemoryRunStore::new(),
+            control: control.clone(),
+            on,
+            armed: AtomicBool::new(true),
+        }
+    }
+
+    fn reached(&self, op: &str) {
+        if op == self.on && self.armed.swap(false, Ordering::SeqCst) {
+            self.control.freeze("incident 12");
+        }
+    }
+}
+
+#[async_trait]
+impl DurableRunStore for FreezingStore {
+    async fn enqueue(&self, run: NewRun) -> Result<Enqueued> {
+        self.inner.enqueue(run).await
+    }
+
+    async fn claim(&self, queue: &str, worker: &str, ttl: Duration) -> Result<Option<ClaimedRun>> {
+        self.reached("claim");
+        self.inner.claim(queue, worker, ttl).await
+    }
+
+    async fn heartbeat(&self, run_id: &str, epoch: u64, ttl: Duration) -> Result<bool> {
+        self.inner.heartbeat(run_id, epoch, ttl).await
+    }
+
+    async fn set_checkpoint(
+        &self,
+        run_id: &str,
+        epoch: u64,
+        checkpoint: RunCheckpointRef,
+    ) -> Result<()> {
+        self.reached("set_checkpoint");
+        self.inner.set_checkpoint(run_id, epoch, checkpoint).await
+    }
+
+    async fn wait(
+        &self,
+        run_id: &str,
+        epoch: u64,
+        until: Option<chrono::DateTime<Utc>>,
+    ) -> Result<()> {
+        self.inner.wait(run_id, epoch, until).await
+    }
+
+    async fn wake(&self, run_id: &str) -> Result<()> {
+        self.inner.wake(run_id).await
+    }
+
+    async fn finish(&self, run_id: &str, epoch: u64, outcome: RunOutcome) -> Result<RunRecord> {
+        self.inner.finish(run_id, epoch, outcome).await
+    }
+
+    async fn request_cancel(&self, run_id: &str) -> Result<()> {
+        self.inner.request_cancel(run_id).await
+    }
+
+    async fn get(&self, run_id: &str) -> Result<Option<RunRecord>> {
+        self.inner.get(run_id).await
+    }
+
+    async fn list(&self, filter: RunFilter) -> Result<Vec<RunRecord>> {
+        self.inner.list(filter).await
+    }
+
+    async fn prune(&self, finished_before: chrono::DateTime<Utc>) -> Result<u64> {
+        self.inner.prune(finished_before).await
+    }
+}
+
+/// A worker over `runs` whose claims and runner are both governed by `control`.
+fn governed_worker(
+    runs: &Arc<dyn DurableRunStore>,
+    control: &GovernanceControl,
+    model: &Arc<AnswerModel>,
+    sessions: &Arc<InMemorySessionService>,
+) -> DurableWorker {
+    let agent =
+        LlmAgentBuilder::new("assistant").model(Arc::clone(model) as Arc<dyn Llm>).build().unwrap();
+    let runner = Runner::builder()
+        .app_name("ops")
+        .agent(Arc::new(agent))
+        .session_service(Arc::clone(sessions) as Arc<dyn SessionService>)
+        .governance(control.clone())
+        .build()
+        .unwrap();
+    DurableWorker::new(Arc::clone(runs))
+        .with_agent("assistant", Arc::new(runner))
+        .with_governance(control.clone())
+        .with_config(worker_config("replica-a"))
+}
+
+/// Gate: a claim in flight when the freeze lands returns its run after the freeze; the
+/// worker hands the run back unstarted instead of failing it, claims nothing more while
+/// frozen, and once unfrozen the run completes at its first attempt.
+#[tokio::test]
+async fn a_run_claimed_across_a_freeze_is_handed_back_unstarted() {
+    let control = GovernanceControl::new();
+    let runs: Arc<dyn DurableRunStore> = Arc::new(FreezingStore::new(&control, "claim"));
+    let model = Arc::new(AnswerModel::default());
+    let worker = governed_worker(&runs, &control, &model, &Arc::new(InMemorySessionService::new()));
+    let run = runs
+        .enqueue(NewRun::new("default", "ops", "user-1", "assistant", json!("hello")))
+        .await
+        .unwrap()
+        .record()
+        .cloned()
+        .unwrap();
+
+    let attempt = worker.run_next().await.unwrap();
+    assert!(attempt.is_none(), "the run claimed after the freeze ran: {attempt:?}");
+    let handed_back = runs.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(
+        (handed_back.state, handed_back.attempt, handed_back.lease_epoch),
+        (RunState::Waiting, 1, 1),
+        "{handed_back:?}"
+    );
+    assert_eq!((handed_back.lease_owner, handed_back.checkpoint), (None, None));
+    assert!(worker.run_next().await.unwrap().is_none(), "nothing is claimed while frozen");
+    assert_eq!(runs.get(&run.run_id).await.unwrap().unwrap().lease_epoch, 1);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "no model call while frozen");
+
+    control.unfreeze();
+    let finished = worker.run_next().await.unwrap().expect("claimed once unfrozen");
+    assert_eq!((finished.state, finished.attempt), (RunState::Completed, 1), "{finished:?}");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+}
+
+/// Gate: a freeze that lands after the claim but before the runner starts the agent
+/// hands the run back unstarted; once unfrozen the run starts from its input, and its user
+/// turn reaches the session once.
+#[tokio::test]
+async fn a_run_refused_at_its_start_is_handed_back_unstarted() {
+    let control = GovernanceControl::new();
+    let runs: Arc<dyn DurableRunStore> = Arc::new(FreezingStore::new(&control, "set_checkpoint"));
+    let model = Arc::new(AnswerModel::default());
+    let sessions = Arc::new(InMemorySessionService::new());
+    let worker = governed_worker(&runs, &control, &model, &sessions);
+    let run = runs
+        .enqueue(NewRun::new("default", "ops", "user-1", "assistant", json!("hello")))
+        .await
+        .unwrap()
+        .record()
+        .cloned()
+        .unwrap();
+
+    let attempt = worker.run_next().await.unwrap();
+    assert!(attempt.is_none(), "the run refused at its start was finished: {attempt:?}");
+    let handed_back = runs.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(
+        (handed_back.state, handed_back.attempt, handed_back.lease_epoch),
+        (RunState::Waiting, 1, 1),
+        "{handed_back:?}"
+    );
+    assert!(
+        matches!(handed_back.checkpoint, Some(RunCheckpointRef::Session { .. })),
+        "{handed_back:?}"
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "no model call while frozen");
+
+    control.unfreeze();
+    let finished = worker.run_next().await.unwrap().expect("claimed once unfrozen");
+    assert_eq!((finished.state, finished.attempt), (RunState::Completed, 1), "{finished:?}");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    let session = sessions
+        .get(GetRequest {
+            app_name: "ops".into(),
+            user_id: "user-1".into(),
+            session_id: format!("run-{}", run.run_id),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap();
+    let turns = session.events().all().iter().filter(|event| event.author == "user").count();
+    assert_eq!(turns, 1, "the user turn reached the session once");
+}
+
 /// A governance store that can be made unreachable.
 #[derive(Default)]
 struct FlakyGovernance {
@@ -1273,6 +1490,83 @@ async fn a_held_call_parks_the_run_and_a_wake_resumes_it() {
         finished.result.as_ref().unwrap()["text"],
         format!("transfer: {}", json!({ "status": "sent" }))
     );
+}
+
+/// Summarizes any window into one line, ending where the window ends.
+struct OneLineSummarizer;
+
+#[async_trait]
+impl adk_core::BaseEventsSummarizer for OneLineSummarizer {
+    async fn summarize_events(
+        &self,
+        events: &[adk_core::Event],
+    ) -> Result<Option<adk_core::Event>> {
+        let (Some(first), Some(last)) = (events.first(), events.last()) else {
+            return Ok(None);
+        };
+        let mut event = adk_core::Event::new("compaction");
+        event.author = "system".to_string();
+        event.actions.compaction = Some(adk_core::EventCompaction {
+            start_timestamp: first.timestamp,
+            end_timestamp: last.timestamp,
+            compacted_content: Content::new("model").with_text("summary"),
+        });
+        Ok(Some(event))
+    }
+}
+
+/// Compaction after every run never covers a held call, so the run still parks as
+/// `Waiting` and the approval resumes the call once.
+#[tokio::test]
+async fn a_held_call_parks_the_run_when_compaction_runs_after_it() {
+    use adk_core::{ApprovalScope, ApprovalStore, InMemoryApprovalStore, ToolApproval};
+
+    let sessions = Arc::new(InMemorySessionService::new());
+    let approvals = Arc::new(InMemoryApprovalStore::new());
+    let executions = Arc::new(AtomicUsize::new(0));
+    let agent = LlmAgentBuilder::new("ops")
+        .model(Arc::new(TransferModel) as Arc<dyn Llm>)
+        .tool(Arc::new(TransferTool { executions: Arc::clone(&executions) }))
+        .require_tool_confirmation("transfer")
+        .build()
+        .unwrap();
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    let runner = Arc::new(
+        Runner::builder()
+            .app_name("ops")
+            .agent(Arc::new(agent))
+            .session_service(Arc::clone(&sessions) as Arc<dyn SessionService>)
+            .approval_store(Arc::clone(&approvals) as Arc<dyn ApprovalStore>)
+            .durable_run_store(Arc::clone(&runs))
+            .compaction_config(adk_core::EventsCompactionConfig {
+                compaction_interval: 1,
+                overlap_size: 0,
+                summarizer: Arc::new(OneLineSummarizer),
+            })
+            .build()
+            .unwrap(),
+    );
+    let run = NewRun::new("default", "ops", "alice", "ops", json!("send 50 USD"))
+        .with_session_id("pay-1");
+    let Enqueued::Created(run) = runs.enqueue(run).await.unwrap() else {
+        panic!("a new run");
+    };
+    let worker = DurableWorker::new(Arc::clone(&runs))
+        .with_agent("ops", runner)
+        .with_config(worker_config("w").with_approval_timeout(Some(Duration::from_secs(600))));
+
+    let parked = worker.run_next().await.unwrap().expect("the queued run");
+    assert_eq!(parked.state, RunState::Waiting, "{parked:?}");
+    let scope = ApprovalScope::new("ops", "alice", "pay-1");
+    let pending = approvals.pending(&scope).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+
+    approvals.decide(&scope, &pending[0].fingerprint, ToolApproval::approve()).await.unwrap();
+    runs.wake(&run.run_id).await.unwrap();
+    let finished = worker.run_next().await.unwrap().expect("the woken run");
+    assert_eq!(finished.state, RunState::Completed, "{finished:?}");
+    assert_eq!(executions.load(Ordering::SeqCst), 1, "the approved call executes once");
 }
 
 /// `POST /runs/{id}/wake` reaches the store.

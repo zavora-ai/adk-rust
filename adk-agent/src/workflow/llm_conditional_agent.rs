@@ -33,7 +33,7 @@ use crate::skill_shim::load_skill_index;
 use crate::skill_shim::{SelectionPolicy, SkillIndex};
 use adk_core::{
     AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Content, Event, EventStream,
-    InvocationContext, Llm, LlmRequest, Part, Result,
+    InvocationContext, Llm, LlmRequest, Part, Result, WorkflowPosition,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -280,6 +280,15 @@ impl Agent for LlmConditionalAgent {
         let agent_name = self.name.clone();
         let before_callbacks = self.before_callbacks.clone();
         let after_callbacks = self.after_callbacks.clone();
+        // A run that resumes a hold returns to the route that holds it without classifying
+        // again: the resuming run's input is not the input that chose the route.
+        let resuming = run_ctx
+            .session()
+            .workflow_resume_positions(&agent_name, run_ctx.branch())
+            .into_iter()
+            .find_map(|position| {
+                self.all_agents.iter().find(|agent| agent.name() == position.sub_agent).cloned()
+            });
 
         let s = stream! {
             // ===== BEFORE AGENT CALLBACKS =====
@@ -311,81 +320,102 @@ impl Agent for LlmConditionalAgent {
                 }
             }
 
-            // Build classification request
-            let user_content = run_ctx.user_content().clone();
-            let user_text: String = user_content.parts.iter()
-                .filter_map(|p| if let Part::Text { text } = p { Some(text.as_str()) } else { None })
-                .collect::<Vec<_>>()
-                .join(" ");
+            let (target_agent, classification) = match resuming {
+                Some(agent) => (Some(agent), None),
+                None => {
+                    // Build classification request
+                    let user_content = run_ctx.user_content().clone();
+                    let user_text: String = user_content.parts.iter()
+                        .filter_map(|p| if let Part::Text { text } = p { Some(text.as_str()) } else { None })
+                        .collect::<Vec<_>>()
+                        .join(" ");
 
-            let classification_prompt = format!(
-                "{}\n\nUser input: {}",
-                instruction,
-                user_text
-            );
+                    let classification_prompt = format!(
+                        "{}\n\nUser input: {}",
+                        instruction,
+                        user_text
+                    );
 
-            let request = LlmRequest {
-                model: model.name().to_string(),
-                contents: vec![Content::new("user").with_text(&classification_prompt)],
-                tools: HashMap::new(),
-                config: None,
-                previous_response_id: None,
-            };
+                    let request = LlmRequest {
+                        model: model.name().to_string(),
+                        contents: vec![Content::new("user").with_text(&classification_prompt)],
+                        tools: HashMap::new(),
+                        config: None,
+                        previous_response_id: None,
+                    };
 
-            // Call LLM for classification; the call counts against the run budget and spend ledger.
-            let scope = adk_core::ModelCallScope::for_run(
-                run_ctx.run_config(),
-                run_ctx.app_name(),
-                &agent_name,
-            );
-            let mut response_stream = match scope.generate(model.as_ref(), request, false).await {
-                Ok(stream) => stream,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
+                    // Call LLM for classification; the call counts against the run budget and spend ledger.
+                    let scope = adk_core::ModelCallScope::for_run(
+                        run_ctx.run_config(),
+                        run_ctx.app_name(),
+                        &agent_name,
+                    );
+                    let mut response_stream = match scope.generate(model.as_ref(), request, false).await {
+                        Ok(stream) => stream,
+                        Err(e) => {
+                            yield Err(e);
+                            return;
+                        }
+                    };
 
-            // Collect classification response
-            let mut classification = String::new();
-            while let Some(chunk_result) = response_stream.next().await {
-                match chunk_result {
-                    Ok(chunk) => {
-                        if let Some(content) = chunk.content {
-                            for part in content.parts {
-                                if let Part::Text { text } = part {
-                                    classification.push_str(&text);
+                    // Collect classification response
+                    let mut classification = String::new();
+                    while let Some(chunk_result) = response_stream.next().await {
+                        match chunk_result {
+                            Ok(chunk) => {
+                                if let Some(content) = chunk.content {
+                                    for part in content.parts {
+                                        if let Part::Text { text } = part {
+                                            classification.push_str(&text);
+                                        }
+                                    }
                                 }
+                            }
+                            Err(e) => {
+                                yield Err(e);
+                                return;
                             }
                         }
                     }
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
+
+                    // Normalize classification
+                    let classification = classification.trim().to_lowercase();
+
+                    // Emit routing event
+                    let mut routing_event = Event::new(&invocation_id);
+                    routing_event.author = agent_name.clone();
+                    routing_event.llm_response.content = Some(
+                        Content::new("model").with_text(format!("[Routing to: {}]", classification))
+                    );
+                    yield Ok(routing_event);
+
+                    // Find matching route
+                    (Self::resolve_route(&classification, &routes).or(default_agent), Some(classification))
                 }
-            }
-
-            // Normalize classification
-            let classification = classification.trim().to_lowercase();
-
-            // Emit routing event
-            let mut routing_event = Event::new(&invocation_id);
-            routing_event.author = agent_name.clone();
-            routing_event.llm_response.content = Some(
-                Content::new("model").with_text(format!("[Routing to: {}]", classification))
-            );
-            yield Ok(routing_event);
-
-            // Find matching route
-            let target_agent = Self::resolve_route(&classification, &routes).or(default_agent);
+            };
 
             // Execute target agent
             if let Some(agent) = target_agent {
                 match agent.run(run_ctx.clone()).await {
                     Ok(mut stream) => {
+                        let mut held = false;
                         while let Some(event) = stream.next().await {
+                            let event = event.map(|mut event| {
+                                if event.actions.tool_confirmation.is_some() {
+                                    held = true;
+                                    event.actions.workflow_positions.insert(
+                                        agent_name.clone(),
+                                        WorkflowPosition::new(0, agent.name()),
+                                    );
+                                }
+                                event
+                            });
                             yield event;
+                        }
+                        // A held call pauses the route; the after-agent callbacks wait for
+                        // the run that finishes it.
+                        if held {
+                            return;
                         }
                     }
                     Err(e) => {
@@ -399,7 +429,7 @@ impl Agent for LlmConditionalAgent {
                 error_event.llm_response.content = Some(
                     Content::new("model").with_text(format!(
                         "No route found for classification '{}'. Available routes: {:?}",
-                        classification,
+                        classification.unwrap_or_default(),
                         routes.keys().collect::<Vec<_>>()
                     ))
                 );

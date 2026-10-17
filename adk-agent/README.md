@@ -125,7 +125,10 @@ a decision recorded against `request.fingerprint()` authorizes the same agent's 
 tool with the same origin and declaration, when the next run resumes it or the model issues it
 again. A resumed call whose tool now resolves to another publisher, or was redefined, is answered
 as not run. A frozen `GovernanceControl` ends the run before the next model or tool
-call. See [Tool Authorization](../docs/official_docs/security/tool-authorization.md).
+call. A workflow agent stops when a sub-agent holds a call and resumes at that sub-agent on the
+next run, without repeating finished sub-agents, loop iterations or routing; a call its provider
+sent without an ID gets a generated `adk-call-` ID, so same-name calls keep their own arguments.
+See [Tool Authorization](../docs/official_docs/security/tool-authorization.md).
 
 ### Generation Config
 

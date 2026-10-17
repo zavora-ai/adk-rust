@@ -323,7 +323,10 @@ Gemini, OpenAI, Anthropic, Ollama, and OpenAI-compatible providers (fixture F-8)
 ## Testing with ScriptedLlm
 
 `ScriptedLlm` is a deterministic LLM double that exercises the full runtime
-pipeline. Only the provider API call is replaced:
+pipeline. Only the provider API call is replaced. It is `adk_model::ScriptedLlm`,
+re-exported: each model call gets the next scripted turn, `requests()` returns what the
+runtime sent on every call, and a call past the last turn fails with
+`model.scripted.exhausted`:
 
 ```rust,ignore
 use adk_managed::testing::{ScriptedLlm, ScriptedTurn, ScriptedToolCall};

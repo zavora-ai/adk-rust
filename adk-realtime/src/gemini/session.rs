@@ -131,6 +131,48 @@ struct GeminiSetup {
     /// every existing server-VAD session relies on.
     #[serde(skip_serializing_if = "Option::is_none")]
     realtime_input_config: Option<GeminiRealtimeInputConfig>,
+    /// Only sent when the caller asked for it
+    /// ([`RealtimeConfig::with_context_window_compression`]). Google documents that without
+    /// it a session ends after about 2 minutes with video and about 15 audio-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_window_compression: Option<GeminiContextWindowCompression>,
+}
+
+/// `setup.contextWindowCompression`.
+///
+/// `slidingWindow` is the only mechanism Google defines; an empty one keeps the server's
+/// defaults (compress at 80% of the context window, cut back to half of that).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiContextWindowCompression {
+    sliding_window: GeminiSlidingWindow,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trigger_tokens: Option<u64>,
+}
+
+/// `setup.contextWindowCompression.slidingWindow`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiSlidingWindow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_tokens: Option<u64>,
+}
+
+impl GeminiContextWindowCompression {
+    /// Reads `extra.context_window_compression`: `true` for the server defaults, or an object
+    /// with optional `trigger_tokens` / `target_tokens`. Anything else leaves it off.
+    fn from_extra(extra: Option<&Value>) -> Option<Self> {
+        match extra?.get("context_window_compression")? {
+            Value::Bool(true) => Some(Self::default()),
+            Value::Object(opts) => Some(Self {
+                sliding_window: GeminiSlidingWindow {
+                    target_tokens: opts.get("target_tokens").and_then(Value::as_u64),
+                },
+                trigger_tokens: opts.get("trigger_tokens").and_then(Value::as_u64),
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// `setup.realtimeInputConfig`.
@@ -187,8 +229,10 @@ struct GeminiInlineData {
 struct GeminiRealtimeInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     audio: Option<GeminiMediaChunk>,
+    /// Camera / screen frames. Not the deprecated `mediaChunks`: `gemini-3.8-live` drops
+    /// images sent there without an error, and the model reports seeing nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
-    media_chunks: Option<Vec<GeminiMediaChunk>>,
+    video: Option<GeminiMediaChunk>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     /// The user has started speaking. Only legal while automatic activity
@@ -754,6 +798,9 @@ impl GeminiRealtimeSession {
 
         let tools = convert_tools(config.tools, dialect);
 
+        let context_window_compression =
+            GeminiContextWindowCompression::from_extra(config.extra.as_ref());
+
         // Functionally extract the token if it exists in the prior state map
         let handle = config
             .extra
@@ -780,6 +827,7 @@ impl GeminiRealtimeSession {
                 input_audio_transcription: transcription.clone(),
                 output_audio_transcription: transcription,
                 realtime_input_config,
+                context_window_compression,
             }),
             ..Default::default()
         }
@@ -1078,18 +1126,7 @@ impl RealtimeSession for GeminiRealtimeSession {
     }
 
     async fn send_video_frame(&self, mime_type: &str, data_base64: &str) -> Result<()> {
-        // Gemini Live accepts image frames as realtimeInput media chunks.
-        let msg = GeminiClientMessage {
-            realtime_input: Some(GeminiRealtimeInput {
-                media_chunks: Some(vec![GeminiMediaChunk {
-                    mime_type: mime_type.to_string(),
-                    data: data_base64.to_string(),
-                }]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        self.send_raw(&msg).await
+        self.send_raw(&video_frame_message(mime_type, data_base64)).await
     }
 
     async fn send_text(&self, text: &str) -> Result<()> {
@@ -1317,6 +1354,20 @@ pub fn build_vertex_live_url(region: &str, project_id: &str) -> Result<String> {
     ))
 }
 
+/// One camera or screen frame as `realtimeInput.video`.
+fn video_frame_message(mime_type: &str, data_base64: &str) -> GeminiClientMessage {
+    GeminiClientMessage {
+        realtime_input: Some(GeminiRealtimeInput {
+            video: Some(GeminiMediaChunk {
+                mime_type: mime_type.to_string(),
+                data: data_base64.to_string(),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
 /// Pure translation function for converting a standard `adk_core` message into
 /// Gemini Live API's native `clientContent` payload.
 pub(crate) fn translate_client_message(
@@ -1429,8 +1480,8 @@ pub(crate) fn translate_client_message(
 /// exclusive and express different things: `parameters` takes an OpenAPI
 /// subset, `parametersJsonSchema` takes standard JSON Schema. Hardcoding the
 /// legacy field silently discards every constraint the subset cannot carry —
-/// `additionalProperties`, `allOf`, `if`/`then`, `minLength`, the numeric
-/// bounds — leaving the model to guess at rules the caller still enforces.
+/// `additionalProperties`, `allOf`, `if`/`then`, the exclusive bounds — leaving
+/// the model to guess at rules the caller still enforces.
 fn convert_tools(
     tools: Option<Vec<ToolDefinition>>,
     dialect: adk_gemini::GeminiSchemaDialect,
@@ -1574,6 +1625,7 @@ mod tests {
             input_audio_transcription: None,
             output_audio_transcription: None,
             realtime_input_config: None,
+            context_window_compression: None,
         };
         let wrapper = GeminiClientMessage { setup: Some(setup), ..Default::default() };
         let js = serde_json::to_value(&wrapper).unwrap();
@@ -1619,6 +1671,53 @@ mod tests {
             RealtimeConfig { extra: Some(json!(["not", "an", "object"])), ..Default::default() };
         let extra = config.with_language("fr-FR").extra.unwrap();
         assert_eq!(extra, json!({"language_code": "fr-FR"}));
+    }
+
+    #[test]
+    fn test_context_window_compression_sends_a_sliding_window() {
+        let js = setup_json(RealtimeConfig::default().with_context_window_compression(None));
+        assert_eq!(js["setup"]["contextWindowCompression"], json!({"slidingWindow": {}}));
+
+        let js = setup_json(
+            RealtimeConfig::default()
+                .with_language("en-US")
+                .with_context_window_compression(Some(25_600)),
+        );
+        assert_eq!(
+            js["setup"]["contextWindowCompression"],
+            json!({"slidingWindow": {}, "triggerTokens": 25_600})
+        );
+        assert_eq!(js["setup"]["generationConfig"]["speechConfig"]["languageCode"], json!("en-US"));
+
+        let config = RealtimeConfig {
+            extra: Some(json!({
+                "context_window_compression": {"trigger_tokens": 32_000, "target_tokens": 16_000}
+            })),
+            ..Default::default()
+        };
+        assert_eq!(
+            setup_json(config)["setup"]["contextWindowCompression"],
+            json!({"slidingWindow": {"targetTokens": 16_000}, "triggerTokens": 32_000})
+        );
+    }
+
+    #[test]
+    fn test_context_window_compression_is_absent_unless_asked() {
+        assert!(
+            setup_json(RealtimeConfig::default())["setup"]
+                .get("contextWindowCompression")
+                .is_none()
+        );
+        for off in [json!(false), json!(null), json!("yes"), json!(1)] {
+            let config = RealtimeConfig {
+                extra: Some(json!({"context_window_compression": off})),
+                ..Default::default()
+            };
+            assert!(
+                setup_json(config)["setup"].get("contextWindowCompression").is_none(),
+                "{off} must not turn compression on"
+            );
+        }
     }
 
     #[test]
@@ -1676,6 +1775,16 @@ mod tests {
         );
     }
 
+    /// `gemini-3.8-live` ignores images under the deprecated `mediaChunks` (the model says
+    /// it sees nothing); under `video` they count as IMAGE tokens and are described.
+    #[test]
+    fn video_frames_go_out_as_realtime_input_video() {
+        assert_eq!(
+            serde_json::to_value(video_frame_message("image/jpeg", "AQI=")).unwrap(),
+            json!({ "realtimeInput": { "video": { "mimeType": "image/jpeg", "data": "AQI=" } } })
+        );
+    }
+
     /// The two frames are separate transitions; emitting both in one message
     /// would describe a turn that started and ended simultaneously.
     #[test]
@@ -1687,7 +1796,7 @@ mod tests {
                 1,
                 "{signal:?} should set exactly one marker"
             );
-            assert!(input.audio.is_none() && input.media_chunks.is_none() && input.text.is_none());
+            assert!(input.audio.is_none() && input.video.is_none() && input.text.is_none());
         }
     }
 

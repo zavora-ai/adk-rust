@@ -185,6 +185,7 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "google-cloud-spanner",
+ "jsonschema",
  "schemars",
  "serde",
  "serde_json",

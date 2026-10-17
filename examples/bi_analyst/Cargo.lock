@@ -185,6 +185,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
+ "jsonschema",
  "reqwest 0.12.28",
  "reqwest 0.13.5",
  "rmcp",

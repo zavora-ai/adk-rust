@@ -23,7 +23,7 @@ MCP Server → raw JSON Schema → McpToolset (stores verbatim)
 
 | Feature | Gemini | OpenAI Strict | OpenAI | Anthropic | Generic |
 |---------|--------|---------------|--------|-----------|---------|
-| `$ref` resolution | ✅ Inlines | ❌ Preserves | ❌ Preserves | ❌ Preserves | ❌ Preserves |
+| `$ref` resolution | ✅ Inlines, keeping the keywords beside the `$ref` | ❌ Preserves | ❌ Preserves | ❌ Preserves | ❌ Preserves |
 | `anyOf`/`oneOf` | Collapses | Preserves | Preserves | Preserves | Preserves |
 | `allOf` | Merges | Preserves | Preserves | Preserves | Preserves |
 | `additionalProperties` | Removes | Sets `false` | Preserves | Preserves | Preserves |
@@ -33,7 +33,8 @@ MCP Server → raw JSON Schema → McpToolset (stores verbatim)
 | `const` | → `enum` | → `enum` | → `enum` | Preserves | → `enum` |
 | Unsupported `format` | Strips | Strips | Strips | Preserves | Strips |
 | Nesting depth limit | 5 levels | None | None | None | None |
-| `exclusiveMin/Max` | Removes | Preserves | Preserves | Preserves | Preserves |
+| `minimum`/`maximum`, `minLength`/`maxLength`, `pattern`, `minItems`/`maxItems` | Preserves | Preserves | Preserves | Preserves | Preserves |
+| `exclusiveMin/Max`, `multipleOf` | Removes | Preserves | Preserves | Preserves | Preserves |
 
 ## The SchemaAdapter Trait
 
@@ -82,7 +83,9 @@ let adapter = GeminiSchemaAdapter::vertex_ai();
 ```
 
 Transform pipeline:
-1. Resolve `$ref` (inline from definitions, break cycles at depth 10)
+1. Resolve `$ref` (inline from definitions, break cycles at depth 10). Keywords beside a
+   `$ref`, such as a field's own `description`, stay on the inlined schema and take precedence
+   over the definition's.
 2. Strip `$schema`
 3. Collapse `anyOf`/`oneOf` → first non-null sub-schema
 4. Merge `allOf` sub-schemas
@@ -91,7 +94,9 @@ Transform pipeline:
 7. Convert `const` → single-element `enum`
 8. Strip null from `enum` arrays
 9. Add implicit `type: "object"`
-10. Remove unsupported keywords
+10. Remove keywords the Gemini `Schema` proto does not define. The bounds it does define —
+    `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `minItems`, `maxItems` — are kept,
+    so the model is shown the limits a `#[tool]` enforces.
 11. Strip unsupported `format` values
 12. Enforce nesting depth (5 levels)
 13. Remove `definitions`/`$defs`
@@ -222,7 +227,7 @@ Available utilities:
 - `strip_unsupported_formats` — removes format values not in allowlist
 - `strip_null_from_enum` — removes null from enum arrays
 - `truncate_tool_name` — truncates at UTF-8 boundary
-- `resolve_refs` — inlines `$ref` references from definitions
+- `resolve_refs` — inlines `$ref` references from definitions, keeping the keywords beside each `$ref`
 - `collapse_combiners` — collapses `anyOf`/`oneOf` to first non-null
 - `merge_all_of` — merges `allOf` sub-schemas
 - `collapse_type_arrays` — collapses `["string", "null"]` to `"string"`

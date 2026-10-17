@@ -3,7 +3,7 @@ use crate::skill_shim::load_skill_index;
 use crate::skill_shim::{SelectionPolicy, SkillIndex};
 use adk_core::{
     AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Content, Event, EventStream,
-    InvocationContext, ReadonlyContext, Result, Session, State,
+    InvocationContext, Part, ReadonlyContext, Result, Session, State, WorkflowPosition,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -184,6 +184,26 @@ impl HistoryTrackingSession {
             // entries that bloat context for subsequent agents.
             let mut history = self.history.write().unwrap_or_else(|e| e.into_inner());
             let mut streamed_id = self.streamed_id.write().unwrap_or_else(|e| e.into_inner());
+            // A resumed call's response takes its pending response's place, so a later
+            // sub-agent sees one response per call.
+            let unplaced;
+            let content = if !event.llm_response.partial
+                && content.parts.iter().any(|part| matches!(part, Part::FunctionResponse { .. }))
+            {
+                unplaced = adk_core::supersede_pending_responses(&mut history, content.clone());
+                match &unplaced {
+                    Some(rest) => rest,
+                    None => {
+                        *streamed_id = None;
+                        drop(history);
+                        drop(streamed_id);
+                        self.state.apply_delta(&event.actions.state_delta);
+                        return;
+                    }
+                }
+            } else {
+                content
+            };
             let continues_stream = streamed_id.as_deref() == Some(event.id.as_str());
 
             if event.llm_response.partial {
@@ -286,6 +306,14 @@ impl Session for HistoryTrackingSession {
 
     fn held_tool_calls(&self, agent_name: &str, branch: &str) -> Vec<adk_core::HeldToolCall> {
         self.parent_ctx.session().held_tool_calls(agent_name, branch)
+    }
+
+    fn workflow_resume_positions(
+        &self,
+        workflow: &str,
+        branch: &str,
+    ) -> Vec<adk_core::WorkflowPosition> {
+        self.parent_ctx.session().workflow_resume_positions(workflow, branch)
     }
 
     fn append_to_history(&self, content: Content) {
@@ -435,6 +463,23 @@ impl InvocationContext for HistoryTrackingContext {
     }
 }
 
+/// The earliest recorded `(iteration, sub-agent index)` a resuming run starts at, if any
+/// names a sub-agent of this loop within its iterations.
+fn resume_point(
+    positions: &[WorkflowPosition],
+    sub_agents: &[Arc<dyn Agent>],
+    max_iterations: u32,
+) -> Option<(u32, usize)> {
+    positions
+        .iter()
+        .filter(|position| position.iteration < max_iterations)
+        .filter_map(|position| {
+            let index = sub_agents.iter().position(|agent| agent.name() == position.sub_agent)?;
+            Some((position.iteration, index))
+        })
+        .min()
+}
+
 #[async_trait]
 impl Agent for LoopAgent {
     fn name(&self) -> &str {
@@ -469,6 +514,11 @@ impl Agent for LoopAgent {
             self.max_skill_chars,
         );
         let run_ctx = Arc::new(HistoryTrackingContext::new(run_ctx));
+        let resume_at = resume_point(
+            &run_ctx.session().workflow_resume_positions(&agent_name, run_ctx.branch()),
+            &sub_agents,
+            max_iterations,
+        );
 
         let s = stream! {
             use futures::StreamExt;
@@ -503,16 +553,27 @@ impl Agent for LoopAgent {
             }
 
             // A range cannot underflow, so `max_iterations == 0` runs the body zero times
-            // instead of wrapping to `u32::MAX`.
-            for _ in 0..max_iterations {
+            // instead of wrapping to `u32::MAX`. A run that resumes a hold starts at the
+            // iteration and sub-agent it stopped at, so sub-agents that already finished in
+            // that iteration do not run again.
+            let (first_iteration, mut first_index) = resume_at.unwrap_or((0, 0));
+            for iteration in first_iteration..max_iterations {
                 let mut should_exit = false;
 
-                for agent in &sub_agents {
+                for (index, agent) in sub_agents.iter().enumerate().skip(first_index) {
                     let mut stream = agent.run(run_ctx.clone() as Arc<dyn InvocationContext>).await?;
+                    let mut held = false;
 
                     while let Some(result) = stream.next().await {
                         match result {
-                            Ok(event) => {
+                            Ok(mut event) => {
+                                if event.actions.tool_confirmation.is_some() {
+                                    held = true;
+                                    event.actions.workflow_positions.insert(
+                                        agent_name.clone(),
+                                        WorkflowPosition::new(iteration, agent.name()),
+                                    );
+                                }
                                 run_ctx.apply_event(&event);
                                 if event.actions.escalate {
                                     should_exit = true;
@@ -526,10 +587,24 @@ impl Agent for LoopAgent {
                         }
                     }
 
+                    // A held call pauses the workflow: no later sub-agent runs, and the
+                    // after-agent callbacks wait for the run that finishes it.
+                    if held {
+                        tracing::info!(
+                            agent.name = %agent_name,
+                            workflow.iteration = iteration,
+                            workflow.sub_agent = %agent.name(),
+                            workflow.index = index,
+                            "workflow paused on a held tool call"
+                        );
+                        return;
+                    }
+
                     if should_exit {
                         break;
                     }
                 }
+                first_index = 0;
 
                 if should_exit {
                     break;

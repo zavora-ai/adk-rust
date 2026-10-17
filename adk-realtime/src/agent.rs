@@ -458,9 +458,15 @@ impl RealtimeAgentBuilder {
     }
 
     /// Build the RealtimeAgent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no model was set, or when two tools added with
+    /// [`tool`](Self::tool) share a name (code `agent.duplicate_tool_name`).
     pub fn build(self) -> Result<RealtimeAgent> {
         let model =
             self.model.ok_or_else(|| AdkError::agent("RealtimeModel is required".to_string()))?;
+        adk_core::ensure_unique_tool_names(&self.name, &self.tools)?;
 
         Ok(RealtimeAgent {
             name: self.name,

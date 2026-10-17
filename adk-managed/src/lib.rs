@@ -74,5 +74,5 @@ pub use state_store::{
     Durability, FileManagedStateStore, InMemoryManagedStateStore, ManagedSessionState,
     ManagedStateStore, PendingAction, PendingKind, SessionRecord, SessionServiceStateStore,
 };
-pub use testing::{ScriptedLlm, ScriptedToolCall, ScriptedTurn};
+pub use testing::{ScriptedLlm, ScriptedResponse, ScriptedToolCall, ScriptedTurn};
 pub use usage::{SessionUsageTracker, UsageReport};

@@ -587,7 +587,7 @@ let agent = LlmAgentBuilder::new("web_agent")
     .build()?;
 ```
 
-You can mix static `.tool()` and dynamic `.toolset()` on the same agent. Duplicate tool names across static tools and toolsets produce a deterministic error.
+You can mix static `.tool()` and dynamic `.toolset()` on the same agent. Two static tools with one name fail `build()` with code `agent.duplicate_tool_name` (`adk_core::DUPLICATE_TOOL_NAME_CODE`); a name shared between a static tool and a toolset, or between two toolsets, fails the turn when the toolsets resolve.
 
 A toolset whose `tools()` call fails, such as an MCP server that is down, is skipped for that resolution: the agent logs a `warn` naming the toolset and the error, and the model runs with the tools that did resolve. The toolset is tried again at the next resolution. Enable strict mode when the agent must not run without every toolset:
 

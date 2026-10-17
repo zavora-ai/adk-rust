@@ -688,7 +688,10 @@ mod tests {
             return;
         }
         let backend = ProcessBackend::default();
-        let request = make_request(Language::JavaScript, "console.log('hello')");
+        let mut request = make_request(Language::JavaScript, "console.log('hello')");
+        // node.exe takes from one to over thirty seconds to start on a loaded Windows runner,
+        // so a finite budget races its startup; `test_timeout_enforcement` covers the timeout.
+        request.timeout = Duration::MAX;
         let result = backend.execute(request).await.unwrap();
         assert!(result.stdout.contains("hello"), "stdout: {}", result.stdout);
         assert_eq!(result.exit_code, 0);

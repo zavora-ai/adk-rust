@@ -169,6 +169,7 @@ dependencies = [
  "async-trait",
  "base64",
  "futures",
+ "jsonschema",
  "schemars",
  "serde",
  "serde_json",

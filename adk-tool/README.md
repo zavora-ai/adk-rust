@@ -93,6 +93,26 @@ let tool = FunctionTool::new("get_weather", "Get weather", get_weather)
     .with_parameters_schema::<WeatherParams>();
 ```
 
+### Argument Validation
+
+A `#[tool]` tool checks each call's arguments against its schema before the function runs:
+a key the schema does not name, a value outside a `range`, `length` or `pattern` bound, or a
+missing field fails the call with a `tool.invalid_arguments` error the model sees and can
+correct. `#[tool(lenient_args)]` opts a tool out. Hand-written tools use the same check:
+
+```rust
+use adk_tool::{ToolArgumentValidator, close_object_schemas};
+use serde_json::json;
+
+let mut schema = json!({
+    "type": "object",
+    "properties": { "count": { "type": "integer", "minimum": 1, "maximum": 10 } }
+});
+close_object_schemas(&mut schema); // reject keys the schema does not name
+let validator = ToolArgumentValidator::new(&schema).expect("a valid JSON Schema");
+assert!(validator.validate("book", &json!({ "count": 50 })).is_err());
+```
+
 ### Tool Metadata
 
 Mark tools as read-only or concurrency-safe for smarter dispatch:

@@ -31,7 +31,7 @@ use crate::skill_shim::load_skill_index;
 use crate::skill_shim::{SelectionPolicy, SkillIndex};
 use adk_core::{
     AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Event, EventStream,
-    InvocationContext, Result,
+    InvocationContext, Result, WorkflowPosition,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -192,6 +192,15 @@ impl Agent for ConditionalAgent {
         let agent_name = self.name.clone();
         let invocation_id = run_ctx.invocation_id().to_string();
         let condition = self.condition.clone();
+        // A run that resumes a hold returns to the branch that holds it without evaluating
+        // the condition again, which may have changed since.
+        let resuming = run_ctx
+            .session()
+            .workflow_resume_positions(&agent_name, run_ctx.branch())
+            .into_iter()
+            .find_map(|position| {
+                self.all_agents.iter().find(|agent| agent.name() == position.sub_agent).cloned()
+            });
 
         let s = stream! {
             for callback in before_callbacks.as_ref() {
@@ -228,10 +237,10 @@ impl Agent for ConditionalAgent {
                 }
             }
 
-            let target_agent = if condition(run_ctx.as_ref()) {
-                Some(if_agent)
-            } else {
-                else_agent
+            let target_agent = match resuming {
+                Some(agent) => Some(agent),
+                None if condition(run_ctx.as_ref()) => Some(if_agent),
+                None => else_agent,
             };
 
             if let Some(agent) = target_agent {
@@ -243,14 +252,29 @@ impl Agent for ConditionalAgent {
                     }
                 };
 
+                let mut held = false;
                 while let Some(result) = stream.next().await {
                     match result {
-                        Ok(event) => yield Ok(event),
+                        Ok(mut event) => {
+                            if event.actions.tool_confirmation.is_some() {
+                                held = true;
+                                event.actions.workflow_positions.insert(
+                                    agent_name.clone(),
+                                    WorkflowPosition::new(0, agent.name()),
+                                );
+                            }
+                            yield Ok(event);
+                        }
                         Err(e) => {
                             yield Err(e);
                             return;
                         }
                     }
+                }
+                // A held call pauses the branch; the after-agent callbacks wait for the run
+                // that finishes it.
+                if held {
+                    return;
                 }
             }
 

@@ -815,4 +815,39 @@ mod tests {
         assert_eq!(result["additionalProperties"], false);
         assert_eq!(result["properties"]["nested"]["additionalProperties"], false);
     }
+
+    /// The shape `#[tool]` declares: objects closed with `additionalProperties: false`,
+    /// a nested type behind a `$ref` with its own description beside it, and bounds.
+    fn closed_tool_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "room": { "type": "string", "minLength": 2, "maxLength": 4, "pattern": "^[A-Z][0-9]$" },
+                "count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 10 },
+                "confirm_to": { "$ref": "#/$defs/Address", "description": "Where to post it." }
+            },
+            "required": ["room", "count", "confirm_to"],
+            "additionalProperties": false,
+            "$defs": {
+                "Address": {
+                    "type": "object",
+                    "description": "A postal address.",
+                    "properties": { "city": { "type": "string" } },
+                    "required": ["city"],
+                    "additionalProperties": false
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn closed_tool_schema_passes_both_adapters_intact() {
+        let schema = closed_tool_schema();
+        let mut expected = schema.clone();
+        // `uint32` is not an OpenAI format; everything else survives as declared.
+        expected["properties"]["count"].as_object_mut().unwrap().remove("format");
+
+        assert_eq!(OpenAiSchemaAdapter.normalize_schema(schema.clone()), expected);
+        assert_eq!(OpenAiStrictSchemaAdapter.normalize_schema(schema), expected);
+    }
 }

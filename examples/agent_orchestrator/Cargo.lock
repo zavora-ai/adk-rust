@@ -247,6 +247,7 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "google-cloud-auth",
+ "jsonschema",
  "reqwest 0.12.28",
  "schemars 1.2.2",
  "serde",

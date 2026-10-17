@@ -74,9 +74,11 @@ impl IntraInvocationCompactor {
             return Ok(None);
         }
 
-        // Determine which events to summarize vs. preserve
+        // Determine which events to summarize vs. preserve. A held call and everything after
+        // it stay, so its approval can still resume it.
         let overlap = self.config.overlap_event_count.min(events.len());
-        let summarize_end = events.len().saturating_sub(overlap);
+        let summarize_end =
+            adk_core::held_call_compaction_limit(events, events.len().saturating_sub(overlap));
 
         if summarize_end == 0 {
             // All events are in the overlap window — nothing to summarize
@@ -113,5 +115,96 @@ impl IntraInvocationCompactor {
     /// Reset the per-cycle guard. Call this at the start of each LLM call.
     pub fn reset_cycle(&self) {
         self.compacted_this_cycle.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adk_core::{
+        Content, EventActions, EventCompaction, FunctionResponseData, Part,
+        ToolConfirmationRequest, confirmation_pending_response, held_tool_calls,
+    };
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    struct Summary;
+
+    #[async_trait]
+    impl BaseEventsSummarizer for Summary {
+        async fn summarize_events(&self, events: &[Event]) -> Result<Option<Event>> {
+            let mut event = Event::new("compaction");
+            event.actions = EventActions {
+                compaction: Some(EventCompaction {
+                    start_timestamp: events[0].timestamp,
+                    end_timestamp: events[events.len() - 1].timestamp,
+                    compacted_content: Content::new("model").with_text("summary"),
+                }),
+                ..Default::default()
+            };
+            Ok(Some(event))
+        }
+    }
+
+    fn event(author: &str, parts: Vec<Part>) -> Event {
+        let mut event = Event::new("inv-1");
+        event.author = author.to_string();
+        event.set_content(Content { role: "model".to_string(), parts });
+        event
+    }
+
+    #[tokio::test]
+    async fn a_held_call_and_the_events_after_it_are_never_summarized() {
+        let mut events: Vec<Event> = (0..6)
+            .map(|index| {
+                event("user", vec![Part::Text { text: format!("message {index} ").repeat(50) }])
+            })
+            .collect();
+        events.push(event(
+            "ops",
+            vec![Part::FunctionCall {
+                name: "transfer".to_string(),
+                args: json!({ "amount": 10 }),
+                id: Some("c1".to_string()),
+                thought_signature: None,
+            }],
+        ));
+        events.push(event(
+            "ops",
+            vec![Part::FunctionResponse {
+                function_response: FunctionResponseData::new(
+                    "transfer",
+                    confirmation_pending_response("held"),
+                ),
+                id: Some("c1".to_string()),
+                annotations: None,
+            }],
+        ));
+        let mut hold = Event::new("inv-1");
+        hold.author = "ops".to_string();
+        hold.actions.tool_confirmation = Some(ToolConfirmationRequest {
+            tool_name: "transfer".to_string(),
+            function_call_id: Some("c1".to_string()),
+            args: json!({ "amount": 10 }),
+            acting: None,
+            origin: None,
+        });
+        events.push(hold);
+        let start = chrono::Utc::now();
+        for (index, event) in events.iter_mut().enumerate() {
+            event.timestamp = start + chrono::Duration::milliseconds(index as i64);
+        }
+
+        let compactor = IntraInvocationCompactor::new(
+            IntraCompactionConfig {
+                token_threshold: 1,
+                overlap_event_count: 0,
+                chars_per_token: 4,
+            },
+            Arc::new(Summary),
+        );
+        let compacted = compactor.maybe_compact(&events).await.unwrap().expect("compacted");
+        assert_eq!(compacted.len(), 4, "the summary, then the held call's three events");
+        assert_eq!(held_tool_calls(&compacted, "ops", "").len(), 1);
     }
 }

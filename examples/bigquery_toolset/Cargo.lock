@@ -185,6 +185,7 @@ dependencies = [
  "base64",
  "futures",
  "gcp-bigquery-client",
+ "jsonschema",
  "schemars",
  "serde",
  "serde_json",

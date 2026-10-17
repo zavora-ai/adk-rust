@@ -99,7 +99,7 @@ or strip the three `[target.*]` linker sections — the shared
 bash-only, so use `./scripts/setup-dev.ps1`. Use the MSVC toolchain
 (`x86_64-pc-windows-msvc`) with Visual Studio Build Tools for the C/C++
 compiler; `.cargo/config.toml` pins `rust-lld` as the linker, which ships with
-rustup. Three further constraints:
+rustup. Four further constraints:
 
 - `adk-sandbox`'s Windows AppContainer enforcer is unimplemented and reports
   itself unavailable — `sandbox-windows` compiles but does not enforce.
@@ -114,10 +114,8 @@ rustup. Three further constraints:
   `a_working_program_still_runs` fails in a plain shell where `LIB` is unset.
 - Keep Git's `usr/bin` off `PATH` ahead of the toolchain: it ships a GNU
   `link.exe` that shadows the MSVC linker, which once made sandboxed Rust
-  compilation resolve the wrong one. The same directory holds the only `echo`
-  binary on Windows (`echo` is a cmd builtin), so
-  `adk-bench`'s `test_external_runner_invalid_json` cannot pass without
-  accepting that hazard. It is the one expected Windows failure.
+  compilation resolve the wrong one. `adk-bench`'s external-runner tests run
+  their scripts with Windows PowerShell 5.1 and need nothing from Git.
 
 ### Verifying a fresh setup
 
@@ -143,10 +141,9 @@ cargo clippy -p adk-rust --features full --all-targets -- -D warnings
 cargo test -p adk-rust --features full --doc
 ```
 
-On Linux and macOS a clean setup runs the full suite with zero failures. On
-Windows, expect 4050/4051 from a Developer PowerShell — the single failure is
-`test_external_runner_invalid_json`, explained under
-[Platform notes](#platform-notes). Any failure carrying `program not found` is a
+A clean setup runs the full suite with zero failures on Linux, macOS, and
+Windows — on Windows from a Developer PowerShell, as
+[Platform notes](#platform-notes) explains. Any failure carrying `program not found` is a
 missing host tool, not a regression — diagnose the environment before assuming
 the workspace is broken.
 
@@ -681,6 +678,14 @@ the projected history; a call without a decision stays held. A held call whose a
 origin no longer matches is answered as not run and its stored decision is spent. A resumed call
 that ends the turn (`escalate`, `skip_summarization`) in a run that brought a user message fails
 the run with `agent.resume_ended_turn`; the message is saved and answered by the next run.
+A held call survives what happens while it waits: session, intra-invocation and context
+compaction stop before the earliest held call (`adk_core::held_call_compaction_limit`); a
+workflow agent stops when a sub-agent holds a call and the next run resumes at that sub-agent
+(`EventActions::workflow_positions`, `Session::workflow_resume_positions`), so finished
+sub-agents, loop iterations and routing are not repeated; a call a provider sent without an ID
+gets a generated `adk-call-` ID before it is saved (stripped from model requests), so same-name
+calls keep their own arguments; and its tool-call budget reservation is returned while it is
+held, so it counts once.
 `CodeActAgent` resumes from its checkpoint.
 
 Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`:

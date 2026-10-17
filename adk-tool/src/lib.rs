@@ -66,6 +66,8 @@
 #![deny(missing_docs)]
 
 mod agent_tool;
+/// Argument validation against a tool's parameters schema.
+mod arguments;
 /// Built-in tool wrappers for Gemini, OpenAI, and Anthropic hosted tools.
 pub mod builtin;
 mod function_tool;
@@ -116,6 +118,10 @@ pub use adk_rust_macros::tool;
 pub use agent_tool::{
     AgentTool, AgentToolConfig, AgentToolFailureMode, AgentToolSessionSnapshot,
     AgentToolStateMergePolicy,
+};
+pub use arguments::{
+    TOOL_INVALID_PARAMETERS_SCHEMA_CODE, ToolArgumentValidator, close_object_schemas,
+    model_facing_schema,
 };
 pub use async_trait::async_trait;
 pub use builtin::{

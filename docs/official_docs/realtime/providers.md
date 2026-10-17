@@ -53,6 +53,10 @@ let model: BoxedModel = Arc::new(GeminiRealtimeModel::new(
   (`speechConfig.languageCode`) so transcription does not switch languages on short
   or accented turns. Native-audio output models choose the language automatically
   and ignore it.
+- **Session length**: `with_context_window_compression(None)` sends
+  `contextWindowCompression` (sliding window; `Some(n)` sets `triggerTokens`). Google
+  documents that sessions without it end after about 2 minutes with video and about 15
+  audio-only; with it only the ~10-minute connection limit remains.
 - **Auth**: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
 
 > **Model names differ by endpoint.** AI Studio (API-key) uses names like

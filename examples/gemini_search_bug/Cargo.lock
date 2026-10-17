@@ -187,6 +187,7 @@ dependencies = [
  "async-trait",
  "base64",
  "futures",
+ "jsonschema",
  "schemars 1.2.1",
  "serde",
  "serde_json",
