@@ -314,6 +314,19 @@ pub trait Session: Send + Sync {
     fn held_tool_calls(&self, _agent_name: &str, _branch: &str) -> Vec<crate::HeldToolCall> {
         Vec::new()
     }
+    /// Returns where the workflow agent `workflow` on `branch` resumes: the positions it
+    /// recorded on the holds that stopped its last run, while those calls are still held.
+    ///
+    /// Implementations backed by an event log return
+    /// [`workflow_resume_positions`](crate::workflow_resume_positions) over it. The default
+    /// returns none, so a workflow over a session without an event log starts over.
+    fn workflow_resume_positions(
+        &self,
+        _workflow: &str,
+        _branch: &str,
+    ) -> Vec<crate::WorkflowPosition> {
+        Vec::new()
+    }
     /// Append content to conversation history (for sequential agent support)
     fn append_to_history(&self, _content: Content) {
         // Default no-op - implementations can override to track history

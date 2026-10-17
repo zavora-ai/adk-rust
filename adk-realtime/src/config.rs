@@ -408,12 +408,46 @@ impl RealtimeConfig {
     /// let config = RealtimeConfig::default().with_voice("Kore").with_language("en-US");
     /// assert_eq!(config.extra.unwrap()["language_code"], "en-US");
     /// ```
-    pub fn with_language(mut self, code: impl Into<String>) -> Self {
+    pub fn with_language(self, code: impl Into<String>) -> Self {
+        self.with_extra("language_code", Value::String(code.into()))
+    }
+
+    /// Turns on Gemini Live context window compression (a sliding window).
+    ///
+    /// The server drops the oldest turns once the context reaches `trigger_tokens` (default:
+    /// 80% of the model's context window). Google documents that without it a session ends
+    /// after about 15 minutes of audio, or about 2 once video frames are sent, and that with
+    /// it the session has no length limit (each connection still lasts about 10 minutes).
+    ///
+    /// Stored under `extra.context_window_compression`: `true`, or
+    /// `{"trigger_tokens": n}` when a threshold is given. The object form also accepts
+    /// `target_tokens`, the size to cut back to (default: half of `trigger_tokens`). An
+    /// `extra` value that is not a JSON object is replaced. OpenAI Realtime and other
+    /// providers ignore the key.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_realtime::RealtimeConfig;
+    ///
+    /// let config = RealtimeConfig::default().with_context_window_compression(None);
+    /// assert_eq!(config.extra.unwrap()["context_window_compression"], true);
+    /// ```
+    pub fn with_context_window_compression(self, trigger_tokens: Option<u64>) -> Self {
+        let value = match trigger_tokens {
+            Some(tokens) => serde_json::json!({ "trigger_tokens": tokens }),
+            None => Value::Bool(true),
+        };
+        self.with_extra("context_window_compression", value)
+    }
+
+    /// Sets one key in `extra`, keeping the others; a non-object `extra` is replaced.
+    fn with_extra(mut self, key: &str, value: Value) -> Self {
         let mut extra = match self.extra.take() {
             Some(Value::Object(map)) => map,
             _ => serde_json::Map::new(),
         };
-        extra.insert("language_code".to_string(), Value::String(code.into()));
+        extra.insert(key.to_string(), value);
         self.extra = Some(Value::Object(extra));
         self
     }

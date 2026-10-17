@@ -23,7 +23,7 @@
 //! | 7 | Convert `const` to single-element `enum` | ✓ | — |
 //! | 8 | Strip null values from `enum` arrays | ✓ | — |
 //! | 9 | Add implicit `"type": "object"` when `properties` exists | ✓ | — |
-//! | 10 | Remove unsupported keywords recursively | ✓ | — |
+//! | 10 | Remove unsupported keywords recursively (bounds the Schema proto defines are kept) | ✓ | — |
 //! | 11 | Strip unsupported `format` values | ✓ | ✓ |
 //! | 12 | Enforce nesting depth limit (5 levels) | ✓ | ✓ |
 //! | 13 | Remove `definitions`/`$defs` blocks | ✓ | ✓ |
@@ -63,12 +63,14 @@ const GEMINI_ALLOWED_FORMATS: &[&str] =
 /// Keywords that Gemini does not support and must be removed from all schema nodes
 /// (standard API surface — removes `additionalProperties` entirely).
 ///
-/// Per the official Gemini API docs, the Schema proto for function declarations
-/// only supports: `type`, `description`, `enum`, `items` (single schema for arrays),
-/// `properties`, `required`, `nullable`, and `format` (limited values).
-/// Everything else must be stripped to avoid 400 errors from the proto parser.
+/// The Schema proto for function declarations rejects any field it does not
+/// define with a 400 (`Unknown name "..."`) on `generateContent` and a WS 1007
+/// close on the Live API. It defines the string, numeric and array bounds
+/// `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `minItems` and
+/// `maxItems`, so those are kept; `exclusiveMinimum`, `exclusiveMaximum`,
+/// `multipleOf` and the rest below are not, so they are stripped.
 ///
-/// Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/function-calling
+/// Reference: https://ai.google.dev/api/caching#Schema
 const UNSUPPORTED_KEYWORDS: &[&str] = &[
     "$id",
     "additionalProperties",
@@ -82,17 +84,10 @@ const UNSUPPORTED_KEYWORDS: &[&str] = &[
     "examples",
     "exclusiveMaximum",
     "exclusiveMinimum",
-    "maxItems",
-    "maxLength",
     "maxProperties",
-    "maximum",
-    "minItems",
-    "minLength",
     "minProperties",
-    "minimum",
     "multipleOf",
     "not",
-    "pattern",
     "patternProperties",
     "prefixItems",
     "propertyNames",
@@ -121,17 +116,10 @@ const UNSUPPORTED_KEYWORDS_VERTEX: &[&str] = &[
     "examples",
     "exclusiveMaximum",
     "exclusiveMinimum",
-    "maxItems",
-    "maxLength",
     "maxProperties",
-    "maximum",
-    "minItems",
-    "minLength",
     "minProperties",
-    "minimum",
     "multipleOf",
     "not",
-    "pattern",
     "patternProperties",
     "prefixItems",
     "propertyNames",
@@ -150,7 +138,7 @@ const UNSUPPORTED_KEYWORDS_VERTEX: &[&str] = &[
 ///
 /// | Dialect | Field | Expresses |
 /// | --- | --- | --- |
-/// | [`OpenApiSubset`](Self::OpenApiSubset) | `parameters` | An OpenAPI subset. No `allOf`, no `if`/`then`, no `additionalProperties`, no string/numeric bounds. |
+/// | [`OpenApiSubset`](Self::OpenApiSubset) | `parameters` | An OpenAPI subset. No `allOf`, no `if`/`then`, no `additionalProperties`, no exclusive bounds. Keeps `minimum`/`maximum`, `minLength`/`maxLength`, `pattern` and `minItems`/`maxItems`. |
 /// | [`VertexOpenApiSubset`](Self::VertexOpenApiSubset) | `parameters` | The same subset, except `additionalProperties: false` is set on objects rather than removed. |
 /// | [`JsonSchema`](Self::JsonSchema) | `parametersJsonSchema` | Standard JSON Schema: `allOf`, `anyOf`, `if`/`then`, `additionalProperties`, `minLength`, numeric bounds. |
 ///
@@ -1277,7 +1265,7 @@ mod tests {
     // These validate that ALL keywords not in Gemini's Schema proto are removed.
 
     #[test]
-    fn test_removes_all_validation_keywords() {
+    fn test_removes_unsupported_and_keeps_proto_bounds() {
         let adapter = GeminiSchemaAdapter::new();
         let schema = json!({
             "type": "object",
@@ -1328,30 +1316,84 @@ mod tests {
         assert!(result.get("minProperties").is_none());
         assert!(result.get("maxProperties").is_none());
 
-        // String property: validation keywords removed, type/description preserved
+        // String property: annotations removed, the proto's string bounds kept
         let name = &result["properties"]["name"];
         assert!(name.get("title").is_none());
         assert!(name.get("default").is_none());
-        assert!(name.get("minLength").is_none());
-        assert!(name.get("maxLength").is_none());
-        assert!(name.get("pattern").is_none());
+        assert_eq!(name["minLength"], 1);
+        assert_eq!(name["maxLength"], 100);
+        assert_eq!(name["pattern"], "^[a-z]+$");
         assert_eq!(name["type"], "string");
 
-        // Integer property: numeric constraints removed
+        // Integer property: inclusive bounds kept, `multipleOf` removed
         let age = &result["properties"]["age"];
-        assert!(age.get("minimum").is_none());
-        assert!(age.get("maximum").is_none());
+        assert_eq!(age["minimum"], 0);
+        assert_eq!(age["maximum"], 150);
         assert!(age.get("multipleOf").is_none());
         assert_eq!(age["type"], "integer");
 
-        // Array property: array constraints removed, items preserved
+        // Array property: item-count bounds kept, other array keywords removed
         let tags = &result["properties"]["tags"];
-        assert!(tags.get("minItems").is_none());
-        assert!(tags.get("maxItems").is_none());
+        assert_eq!(tags["minItems"], 1);
+        assert_eq!(tags["maxItems"], 10);
         assert!(tags.get("uniqueItems").is_none());
         assert!(tags.get("contains").is_none());
         assert_eq!(tags["type"], "array");
         assert_eq!(tags["items"]["type"], "string");
+    }
+
+    /// Every bound the Schema proto defines survives both OpenAPI-subset
+    /// dialects; the exclusive bounds, which it does not define, do not.
+    #[test]
+    fn openapi_subset_dialects_keep_the_bounds_the_proto_defines() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "room": {"type": "string", "minLength": 2, "maxLength": 4, "pattern": "^[A-Z][0-9]$"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 10, "exclusiveMaximum": 11},
+                "tags": {"type": "array", "items": {"type": "string"}, "minItems": 0, "maxItems": 3}
+            }
+        });
+        for adapter in [GeminiSchemaAdapter::new(), GeminiSchemaAdapter::vertex_ai()] {
+            let properties = &adapter.normalize_schema(schema.clone())["properties"];
+            assert_eq!(properties["room"]["minLength"], 2);
+            assert_eq!(properties["room"]["maxLength"], 4);
+            assert_eq!(properties["room"]["pattern"], "^[A-Z][0-9]$");
+            assert_eq!(properties["count"]["minimum"], 1);
+            assert_eq!(properties["count"]["maximum"], 10);
+            assert!(properties["count"].get("exclusiveMaximum").is_none());
+            assert_eq!(properties["tags"]["minItems"], 0);
+            assert_eq!(properties["tags"]["maxItems"], 3);
+        }
+    }
+
+    /// A field's own description sits beside its `$ref`; inlining the
+    /// definition keeps it, and the inlined fields keep their bounds.
+    #[test]
+    fn ref_sibling_description_survives_inlining() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "confirm_to": {"$ref": "#/$defs/Address", "description": "Where to post it."},
+                "home": {"$ref": "#/$defs/Address"}
+            },
+            "$defs": {
+                "Address": {
+                    "type": "object",
+                    "description": "A postal address.",
+                    "properties": {"city": {"type": "string", "maxLength": 40}},
+                    "additionalProperties": false
+                }
+            }
+        });
+        let result = GeminiSchemaAdapter::new().normalize_schema(schema);
+        let confirm_to = &result["properties"]["confirm_to"];
+        assert_eq!(confirm_to["description"], "Where to post it.");
+        assert_eq!(confirm_to["properties"]["city"]["maxLength"], 40);
+        assert!(confirm_to.get("$ref").is_none());
+        assert!(confirm_to.get("additionalProperties").is_none());
+        assert_eq!(result["properties"]["home"]["description"], "A postal address.");
+        assert!(result.get("$defs").is_none());
     }
 
     #[test]
@@ -1420,9 +1462,8 @@ mod tests {
     }
 
     /// A realistic acquisition schema: a conditional rule, a closed object, and
-    /// a bounded string. Under the OpenAPI subset all three are stripped, which
-    /// is the whole defect — the caller keeps enforcing them while the model is
-    /// never shown them.
+    /// a bounded string. The OpenAPI subset cannot carry the first two, so it
+    /// strips them; the JSON Schema dialect keeps all three.
     fn schema_with_constraints_the_subset_cannot_carry() -> Value {
         json!({
             "type": "object",
@@ -1468,21 +1509,21 @@ mod tests {
         );
     }
 
-    /// The non-breaking claim, held by a test rather than by assertion: the two
-    /// pre-existing constructors reduce exactly as before.
+    /// The two OpenAPI-subset constructors still post under the legacy field
+    /// and still reduce away what the subset cannot express, while keeping the
+    /// bounds it can.
     #[test]
-    fn openapi_subset_dialects_still_reduce_as_before() {
+    fn openapi_subset_dialects_reduce_what_the_subset_cannot_carry() {
         for adapter in [GeminiSchemaAdapter::new(), GeminiSchemaAdapter::vertex_ai()] {
-            // Still the legacy field, so the reduction and the field stay
-            // consistent for callers who never opt in.
             assert_eq!(adapter.parameters_field(), "parameters");
 
             let result =
                 adapter.normalize_schema(schema_with_constraints_the_subset_cannot_carry());
 
             assert!(result.get("allOf").is_none(), "{result}");
-            assert!(result["properties"]["callback_number"].get("minLength").is_none());
-            assert!(result["properties"]["party_size"].get("minimum").is_none());
+            assert_eq!(result["properties"]["callback_number"]["minLength"], 7);
+            assert_eq!(result["properties"]["party_size"]["minimum"], 1);
+            assert_eq!(result["properties"]["party_size"]["maximum"], 40);
         }
     }
 }

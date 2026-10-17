@@ -740,8 +740,7 @@ async fn test_function_call_ids_are_unique_for_repeated_tool_calls() {
     let ids = ids.lock().unwrap_or_else(|e| e.into_inner()).clone();
     assert_eq!(ids.len(), 2);
     assert_ne!(ids[0], ids[1]);
-    assert!(ids[0].ends_with("_0"));
-    assert!(ids[1].ends_with("_1"));
+    assert!(ids.iter().all(|id| id.starts_with(adk_core::GENERATED_CALL_ID_PREFIX)), "{ids:?}");
 }
 
 #[tokio::test]

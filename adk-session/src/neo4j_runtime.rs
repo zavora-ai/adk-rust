@@ -42,6 +42,10 @@
 //! such as a detected deadlock, is retried up to 30 times with a short randomized pause
 //! before the error is returned. Call `migrate` once per database to create the
 //! constraints and indexes.
+//!
+//! A transaction keeps its locks while its client is paused, so a process stopped inside
+//! a claim blocks every claim and enqueue in that queue, on every replica, until it
+//! resumes. Set the server's `db.transaction.timeout` to bound how long that can last.
 
 use crate::neo4j_stores::{Inline, detached};
 use std::future::Future;

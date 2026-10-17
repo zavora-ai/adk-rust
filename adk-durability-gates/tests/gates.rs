@@ -5,8 +5,8 @@
 //! |------|----------------|
 //! | `crash_mid_payment` | a worker SIGKILLed inside a non-idempotent charge; another process claims the run only after the lease expired, charges nothing, and completes it |
 //! | `one_firing_per_schedule` | three scheduler processes; every cron, interval, and one-shot occurrence produces exactly one run |
-//! | `stalled_worker` | a worker paused with SIGSTOP past its lease resumes with SIGCONT while another process owns the run; every write it attempts is refused with `run_store.stale_epoch`, and nothing is charged twice |
-//! | `kill_switch` | a freeze written by one process stops new runs, model calls, and tool calls on three replica processes within three poll intervals; no schedule fires while frozen; a replica that cannot read the governance store past its staleness limit refuses new runs |
+//! | `stalled_worker` | a worker paused with SIGSTOP at its heartbeat, with no store call in flight, past its lease resumes with SIGCONT while another process owns the run; every write it attempts is refused with `run_store.stale_epoch`, and nothing is charged twice |
+//! | `kill_switch` | a freeze written by one process stops new runs, model calls, and tool calls on three replica processes within three poll intervals; a run claimed across the freeze is handed back unstarted; no schedule fires while frozen; a replica that cannot read the governance store past its staleness limit refuses new runs |
 //!
 //! SQLite runs by default, one directory per gate. The server gates are `#[ignore]`d and
 //! read the variables the nightly `durable-stores` job sets:
@@ -347,6 +347,14 @@ async fn stalled_worker(backend: Backend, dir: PathBuf) {
     a.signal("STOP");
     // Seen by the parked heartbeat only once the process runs again.
     touch(&resume);
+    // A process stopped inside a store transaction keeps its locks; on Neo4j a claim
+    // transaction holds the queue's lock, and process b could never recover the run.
+    let polls: Vec<WriteRecord> = WriteRecord::read_all(&a_writes)
+        .into_iter()
+        .skip_while(|write| write.op != "claim")
+        .filter(|write| write.op == "poll")
+        .collect();
+    assert!(polls.is_empty(), "process a polled the run store while it held the run: {polls:?}");
 
     let stalled = run(&gate.stores, &gate.run.run_id).await;
     assert_eq!(stalled.state, RunState::Running);
@@ -653,9 +661,26 @@ fn calls(dir: &Path, replica: usize) -> Vec<(String, i64)> {
         .collect()
 }
 
+/// Whether `record` never started: still queued, or handed back unstarted.
+///
+/// A replica's claim that was in flight when it froze (or went stale) can return a run
+/// enqueued after the freeze. Its worker checks the kill switch again and hands that run
+/// back before any model or tool call: `Waiting` at its first attempt and epoch, with no
+/// checkpoint.
+fn unstarted(record: &RunRecord) -> bool {
+    match record.state {
+        RunState::Queued => (record.attempt, record.lease_epoch) == (0, 0),
+        RunState::Waiting => {
+            (record.attempt, record.lease_epoch) == (1, 1) && record.checkpoint.is_none()
+        }
+        _ => false,
+    }
+}
+
 /// Gate: a freeze written by one process stops new runs, model calls, and tool calls on
 /// every replica within the bound; no schedule fires while frozen; a replica that cannot
-/// read the governance store past its staleness limit refuses new runs.
+/// read the governance store past its staleness limit refuses new runs. A run claimed
+/// across the freeze never starts, and completes once unfrozen.
 async fn kill_switch(backend: Backend, dir: PathBuf) {
     const REPLICAS: usize = 3;
     let stores = backend.open().await;
@@ -766,7 +791,7 @@ async fn kill_switch(backend: Backend, dir: PathBuf) {
     }
     for run_id in &quick {
         let record = run(&stores, run_id).await;
-        assert_eq!((record.state, record.attempt), (RunState::Queued, 0), "claimed while frozen");
+        assert!(unstarted(&record), "started while frozen: {record:?}");
     }
     assert!(
         stores.runs.list(RunFilter::default().queue(&fired_queue)).await.unwrap().is_empty(),
@@ -833,7 +858,7 @@ async fn kill_switch(backend: Backend, dir: PathBuf) {
     assert_eq!(record.state, RunState::Completed, "a reachable replica keeps working");
     tokio::time::sleep(Duration::from_millis(1000)).await;
     let record = run(&stores, &refused.run_id).await;
-    assert_eq!((record.state, record.attempt), (RunState::Queued, 0), "a stale replica claimed");
+    assert!(unstarted(&record), "a stale replica started a run: {record:?}");
     for i in 0..partitioned {
         let first_ok = reported(&dir, i, "ok", 0).expect("ready");
         let stale = reported(&dir, i, "stale", first_ok);

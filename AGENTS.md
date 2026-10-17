@@ -677,6 +677,14 @@ the projected history; a call without a decision stays held. A held call whose a
 origin no longer matches is answered as not run and its stored decision is spent. A resumed call
 that ends the turn (`escalate`, `skip_summarization`) in a run that brought a user message fails
 the run with `agent.resume_ended_turn`; the message is saved and answered by the next run.
+A held call survives what happens while it waits: session, intra-invocation and context
+compaction stop before the earliest held call (`adk_core::held_call_compaction_limit`); a
+workflow agent stops when a sub-agent holds a call and the next run resumes at that sub-agent
+(`EventActions::workflow_positions`, `Session::workflow_resume_positions`), so finished
+sub-agents, loop iterations and routing are not repeated; a call a provider sent without an ID
+gets a generated `adk-call-` ID before it is saved (stripped from model requests), so same-name
+calls keep their own arguments; and its tool-call budget reservation is returned while it is
+held, so it counts once.
 `CodeActAgent` resumes from its checkpoint.
 
 Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`:

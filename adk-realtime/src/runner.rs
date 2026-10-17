@@ -225,6 +225,8 @@ pub struct RealtimeRunnerBuilder {
     config: RealtimeConfig,
     runner_config: RunnerConfig,
     tools: HashMap<String, (ToolDefinition, Arc<dyn ToolHandler>)>,
+    /// The first name registered twice; `build` rejects it.
+    duplicate_tool: Option<String>,
     event_handler: Option<Arc<dyn EventHandler>>,
     governance: Option<ToolGovernance>,
     tool_timeout: std::time::Duration,
@@ -244,6 +246,7 @@ impl RealtimeRunnerBuilder {
             config: RealtimeConfig::default(),
             runner_config: RunnerConfig::default(),
             tools: HashMap::new(),
+            duplicate_tool: None,
             event_handler: None,
             governance: None,
             tool_timeout: DEFAULT_REALTIME_TOOL_TIMEOUT,
@@ -320,10 +323,11 @@ impl RealtimeRunnerBuilder {
     }
 
     /// Register a tool with its handler.
-    pub fn tool(mut self, definition: ToolDefinition, handler: impl ToolHandler + 'static) -> Self {
-        let name = definition.name.clone();
-        self.tools.insert(name, (definition, Arc::new(handler)));
-        self
+    ///
+    /// Each tool needs a name of its own: [`build`](Self::build) fails when two
+    /// share one.
+    pub fn tool(self, definition: ToolDefinition, handler: impl ToolHandler + 'static) -> Self {
+        self.tool_arc(definition, Arc::new(handler))
     }
 
     /// Register a tool with a sync function handler.
@@ -340,7 +344,9 @@ impl RealtimeRunnerBuilder {
     /// an extra `Arc` wrapping that the `tool()` method would perform.
     pub fn tool_arc(mut self, definition: ToolDefinition, handler: Arc<dyn ToolHandler>) -> Self {
         let name = definition.name.clone();
-        self.tools.insert(name, (definition, handler));
+        if self.tools.insert(name.clone(), (definition, handler)).is_some() {
+            self.duplicate_tool.get_or_insert(name);
+        }
         self
     }
 
@@ -360,8 +366,19 @@ impl RealtimeRunnerBuilder {
     }
 
     /// Build the runner (does not connect yet).
+    ///
+    /// # Errors
+    ///
+    /// Returns a config error when no model was set or when two tools were
+    /// registered under one name.
     pub fn build(self) -> Result<RealtimeRunner> {
         let model = self.model.ok_or_else(|| RealtimeError::config("Model is required"))?;
+        if let Some(name) = self.duplicate_tool {
+            return Err(RealtimeError::config(format!(
+                "two tools are registered as '{name}'; the model calls tools by name, so only \
+                 one could ever run. Rename one of them or register it once."
+            )));
+        }
 
         // Add tool definitions to config
         let mut config = self.config;
@@ -1363,6 +1380,62 @@ mod runner_tests {
 
     fn tool_def(name: &str) -> ToolDefinition {
         ToolDefinition { name: name.into(), description: None, parameters: None }
+    }
+
+    #[test]
+    fn runner_builder_rejects_two_tools_with_one_name() {
+        let builder = || {
+            RealtimeRunner::builder()
+                .model(Arc::new(MockModel) as BoxedModel)
+                .tool_fn(tool_def("pay"), |_call| Ok(serde_json::json!({ "paid": 1 })))
+        };
+        let Err(err) = builder()
+            .tool_fn(tool_def("pay"), |_call| Ok(serde_json::json!({ "paid": 2 })))
+            .build()
+        else {
+            panic!("two tools named `pay` must fail the build");
+        };
+        assert!(matches!(err, RealtimeError::ConfigError(_)), "{err}");
+        assert!(err.to_string().contains("'pay'"), "{err}");
+        assert!(
+            builder()
+                .tool_fn(tool_def("refund"), |_call| Ok(serde_json::json!({})))
+                .build()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn agent_builder_rejects_two_tools_with_one_name() {
+        struct Lookup;
+
+        #[async_trait]
+        impl adk_core::Tool for Lookup {
+            fn name(&self) -> &str {
+                "lookup"
+            }
+            fn description(&self) -> &str {
+                "looks things up"
+            }
+            async fn execute(
+                &self,
+                _ctx: Arc<dyn adk_core::ToolContext>,
+                args: serde_json::Value,
+            ) -> adk_core::Result<serde_json::Value> {
+                Ok(args)
+            }
+        }
+
+        let Err(err) = crate::agent::RealtimeAgent::builder("voice")
+            .model(Arc::new(MockModel) as BoxedModel)
+            .tool(Arc::new(Lookup))
+            .tool(Arc::new(Lookup))
+            .build()
+        else {
+            panic!("two tools named `lookup` must fail the build");
+        };
+        assert_eq!(err.code, adk_core::DUPLICATE_TOOL_NAME_CODE);
+        assert!(err.message.contains("'lookup'"), "{}", err.message);
     }
 
     fn ok_tool() -> FnToolHandler<impl Fn(&ToolCall) -> Result<serde_json::Value> + Send + Sync> {

@@ -1,14 +1,17 @@
 //! Testing utilities for the managed agent runtime.
 //!
-//! This module provides deterministic test doubles for the managed agent runtime
-//! pipeline. These are **not mocks** — they implement the real traits and exercise
-//! the full runtime pipeline (durable runs, checkpoints, replay, event mapping). Only
-//! the LLM provider API call is replaced with pre-scripted deterministic responses.
+//! [`ScriptedLlm`] is the scripted model double from `adk-model`: it answers each model call
+//! with the next scripted reply and records every request. It implements the real
+//! [`Llm`](adk_core::Llm) trait, so the full runtime pipeline (durable runs, checkpoints, replay, event mapping) runs
+//! exactly as it does with a real provider; only the provider API call is replaced.
+//!
+//! [`ScriptedTurn`] is the serializable form of one reply, used by the golden fixtures, and
+//! converts into a [`ScriptedResponse`].
 //!
 //! # Architecture
 //!
 //! ```text
-//! ScriptedLlm (deterministic responses)
+//! ScriptedLlm (one scripted reply per call, requests recorded)
 //!   │
 //!   ▼
 //! Full runtime pipeline (SessionLoop, CheckpointManager, durable runs, etc.)
@@ -19,15 +22,11 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use adk_managed::testing::{ScriptedLlm, ScriptedTurn, ScriptedToolCall};
+//! ```rust
+//! use adk_managed::testing::{ScriptedLlm, ScriptedToolCall, ScriptedTurn};
 //! use serde_json::json;
 //!
 //! let turns = vec![
-//!     ScriptedTurn {
-//!         text: Some("Hello! How can I help you?".to_string()),
-//!         tool_calls: vec![],
-//!     },
 //!     ScriptedTurn {
 //!         text: None,
 //!         tool_calls: vec![ScriptedToolCall {
@@ -36,25 +35,25 @@
 //!             id: Some("tc_001".to_string()),
 //!         }],
 //!     },
+//!     ScriptedTurn { text: Some("Here is what I found.".to_string()), tool_calls: vec![] },
 //! ];
 //!
 //! let llm = ScriptedLlm::new("scripted-model", turns);
-//! // Use llm in place of any Arc<dyn Llm> in the runtime pipeline
+//! assert_eq!(llm.remaining(), 2);
+//! // Use llm in place of any Arc<dyn Llm> in the runtime pipeline, then assert on
+//! // `llm.requests()` to see what the runtime sent the model on each call.
 //! ```
 
-use adk_core::{
-    Llm, LlmRequest, LlmResponse, LlmResponseStream, Result as AdkResult, types::Content,
-};
-use async_stream::stream;
-use async_trait::async_trait;
+use adk_core::{Content, FinishReason, LlmResponse, Part};
+pub use adk_model::{SCRIPT_EXHAUSTED_CODE, ScriptedLlm, ScriptedResponse};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// A pre-scripted turn that the [`ScriptedLlm`] will return.
+/// One scripted model reply, in the serializable form the fixture files use.
 ///
 /// Each turn represents one complete LLM response. It can contain text content,
 /// tool calls, or both — mirroring real LLM behavior where a response may
-/// include reasoning text followed by tool invocations.
+/// include reasoning text followed by tool invocations. It converts into a
+/// [`ScriptedResponse`], so a `Vec<ScriptedTurn>` scripts a [`ScriptedLlm`].
 ///
 /// # Wire Format
 ///
@@ -89,165 +88,41 @@ pub struct ScriptedToolCall {
     pub name: String,
     /// Input arguments as JSON.
     pub input: serde_json::Value,
-    /// Optional tool call ID. If not provided, a deterministic ID is generated.
+    /// Optional tool call ID. Without one, [`ScriptedLlm`] assigns
+    /// `scripted_tc_{call}_{index}`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
 }
 
-/// A deterministic LLM double with pre-scripted responses.
-///
-/// `ScriptedLlm` implements the real [`Llm`] trait and exercises the full
-/// runtime pipeline. Only the provider API call is replaced — everything else
-/// (session loop, checkpoints, durable runs, event mapping) runs exactly as it would
-/// with a real provider.
-///
-/// This is explicitly **NOT a mock**. It:
-/// - Implements the full `Llm` trait contract
-/// - Returns complete `LlmResponse` objects with proper `Content` and `Part` types
-/// - Supports tool calls (function calls) in responses
-/// - Advances through turns deterministically (FIFO order)
-/// - Is thread-safe (`Send + Sync` via `AtomicUsize`)
-///
-/// # Panics
-///
-/// If more turns are requested than were scripted, the LLM returns an empty
-/// response with `turn_complete = true` rather than panicking.
-pub struct ScriptedLlm {
-    /// Model name identifier.
-    name: String,
-    /// Pre-scripted turns in FIFO order.
-    turns: Vec<ScriptedTurn>,
-    /// Current turn index (atomic for thread safety).
-    current_turn: AtomicUsize,
-}
-
-impl ScriptedLlm {
-    /// Create a new `ScriptedLlm` with the given name and pre-scripted turns.
-    ///
-    /// Turns are consumed in FIFO order — each call to `generate_content`
-    /// advances to the next turn.
-    pub fn new(name: impl Into<String>, turns: Vec<ScriptedTurn>) -> Self {
-        Self { name: name.into(), turns, current_turn: AtomicUsize::new(0) }
-    }
-
-    /// Returns the number of turns that have been consumed so far.
-    pub fn turns_consumed(&self) -> usize {
-        self.current_turn.load(Ordering::Relaxed)
-    }
-
-    /// Returns the total number of scripted turns.
-    pub fn total_turns(&self) -> usize {
-        self.turns.len()
-    }
-
-    /// Build an `LlmResponse` from a `ScriptedTurn`.
-    fn build_response(turn: &ScriptedTurn, turn_index: usize) -> LlmResponse {
-        use adk_core::FinishReason;
-        use adk_core::types::Part;
-
-        let mut parts = Vec::new();
-
-        // Add text part if present.
-        if let Some(text) = &turn.text {
-            parts.push(Part::Text { text: text.clone() });
-        }
-
-        // Add function call parts.
-        for (i, tool_call) in turn.tool_calls.iter().enumerate() {
-            let id =
-                tool_call.id.clone().unwrap_or_else(|| format!("scripted_tc_{turn_index}_{i}"));
-            parts.push(Part::FunctionCall {
-                name: tool_call.name.clone(),
-                args: tool_call.input.clone(),
-                id: Some(id),
+impl From<ScriptedTurn> for ScriptedResponse {
+    /// A final model response: the turn's text first, then its tool calls in order. A turn with
+    /// neither is a response with no content.
+    fn from(turn: ScriptedTurn) -> Self {
+        let parts: Vec<Part> = turn
+            .text
+            .map(|text| Part::Text { text })
+            .into_iter()
+            .chain(turn.tool_calls.into_iter().map(|call| Part::FunctionCall {
+                name: call.name,
+                args: call.input,
+                id: call.id,
                 thought_signature: None,
-            });
+            }))
+            .collect();
+        let mut response = LlmResponse::new(Content { role: "model".to_string(), parts });
+        if response.content.as_ref().is_some_and(|content| content.parts.is_empty()) {
+            response.content = None;
         }
-
-        let content = if parts.is_empty() {
-            None
-        } else {
-            Some(Content { role: "model".to_string(), parts })
-        };
-
-        LlmResponse {
-            content,
-            usage_metadata: None,
-            finish_reason: Some(FinishReason::Stop),
-            citation_metadata: None,
-            partial: false,
-            turn_complete: true,
-            interrupted: false,
-            error_code: None,
-            error_message: None,
-            provider_metadata: None,
-            interaction_id: None,
-            model: None,
-            provider: None,
-        }
-    }
-}
-
-impl std::fmt::Debug for ScriptedLlm {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScriptedLlm")
-            .field("name", &self.name)
-            .field("turns", &self.turns.len())
-            .field("current_turn", &self.current_turn.load(Ordering::Relaxed))
-            .finish()
-    }
-}
-
-#[async_trait]
-impl Llm for ScriptedLlm {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    async fn generate_content(
-        &self,
-        _request: LlmRequest,
-        _stream: bool,
-    ) -> AdkResult<LlmResponseStream> {
-        let turn_index = self.current_turn.fetch_add(1, Ordering::Relaxed);
-
-        let response = if turn_index < self.turns.len() {
-            Self::build_response(&self.turns[turn_index], turn_index)
-        } else {
-            // Beyond scripted turns — return empty complete response.
-            LlmResponse {
-                content: Some(Content {
-                    role: "model".to_string(),
-                    parts: vec![adk_core::types::Part::Text {
-                        text: "[ScriptedLlm: no more scripted turns]".to_string(),
-                    }],
-                }),
-                usage_metadata: None,
-                finish_reason: Some(adk_core::FinishReason::Stop),
-                citation_metadata: None,
-                partial: false,
-                turn_complete: true,
-                interrupted: false,
-                error_code: None,
-                error_message: None,
-                provider_metadata: None,
-                interaction_id: None,
-                model: None,
-                provider: None,
-            }
-        };
-
-        let response_stream = stream! {
-            yield Ok(response);
-        };
-
-        Ok(Box::pin(response_stream))
+        response.finish_reason = Some(FinishReason::Stop);
+        response.turn_complete = true;
+        ScriptedResponse::response(response)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adk_core::{Llm, LlmRequest};
     use futures::StreamExt;
     use serde_json::json;
 
@@ -327,7 +202,8 @@ mod tests {
             }
         }
 
-        assert_eq!(llm.turns_consumed(), 3);
+        assert_eq!(llm.requests().len(), 3);
+        assert_eq!(llm.remaining(), 0);
     }
 
     #[tokio::test]
@@ -340,18 +216,44 @@ mod tests {
         let mut stream = llm.generate_content(request, false).await.unwrap();
         let _ = stream.next().await.unwrap().unwrap();
 
-        // Next call should return a fallback.
+        // A call past the script fails instead of inventing a reply.
         let request = LlmRequest::new("exhausted", vec![]);
-        let mut stream = llm.generate_content(request, false).await.unwrap();
-        let response = stream.next().await.unwrap().unwrap();
-        assert!(response.turn_complete);
-        let content = response.content.unwrap();
-        match &content.parts[0] {
-            adk_core::types::Part::Text { text } => {
-                assert!(text.contains("no more scripted turns"));
-            }
-            other => panic!("expected fallback Text, got: {other:?}"),
+        let Err(err) = llm.generate_content(request, false).await else {
+            panic!("the script is used up");
+        };
+        assert_eq!(err.code, SCRIPT_EXHAUSTED_CODE);
+    }
+
+    #[tokio::test]
+    async fn test_scripted_llm_records_requests() {
+        let llm = ScriptedLlm::new(
+            "recording",
+            vec![
+                ScriptedTurn { text: Some("one".to_string()), tool_calls: vec![] },
+                ScriptedTurn { text: Some("two".to_string()), tool_calls: vec![] },
+            ],
+        );
+        for prompt in ["first", "second"] {
+            let request =
+                LlmRequest::new("recording", vec![Content::new("user").with_text(prompt)]);
+            let _ = llm.generate_content(request, false).await.unwrap().next().await;
         }
+        let prompts: Vec<_> = llm
+            .requests()
+            .iter()
+            .map(|request| request.contents[0].parts[0].text().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(prompts, ["first", "second"]);
+    }
+
+    #[tokio::test]
+    async fn test_empty_turn_has_no_content() {
+        let llm = ScriptedLlm::new("empty", vec![ScriptedTurn { text: None, tool_calls: vec![] }]);
+        let request = LlmRequest::new("empty", vec![]);
+        let response = llm.generate_content(request, false).await.unwrap().next().await;
+        let response = response.unwrap().unwrap();
+        assert!(response.content.is_none());
+        assert!(response.turn_complete);
     }
 
     #[tokio::test]

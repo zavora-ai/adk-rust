@@ -199,6 +199,7 @@ dependencies = [
  "base64",
  "chrono",
  "futures",
+ "jsonschema",
  "schemars",
  "serde",
  "serde_json",

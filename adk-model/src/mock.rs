@@ -3,7 +3,9 @@ use async_trait::async_trait;
 
 /// A mock LLM implementation for testing without real API calls.
 ///
-/// Returns pre-configured responses in order when `generate_content` is called.
+/// Every `generate_content` call streams all of the pre-configured responses, in order, so a
+/// second call receives the same responses as the first. To script a different reply for each
+/// call, such as a function call followed by an answer, use [`ScriptedLlm`](crate::ScriptedLlm).
 pub struct MockLlm {
     name: String,
     responses: Vec<LlmResponse>,

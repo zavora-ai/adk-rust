@@ -1150,6 +1150,9 @@ impl LlmAgentBuilder {
     }
 
     /// Add a tool to this agent's toolbox.
+    ///
+    /// The model calls tools by name, so each tool added here needs a name of
+    /// its own: [`build`](Self::build) fails when two share one.
     pub fn tool(mut self, tool: Arc<dyn Tool>) -> Self {
         self.tools.push(tool);
         self
@@ -1502,7 +1505,13 @@ impl LlmAgentBuilder {
         self
     }
 
-    /// Build the [`LlmAgent`], returning an error if no model was set.
+    /// Build the [`LlmAgent`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no model was set, when two sub-agents share a
+    /// name, or when two tools added with [`tool`](Self::tool) share a name
+    /// (code `agent.duplicate_tool_name`).
     pub fn build(self) -> Result<LlmAgent> {
         let model = self.model.ok_or_else(|| adk_core::AdkError::agent("Model is required"))?;
 
@@ -1515,6 +1524,7 @@ impl LlmAgentBuilder {
                 )));
             }
         }
+        adk_core::ensure_unique_tool_names(&self.name, &self.tools)?;
 
         // Validate: Gemini Interactions API + client-side sandbox tools conflict.
         // These provide competing filesystems and would produce nondeterministic behavior.
@@ -3337,6 +3347,11 @@ impl Agent for LlmAgent {
                 drop(executor);
                 circuit_breaker_state = cb_mutex.into_inner().unwrap_or_else(|e| e.into_inner());
 
+                // A call held again has not run, and counts when a later run resumes it.
+                if let Some(tracker) = budget_tracker.as_ref() {
+                    let held = results.iter().filter(|result| result.pending.is_some()).count();
+                    tracker.release_tool_calls(held as u64);
+                }
                 let mut held_again = Vec::new();
                 for result in results {
                     if result.escalate_or_skip {
@@ -3356,32 +3371,12 @@ impl Agent for LlmAgent {
                         return;
                     }
                     held_again.extend(result.pending);
-                    // Each result takes the place of its call's pending response, so the
-                    // model sees one response per call.
-                    for response in result.content.parts {
-                        let Part::FunctionResponse { function_response, id, .. } = &response else {
-                            continue;
-                        };
-                        let slot = conversation_history
-                            .iter_mut()
-                            .rev()
-                            .flat_map(|content| content.parts.iter_mut().rev())
-                            .find(|part| match part {
-                                Part::FunctionResponse {
-                                    function_response: pending,
-                                    id: pending_id,
-                                    ..
-                                } => {
-                                    adk_core::is_confirmation_pending(&pending.response)
-                                        && pending_id == id
-                                        && (id.is_some() || pending.name == function_response.name)
-                                }
-                                _ => false,
-                            });
-                        if let Some(slot) = slot {
-                            *slot = response;
-                        }
-                    }
+                    // Each result takes the place of its call's pending response, matched by
+                    // call ID, so the model sees one response per call.
+                    let _ = adk_core::supersede_pending_responses(
+                        &mut conversation_history,
+                        result.content,
+                    );
                 }
                 if !held_again.is_empty() {
                     for request in held_again {
@@ -3432,9 +3427,13 @@ impl Agent for LlmAgent {
                     ctx.run_config().cached_content.as_deref(),
                 );
 
+                // Call IDs the agent generated for a provider that sent none stay out of
+                // what the provider receives.
+                let mut contents = conversation_history.clone();
+                contents.iter_mut().for_each(Content::strip_generated_call_ids);
                 let mut request = LlmRequest {
                     model: model.name().to_string(),
-                    contents: conversation_history.clone(),
+                    contents,
                     tools: tool_declarations.clone(),
                     config,
                     // Provider-neutral continuity: carry the most recent
@@ -4276,6 +4275,11 @@ impl Agent for LlmAgent {
 
                     // Events were already emitted on completion. Only model context
                     // is assembled in call order; never emit a second result event.
+                    // A held call has not run; it counts once, when a later run resumes it.
+                    if let Some(tracker) = budget_tracker.as_ref() {
+                        let held = results.iter().filter(|result| result.pending.is_some()).count();
+                        tracker.release_tool_calls(held as u64);
+                    }
                     let mut held_for_confirmation = Vec::new();
                     for result in results {
                         if result.escalate_or_skip {

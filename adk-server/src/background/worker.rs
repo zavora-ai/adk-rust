@@ -28,6 +28,23 @@
 //! was sent less than `lease_ttl` ago. When it is not, the fence never returns, the
 //! execution is dropped, and no further session event, tool call, or store write happens.
 //!
+//! # Kill switch
+//!
+//! A worker with a governance control ([`DurableWorker::with_governance`]) claims nothing
+//! while the control refuses work. A claim already in flight when the control starts
+//! refusing can still return a run, so the worker checks the control again before it runs
+//! the target:
+//!
+//! | Refused | Worker |
+//! |---------|--------|
+//! | Once the claim returns | Hands the run back unstarted |
+//! | By the runner before the agent produced an event (its start check, or the check before the first model call) | Hands the run back unstarted, when the worker's own control also refuses |
+//! | After the run made a model or tool call | Ends the attempt with the control's error |
+//!
+//! A run handed back is parked with [`wait`](DurableRunStore::wait) until the time it was
+//! claimed: it is `Waiting`, claimable at once, and the claim that resumes it counts no
+//! further attempt.
+//!
 //! # Identity
 //!
 //! An agent run acts as the runner's own principal for its root agent (its identity
@@ -71,9 +88,9 @@ use adk_core::audit_log::{
 };
 use adk_core::{
     ActingConfig, AdkError, AgentId, AgentPrincipal, BeforeModelResult, CallbackContext,
-    ClaimedRun, Content, DurableRunStore, ErrorCategory, ErrorComponent, GovernanceControl,
-    InvocationHooks, LlmRequest, LlmResponse, PRINCIPAL_NOT_ALLOWED_CODE, Part, RunCheckpointRef,
-    RunOutcome, RunRecord, SessionId, UserId,
+    ClaimedRun, Content, DurableRunStore, ErrorCategory, ErrorComponent, GOVERNANCE_FROZEN_CODE,
+    GOVERNANCE_STALE_CODE, GovernanceControl, InvocationHooks, LlmRequest, LlmResponse,
+    PRINCIPAL_NOT_ALLOWED_CODE, Part, RunCheckpointRef, RunOutcome, RunRecord, SessionId, UserId,
     run_store::{RUN_NOT_FOUND_CODE, RUN_STALE_EPOCH_CODE},
 };
 use adk_runner::Runner;
@@ -258,6 +275,8 @@ enum Attempt {
     Done(Value),
     /// The run holds tool calls for approval and waits, until this time when set.
     Parked(Option<chrono::DateTime<chrono::Utc>>),
+    /// The governance control refused the run before it made a model or tool call.
+    Refused(AdkError),
 }
 
 /// A failed attempt.
@@ -299,6 +318,9 @@ impl DurableWorker {
     }
 
     /// Claims nothing while `control` refuses work (frozen, or a stale fail-closed mirror).
+    ///
+    /// A run that a claim in flight returns after `control` started refusing is handed
+    /// back unstarted; see [Kill switch](self#kill-switch).
     pub fn with_governance(mut self, control: GovernanceControl) -> Self {
         self.governance = Some(control);
         self
@@ -333,6 +355,11 @@ impl DurableWorker {
             || self.workflows.as_ref().is_some_and(|workflows| workflows.has_workflow(target))
     }
 
+    /// The governance control's refusal, while it refuses work.
+    fn refusal(&self) -> Option<AdkError> {
+        self.governance.as_ref().and_then(|control| control.check().err())
+    }
+
     /// Claims one run and executes it to the end of the attempt.
     ///
     /// Returns the run as the attempt left it, or `None` when nothing was claimable, the
@@ -342,9 +369,7 @@ impl DurableWorker {
     ///
     /// Returns the run store's error from the claim.
     pub async fn run_next(&self) -> adk_core::Result<Option<RunRecord>> {
-        if let Some(control) = &self.governance
-            && let Err(error) = control.check()
-        {
+        if let Some(error) = self.refusal() {
             tracing::debug!(error = %error, "governance refuses work; not claiming");
             return Ok(None);
         }
@@ -407,8 +432,7 @@ impl DurableWorker {
             }
             let mut claimed = None;
             if in_flight.len() < worker.config.max_concurrent_runs {
-                let refused = worker.governance.as_ref().and_then(|control| control.check().err());
-                match refused {
+                match worker.refusal() {
                     Some(error) => {
                         tracing::debug!(error = %error, "governance refuses work; not claiming")
                     }
@@ -460,6 +484,11 @@ impl DurableWorker {
             run.epoch = epoch
         );
         tracing::info!(parent: &span, "run claimed");
+        // The control was read before the claim, which can return after a freeze landed;
+        // the same check now keeps a run that nothing has started from failing at its start.
+        if let Some(error) = self.refusal() {
+            return self.hand_back(&record, epoch, &error, &span).await;
+        }
 
         let work = async {
             let attempt = self.run_target(&record, epoch, &lease, &cancel);
@@ -485,6 +514,9 @@ impl DurableWorker {
                 return None;
             }
             Ok(_) if lease.cancel_requested.load(Ordering::SeqCst) => RunOutcome::Cancelled,
+            Ok(Ok(Attempt::Refused(error))) => {
+                return self.hand_back(&record, epoch, &error, &span).await;
+            }
             Ok(Ok(Attempt::Parked(until))) => {
                 return match self.runs.wait(&run_id, epoch, until).await {
                     Ok(()) => {
@@ -512,6 +544,29 @@ impl DurableWorker {
                 None
             }
         }
+    }
+
+    /// Gives a claimed run that made no model or tool call back to its queue.
+    ///
+    /// The run is parked until the time it was claimed, so it is claimable at once — by
+    /// this worker once its control allows work again — and the claim that resumes it
+    /// counts no further attempt.
+    async fn hand_back(
+        &self,
+        record: &RunRecord,
+        epoch: u64,
+        refusal: &AdkError,
+        span: &tracing::Span,
+    ) -> Option<RunRecord> {
+        match self.runs.wait(&record.run_id, epoch, Some(record.updated_at)).await {
+            Ok(()) => {
+                tracing::info!(parent: span, error = %refusal.diagnostics(), "governance refuses work; the run was handed back unstarted");
+            }
+            Err(error) => {
+                tracing::warn!(parent: span, error = %error, "could not hand the run back; it is recovered once its lease expires");
+            }
+        }
+        None
     }
 
     /// Heartbeats until the lease is lost; returns only then.
@@ -827,6 +882,7 @@ impl DurableWorker {
         let mut events = invocation.into_events();
         let mut text = String::new();
         let mut interrupted = false;
+        let mut produced = false;
         loop {
             let next = tokio::select! {
                 next = events.next() => next,
@@ -839,6 +895,7 @@ impl DurableWorker {
             let Some(event) = next else { break };
             match event {
                 Ok(event) => {
+                    produced = true;
                     if !event.llm_response.partial
                         && event.author != "user"
                         && event.is_final_response()
@@ -851,6 +908,18 @@ impl DurableWorker {
                             .collect::<Vec<_>>()
                             .join("");
                     }
+                }
+                // Before any event, a kill-switch refusal comes from the runner's start
+                // check or the agent's check before its first model call: no model or tool
+                // call ran, and the checkpoint resumes the run from its input or its
+                // persisted user turn.
+                Err(error)
+                    if !produced
+                        && (error.code == GOVERNANCE_FROZEN_CODE
+                            || error.code == GOVERNANCE_STALE_CODE)
+                        && self.refusal().is_some() =>
+                {
+                    return Ok(Ok(Attempt::Refused(error)));
                 }
                 Err(error) => return Ok(Err(error.into())),
             }

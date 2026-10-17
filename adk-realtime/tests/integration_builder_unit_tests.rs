@@ -125,3 +125,48 @@ fn test_successful_build_with_all_services_configured() {
 
     assert!(result.is_ok(), "full build with all services should succeed, got: {:?}", result.err());
 }
+
+#[test]
+fn test_two_tools_with_one_name_return_config_error() {
+    use adk_core::{Tool, ToolContext};
+    use adk_realtime::config::ToolDefinition;
+    use adk_realtime::runner::FnToolHandler;
+
+    struct Lookup;
+
+    #[async_trait]
+    impl Tool for Lookup {
+        fn name(&self) -> &str {
+            "lookup"
+        }
+        fn description(&self) -> &str {
+            "looks things up"
+        }
+        async fn execute(
+            &self,
+            _ctx: Arc<dyn ToolContext>,
+            args: serde_json::Value,
+        ) -> adk_core::Result<serde_json::Value> {
+            Ok(args)
+        }
+    }
+
+    let native = || FnToolHandler::new(|_call| Ok(serde_json::json!({ "native": true })));
+    let builder =
+        || IntegratedRealtimeRunnerBuilder::new().model(mock_model()).identity("app", "u", "s");
+
+    for result in [
+        builder()
+            .tool(ToolDefinition::new("lookup"), native())
+            .tool(ToolDefinition::new("lookup"), native())
+            .build(),
+        builder().tool(ToolDefinition::new("lookup"), native()).adk_tool(Arc::new(Lookup)).build(),
+        builder().adk_tool(Arc::new(Lookup)).adk_tool(Arc::new(Lookup)).build(),
+    ] {
+        let Err(err) = result else {
+            panic!("two tools named `lookup` must fail the build");
+        };
+        assert!(err.to_string().contains("'lookup'"), "{err}");
+    }
+    assert!(builder().adk_tool(Arc::new(Lookup)).build().is_ok());
+}

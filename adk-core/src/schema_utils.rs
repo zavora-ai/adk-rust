@@ -263,9 +263,11 @@ pub fn strip_null_from_enum(schema: &mut Value) {
 /// definitions map.
 ///
 /// Handles both `#/definitions/<name>` (Draft 4–7) and `#/$defs/<name>`
-/// (Draft 2019-09+) reference formats. Unresolvable references are replaced
-/// with `{"type": "object"}`. Circular reference chains are broken by
-/// replacing the schema with `{"type": "object"}` when `depth` exceeds 10.
+/// (Draft 2019-09+) reference formats. Keywords beside a `$ref`, such as the
+/// field's own `description`, are kept on the inlined schema and take
+/// precedence over the definition's. Unresolvable references are replaced
+/// with `{"type": "object"}` plus those keywords. Circular reference chains are
+/// broken the same way when `depth` exceeds 10.
 ///
 /// After resolving a `$ref`, the function recurses into the inlined schema
 /// (incrementing depth) to resolve any nested references. When no `$ref` is
@@ -291,50 +293,43 @@ pub fn strip_null_from_enum(schema: &mut Value) {
 /// let mut schema = json!({
 ///     "type": "object",
 ///     "properties": {
-///         "home": { "$ref": "#/definitions/Address" }
+///         "home": { "$ref": "#/definitions/Address", "description": "Where the user lives" }
 ///     }
 /// });
 ///
 /// resolve_refs(&mut schema, &defs, 0);
 /// assert_eq!(schema["properties"]["home"]["type"], "object");
+/// assert_eq!(schema["properties"]["home"]["description"], "Where the user lives");
 /// assert!(schema["properties"]["home"].get("$ref").is_none());
 /// ```
 pub fn resolve_refs(schema: &mut Value, definitions: &Map<String, Value>, depth: usize) {
-    // Break circular chains at max depth 10
-    if depth > 10 {
-        // Only replace if this schema itself has a $ref (circular chain detected)
-        if schema.as_object().is_some_and(|obj| obj.contains_key("$ref")) {
-            *schema = serde_json::json!({"type": "object"});
-        }
-        return;
-    }
-
-    let Some(obj) = schema.as_object() else {
+    let Some(obj) = schema.as_object_mut() else {
         return;
     };
+    let Some(reference) = obj.get("$ref").and_then(Value::as_str).map(str::to_string) else {
+        resolve_refs_recurse(schema, definitions, depth);
+        return;
+    };
+    obj.remove("$ref");
+    let siblings = std::mem::take(obj);
 
-    if let Some(ref_val) = obj.get("$ref").and_then(|v| v.as_str()) {
-        // Parse the ref path: #/definitions/<name> or #/$defs/<name>
-        let name =
-            ref_val.strip_prefix("#/definitions/").or_else(|| ref_val.strip_prefix("#/$defs/"));
+    // Past depth 10 the chain is circular, so it ends in the fallback.
+    let definition = reference
+        .strip_prefix("#/definitions/")
+        .or_else(|| reference.strip_prefix("#/$defs/"))
+        .and_then(|name| definitions.get(name))
+        .filter(|_| depth <= 10);
+    let mut inlined = match definition {
+        Some(Value::Object(definition)) => definition.clone(),
+        Some(_) | None => Map::from_iter([("type".to_string(), Value::from("object"))]),
+    };
+    // Keywords beside a `$ref` describe this use of the definition, so they win.
+    inlined.extend(siblings);
+    *schema = Value::Object(inlined);
 
-        if let Some(def_name) = name {
-            if let Some(def_schema) = definitions.get(def_name) {
-                // Replace the entire schema node with the referenced sub-schema
-                *schema = def_schema.clone();
-            } else {
-                // Unresolvable ref — replace with fallback
-                *schema = serde_json::json!({"type": "object"});
-            }
-        } else {
-            // Unsupported ref format — replace with fallback
-            *schema = serde_json::json!({"type": "object"});
-        }
-
-        // Recursively resolve refs in the inlined schema
+    if definition.is_some() {
         resolve_refs(schema, definitions, depth + 1);
     } else {
-        // No $ref — recurse into all sub-schemas
         resolve_refs_recurse(schema, definitions, depth);
     }
 }
@@ -1377,6 +1372,46 @@ mod tests {
         // Inner was also resolved within Outer
         assert_eq!(schema["properties"]["wrapper"]["properties"]["value"]["type"], "string");
         assert!(schema["properties"]["wrapper"]["properties"]["value"].get("$ref").is_none());
+    }
+
+    #[test]
+    fn test_resolve_refs_keeps_sibling_keywords() {
+        let mut defs = Map::new();
+        defs.insert(
+            "Address".to_string(),
+            json!({
+                "type": "object",
+                "description": "A postal address.",
+                "properties": { "city": { "type": "string" } }
+            }),
+        );
+        defs.insert("Alias".to_string(), json!({ "$ref": "#/$defs/Address", "title": "Alias" }));
+
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "confirm_to": { "$ref": "#/$defs/Address", "description": "Where to post it." },
+                "home": { "$ref": "#/$defs/Address" },
+                "aliased": { "$ref": "#/$defs/Alias", "description": "Through an alias." },
+                "missing": { "$ref": "#/$defs/Missing", "description": "Gone." }
+            }
+        });
+
+        resolve_refs(&mut schema, &defs, 0);
+        let properties = &schema["properties"];
+        assert_eq!(
+            properties["confirm_to"],
+            json!({
+                "type": "object",
+                "description": "Where to post it.",
+                "properties": { "city": { "type": "string" } }
+            })
+        );
+        assert_eq!(properties["home"]["description"], "A postal address.");
+        assert_eq!(properties["aliased"]["description"], "Through an alias.");
+        assert_eq!(properties["aliased"]["title"], "Alias");
+        assert_eq!(properties["aliased"]["properties"]["city"]["type"], "string");
+        assert_eq!(properties["missing"], json!({ "type": "object", "description": "Gone." }));
     }
 
     #[test]

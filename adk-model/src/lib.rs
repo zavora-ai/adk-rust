@@ -21,7 +21,8 @@
 //! - `OllamaModel` - Local LLMs via Ollama — requires `ollama` feature
 //! - `BedrockClient` - Amazon Bedrock via AWS SDK — requires `bedrock` feature
 //! - `AzureAIClient` - Azure AI Inference endpoints — requires `azure-ai` feature
-//! - [`MockLlm`] - Mock LLM for testing
+//! - [`ScriptedLlm`] - Test double that answers each call with the next scripted reply and records every request
+//! - [`MockLlm`] - Mock LLM that replays the same responses on every call
 //!
 //! ## Quick Start
 //!
@@ -299,6 +300,8 @@ pub mod pricing;
 pub mod provider;
 /// Retry logic with exponential backoff for transient provider errors.
 pub mod retry;
+/// Scripted LLM test double with per-call replies and request capture.
+pub mod scripted;
 #[cfg(any(
     feature = "openai",
     feature = "deepseek",
@@ -360,3 +363,4 @@ pub use pricing::PricingCatalog;
 pub use provider::ModelProvider;
 pub use retry::RetryConfig;
 pub use retry::ServerRetryHint;
+pub use scripted::{SCRIPT_EXHAUSTED_CODE, ScriptedLlm, ScriptedResponse};

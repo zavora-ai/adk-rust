@@ -58,6 +58,8 @@ pub struct IntegratedRealtimeRunnerBuilder {
     pub(crate) adk_tools: Vec<Arc<dyn Tool>>,
     /// Native tools registered directly as `ToolHandler` implementations.
     pub(crate) native_tools: HashMap<String, (ToolDefinition, Arc<dyn ToolHandler>)>,
+    /// The first native tool name registered twice; `build` rejects it.
+    pub(crate) duplicate_tool: Option<String>,
     /// Optional event handler for raw realtime events.
     pub(crate) event_handler: Option<Arc<dyn EventHandler>>,
     /// Session identity triple (required for build).
@@ -90,6 +92,7 @@ impl IntegratedRealtimeRunnerBuilder {
             plugin_manager: None,
             adk_tools: Vec::new(),
             native_tools: HashMap::new(),
+            duplicate_tool: None,
             event_handler: None,
             identity: None,
             integration_config: IntegrationConfig::default(),
@@ -220,7 +223,9 @@ impl IntegratedRealtimeRunnerBuilder {
     /// * `handler` - The tool handler implementation.
     pub fn tool(mut self, definition: ToolDefinition, handler: impl ToolHandler + 'static) -> Self {
         let name = definition.name.clone();
-        self.native_tools.insert(name, (definition, Arc::new(handler)));
+        if self.native_tools.insert(name.clone(), (definition, Arc::new(handler))).is_some() {
+            self.duplicate_tool.get_or_insert(name);
+        }
         self
     }
 
@@ -292,6 +297,7 @@ impl IntegratedRealtimeRunnerBuilder {
     /// Returns a [`ConfigError`](crate::error::RealtimeError::ConfigError) if:
     /// - `model` was not set
     /// - `identity` was not set
+    /// - two tools, native or bridged, share a name
     ///
     /// Also propagates any errors from the underlying `RealtimeRunner::builder().build()`.
     ///
@@ -317,10 +323,20 @@ impl IntegratedRealtimeRunnerBuilder {
 
         // Bridge ADK tools via ToolBridgeAdapter
         let mut all_tools = self.native_tools;
+        let mut duplicate_tool = self.duplicate_tool;
         for tool in &self.adk_tools {
             let def = ToolBridgeAdapter::definition(tool.as_ref());
             let adapter = Arc::new(ToolBridgeAdapter::new(tool.clone(), context_factory.clone()));
-            all_tools.insert(def.name.clone(), (def, adapter as Arc<dyn ToolHandler>));
+            let name = def.name.clone();
+            if all_tools.insert(name.clone(), (def, adapter as Arc<dyn ToolHandler>)).is_some() {
+                duplicate_tool.get_or_insert(name);
+            }
+        }
+        if let Some(name) = duplicate_tool {
+            return Err(RealtimeError::config(format!(
+                "two tools are registered as '{name}'; the model calls tools by name, so only \
+                 one could ever run. Rename one of them or register it once."
+            )));
         }
 
         // Build underlying RealtimeRunner

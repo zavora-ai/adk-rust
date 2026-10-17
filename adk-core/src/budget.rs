@@ -513,6 +513,35 @@ impl BudgetTracker {
         self.reserve(Counter::ToolCalls, count)
     }
 
+    /// Returns `count` reserved tool calls that did not run, in this tracker and its
+    /// ancestors.
+    ///
+    /// An agent releases the calls it held for confirmation: a held call has not run, and
+    /// it is reserved again when a later run resumes it, so it counts once.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::{BudgetTracker, RunBudget};
+    ///
+    /// let tracker = BudgetTracker::new(RunBudget::new().max_tool_calls(1));
+    /// tracker.begin_tool_calls(1).unwrap();
+    /// tracker.release_tool_calls(1);
+    /// assert_eq!(tracker.usage().tool_calls, 0);
+    /// assert!(tracker.begin_tool_calls(1).is_ok());
+    /// ```
+    pub fn release_tool_calls(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        let _ = self.tool_calls.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
+            Some(used.saturating_sub(count))
+        });
+        if let Some(parent) = &self.parent {
+            parent.release_tool_calls(count);
+        }
+    }
+
     /// Tool calls left before the tool-call limit is reached, across this tracker
     /// and its ancestors. `None` when no tracker in the chain limits tool calls.
     ///

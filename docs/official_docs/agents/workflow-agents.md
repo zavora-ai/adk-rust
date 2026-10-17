@@ -547,6 +547,56 @@ let full_pipeline = SequentialAgent::new(
 
 ---
 
+## Held Tool Calls
+
+A workflow agent stops when one of its sub-agents holds a tool call for confirmation (see
+[Tool Authorization](../security/tool-authorization.md#resuming-a-held-call)), and the next
+run resumes the paused turn at that sub-agent instead of starting over.
+
+| Workflow agent | The run that holds the call | The next run |
+|----------------|-----------------------------|--------------|
+| `SequentialAgent` | Later sub-agents do not run | Starts at the sub-agent holding the call; earlier sub-agents do not run again |
+| `LoopAgent` | Later sub-agents and iterations do not run | Starts at the holding sub-agent in the iteration it held in, then runs the remaining iterations, so `max_iterations` counts across the hold |
+| `ParallelAgent` | Every branch runs to its end, then the workflow stops | Runs only the sub-agents holding calls; siblings that finished do not run again |
+| `ConditionalAgent` | The chosen branch stops | Runs the branch holding the call without evaluating the condition again |
+| `LlmConditionalAgent` | The chosen route stops | Runs the route holding the call without classifying the input again |
+
+- **Positions.** Each workflow agent records its position on the confirmation event as the
+  event passes through it (`EventActions::workflow_positions`, one `WorkflowPosition` per
+  workflow name) and reads it back with `Session::workflow_resume_positions`. Nested workflows
+  each resume at their own position.
+- **Callbacks.** A paused workflow's after-agent callbacks run in the run that finishes it, not
+  in the run that paused it.
+- **One response per call.** A later sub-agent sees the resumed call's result in place of its
+  confirmation-pending response.
+- **A turn that moves on.** A paused turn resumes once. When the holding sub-agent runs without
+  a decision — its model answers past the pending response — the workflow continues to its
+  later sub-agents, and the next run starts over. The call stays held, and resumes the next
+  time its agent runs with a decision.
+
+```rust
+use adk_rust::prelude::*;
+use std::sync::Arc;
+
+fn pipeline(model: Arc<dyn Llm>, transfer: Arc<dyn Tool>) -> anyhow::Result<SequentialAgent> {
+    let intake = LlmAgentBuilder::new("intake").model(model.clone()).build()?;
+    let ops = LlmAgentBuilder::new("ops")
+        .model(model.clone())
+        .tool(transfer)
+        .require_tool_confirmation("transfer")
+        .build()?;
+    let report = LlmAgentBuilder::new("report").model(model).build()?;
+    // Run 1: intake runs, ops holds `transfer`, report does not run.
+    // Run 2, with the decision: ops resumes the call, then report runs; intake does not.
+    Ok(SequentialAgent::new(
+        "pipeline",
+        vec![Arc::new(intake), Arc::new(ops), Arc::new(report)],
+    ))
+}
+```
+
+---
+
 ## Tracing Workflow Execution
 
 To see what's happening inside a workflow, enable tracing:
