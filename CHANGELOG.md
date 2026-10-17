@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2 minutes with video and about 15 audio-only; with it only the ~10-minute
   connection limit remains.
 
+### Fixed
+
+- **Gemini Live camera frames reach the model** (`adk-realtime`): `send_video_frame`
+  sends `realtimeInput.video` instead of the deprecated `realtimeInput.mediaChunks`.
+  `gemini-3.8-live` dropped frames sent as `mediaChunks` without an error, and the
+  model answered as if it saw nothing.
+
 ## [3.0.0] - 2026-10-10
 
 ## [2.3.0] - 2026-10-09

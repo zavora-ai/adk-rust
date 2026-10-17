@@ -229,8 +229,10 @@ struct GeminiInlineData {
 struct GeminiRealtimeInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     audio: Option<GeminiMediaChunk>,
+    /// Camera / screen frames. Not the deprecated `mediaChunks`: `gemini-3.8-live` drops
+    /// images sent there without an error, and the model reports seeing nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
-    media_chunks: Option<Vec<GeminiMediaChunk>>,
+    video: Option<GeminiMediaChunk>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     /// The user has started speaking. Only legal while automatic activity
@@ -1124,18 +1126,7 @@ impl RealtimeSession for GeminiRealtimeSession {
     }
 
     async fn send_video_frame(&self, mime_type: &str, data_base64: &str) -> Result<()> {
-        // Gemini Live accepts image frames as realtimeInput media chunks.
-        let msg = GeminiClientMessage {
-            realtime_input: Some(GeminiRealtimeInput {
-                media_chunks: Some(vec![GeminiMediaChunk {
-                    mime_type: mime_type.to_string(),
-                    data: data_base64.to_string(),
-                }]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        self.send_raw(&msg).await
+        self.send_raw(&video_frame_message(mime_type, data_base64)).await
     }
 
     async fn send_text(&self, text: &str) -> Result<()> {
@@ -1361,6 +1352,20 @@ pub fn build_vertex_live_url(region: &str, project_id: &str) -> Result<String> {
          google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent\
          ?project_id={project_id}",
     ))
+}
+
+/// One camera or screen frame as `realtimeInput.video`.
+fn video_frame_message(mime_type: &str, data_base64: &str) -> GeminiClientMessage {
+    GeminiClientMessage {
+        realtime_input: Some(GeminiRealtimeInput {
+            video: Some(GeminiMediaChunk {
+                mime_type: mime_type.to_string(),
+                data: data_base64.to_string(),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
 }
 
 /// Pure translation function for converting a standard `adk_core` message into
@@ -1770,6 +1775,16 @@ mod tests {
         );
     }
 
+    /// `gemini-3.8-live` ignores images under the deprecated `mediaChunks` (the model says
+    /// it sees nothing); under `video` they count as IMAGE tokens and are described.
+    #[test]
+    fn video_frames_go_out_as_realtime_input_video() {
+        assert_eq!(
+            serde_json::to_value(video_frame_message("image/jpeg", "AQI=")).unwrap(),
+            json!({ "realtimeInput": { "video": { "mimeType": "image/jpeg", "data": "AQI=" } } })
+        );
+    }
+
     /// The two frames are separate transitions; emitting both in one message
     /// would describe a turn that started and ended simultaneously.
     #[test]
@@ -1781,7 +1796,7 @@ mod tests {
                 1,
                 "{signal:?} should set exactly one marker"
             );
-            assert!(input.audio.is_none() && input.media_chunks.is_none() && input.text.is_none());
+            assert!(input.audio.is_none() && input.video.is_none() && input.text.is_none());
         }
     }
 
