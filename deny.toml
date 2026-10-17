@@ -40,6 +40,24 @@ ignore = [
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
 
+    # zip < 9 — SUID/SGID bits kept, symlink targets and permissions applied
+    # outside the destination, all in `ZipArchive::extract` /
+    # `ZipStreamReader::extract`. Reached only through third-party wrappers with
+    # no release on zip >= 9:
+    #   * zip 0.6.6 — adk-realtime -> webrtc-sys -> (build) webrtc-sys-build,
+    #     feature `adk-realtime/livekit`. Extracts LiveKit's pinned libwebrtc
+    #     archive at build time only; `LK_CUSTOM_WEBRTC` skips it.
+    #   * zip 6.0.0 — adk-audio -> ndarray-npy (`npz`), feature `adk-audio/kokoro`.
+    #     Reads entries by name; never extracts.
+    #   * zip 7.2.0 — adk-audio -> candle-core 0.9 (`adk-audio/qwen3-tts`) and
+    #     adk-mistralrs -> mistralrs -> candle-core 0.10. Reads entries by name;
+    #     never extracts.
+    # The crates this workspace declares require zip 9, and the `[[bans.deny]]`
+    # entry below keeps that floor enforced.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+
     # rsa — Marvin timing side-channel. No upstream fix exists.
     "RUSTSEC-2023-0071",
 
@@ -151,6 +169,12 @@ allow-wildcard-paths = true
 # permitted wrapper, matching the documented advisory ignore above.
 crate = "quick-xml:<0.41"
 wrappers = ["inferno"]
+
+[[bans.deny]]
+# Keep declared zip usage on the patched line. The wrappers are the third-party
+# crates named in the zip advisory ignore above.
+crate = "zip:<9"
+wrappers = ["webrtc-sys-build", "ndarray-npy", "candle-core"]
 
 [sources]
 unknown-registry = "deny"

@@ -8,7 +8,7 @@ The purpose of this file is to provide transparency to consumers about the secur
 
 These accepted advisories are also configured in [`.cargo/audit.toml`](../../.cargo/audit.toml) so that `cargo audit` passes in CI while still surfacing new, unreviewed advisories.
 
-**Last reviewed:** 2026-10-06 (post-2.2.0 review)
+**Last reviewed:** 2026-10-17 (3.0.0 release candidate)
 
 ---
 
@@ -34,15 +34,22 @@ These accepted advisories are also configured in [`.cargo/audit.toml`](../../.ca
 |---|---|---|
 | RUSTSEC-2026-0098, RUSTSEC-2026-0099, RUSTSEC-2026-0104 | `rustls-webpki` | The lockfile no longer contains a `rustls-webpki` release below 0.103.12. Neither `cargo audit` nor `cargo deny` reports the advisories, and the exceptions were removed from both policies. |
 
-## Open advisories (fix in flight)
+## Resolved in 2.3.0
 
-These fail the nightly `supply-chain` job today. They are not accepted risks; the
-exceptions are deliberately absent so the job stays red until the fixes land.
-
-| Advisory | Crate | Fix |
+| Advisory | Crate | Resolution |
 |---|---|---|
-| RUSTSEC-2026-0321, RUSTSEC-2026-0322, RUSTSEC-2026-0323, RUSTSEC-2026-0324, RUSTSEC-2026-0325, RUSTSEC-2026-0326, RUSTSEC-2026-0327 | `wasmtime`, `wasmtime-wasi` 48.0.3 (`adk-sandbox`, feature `wasm`) | Patched in 48.0.5; dependabot PR #704 moves the lockfile. |
-| RUSTSEC-2026-0285 | `rustls` 0.23.43 | Patched in 0.23.45; PR #687 updates the workspace and example lockfiles. |
+| RUSTSEC-2026-0321, RUSTSEC-2026-0322, RUSTSEC-2026-0323, RUSTSEC-2026-0324, RUSTSEC-2026-0325, RUSTSEC-2026-0326, RUSTSEC-2026-0327 | `wasmtime`, `wasmtime-wasi` | Lockfile updated from 48.0.3 to 48.0.5 (#704). |
+| RUSTSEC-2026-0285 | `rustls` | Workspace and example lockfiles updated to 0.23.45 (#687). |
+
+## Resolved since 2.3.0
+
+| Advisory | Crate | Resolution |
+|---|---|---|
+| RUSTSEC-2021-0157, RUSTSEC-2021-0158 | `ammonia` | Lockfile updated from 4.1.4 to 4.1.8. |
+| RUSTSEC-2026-0338, RUSTSEC-2026-0340, RUSTSEC-2026-0343 | `quinn-proto` | Workspace and example lockfiles updated to 0.11.19. |
+| RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, RUSTSEC-2026-0349 | `rustls` | Workspace and example lockfiles updated from 0.23.45 to 0.23.46. |
+| RUSTSEC-2026-0352 through RUSTSEC-2026-0359, RUSTSEC-2026-0361 through RUSTSEC-2026-0364 | `wasmtime`, `wasmtime-wasi` | Lockfile updated from 48.0.5 to 48.0.6, with the matching Cranelift 0.135.6 crates. Wasmtime 49.0.3 requires Rust 1.96. |
+| RUSTSEC-2026-0367, RUSTSEC-2026-0368, RUSTSEC-2026-0369 | `zip` (declared) | The workspace `zip` dependency (`adk-skill`, `adk-cli` tests) now requires zip 9. The transitive zip 0.6, 6, and 7 copies are covered below. |
 
 ---
 
@@ -79,6 +86,31 @@ exceptions are deliberately absent so the job stays red until the fixes land.
 - **Conditions:** Both advisories require the attacker to control XML fed to the parser.
 - **ADK-Specific Context:** `inferno` parses only the flamegraph SVG that `pprof` generates in-process during profiling. No ADK-Rust request, document, or tool input reaches this parser, and the profiler is not invoked by the RAG backend at runtime.
 - **Mitigation:** The crates this workspace declares directly are on the patched line — `adk-eval` requires quick-xml 0.41. `deny.toml` bans `quick-xml < 0.41` with `inferno` as the sole permitted wrapper, so a direct regression cannot hide behind this exception.
+
+---
+
+### RUSTSEC-2026-0367, RUSTSEC-2026-0368, RUSTSEC-2026-0369 — zip < 9: unconfined archive extraction
+
+- **Crate:** `zip` (0.6.6, 6.0.0, 7.2.0)
+- **Severity:** High (7.3) for RUSTSEC-2026-0367, Critical (9.1) for RUSTSEC-2026-0369; RUSTSEC-2026-0368 is unscored
+- **Advisories:**
+  - [RUSTSEC-2026-0367](https://rustsec.org/advisories/RUSTSEC-2026-0367) — SUID, SGID, and sticky bits preserved from archive attributes during extraction
+  - [RUSTSEC-2026-0368](https://rustsec.org/advisories/RUSTSEC-2026-0368) — symbolic links created with attacker-chosen targets outside the destination
+  - [RUSTSEC-2026-0369](https://rustsec.org/advisories/RUSTSEC-2026-0369) — Unix permissions applied through extracted symlinks outside the destination
+- **ADK Impact:**
+
+  | zip | Dependency path | Feature | Vulnerable code reached |
+  |---|---|---|---|
+  | 0.6.6 | `adk-realtime` → `webrtc-sys` 0.3.40 → (build) `webrtc-sys-build` 0.3.18 | `adk-realtime/livekit` | At build time only, on LiveKit's pinned libwebrtc archive |
+  | 6.0.0 | `adk-audio` → `ndarray-npy` 0.10.0 (`npz`) | `adk-audio/kokoro` | No — `NpzReader` reads entries by name |
+  | 7.2.0 | `adk-audio` → `candle-core` 0.9.2, also via `qwen_tts` 0.1.1 | `adk-audio/qwen3-tts` | No — reads `.npz`/`.pth` entries by name, writes `.npz` |
+  | 7.2.0 | `adk-mistralrs` → `mistralrs` 0.8.1 → `candle-core` 0.10.2 | default | No — same `candle-core` code |
+
+- **Status:** Patched upstream in zip ≥ 9.0.0. No release of any wrapper depends on zip 9: every `webrtc-sys-build` release requires zip 0.6, `ndarray-npy` 0.10.0 is the latest release and requires zip 6, and `candle-core` 0.11.0 requires zip 8.6. `qwen_tts` 0.1.1 requires `candle-core` 0.9 and `mistralrs` 0.8.1 requires `candle-core` 0.10.2.
+- **Disposition:** Accepted risk — no runtime path; the one build-time extraction reads a vendor archive
+- **Conditions:** All three advisories are in `ZipArchive::extract` and `ZipStreamReader::extract`, and require the attacker to control the archive being extracted.
+- **ADK-Specific Context:** `ndarray-npy` and `candle-core` never call either extraction API; they open archives with `ZipArchive::new` and read single entries with `by_name`. The `webrtc-sys-build` build script calls `ZipArchive::extract` on the libwebrtc archive it downloads over HTTPS from the `livekit/rust-sdks` GitHub release `webrtc-51ef663`. That archive supplies the native library linked into the binary, so a party able to substitute it already controls linked code; the extraction flaw adds no capability. No ADK-Rust runtime path extracts a zip archive with these versions.
+- **Mitigation:** The crates this workspace declares directly are on the patched line — the workspace `zip` dependency requires zip 9, and `adk-skill` validates registry archives in memory without either extraction API. `deny.toml` bans `zip < 9` with `webrtc-sys-build`, `ndarray-npy`, and `candle-core` as the sole permitted wrappers, so a direct regression cannot hide behind this exception. Set `LK_CUSTOM_WEBRTC` to a locally built libwebrtc to skip the download and extraction. Remove the exception when the wrappers move to zip 9.
 
 ---
 
@@ -195,6 +227,7 @@ cargo deny check
 ```
 
 `cargo audit` scans `Cargo.lock`; `cargo deny check` additionally enforces the
-license allow-list, the registry allow-list, and the `quick-xml` version floor.
+license allow-list, the registry allow-list, and the `quick-xml` and `zip` version
+floors.
 The accepted-advisory lists in [`.cargo/audit.toml`](../../.cargo/audit.toml) and
 [`deny.toml`](../../deny.toml) are kept in sync — add the rationale here first.

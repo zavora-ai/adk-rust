@@ -23,6 +23,26 @@ ignore = [
     "RUSTSEC-2026-0195",
     "RUSTSEC-2026-0194",
 
+    # zip < 9: SUID/SGID bits kept, symlink targets and permissions applied
+    # outside the destination — all three in `ZipArchive::extract` and
+    # `ZipStreamReader::extract`. Crates this workspace declares require zip 9
+    # (adk-skill, adk-cli), and deny.toml bans zip < 9 outside the wrappers below.
+    # No release of any wrapper depends on zip >= 9.
+    #   * zip 0.6.6: adk-realtime -> webrtc-sys 0.3.40 -> (build) webrtc-sys-build
+    #     0.3.18, feature `adk-realtime/livekit`. Its build script calls `extract`
+    #     at build time on LiveKit's pinned libwebrtc archive (HTTPS, GitHub
+    #     release `webrtc-51ef663`); no runtime path, and no input adk controls.
+    #     `LK_CUSTOM_WEBRTC` skips the download and the extraction.
+    #   * zip 6.0.0: adk-audio -> ndarray-npy 0.10.0 (`npz`), feature
+    #     `adk-audio/kokoro`. `NpzReader` reads entries by name; never extracts.
+    #   * zip 7.2.0: adk-audio -> candle-core 0.9.2 (also via qwen_tts 0.1.1),
+    #     feature `adk-audio/qwen3-tts`; adk-mistralrs -> mistralrs 0.8.1 ->
+    #     candle-core 0.10.2. candle reads `.npz`/`.pth` entries by name and
+    #     writes `.npz`; never extracts.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+
     # rkyv 0.7 is present only as rust_decimal's disabled optional `rkyv`
     # feature. No workspace feature activates it; active archive consumers use
     # rkyv 0.8.18. See the security advisory review.

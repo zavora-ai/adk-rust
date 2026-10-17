@@ -99,7 +99,7 @@ pub fn extract_skill_archive(bytes: &[u8]) -> SkillResult<BTreeMap<String, Vec<u
     let mut declared_total: u64 = 0;
     for index in 0..archive.len() {
         let entry = archive.by_index_raw(index).map_err(format_error)?;
-        let name = entry.name().to_string();
+        let name = entry.name().map_err(format_error)?.into_owned();
         validate_entry_name(&name)?;
         if entry.is_symlink() {
             return Err(SkillError::ArchiveSymlink { name });
@@ -132,7 +132,7 @@ pub fn extract_skill_archive(bytes: &[u8]) -> SkillResult<BTreeMap<String, Vec<u
         if entry.is_dir() {
             continue;
         }
-        let name = entry.name().to_string();
+        let name = entry.name().map_err(format_error)?.into_owned();
         let declared = entry.size();
         let mut contents = Vec::with_capacity(usize::try_from(declared).unwrap_or(0));
         let read = std::io::copy(&mut (&mut entry).take(declared + 1), &mut contents)

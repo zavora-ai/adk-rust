@@ -175,7 +175,7 @@ jobs:
   #     advisories) configured by the root `deny.toml`. Its accepted-advisory list
   #     mirrors `.cargo/audit.toml` (cargo-deny does not read that file), and it
   #     additionally enforces the license allow-list, the registry allow-list, and
-  #     the `quick-xml` version floor. Both gates are ENFORCING.
+  #     the `quick-xml` and `zip` version floors. Both gates are ENFORCING.
   supply-chain:
     runs-on: ubuntu-latest
     timeout-minutes: 30
