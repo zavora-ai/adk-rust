@@ -212,6 +212,11 @@ session. A partial event that cannot be delivered within 100 ms is dropped; the 
 logged at `warn`, the total at the end of the call, and one `[adk: forwarded events dropped]`
 progress event on the `events` stream precedes the next delivered partial event.
 
+Forwarded events carry the tool's own branch, `{caller branch}.{tool}@{call id}`
+(`adk_core::history::tool_branch`). The caller's history leaves events on that branch out, so
+the caller's model receives the sub-agent's answer once, as the tool's response, and never its
+turns as the caller's own.
+
 ### Key Behavior
 
 - Sub-agents run in non-streaming mode internally for reliable response capture

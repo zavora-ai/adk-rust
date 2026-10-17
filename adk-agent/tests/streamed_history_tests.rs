@@ -161,17 +161,37 @@ async fn sequential_successor_sees_a_streamed_response_once() {
 
     run(Arc::new(pipeline), "question").await;
 
+    // Each of the writer's responses reaches the reviewer once, as context.
     let requests = reviewer_model.requests();
     assert_eq!(requests.len(), 1);
+    let context: Vec<String> = requests[0]
+        .contents
+        .iter()
+        .filter(|content| adk_core::history::is_other_agent_context(content))
+        .map(|content| {
+            content.parts[1..].iter().filter_map(Part::text).collect::<Vec<_>>().join("|")
+        })
+        .collect();
+    let quoted = |text: &str| {
+        format!(
+            "{}\n{text}\n{}",
+            adk_core::history::QUOTED_CONTENT_BEGIN,
+            adk_core::history::QUOTED_CONTENT_END
+        )
+    };
     assert_eq!(
-        summarise(&requests[0].contents),
+        context,
         vec![
-            ("user".to_string(), vec!["text:question".to_string()]),
-            ("model".to_string(), vec!["text:Let me check".to_string(), "call:lookup".to_string()]),
-            ("function".to_string(), vec!["response:lookup".to_string()]),
-            ("model".to_string(), vec!["text:Found".to_string()]),
+            format!(
+                "[writer] said:\n{}|[writer] called tool `lookup` with parameters:\n{}",
+                quoted("Let me check"),
+                quoted("{}")
+            ),
+            format!("[writer] `lookup` tool returned result:\n{}", quoted(r#"{"found":true}"#)),
+            format!("[writer] said:\n{}", quoted("Found")),
         ]
     );
+    assert_eq!(requests[0].contents.len(), 4, "the question, then one context message per event");
 }
 
 #[tokio::test]
@@ -191,11 +211,15 @@ async fn loop_iteration_sees_a_streamed_response_once() {
 
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
+    let second = summarise(&requests[1].contents);
     assert_eq!(
-        summarise(&requests[1].contents),
-        vec![
+        second[..2],
+        [
             ("user".to_string(), vec!["text:go".to_string()]),
             ("model".to_string(), vec!["text:Hello!".to_string()]),
         ]
     );
+    // The round after the agent's own answer gets a user turn to answer.
+    assert_eq!(second.len(), 3);
+    assert_eq!(second[2].0, "user");
 }

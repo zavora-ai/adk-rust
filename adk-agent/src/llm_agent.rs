@@ -423,15 +423,16 @@ impl PromptConfig {
             )));
         }
 
-        let agent_filter = if ctx.authoritative_transfer_targets()
+        // An agent that received control by transfer sees only the user's turns and its own.
+        // Otherwise, as in a workflow, other agents' turns reach it as user-role context, so
+        // it never replays an earlier agent's answer as its own.
+        let mut session_history = if ctx.authoritative_transfer_targets()
             || !ctx.run_config().transfer_targets.is_empty()
         {
-            Some(agent_name)
+            ctx.session().conversation_history_scoped(Some(agent_name), ctx.branch())
         } else {
-            None
+            ctx.session().conversation_history_with_context(agent_name, ctx.branch())
         };
-        let mut session_history =
-            ctx.session().conversation_history_scoped(agent_filter, ctx.branch());
         let mut current_user_content = ctx.user_content().clone();
         if let Some(index) = &self.skills_index {
             apply_skill_injection(
@@ -441,7 +442,9 @@ impl PromptConfig {
                 self.max_skill_chars,
             );
         }
-        if let Some(index) = session_history.iter().rposition(|content| content.role == "user") {
+        if let Some(index) = session_history.iter().rposition(|content| {
+            content.role == "user" && !adk_core::history::is_other_agent_context(content)
+        }) {
             session_history[index] = current_user_content.clone();
         } else {
             session_history.push(current_user_content.clone());
@@ -455,20 +458,20 @@ impl PromptConfig {
                     .iter()
                     .any(|part| !matches!(part, Part::Text { text } if text.trim().is_empty()))
         });
-        // Without its empty turn, a resuming run whose model already answered after the
-        // held call would end on a model message, which providers read as a prefill and
-        // models without prefill support (Anthropic's newer ones) reject.
+        // A history that ends on the model's answer — a resuming run whose model already
+        // answered after the held call, or a loop running this agent again after its own
+        // answer — would be read as a prefill, which models without prefill support
+        // (Anthropic's newer ones) reject. It gets a user turn to answer.
         let empty_turn = current_user_content
             .parts
             .iter()
             .all(|part| matches!(part, Part::Text { text } if text.trim().is_empty()));
-        if empty_turn
-            && session_history.last().is_some_and(|last| {
-                last.role == "model"
-                    && !last.parts.iter().any(|part| matches!(part, Part::FunctionCall { .. }))
-            })
-        {
-            session_history.push(Content::new("user").with_text(RESUMED_TURN_NOTE));
+        if session_history.last().is_some_and(|last| {
+            last.role == "model"
+                && !last.parts.iter().any(|part| matches!(part, Part::FunctionCall { .. }))
+        }) {
+            let note = if empty_turn { RESUMED_TURN_NOTE } else { CONTINUE_TURN_NOTE };
+            session_history.push(Content::new("user").with_text(note));
         }
 
         Ok(match self.include_contents {
@@ -488,6 +491,10 @@ impl PromptConfig {
 /// end on a model message.
 const RESUMED_TURN_NOTE: &str =
     "(No new message from the user. Continue from the tool results above.)";
+
+/// The user turn a run sends when its history ends on this agent's own answer.
+const CONTINUE_TURN_NOTE: &str =
+    "(No new message from the user. Continue from the conversation above.)";
 
 struct ToolSetup {
     tools: Vec<Arc<dyn Tool>>,
@@ -719,8 +726,8 @@ fn validate_output_against_schema(
     text: &str,
     schema: &serde_json::Value,
 ) -> std::result::Result<serde_json::Value, String> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| format!("Response is not valid JSON: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(strip_json_code_fence(text))
+        .map_err(|e| format!("Response is not valid JSON: {e}"))?;
 
     let validator =
         jsonschema::validator_for(schema).map_err(|e| format!("Invalid schema: {e}"))?;
@@ -728,6 +735,89 @@ fn validate_output_against_schema(
     let errors: Vec<String> = validator.iter_errors(&parsed).map(|e| e.to_string()).collect();
 
     if errors.is_empty() { Ok(parsed) } else { Err(errors.join("; ")) }
+}
+
+/// The JSON inside one Markdown code fence wrapping all of `text`, or `text` unchanged.
+///
+/// A model asked for structured output sometimes wraps it in a ```` ```json ```` fence,
+/// most often when tools are configured and the schema constraint is best-effort. JSON
+/// never starts with a fence, so valid output is unchanged.
+fn strip_json_code_fence(text: &str) -> &str {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return text;
+    };
+    let Some(body) = rest.strip_suffix("```") else {
+        return text;
+    };
+    // The info string (`json`, `JSON`, ...) runs to the end of the opening line.
+    let body = match body.find('\n') {
+        Some(newline) if body[..newline].chars().all(|c| c.is_ascii_alphanumeric()) => {
+            &body[newline + 1..]
+        }
+        _ => body.trim_start_matches(|c: char| c.is_ascii_alphanumeric()),
+    };
+    if body.contains("```") {
+        return text;
+    }
+    body.trim()
+}
+
+/// Rebuilds the chunk an after-model callback replaced.
+///
+/// The replacement's content and metadata win. The chunk's place in the stream and what the
+/// call used stay with the original: `partial` and `turn_complete` stay set when the
+/// original had them, and `finish_reason` and `usage_metadata` carry over unless the
+/// replacement sets them. A callback that returns `LlmResponse { content, ..Default::default() }`
+/// for a streamed delta therefore still produces one persisted event per response, with usage.
+fn replace_chunk(original: &LlmResponse, mut replacement: LlmResponse) -> LlmResponse {
+    replacement.partial |= original.partial;
+    replacement.turn_complete |= original.turn_complete;
+    if replacement.finish_reason.is_none() {
+        replacement.finish_reason = original.finish_reason;
+    }
+    if replacement.usage_metadata.is_none() {
+        replacement.usage_metadata = original.usage_metadata.clone();
+    }
+    replacement
+}
+
+/// Whether a final model turn carries an answer: text that is not only whitespace, data, a
+/// file, a resource, or a provider tool part. Thinking alone is not an answer.
+fn has_answer_content(content: &Content) -> bool {
+    content.parts.iter().any(|part| match part {
+        Part::Text { text } => !text.trim().is_empty(),
+        Part::Thinking { .. } => false,
+        Part::InlineData { .. }
+        | Part::FileData { .. }
+        | Part::FunctionCall { .. }
+        | Part::FunctionResponse { .. }
+        | Part::ServerToolCall { .. }
+        | Part::ServerToolResponse { .. }
+        | Part::EmbeddedResource { .. } => true,
+    })
+}
+
+/// The error for a model turn that ended without an answer.
+fn empty_response_error(finish_reason: Option<adk_core::FinishReason>) -> adk_core::AdkError {
+    let mut details = adk_core::ErrorDetails::default();
+    if let Some(reason) = finish_reason {
+        details
+            .metadata
+            .insert("finish_reason".to_string(), serde_json::json!(format!("{reason:?}")));
+    }
+    let reason = finish_reason.map_or_else(|| "none".to_string(), |reason| format!("{reason:?}"));
+    adk_core::AdkError::new(
+        adk_core::ErrorComponent::Model,
+        adk_core::ErrorCategory::Internal,
+        "model.empty_response",
+        format!(
+            "the model ended its turn without an answer: no text, data or tool call, only \
+             thinking or whitespace (finish reason: {reason}); retry the run, or check the \
+             model's output limit and safety settings"
+        ),
+    )
+    .with_details(details)
 }
 
 /// Extract the text content from a series of events.
@@ -758,7 +848,8 @@ fn extract_text_from_events(events: &[Event]) -> Option<String> {
 ///
 /// Scans events for the last text content and deserializes it into `T`.
 /// This is useful after running an agent with `output_schema` set to
-/// extract the structured result.
+/// extract the structured result. One Markdown code fence wrapping the whole
+/// text is removed first.
 ///
 /// # Example
 ///
@@ -780,7 +871,7 @@ pub fn extract_typed<T: serde::de::DeserializeOwned>(events: &[Event]) -> Result
         adk_core::AdkError::agent("no text content found in events for typed extraction")
     })?;
 
-    serde_json::from_str(&text)
+    serde_json::from_str(strip_json_code_fence(&text))
         .map_err(|e| adk_core::AdkError::agent(format!("output deserialization failed: {e}")))
 }
 
@@ -3569,6 +3660,8 @@ impl Agent for LlmAgent {
                 let mut accumulated_content: Option<Content> = None;
                 let mut final_provider_metadata: Option<serde_json::Value> = None;
 
+                let produced_by_model = model_response_override.is_none();
+                let mut last_turn_finish_reason = None;
                 if let Some(cached_response) = model_response_override {
                     // Use callback-provided response (e.g., from cache)
                     // Yield it as an event
@@ -3737,8 +3830,7 @@ impl Agent for LlmAgent {
                                 .await
                             {
                                 Ok(Some(modified_chunk)) => {
-                                    // Callback modified this chunk
-                                    chunk = modified_chunk;
+                                    chunk = replace_chunk(&chunk, modified_chunk);
                                     break;
                                 }
                                 Ok(None) => {
@@ -3825,6 +3917,9 @@ impl Agent for LlmAgent {
                             last_interaction_id = chunk.interaction_id.clone();
                         }
 
+                        if chunk.finish_reason.is_some() {
+                            last_turn_finish_reason = chunk.finish_reason;
+                        }
                         // Store last chunk for final event metadata
                         last_chunk = Some(chunk.clone());
 
@@ -3838,6 +3933,55 @@ impl Agent for LlmAgent {
                         final_provider_metadata = last.provider_metadata.clone();
                     }
                     normalize_option_content(&mut accumulated_content);
+
+                    // A stream whose last chunk is partial never produced the complete event
+                    // the runner persists, so one is emitted here with the whole response.
+                    if should_stream_to_client
+                        && let Some(last) = last_chunk.as_ref().filter(|chunk| chunk.partial)
+                        && accumulated_content.is_some()
+                    {
+                        let mut closing = last.clone();
+                        closing.partial = false;
+                        closing.content = accumulated_content.clone();
+                        closing.turn_complete = !closing
+                            .content
+                            .as_ref()
+                            .is_some_and(|content| {
+                                content.parts.iter().any(|part| matches!(part, Part::FunctionCall { .. }))
+                            });
+                        let long_running_tool_ids = closing
+                            .content
+                            .as_ref()
+                            .map(|content| collect_long_running_tool_ids(&tool_map, content))
+                            .unwrap_or_default();
+                        let mut event = build_partial_llm_event(
+                            &llm_event_id,
+                            &invocation_id,
+                            &agent_name,
+                            &trace_request_json,
+                            &closing,
+                            long_running_tool_ids,
+                        );
+                        if call_metered {
+                            event.provider_metadata.insert(
+                                adk_core::BUDGET_RECORDED_KEY.to_string(),
+                                "true".to_string(),
+                            );
+                        }
+                        if let Some(withheld) = &withheld_builtins {
+                            event.provider_metadata.insert(
+                                adk_core::BUILTIN_TOOLS_WITHHELD_KEY.to_string(),
+                                withheld.clone(),
+                            );
+                        }
+                        if let Some(metadata) = event.llm_response.provider_metadata
+                            .get_or_insert_with(|| serde_json::json!({}))
+                            .as_object_mut()
+                        {
+                            metadata.insert("content_complete".into(), true.into());
+                        }
+                        yield Ok(event);
+                    }
                     // A stream that ended without a non-partial usage report is settled
                     // here, before any tool runs, from the best usage it carried.
                     drop(response_stream);
@@ -4024,6 +4168,17 @@ impl Agent for LlmAgent {
                 }
 
                 if !has_function_calls {
+                    // ===== EMPTY MODEL TURN =====
+                    // A turn the model ended with no answer — no parts, only thinking, or only
+                    // whitespace — fails the run, so callers and retry policy can tell it from
+                    // an answer. A callback that answered instead of the model is not checked.
+                    if produced_by_model
+                        && !accumulated_content.as_ref().is_some_and(has_answer_content)
+                    {
+                        yield Err(empty_response_error(last_turn_finish_reason));
+                        return;
+                    }
+
                     // ===== OUTPUT SCHEMA VALIDATION =====
                     // When output_schema is set, validate the response text against
                     // the schema. If invalid, retry with a correction prompt up to
@@ -4081,6 +4236,10 @@ impl Agent for LlmAgent {
                             if let Part::Text { text } = part {
                                 text_parts.push_str(text);
                             }
+                        }
+                        // Structured output is stored as the JSON it validated as.
+                        if prompt_config.output_schema.is_some() {
+                            text_parts = strip_json_code_fence(&text_parts).to_string();
                         }
                         if !text_parts.is_empty() {
                             let mut state_event = Event::new(&invocation_id);

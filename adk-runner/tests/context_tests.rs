@@ -332,7 +332,7 @@ fn test_mutable_session_state_delta_propagation() {
 }
 
 #[test]
-fn test_mutable_session_temp_keys_not_persisted() {
+fn test_mutable_session_temp_keys_visible_within_the_invocation() {
     let session = Arc::new(MockSessionWithState::new());
     let mutable = MutableSession::new(session);
 
@@ -342,9 +342,9 @@ fn test_mutable_session_temp_keys_not_persisted() {
     delta.insert("permanent".to_string(), serde_json::json!("persisted"));
     mutable.apply_state_delta(&delta);
 
-    // temp: keys should NOT be stored
-    assert_eq!(mutable.state().get("temp:scratch"), None);
-    // Regular keys should be stored
+    // A later tool or agent in the invocation reads the temp: key; the session service drops
+    // it when it persists the event.
+    assert_eq!(mutable.state().get("temp:scratch"), Some(serde_json::json!("temporary")));
     assert_eq!(mutable.state().get("permanent"), Some(serde_json::json!("persisted")));
 }
 
@@ -1256,15 +1256,108 @@ fn a_resumed_response_supersedes_the_pending_response_in_place() {
 }
 
 #[test]
-fn a_response_that_supersedes_nothing_pending_is_left_unchanged() {
+fn a_second_response_to_an_answered_call_is_left_out() {
     let mutable = held_then_resumed(Some("call-1"));
     let answered = response_part(serde_json::json!({"status": "paid"}), Some("call-1"));
     mutable.append_event(event_with("ops", "inv-2", "function", vec![answered.clone()]));
-    // A second real response does not replace the first one.
+    // A second real response neither replaces the first one nor reaches the provider, which
+    // rejects a call answered twice.
     let duplicate = response_part(serde_json::json!({"status": "again"}), Some("call-1"));
     mutable.append_event(event_with("ops", "inv-2", "function", vec![duplicate.clone()]));
 
     let history = mutable.conversation_history_for_agent("ops");
     assert_eq!(history[2].parts, vec![answered]);
-    assert_eq!(history.last().unwrap().parts, vec![duplicate]);
+    assert!(history.iter().all(|content| !content.parts.contains(&duplicate)));
+}
+
+fn call_part(id: &str) -> Part {
+    Part::FunctionCall {
+        name: "pay".to_string(),
+        args: serde_json::json!({"amount": 5}),
+        id: Some(id.to_string()),
+        thought_signature: None,
+    }
+}
+
+fn text_part(text: &str) -> Part {
+    Part::Text { text: text.to_string() }
+}
+
+#[test]
+fn a_response_whose_call_was_cut_from_the_window_is_left_out() {
+    // A `history_max_events` window that starts on a result whose call it cut.
+    let mutable = MutableSession::new(Arc::new(MockSessionWithState::new()));
+    let result = response_part(serde_json::json!({"status": "paid"}), Some("call-1"));
+    mutable.append_event(event_with("ops", "inv-1", "function", vec![result]));
+    mutable.append_event(event_with("ops", "inv-1", "model", vec![text_part("paid")]));
+    mutable.append_event(event_with("user", "inv-2", "user", vec![text_part("thanks")]));
+
+    let history: Vec<(String, Vec<Part>)> = adk_core::Session::conversation_history(&mutable)
+        .into_iter()
+        .map(|content| (content.role, content.parts))
+        .collect();
+    assert_eq!(
+        history,
+        vec![
+            ("model".to_string(), vec![text_part("paid")]),
+            ("user".to_string(), vec![text_part("thanks")]),
+        ]
+    );
+}
+
+#[test]
+fn the_context_view_renders_other_agents_turns_as_user_context() {
+    let mutable = MutableSession::new(Arc::new(MockSessionWithState::new()));
+    mutable.append_event(event_with("user", "inv-1", "user", vec![text_part("pay 5")]));
+    mutable.append_event(event_with("ops", "inv-1", "model", vec![call_part("call-1")]));
+    mutable.append_event(event_with(
+        "ops",
+        "inv-1",
+        "function",
+        vec![response_part(serde_json::json!({"status": "paid"}), Some("call-1"))],
+    ));
+    mutable.append_event(event_with("ops", "inv-1", "model", vec![text_part("paid")]));
+    mutable.append_event(event_with("report", "inv-1", "model", vec![text_part("reported")]));
+
+    let for_report = adk_core::Session::conversation_history_with_context(&mutable, "report", "");
+    let roles: Vec<&str> = for_report.iter().map(|content| content.role.as_str()).collect();
+    assert_eq!(roles, ["user", "user", "user", "user", "model"]);
+    assert!(for_report[1..4].iter().all(adk_core::history::is_other_agent_context));
+    assert!(
+        for_report
+            .iter()
+            .flat_map(|content| content.parts.iter())
+            .all(|part| !matches!(part, Part::FunctionCall { .. } | Part::FunctionResponse { .. })),
+        "another agent's calls and results reach the reader as text"
+    );
+
+    // The unscoped view is unchanged.
+    let unscoped = adk_core::Session::conversation_history(&mutable);
+    let roles: Vec<&str> = unscoped.iter().map(|content| content.role.as_str()).collect();
+    assert_eq!(roles, ["user", "model", "function", "model", "model"]);
+    assert!(adk_core::Session::records_invocation_events(&mutable));
+}
+
+#[test]
+fn events_on_a_tool_branch_stay_out_of_the_callers_history() {
+    let mutable = MutableSession::new(Arc::new(MockSessionWithState::new()));
+    mutable.append_event(event_with("user", "inv-1", "user", vec![text_part("ask")]));
+    mutable.append_event(event_with("desk", "inv-1", "model", vec![call_part("call-1")]));
+    let mut forwarded = event_with("helper", "inv-1", "model", vec![text_part("helper says hi")]);
+    forwarded.branch = adk_core::history::tool_branch("", "pay", "call-1");
+    mutable.append_event(forwarded);
+    mutable.append_event(event_with(
+        "desk",
+        "inv-1",
+        "function",
+        vec![response_part(serde_json::json!({"result": "helper says hi"}), Some("call-1"))],
+    ));
+
+    for history in [
+        adk_core::Session::conversation_history(&mutable),
+        adk_core::Session::conversation_history_with_context(&mutable, "desk", ""),
+    ] {
+        let roles: Vec<&str> = history.iter().map(|content| content.role.as_str()).collect();
+        assert_eq!(roles, ["user", "model", "function"]);
+    }
 }

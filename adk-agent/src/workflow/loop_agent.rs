@@ -119,12 +119,38 @@ impl LoopAgent {
     }
 }
 
+/// Tracks the history a loop's sub-agents produce, for a parent session that does not.
+///
+/// Under the runner the parent session records every event as it is yielded
+/// ([`Session::records_invocation_events`]), and history is read from it. Otherwise this
+/// keeps the history the loop started with and adds each sub-agent event to it, with its
+/// author, so each sub-agent sees other agents' turns as context.
 struct HistoryTrackingSession {
     parent_ctx: Arc<dyn InvocationContext>,
-    history: Arc<RwLock<Vec<Content>>>,
+    history: RwLock<TrackedHistory>,
     /// Event id of the streamed response that produced the last history entry.
     streamed_id: RwLock<Option<String>>,
     state: StateTrackingState,
+}
+
+/// History entries and, for each, the author and branch of the event that produced it;
+/// `None` for the history the loop started with.
+#[derive(Default)]
+struct TrackedHistory {
+    contents: Vec<Content>,
+    origins: Vec<Option<(String, String)>>,
+}
+
+impl TrackedHistory {
+    fn push(&mut self, content: Content, origin: Option<(String, String)>) {
+        self.contents.push(content);
+        self.origins.push(origin);
+    }
+
+    /// Whether the last entry came from `origin`'s event author.
+    fn last_from(&self, origin: &(String, String)) -> bool {
+        matches!(self.origins.last(), Some(Some(last)) if last == origin)
+    }
 }
 
 struct StateTrackingState {
@@ -168,16 +194,26 @@ impl State for StateTrackingState {
 
 impl HistoryTrackingSession {
     fn new(parent_ctx: Arc<dyn InvocationContext>) -> Self {
+        let mut history = TrackedHistory::default();
+        for content in parent_ctx.session().conversation_history() {
+            history.push(content, None);
+        }
         Self {
-            history: Arc::new(RwLock::new(parent_ctx.session().conversation_history())),
+            history: RwLock::new(history),
             streamed_id: RwLock::new(None),
             state: StateTrackingState::new(&parent_ctx),
             parent_ctx,
         }
     }
 
+    /// Whether history is read from the parent session, which records every event itself.
+    fn delegates(&self) -> bool {
+        self.parent_ctx.session().records_invocation_events()
+    }
+
     fn apply_event(&self, event: &Event) {
         if let Some(content) = &event.llm_response.content {
+            let origin = (event.author.clone(), event.branch.clone());
             // Consolidate streaming chunks: chunks of one response merge into the
             // entry its first chunk started instead of creating new entries.
             // This prevents N streaming chunks from becoming N separate Content
@@ -190,7 +226,8 @@ impl HistoryTrackingSession {
             let content = if !event.llm_response.partial
                 && content.parts.iter().any(|part| matches!(part, Part::FunctionResponse { .. }))
             {
-                unplaced = adk_core::supersede_pending_responses(&mut history, content.clone());
+                unplaced =
+                    adk_core::supersede_pending_responses(&mut history.contents, content.clone());
                 match &unplaced {
                     Some(rest) => rest,
                     None => {
@@ -205,32 +242,21 @@ impl HistoryTrackingSession {
                 content
             };
             let continues_stream = streamed_id.as_deref() == Some(event.id.as_str());
+            let same_author = history.last_from(&origin);
 
             if event.llm_response.partial {
                 // Partial chunk — merge into the entry this response started, so a
                 // later complete snapshot replaces only this response.
                 if continues_stream
-                    && let Some(last) = history.last_mut()
+                    && same_author
+                    && let Some(last) = history.contents.last_mut()
                     && last.role == content.role
                 {
-                    for part in &content.parts {
-                        if let adk_core::Part::Text { text } = part {
-                            // Append text to the last Text part
-                            if let Some(adk_core::Part::Text { text: existing }) =
-                                last.parts.last_mut()
-                            {
-                                existing.push_str(text);
-                            } else {
-                                last.parts.push(part.clone());
-                            }
-                        } else {
-                            last.parts.push(part.clone());
-                        }
-                    }
+                    merge_parts(last, &content.parts);
                     return;
                 }
                 // No matching last entry — start a new one
-                history.push(content.clone());
+                history.push(content.clone(), Some(origin));
                 *streamed_id = Some(event.id.clone());
             } else {
                 let content_complete = event
@@ -240,42 +266,39 @@ impl HistoryTrackingSession {
                     .and_then(|metadata| metadata.get("content_complete"))
                     .and_then(serde_json::Value::as_bool)
                     == Some(true);
-                let replaced_stream = continues_stream && content_complete;
+                let replaced_stream = continues_stream && content_complete && same_author;
                 *streamed_id = None;
-                if replaced_stream && let Some(last) = history.last_mut() {
+                if replaced_stream && let Some(last) = history.contents.last_mut() {
                     // A complete snapshot already contains every streamed delta.
                     *last = content.clone();
-                } else if let Some(last) = history.last_mut() {
-                    // Final event (partial=false) — append as-is.
-                    // For non-streaming mode this carries the full content.
-                    // Without a complete snapshot the accumulated text is already in
-                    // the last history entry from partial merges above, so the final
-                    // chunk (which may carry the last fragment or be empty) is
-                    // merged if same role, or appended if different.
-                    if last.role == content.role && !content.parts.is_empty() {
-                        // Merge any remaining text from the final chunk
-                        for part in &content.parts {
-                            if let adk_core::Part::Text { text } = part {
-                                if let Some(adk_core::Part::Text { text: existing }) =
-                                    last.parts.last_mut()
-                                {
-                                    existing.push_str(text);
-                                } else {
-                                    last.parts.push(part.clone());
-                                }
-                            } else {
-                                last.parts.push(part.clone());
-                            }
-                        }
-                    } else if !content.parts.is_empty() {
-                        history.push(content.clone());
-                    }
-                } else {
-                    history.push(content.clone());
+                } else if continues_stream
+                    && same_author
+                    && let Some(last) = history.contents.last_mut()
+                    && last.role == content.role
+                {
+                    // Without a complete snapshot the accumulated text is already in the
+                    // last entry from the partial merges above, so the final chunk (which
+                    // may carry the last fragment or be empty) is merged into it.
+                    merge_parts(last, &content.parts);
+                } else if !content.parts.is_empty() {
+                    history.push(content.clone(), Some(origin));
                 }
             }
         }
         self.state.apply_delta(&event.actions.state_delta);
+    }
+}
+
+/// Appends `parts` to `last`, joining text onto its last text part.
+fn merge_parts(last: &mut Content, parts: &[Part]) {
+    for part in parts {
+        if let Part::Text { text } = part
+            && let Some(Part::Text { text: existing }) = last.parts.last_mut()
+        {
+            existing.push_str(text);
+        } else {
+            last.parts.push(part.clone());
+        }
     }
 }
 
@@ -297,11 +320,60 @@ impl Session for HistoryTrackingSession {
     }
 
     fn conversation_history(&self) -> Vec<Content> {
-        self.history.read().unwrap_or_else(|e| e.into_inner()).clone()
+        if self.delegates() {
+            return self.parent_ctx.session().conversation_history();
+        }
+        self.history.read().unwrap_or_else(|e| e.into_inner()).contents.clone()
     }
 
-    fn conversation_history_for_agent(&self, _agent_name: &str) -> Vec<Content> {
+    fn conversation_history_for_agent(&self, agent_name: &str) -> Vec<Content> {
+        if self.delegates() {
+            return self.parent_ctx.session().conversation_history_for_agent(agent_name);
+        }
         self.conversation_history()
+    }
+
+    fn conversation_history_scoped(&self, agent_name: Option<&str>, branch: &str) -> Vec<Content> {
+        if self.delegates() {
+            return self.parent_ctx.session().conversation_history_scoped(agent_name, branch);
+        }
+        self.conversation_history()
+    }
+
+    fn conversation_history_with_context(&self, agent_name: &str, branch: &str) -> Vec<Content> {
+        if self.delegates() {
+            return self.parent_ctx.session().conversation_history_with_context(agent_name, branch);
+        }
+        let history = self.history.read().unwrap_or_else(|e| e.into_inner());
+        let call_ids: std::collections::HashSet<String> = history
+            .contents
+            .iter()
+            .flat_map(|content| content.parts.iter())
+            .filter_map(|part| match part {
+                Part::FunctionCall { id: Some(id), .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        history
+            .contents
+            .iter()
+            .zip(&history.origins)
+            .filter_map(|(content, origin)| match origin {
+                Some((_, event_branch))
+                    if adk_core::history::is_tool_branch_event(branch, event_branch, &call_ids) =>
+                {
+                    None
+                }
+                Some((author, _)) if author != "user" && author != agent_name => {
+                    adk_core::history::other_agent_context(author, content)
+                }
+                Some(_) | None => Some(content.clone()),
+            })
+            .collect()
+    }
+
+    fn records_invocation_events(&self) -> bool {
+        self.delegates()
     }
 
     fn held_tool_calls(&self, agent_name: &str, branch: &str) -> Vec<adk_core::HeldToolCall> {
@@ -317,7 +389,11 @@ impl Session for HistoryTrackingSession {
     }
 
     fn append_to_history(&self, content: Content) {
-        self.history.write().unwrap_or_else(|e| e.into_inner()).push(content);
+        if self.delegates() {
+            self.parent_ctx.session().append_to_history(content);
+            return;
+        }
+        self.history.write().unwrap_or_else(|e| e.into_inner()).push(content, None);
     }
 }
 

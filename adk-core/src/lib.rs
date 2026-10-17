@@ -115,6 +115,9 @@ mod event_stream;
 pub mod governance;
 /// Durable freeze state for the kill switch, shared by every replica.
 pub mod governance_state;
+/// Building model history from session events: other agents' turns as context, tool
+/// branches, and balanced history cuts.
+pub mod history;
 /// Typed identity primitives for app, user, session, and invocation.
 pub mod identity;
 /// Template-based instruction injection with session state interpolation.

@@ -42,6 +42,10 @@ impl MutableSession {
 
     /// Apply state delta from an event to the mutable state.
     /// This is called by the Runner when events are yielded.
+    ///
+    /// Every key applies, `temp:` keys included, so a later tool, agent or `{temp:key}`
+    /// instruction in the same invocation reads them. Session services drop `temp:` keys when
+    /// they persist an event.
     pub fn apply_state_delta(&self, delta: &HashMap<String, serde_json::Value>) {
         if delta.is_empty() {
             return;
@@ -51,11 +55,10 @@ impl MutableSession {
             tracing::error!("state RwLock poisoned in apply_state_delta — skipping delta");
             return;
         };
+        // `temp:` keys stay for the rest of the invocation; the session service drops them
+        // when it persists the event, so they never outlive it.
         for (key, value) in delta {
-            // Skip temp: prefixed keys (they shouldn't persist)
-            if !key.starts_with("temp:") {
-                state.insert(key.clone(), value.clone());
-            }
+            state.insert(key.clone(), value.clone());
         }
     }
 
@@ -110,10 +113,24 @@ impl MutableSession {
     /// `branch` additionally scopes history to a conversation branch: an event is
     /// kept when its branch equals `branch` or is an ancestor of it, so
     /// concurrent `ParallelAgent` branches do not read each other's output. An
-    /// empty `branch`, or an event without one, matches everything.
+    /// empty `branch`, or an event without one, matches everything. Events a tool
+    /// published on its own branch below `branch`
+    /// ([`tool_branch`](adk_core::history::tool_branch)) are left out.
     pub fn conversation_history_for_agent_impl(
         &self,
         agent_name: Option<&str>,
+        branch: &str,
+    ) -> Vec<adk_core::Content> {
+        match agent_name {
+            Some(name) => self.project_history(Some(name), OtherAgents::Exclude, branch),
+            None => self.project_history(None, OtherAgents::AsOwnTurns, branch),
+        }
+    }
+
+    fn project_history(
+        &self,
+        agent_name: Option<&str>,
+        others: OtherAgents,
         branch: &str,
     ) -> Vec<adk_core::Content> {
         let Ok(events) = self.events.read() else {
@@ -121,6 +138,7 @@ impl MutableSession {
             return Vec::new();
         };
         let mut history = Vec::new();
+        let call_ids = adk_core::history::function_call_ids(&events);
 
         // Find the most recent compaction event — everything before its
         // end_timestamp has been summarized and should be replaced by the
@@ -170,35 +188,57 @@ impl MutableSession {
                 continue;
             }
 
-            // When filtering for a specific agent, skip events from other agents.
-            // Keep: user messages and the agent's own events.
-            // Skip: other agents' events entirely (model-role, function calls,
-            // and function/tool responses). This prevents the sub-agent from
-            // seeing orphaned function responses without their preceding calls.
-            if let Some(name) = agent_name
-                && event.author != "user"
-                && event.author != name
-            {
+            // What a tool published on its own branch is progress for observers; the
+            // caller's model gets the tool's response.
+            if adk_core::history::is_tool_branch_event(branch, &event.branch, &call_ids) {
                 continue;
             }
 
-            if let Some(content) = &event.llm_response.content {
-                let mut mapped_content = content.clone();
-                mapped_content.role = match (event.author.as_str(), content.role.as_str()) {
-                    ("user", _) => "user",
-                    (_, "function" | "tool") => content.role.as_str(),
-                    _ => "model",
+            let Some(content) = &event.llm_response.content else {
+                continue;
+            };
+            let other_agent =
+                agent_name.is_some_and(|name| event.author != "user" && event.author != name);
+            let mapped_content = match others {
+                // A transferred sub-agent sees only the user's turns and its own, so it
+                // never sees responses whose calls another agent made.
+                OtherAgents::Exclude if other_agent => continue,
+                OtherAgents::AsContext if other_agent => {
+                    match adk_core::history::other_agent_context(&event.author, content) {
+                        Some(context) => context,
+                        None => continue,
+                    }
                 }
-                .to_string();
-                history.push(HistoryContent {
-                    content: mapped_content,
-                    invocation_id: Some(event.invocation_id.clone()),
-                });
-            }
+                OtherAgents::Exclude | OtherAgents::AsContext | OtherAgents::AsOwnTurns => {
+                    let mut mapped_content = content.clone();
+                    mapped_content.role = match (event.author.as_str(), content.role.as_str()) {
+                        ("user", _) => "user",
+                        (_, "function" | "tool") => content.role.as_str(),
+                        _ => "model",
+                    }
+                    .to_string();
+                    mapped_content
+                }
+            };
+            history.push(HistoryContent {
+                content: mapped_content,
+                invocation_id: Some(event.invocation_id.clone()),
+            });
         }
 
         close_interrupted_tool_calls(history)
     }
+}
+
+/// How a history view presents events other agents authored.
+#[derive(Clone, Copy)]
+enum OtherAgents {
+    /// Leave them out.
+    Exclude,
+    /// Render them as user-role context.
+    AsContext,
+    /// Keep them as model turns, as an unscoped view always has.
+    AsOwnTurns,
 }
 
 struct HistoryContent {
@@ -238,6 +278,10 @@ struct HeldAnswer {
 /// closed only when a later user turn exists and has no durable response in the
 /// retained history. Such calls are omitted from the model projection rather
 /// than assigned a result that did not occur.
+///
+/// A function response whose call is not in the retained history is omitted: a
+/// `history_max_events` window or a compaction may have cut the call away, and providers
+/// reject a response without its call.
 ///
 /// A call held for confirmation is answered with a confirmation-pending response,
 /// and a later run that resumes the call persists its real response. The later
@@ -338,6 +382,15 @@ fn close_interrupted_tool_calls(history: Vec<HistoryContent>) -> Vec<Content> {
                         if !adk_core::is_confirmation_pending(&function_response.response) {
                             held_answers.remove(index);
                         }
+                    } else {
+                        // A response whose call is not in the retained history — cut by a
+                        // history window or a compaction, or answered twice — is rejected by
+                        // every provider, so it is left out.
+                        tracing::debug!(
+                            function.name = %function_response.name,
+                            "dropping a function response that answers no retained call"
+                        );
+                        removed_parts.insert(location);
                     }
                 }
                 _ => {}
@@ -418,6 +471,18 @@ impl adk_core::Session for MutableSession {
         branch: &str,
     ) -> Vec<adk_core::Content> {
         self.conversation_history_for_agent_impl(agent_name, branch)
+    }
+
+    fn conversation_history_with_context(
+        &self,
+        agent_name: &str,
+        branch: &str,
+    ) -> Vec<adk_core::Content> {
+        self.project_history(Some(agent_name), OtherAgents::AsContext, branch)
+    }
+
+    fn records_invocation_events(&self) -> bool {
+        true
     }
 
     fn held_tool_calls(&self, agent_name: &str, branch: &str) -> Vec<adk_core::HeldToolCall> {

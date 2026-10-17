@@ -150,9 +150,9 @@ proptest! {
     /// **Feature: production-hardening, Property 2A: Preservation — apply_state_delta**
     ///
     /// *For any* sequence of state deltas, `apply_state_delta` SHALL merge
-    /// non-temp keys into the mutable state. `temp:` prefixed keys SHALL be
-    /// skipped. The final state SHALL equal the cumulative merge of all deltas
-    /// (last-write-wins per key), excluding `temp:` keys.
+    /// every key into the mutable state, `temp:` keys included, since they stay
+    /// visible for the rest of the invocation. The final state SHALL equal the
+    /// cumulative merge of all deltas (last-write-wins per key).
     ///
     /// **Validates: Requirement 3.1**
     #[test]
@@ -162,14 +162,12 @@ proptest! {
         let session = empty_session();
         let mutable = MutableSession::new(session);
 
-        // Build expected state by replaying deltas, skipping temp: keys
+        // Build expected state by replaying deltas
         let mut expected = HashMap::new();
         for delta in &deltas {
             mutable.apply_state_delta(delta);
             for (k, v) in delta {
-                if !k.starts_with("temp:") {
-                    expected.insert(k.clone(), v.clone());
-                }
+                expected.insert(k.clone(), v.clone());
             }
         }
 
@@ -290,19 +288,23 @@ fn apply_state_delta_empty_is_noop() {
     assert_eq!(state.get("key1"), Some(&serde_json::json!("val1")));
 }
 
-/// Verify that temp: keys are skipped by apply_state_delta.
+/// Verify that temp: keys stay visible for the rest of the invocation.
 #[test]
-fn apply_state_delta_skips_temp_keys() {
+fn apply_state_delta_keeps_temp_keys_for_the_invocation() {
     let session = empty_session();
     let mutable = MutableSession::new(session);
 
     let mut delta = HashMap::new();
     delta.insert("normal_key".to_string(), serde_json::json!("kept"));
-    delta.insert("temp:scratch".to_string(), serde_json::json!("skipped"));
+    delta.insert("temp:scratch".to_string(), serde_json::json!("visible"));
     mutable.apply_state_delta(&delta);
 
     let state = AdkCoreSession::state(&mutable).all();
-    assert_eq!(state.len(), 1);
-    assert!(state.contains_key("normal_key"));
-    assert!(!state.contains_key("temp:scratch"));
+    assert_eq!(
+        state,
+        HashMap::from([
+            ("normal_key".to_string(), serde_json::json!("kept")),
+            ("temp:scratch".to_string(), serde_json::json!("visible")),
+        ])
+    );
 }

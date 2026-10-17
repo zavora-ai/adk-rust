@@ -120,7 +120,10 @@ pub trait CompactionStrategy: Send + Sync {
 ///
 /// This is the simplest compaction strategy: it keeps the first event (assumed to
 /// be the system prompt) and the last `preserve_recent` events, discarding
-/// everything in between. No LLM calls are made.
+/// everything in between. No LLM calls are made. When the first kept event would be a
+/// function response whose call is dropped, the call and the events after it are kept
+/// too ([`adk_core::history::balanced_cut`]), since providers reject a response without
+/// its call.
 ///
 /// # Fields
 ///
@@ -155,15 +158,19 @@ impl CompactionStrategy for TruncationCompaction {
             return Ok(events);
         }
 
-        let mut compacted = Vec::with_capacity(self.preserve_recent + 1);
+        // Preserve the last N events, and more when the Nth from last is a function response
+        // whose call would otherwise be dropped.
+        let start = adk_core::history::balanced_cut(&events, len - self.preserve_recent);
+        if start <= 1 {
+            return Ok(events);
+        }
+
+        let mut compacted = Vec::with_capacity(len - start + 1);
 
         // Preserve the first event (system prompt)
         if let Some(first) = events.first() {
             compacted.push(first.clone());
         }
-
-        // Preserve the last N events
-        let start = len.saturating_sub(self.preserve_recent);
         compacted.extend_from_slice(&events[start..]);
 
         tracing::debug!(
@@ -183,6 +190,13 @@ impl CompactionStrategy for TruncationCompaction {
 /// `turns_to_summarise` boundary), sends them to an LLM with a summarization
 /// prompt, and replaces them with a single summary event. Recent events are
 /// preserved verbatim to maintain conversational continuity.
+///
+/// The prompt renders each event's text, function calls and responses, and data
+/// references ([`adk_core::intra_compaction::render_part_for_summary`]), so the summary
+/// keeps what tools returned. The split never separates a function response from its call
+/// ([`adk_core::history::balanced_cut`]). The events stay as they are when the summary is
+/// empty or not smaller than they are; a stream error, or a model that stops for any reason
+/// but `Stop`, fails the compaction with `model.summary_incomplete`.
 ///
 /// The summary call goes through [`adk_core::generate_metered`], so when the
 /// runner compacts a session it counts against the run's budget and spend
@@ -228,8 +242,12 @@ impl CompactionStrategy for SummarisationCompaction {
             return Ok(events);
         }
 
-        // Split: events to summarize vs. events to preserve
-        let summarize_end = self.turns_to_summarise.min(len);
+        // Split: events to summarize vs. events to preserve. The split never separates a
+        // function response from its call.
+        let summarize_end = adk_core::history::balanced_cut(&events, self.turns_to_summarise);
+        if summarize_end == 0 {
+            return Ok(events);
+        }
         let events_to_summarize = &events[..summarize_end];
         let events_to_preserve = &events[summarize_end..];
 
@@ -247,6 +265,7 @@ impl CompactionStrategy for SummarisationCompaction {
         // Collect the full response
         use futures::StreamExt;
         let mut summary_content = String::new();
+        let mut finish_reason = None;
         while let Some(response) = stream.next().await {
             let response = response?;
             if let Some(content) = &response.content {
@@ -256,6 +275,25 @@ impl CompactionStrategy for SummarisationCompaction {
                     }
                 }
             }
+            finish_reason = response.finish_reason.or(finish_reason);
+        }
+        // A summary the model cut short would replace history with part of what it said.
+        if let Some(
+            reason @ (adk_core::FinishReason::MaxTokens
+            | adk_core::FinishReason::Safety
+            | adk_core::FinishReason::Recitation
+            | adk_core::FinishReason::Other),
+        ) = finish_reason
+        {
+            return Err(AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Internal,
+                "model.summary_incomplete",
+                format!(
+                    "the summarization model stopped before finishing its summary ({reason:?}); \
+                     raise its output limit or summarise fewer turns"
+                ),
+            ));
         }
 
         // Create a summary event
@@ -265,6 +303,14 @@ impl CompactionStrategy for SummarisationCompaction {
             adk_core::Content::new("model")
                 .with_text(format!("[Context Summary]\n{summary_content}")),
         );
+        // A summary that is not smaller than what it replaces would not shrink the request.
+        if summary_content.trim().is_empty()
+            || estimate_event_tokens(std::slice::from_ref(&summary_event))
+                >= estimate_event_tokens(events_to_summarize)
+        {
+            tracing::info!("summary is not smaller than the events it replaces; keeping them");
+            return Ok(events);
+        }
 
         // Build the compacted list: summary + preserved events
         let mut compacted = Vec::with_capacity(1 + events_to_preserve.len());
@@ -290,14 +336,15 @@ fn build_summary_prompt(events: &[Event]) -> String {
     );
 
     for event in events {
+        if event.llm_response.partial {
+            continue;
+        }
         if let Some(content) = event.content() {
-            prompt.push_str(&format!("[{}]: ", content.role));
-            for part in &content.parts {
-                if let adk_core::Part::Text { text } = part {
-                    prompt.push_str(text);
-                }
+            for rendered in
+                content.parts.iter().filter_map(adk_core::intra_compaction::render_part_for_summary)
+            {
+                prompt.push_str(&format!("[{}]: {rendered}\n", content.role));
             }
-            prompt.push('\n');
         }
     }
 
@@ -492,7 +539,10 @@ pub async fn apply_compaction_with_retry(
 
         // The strategy sees only the events before the earliest held call; that call and
         // everything after it stay, so its approval can still resume it.
-        let held_from = adk_core::held_call_compaction_limit(&current_events, current_events.len());
+        let held_from = adk_core::history::balanced_cut(
+            &current_events,
+            adk_core::held_call_compaction_limit(&current_events, current_events.len()),
+        );
         let kept = current_events.split_off(held_from);
         current_events = config.strategy.compact(current_events, config.context_budget).await?;
         current_events.extend(kept);
@@ -525,28 +575,11 @@ pub async fn apply_compaction_with_retry(
 
 /// Estimates the total token count for a slice of events.
 ///
-/// Uses a simple heuristic of ~4 characters per token, consistent with
-/// `adk_core::intra_compaction::estimate_tokens`.
+/// Uses [`adk_core::intra_compaction::estimate_tokens`] at ~4 characters per token, which
+/// counts function call arguments and responses as well as text, so a history made of large
+/// tool results crosses the budget.
 pub fn estimate_event_tokens(events: &[Event]) -> usize {
-    let total_chars: usize = events
-        .iter()
-        .map(|e| {
-            e.content()
-                .map(|c| {
-                    c.parts
-                        .iter()
-                        .map(|p| match p {
-                            adk_core::Part::Text { text } => text.len(),
-                            _ => 20, // rough estimate for non-text parts
-                        })
-                        .sum::<usize>()
-                })
-                .unwrap_or(0)
-        })
-        .sum();
-
-    // ~4 chars per token
-    total_chars / 4
+    adk_core::intra_compaction::estimate_tokens(events, 4) as usize
 }
 
 #[cfg(test)]
@@ -673,6 +706,139 @@ mod tests {
         let refused = scope.within(strategy.compact(make_events(10), 4096)).await;
         assert_eq!(refused.unwrap_err().code, "budget.model_calls");
         assert_eq!(tracker.usage().model_calls, 1);
+    }
+
+    fn call_and_result(id: &str, payload: serde_json::Value) -> [Event; 2] {
+        let mut call = Event::new("inv");
+        call.author = "desk".to_string();
+        call.set_content(Content {
+            role: "model".to_string(),
+            parts: vec![adk_core::Part::FunctionCall {
+                name: "lookup".to_string(),
+                args: serde_json::json!({"order": "A1"}),
+                id: Some(id.to_string()),
+                thought_signature: None,
+            }],
+        });
+        let mut result = Event::new("inv");
+        result.author = "desk".to_string();
+        result.set_content(Content {
+            role: "function".to_string(),
+            parts: vec![adk_core::Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new("lookup", payload),
+                id: Some(id.to_string()),
+                annotations: None,
+            }],
+        });
+        [call, result]
+    }
+
+    /// A summarizer that answers `text` and stops for `finish`, recording its prompt.
+    struct ScriptedSummary {
+        text: String,
+        finish: adk_core::FinishReason,
+        prompts: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl ScriptedSummary {
+        fn new(text: &str, finish: adk_core::FinishReason) -> Arc<Self> {
+            Arc::new(Self { text: text.to_string(), finish, prompts: Default::default() })
+        }
+    }
+
+    #[async_trait]
+    impl Llm for ScriptedSummary {
+        fn name(&self) -> &str {
+            "summary"
+        }
+
+        async fn generate_content(
+            &self,
+            request: adk_core::LlmRequest,
+            _stream: bool,
+        ) -> adk_core::Result<adk_core::LlmResponseStream> {
+            let prompt = request.contents[0].parts[0].text().unwrap_or_default().to_string();
+            self.prompts.lock().unwrap().push(prompt);
+            let response = adk_core::LlmResponse {
+                content: Some(Content::new("model").with_text(&self.text)),
+                finish_reason: Some(self.finish),
+                turn_complete: true,
+                ..Default::default()
+            };
+            Ok(Box::pin(futures::stream::iter(vec![Ok(response)])))
+        }
+    }
+
+    #[tokio::test]
+    async fn truncation_keeps_the_call_of_a_kept_result() {
+        // [q1, a1, q2, call, result, a2, q3]: keeping three would start on the result.
+        let mut events = make_events(3);
+        events.extend(call_and_result("c1", serde_json::json!({"status": "shipped"})));
+        events.extend(make_events(2));
+        let compacted = TruncationCompaction { preserve_recent: 3 }
+            .compact(events.clone(), 4096)
+            .await
+            .unwrap();
+        let ids = compacted.iter().map(|event| event.id.clone()).collect::<Vec<_>>();
+        let expected = [&events[..1], &events[3..]]
+            .concat()
+            .iter()
+            .map(|event| event.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected);
+    }
+
+    #[tokio::test]
+    async fn summarisation_never_splits_a_call_from_its_result_and_keeps_tool_facts() {
+        // [q1, call, result, a1, q2]: summarising two would leave the result without its call.
+        let mut events = vec![make_events(1)[0].clone()];
+        events[0].set_content(Content::new("user").with_text("background ".repeat(50)));
+        events.extend(call_and_result("c1", serde_json::json!({"warehouse": "Nairobi-7"})));
+        events.extend(make_events(2));
+        let model = ScriptedSummary::new("short", adk_core::FinishReason::Stop);
+        let compacted = SummarisationCompaction { model: model.clone(), turns_to_summarise: 2 }
+            .compact(events.clone(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(compacted.len(), 5, "the summary, then the call, its result and two more");
+        assert_eq!(compacted[1].id, events[1].id);
+
+        let summary_of_tools =
+            SummarisationCompaction { model: model.clone(), turns_to_summarise: 3 }
+                .compact(events.clone(), 4096)
+                .await
+                .unwrap();
+        assert_eq!(summary_of_tools.len(), 3);
+        let prompts = model.prompts.lock().unwrap().clone();
+        assert!(prompts[1].contains(r#"[function response] lookup: {"warehouse":"Nairobi-7"}"#));
+        assert!(prompts[1].contains(r#"[function call] lookup({"order":"A1"})"#));
+    }
+
+    #[tokio::test]
+    async fn summarisation_keeps_the_events_when_the_summary_does_not_shrink_them() {
+        let events = make_events(6);
+        let model = ScriptedSummary::new(&"long summary ".repeat(50), adk_core::FinishReason::Stop);
+        let compacted = SummarisationCompaction { model, turns_to_summarise: 3 }
+            .compact(events.clone(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(compacted.len(), events.len());
+    }
+
+    #[tokio::test]
+    async fn summarisation_fails_when_the_summary_was_cut_short() {
+        let model = ScriptedSummary::new("Summary: the cust", adk_core::FinishReason::MaxTokens);
+        let error = SummarisationCompaction { model, turns_to_summarise: 3 }
+            .compact(make_events(6), 4096)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "model.summary_incomplete");
+    }
+
+    #[test]
+    fn the_estimate_counts_tool_payloads() {
+        let events = call_and_result("c1", serde_json::json!({"notes": "n".repeat(4000)}));
+        assert!(estimate_event_tokens(&events) > 1000, "{}", estimate_event_tokens(&events));
     }
 
     #[tokio::test]

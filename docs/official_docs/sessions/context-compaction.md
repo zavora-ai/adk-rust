@@ -26,6 +26,10 @@ The `overlap_size` parameter controls how many events from the previous window c
 | Inline data, file data, embedded resources, server tool calls and responses | A one-line reference (MIME type, size or URI, resource text) |
 | Thinking parts and streamed partial events | Left out |
 
+`SummarisationCompaction` (context compaction) renders events the same way, and the token
+estimate that decides when context compaction runs counts function call arguments and responses
+as well as text, so a history of large tool results crosses `context_budget`.
+
 Each summary therefore carries the one before it, so facts from older turns and tool results
 survive repeated compaction. This matters with `RunConfig::history_max_events`: the runner then
 loads only the most recent events, so an older turn reaches the model only through the
@@ -122,6 +126,36 @@ With `compaction_interval: 3` and `overlap_size: 1`:
 | 6 | user→agent | Compact events 3-6 (overlap=1) into Summary B |
 
 After invocation 6, the agent sees: `[Summary B, event 6 overlap events, event 7+]`
+
+## Function Calls and Their Responses
+
+A provider rejects a function response whose call is not in the request. Every compaction cut
+therefore lands where no response after the cut answers a call before it
+(`adk_core::history::balanced_cut`): the cut moves back to before such a call, keeping the call,
+its response and every later event.
+
+| Compaction | Where it cuts |
+|------------|---------------|
+| Session compaction (`EventsCompactionConfig`) | At the overlap boundary, moved back before any call answered after it |
+| Intra-invocation compaction (`IntraCompactionConfig`) | `overlap_event_count` events from the end, moved back the same way |
+| `TruncationCompaction` | Keeps the first event and the last `preserve_recent`, plus the call of any kept response |
+| `SummarisationCompaction` | Summarises the first `turns_to_summarise` events, or fewer so that no call is split from its response |
+
+A `RunConfig::history_max_events` window can still start on a response whose call fell outside
+it. History leaves such a response out, as it does a second response to a call already
+answered, so the request stays valid.
+
+## Summaries That Do Not Shrink the History
+
+A summary replaces history only when it is complete and smaller:
+
+- `LlmEventSummarizer` fails with `model.summary_incomplete` when the model stops for any reason
+  but `Stop` (for example `MaxTokens`) or its stream fails, and returns no summary when the
+  summary is empty or at least as long as the window it renders.
+- The runner keeps the history when a summarizer's event is not smaller, by the token estimate,
+  than the events it would replace, for session and intra-invocation compaction alike.
+- `SummarisationCompaction` keeps the events when its summary is empty or not smaller, and fails
+  with `model.summary_incomplete` on an incomplete summary.
 
 ## Calls Held for Confirmation
 

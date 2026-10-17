@@ -338,3 +338,37 @@ async fn compaction_with_a_history_window_keeps_earlier_summaries_and_tool_resul
     assert!(!history.contains("Remember FACT-A"), "turn 1 is outside the window: {history}");
     assert!(history.contains("Facts: [FACT-A, FACT-TOOL-7731]"), "{history}");
 }
+
+fn window() -> Vec<Event> {
+    vec![
+        make_event("user", "Where is order A1?"),
+        make_event("desk", "Order A1 ships Monday from the Nairobi warehouse."),
+    ]
+}
+
+#[tokio::test]
+async fn a_summary_not_smaller_than_its_window_is_not_used() {
+    let llm = Arc::new(MockSummarizerLlm { summary_text: "A very detailed summary. ".repeat(20) });
+    let result = LlmEventSummarizer::new(llm).summarize_events(&window()).await.unwrap();
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn a_summary_cut_short_fails_instead_of_replacing_history() {
+    let mut truncated = LlmResponse::new(Content::new("model").with_text("The customer"));
+    truncated.finish_reason = Some(adk_core::FinishReason::MaxTokens);
+    let llm = Arc::new(adk_model::ScriptedLlm::new("summarizer", [truncated]));
+    let error = LlmEventSummarizer::new(llm).summarize_events(&window()).await.unwrap_err();
+    assert_eq!(error.code, "model.summary_incomplete");
+}
+
+#[tokio::test]
+async fn a_stream_error_fails_the_summary() {
+    let llm = Arc::new(adk_model::ScriptedLlm::new(
+        "summarizer",
+        [adk_model::ScriptedResponse::text("Summary.")
+            .then_error(adk_core::AdkError::model("stream reset"))],
+    ));
+    let error = LlmEventSummarizer::new(llm).summarize_events(&window()).await.unwrap_err();
+    assert_eq!(error.message, "stream reset");
+}

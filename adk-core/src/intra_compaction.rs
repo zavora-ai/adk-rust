@@ -86,11 +86,13 @@ pub fn estimate_tokens(events: &[Event], chars_per_token: u32) -> u64 {
 /// - Thinking parts (thinking text length)
 /// - Function call parts (serialized args length + name length)
 /// - Function response parts (serialized response length + name length)
+/// - A compaction event's summary, which stands in for the events it covers
 /// - Serialized actions (state_delta as JSON)
 fn estimate_event_chars(event: &Event) -> usize {
     let mut chars = 0;
 
-    if let Some(content) = &event.llm_response.content {
+    let summary = event.actions.compaction.as_ref().map(|compaction| &compaction.compacted_content);
+    for content in event.llm_response.content.iter().chain(summary) {
         for part in &content.parts {
             chars += estimate_part_chars(part);
         }
@@ -130,6 +132,75 @@ fn estimate_part_chars(part: &Part) -> usize {
             serde_json::to_string(resource).map_or(0, |s| s.len())
         }
     }
+}
+
+/// A one-line rendering of `part` for a summarizer prompt; `None` for thinking.
+///
+/// Text is kept as it is. Function calls and responses keep their name and JSON payload,
+/// data and file parts their type and reference, and embedded resources their URI, so a
+/// summary keeps the facts a tool returned. The session compaction summarizer
+/// (`LlmEventSummarizer`) and the runner's `SummarisationCompaction` both render events with
+/// it.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::intra_compaction::render_part_for_summary;
+/// use adk_core::{FunctionResponseData, Part};
+/// use serde_json::json;
+///
+/// let result = Part::FunctionResponse {
+///     function_response: FunctionResponseData::new("lookup", json!({"status": "shipped"})),
+///     id: None,
+///     annotations: None,
+/// };
+/// assert_eq!(
+///     render_part_for_summary(&result).as_deref(),
+///     Some(r#"[function response] lookup: {"status":"shipped"}"#)
+/// );
+/// let thought = Part::Thinking { thinking: "hmm".into(), signature: None };
+/// assert_eq!(render_part_for_summary(&thought), None);
+/// ```
+pub fn render_part_for_summary(part: &Part) -> Option<String> {
+    let json = |value: &serde_json::Value| value.to_string();
+    Some(match part {
+        Part::Text { text } => text.clone(),
+        Part::Thinking { .. } => return None,
+        Part::FunctionCall { name, args, .. } => format!("[function call] {name}({})", json(args)),
+        Part::FunctionResponse { function_response, .. } => {
+            let mut rendered = format!(
+                "[function response] {}: {}",
+                function_response.name,
+                json(&function_response.response)
+            );
+            for data in &function_response.inline_data {
+                rendered.push_str(&format!(" [inline data: {}]", data.mime_type));
+            }
+            for file in &function_response.file_data {
+                rendered.push_str(&format!(" [file: {} ({})]", file.file_uri, file.mime_type));
+            }
+            rendered
+        }
+        Part::InlineData { mime_type, data, .. } => {
+            format!("[inline data: {mime_type}, {} bytes]", data.len())
+        }
+        Part::FileData { mime_type, file_uri, .. } => format!("[file: {file_uri} ({mime_type})]"),
+        Part::ServerToolCall { server_tool_call } => {
+            format!("[server tool call] {}", json(server_tool_call))
+        }
+        Part::ServerToolResponse { server_tool_response } => {
+            format!("[server tool response] {}", json(server_tool_response))
+        }
+        Part::EmbeddedResource { resource } => match resource {
+            crate::EmbeddedResource::Text(text) => format!("[resource {}] {}", text.uri, text.text),
+            crate::EmbeddedResource::Blob(blob) => format!(
+                "[resource {}: {}, {} bytes]",
+                blob.uri,
+                blob.mime_type.as_deref().unwrap_or("application/octet-stream"),
+                blob.data.len()
+            ),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -190,6 +261,17 @@ mod tests {
         let tokens = estimate_tokens(&[event], 4);
         // "get_weather" = 11 chars + {"city":"NYC"} serialized
         assert!(tokens > 0);
+    }
+
+    #[test]
+    fn a_compaction_summary_counts_toward_the_estimate() {
+        let mut event = Event::new("inv-1");
+        event.actions.compaction = Some(crate::EventCompaction {
+            start_timestamp: chrono::Utc::now(),
+            end_timestamp: chrono::Utc::now(),
+            compacted_content: Content::new("model").with_text("a".repeat(40)),
+        });
+        assert_eq!(estimate_tokens(&[event], 4), 10);
     }
 
     #[test]

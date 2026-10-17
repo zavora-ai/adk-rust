@@ -324,9 +324,10 @@ async fn test_runner_triggers_compaction_at_interval() {
     let summarizer = Arc::new(MockSummarizer::new("Compacted summary"));
     let session_service = Arc::new(TrackingSessionService::new());
 
+    // Long enough that the summary is smaller than the history it replaces.
     let agent = Arc::new(MockAgent {
         name: "test_agent".to_string(),
-        response_text: "Agent response".to_string(),
+        response_text: "Agent response with the details the summary condenses".to_string(),
     });
 
     let compaction_config = EventsCompactionConfig {
@@ -370,6 +371,43 @@ async fn test_runner_triggers_compaction_at_interval() {
         _ => panic!("Expected text part"),
     };
     assert_eq!(summary_text, "Compacted summary");
+}
+
+/// A summary that is not smaller than the history it would replace is not persisted.
+#[tokio::test]
+async fn a_summary_longer_than_the_history_is_not_persisted() {
+    let summarizer = Arc::new(MockSummarizer::new(&"A very detailed summary. ".repeat(20)));
+    let session_service = Arc::new(TrackingSessionService::new());
+    let agent = Arc::new(MockAgent {
+        name: "test_agent".to_string(),
+        response_text: "Short answer".to_string(),
+    });
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(agent as Arc<dyn Agent>)
+        .session_service(session_service.clone() as Arc<dyn SessionService>)
+        .compaction_config(EventsCompactionConfig {
+            compaction_interval: 1,
+            overlap_size: 0,
+            summarizer: summarizer.clone(),
+        })
+        .build()
+        .unwrap();
+
+    let mut stream = runner
+        .run(
+            UserId::new("user-1").unwrap(),
+            SessionId::new("sess-1").unwrap(),
+            Content::new("user").with_text("Hello"),
+        )
+        .await
+        .unwrap();
+    while let Some(result) = stream.next().await {
+        assert!(result.is_ok());
+    }
+
+    assert_eq!(summarizer.call_count(), 1);
+    assert!(session_service.appended_events().iter().all(|e| e.actions.compaction.is_none()));
 }
 
 /// Test that compaction does NOT trigger when interval hasn't been reached.

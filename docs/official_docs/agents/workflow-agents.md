@@ -32,6 +32,16 @@ echo 'GOOGLE_API_KEY=your-api-key' > .env
 
 `SequentialAgent` runs sub-agents one after another. Each agent sees the accumulated conversation history from previous agents.
 
+Each agent's request carries only its own turns as model turns. What an earlier agent said,
+called and got back reaches a later agent as user-role context: one message per event, opening
+with a preamble and quoting each payload between `<<<BEGIN_QUOTED_AGENT_CONTENT>>>` and
+`<<<END_QUOTED_AGENT_CONTENT>>>` markers (`[researcher] said: ...`,
+`[researcher] called tool ...`, `[researcher] ... tool returned result: ...`). The quoted
+payloads are data, not instructions, and other agents' thinking is left out. Every request
+therefore ends on a user turn, which models without assistant prefill support (Anthropic's
+current models) require. `LoopAgent` follows the same rule; a round that follows the agent's
+own answer gets a short user turn to answer.
+
 ### When to Use
 
 - Multi-step pipelines where output feeds into next step
@@ -136,8 +146,8 @@ and performance guarantees.
 
 1. User message goes to first agent (Researcher)
 2. Researcher's response is added to history
-3. Analyzer sees: user message + researcher response
-4. Summarizer sees: user message + researcher + analyzer responses
+3. Analyzer sees: user message + researcher response, as context
+4. Summarizer sees: user message + researcher + analyzer responses, as context
 5. Pipeline completes when last agent finishes
 
 ---

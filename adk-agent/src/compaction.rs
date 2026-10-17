@@ -4,9 +4,10 @@
 //! a window of conversation events into a single compacted event. This is the
 //! Rust equivalent of ADK Python's `LlmEventSummarizer`.
 
+use adk_core::intra_compaction::render_part_for_summary as render_part;
 use adk_core::{
-    BaseEventsSummarizer, Content, EmbeddedResource, Event, EventActions, EventCompaction, Llm,
-    LlmRequest, Part, Result,
+    AdkError, BaseEventsSummarizer, Content, ErrorCategory, ErrorComponent, Event, EventActions,
+    EventCompaction, FinishReason, Llm, LlmRequest, Part, Result,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -29,6 +30,12 @@ The summary should be concise and capture the essence of the interaction.\n\n\
 /// it covers, so its content carries into the new summary, and every later event contributes
 /// its text, function calls and responses, file and inline data references, and embedded
 /// resources. Thinking parts and streamed partial events are left out.
+///
+/// A summary replaces history only when it is complete and smaller. A stream error fails
+/// the summary, and so does a model that stops for any reason but `Stop` (for example
+/// `MaxTokens`), with `model.summary_incomplete`. An empty summary, or one at least as long
+/// as the rendered window it would replace, returns `Ok(None)`, so the runner keeps the
+/// history as it is.
 ///
 /// The summary call goes through [`adk_core::generate_metered`], so when the
 /// runner compacts a session it counts against the run's budget and spend
@@ -75,49 +82,6 @@ impl LlmEventSummarizer {
     }
 }
 
-/// A one-line rendering of `part` for the summarizer prompt; `None` for thinking.
-fn render_part(part: &Part) -> Option<String> {
-    let json = |value: &serde_json::Value| value.to_string();
-    Some(match part {
-        Part::Text { text } => text.clone(),
-        Part::Thinking { .. } => return None,
-        Part::FunctionCall { name, args, .. } => format!("[function call] {name}({})", json(args)),
-        Part::FunctionResponse { function_response, .. } => {
-            let mut rendered = format!(
-                "[function response] {}: {}",
-                function_response.name,
-                json(&function_response.response)
-            );
-            for data in &function_response.inline_data {
-                rendered.push_str(&format!(" [inline data: {}]", data.mime_type));
-            }
-            for file in &function_response.file_data {
-                rendered.push_str(&format!(" [file: {} ({})]", file.file_uri, file.mime_type));
-            }
-            rendered
-        }
-        Part::InlineData { mime_type, data, .. } => {
-            format!("[inline data: {mime_type}, {} bytes]", data.len())
-        }
-        Part::FileData { mime_type, file_uri, .. } => format!("[file: {file_uri} ({mime_type})]"),
-        Part::ServerToolCall { server_tool_call } => {
-            format!("[server tool call] {}", json(server_tool_call))
-        }
-        Part::ServerToolResponse { server_tool_response } => {
-            format!("[server tool response] {}", json(server_tool_response))
-        }
-        Part::EmbeddedResource { resource } => match resource {
-            EmbeddedResource::Text(text) => format!("[resource {}] {}", text.uri, text.text),
-            EmbeddedResource::Blob(blob) => format!(
-                "[resource {}: {}, {} bytes]",
-                blob.uri,
-                blob.mime_type.as_deref().unwrap_or("application/octet-stream"),
-                blob.data.len()
-            ),
-        },
-    })
-}
-
 #[async_trait]
 impl BaseEventsSummarizer for LlmEventSummarizer {
     async fn summarize_events(&self, events: &[Event]) -> Result<Option<Event>> {
@@ -145,23 +109,51 @@ impl BaseEventsSummarizer for LlmEventSummarizer {
             adk_core::generate_metered(self.llm.as_ref(), request, false).await?;
 
         use futures::StreamExt;
-        let mut summary_content: Option<Content> = None;
+        let mut summary_text = String::new();
+        let mut finish_reason = None;
         // Drained to the end so the call's usage, which may follow the content, is metered.
-        while let Some(chunk_result) = response_stream.next().await {
-            if let Ok(chunk) = chunk_result
-                && summary_content.is_none()
-                && chunk.content.is_some()
-            {
-                summary_content = chunk.content;
+        while let Some(chunk) = response_stream.next().await {
+            let chunk = chunk?;
+            for part in chunk.content.iter().flat_map(|content| content.parts.iter()) {
+                if let Part::Text { text } = part {
+                    summary_text.push_str(text);
+                }
             }
+            finish_reason = chunk.finish_reason.or(finish_reason);
         }
 
-        let Some(mut summary) = summary_content else {
+        // A summary the model cut short would replace history with part of what it said.
+        if let Some(
+            reason @ (FinishReason::MaxTokens
+            | FinishReason::Safety
+            | FinishReason::Recitation
+            | FinishReason::Other),
+        ) = finish_reason
+        {
+            return Err(AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Internal,
+                "model.summary_incomplete",
+                format!(
+                    "the summarizer model stopped before finishing its summary ({reason:?}); \
+                     the history is kept as it is. Raise the summarizer's output limit or \
+                     shorten the compaction window"
+                ),
+            ));
+        }
+        if summary_text.trim().is_empty() {
             return Ok(None);
-        };
-
-        // Ensure the compacted content has the role 'model'
-        summary.role = "model".to_string();
+        }
+        // A summary at least as long as what it replaces would not shrink the request.
+        if summary_text.len() >= conversation_history.len() {
+            tracing::debug!(
+                summary.chars = summary_text.len(),
+                window.chars = conversation_history.len(),
+                "summary is not smaller than the history it replaces; skipping compaction"
+            );
+            return Ok(None);
+        }
+        let summary = Content::new("model").with_text(summary_text);
 
         // A new summary also stands in for the span the earlier one covered.
         let start_timestamp = events

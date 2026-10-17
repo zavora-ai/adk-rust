@@ -379,6 +379,11 @@ impl AgentTool {
     ///
     /// The default is `false` for backward compatibility. State and artifact
     /// deltas are merged regardless of this setting.
+    ///
+    /// Forwarded events carry the tool's branch, `{caller branch}.{tool}@{call id}`
+    /// ([`adk_core::history::tool_branch`]), so observers can follow the delegate's progress
+    /// while the caller's history leaves it out: the caller's model gets the delegate's answer
+    /// once, as the tool's response.
     pub fn forward_events(mut self, forward: bool) -> Self {
         self.runtime.forward_events = forward;
         self
@@ -963,6 +968,18 @@ impl Tool for AgentTool {
                                 }
                                 // The caller surfaces the delegate's hold as its own call's.
                                 forwarded.actions.tool_confirmation = None;
+                                // On the tool's own branch the caller's history leaves the
+                                // delegate's turns out; its model gets the tool's response.
+                                let tool_branch = adk_core::history::tool_branch(
+                                    ctx.branch(),
+                                    self.name(),
+                                    ctx.function_call_id(),
+                                );
+                                forwarded.branch = if forwarded.branch.is_empty() {
+                                    tool_branch
+                                } else {
+                                    format!("{tool_branch}.{}", forwarded.branch)
+                                };
                                 ctx.emit_event(forwarded).await;
                             }
                             events.push(event);

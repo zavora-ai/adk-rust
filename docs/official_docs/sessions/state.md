@@ -88,7 +88,10 @@ Use cases:
 
 ### `temp:` - Temporary State
 
-State that is cleared after each invocation. Not persisted.
+State that lasts for the rest of the invocation that set it and is never persisted. A tool,
+a later agent in a workflow or after a transfer, and a `{temp:key}` instruction placeholder
+all read a `temp:` key set earlier in the same invocation; the session service drops it when
+it saves the event, so the next invocation starts without it.
 
 ```rust
 use adk_session::KEY_PREFIX_TEMP;

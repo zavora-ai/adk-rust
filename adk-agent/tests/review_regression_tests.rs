@@ -1013,10 +1013,14 @@ async fn test_sequential_agent_accumulates_history_without_runner() {
 
     let requests = second_requests.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let request = requests.first().expect("captured request");
+    // The first agent's answer reaches the second as context, not as the second's own turn.
     let saw_first_output = request.contents.iter().any(|content| {
-        content.parts.iter().any(|part| matches!(part, Part::Text { text } if text == "analysis"))
+        adk_core::history::is_other_agent_context(content)
+            && content.parts.iter().any(
+                |part| matches!(part, Part::Text { text } if text.contains("[first] said:") && text.contains("analysis")),
+            )
     });
-    assert!(saw_first_output);
+    assert!(saw_first_output, "{:?}", request.contents);
 }
 
 #[tokio::test]

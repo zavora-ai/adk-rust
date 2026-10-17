@@ -1881,9 +1881,12 @@ impl Runner {
                             // Not enough user messages to satisfy overlap — skip compaction
                             0
                         };
-                        // A held call must stay visible for its approval to resume it.
-                        let compact_up_to =
-                            adk_core::held_call_compaction_limit(&all_events, compact_up_to);
+                        // A held call must stay visible for its approval to resume it, and the
+                        // cut never separates a function response from its call.
+                        let compact_up_to = adk_core::history::balanced_cut(
+                            &all_events,
+                            adk_core::held_call_compaction_limit(&all_events, compact_up_to),
+                        );
 
                         if compact_up_to > 0 {
                             let events_to_compact = &all_events[..compact_up_to];
@@ -1894,6 +1897,21 @@ impl Runner {
                                 ctx.agent_name(),
                             );
                             match scope.within(compaction_cfg.summarizer.summarize_events(events_to_compact)).await {
+                                // A summary that is not smaller than what it replaces would
+                                // not shrink later requests.
+                                Ok(Some(compaction_event))
+                                    if adk_core::intra_compaction::estimate_tokens(
+                                        std::slice::from_ref(&compaction_event),
+                                        4,
+                                    ) >= adk_core::intra_compaction::estimate_tokens(
+                                        events_to_compact,
+                                        4,
+                                    ) =>
+                                {
+                                    tracing::info!(
+                                        "compaction summary is not smaller than the history it replaces; keeping the history"
+                                    );
+                                }
                                 Ok(Some(compaction_event)) => {
                                     // Persist the compaction event
                                     if let Err(e) = session_service

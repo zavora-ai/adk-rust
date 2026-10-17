@@ -454,6 +454,30 @@ Where a provider enforces syntax only, or nothing at all, the agent still inject
 schema as an instruction and validates the reply, so a non-conforming answer costs a
 retry rather than returning bad data.
 
+A reply wrapped in one Markdown code fence (```` ```json ... ``` ````), which models
+sometimes produce when tools are configured beside the schema, is unwrapped before
+validation. `output_key` then stores the JSON without the fence, and `extract_typed`
+unwraps it the same way.
+
+### Model Turns Without an Answer
+
+A model turn that ends with no tool call and no answer — no parts, only thinking, or only
+whitespace — fails the run with a `Model` error coded `model.empty_response` instead of
+finishing silently; its `details.metadata.finish_reason` names the provider's finish reason.
+`output_key` is not written. The run is not retried automatically: retry the run, or check the
+model's output limit and safety settings. A response a `before_model_callback` returned in place
+of the model is not checked.
+
+### Replacing a Streamed Response
+
+An `after_model_callback` that returns a new `LlmResponse` replaces the chunk's content and
+metadata, but the chunk keeps its place in the stream: `partial` and `turn_complete` stay set
+when the original had them, and `finish_reason` and `usage_metadata` carry over unless the
+replacement sets them. A callback that returns `LlmResponse { content, ..Default::default() }`
+for each streamed delta therefore still produces one persisted event per response, with its
+usage. A stream that ends on a partial chunk gets one closing event with the whole response,
+so the session keeps it.
+
 > **Note:** DeepSeek requires the word "json" to appear in the prompt whenever JSON
 > Output is on, otherwise the API can return empty content. The adapter adds that
 > mention itself when your prompt does not already contain it.

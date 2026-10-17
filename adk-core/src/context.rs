@@ -305,6 +305,30 @@ pub trait Session: Send + Sync {
             None => self.conversation_history(),
         }
     }
+    /// Returns the history `agent_name` sends its model on `branch`.
+    ///
+    /// The agent's own events and the user's keep their turns. What another agent said,
+    /// called and got back becomes user-role context
+    /// ([`other_agent_context`](crate::history::other_agent_context)), so a workflow
+    /// sub-agent never replays an earlier agent's turns as its own, and a request that would
+    /// end on another agent's answer ends on a user turn. Branch scoping is that of
+    /// [`conversation_history_scoped`](Self::conversation_history_scoped).
+    ///
+    /// The default cannot tell authors apart and returns
+    /// `conversation_history_scoped(None, branch)`. Implementations backed by an event log
+    /// override it.
+    fn conversation_history_with_context(&self, _agent_name: &str, branch: &str) -> Vec<Content> {
+        self.conversation_history_scoped(None, branch)
+    }
+    /// Whether this session's history already holds every event of the current invocation
+    /// once the agent that produced it has yielded it.
+    ///
+    /// The runner's session records each event before it asks the agent for the next one, so
+    /// a workflow agent reads its sub-agents' history from it instead of tracking their
+    /// events itself. The default is `false`.
+    fn records_invocation_events(&self) -> bool {
+        false
+    }
     /// Returns the tool calls `agent_name` holds for confirmation on `branch`.
     ///
     /// An agent resumes these at the start of a run once a decision exists for them.

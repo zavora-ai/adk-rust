@@ -92,12 +92,15 @@ fn ends_on_tool_result(request: &LlmRequest) -> bool {
     })
 }
 
+/// The text of the user's last message; other agents' turns relayed as context are not it.
 fn last_user_text(request: &LlmRequest) -> String {
     request
         .contents
         .iter()
         .rev()
-        .filter(|content| content.role == "user")
+        .filter(|content| {
+            content.role == "user" && !adk_core::history::is_other_agent_context(content)
+        })
         .flat_map(|content| &content.parts)
         .find_map(|part| part.text().map(str::to_string))
         .unwrap_or_default()
@@ -290,7 +293,8 @@ async fn held_call_survives_compaction(overlap: u32, message_while_held: bool) {
     let executions = Executions::default();
     let harness = harness(holder("ops", model.clone(), &executions), Some(overlap)).await;
 
-    harness.run("send 10", None).await;
+    // Longer than the one-line summary, so the summary shrinks the history it replaces.
+    harness.run("send 10 to the supplier account, please", None).await;
     if message_while_held {
         harness.run("what is the status?", None).await;
     }
