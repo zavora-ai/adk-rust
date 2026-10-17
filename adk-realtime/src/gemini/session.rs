@@ -1429,8 +1429,8 @@ pub(crate) fn translate_client_message(
 /// exclusive and express different things: `parameters` takes an OpenAPI
 /// subset, `parametersJsonSchema` takes standard JSON Schema. Hardcoding the
 /// legacy field silently discards every constraint the subset cannot carry —
-/// `additionalProperties`, `allOf`, `if`/`then`, `minLength`, the numeric
-/// bounds — leaving the model to guess at rules the caller still enforces.
+/// `additionalProperties`, `allOf`, `if`/`then`, the exclusive bounds — leaving
+/// the model to guess at rules the caller still enforces.
 fn convert_tools(
     tools: Option<Vec<ToolDefinition>>,
     dialect: adk_gemini::GeminiSchemaDialect,
