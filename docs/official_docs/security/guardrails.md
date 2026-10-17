@@ -4,7 +4,7 @@ Input/output validation and content safety using `adk-guardrail`.
 
 ## Overview
 
-Guardrails validate and transform agent inputs and outputs to ensure safety, compliance, and quality. They run in parallel with agent execution and can:
+Guardrails validate and transform agent inputs and outputs to ensure safety, compliance, and quality. Input guardrails screen a user message before it is saved or reaches a model, output guardrails screen a response before it is returned, and both can:
 
 - Block harmful or off-topic content
 - Redact PII (emails, phones, SSNs, credit cards)
@@ -283,6 +283,40 @@ let agent = LlmAgentBuilder::new("assistant")
     .build()?;
 ```
 
+## Input Guardrails and the Session
+
+The `Runner` screens each user message with the input guardrails of its agent tree before it
+saves the message, so the session, and every later model request built from it, holds only
+what the guardrails let through.
+
+| Guardrail outcome | What the runner does |
+|-------------------|----------------------|
+| Pass | Saves the message unchanged, with `actions.input_screened` set |
+| Transform, such as PII redaction | Saves the transformed message, with the marker set; this run and every later run see only that form |
+| Block | Fails the run with the guardrail's error before anything is saved; no agent runs and no model sees the message |
+
+- **Agent tree.** Every agent in the tree screens the message: an `LlmAgent` or `CodeActAgent`
+  applies its own input guardrails, then its sub-agents' (`Agent::screen_user_input`). A
+  guardrail on a nested agent, such as a `SequentialAgent` step or a transfer target, therefore
+  applies before the first agent sees the message, because every agent in the session can see a
+  saved message in a later run. An agent that wraps another agent without listing it in
+  `sub_agents()` delegates `screen_user_input` to it.
+- **Unscreened saved messages.** Before each run, the runner screens every saved user message
+  without the `input_screened` marker — saved by an earlier release, or appended to the session
+  directly — in the run's view of the session; the store is not rewritten. A transformed message
+  is replaced in that view and a blocked one is withheld from it. A run that brings no message
+  of its own (an empty resume turn, or a durable worker or managed runtime recovering a run)
+  continues the latest saved message, so a block on that message fails the run without a model
+  call.
+- **Empty turns.** A blank user turn, which only resumes held tool calls, and user-role
+  function responses carry no input and are not screened.
+- **Agents still screen.** `LlmAgent` and `CodeActAgent` keep applying their input guardrails
+  to the message they run with, so an agent run outside a `Runner` is screened too. A guardrail
+  that returns `Transform` therefore sees its own output again and must be idempotent, as
+  `PiiRedactor` is.
+- **Every backend.** The marker is a field of `EventActions`, which every session backend
+  persists.
+
 ## Execution Flow
 
 ```
@@ -290,11 +324,16 @@ User Input
     │
     ▼
 ┌─────────────────────┐
-│  Input Guardrails   │ ← PII redaction, content filtering
+│  Input Guardrails   │ ← every agent in the tree: PII redaction, content filtering
 │  (parallel)         │
 └─────────────────────┘
     │
-    ▼ (transformed or blocked)
+    ▼ (transformed, or blocked: nothing is saved)
+┌─────────────────────┐
+│  Session            │ ← saves only the screened message
+└─────────────────────┘
+    │
+    ▼
 ┌─────────────────────┐
 │  Agent Execution    │
 └─────────────────────┘

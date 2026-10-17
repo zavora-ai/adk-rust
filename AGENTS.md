@@ -536,6 +536,9 @@ When implementing `Agent`:
 - `sub_agents()` is required — return `&[]` for leaf agents with no children.
 - `description()` returns `&str` (not `Option<&str>`).
 - `run()` returns `Result<EventStream>` where `EventStream = Pin<Box<dyn Stream<Item = Result<Event>> + Send>>`.
+- `screen_user_input()` defaults to screening with `sub_agents()`. The runner calls it on the root
+  before saving a user message, so an agent with input guardrails applies them there, and a
+  wrapper whose inner agent is not in `sub_agents()` delegates to it.
 
 When implementing `Tool`:
 - `execute()` takes `Arc<dyn ToolContext>` and `Value`, returns `Result<Value>`.
@@ -674,8 +677,10 @@ decision (`adk_core::confirmation_decision_available`) under its original call I
 order below, as `GovernedCall::resuming(request)`. Its response, authored by the agent that held
 the call (also under a workflow parent), supersedes the call's `confirmation_pending_response` in
 the projected history; a call without a decision stays held. A held call whose agent or tool
-origin no longer matches is answered as not run and its stored decision is spent. `CodeActAgent`
-resumes from its checkpoint.
+origin no longer matches is answered as not run and its stored decision is spent. A resumed call
+that ends the turn (`escalate`, `skip_summarization`) in a run that brought a user message fails
+the run with `agent.resume_ended_turn`; the message is saved and answered by the next run.
+`CodeActAgent` resumes from its checkpoint.
 
 Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`:
 

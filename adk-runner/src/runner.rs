@@ -203,6 +203,58 @@ fn recovered_call_response(
     }
 }
 
+/// Screens the saved user messages of `session` that lack the
+/// [`input_screened`](adk_core::EventActions::input_screened) marker with `root`'s input
+/// guardrails, so no model sees them unscreened.
+///
+/// Returns, by event index, what this run's view of the session holds instead: the screened
+/// content of a message a guardrail transformed, or `None` for a message a guardrail blocks,
+/// which is withheld. The store is not rewritten. A run that brings no message of its own
+/// (`resuming`) continues the latest saved message, so a block on that message fails the run.
+///
+/// # Errors
+///
+/// Returns the guardrail's error when it blocks the latest saved message of a resuming run.
+async fn screen_unscreened_messages(
+    root: &Arc<dyn Agent>,
+    session: &dyn adk_session::Session,
+    resuming: bool,
+) -> Result<Vec<(usize, Option<Content>)>> {
+    let events = session.events();
+    let is_message = |event: &Event| {
+        event.author == "user"
+            && event.llm_response.content.as_ref().is_some_and(Content::carries_user_input)
+    };
+    let latest = (0..events.len()).rev().find(|&index| events.at(index).is_some_and(is_message));
+    let mut replacements = Vec::new();
+    for index in 0..events.len() {
+        let Some(event) = events.at(index) else { continue };
+        if event.actions.input_screened || !is_message(event) {
+            continue;
+        }
+        let Some(content) = event.llm_response.content.as_ref() else { continue };
+        match root.screen_user_input(content).await {
+            // No agent in the tree screens input, so no saved message needs it.
+            Ok(None) => return Ok(Vec::new()),
+            Ok(Some(screened)) => {
+                if screened.role != content.role || screened.parts != content.parts {
+                    replacements.push((index, Some(screened)));
+                }
+            }
+            Err(error) if resuming && Some(index) == latest => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    event.id = %event.id,
+                    error.code = %error.code,
+                    "input guardrails block a saved user message; withholding it from this run"
+                );
+                replacements.push((index, None));
+            }
+        }
+    }
+    Ok(replacements)
+}
+
 /// Deregisters a run when its event stream is dropped.
 ///
 /// Removal is by run ID, so a finishing run can never deregister a different run
@@ -824,6 +876,22 @@ impl Runner {
                 }
             };
 
+            // A saved message that was never screened — saved by an earlier release, or
+            // appended to the session directly — is screened before any model sees it.
+            let unscreened = match screen_unscreened_messages(
+                &root_agent,
+                session.as_ref(),
+                !user_content.carries_user_input(),
+            )
+            .await
+            {
+                Ok(replacements) => replacements,
+                Err(error) => {
+                    yield Err(error);
+                    return;
+                }
+            };
+
             // Find which agent should handle this request
             let agent_to_run = Self::find_agent_to_run(&root_agent, session.as_ref());
 
@@ -896,6 +964,15 @@ impl Runner {
                     return;
                 }
             };
+            if !unscreened.is_empty() {
+                let mut events = invocation_ctx.mutable_session().events_snapshot();
+                for (index, content) in unscreened {
+                    if let Some(event) = events.get_mut(index) {
+                        event.llm_response.content = content;
+                    }
+                }
+                invocation_ctx.mutable_session().replace_events(events);
+            }
 
             // Add optional services
             #[cfg(feature = "artifacts")]
@@ -1027,10 +1104,41 @@ impl Runner {
                 }
             }
 
+            // Every agent in the tree screens the message before it is saved, so the session,
+            // and every later run, holds only what the guardrails let through. A blank turn,
+            // which only resumes held calls, carries nothing to screen.
+            let screened = if effective_user_content.carries_user_input() {
+                match root_agent.screen_user_input(&effective_user_content).await {
+                    Ok(screened) => screened,
+                    Err(error) => {
+                        #[cfg(feature = "plugins")]
+                        if let Some(manager) = plugin_manager.as_ref() {
+                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                        }
+                        yield Err(error);
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            let input_screened = screened.is_some();
+            let effective_user_content = match screened {
+                Some(screened)
+                    if screened.role != effective_user_content.role
+                        || screened.parts != effective_user_content.parts =>
+                {
+                    ctx = Arc::new(ctx.with_user_content(screened.clone()));
+                    screened
+                }
+                Some(_) | None => effective_user_content,
+            };
+
             // Append user message to session service (persistent storage)
             let mut user_event = adk_core::Event::new(ctx.invocation_id());
             user_event.author = "user".to_string();
             user_event.llm_response.content = Some(effective_user_content.clone());
+            user_event.actions.input_screened = input_screened;
 
             // Also add to mutable session for immediate visibility
             // Note: adk_session::Event is a re-export of adk_core::Event, so we can use it directly

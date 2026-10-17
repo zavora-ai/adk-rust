@@ -441,6 +441,11 @@ let agent = LlmAgentBuilder::new("safe_assistant")
     .build()?;
 ```
 
+Under a `Runner`, input guardrails screen each user message before it is saved: a blocked
+message is never saved, and a redacted one is saved redacted, so later runs see only that form.
+The guardrails of every agent in the tree apply, including sub-agents and workflow steps. See
+[Guardrails](../docs/official_docs/security/guardrails.md#input-guardrails-and-the-session).
+
 ### Custom Agent
 
 ```rust

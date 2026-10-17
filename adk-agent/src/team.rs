@@ -11,7 +11,7 @@ use std::sync::Arc;
 #[cfg(feature = "team-tools")]
 use std::sync::{Mutex, OnceLock};
 
-use adk_core::{Agent, EventStream, InvocationContext, Result, RunConfig};
+use adk_core::{Agent, Content, EventStream, InvocationContext, Result, RunConfig};
 use async_trait::async_trait;
 use futures::StreamExt;
 use schemars::JsonSchema;
@@ -1545,6 +1545,10 @@ impl Agent for TeamMemberAgent {
 
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
         &[]
+    }
+
+    async fn screen_user_input(&self, content: &Content) -> Result<Option<Content>> {
+        self.agent.screen_user_input(content).await
     }
 
     fn supports_agent_transfer(&self) -> bool {

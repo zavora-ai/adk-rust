@@ -495,6 +495,36 @@ impl Content {
         self.parts.iter().any(|p| matches!(p, Part::FunctionCall { .. }))
     }
 
+    /// Returns `true` if this content carries input from its author: a part other than
+    /// blank text or a function response.
+    ///
+    /// A run that only resumes held tool calls sends a user turn of blank text, and a
+    /// client's custom tool results arrive as user-role function responses; neither is a
+    /// message for input guardrails to screen.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::Content;
+    ///
+    /// assert!(Content::new("user").with_text("hello").carries_user_input());
+    /// assert!(!Content::new("user").with_text("  ").carries_user_input());
+    /// assert!(!Content::new("user").carries_user_input());
+    /// ```
+    pub fn carries_user_input(&self) -> bool {
+        self.parts.iter().any(|part| match part {
+            Part::Text { text } => !text.trim().is_empty(),
+            Part::FunctionResponse { .. } => false,
+            Part::Thinking { .. }
+            | Part::InlineData { .. }
+            | Part::FileData { .. }
+            | Part::FunctionCall { .. }
+            | Part::ServerToolCall { .. }
+            | Part::ServerToolResponse { .. }
+            | Part::EmbeddedResource { .. } => true,
+        })
+    }
+
     /// Creates a new empty content with the given role.
     pub fn new(role: impl Into<String>) -> Self {
         Self { role: role.into(), parts: Vec::new() }

@@ -265,6 +265,11 @@ that has a decision. The decision does not depend on the model issuing the call 
 - **Workflows.** A sub-agent of a `SequentialAgent`, `ParallelAgent`, or `LoopAgent` authors
   its own tool results, so a resumed call's result releases its hold and the call never runs
   twice, whatever the decision source.
+- **A call that ends the turn.** A resumed call that sets `escalate` or `skip_summarization`
+  ends the turn before any model call. When the run also brought a user message, it fails with
+  `agent.resume_ended_turn` (`InvalidInput`) after the call's result is saved, so the message
+  is saved but not answered rather than silently dropped. Run again with an empty message to
+  answer it, or resume held calls with an empty message before sending a new one.
 
 `CodeActAgent` resumes a held call from its checkpoint (`Disposition::AwaitingConfirmation`),
 which already re-dispatches the call through the governed path. Realtime agents answer a held

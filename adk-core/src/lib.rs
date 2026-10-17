@@ -172,7 +172,7 @@ pub use action_ledger::{
 pub use agent::{
     Agent, AgentCapabilities, AgentInteractionMode, AgentRelationshipKind, AgentTopology,
     AgentTopologyMember, AgentTopologyRelationship, AgentTransferDecision, AgentTransferRequest,
-    EventStream, ResolvedContext,
+    EventStream, ResolvedContext, screen_user_input_with,
 };
 pub use agent_invoker::AgentInvoker;
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};

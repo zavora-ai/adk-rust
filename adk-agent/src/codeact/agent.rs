@@ -1888,6 +1888,18 @@ impl Agent for CodeActAgent {
         &self.sub_agents
     }
 
+    async fn screen_user_input(&self, content: &Content) -> adk_core::Result<Option<Content>> {
+        let own = if self.input_guardrails.is_empty() {
+            None
+        } else {
+            Some(enforce_guardrails(self.input_guardrails.as_ref(), content, "input").await?)
+        };
+        let below =
+            adk_core::screen_user_input_with(&self.sub_agents, own.as_ref().unwrap_or(content))
+                .await?;
+        Ok(below.or(own))
+    }
+
     fn capabilities(&self) -> adk_core::AgentCapabilities {
         adk_core::AgentCapabilities {
             runtime_tools: true,
