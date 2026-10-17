@@ -3069,6 +3069,18 @@ impl Agent for LlmAgent {
         }
     }
 
+    async fn screen_user_input(&self, content: &Content) -> Result<Option<Content>> {
+        let own = if self.input_guardrails.is_empty() {
+            None
+        } else {
+            Some(enforce_guardrails(self.input_guardrails.as_ref(), content, "input").await?)
+        };
+        let below =
+            adk_core::screen_user_input_with(&self.sub_agents, own.as_ref().unwrap_or(content))
+                .await?;
+        Ok(below.or(own))
+    }
+
     #[adk_telemetry::instrument(
         skip(self, ctx),
         fields(
@@ -3316,6 +3328,19 @@ impl Agent for LlmAgent {
                 let mut held_again = Vec::new();
                 for result in results {
                     if result.escalate_or_skip {
+                        // The call ends the turn before any model call, so a message this
+                        // run brought would otherwise go unanswered without a word.
+                        if ctx.user_content().carries_user_input() {
+                            yield Err(adk_core::AdkError::new(
+                                adk_core::ErrorComponent::Agent,
+                                adk_core::ErrorCategory::InvalidInput,
+                                "agent.resume_ended_turn",
+                                "a resumed tool call ended the turn, so the message sent with \
+                                 this run is saved but was not answered; run again with an \
+                                 empty message to answer it, or resume held calls with an \
+                                 empty message before sending a new one",
+                            ));
+                        }
                         return;
                     }
                     held_again.extend(result.pending);

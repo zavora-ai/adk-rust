@@ -102,6 +102,8 @@ pub async fn assert_session_contract_with_users(
     event_2.author = "agent".to_string();
     event_2.timestamp = t2;
     event_2.actions.state_delta.insert("result".to_string(), json!("ok-2"));
+    // The runner's screening marker decides whether a saved message is screened again.
+    event_2.actions.input_screened = true;
 
     service.append_event(&session_id, event_2).await.expect("append second event should succeed");
 
@@ -117,6 +119,8 @@ pub async fn assert_session_contract_with_users(
         .expect("get after append should succeed");
 
     assert_eq!(with_events.events().len(), 2);
+    assert!(!with_events.events().at(0).expect("event 0").actions.input_screened);
+    assert!(with_events.events().at(1).expect("event 1").actions.input_screened);
     assert_eq!(with_events.state().get("result"), Some(json!("ok-2")));
     assert_eq!(with_events.state().get("temp:event"), None);
 

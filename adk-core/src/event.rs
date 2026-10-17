@@ -102,6 +102,14 @@ pub struct EventActions {
     /// following static edges.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Vec<String>>,
+    /// Set on a user message that the runner screened with its agents' input guardrails
+    /// before saving it.
+    ///
+    /// A saved user message without it — saved by an earlier release, or appended to the
+    /// session directly — is screened again before any model sees it. See
+    /// [`Agent::screen_user_input`](crate::Agent::screen_user_input).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub input_screened: bool,
 }
 
 /// A typed, borrowed view of a single tool call carried by an [`Event`].

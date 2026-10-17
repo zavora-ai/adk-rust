@@ -685,6 +685,26 @@ impl InvocationContext {
     pub fn mutable_session(&self) -> &Arc<MutableSession> {
         &self.session
     }
+
+    /// A copy of this context, sharing its session and services, whose user message is
+    /// `content`.
+    pub(crate) fn with_user_content(&self, content: Content) -> Self {
+        Self {
+            identity: self.identity.clone(),
+            agent: self.agent.clone(),
+            user_content: content,
+            artifacts: self.artifacts.clone(),
+            memory: self.memory.clone(),
+            run_config: self.run_config.clone(),
+            ended: self.ended.clone(),
+            session: self.session.clone(),
+            request_context: self.request_context.clone(),
+            shared_state: self.shared_state.clone(),
+            secret_service: self.secret_service.clone(),
+            cancellation_token: self.cancellation_token.clone(),
+            orchestration_root_invocation_id: self.orchestration_root_invocation_id.clone(),
+        }
+    }
 }
 
 #[async_trait]

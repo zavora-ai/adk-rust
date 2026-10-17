@@ -101,6 +101,8 @@ pub struct EventActions {
     pub tool_confirmation: Option<ToolConfirmationRequest>,      // Pending tool confirmation
     pub tool_confirmation_decision: Option<ToolConfirmationDecision>, // Approval/denial
     pub compaction: Option<EventCompaction>,     // Context compaction summary
+    pub route: Option<Vec<String>>,              // Graph route targets
+    pub input_screened: bool,                    // User message screened before it was saved
 }
 ```
 
@@ -147,6 +149,10 @@ actions.transfer_to_agent = Some("specialist_agent".to_string());
 ### escalate
 
 When `true`, signals that the conversation should be escalated to a human operator or supervisor agent. The specific escalation behavior depends on your application's implementation.
+
+### input_screened
+
+Set on a user message that the Runner screened with its agents' input guardrails before saving it. A saved user message without it — saved by an earlier release, or appended to the session directly — is screened again before any model sees it. See [Guardrails](../security/guardrails.md#input-guardrails-and-the-session).
 
 ## Conversation History Formation
 
@@ -278,7 +284,7 @@ Understanding how events are created and processed helps clarify how the framewo
 
 Events are created at different points in the agent execution lifecycle:
 
-1. **User Input**: The Runner wraps user messages into an Event with `author = "user"`
+1. **User Input**: The Runner wraps user messages into an Event with `author = "user"`, after the agents' input guardrails screen it
 2. **Agent Responses**: Agents yield Event objects (setting `author = agent.name()`) to communicate responses
 3. **LLM Output**: The model integration layer translates LLM output (text, function calls) into Event objects
 4. **Tool Results**: After tool execution, the framework generates an Event containing the tool response

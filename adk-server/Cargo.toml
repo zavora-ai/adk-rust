@@ -89,6 +89,8 @@ vertex-remote-engine = [
 ]
 
 [dev-dependencies]
+# Input guardrails on the agents a recovering durable worker resumes.
+adk-agent = { path = "../adk-agent", features = ["guardrails"] }
 adk-graph = { path = "../adk-graph" }
 adk-session = { path = "../adk-session", features = ["sqlite", "postgres"] }
 async-stream.workspace = true

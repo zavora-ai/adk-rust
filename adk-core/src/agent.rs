@@ -1,4 +1,4 @@
-use crate::{InvocationContext, Result, RunConfig, event::Event};
+use crate::{Content, InvocationContext, Result, RunConfig, event::Event};
 use async_trait::async_trait;
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -236,8 +236,102 @@ pub trait Agent: Send + Sync {
         Ok(AgentTransferDecision::Allow)
     }
 
+    /// Screens a user message with the input guardrails of this agent and of every agent
+    /// below it.
+    ///
+    /// The runner calls this on its root agent before it saves a user message, and saves
+    /// only what it returns, so the session and every later model request hold only the
+    /// screened message. It also screens, before any model call, a saved user message that
+    /// carries no [`EventActions::input_screened`](crate::EventActions::input_screened)
+    /// marker. `Ok(None)` means no agent in the tree screens input; `Ok(Some(content))` is
+    /// the screened message, transformed when a guardrail redacts it.
+    ///
+    /// The default screens the message with each of [`sub_agents`](Self::sub_agents) in
+    /// order. An agent with input guardrails applies its own first, then its sub-agents'.
+    /// An agent that wraps another agent without listing it in `sub_agents` delegates to it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Agent, Content, EventStream, InvocationContext, Result};
+    /// use async_trait::async_trait;
+    /// use std::sync::Arc;
+    ///
+    /// /// Runs `inner` without listing it as a sub-agent.
+    /// struct Wrapper {
+    ///     inner: Arc<dyn Agent>,
+    /// }
+    ///
+    /// #[async_trait]
+    /// impl Agent for Wrapper {
+    ///     fn name(&self) -> &str {
+    ///         "wrapper"
+    ///     }
+    ///
+    ///     fn description(&self) -> &str {
+    ///         "runs its inner agent"
+    ///     }
+    ///
+    ///     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+    ///         &[]
+    ///     }
+    ///
+    ///     async fn screen_user_input(&self, content: &Content) -> Result<Option<Content>> {
+    ///         self.inner.screen_user_input(content).await
+    ///     }
+    ///
+    ///     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+    ///         self.inner.run(ctx).await
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the guardrail's error when it blocks the message, which is then neither
+    /// saved nor sent to a model.
+    async fn screen_user_input(&self, content: &Content) -> Result<Option<Content>> {
+        screen_user_input_with(self.sub_agents(), content).await
+    }
+
     /// Executes the agent and returns a stream of events.
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream>;
+}
+
+/// Screens a user message with each agent's [`Agent::screen_user_input`] in order, each
+/// agent receiving the previous agent's output.
+///
+/// Returns `Ok(None)` when none of the agents screens input. An [`Agent`] with its own
+/// input guardrails calls this on its sub-agents after applying them.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{Agent, Content, screen_user_input_with};
+/// use std::sync::Arc;
+///
+/// # async fn demo() -> adk_core::Result<()> {
+/// let agents: Vec<Arc<dyn Agent>> = Vec::new();
+/// let message = Content::new("user").with_text("hello");
+/// assert!(screen_user_input_with(&agents, &message).await?.is_none());
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns the first error an agent returns, which is a guardrail blocking the message.
+pub async fn screen_user_input_with(
+    agents: &[Arc<dyn Agent>],
+    content: &Content,
+) -> Result<Option<Content>> {
+    let mut screened: Option<Content> = None;
+    for agent in agents {
+        if let Some(next) = agent.screen_user_input(screened.as_ref().unwrap_or(content)).await? {
+            screened = Some(next);
+        }
+    }
+    Ok(screened)
 }
 
 /// A validated context containing engineered instructions and resolved tool instances.
