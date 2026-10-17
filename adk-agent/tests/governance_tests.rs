@@ -361,7 +361,11 @@ mod plugin_rewrites {
         let (transfer, executions) = RecordingTool::new("transfer");
         let runner = runner(agent(model, transfer), |builder| builder).await;
 
-        let original = adk_core::tool_call_fingerprint("transfer", &json!({ "amount": 10 }));
+        // Bound to this agent and tool, so only the arguments differ from the rewrite.
+        let (tool, _) = RecordingTool::new("transfer");
+        let original = ToolConfirmationRequest::for_tool(tool.as_ref(), json!({ "amount": 10 }))
+            .with_acting_context(RunConfig::default().acting_context_for("governed", "ops", "user"))
+            .fingerprint();
         let config = RunConfig::builder().tool_approval(original, ToolApproval::approve()).build();
         let events = run(&runner, Some(config)).await;
 

@@ -21,7 +21,7 @@ use adk_agent::guardrails::{
 use adk_core::{
     Agent, Content, FinishReason, InvocationContext, Llm, LlmRequest, LlmResponse,
     LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolConfirmationDecision,
-    ToolContext, tool_call_fingerprint,
+    ToolConfirmationRequest, ToolContext,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -329,15 +329,18 @@ async fn a_revision_is_fingerprinted_and_confirmed_after_screening() {
 
     let call_id = "call_prune_cache".to_string();
     let revised = json!({ "path": "/var/cache", "dry_run": true });
+    // The binding is the request the screened call surfaces: this agent, this tool, the revision.
+    let tool =
+        RecordingTool { name: "prune_cache", runs: Arc::default(), last_args: Arc::default() };
+    let bound = ToolConfirmationRequest::for_tool(&tool, revised.clone()).with_acting_context(
+        RunConfig::default().acting_context_for("test-app", "test-agent", "user-1"),
+    );
     let run_config = RunConfig::builder()
         .tool_confirmation_decisions(HashMap::from([(
             call_id.clone(),
             ToolConfirmationDecision::Approve,
         )]))
-        .tool_confirmation_fingerprints(HashMap::from([(
-            call_id,
-            tool_call_fingerprint("prune_cache", &revised),
-        )]))
+        .tool_confirmation_fingerprints(HashMap::from([(call_id, bound.fingerprint())]))
         .build();
 
     let (runs, seen, transcript) = run_with_options(

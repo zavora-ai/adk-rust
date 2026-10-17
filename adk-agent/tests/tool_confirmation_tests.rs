@@ -501,10 +501,14 @@ async fn an_approval_bound_to_arguments_is_ignored_when_they_change() {
     run_config
         .tool_confirmation_decisions
         .insert("call-replayed".to_string(), ToolConfirmationDecision::Approve);
-    run_config.tool_confirmation_fingerprints.insert(
-        "call-replayed".to_string(),
-        adk_core::tool_call_fingerprint("test_tool", &json!({ "path": "/tmp/scratch" })),
-    );
+    let granted = adk_core::ToolConfirmationRequest::for_tool(
+        &CountingTool::new(),
+        json!({ "path": "/tmp/scratch" }),
+    )
+    .with_acting_context(run_config.acting_context_for("test-app", "test-agent", "user-1"));
+    run_config
+        .tool_confirmation_fingerprints
+        .insert("call-replayed".to_string(), granted.fingerprint());
 
     let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
     let mut confirmation_requests = Vec::new();
