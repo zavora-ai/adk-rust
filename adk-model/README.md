@@ -740,7 +740,10 @@ See [Ollama library](https://ollama.com/library) for all available models.
 
 ## Features
 
-- **Streaming** - Real-time response streaming for all providers
+- **Streaming** - Real-time response streaming for all providers. A stream that ends before
+  its terminal event, ends mid tool call, or carries an error frame fails with an `AdkError`
+  instead of returning a truncated answer (OpenAI-compatible, Azure OpenAI, Groq, Ollama,
+  OpenRouter; see "Stream Termination" in `docs/official_docs/models/providers.md`)
 - **Tool Calling** - Function calling support across all providers. Text-encoded tool calls
   (Qwen, Llama, Mistral Nemo, DeepSeek, Gemma 4) are recognised only for tools the request
   declares; arguments that are not a JSON object are marked with `adk_core::invalid_tool_arguments`

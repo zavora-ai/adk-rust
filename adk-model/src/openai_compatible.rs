@@ -303,6 +303,10 @@ pub(crate) struct ErrorCodes {
     pub(crate) api_error: &'static str,
     /// Response body that is not valid JSON.
     pub(crate) parse: &'static str,
+    /// Stream that ended, or whose connection failed, before the response finished.
+    pub(crate) incomplete_stream: &'static str,
+    /// Error the provider reported inside a response or stream.
+    pub(crate) stream_error: &'static str,
     /// Status-specific codes that take precedence over `api_error`.
     pub(crate) status: &'static [(u16, &'static str)],
 }
@@ -313,6 +317,8 @@ impl ErrorCodes {
         request: "model.openai_compat.request",
         api_error: "model.openai_compat.api_error",
         parse: "model.openai_compat.parse",
+        incomplete_stream: "model.openai_compat.incomplete_stream",
+        stream_error: "model.openai_compat.stream_error",
         status: &[],
     };
 
@@ -756,14 +762,14 @@ async fn send_request(
 }
 
 /// Parse a finish_reason string into an ADK `FinishReason`.
+///
+/// `"error"` is not a finish reason but a failure, and callers reject it first.
 fn parse_finish_reason(fr: &str) -> FinishReason {
     match fr {
-        "stop" => FinishReason::Stop,
+        "stop" | "tool_calls" | "function_call" => FinishReason::Stop,
         "length" => FinishReason::MaxTokens,
-        "tool_calls" => FinishReason::Stop,
         "content_filter" => FinishReason::Safety,
-        "function_call" => FinishReason::Stop,
-        _ => FinishReason::Stop,
+        _ => FinishReason::Other,
     }
 }
 
@@ -892,38 +898,70 @@ impl Llm for OpenAICompatible {
                 let mut text_tool_buffer =
                     crate::tool_call_parser::ToolCallBuffer::for_declared_tools(declared_tools);
                 let mut pending_final_response: Option<LlmResponse> = None;
+                // A finish reason or `[DONE]` marks a complete response; without one the
+                // answer or a tool call may be truncated.
+                let mut finished = false;
+                let mut ended = false;
 
-                while let Some(chunk_result) = byte_stream.next().await {
-                    let chunk = chunk_result.map_err(|e| {
-                        AdkError::model(format!("stream read error: {e}"))
-                    })?;
-
-                    buffer.extend_from_slice(&chunk);
+                while !ended {
+                    match byte_stream.next().await {
+                        Some(chunk) => buffer.extend_from_slice(&chunk.map_err(|error| {
+                            crate::stream_error::interrupted(
+                                &provider_name,
+                                error_codes.incomplete_stream,
+                                &error,
+                            )
+                        })?),
+                        None => {
+                            ended = true;
+                            // The last line may arrive without its line ending.
+                            buffer.push(b'\n');
+                        }
+                    }
 
                     // Process complete SSE lines.
                     while let Some(line) = take_line(&mut buffer)? {
-
-                        if line.is_empty() {
+                        let Some(data) = crate::sse::data(&line) else {
                             continue;
-                        }
+                        };
 
-                        if line == "data: [DONE]" {
+                        if data == "[DONE]" {
+                            if !tool_call_accumulators.is_empty() {
+                                Err(crate::stream_error::incomplete(
+                                    &provider_name,
+                                    error_codes.incomplete_stream,
+                                    "its tool calls finished",
+                                ))?;
+                            }
+                            finished = true;
                             if let Some(response) = pending_final_response.take() {
                                 yield response;
                             }
                             continue;
                         }
 
-                        if let Some(data) = line.strip_prefix("data: ") {
-                            let chunk_json: serde_json::Value = match serde_json::from_str(data) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "failed to parse SSE chunk: {e} - {data}"
-                                    );
-                                    continue;
-                                }
-                            };
+                        {
+                            let parsed = serde_json::from_str::<serde_json::Value>(data);
+                            // A cut-off trailer after a finished response loses nothing.
+                            if parsed.is_err() && ended && finished {
+                                continue;
+                            }
+                            let chunk_json = parsed.map_err(|error| {
+                                crate::stream_error::undecodable(
+                                    &provider_name,
+                                    error_codes.parse,
+                                    &error,
+                                )
+                            })?;
+                            if let Some(error) =
+                                chunk_json.get("error").filter(|error| !error.is_null())
+                            {
+                                Err(crate::stream_error::reported(
+                                    &provider_name,
+                                    error_codes.stream_error,
+                                    error,
+                                ))?;
+                            }
                             let usage_metadata = parse_usage_from_chunk(&chunk_json);
 
                             let choice = match chunk_json.get("choices").and_then(|c| c.get(0)) {
@@ -1012,6 +1050,14 @@ impl Llm for OpenAICompatible {
 
                             // Check for finish_reason → emit final response.
                             if let Some(ref fr) = finish_reason_str {
+                                if fr == "error" {
+                                    Err(crate::stream_error::reported(
+                                        &provider_name,
+                                        error_codes.stream_error,
+                                        &serde_json::Value::Null,
+                                    ))?;
+                                }
+                                finished = true;
                                 let finish_reason = Some(parse_finish_reason(fr));
 
                                 // Emit accumulated tool calls if any.
@@ -1138,6 +1184,18 @@ impl Llm for OpenAICompatible {
                     }
                 }
 
+                if !finished {
+                    Err(crate::stream_error::incomplete(
+                        &provider_name,
+                        error_codes.incomplete_stream,
+                        if tool_call_accumulators.is_empty() {
+                            "the response finished"
+                        } else {
+                            "its tool calls finished"
+                        },
+                    ))?;
+                }
+
                 if let Some(response) = pending_final_response.take() {
                     yield response;
                 }
@@ -1207,6 +1265,16 @@ impl Llm for OpenAICompatible {
                     }
                 })
                 .await?;
+
+                // Some providers answer HTTP 200 with an error object or an `error` finish.
+                let reported_error = response.get("error").filter(|error| !error.is_null()).or_else(|| {
+                    (response.pointer("/choices/0/finish_reason").and_then(serde_json::Value::as_str)
+                        == Some("error"))
+                    .then_some(&serde_json::Value::Null)
+                });
+                if let Some(error) = reported_error {
+                    Err(crate::stream_error::reported(&provider_name, error_codes.stream_error, error))?;
+                }
 
                 yield convert::from_raw_openai_response(
                     &provider_name,

@@ -9,16 +9,26 @@ use adk_core::{
 use async_stream::try_stream;
 use async_trait::async_trait;
 use ollama_rs::Ollama;
-use ollama_rs::generation::chat::ChatMessage;
 use ollama_rs::generation::chat::request::ChatMessageRequest;
+use ollama_rs::generation::chat::{ChatMessage, ChatMessageResponse};
 use ollama_rs::generation::parameters::{FormatType, JsonStructure};
 use ollama_rs::generation::tools::{ToolFunctionInfo, ToolInfo, ToolType};
 use ollama_rs::models::ModelOptions;
 use schemars::Schema;
 
+/// Stream that ended, or whose connection failed, before the `done` line.
+const INCOMPLETE_STREAM: &str = "model.ollama.incomplete_stream";
+/// Stream line that is not valid JSON or not a chat response.
+const INVALID_CHUNK: &str = "model.ollama.stream_chunk";
+/// Error line Ollama sent inside the stream.
+const STREAM_ERROR: &str = "model.ollama.stream_error";
+
 /// Ollama client for local LLM inference.
 pub struct OllamaModel {
     client: Ollama,
+    /// Streams `/api/chat` directly: `ollama-rs` skips error lines and chunks that end
+    /// inside a UTF-8 character, and does not report a stream that ends before `done`.
+    http: reqwest::Client,
     model_name: String,
     config: OllamaConfig,
 }
@@ -38,7 +48,17 @@ impl OllamaModel {
             .with_provider("ollama")
         })?;
 
-        Ok(Self { client, model_name: config.model.clone(), config })
+        let http = reqwest::Client::builder().build().map_err(|e| {
+            AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Internal,
+                "model.ollama.client_init",
+                format!("Failed to create Ollama HTTP client: {e}"),
+            )
+            .with_provider("ollama")
+        })?;
+
+        Ok(Self { client, http, model_name: config.model.clone(), config })
     }
 
     /// Create a client with default settings for a given model.
@@ -220,77 +240,136 @@ impl Llm for OllamaModel {
         let declared_tools: std::collections::HashSet<String> =
             request.tools.keys().cloned().collect();
 
+        // The same endpoint `ollama-rs` derives from the configured host.
+        let chat_url = format!("{}api/chat", self.client.url_str());
+        let http = self.http.clone();
+
         let response_stream = try_stream! {
             if stream {
                 // Streaming mode — Ollama supports streaming with tool calls since May 2025
                 use futures::StreamExt;
 
-                let stream_result = client
-                    .send_chat_messages_stream(chat_request)
-                    .await
-                    .map_err(|e| {
-                        let msg = format!("Ollama stream error: {e}");
-                        ollama_error_to_adk(&msg)
-                    })?;
+                let mut body = serde_json::to_value(&chat_request).map_err(|e| {
+                    AdkError::new(
+                        ErrorComponent::Model,
+                        ErrorCategory::Internal,
+                        "model.ollama.request_serialization",
+                        format!("Failed to serialize Ollama request: {e}"),
+                    )
+                    .with_provider("ollama")
+                })?;
+                body["stream"] = serde_json::Value::Bool(true);
 
-                let mut pinned_stream = std::pin::pin!(stream_result);
+                let response = http.post(&chat_url).json(&body).send().await.map_err(|e| {
+                    let (category, code) = if e.is_timeout() {
+                        (ErrorCategory::Timeout, "model.ollama.timeout")
+                    } else {
+                        (ErrorCategory::Unavailable, "model.ollama.unavailable")
+                    };
+                    AdkError::new(ErrorComponent::Model, category, code, format!("Ollama stream error: {e}"))
+                        .with_provider("ollama")
+                })?;
+                let status = response.status();
+                if !status.is_success() {
+                    let body = response.text().await.unwrap_or_default();
+                    let detail = serde_json::from_str::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|value| value.get("error").and_then(serde_json::Value::as_str).map(str::to_owned))
+                        .unwrap_or(body);
+                    let message = format!(
+                        "Ollama stream error: HTTP {status}: {}",
+                        crate::stream_error::excerpt(&detail)
+                    );
+                    Err(ollama_error_to_adk(&message).with_upstream_status(status.as_u16()))?;
+                    return;
+                }
 
-                while let Some(chunk_result) = pinned_stream.next().await {
-                    match chunk_result {
-                        Ok(response) => {
-                            // Yield thinking delta for each chunk
-                            if let Some(thinking) = &response.message.thinking
-                                && !thinking.is_empty() {
-                                    yield convert::thinking_delta_response(thinking);
-                                }
+                let mut byte_stream = response.bytes_stream();
+                // Bytes, not text: a network chunk can end inside a UTF-8 character.
+                let mut buffer = Vec::new();
+                // Only a `done: true` line marks a complete response.
+                let mut done = false;
+                let mut ended = false;
 
-                            // Yield text delta for each chunk
-                            if !response.message.content.is_empty() {
-                                yield convert::text_delta_response(&response.message.content);
-                            }
-
-                            // Yield tool calls if present in this chunk
-                            if !response.message.tool_calls.is_empty() {
-                                let mut parts = Vec::new();
-                                for tool_call in &response.message.tool_calls {
-                                    parts.push(Part::FunctionCall {
-                                        name: tool_call.function.name.clone(),
-                                        args: tool_call.function.arguments.clone(),
-                                        id: None,
-                                        thought_signature: None,
-                                    });
-                                }
-                                yield LlmResponse {
-                                    content: Some(Content { role: "model".to_string(), parts }),
-                                    usage_metadata: None,
-                                    finish_reason: None,
-                                    citation_metadata: None,
-                                    partial: false,
-                                    turn_complete: false,
-                                    interrupted: false,
-                                    error_code: None,
-                                    error_message: None,
-                                    provider_metadata: None,
-                                    interaction_id: None,
-                                    model: None,
-                                    provider: None,
-                                };
-                            }
-
-                            // If done, yield final response with metadata
-                            if response.done {
-                                yield convert::chat_response_to_llm_response(&response, false, &declared_tools);
-                            }
-                        }
-                        Err(e) => {
-                            Err(AdkError::new(
-                                ErrorComponent::Model,
-                                ErrorCategory::Internal,
-                                "model.ollama.stream_chunk",
-                                format!("Stream chunk error: {e:?}"),
-                            ).with_provider("ollama"))?;
+                while !ended {
+                    match byte_stream.next().await {
+                        Some(chunk) => buffer.extend_from_slice(&chunk.map_err(|error| {
+                            crate::stream_error::interrupted("ollama", INCOMPLETE_STREAM, &error)
+                        })?),
+                        None => {
+                            ended = true;
+                            // The last line may arrive without its line ending.
+                            buffer.push(b'\n');
                         }
                     }
+
+                    while let Some(line) = crate::sse::take_line(&mut buffer)? {
+                        if line.is_empty() {
+                            continue;
+                        }
+                        let parsed = serde_json::from_str::<serde_json::Value>(&line);
+                        // A cut-off trailer after a finished response loses nothing.
+                        if parsed.is_err() && ended && done {
+                            continue;
+                        }
+                        let value = parsed.map_err(|error| {
+                            crate::stream_error::undecodable("ollama", INVALID_CHUNK, &error)
+                        })?;
+                        if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+                            Err(crate::stream_error::reported("ollama", STREAM_ERROR, error))?;
+                        }
+                        let response: ChatMessageResponse = serde_json::from_value(value).map_err(|error| {
+                            crate::stream_error::undecodable("ollama", INVALID_CHUNK, &error)
+                        })?;
+
+                        // Yield thinking delta for each chunk
+                        if let Some(thinking) = &response.message.thinking
+                            && !thinking.is_empty() {
+                                yield convert::thinking_delta_response(thinking);
+                            }
+
+                        // Yield text delta for each chunk
+                        if !response.message.content.is_empty() {
+                            yield convert::text_delta_response(&response.message.content);
+                        }
+
+                        // Yield tool calls if present in this chunk
+                        if !response.message.tool_calls.is_empty() {
+                            let mut parts = Vec::new();
+                            for tool_call in &response.message.tool_calls {
+                                parts.push(Part::FunctionCall {
+                                    name: tool_call.function.name.clone(),
+                                    args: tool_call.function.arguments.clone(),
+                                    id: None,
+                                    thought_signature: None,
+                                });
+                            }
+                            yield LlmResponse {
+                                content: Some(Content { role: "model".to_string(), parts }),
+                                usage_metadata: None,
+                                finish_reason: None,
+                                citation_metadata: None,
+                                partial: false,
+                                turn_complete: false,
+                                interrupted: false,
+                                error_code: None,
+                                error_message: None,
+                                provider_metadata: None,
+                                interaction_id: None,
+                                model: None,
+                                provider: None,
+                            };
+                        }
+
+                        // If done, yield final response with metadata
+                        if response.done {
+                            done = true;
+                            yield convert::chat_response_to_llm_response(&response, false, &declared_tools);
+                        }
+                    }
+                }
+                if !done {
+                    Err(crate::stream_error::incomplete("ollama", INCOMPLETE_STREAM, "the response finished"))?;
                 }
             } else {
                 // Non-streaming mode

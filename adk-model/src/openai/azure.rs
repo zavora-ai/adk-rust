@@ -13,6 +13,8 @@ const ERROR_CODES: ErrorCodes = ErrorCodes {
     request: "model.azure_openai.request",
     api_error: "model.azure_openai.api_error",
     parse: "model.azure_openai.parse",
+    incomplete_stream: "model.azure_openai.incomplete_stream",
+    stream_error: "model.azure_openai.stream_error",
     status: &[
         (401, "model.azure_openai.unauthorized"),
         (404, "model.azure_openai.not_found"),

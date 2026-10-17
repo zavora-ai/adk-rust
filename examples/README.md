@@ -16,6 +16,7 @@ playground versions are being finalized:
 - `examples/gemini3_builtin_tools` — full Gemini native-tool example matrix plus multi-turn mixed-tool validation
 - `examples/gemini_ws_outcomes` — Gemini error objects, cut streams, blocked prompts, and block-type finish reasons, the Interactions stream's terminal event, and the Responses WebSocket transport's abandoned, incomplete, closed, failed, and rejected-handshake responses, against scripted local upstreams, plus live Gemini and OpenAI WebSocket happy paths
 - `examples/openai_responses` — end-to-end OpenAI Responses validation
+- `examples/stream_termination` — model streams that end early, end mid tool call, or carry an error frame fail the run instead of persisting a truncated answer, for the OpenAI-compatible, Groq, Ollama, and OpenRouter clients against a scripted local upstream, plus live OpenAI, Groq, and OpenRouter happy paths
 - `examples/openrouter` — end-to-end OpenRouter validation through the ADK agent stack
 - `examples/bedrock_test` — Bedrock smoke testing
 - `examples/payments` — agentic commerce scenario index for ACP/AP2 validation paths

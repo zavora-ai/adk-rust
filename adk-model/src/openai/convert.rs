@@ -491,12 +491,10 @@ pub(crate) fn from_raw_openai_response(
     // Parse finish reason
     let finish_reason =
         choice.and_then(|c| c.get("finish_reason")).and_then(|v| v.as_str()).map(|fr| match fr {
-            "stop" => FinishReason::Stop,
+            "stop" | "tool_calls" | "function_call" => FinishReason::Stop,
             "length" => FinishReason::MaxTokens,
-            "tool_calls" => FinishReason::Stop,
             "content_filter" => FinishReason::Safety,
-            "function_call" => FinishReason::Stop,
-            _ => FinishReason::Stop,
+            _ => FinishReason::Other,
         });
     let tool_call_turn = choice
         .and_then(|choice| choice.get("finish_reason"))
