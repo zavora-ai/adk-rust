@@ -57,6 +57,7 @@ tokio = { workspace = true, features = ["fs", "process", "sync", "time"] }
 serde.workspace = true
 serde_json.workspace = true
 schemars = "1.0"
+jsonschema = { workspace = true }
 rmcp = { version = "3.1", features = ["client", "transport-child-process", "elicitation"], optional = true }
 tracing.workspace = true
 base64 = "0.22"

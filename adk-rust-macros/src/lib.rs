@@ -30,6 +30,8 @@
 //! The macro:
 //! - Uses the function's doc comment as the tool description
 //! - Derives the JSON schema from the argument type via `schemars::schema_for!`
+//! - Checks each call's arguments against that schema, rejecting keys it does not name,
+//!   before the function runs
 //! - Names the tool after the function (snake_case)
 //! - Generates a zero-sized struct (PascalCase) implementing `Tool`
 
@@ -57,6 +59,28 @@ use syn::{FnArg, ItemFn, Meta, Type, parse_macro_input};
 ///   so a retry budget may retry it after a retryable error. Ignored alongside `read_only`.
 /// - `concurrency_safe` — marks the tool as safe for concurrent execution (`is_concurrency_safe() → true`)
 /// - `long_running` — marks the tool as long-running (`is_long_running() → true`)
+/// - `lenient_args` — turns off argument validation; see below
+///
+/// # Argument validation
+///
+/// Before the function runs, the call's arguments are checked against the argument type's
+/// schema, with `additionalProperties: false` set on every object that declares all of its
+/// fields ([`close_object_schemas`]). A key the schema does not name, a value outside a
+/// `#[schemars(range(...))]`, `length(...)` or `pattern(...)` bound, or a missing required field
+/// fails the call with an `ErrorCategory::InvalidInput` error with code
+/// `TOOL_INVALID_ARGUMENTS_CODE`, which lists each violation by JSON pointer. An `LlmAgent`
+/// shows that message to the model so it can correct the call; the function does not run.
+/// `parameters_schema()` is not closed: Gemini's function declarations reject
+/// `additionalProperties`, and not every path to a provider runs a schema adapter.
+///
+/// A schema that differs from what the type deserializes from also rejects calls serde would
+/// accept: a `#[serde(alias = "...")]` key, or a field with a custom `deserialize_with` whose
+/// schema is narrower than its input. Keep such keys open with
+/// `#[schemars(extend("additionalProperties" = true))]` on the struct, or opt the tool out with
+/// `#[tool(lenient_args)]`, which deserializes with serde alone: unknown keys are dropped and
+/// schema bounds are advisory.
+///
+/// [`close_object_schemas`]: https://docs.rs/adk-tool/latest/adk_tool/fn.close_object_schemas.html
 ///
 /// # Examples
 ///
@@ -79,6 +103,12 @@ use syn::{FnArg, ItemFn, Meta, Type, parse_macro_input};
 ///     // ...
 /// }
 ///
+/// /// Accept legacy argument names that only serde knows about.
+/// #[tool(lenient_args)]
+/// async fn legacy_lookup(args: LegacyArgs) -> Result<serde_json::Value, adk_tool::AdkError> {
+///     // ...
+/// }
+///
 /// // Generated: pub struct SearchDocs; implements Tool
 /// // Use: agent_builder.tool(Arc::new(SearchDocs))
 /// ```
@@ -86,11 +116,13 @@ use syn::{FnArg, ItemFn, Meta, Type, parse_macro_input};
 pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
 
-    // Parse optional attributes: #[tool(read_only, idempotent, concurrency_safe, long_running)]
+    // Parse optional attributes:
+    // #[tool(read_only, idempotent, concurrency_safe, long_running, lenient_args)]
     let mut is_read_only = false;
     let mut is_idempotent = false;
     let mut is_concurrency_safe = false;
     let mut is_long_running = false;
+    let mut is_lenient_args = false;
 
     if !attr.is_empty() {
         let meta = parse_macro_input!(attr as ToolAttrs);
@@ -98,6 +130,7 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
         is_idempotent = meta.idempotent;
         is_concurrency_safe = meta.concurrency_safe;
         is_long_running = meta.long_running;
+        is_lenient_args = meta.lenient_args;
     }
 
     let fn_name = &input_fn.sig.ident;
@@ -145,104 +178,67 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Extract the single argument type
     let args_type = extract_args_type(&input_fn);
 
-    // Check if we have a typed args parameter or no params
-    let (schema_gen, deserialize_call) = if let Some(args_ty) = &args_type {
-        (
-            quote! {
-                {
-                    let mut schema = serde_json::to_value(
-                        schemars::schema_for!(#args_ty)
-                    ).unwrap_or_default();
-                    // Strip fields that Gemini/LLM APIs don't accept
-                    if let Some(obj) = schema.as_object_mut() {
-                        obj.remove("$schema");
-                        obj.remove("title");
-                    }
-                    // Simplify nullable types: {"type": ["string", "null"]} → {"type": "string"}
-                    fn simplify_nullable(v: &mut serde_json::Value) {
-                        match v {
-                            serde_json::Value::Object(map) => {
-                                if let Some(serde_json::Value::Array(types)) = map.get("type") {
-                                    let non_null: Vec<_> = types.iter()
-                                        .filter(|t| t.as_str() != Some("null"))
-                                        .cloned()
-                                        .collect();
-                                    if non_null.len() == 1 {
-                                        map.insert("type".to_string(), non_null[0].clone());
-                                    }
-                                }
-                                // Remove anyOf wrappers for simple nullable types
-                                if let Some(serde_json::Value::Array(any_of)) = map.remove("anyOf") {
-                                    for variant in &any_of {
-                                        if let Some(obj) = variant.as_object() {
-                                            if obj.get("type").and_then(|t| t.as_str()) != Some("null") {
-                                                for (k, val) in obj {
-                                                    map.insert(k.clone(), val.clone());
-                                                }
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                                for val in map.values_mut() {
-                                    simplify_nullable(val);
-                                }
-                            }
-                            serde_json::Value::Array(arr) => {
-                                for item in arr {
-                                    simplify_nullable(item);
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    simplify_nullable(&mut schema);
-                    Some(schema)
-                }
-            },
-            quote! {
-                let typed_args: #args_ty = serde_json::from_value(args)
-                    .map_err(|e| adk_tool::AdkError::new(
-                        adk_tool::ErrorComponent::Tool,
-                        adk_tool::ErrorCategory::InvalidInput,
-                        adk_tool::TOOL_INVALID_ARGUMENTS_CODE,
-                        format!("invalid arguments for '{}': {e}", #tool_name_str),
-                    ))?;
-                #fn_name(typed_args).await
-            },
-        )
-    } else {
-        (
-            quote! { None },
-            quote! {
-                let _ = args;
-                #fn_name().await
-            },
-        )
+    // The model is shown the generated schema as before; arguments are checked against the
+    // same schema with its objects closed. The closure stays out of `parameters_schema()`
+    // because some schemas reach providers without an adapter (a realtime session posts them
+    // as-is), and Gemini rejects `additionalProperties`. Validation keeps nullable types, so
+    // `null` stays accepted for an optional field the model-facing schema shows as non-null.
+    let schema_gen = match &args_type {
+        Some(args_ty) => quote! {
+            Some(adk_tool::model_facing_schema(
+                serde_json::to_value(schemars::schema_for!(#args_ty)).unwrap_or_default(),
+            ))
+        },
+        None => quote! { None },
     };
+    let validate_args = match &args_type {
+        Some(args_ty) if !is_lenient_args => quote! {
+            static ARGUMENTS: std::sync::LazyLock<
+                std::result::Result<adk_tool::ToolArgumentValidator, String>,
+            > = std::sync::LazyLock::new(|| {
+                let mut schema = serde_json::to_value(schemars::schema_for!(#args_ty))
+                    .unwrap_or_default();
+                adk_tool::close_object_schemas(&mut schema);
+                adk_tool::ToolArgumentValidator::new(&schema).map_err(|error| error.message)
+            });
+            match &*ARGUMENTS {
+                Ok(validator) => validator.validate(#tool_name_str, &args)?,
+                Err(message) => {
+                    return Err(adk_tool::AdkError::new(
+                        adk_tool::ErrorComponent::Tool,
+                        adk_tool::ErrorCategory::Internal,
+                        adk_tool::TOOL_INVALID_PARAMETERS_SCHEMA_CODE,
+                        message.clone(),
+                    ));
+                }
+            }
+        },
+        _ => quote! {},
+    };
+    let deserialize_args = args_type.as_ref().map(|args_ty| {
+        quote! {
+            let typed_args: #args_ty = serde_json::from_value(args)
+                .map_err(|e| adk_tool::AdkError::new(
+                    adk_tool::ErrorComponent::Tool,
+                    adk_tool::ErrorCategory::InvalidInput,
+                    adk_tool::TOOL_INVALID_ARGUMENTS_CODE,
+                    format!("invalid arguments for '{}': {e}", #tool_name_str),
+                ))?;
+        }
+    });
 
     // Check if the function signature includes ctx: Arc<dyn ToolContext>
     let has_ctx = has_tool_context_param(&input_fn);
-    let execute_body = if has_ctx {
-        if let Some(args_ty) = &args_type {
-            quote! {
-                let typed_args: #args_ty = serde_json::from_value(args)
-                    .map_err(|e| adk_tool::AdkError::new(
-                        adk_tool::ErrorComponent::Tool,
-                        adk_tool::ErrorCategory::InvalidInput,
-                        adk_tool::TOOL_INVALID_ARGUMENTS_CODE,
-                        format!("invalid arguments for '{}': {e}", #tool_name_str),
-                    ))?;
-                #fn_name(ctx, typed_args).await
-            }
-        } else {
-            quote! {
-                let _ = args;
-                #fn_name(ctx).await
-            }
-        }
-    } else {
-        deserialize_call
+    let call = match (has_ctx, args_type.is_some()) {
+        (true, true) => quote! { #fn_name(ctx, typed_args).await },
+        (true, false) => quote! { let _ = args; #fn_name(ctx).await },
+        (false, true) => quote! { #fn_name(typed_args).await },
+        (false, false) => quote! { let _ = args; #fn_name().await },
+    };
+    let execute_body = quote! {
+        #validate_args
+        #deserialize_args
+        #call
     };
 
     // Generate optional trait method overrides
@@ -348,12 +344,14 @@ fn has_tool_context_param(func: &ItemFn) -> bool {
     })
 }
 
-/// Parsed attributes from `#[tool(read_only, idempotent, concurrency_safe, long_running)]`.
+/// Parsed attributes from
+/// `#[tool(read_only, idempotent, concurrency_safe, long_running, lenient_args)]`.
 struct ToolAttrs {
     read_only: bool,
     idempotent: bool,
     concurrency_safe: bool,
     long_running: bool,
+    lenient_args: bool,
 }
 
 impl syn::parse::Parse for ToolAttrs {
@@ -363,6 +361,7 @@ impl syn::parse::Parse for ToolAttrs {
             idempotent: false,
             concurrency_safe: false,
             long_running: false,
+            lenient_args: false,
         };
 
         let punctuated =
@@ -378,10 +377,12 @@ impl syn::parse::Parse for ToolAttrs {
                     attrs.concurrency_safe = true;
                 } else if path.is_ident("long_running") {
                     attrs.long_running = true;
+                } else if path.is_ident("lenient_args") {
+                    attrs.lenient_args = true;
                 } else {
                     return Err(syn::Error::new_spanned(
                         path,
-                        "unknown tool attribute; expected `read_only`, `idempotent`, `concurrency_safe`, or `long_running`",
+                        "unknown tool attribute; expected `read_only`, `idempotent`, `concurrency_safe`, `long_running`, or `lenient_args`",
                     ));
                 }
             } else {

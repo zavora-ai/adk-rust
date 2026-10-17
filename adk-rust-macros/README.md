@@ -65,8 +65,23 @@ async fn generate_report(args: ReportArgs) -> Result<serde_json::Value, adk_tool
 | `read_only` | `is_read_only() → true` — one of two signals required for concurrent `Auto` dispatch |
 | `concurrency_safe` | `is_concurrency_safe() → true` — one of two signals required for concurrent `Auto` dispatch |
 | `long_running` | `is_long_running() → true` — prevents LLM from re-calling a pending tool |
+| `lenient_args` | Turns off argument validation: serde alone decodes the arguments, unknown keys are dropped, schema bounds are advisory |
 
-Plain `#[tool]` without attributes keeps the defaults (all `false`), so existing code is unaffected.
+Plain `#[tool]` without attributes keeps the defaults (all `false`).
+
+## Argument Validation
+
+Before your function runs, the generated `execute()` checks the arguments against the args
+type's schema, with `additionalProperties: false` on every object that declares all of its
+fields (for the check only; `parameters_schema()` leaves it out, since Gemini rejects it). A key the schema does not name, a value outside a `#[schemars(range(...))]`,
+`length(...)` or `pattern(...)` bound, or a missing required field fails the call with a
+`tool.invalid_arguments` error that lists each violation by JSON pointer; `LlmAgent` shows it
+to the model so it can correct the call. `null` stays accepted for an `Option` field.
+
+A schema narrower than what the type deserializes from — a `#[serde(alias)]` key, a custom
+`deserialize_with` — also rejects calls serde would accept. Keep one struct open with
+`#[schemars(extend("additionalProperties" = true))]`, or opt the tool out with
+`#[tool(lenient_args)]`.
 
 ## What the Macro Generates
 
@@ -86,7 +101,7 @@ The generated struct is zero-sized and implements `adk_core::Tool` with:
 - `is_read_only()` → `true` if `read_only` attribute is set
 - `is_concurrency_safe()` → `true` if `concurrency_safe` attribute is set
 - `is_long_running()` → `true` if `long_running` attribute is set
-- `execute()` → deserializes args, calls your function
+- `execute()` → validates args against the schema, deserializes them, calls your function
 
 ## Usage Patterns
 

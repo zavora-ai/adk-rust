@@ -23,23 +23,25 @@ Function tools let you give agents abilities beyond conversation - calling APIs,
 sequenceDiagram
     participant LLM as Model Provider
     participant Agent as LlmAgent
-    participant Dispatch as Tool Dispatch
-    participant Schema as Schema Validation
     participant Tool as Tool::execute()
+    participant Fn as Your function
 
     LLM->>Agent: Response with tool_call(name, args_json)
-    Agent->>Dispatch: Resolve tool by name
-    Dispatch->>Schema: Validate args against parameters_schema
-    
-    alt Validation passes
-        Schema->>Tool: execute(ctx, validated_args)
-        Tool-->>Agent: Result (JSON Value)
+    Agent->>Tool: Resolve tool by name, execute(ctx, args)
+
+    alt #[tool]: args match parameters_schema
+        Tool->>Fn: Deserialize args and call
+        Fn-->>Tool: Result (JSON Value)
+        Tool-->>Agent: Result
         Agent->>LLM: Send tool_result back
-    else Validation fails
-        Schema-->>Agent: ValidationError
-        Agent->>LLM: Error message as tool_result
+    else args break the schema
+        Tool-->>Agent: tool.invalid_arguments error (the function does not run)
+        Agent->>LLM: Error message as tool_result, so the model can correct the call
     end
 ```
+
+A `#[tool]` tool checks its arguments itself; a `FunctionTool` handler receives the raw
+arguments and can check them with [`ToolArgumentValidator`](#argument-validation).
 
 ---
 
@@ -115,8 +117,85 @@ Available attributes (all optional, combine freely):
 | `idempotent` | `effect() → ToolEffect::Idempotent` — a retry budget may retry the tool after a retryable error; ignored alongside `read_only` |
 | `concurrency_safe` | `is_concurrency_safe() → true` — one of two signals required for concurrent `Auto` dispatch |
 | `long_running` | `is_long_running() → true` — prevents LLM from re-calling a pending tool |
+| `lenient_args` | Turns off [argument validation](#argument-validation): arguments are deserialized with serde alone, unknown keys are dropped, and schema bounds are advisory |
 
 Plain `#[tool]` without attributes keeps the defaults (all `false`, effect `NonIdempotent`). See [Tool Effects](tool-effects.md) for how the effect governs retries.
+
+### Argument Validation
+
+A `#[tool]` tool checks each call's arguments against its schema before your function runs.
+The schema is the one schemars derives from the args type — the one `parameters_schema()`
+returns — with `additionalProperties: false` set on every object that declares all of its
+fields. The closure applies to the check only: Gemini's function declarations reject
+`additionalProperties`, so the declared schema leaves it out.
+
+| The model sends | Result |
+|-----------------|--------|
+| A key the schema does not name, at any depth | Rejected, except in an object whose fields come partly from a flattened enum, which stays open |
+| A value outside a `#[schemars(range(...))]`, `length(...)` or `pattern(...)` bound | Rejected |
+| A missing required field, or a value of the wrong type | Rejected |
+| `null` for an `Option` field | Accepted |
+
+A rejected call fails with an `ErrorCategory::InvalidInput` error with code
+`TOOL_INVALID_ARGUMENTS_CODE` (`tool.invalid_arguments`) that lists each violation by JSON
+pointer. `LlmAgent` always shows that message to the model, so it can fix the arguments and
+call again; the function does not run.
+
+```rust
+use adk_core::AdkError;
+use adk_tool::tool;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+#[derive(Deserialize, JsonSchema)]
+struct BookArgs {
+    /// Room code such as `A1`.
+    #[schemars(length(min = 2, max = 4), pattern(r"^[A-Z][0-9]{1,3}$"))]
+    room: String,
+    /// Slots to book, from 1 to 10.
+    #[schemars(range(min = 1, max = 10))]
+    count: u32,
+}
+
+/// Book meeting-room slots.
+#[tool]
+async fn book_slots(args: BookArgs) -> Result<Value, AdkError> {
+    Ok(json!({ "booked": args.count, "room": args.room }))
+}
+
+// {"room": "A1", "count": 50, "dry_run": true} reaches the model as:
+// tool.invalid_input: invalid arguments for 'book_slots': /count: 50 is greater than the
+// maximum of 10; arguments: Additional properties are not allowed ('dry_run' was unexpected).
+// Correct the arguments to match the tool's parameters schema and call it again.
+```
+
+A schema narrower than what the type deserializes from rejects calls serde would accept, such
+as a `#[serde(alias = "...")]` key or a field with a custom `deserialize_with`. Keep one
+struct's keys open with `#[schemars(extend("additionalProperties" = true))]`, or opt the whole
+tool out with `#[tool(lenient_args)]`.
+
+Hand-written tools use the same check through `adk_tool::ToolArgumentValidator`, with
+`adk_tool::close_object_schemas` to reject undeclared keys:
+
+```rust
+use adk_core::AdkError;
+use adk_tool::{ToolArgumentValidator, close_object_schemas};
+use serde_json::json;
+
+fn weather_validator() -> Result<ToolArgumentValidator, AdkError> {
+    let mut schema = json!({
+        "type": "object",
+        "properties": { "city": { "type": "string", "maxLength": 40 } },
+        "required": ["city"]
+    });
+    close_object_schemas(&mut schema);
+    ToolArgumentValidator::new(&schema)
+}
+
+// In `Tool::execute`, before acting on `args`:
+// weather_validator()?.validate(self.name(), &args)?;
+```
 
 ---
 

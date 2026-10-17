@@ -987,6 +987,7 @@ name = "adk-rust-macros"
 version = "3.0.0"
 dependencies = [
  "adk-core",
+ "adk-tool",
  "async-trait",
  "proc-macro2",
  "quote",
@@ -1168,6 +1169,7 @@ dependencies = [
  "gcp-bigquery-client",
  "google-cloud-auth 1.15.0",
  "google-cloud-spanner",
+ "jsonschema",
  "proptest",
  "reqwest 0.12.28",
  "reqwest 0.13.4",
