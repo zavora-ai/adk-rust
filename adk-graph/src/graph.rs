@@ -209,10 +209,10 @@ impl StateGraph {
     /// arriving predecessor, applying its updates repeatedly and reading a
     /// half-built state.
     ///
-    /// Only `Direct` and `Entry` edges count. A conditional predecessor may never
-    /// fire, and waiting for one that cannot arrive would deadlock the join. A
-    /// graph whose fan-in arrives through conditional edges therefore still needs
-    /// `mark_deferred` and a `fan_in_timeout`.
+    /// Only `Direct` and `Entry` edges count toward making a node deferred. Once
+    /// deferred, a node waits only for the predecessors that can still run in the
+    /// current pass, so a merge after a conditional branch, or a node re-entered by
+    /// a loop's back edge, runs with the arrivals it has.
     ///
     /// An explicit configuration always wins, so a caller who wants the earlier
     /// behaviour keeps it by configuring the node themselves.
@@ -300,6 +300,9 @@ impl StateGraph {
         Ok(())
     }
 }
+
+/// A `(source, target)` pair: an executed node and a node it routed to.
+pub(crate) type Route = (String, String);
 
 /// Turns a node failure into state and a route, instead of ending the run.
 ///
@@ -694,20 +697,46 @@ impl CompiledGraph {
     /// otherwise stop and the run would report success having skipped the work.
     pub fn get_next_nodes(&self, executed: &[String], state: &State) -> Result<Vec<String>> {
         let mut next = Vec::new();
+        for (_, target) in self.routes_from(executed, state)? {
+            if !next.contains(&target) {
+                next.push(target);
+            }
+        }
+        Ok(next)
+    }
+
+    /// Each `(source, target)` pair the executed nodes' edges route along, in
+    /// edge declaration order.
+    ///
+    /// A fan-in node counts an arrival only from a source that routed to it, so
+    /// the pairs are kept rather than only the targets. A route to `END` yields
+    /// no pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::UnknownRouteTarget`] on an undeclared route key, as
+    /// [`Self::get_next_nodes`] does.
+    pub(crate) fn routes_from(&self, executed: &[String], state: &State) -> Result<Vec<Route>> {
+        let mut routes: Vec<Route> = Vec::new();
+        let mut push = |source: &String, target: &String| {
+            if !routes.iter().any(|(s, t)| s == source && t == target) {
+                routes.push((source.clone(), target.clone()));
+            }
+        };
 
         for edge in &self.edges {
             match edge {
                 Edge::Direct { source, target: EdgeTarget::Node(n) }
-                    if executed.contains(source) && !next.contains(n) =>
+                    if executed.contains(source) =>
                 {
-                    next.push(n.clone());
+                    push(source, n);
                 }
                 Edge::Conditional { source, router, targets } if executed.contains(source) => {
                     let route = router(state);
                     match targets.get(&route) {
-                        Some(EdgeTarget::Node(n)) if !next.contains(n) => next.push(n.clone()),
-                        // Declared, and either already queued or the end of this branch.
-                        Some(_) => {}
+                        Some(EdgeTarget::Node(n)) => push(source, n),
+                        // Declared, and the end of this branch.
+                        Some(EdgeTarget::End) => {}
                         None => {
                             return Err(GraphError::UnknownRouteTarget(format!(
                                 "node '{source}' routed to '{route}', which is not a declared target. Declared: {declared:?}",
@@ -725,7 +754,31 @@ impl CompiledGraph {
             }
         }
 
-        Ok(next)
+        Ok(routes)
+    }
+
+    /// Every node one declared edge leads to from each node, counting every
+    /// target of a conditional edge.
+    ///
+    /// Used to decide whether a fan-in predecessor can still run, so a `goto`
+    /// to a node no edge reaches is not anticipated.
+    pub(crate) fn successor_map(&self) -> HashMap<&str, Vec<&str>> {
+        let mut successors: HashMap<&str, Vec<&str>> = HashMap::new();
+        for edge in &self.edges {
+            match edge {
+                Edge::Direct { source, target } => {
+                    if let Some(target) = target.node_name() {
+                        successors.entry(source.as_str()).or_default().push(target);
+                    }
+                }
+                Edge::Conditional { source, targets, .. } => {
+                    let entry = successors.entry(source.as_str()).or_default();
+                    entry.extend(targets.values().filter_map(EdgeTarget::node_name));
+                }
+                Edge::Entry { .. } => {}
+            }
+        }
+        successors
     }
 
     /// Reports the conditional dispatches the executed nodes produce.

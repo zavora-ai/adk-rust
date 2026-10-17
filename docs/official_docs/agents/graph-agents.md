@@ -807,6 +807,13 @@ let config = ExecutionConfig::new(&thread_id).with_parent_context(ctx.clone());
 > conversation history inside a node is scoped to the node rather than appended to the
 > caller's session.
 
+#### When the agent fails
+
+An error the agent yields — a model failure, a guardrail block, a budget stop —
+fails the node with `GraphError::NodeExecutionFailed`, in blocking and streaming
+execution alike. A retry policy on the node runs the agent again, and the nodes
+after it do not run on a missing answer.
+
 
 
 ```rust
@@ -966,12 +973,21 @@ above asks for that: a node with more than one incoming direct edge is deferred
 automatically at compile time. Branches of unequal length therefore join
 correctly without configuration.
 
-Two details follow from how the count is taken:
+A deferred node waits only for the predecessors that can still run in the current
+pass:
 
 | Case | Behaviour |
 |------|-----------|
-| Conditional predecessors | Not counted. A conditional branch may never fire, so waiting for it could stall the join. |
-| A quorum instead of all | Set `min_predecessors` on `DeferredNodeConfig` and mark the node with `mark_deferred`, to release after *n* of *m* arrive. |
+| Which predecessors arrive | Each one that routed to the node in this step, along a direct edge, a conditional edge, or a `goto`. A predecessor that ran but routed elsewhere has not arrived. |
+| A merge after a conditional branch | Runs with the branch that was taken, because the untaken branch can no longer run. |
+| A node re-entered by a loop's back edge | Runs on every pass. A predecessor reached only through the node itself belongs to the next pass, so it is not waited for. |
+| A predecessor behind another waiting join | Waited for, because the other join still runs and its successors can still arrive. |
+| Nothing else can run | Every waiting node is released, so a run never ends with a join that did not fire. |
+| What `{node}_fan_in` holds | One entry per arrival: the value the predecessor wrote to a channel named after itself, or else every update it wrote. |
+| A quorum instead of all | Set `min_predecessors` on `DeferredNodeConfig` and mark the node with `mark_deferred`. With a `fan_in_timeout`, the node releases once that many arrive and ignores the late arrival of a branch it was released without. A node whose remaining predecessors can no longer run fails with `GraphError::FanInIncomplete` when fewer arrived. |
+
+Reachability follows declared edges, so a `goto` to a node no edge reaches is not
+anticipated.
 
 ## Cyclic Graphs (ReAct Pattern)
 
@@ -1442,7 +1458,7 @@ let outer = StateGraph::with_channels(&["document", "size"])
 | Shared names | A channel both schemas declare under one name passes through both ways. |
 | `isolated()` | Nothing passes implicitly; every exchange must be named. Worth it when the two graphs are maintained apart, because adding a channel to one then cannot silently start feeding the other. |
 | A pause inside | Pauses the parent, carrying the subgraph's name and the inner message. |
-| Threads | The subgraph runs on `<parent thread>/<node name>`, so two subgraphs of one parent cannot collide. |
+| Threads | Each activation runs on `<parent thread>/<node name>@<parent step>`, so a later pass of a loop or a later turn runs the subgraph again, and two subgraphs of one parent cannot collide. |
 | A wrong channel name | Fails when the **parent compiles**, naming the channel and the side. |
 
 That last row is the difference worth knowing: both schemas are available before
@@ -1453,8 +1469,8 @@ rejected the same way, because it could not affect its parent.
 ### Resuming a pause inside a subgraph
 
 Nothing extra is needed. Invoking the parent again on the same thread re-enters
-the subgraph, which finds its own checkpoint on `<parent thread>/<node name>` and
-continues from where it stopped. Work the subgraph finished before the pause is
+the subgraph in the step that paused, so it finds its own checkpoint on
+`<parent thread>/<node name>@<parent step>` and continues from where it stopped. Work the subgraph finished before the pause is
 not repeated, and a pause several levels down resumes the same way — the message
 names each level it passed through.
 
@@ -1550,8 +1566,19 @@ let output = ctx
 ```
 
 The target needs no edge. Each completed child is recorded under
-`<parent>/<child>@<run_id>`, so a resumed run returns the recorded answer instead
-of executing the child again — which matters when the child costs a model call.
+`<parent>@<step>/<child>@<run_id>` while the parent's step runs:
+
+| Parent | Children |
+|--------|----------|
+| Retried by its retry policy | Those that finished are served from the record; the rest run |
+| Resumed after a pause or a failed step | Those that finished are served from the record; the rest run |
+| Re-entered by a loop in a later step | All run again, because the record is dropped once the step completes |
+
+The default run id counts calls to that child within one attempt of the parent, so
+pass your own when the parent's order of calls can change between attempts. A child
+with a policy set by `with_node_retry` is retried under it; the graph's default
+policy does not apply to children, because the parent's own policy retries the
+parent.
 
 ### Node caching
 
@@ -1682,8 +1709,10 @@ let graph_agent = GraphAgent::builder("workflow")
 Each `Agent::run` call is one turn on the session's thread. The thread id is
 `adk_graph::agent::session_thread_id(app_name, user_id, session_id)`: the three parts
 joined with `:`, with `%` and `:` percent-encoded inside each, so two users who choose
-the same session id never share checkpoints. `NodeTool` keys a graph tool call's thread
-the same way. With a checkpointer configured:
+the same session id never share checkpoints. `NodeTool` runs each call on its own
+thread, `adk_graph::agent::tool_call_thread_id(app_name, user_id, session_id, function_call_id)`,
+so a second call runs the graph again, and the same call dispatched again — a held call
+resuming — continues its own run. With a checkpointer configured:
 
 | Thread's latest checkpoint | What the turn does |
 |----------------------------|--------------------|

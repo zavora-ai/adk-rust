@@ -294,11 +294,10 @@ impl Agent for GraphAgent {
 
 /// Returns the checkpoint thread id for an ADK session.
 ///
-/// [`GraphAgent`] and [`NodeTool`](crate::tool::NodeTool) key their checkpoints
-/// by this id. It joins the app name, user id, and session id with `:`, and
-/// percent-encodes `%` and `:` inside each part, so distinct identities never
-/// produce the same thread id. Use it to find a session's checkpoints with
-/// [`Checkpointer::load`] or [`Checkpointer::list`].
+/// [`GraphAgent`] keys its checkpoints by this id. It joins the app name, user
+/// id, and session id with `:`, and percent-encodes `%` and `:` inside each part,
+/// so distinct identities never produce the same thread id. Use it to find a
+/// session's checkpoints with [`Checkpointer::load`] or [`Checkpointer::list`].
 ///
 /// # Example
 ///
@@ -316,15 +315,52 @@ pub fn session_thread_id(app_name: &str, user_id: &str, session_id: &str) -> Str
         if index > 0 {
             thread_id.push(':');
         }
-        for c in part.chars() {
-            match c {
-                '%' => thread_id.push_str("%25"),
-                ':' => thread_id.push_str("%3A"),
-                other => thread_id.push(other),
-            }
-        }
+        push_thread_part(&mut thread_id, part);
     }
     thread_id
+}
+
+/// Returns the checkpoint thread id of one graph tool call.
+///
+/// [`NodeTool`](crate::tool::NodeTool) runs each call on its own thread: the
+/// session's [`session_thread_id`] with the function call id appended as a fourth
+/// `:`-separated part, encoded the same way. A second call in the same session
+/// therefore runs the graph again, and the same call dispatched again, as when a
+/// held call resumes, continues its own thread.
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::agent::{session_thread_id, tool_call_thread_id};
+///
+/// assert_eq!(tool_call_thread_id("shop", "alice", "s-1", "call-7"), "shop:alice:s-1:call-7");
+/// assert_ne!(
+///     tool_call_thread_id("shop", "alice", "s-1", "call-7"),
+///     tool_call_thread_id("shop", "alice", "s-1", "call-8")
+/// );
+/// assert_ne!(tool_call_thread_id("shop", "alice", "s", "1"), session_thread_id("shop", "alice", "s:1"));
+/// ```
+pub fn tool_call_thread_id(
+    app_name: &str,
+    user_id: &str,
+    session_id: &str,
+    function_call_id: &str,
+) -> String {
+    let mut thread_id = session_thread_id(app_name, user_id, session_id);
+    thread_id.push(':');
+    push_thread_part(&mut thread_id, function_call_id);
+    thread_id
+}
+
+/// Appends one part of a thread id, percent-encoding the separator and `%`.
+fn push_thread_part(thread_id: &mut String, part: &str) {
+    for c in part.chars() {
+        match c {
+            '%' => thread_id.push_str("%25"),
+            ':' => thread_id.push_str("%3A"),
+            other => thread_id.push(other),
+        }
+    }
 }
 
 /// Default input mapper - extracts content from InvocationContext
@@ -792,6 +828,10 @@ impl GraphAgentBuilder {
         // Add edges
         graph.edges = self.edges;
 
+        // Explicit fan-in configurations go in before compiling, so a node with
+        // several incoming edges and no configuration is still deferred.
+        graph.deferred_configs = self.deferred_configs;
+
         // Compile
         let mut compiled = graph.compile()?;
 
@@ -805,7 +845,6 @@ impl GraphAgentBuilder {
         compiled.max_concurrency = self.max_concurrency;
         compiled.timeout_policies = self.timeout_policies;
         compiled.default_timeout = self.default_timeout;
-        compiled.deferred_configs = self.deferred_configs;
 
         #[cfg(feature = "node-cache")]
         {

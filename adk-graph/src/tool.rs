@@ -170,8 +170,19 @@ impl Tool for NodeTool {
             }
         }
 
-        let thread_id =
-            crate::agent::session_thread_id(ctx.app_name(), ctx.user_id(), ctx.session_id());
+        // Each call runs on its own thread, so a second call in the session runs
+        // the graph again rather than reading the first call's finished state.
+        let call_id = ctx.function_call_id();
+        let thread_id = if call_id.is_empty() {
+            crate::agent::session_thread_id(ctx.app_name(), ctx.user_id(), ctx.session_id())
+        } else {
+            crate::agent::tool_call_thread_id(
+                ctx.app_name(),
+                ctx.user_id(),
+                ctx.session_id(),
+                call_id,
+            )
+        };
         let config = ExecutionConfig::new(&thread_id);
 
         match &self.target {
@@ -190,15 +201,23 @@ impl Tool for NodeTool {
                 }
                 Ok(Value::Object(output.updates.into_iter().collect()))
             }
-            Target::Graph => match self.graph.invoke(input, config).await {
-                Ok(state) => Ok(Value::Object(state.into_iter().collect())),
-                Err(GraphError::Interrupted(interrupted)) => Ok(interrupt_value(
-                    &interrupted.interrupt,
-                    &interrupted.thread_id,
-                    &interrupted.checkpoint_id,
-                )),
-                Err(error) => Err(AdkError::tool(error.to_string())),
-            },
+            Target::Graph => {
+                // Without a call id the calls share the session's thread, so a
+                // finished run starts again, as a `GraphAgent` turn does.
+                let mut executor = crate::executor::PregelExecutor::new(&self.graph, config);
+                if call_id.is_empty() {
+                    executor = executor.restarting_completed_threads();
+                }
+                match executor.run(input).await {
+                    Ok(state) => Ok(Value::Object(state.into_iter().collect())),
+                    Err(GraphError::Interrupted(interrupted)) => Ok(interrupt_value(
+                        &interrupted.interrupt,
+                        &interrupted.thread_id,
+                        &interrupted.checkpoint_id,
+                    )),
+                    Err(error) => Err(AdkError::tool(error.to_string())),
+                }
+            }
         }
     }
 }

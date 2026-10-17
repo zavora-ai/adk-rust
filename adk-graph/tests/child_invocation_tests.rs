@@ -208,3 +208,148 @@ async fn invoking_an_unknown_child_is_an_error() {
     let message = state.get("out").and_then(|v| v.as_str()).unwrap_or("");
     assert!(message.contains("nope"), "the error must name the child, got {message:?}");
 }
+
+/// A parent in a loop runs its child on every pass. The ledger path held no
+/// trace of the pass, so every later pass received the first pass's output.
+#[tokio::test]
+async fn a_parent_in_a_loop_runs_its_child_on_every_pass() {
+    let child_runs = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&child_runs);
+    let echoes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&echoes);
+
+    let graph = StateGraph::with_channels(&["iter"])
+        .add_node_fn("child", move |ctx| {
+            let counter = Arc::clone(&counter);
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(NodeOutput::new().with_update("echo", ctx.get("i").cloned().unwrap_or_default()))
+            }
+        })
+        .add_node_fn("parent", move |ctx| {
+            let seen = Arc::clone(&seen);
+            async move {
+                let iter = ctx.get("iter").and_then(|v| v.as_i64()).unwrap_or(0) + 1;
+                let out = ctx.run_node("child", json!({ "i": iter })).await?;
+                seen.lock().unwrap().push(out.get("echo").cloned());
+                Ok(NodeOutput::new().with_update("iter", json!(iter)))
+            }
+        })
+        .add_edge(START, "parent")
+        .add_conditional_edges(
+            "parent",
+            |s| {
+                if s.get("iter").and_then(|v| v.as_i64()).unwrap_or(0) < 3 {
+                    "again"
+                } else {
+                    "done"
+                }
+                .to_string()
+            },
+            [("again", "parent"), ("done", END)],
+        )
+        .compile()
+        .unwrap()
+        .with_checkpointer(MemoryCheckpointer::new());
+
+    graph.invoke(State::new(), ExecutionConfig::new("children-loop")).await.unwrap();
+    let last = graph.checkpointer().unwrap().load("children-loop").await.unwrap().unwrap();
+
+    assert_eq!(
+        (child_runs.load(Ordering::SeqCst), echoes.lock().unwrap().clone()),
+        (3, vec![Some(json!(1)), Some(json!(2)), Some(json!(3))])
+    );
+    assert!(last.child_ledger.is_empty(), "a completed step drops its parents' entries");
+}
+
+/// A retried parent is served the children that finished on an earlier attempt,
+/// so a charge is not made twice when the notification after it fails once. The
+/// child counter carried across attempts and gave the charge a new identity.
+#[tokio::test]
+async fn a_retried_parent_is_served_the_children_that_finished() {
+    use adk_graph::retry::RetryPolicy;
+    use std::time::Duration;
+
+    let charges = Arc::new(AtomicUsize::new(0));
+    let notifications = Arc::new(AtomicUsize::new(0));
+    let (charge, notify) = (Arc::clone(&charges), Arc::clone(&notifications));
+    let graph = StateGraph::with_channels(&["out"])
+        .add_node_fn("charge", move |_| {
+            let charge = Arc::clone(&charge);
+            async move {
+                charge.fetch_add(1, Ordering::SeqCst);
+                Ok(NodeOutput::new().with_update("charged", json!(true)))
+            }
+        })
+        .add_node_fn("notify", move |_| {
+            let notify = Arc::clone(&notify);
+            async move {
+                if notify.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(GraphError::NodeExecutionFailed {
+                        node: "notify".into(),
+                        message: "transient".into(),
+                    });
+                }
+                Ok(NodeOutput::new().with_update("notified", json!(true)))
+            }
+        })
+        .add_node_fn("parent", |ctx| async move {
+            ctx.run_node("charge", json!({})).await?;
+            ctx.run_node("notify", json!({})).await?;
+            Ok(NodeOutput::new().with_update("out", json!("done")))
+        })
+        .add_edge(START, "parent")
+        .add_edge("parent", END)
+        .compile()
+        .unwrap()
+        .with_node_retry(
+            "parent",
+            RetryPolicy::new(3).with_initial_delay(Duration::from_millis(1)).with_jitter(0.0),
+        );
+
+    let state = graph.invoke(State::new(), ExecutionConfig::new("children-retry")).await.unwrap();
+
+    assert_eq!(
+        (state.get("out"), charges.load(Ordering::SeqCst), notifications.load(Ordering::SeqCst)),
+        (Some(&json!("done")), 1, 2)
+    );
+}
+
+/// A child is retried under the policy set for it with `with_node_retry`.
+#[tokio::test]
+async fn a_child_is_retried_under_its_own_policy() {
+    use adk_graph::retry::RetryPolicy;
+    use std::time::Duration;
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&attempts);
+    let graph = StateGraph::with_channels(&["out"])
+        .add_node_fn("flaky", move |_| {
+            let counter = Arc::clone(&counter);
+            async move {
+                if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(GraphError::NodeExecutionFailed {
+                        node: "flaky".into(),
+                        message: "transient".into(),
+                    });
+                }
+                Ok(NodeOutput::new().with_update("out", json!("ok")))
+            }
+        })
+        .add_node_fn("parent", |ctx| async move {
+            let out = ctx.run_node("flaky", json!({})).await?;
+            Ok(NodeOutput::new().with_update("out", out.get("out").cloned().unwrap_or_default()))
+        })
+        .add_edge(START, "parent")
+        .add_edge("parent", END)
+        .compile()
+        .unwrap()
+        .with_node_retry(
+            "flaky",
+            RetryPolicy::new(3).with_initial_delay(Duration::from_millis(1)).with_jitter(0.0),
+        );
+
+    let state = graph.invoke(State::new(), ExecutionConfig::new("child-policy")).await.unwrap();
+
+    assert_eq!((state.get("out"), attempts.load(Ordering::SeqCst)), (Some(&json!("ok")), 2));
+}

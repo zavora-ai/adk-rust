@@ -16,7 +16,7 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **AgentNode**: Wrap LLM agents as graph nodes with custom input/output mappers
 - **Cyclic Support**: Native support for loops and iterative reasoning (ReAct pattern)
 - **Conditional Routing**: Dynamic edge routing based on state
-- **Fan-out / fan-in**: parallel branches run concurrently in a super-step. A node with more than one incoming direct edge is deferred **automatically**, so it runs once after its branches arrive — branches of unequal length join correctly with no configuration. `mark_deferred` sets a `fan_in_timeout` or an *n*-of-*m* `min_predecessors` quorum
+- **Fan-out / fan-in**: parallel branches run concurrently in a super-step. A node with more than one incoming direct edge is deferred **automatically**, so it runs once after the branches that can still reach it arrive — branches of unequal length, a merge after a conditional branch, and a node re-entered by a loop join correctly with no configuration. `mark_deferred` sets a `fan_in_timeout` or an *n*-of-*m* `min_predecessors` quorum
 - **State Management**: Typed state with reducers (overwrite, append, sum, custom)
 - **Checkpointing**: Persistent state after each step — memory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j, Firestore — every backend proven by one conformance suite; per-thread versions refuse a second writer instead of interleaving
 - **Durability modes**: `Sync` (default), `Async`, or `Exit` per run; a step with a declared `NonIdempotent` node writes earlier checkpoints first
@@ -420,7 +420,9 @@ let outer = StateGraph::with_channels(&["document", "size"])
 ```
 
 Channels both schemas declare under one name pass through; `isolated()` requires
-every exchange to be named. A pause inside pauses the parent and resumes without
+every exchange to be named. Each activation runs on its own thread,
+`<parent thread>/<node name>@<parent step>`, so a later pass of a loop or a later turn
+runs the subgraph again. A pause inside pauses the parent and resumes without
 re-running finished work. A mapping naming a channel neither side declares fails at
 `compile()`, as does a subgraph with an interrupt gate but no checkpointer — that
 one would re-enter at its first node and pay for its work twice.
@@ -505,8 +507,11 @@ let output = ctx
 ```
 
 The target needs no edge. Each completed child is recorded under
-`<parent>/<child>@<run_id>`, so a resumed run returns the recorded answer instead of
-executing the child again — which matters when the child costs a model call.
+`<parent>@<step>/<child>@<run_id>` while the parent's step runs, so a parent that is
+retried or resumed is served the recorded answer instead of executing the child again —
+which matters when the child costs a model call or charges a card. The record is
+dropped once the step completes, so a parent re-entered by a loop runs its children
+again. A child with a policy set by `with_node_retry` is retried under it.
 
 ## A Graph as a Tool
 
@@ -522,7 +527,9 @@ let agent = LlmAgentBuilder::new("analyst").model(model).tool(Arc::new(desk)).bu
 
 The parameter schema is derived from the graph's channels, so the tool description
 and the graph cannot drift apart. It reports itself long-running, so a graph that
-pauses travels the existing tool-confirmation path.
+pauses travels the existing tool-confirmation path. Each call runs on its own
+checkpoint thread, `tool_call_thread_id(app, user, session, function_call_id)`, so a
+second call runs the graph again.
 
 ## State Management
 

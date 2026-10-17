@@ -249,3 +249,44 @@ async fn a_parent_goto_naming_an_unknown_node_fails_the_run() {
         "the parent validates the target, got {error:?}"
     );
 }
+
+/// A timeout policy keeps what the executor attached to a node, so a subgraph
+/// still finds its parent's schema and a node can still invoke children. Each
+/// failed with an "executor defect" once any timeout applied.
+#[tokio::test]
+async fn a_timeout_policy_keeps_subgraphs_and_children_working() {
+    use adk_graph::timeout::{OnTimeout, TimeoutPolicy};
+
+    let inner = Arc::new(
+        StateGraph::with_channels(&["value"])
+            .add_node_fn("inner", |_| async {
+                Ok(NodeOutput::new().with_update("value", json!(7)))
+            })
+            .add_edge(START, "inner")
+            .add_edge("inner", END)
+            .compile()
+            .unwrap(),
+    );
+    let timeout = TimeoutPolicy {
+        run_timeout: Some(Duration::from_secs(30)),
+        idle_timeout: Some(Duration::from_secs(30)),
+        on_timeout: OnTimeout::Retry { max_attempts: 2 },
+    };
+    let graph = StateGraph::with_channels(&["value", "child"])
+        .add_node(SubgraphNode::new("sub", inner))
+        .add_node_fn("child", |_| async { Ok(NodeOutput::new().with_update("out", json!(1))) })
+        .add_node_fn("parent", |ctx| async move {
+            let out = ctx.run_node("child", json!({})).await?;
+            Ok(NodeOutput::new().with_update("child", out.get("out").cloned().unwrap_or_default()))
+        })
+        .add_edge(START, "sub")
+        .add_edge("sub", "parent")
+        .add_edge("parent", END)
+        .compile()
+        .unwrap()
+        .with_node_defaults(NodeDefaults::new().with_timeout(timeout));
+
+    let state = graph.invoke(State::new(), ExecutionConfig::new("timed")).await.unwrap();
+
+    assert_eq!((state.get("value"), state.get("child")), (Some(&json!(7)), Some(&json!(1))));
+}

@@ -187,12 +187,16 @@ impl SubgraphNode {
         updates
     }
 
-    /// The thread the subgraph runs on, derived from the parent's.
+    /// The thread one activation of the subgraph runs on, derived from the
+    /// parent's thread and the step the parent ran it in.
     ///
     /// Namespacing by node name keeps two subgraphs of one parent apart, and keeps
-    /// a subgraph's checkpoints from colliding with its parent's.
-    fn child_thread(&self, parent_thread: &str) -> String {
-        format!("{parent_thread}/{}", self.name)
+    /// a subgraph's checkpoints from colliding with its parent's. The step makes
+    /// each activation its own thread: a later pass of a loop, or a later turn,
+    /// runs the subgraph again, while the parent re-entering the same step after
+    /// a pause, a failure, or a retry resumes it, or reads its finished result.
+    fn child_thread(&self, parent_thread: &str, step: usize) -> String {
+        format!("{parent_thread}/{}@{step}", self.name)
     }
 }
 
@@ -268,7 +272,7 @@ impl Node for SubgraphNode {
         })?;
 
         let input = self.project_in(&ctx.state, &parent_schema);
-        let thread = self.child_thread(&ctx.config.thread_id);
+        let thread = self.child_thread(&ctx.config.thread_id, ctx.step);
         let mut config = ExecutionConfig::new(&thread);
         if let Some(parent) = ctx.config.parent_context.clone() {
             config = config.with_parent_context(parent);

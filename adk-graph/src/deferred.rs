@@ -145,20 +145,23 @@ pub struct DeferredNodeConfig {
     /// Strategy for combining upstream outputs.
     pub merge_strategy: MergeStrategy,
 
-    /// Maximum time to wait for all upstream paths to complete.
+    /// Maximum time to wait for the predecessors that can still run.
     ///
-    /// - `None`: Wait indefinitely for all upstream paths.
-    /// - `Some(duration)`: If the timeout expires and some paths have completed,
-    ///   proceed with partial results. If zero paths have completed, return
-    ///   `GraphError::FanInTimedOut`.
+    /// - `None`: Wait until every predecessor that can still run in this pass has
+    ///   arrived.
+    /// - `Some(duration)`: If the timeout expires and at least `min_predecessors`
+    ///   have arrived, proceed with partial results and ignore the late arrival of
+    ///   the others. Otherwise, return `GraphError::FanInTimedOut`.
     pub fan_in_timeout: Option<Duration>,
-    /// How many predecessors must have arrived for `fan_in_timeout` to release
-    /// the node with partial results.
+    /// How many predecessors must have arrived for the node to be released with
+    /// partial results.
     ///
     /// `None` means one, which is the behaviour this field replaced. Set it to
     /// the full predecessor count to require all of them even after a timeout, or
     /// to any value between for an n-of-m join: release once that many branches
-    /// have answered and abandon the rest.
+    /// have answered and abandon the rest. A node whose remaining predecessors can
+    /// no longer run, and that has fewer than this, fails with
+    /// `GraphError::FanInIncomplete`.
     pub min_predecessors: Option<usize>,
 }
 
@@ -381,6 +384,20 @@ const FAN_IN_SNAPSHOT_VERSION: u32 = 1;
 pub(crate) struct FanInSnapshot {
     version: u32,
     nodes: BTreeMap<String, PendingFanIn>,
+    /// Predecessors whose next arrival a node ignores, because a `fan_in_timeout`
+    /// released it without them. Absent from checkpoints that predate it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    abandoned: BTreeMap<String, Vec<String>>,
+}
+
+/// What a checkpoint restores of the fan-in nodes still waiting.
+pub(crate) struct RestoredFanIn {
+    /// The waiting nodes' trackers.
+    pub(crate) trackers: HashMap<String, FanInTracker>,
+    /// When each waiting node started waiting.
+    pub(crate) started: HashMap<String, Instant>,
+    /// The predecessors each node ignores the next arrival of.
+    pub(crate) abandoned: HashMap<String, HashSet<String>>,
 }
 
 /// One deferred node's recorded arrivals.
@@ -401,12 +418,14 @@ struct FanInArrival {
 }
 
 impl FanInSnapshot {
-    /// Captures every waiting tracker, or `None` when no join is waiting.
+    /// Captures every waiting tracker and abandoned predecessor, or `None` when
+    /// there is neither.
     pub(crate) fn capture(
         trackers: &HashMap<String, FanInTracker>,
         started: &HashMap<String, Instant>,
+        abandoned: &HashMap<String, HashSet<String>>,
     ) -> Option<Self> {
-        if trackers.is_empty() {
+        if trackers.is_empty() && abandoned.values().all(HashSet::is_empty) {
             return None;
         }
         let now = chrono::Utc::now();
@@ -430,7 +449,16 @@ impl FanInSnapshot {
                 (node.clone(), PendingFanIn { arrivals, waiting_since: now - waited })
             })
             .collect();
-        Some(Self { version: FAN_IN_SNAPSHOT_VERSION, nodes })
+        let abandoned = abandoned
+            .iter()
+            .filter(|(_, sources)| !sources.is_empty())
+            .map(|(node, sources)| {
+                let mut sources: Vec<String> = sources.iter().cloned().collect();
+                sources.sort();
+                (node.clone(), sources)
+            })
+            .collect();
+        Some(Self { version: FAN_IN_SNAPSHOT_VERSION, nodes, abandoned })
     }
 
     /// Reads the snapshot from checkpoint metadata; `None` when the key is absent.
@@ -457,14 +485,11 @@ impl FanInSnapshot {
         Ok(Some(snapshot))
     }
 
-    /// Rebuilds the trackers and their wait start times.
+    /// Rebuilds the trackers, their wait start times, and the abandoned predecessors.
     ///
     /// `upstream` names each node's predecessors from the graph being resumed, so
     /// the expected set is never read from the checkpoint.
-    pub(crate) fn restore(
-        self,
-        upstream: impl Fn(&str) -> Vec<String>,
-    ) -> (HashMap<String, FanInTracker>, HashMap<String, Instant>) {
+    pub(crate) fn restore(self, upstream: impl Fn(&str) -> Vec<String>) -> RestoredFanIn {
         let now = chrono::Utc::now();
         let mut trackers = HashMap::new();
         let mut started = HashMap::new();
@@ -481,7 +506,12 @@ impl FanInSnapshot {
             );
             trackers.insert(node, tracker);
         }
-        (trackers, started)
+        let abandoned = self
+            .abandoned
+            .into_iter()
+            .map(|(node, sources)| (node, sources.into_iter().collect()))
+            .collect();
+        RestoredFanIn { trackers, started, abandoned }
     }
 
     /// Serializes the snapshot for checkpoint metadata.
@@ -625,23 +655,36 @@ mod tests {
         let trackers = HashMap::from([("join".to_string(), tracker)]);
         let started = HashMap::from([("join".to_string(), Instant::now())]);
 
-        let snapshot = FanInSnapshot::capture(&trackers, &started).expect("a join is waiting");
+        let abandoned =
+            HashMap::from([("quorum".to_string(), HashSet::from(["slow".to_string()]))]);
+
+        let snapshot =
+            FanInSnapshot::capture(&trackers, &started, &abandoned).expect("a join is waiting");
         let metadata = HashMap::from([(FAN_IN_METADATA_KEY.to_string(), snapshot.to_value())]);
         let restored = FanInSnapshot::from_metadata(&metadata).unwrap().expect("key present");
-        let (trackers, started) =
+        let restored =
             restored.restore(|_| vec!["a".to_string(), "b".to_string(), "c".to_string()]);
 
-        let tracker = &trackers["join"];
+        let tracker = &restored.trackers["join"];
         assert_eq!(tracker.completed_sources(), vec!["b", "a"]);
         assert_eq!(tracker.merge(&MergeStrategy::Collect), json!(["from b", {"x": 1}]));
         assert!(!tracker.is_ready());
-        assert!(started.contains_key("join"));
+        assert!(restored.started.contains_key("join"));
+        assert_eq!(restored.abandoned, abandoned);
+    }
+
+    #[test]
+    fn a_snapshot_without_abandoned_predecessors_reads_as_before() {
+        let metadata =
+            HashMap::from([(FAN_IN_METADATA_KEY.to_string(), json!({"version": 1, "nodes": {}}))]);
+        let restored = FanInSnapshot::from_metadata(&metadata).unwrap().expect("key present");
+        assert!(restored.restore(|_| Vec::new()).abandoned.is_empty());
     }
 
     #[test]
     fn a_checkpoint_without_fan_in_metadata_restores_nothing() {
         assert_eq!(FanInSnapshot::from_metadata(&HashMap::new()).unwrap(), None);
-        assert_eq!(FanInSnapshot::capture(&HashMap::new(), &HashMap::new()), None);
+        assert_eq!(FanInSnapshot::capture(&HashMap::new(), &HashMap::new(), &HashMap::new()), None);
     }
 
     #[test]

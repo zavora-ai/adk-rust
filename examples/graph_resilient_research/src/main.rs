@@ -35,6 +35,7 @@ use std::time::Duration;
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{Agent, Content, Event, Tool};
+use adk_graph::agent::tool_call_thread_id;
 use adk_graph::checkpoint::MemoryCheckpointer;
 use adk_graph::deferred::{DeferredNodeConfig, MergeStrategy};
 use adk_graph::edge::{END, START};
@@ -215,16 +216,18 @@ async fn main() -> anyhow::Result<()> {
         .run(adk_core::UserId::new("user")?, adk_core::SessionId::new("s1")?, question)
         .await?;
     let mut tool_calls = 0usize;
+    let mut desk_call_id = None;
     let mut answer = String::new();
     let elapsed = std::time::Instant::now();
     while let Some(event) = stream.next().await {
         let event = event?;
         if let Some(content) = event.content() {
-            tool_calls += content
-                .parts
-                .iter()
-                .filter(|part| matches!(part, adk_core::Part::FunctionCall { .. }))
-                .count();
+            for part in &content.parts {
+                if let adk_core::Part::FunctionCall { id, .. } = part {
+                    tool_calls += 1;
+                    desk_call_id = id.clone().or(desk_call_id);
+                }
+            }
         }
         // The model streams, so the answer is accumulated rather than taken from
         // one event.
@@ -242,8 +245,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Every super-step left a checkpoint, so the run can be read back afterwards.
     // What the desk itself recorded, which is where the quorum and the failure show.
+    // `NodeTool` runs each call on its own thread, keyed by the call's id.
+    let thread =
+        tool_call_thread_id("research", "user", "s1", desk_call_id.as_deref().unwrap_or(""));
     println!("\n=== What the desk recorded ===\n");
-    match desk.get_state("s1").await? {
+    match desk.get_state(&thread).await? {
         Some(state) => {
             let answered =
                 state.get("findings").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0);
@@ -260,9 +266,8 @@ async fn main() -> anyhow::Result<()> {
         None => println!("  (no checkpoint, so the model did not call the tool)"),
     }
 
-    // `NodeTool` runs the graph on the caller's session id, so the thread is known.
     println!("\n=== Reading the desk's history back ===\n");
-    let handle = desk.time_travel("s1")?;
+    let handle = desk.time_travel(&thread)?;
     let steps = handle.steps().await?;
     if steps.is_empty() {
         println!("  (no checkpoints, so the model chose not to call the tool)");

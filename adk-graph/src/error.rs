@@ -47,6 +47,22 @@ pub enum GraphError {
     #[error("Fan-in node '{node}' timed out: received {received}/{expected} upstream outputs")]
     FanInTimedOut { node: String, received: usize, expected: usize },
 
+    /// A fan-in node's remaining predecessors can no longer run, and fewer than
+    /// its `min_predecessors` arrived.
+    #[error(
+        "fan-in node '{node}' needs {required} upstream outputs but received {received}, and no \
+         other predecessor can still run in this pass. Lower `min_predecessors`, or route every \
+         required branch to the node"
+    )]
+    FanInIncomplete {
+        /// The fan-in node.
+        node: String,
+        /// How many predecessors arrived.
+        received: usize,
+        /// The `min_predecessors` it was configured with.
+        required: usize,
+    },
+
     /// State serialization error
     #[error("State serialization error: {0}")]
     SerializationError(String),
@@ -163,6 +179,9 @@ impl From<GraphError> for adk_core::AdkError {
             }
             GraphError::NodeTimedOut { .. } => (ErrorCategory::Timeout, "graph.node_timed_out"),
             GraphError::FanInTimedOut { .. } => (ErrorCategory::Timeout, "graph.fan_in_timed_out"),
+            GraphError::FanInIncomplete { .. } => {
+                (ErrorCategory::Internal, "graph.fan_in_incomplete")
+            }
             GraphError::SerializationError(_) => (ErrorCategory::Internal, "graph.serialization"),
             GraphError::CheckpointError(_) => (ErrorCategory::Internal, "graph.checkpoint"),
             GraphError::CheckpointConflict { .. } => {

@@ -136,6 +136,7 @@ impl Default for ExecutionConfig {
 }
 
 /// Context passed to nodes during execution
+#[derive(Clone)]
 pub struct NodeContext {
     /// Current graph state (read-only view)
     pub state: State,
@@ -538,21 +539,8 @@ impl Node for FunctionNode {
 
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput> {
         // The closure takes an owned context, so everything the executor attached
-        // has to be carried across or the node silently loses it.
-        let mut ctx_owned = NodeContext::new(ctx.state.clone(), ctx.config.clone(), ctx.step);
-        if let Some(handle) = ctx.progress_handle() {
-            ctx_owned.set_progress_handle(handle.clone());
-        }
-        if let Some(invoker) = ctx.child_invoker() {
-            ctx_owned.set_child_invoker(invoker);
-        }
-        if let Some(schema) = ctx.parent_schema() {
-            ctx_owned.set_parent_schema(schema);
-        }
-        if let Some(run_config) = ctx.run_config() {
-            ctx_owned.set_run_config(run_config);
-        }
-        (self.func)(ctx_owned).await
+        // is carried across by cloning it.
+        (self.func)(ctx.clone()).await
     }
 }
 
@@ -755,7 +743,22 @@ impl Node for AgentNode {
             }
         })?;
 
-        let events: Vec<adk_core::Event> = stream.filter_map(|r| async { r.ok() }).collect().await;
+        // The first error the agent yields fails the node, as on the streaming
+        // path, so a model failure is not a successful node with no answer: a
+        // retry policy applies, and the nodes after it do not run.
+        let mut stream = stream;
+        let mut events: Vec<adk_core::Event> = Vec::new();
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(event) => events.push(event),
+                Err(e) => {
+                    return Err(crate::error::GraphError::NodeExecutionFailed {
+                        node: self.name.clone(),
+                        message: e.to_string(),
+                    });
+                }
+            }
+        }
 
         if let Some(request) =
             events.iter().find_map(|event| event.actions.tool_confirmation.clone())

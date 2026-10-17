@@ -146,6 +146,7 @@ pub async fn execute_with_timeout(
 
     loop {
         attempts += 1;
+        crate::executor::begin_attempt(ctx);
         let result = execute_once_with_timeout(node, ctx, policy).await;
 
         match result {
@@ -207,13 +208,11 @@ async fn execute_once_with_timeout(
     let node_name = node.name().to_string();
     let progress_handle = ProgressHandle::new();
 
-    // Build a context with the progress handle attached so the node can
-    // call `report_progress()` to reset the idle timeout.
-    let mut timeout_ctx = NodeContext::new(ctx.state.clone(), ctx.config.clone(), ctx.step);
+    // The node keeps everything the executor attached, such as its child invoker
+    // and its graph's schema, with a fresh progress handle so it can call
+    // `report_progress()` to reset the idle timeout.
+    let mut timeout_ctx = ctx.clone();
     timeout_ctx.set_progress_handle(progress_handle.clone());
-    if let Some(run_config) = ctx.run_config() {
-        timeout_ctx.set_run_config(run_config);
-    }
 
     tokio::select! {
         result = node.execute(&timeout_ctx) => {

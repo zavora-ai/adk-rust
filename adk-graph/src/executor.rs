@@ -7,7 +7,7 @@ use crate::cache::compute_cache_key;
 use crate::checkpoint::Durability;
 use crate::deferred::{FAN_IN_METADATA_KEY, FanInSnapshot, FanInTracker};
 use crate::error::{GraphError, InterruptedExecution, Result};
-use crate::graph::CompiledGraph;
+use crate::graph::{CompiledGraph, Route};
 use crate::interrupt::{GraphToolConfirmationPause, Interrupt};
 use crate::node::{ExecutionConfig, NodeContext};
 use crate::state::{Checkpoint, PendingWrite, State};
@@ -29,6 +29,11 @@ pub struct SuperStepResult {
     pub events: Vec<StreamEvent>,
     /// Nodes that named their own successors, keyed by node name.
     pub goto: HashMap<String, Vec<String>>,
+    /// Each executed node's own updates, keyed by node name.
+    ///
+    /// A fan-in node records these as the arrival of the predecessor that wrote
+    /// them, so an arrival never embeds the whole state.
+    pub updates: HashMap<String, HashMap<String, serde_json::Value>>,
 }
 
 /// What a completed run produced, and what it asks of its caller.
@@ -58,6 +63,9 @@ pub struct PregelExecutor<'a> {
     pending_deferred: HashMap<String, FanInTracker>,
     /// Tracks when each deferred node first entered the pending state (for fan-in timeout).
     deferred_start_times: HashMap<String, Instant>,
+    /// Predecessors a `fan_in_timeout` released a node without, keyed by node. Their
+    /// next arrival is ignored, so the node does not run again for an abandoned branch.
+    abandoned_arrivals: HashMap<String, std::collections::HashSet<String>>,
     /// Attempts already spent per node, carried through a resume so a retry
     /// budget is not restarted.
     attempts: HashMap<String, u32>,
@@ -106,6 +114,7 @@ impl<'a> PregelExecutor<'a> {
             goto_parent: None,
             pending_deferred: HashMap::new(),
             deferred_start_times: HashMap::new(),
+            abandoned_arrivals: HashMap::new(),
             attempts: HashMap::new(),
             child_ledger: Arc::new(std::sync::Mutex::new(HashMap::new())),
             cleared_interrupt: None,
@@ -177,10 +186,10 @@ impl<'a> PregelExecutor<'a> {
                 *self.child_ledger.lock().expect("child ledger") = checkpoint.child_ledger;
                 self.pending_writes = checkpoint.pending_writes;
                 if let Some(snapshot) = FanInSnapshot::from_metadata(&checkpoint.metadata)? {
-                    let (trackers, started) =
-                        snapshot.restore(|node| self.graph.get_upstream_nodes(node));
-                    self.pending_deferred = trackers;
-                    self.deferred_start_times = started;
+                    let restored = snapshot.restore(|node| self.graph.get_upstream_nodes(node));
+                    self.pending_deferred = restored.trackers;
+                    self.deferred_start_times = restored.started;
+                    self.abandoned_arrivals = restored.abandoned;
                 }
             }
 
@@ -226,8 +235,8 @@ impl<'a> PregelExecutor<'a> {
             };
 
             // Handle interrupts
-            if let Some(interrupt) = result.interrupt {
-                self.pause_frontier(&interrupt, &result.executed_nodes, &result.goto)?;
+            if let Some(interrupt) = result.interrupt.clone() {
+                self.pause_frontier(&interrupt, &result)?;
                 let checkpoint_id = self.save_checkpoint().await?;
                 return Err(GraphError::Interrupted(Box::new(InterruptedExecution::new(
                     self.config.thread_id.clone(),
@@ -249,9 +258,8 @@ impl<'a> PregelExecutor<'a> {
             // Advance the frontier *before* checkpointing. A checkpoint records
             // what still has to run, so saving while `pending_nodes` still holds
             // the nodes that just finished would re-execute them on resume.
-            let next_candidates = self.next_frontier(&result.executed_nodes, &result.goto)?;
-            self.pending_nodes =
-                self.filter_deferred_nodes(next_candidates, &result.executed_nodes)?;
+            self.pending_nodes = self.advance_frontier(&result, &[])?;
+            self.settle_child_ledger(&[]);
             self.step += 1;
 
             // An empty frontier is a terminal checkpoint: resuming it re-reads
@@ -355,28 +363,13 @@ impl<'a> PregelExecutor<'a> {
                             for (key, value) in &write.updates {
                                 self.graph.schema.apply_update(&mut self.state, key, value.clone());
                             }
+                            result.updates.insert(node_name.clone(), write.updates.clone());
                             step_writes.insert(node_name.clone(), write);
                             continue;
                         }
                         if let Some(node) = self.graph.nodes.get(node_name) {
-                            let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
-                            if let Some(run_config) = self.run_config.clone() {
-                                ctx.set_run_config(run_config);
-                            }
-                            ctx.set_parent_schema(Arc::new(self.graph.schema.clone()));
-                            ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
-                                self.graph.nodes.clone(),
-                                Arc::clone(&self.child_ledger),
-                                node_name.clone(),
-                            )));
-
-                            // Attach progress handle if idle timeout is configured
+                            let ctx = self.node_context(node_name);
                             let policy = self.graph.timeout_policy_for(node_name).cloned();
-                            if let Some(ref p) = policy
-                                && p.idle_timeout.is_some() {
-                                    ctx.set_progress_handle(ProgressHandle::new());
-                                }
-
                             let start = std::time::Instant::now();
 
                             // The timeout policy now applies to the streamed
@@ -398,6 +391,7 @@ impl<'a> PregelExecutor<'a> {
                                 collected_events.clear();
                                 streamed_updates.clear();
                                 timed_out_after = None;
+                                begin_attempt(&ctx);
                                 let attempt_start = std::time::Instant::now();
                                 let mut node_stream = node.execute_stream(&ctx);
                                 let mut failure = None;
@@ -518,6 +512,7 @@ impl<'a> PregelExecutor<'a> {
                                 for updates in &streamed_updates {
                                     write.updates.extend(updates.clone());
                                 }
+                                result.updates.insert(node_name.clone(), write.updates.clone());
                                 step_writes.insert(node_name.clone(), write);
                                 for updates in streamed_updates {
                                     self.ensure_channels_declared(
@@ -549,10 +544,8 @@ impl<'a> PregelExecutor<'a> {
 
                     // This branch returns rather than falling through to the shared
                     // handling below, so the pause is reported here.
-                    if let Some(interrupt) = result.interrupt {
-                        if let Err(error) =
-                            self.pause_frontier(&interrupt, &result.executed_nodes, &result.goto)
-                        {
+                    if let Some(interrupt) = result.interrupt.clone() {
+                        if let Err(error) = self.pause_frontier(&interrupt, &result) {
                             yield Err(error);
                             return;
                         }
@@ -595,16 +588,14 @@ impl<'a> PregelExecutor<'a> {
                         self.cleared_interrupt = None;
                     }
 
-                    self.pending_nodes = {
-                        let next_candidates = self.next_frontier(&result.executed_nodes, &result.goto)?;
-                        match self.filter_deferred_nodes(next_candidates, &result.executed_nodes) {
-                            Ok(nodes) => nodes,
-                            Err(e) => {
-                                yield Err(e);
-                                return;
-                            }
+                    self.pending_nodes = match self.advance_frontier(&result, &[]) {
+                        Ok(nodes) => nodes,
+                        Err(e) => {
+                            yield Err(e);
+                            return;
                         }
                     };
+                    self.settle_child_ledger(&[]);
                     self.step += 1;
 
                     self.pending_writes.clear();
@@ -655,10 +646,8 @@ impl<'a> PregelExecutor<'a> {
                 }
 
                 // Handle interrupts
-                if let Some(interrupt) = result.interrupt {
-                    if let Err(error) =
-                        self.pause_frontier(&interrupt, &result.executed_nodes, &result.goto)
-                    {
+                if let Some(interrupt) = result.interrupt.clone() {
+                    if let Err(error) = self.pause_frontier(&interrupt, &result) {
                         yield Err(error);
                         return;
                     }
@@ -720,16 +709,14 @@ impl<'a> PregelExecutor<'a> {
                     }
                 }
 
-                self.pending_nodes = {
-                    let next_candidates = self.next_frontier(&result.executed_nodes, &result.goto)?;
-                    match self.filter_deferred_nodes(next_candidates, &result.executed_nodes) {
-                        Ok(nodes) => nodes,
-                        Err(e) => {
-                            yield Err(e);
-                            return;
-                        }
+                self.pending_nodes = match self.advance_frontier(&result, &[]) {
+                    Ok(nodes) => nodes,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
                     }
                 };
+                self.settle_child_ledger(&[]);
                 self.step += 1;
 
                 if let Err(e) = self.checkpoint_step().await {
@@ -746,111 +733,253 @@ impl<'a> PregelExecutor<'a> {
         }
     }
 
+    /// Computes the next frontier of a finished super-step, holding fan-in nodes
+    /// that still wait for a predecessor.
+    ///
+    /// `in_flight` names nodes that did not finish and run again, such as the
+    /// nodes a dynamic pause re-queues; a waiting fan-in node counts them as
+    /// predecessors that can still run.
+    ///
+    /// # Errors
+    ///
+    /// Returns the routing error from [`Self::next_frontier`] or the fan-in error
+    /// from [`Self::filter_deferred_nodes`].
+    fn advance_frontier(
+        &mut self,
+        result: &SuperStepResult,
+        in_flight: &[String],
+    ) -> Result<Vec<String>> {
+        let (candidates, routes) = self.next_frontier(&result.executed_nodes, &result.goto)?;
+        self.filter_deferred_nodes(candidates, &routes, &result.updates, in_flight)
+    }
+
     /// Filter deferred nodes from the next candidates.
     ///
-    /// For each candidate node that is configured as deferred, check whether all
-    /// upstream paths have completed. If not, hold the node in `pending_deferred`
-    /// and record the outputs from the just-executed nodes. If all upstream paths
-    /// have completed, inject the merged output into state and allow the node to
-    /// proceed.
+    /// A deferred node records an arrival from each node that routed to it in
+    /// this step: the updates that predecessor wrote, or the value it wrote to a
+    /// channel named after itself. A predecessor that ran but routed elsewhere
+    /// does not arrive.
+    ///
+    /// Every waiting node is then checked, whether or not anything routed to it
+    /// in this step. It is released, with its arrivals merged into
+    /// `{node}_fan_in`, once no predecessor that has not arrived can still run in
+    /// the current pass. A predecessor can still run when it is reachable along
+    /// declared edges from a node that runs next, a node that runs again, or
+    /// another waiting node, without passing through this node or a deferred node
+    /// that waits on it. A predecessor reached only through this node belongs to
+    /// the next pass of a loop, so a node re-entered by a back edge, or a merge
+    /// after a conditional branch, runs with what arrived.
+    ///
+    /// When nothing else can run, every waiting node is released, so a run never
+    /// ends with a join that did not fire.
     ///
     /// If a deferred node has a `fan_in_timeout` configured and the timeout has
-    /// elapsed:
-    /// - If at least one upstream path has completed, proceed with partial results.
-    /// - If zero upstream paths have completed, return `GraphError::FanInTimedOut`.
+    /// elapsed while it still waits:
+    /// - If at least `min_predecessors` (default one) arrived, proceed with partial results.
+    /// - Otherwise, return `GraphError::FanInTimedOut`.
     fn filter_deferred_nodes(
         &mut self,
         candidates: Vec<String>,
-        executed_nodes: &[String],
+        routes: &[Route],
+        updates: &HashMap<String, HashMap<String, serde_json::Value>>,
+        in_flight: &[String],
     ) -> Result<Vec<String>> {
         let mut ready_nodes = Vec::new();
 
         for candidate in candidates {
-            if let Some(config) = self.graph.deferred_configs.get(&candidate) {
-                // This is a deferred node — check if all upstream paths are done
-                let upstream = self.graph.get_upstream_nodes(&candidate);
-
-                // Get or create the tracker for this deferred node
-                let tracker = self.pending_deferred.entry(candidate.clone()).or_insert_with(|| {
-                    let sources: Vec<&str> = upstream.iter().map(|s| s.as_str()).collect();
-                    FanInTracker::new(sources)
-                });
-
-                // Record the start time if this is the first time we see this deferred node
-                self.deferred_start_times.entry(candidate.clone()).or_insert_with(Instant::now);
-
-                // Record outputs from the just-executed nodes that are upstream of this deferred node
-                for executed in executed_nodes {
-                    if upstream.contains(executed) {
-                        // Use the current state as the output representation for this upstream node.
-                        // We capture a snapshot of the state that this upstream node contributed to.
-                        let output = self.state.get(executed).cloned().unwrap_or_else(|| {
-                            // If no state key matches the node name, capture the full state
-                            serde_json::Value::Object(
-                                self.state.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                            )
-                        });
-                        tracker.record(executed, output);
-                    }
-                }
-
-                if tracker.is_ready() {
-                    // All upstream paths have completed — merge and inject into state
-                    let merged = tracker.merge(&config.merge_strategy);
-                    let fan_in_key = format!("{candidate}_fan_in");
-                    self.graph.schema.apply_update(&mut self.state, &fan_in_key, merged);
-
-                    // Remove from pending_deferred and start times since it's now ready
-                    self.pending_deferred.remove(&candidate);
-                    self.deferred_start_times.remove(&candidate);
-                    ready_nodes.push(candidate);
-                } else if let Some(timeout_duration) = config.fan_in_timeout {
-                    // Check if the fan-in timeout has elapsed
-                    let start_time = self.deferred_start_times[&candidate];
-                    if start_time.elapsed() >= timeout_duration {
-                        let received = tracker.received_count();
-                        let expected = tracker.expected_count();
-
-                        // `min_predecessors` decides how many arrivals are enough
-                        // to release the node once the timeout expires.
-                        let required = config.min_predecessors.unwrap_or(1).max(1);
-                        if received >= required {
-                            // Proceed with partial results
-                            tracing::warn!(
-                                node = %candidate,
-                                received,
-                                expected,
-                                "fan-in timeout expired, proceeding with partial results"
-                            );
-                            let merged = tracker.merge(&config.merge_strategy);
-                            let fan_in_key = format!("{candidate}_fan_in");
-                            self.graph.schema.apply_update(&mut self.state, &fan_in_key, merged);
-
-                            // Clean up tracking state
-                            self.pending_deferred.remove(&candidate);
-                            self.deferred_start_times.remove(&candidate);
-                            ready_nodes.push(candidate);
-                        } else {
-                            // Too few arrived to release the node.
-                            self.pending_deferred.remove(&candidate);
-                            self.deferred_start_times.remove(&candidate);
-                            return Err(GraphError::FanInTimedOut {
-                                node: candidate,
-                                received,
-                                expected,
-                            });
-                        }
-                    }
-                }
-                // If not ready and no timeout (or timeout not yet elapsed), the node stays
-                // in pending_deferred and is NOT added to ready_nodes
-            } else {
-                // Not a deferred node — schedule normally
+            if !self.graph.deferred_configs.contains_key(&candidate) {
                 ready_nodes.push(candidate);
+                continue;
+            }
+            // A branch a timeout released this node without arrives late: that
+            // arrival is dropped once, rather than running the node again for it.
+            let abandoned = self.abandoned_arrivals.entry(candidate.clone()).or_default();
+            let arrivals: Vec<&String> = routes
+                .iter()
+                .filter(|(source, target)| target == &candidate && !abandoned.remove(source))
+                .map(|(source, _)| source)
+                .collect();
+            if arrivals.is_empty() && !self.pending_deferred.contains_key(&candidate) {
+                continue;
+            }
+            let upstream = self.graph.get_upstream_nodes(&candidate);
+            let tracker = self.pending_deferred.entry(candidate.clone()).or_insert_with(|| {
+                FanInTracker::new(upstream.iter().map(String::as_str).collect())
+            });
+            self.deferred_start_times.entry(candidate.clone()).or_insert_with(Instant::now);
+            for source in arrivals {
+                tracker.record(source, arrival_output(source, updates.get(source)));
+            }
+        }
+        self.abandoned_arrivals.retain(|_, sources| !sources.is_empty());
+
+        if self.pending_deferred.is_empty() {
+            return Ok(ready_nodes);
+        }
+
+        let graph = self.graph;
+        let mut waiting: Vec<String> = self.pending_deferred.keys().cloned().collect();
+        waiting.sort();
+        let successors = graph.successor_map();
+        let deferred_upstream: HashMap<&str, Vec<String>> = graph
+            .deferred_configs
+            .keys()
+            .map(|node| (node.as_str(), graph.get_upstream_nodes(node)))
+            .collect();
+
+        let mut released = Vec::new();
+        for join in &waiting {
+            // This node, and any deferred node waiting on it, cannot run before it.
+            let blocked = |node: &str| {
+                node == join.as_str()
+                    || deferred_upstream.get(node).is_some_and(|upstream| upstream.contains(join))
+            };
+            let sources = ready_nodes
+                .iter()
+                .chain(in_flight)
+                .chain(waiting.iter())
+                .map(String::as_str)
+                .filter(|node| !blocked(node));
+            let reachable = reachable_from(sources, &successors, &blocked);
+
+            let tracker = &self.pending_deferred[join];
+            let still_expected =
+                tracker.pending_sources().into_iter().any(|source| reachable.contains(source));
+            if !still_expected {
+                released.push(join.clone());
+                continue;
+            }
+
+            let Some(config) = graph.deferred_configs.get(join) else { continue };
+            let Some(timeout) = config.fan_in_timeout else { continue };
+            if self.deferred_start_times[join].elapsed() < timeout {
+                continue;
+            }
+            let received = tracker.received_count();
+            let expected = tracker.expected_count();
+            // `min_predecessors` decides how many arrivals are enough to release
+            // the node once the timeout expires.
+            let required = config.min_predecessors.unwrap_or(1).max(1);
+            if received < required {
+                self.pending_deferred.remove(join);
+                self.deferred_start_times.remove(join);
+                return Err(GraphError::FanInTimedOut { node: join.clone(), received, expected });
+            }
+            tracing::warn!(
+                node = %join,
+                received,
+                expected,
+                "fan-in timeout expired, proceeding with partial results"
+            );
+            let abandoned: std::collections::HashSet<String> = tracker
+                .pending_sources()
+                .into_iter()
+                .filter(|source| reachable.contains(source))
+                .map(str::to_string)
+                .collect();
+            self.release_join(join, false)?;
+            if !abandoned.is_empty() {
+                self.abandoned_arrivals.insert(join.clone(), abandoned);
+            }
+            ready_nodes.push(join.clone());
+        }
+
+        for join in released {
+            self.release_join(&join, true)?;
+            ready_nodes.push(join);
+        }
+
+        // Each waiting node waits on another, and nothing else runs: release
+        // them together rather than end the run with joins that never fired.
+        if ready_nodes.is_empty() && in_flight.is_empty() && !self.pending_deferred.is_empty() {
+            let mut stalled: Vec<String> = self.pending_deferred.keys().cloned().collect();
+            stalled.sort();
+            tracing::debug!(nodes = ?stalled, "releasing fan-in nodes that wait only on each other");
+            for join in stalled {
+                self.release_join(&join, true)?;
+                ready_nodes.push(join);
             }
         }
 
         Ok(ready_nodes)
+    }
+
+    /// Releases a waiting fan-in node, merging its arrivals into `{node}_fan_in`.
+    ///
+    /// `check_minimum` applies `min_predecessors` to a node released because its
+    /// remaining predecessors can no longer run; the timeout path checks its own.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::FanInIncomplete`] when fewer predecessors arrived
+    /// than `min_predecessors` requires.
+    fn release_join(&mut self, join: &str, check_minimum: bool) -> Result<()> {
+        let Some(tracker) = self.pending_deferred.remove(join) else { return Ok(()) };
+        self.deferred_start_times.remove(join);
+        // A branch abandoned on an earlier firing that never arrived belongs to
+        // that firing, not to this one.
+        self.abandoned_arrivals.remove(join);
+        let Some(config) = self.graph.deferred_configs.get(join) else { return Ok(()) };
+        if check_minimum
+            && !tracker.is_ready()
+            && let Some(required) = config.min_predecessors
+            && tracker.received_count() < required
+        {
+            return Err(GraphError::FanInIncomplete {
+                node: join.to_string(),
+                received: tracker.received_count(),
+                required,
+            });
+        }
+        let merged = tracker.merge(&config.merge_strategy);
+        self.graph.schema.apply_update(&mut self.state, &format!("{join}_fan_in"), merged);
+        Ok(())
+    }
+
+    /// Keeps only the child-ledger entries of nodes that will run this step again.
+    ///
+    /// A ledger entry lets a re-executed parent skip a child that already
+    /// finished. Once a parent's step completes it never re-executes that
+    /// activation, so its entries are dropped; a parent that paused keeps them
+    /// for its resume.
+    fn settle_child_ledger(&self, rerun: &[String]) {
+        let prefixes: Vec<String> = rerun
+            .iter()
+            .map(|node| crate::child::ChildInvoker::activation_prefix(node, self.step))
+            .collect();
+        self.child_ledger
+            .lock()
+            .expect("child ledger")
+            .retain(|path, _| prefixes.iter().any(|prefix| path.starts_with(prefix)));
+    }
+
+    /// The context a node runs with in the current step.
+    ///
+    /// Carries the run configuration, the graph's schema for a node that projects
+    /// state, an invoker for the children the node may run, and a progress handle
+    /// when the node has an idle timeout.
+    fn node_context(&self, node: &str) -> NodeContext {
+        let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
+        if let Some(run_config) = self.run_config.clone() {
+            ctx.set_run_config(run_config);
+        }
+        // A node body may invoke other nodes. The invoker carries the graph's
+        // nodes and the shared ledger, so a resumed parent serves children that
+        // already finished. These invocations are awaited inline by the parent and
+        // are deliberately outside the concurrency budget: counting them could
+        // deadlock, because the parent holds its own slot while waiting.
+        ctx.set_parent_schema(Arc::new(self.graph.schema.clone()));
+        ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
+            self.graph.nodes.clone(),
+            self.graph.retry_policies.clone(),
+            Arc::clone(&self.child_ledger),
+            node,
+            self.step,
+        )));
+        if self.graph.timeout_policy_for(node).is_some_and(|policy| policy.idle_timeout.is_some()) {
+            ctx.set_progress_handle(ProgressHandle::new());
+        }
+        ctx
     }
 
     /// Initialize state from input and/or checkpoint
@@ -908,6 +1037,7 @@ impl<'a> PregelExecutor<'a> {
                         self.goto_parent = Some(targets.clone());
                     }
                     all_updates.push((node_name.clone(), write.updates.clone()));
+                    result.updates.insert(node_name.clone(), write.updates.clone());
                     step_writes.insert(node_name.clone(), write.clone());
                 }
                 None => to_run.push(node_name.clone()),
@@ -942,6 +1072,7 @@ impl<'a> PregelExecutor<'a> {
                     result.events.push(StreamEvent::node_end(node_name, self.step, 0));
                     let updates: HashMap<String, serde_json::Value> = updates.into_iter().collect();
                     step_writes.insert(node_name.clone(), PendingWrite::new(updates.clone()));
+                    result.updates.insert(node_name.clone(), updates.clone());
                     all_updates.push((node_name.clone(), updates));
                 }
                 // A cached value is always the map of a node's updates; anything
@@ -990,35 +1121,13 @@ impl<'a> PregelExecutor<'a> {
             .zip(retry_policies)
             .zip(prior_attempts)
             .map(|((((name, node), policy), retry), spent)| {
-                let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
-                if let Some(run_config) = self.run_config.clone() {
-                    ctx.set_run_config(run_config);
-                }
-                // A node body may invoke other nodes. The invoker carries the
-                // graph's nodes and the shared ledger, so a resumed parent serves
-                // children that already finished. These invocations are awaited
-                // inline by the parent and are deliberately outside the
-                // concurrency budget: counting them could deadlock, because the
-                // parent holds its own slot while waiting.
-                ctx.set_parent_schema(Arc::new(self.graph.schema.clone()));
-                ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
-                    self.graph.nodes.clone(),
-                    Arc::clone(&self.child_ledger),
-                    name.clone(),
-                )));
-
-                // Attach a ProgressHandle when idle timeout is configured
-                if let Some(ref p) = policy
-                    && p.idle_timeout.is_some()
-                {
-                    ctx.set_progress_handle(ProgressHandle::new());
-                }
-
+                let ctx = self.node_context(&name);
                 let step = self.step;
                 async move {
                     let start = Instant::now();
                     let mut attempts = spent;
                     let output = loop {
+                        begin_attempt(&ctx);
                         let result = match policy {
                             Some(ref timeout_policy) => {
                                 execute_with_timeout(node.as_ref(), &ctx, timeout_policy).await
@@ -1126,6 +1235,7 @@ impl<'a> PregelExecutor<'a> {
 
                     // Collect updates with their node, so application order can be
                     // made independent of which future resolved first.
+                    result.updates.insert(node_name.clone(), output.updates.clone());
                     all_updates.push((node_name.clone(), output.updates));
                 }
                 Err(e) => {
@@ -1147,6 +1257,7 @@ impl<'a> PregelExecutor<'a> {
                                 result.goto.insert(node_name.clone(), targets);
                             }
                             result.executed_nodes.push(node_name.clone());
+                            result.updates.insert(node_name.clone(), recovery.updates.clone());
                             all_updates.push((node_name, recovery.updates));
                         }
                         _ => {
@@ -1242,16 +1353,16 @@ impl<'a> PregelExecutor<'a> {
     /// targets are not lost: they are computed now, while the step's results are
     /// still at hand, and arrivals at a fan-in node are recorded for the checkpoint.
     ///
+    /// A node that paused keeps its child-ledger entries, so its children that
+    /// finished are not run again when it resumes; the nodes that completed drop
+    /// theirs.
+    ///
     /// # Errors
     ///
     /// Returns the routing error from [`Self::next_frontier`] or the fan-in error
     /// from [`Self::filter_deferred_nodes`].
-    fn pause_frontier(
-        &mut self,
-        interrupt: &Interrupt,
-        executed: &[String],
-        goto: &HashMap<String, Vec<String>>,
-    ) -> Result<()> {
+    fn pause_frontier(&mut self, interrupt: &Interrupt, result: &SuperStepResult) -> Result<()> {
+        let executed = &result.executed_nodes;
         match interrupt {
             Interrupt::Before(node) => {
                 // Record the gate being answered so the resumed run executes this
@@ -1260,8 +1371,8 @@ impl<'a> PregelExecutor<'a> {
                 return Ok(());
             }
             Interrupt::After(_) => {
-                let next = self.next_frontier(executed, goto)?;
-                self.pending_nodes = self.filter_deferred_nodes(next, executed)?;
+                self.pending_nodes = self.advance_frontier(result, &[])?;
+                self.settle_child_ledger(&[]);
             }
             Interrupt::Dynamic { .. } => {
                 let paused: Vec<String> = self
@@ -1270,8 +1381,8 @@ impl<'a> PregelExecutor<'a> {
                     .filter(|node| !executed.contains(node))
                     .cloned()
                     .collect();
-                let next = self.next_frontier(executed, goto)?;
-                let mut frontier = self.filter_deferred_nodes(next, executed)?;
+                let mut frontier = self.advance_frontier(result, &paused)?;
+                self.settle_child_ledger(&paused);
                 for node in paused {
                     if !frontier.contains(&node) {
                         frontier.push(node);
@@ -1296,6 +1407,9 @@ impl<'a> PregelExecutor<'a> {
     /// replaces an edge rather than adding to one. `END` is accepted and
     /// contributes no successor, which is how a branch stops.
     ///
+    /// Returns the frontier and each `(source, target)` route taken, the routes
+    /// being what a fan-in node counts as arrivals.
+    ///
     /// # Errors
     ///
     /// Returns [`GraphError::UnknownRouteTarget`] when a `goto` names a node the
@@ -1304,11 +1418,17 @@ impl<'a> PregelExecutor<'a> {
         &self,
         executed: &[String],
         goto: &HashMap<String, Vec<String>>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<(Vec<String>, Vec<Route>)> {
         // A node that routed itself does not also follow its declared edges.
         let followed_edges: Vec<String> =
             executed.iter().filter(|node| !goto.contains_key(*node)).cloned().collect();
-        let mut next = self.graph.get_next_nodes(&followed_edges, &self.state)?;
+        let mut routes = self.graph.routes_from(&followed_edges, &self.state)?;
+        let mut next: Vec<String> = Vec::new();
+        for (_, target) in &routes {
+            if !next.contains(target) {
+                next.push(target.clone());
+            }
+        }
 
         // Sorted, so a multi-target goto admits its nodes in a fixed order.
         let mut routed: Vec<(&String, &Vec<String>)> = goto.iter().collect();
@@ -1324,12 +1444,13 @@ impl<'a> PregelExecutor<'a> {
                         "node '{node}' routed to '{target}', which is not a node in this graph"
                     )));
                 }
+                routes.push((node.clone(), target.clone()));
                 if !next.contains(target) {
                     next.push(target.clone());
                 }
             }
         }
-        Ok(next)
+        Ok((next, routes))
     }
 
     /// Rejects an update naming a channel the schema does not declare.
@@ -1369,9 +1490,11 @@ impl<'a> PregelExecutor<'a> {
         checkpoint.pending_writes = self.pending_writes.clone();
         // Carried in metadata rather than a field, so every backend persists
         // it without a schema change and older checkpoints load as before.
-        if let Some(snapshot) =
-            FanInSnapshot::capture(&self.pending_deferred, &self.deferred_start_times)
-        {
+        if let Some(snapshot) = FanInSnapshot::capture(
+            &self.pending_deferred,
+            &self.deferred_start_times,
+            &self.abandoned_arrivals,
+        ) {
             checkpoint.metadata.insert(FAN_IN_METADATA_KEY.to_string(), snapshot.to_value());
         }
         checkpoint
@@ -1463,6 +1586,58 @@ impl<'a> PregelExecutor<'a> {
                 "failed to checkpoint a failing super-step; a resumed run repeats its work"
             );
         }
+    }
+}
+
+/// What a predecessor hands a fan-in node: the value it wrote to a channel named
+/// after itself, or else every update it wrote.
+///
+/// Never the whole state: in a loop the state holds the previous pass's
+/// `{node}_fan_in`, so an arrival that embedded it would double each pass.
+fn arrival_output(
+    node: &str,
+    updates: Option<&HashMap<String, serde_json::Value>>,
+) -> serde_json::Value {
+    let Some(updates) = updates else { return serde_json::Value::Object(serde_json::Map::new()) };
+    if let Some(value) = updates.get(node) {
+        return value.clone();
+    }
+    let mut keys: Vec<&String> = updates.keys().collect();
+    keys.sort();
+    serde_json::Value::Object(
+        keys.into_iter().map(|key| (key.clone(), updates[key].clone())).collect(),
+    )
+}
+
+/// Every node reachable along `successors` from `sources`, the sources included,
+/// never entering a node `blocked` rejects.
+fn reachable_from<'g>(
+    sources: impl Iterator<Item = &'g str>,
+    successors: &HashMap<&'g str, Vec<&'g str>>,
+    blocked: &impl Fn(&str) -> bool,
+) -> std::collections::HashSet<&'g str> {
+    let mut seen: std::collections::HashSet<&'g str> = std::collections::HashSet::new();
+    let mut queue: Vec<&'g str> = sources.collect();
+    while let Some(node) = queue.pop() {
+        if !seen.insert(node) {
+            continue;
+        }
+        for next in successors.get(node).into_iter().flatten() {
+            if !blocked(next) && !seen.contains(next) {
+                queue.push(next);
+            }
+        }
+    }
+    seen
+}
+
+/// Starts a new attempt of the node `ctx` belongs to.
+///
+/// Children are numbered per attempt, so a retried parent asks for the same
+/// children under the same identities and is served those that finished.
+pub(crate) fn begin_attempt(ctx: &NodeContext) {
+    if let Some(invoker) = ctx.child_invoker() {
+        invoker.begin_attempt();
     }
 }
 
