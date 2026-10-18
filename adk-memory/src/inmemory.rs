@@ -19,6 +19,43 @@ struct StoredEntry {
 
 type MemoryStore = HashMap<MemoryKey, HashMap<String, Vec<StoredEntry>>>;
 
+/// In-process memory with keyword search, for development and tests.
+///
+/// Search tokenizes the query and every entry with [`extract_words`](crate::text::extract_words),
+/// keeps entries that share at least one word with the query, scores each by the share of
+/// query words it contains (the score `min_score` filters on), and returns the best `limit`
+/// matches, newest first among equal scores. Entries without words, such as an image, are
+/// stored and listed but never match a query.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::Content;
+/// use adk_memory::{InMemoryMemoryService, MemoryEntry, MemoryService, SearchRequest};
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> adk_core::Result<()> {
+/// let service = InMemoryMemoryService::new();
+/// let entry = MemoryEntry {
+///     content: Content::new("user").with_text("Hometown: Nairobi."),
+///     author: "user".to_string(),
+///     timestamp: chrono::Utc::now(),
+/// };
+/// service.add_session("app", "ada", "s1", vec![entry]).await?;
+/// let found = service
+///     .search(SearchRequest {
+///         query: "nairobi".to_string(),
+///         user_id: "ada".to_string(),
+///         app_name: "app".to_string(),
+///         limit: None,
+///         min_score: None,
+///         project_id: None,
+///     })
+///     .await?;
+/// assert_eq!(found.memories.len(), 1);
+/// # Ok(())
+/// # }
+/// ```
 pub struct InMemoryMemoryService {
     store: Arc<RwLock<MemoryStore>>,
 }
@@ -59,7 +96,6 @@ impl MemoryService for InMemoryMemoryService {
                 let words = crate::text::extract_words_from_content(&entry.content);
                 StoredEntry { entry, words, project_id: None }
             })
-            .filter(|e| !e.words.is_empty())
             .collect();
 
         if stored_entries.is_empty() {
@@ -95,7 +131,6 @@ impl MemoryService for InMemoryMemoryService {
                 let words = crate::text::extract_words_from_content(&entry.content);
                 StoredEntry { entry, words, project_id: Some(project_id.to_string()) }
             })
-            .filter(|e| !e.words.is_empty())
             .collect();
 
         if stored_entries.is_empty() {
@@ -254,6 +289,7 @@ impl MemoryService for InMemoryMemoryService {
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
         let query_words = crate::text::extract_words(&req.query);
         let limit = req.limit.unwrap_or(10);
+        let min_score = req.min_score.unwrap_or(0.0);
 
         let key = MemoryKey { app_name: req.app_name, user_id: req.user_id };
 
@@ -263,34 +299,23 @@ impl MemoryService for InMemoryMemoryService {
             None => return Ok(SearchResponse { memories: Vec::new() }),
         };
 
-        let mut memories = Vec::new();
-        for stored_entries in sessions.values() {
-            for stored in stored_entries {
-                if !Self::has_intersection(&stored.words, &query_words) {
-                    continue;
-                }
-
-                match &req.project_id {
-                    // Global search: only include global entries
-                    None => {
-                        if stored.project_id.is_none() {
-                            memories.push(stored.entry.clone());
-                        }
-                    }
-                    // Project search: include global + matching project entries
-                    Some(pid) => {
-                        if stored.project_id.is_none()
-                            || stored.project_id.as_deref() == Some(pid.as_str())
-                        {
-                            memories.push(stored.entry.clone());
-                        }
-                    }
-                }
+        let mut matches = Vec::new();
+        for stored in sessions.values().flatten() {
+            let in_scope = match (&stored.project_id, &req.project_id) {
+                // Global entries are always in scope; project entries only in their project.
+                (None, _) => true,
+                (Some(entry_project), Some(project)) => entry_project == project,
+                (Some(_), None) => false,
+            };
+            if !in_scope {
+                continue;
+            }
+            let score = crate::text::match_score(&query_words, &stored.words);
+            if score > 0.0 && score >= min_score {
+                matches.push((score, stored.entry.clone()));
             }
         }
 
-        memories.truncate(limit);
-
-        Ok(SearchResponse { memories })
+        Ok(SearchResponse { memories: crate::text::rank_matches(matches, limit) })
     }
 }

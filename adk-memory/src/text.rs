@@ -35,26 +35,21 @@ fn is_cjk_char(c: char) -> bool {
 
 /// Tokenize text into a set of lowercase words for keyword matching.
 ///
-/// For whitespace-separated languages (English, etc.), splits on whitespace.
-/// For CJK text (Chinese, Japanese, Korean) which has no word-separating
-/// whitespace, generates character-level unigrams and bigrams to enable
-/// substring matching.
+/// A word is a maximal run of Unicode letters and digits ([`char::is_alphanumeric`]), so
+/// punctuation never sticks to a word: `"Nairobi."`, `"(Nairobi)"` and `"Nairobi"` all
+/// yield `nairobi`, in every script.
+///
+/// CJK text (Chinese, Japanese, Korean) has no spaces between words, so each word that
+/// contains CJK characters also yields its character unigrams and bigrams, which lets a
+/// query match part of a longer run of CJK text.
 pub fn extract_words(text: &str) -> HashSet<String> {
     let mut words = HashSet::new();
+    let lower = text.to_lowercase();
 
-    for token in text.split_whitespace() {
-        if token.is_empty() {
-            continue;
-        }
-        let lower = token.to_lowercase();
-
-        // Check if this token contains CJK characters
-        let has_cjk = lower.chars().any(is_cjk_char);
-
-        if has_cjk {
-            // For CJK tokens, generate character unigrams and bigrams
-            // This enables partial matching: "编程" matches within "用户喜欢用Rust编程"
-            let chars: Vec<char> = lower.chars().collect();
+    for word in lower.split(|c: char| !c.is_alphanumeric()).filter(|word| !word.is_empty()) {
+        if word.chars().any(is_cjk_char) {
+            // "编程" matches within "用户喜欢用rust编程".
+            let chars: Vec<char> = word.chars().collect();
             for c in &chars {
                 if is_cjk_char(*c) {
                     words.insert(c.to_string());
@@ -62,37 +57,34 @@ pub fn extract_words(text: &str) -> HashSet<String> {
             }
             for window in chars.windows(2) {
                 if window.iter().any(|c| is_cjk_char(*c)) {
-                    let bigram: String = window.iter().collect();
-                    words.insert(bigram);
+                    words.insert(window.iter().collect());
                 }
             }
-            // Also insert the full token for exact matches
-            words.insert(lower);
-        } else {
-            words.insert(lower);
         }
-    }
-
-    // Handle text with no whitespace at all (pure CJK string)
-    if !text.contains(char::is_whitespace) && text.chars().any(is_cjk_char) {
-        let lower = text.to_lowercase();
-        let chars: Vec<char> = lower.chars().collect();
-        for c in &chars {
-            if is_cjk_char(*c) {
-                words.insert(c.to_string());
-            }
-        }
-        for window in chars.windows(2) {
-            if window.iter().any(|c| is_cjk_char(*c)) {
-                let bigram: String = window.iter().collect();
-                words.insert(bigram);
-            }
-        }
-        // Also add the full string
-        words.insert(lower);
+        words.insert(word.to_string());
     }
 
     words
+}
+
+/// The share of `query_words` that `entry_words` contains, from 0.0 (none) to 1.0 (all).
+pub(crate) fn match_score(query_words: &HashSet<String>, entry_words: &HashSet<String>) -> f32 {
+    if query_words.is_empty() {
+        return 0.0;
+    }
+    let matched = query_words.iter().filter(|word| entry_words.contains(*word)).count();
+    matched as f32 / query_words.len() as f32
+}
+
+/// Orders keyword matches best first: the higher score, then the newer entry.
+pub(crate) fn rank_matches(
+    mut matches: Vec<(f32, crate::service::MemoryEntry)>,
+    limit: usize,
+) -> Vec<crate::service::MemoryEntry> {
+    matches.sort_by(|(left_score, left), (right_score, right)| {
+        right_score.total_cmp(left_score).then_with(|| right.timestamp.cmp(&left.timestamp))
+    });
+    matches.into_iter().take(limit).map(|(_, entry)| entry).collect()
 }
 
 /// Extract and tokenize all text from a [`Content`](adk_core::Content) into word set.
@@ -153,6 +145,34 @@ mod tests {
         assert!(words.contains("你"));
         assert!(words.contains("好"));
         assert!(words.contains("你好"));
+    }
+
+    #[test]
+    fn test_extract_words_ignore_punctuation() {
+        let words = extract_words("Hometown: Nairobi. (Kenya!) state-of-the-art, \"quoted\"");
+        for word in ["hometown", "nairobi", "kenya", "state", "art", "quoted"] {
+            assert!(words.contains(word), "{word} missing from {words:?}");
+        }
+        assert!(!words.iter().any(|word| word.contains(|c: char| !c.is_alphanumeric())));
+        assert!(extract_words("Ünïcödé: café, naïve!").contains("café"));
+        assert!(extract_words("Привет, мир!").contains("мир"));
+        assert!(extract_words("!!! ... ---").is_empty());
+    }
+
+    #[test]
+    fn test_extract_words_cjk_punctuation_is_not_a_gram() {
+        let words = extract_words("你好，世界。");
+        assert!(words.contains("你好") && words.contains("世界"));
+        assert!(!words.iter().any(|word| word.contains(['，', '。'])));
+    }
+
+    #[test]
+    fn test_match_score_counts_matched_query_words() {
+        let query = extract_words("rust ownership borrowing");
+        assert_eq!(match_score(&query, &extract_words("Rust ownership and borrowing.")), 1.0);
+        assert!((match_score(&query, &extract_words("Rust note.")) - 1.0 / 3.0).abs() < 1e-6);
+        assert_eq!(match_score(&query, &extract_words("unrelated")), 0.0);
+        assert_eq!(match_score(&HashSet::new(), &extract_words("rust")), 0.0);
     }
 
     #[test]

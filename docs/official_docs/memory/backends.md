@@ -30,6 +30,16 @@ let memory = InMemoryMemoryService::new();
 Perfect for development and the test suite; swap it for a durable backend with a
 one-line change because the trait is identical.
 
+Search is keyword-based, and `RedisMemoryService` searches the same way:
+
+| Step | Behaviour |
+|------|-----------|
+| **Words** | A word is a run of Unicode letters and digits, lowercased, so punctuation never sticks to it: `Hometown: Nairobi.` matches `hometown` and `nairobi`. CJK text also yields character unigrams and bigrams. |
+| **Match** | An entry matches when it shares at least one word with the query. |
+| **Score** | The share of the query's words the entry contains, from 0.0 to 1.0. `SearchRequest::min_score` filters on it. |
+| **Order** | Highest score first, then newest; `limit` (default 10) keeps the best. |
+| **Entries without words** | Entries with no text, such as an image, are stored and returned by `list_recent`, and never match a query. |
+
 ## SQLite — a file
 
 Durable, single-file, no server. Great for desktop apps and single-node services.

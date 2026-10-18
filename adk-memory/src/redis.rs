@@ -2,8 +2,8 @@
 //!
 //! Provides [`RedisMemoryService`], a [`MemoryService`](crate::MemoryService) implementation
 //! that stores memory entries in Redis with keyword-based search. Redis does not
-//! natively support vector similarity search, so this backend uses word-overlap
-//! matching similar to [`InMemoryMemoryService`](crate::InMemoryMemoryService).
+//! natively support vector similarity search, so this backend uses the same word-overlap
+//! matching and ranking as [`InMemoryMemoryService`](crate::InMemoryMemoryService).
 //!
 //! # Data Model
 //!
@@ -149,13 +149,13 @@ impl RedisMemoryService {
         Ok(Self { client, ttl: config.ttl })
     }
 
-    /// Search entries in a single Redis list key, appending matches to `memories`.
+    /// Scores the entries of one Redis list key against the query, appending matches.
     async fn search_entries_in_key(
         &self,
         key: &str,
         query_words: &HashSet<String>,
-        limit: usize,
-        memories: &mut Vec<MemoryEntry>,
+        min_score: f32,
+        matches: &mut Vec<(f32, MemoryEntry)>,
     ) -> Result<()> {
         let raw_entries: Vec<String> = self
             .client
@@ -169,19 +169,16 @@ impl RedisMemoryService {
                 Err(_) => continue,
             };
             let text = crate::text::extract_text(&stored.content);
-            let entry_words = crate::text::extract_words(&text);
-            if entry_words.is_empty() {
-                continue;
-            }
-            if query_words.iter().any(|w| entry_words.contains(w)) {
-                memories.push(MemoryEntry {
-                    content: stored.content,
-                    author: stored.author,
-                    timestamp: stored.timestamp,
-                });
-                if memories.len() >= limit {
-                    return Ok(());
-                }
+            let score = crate::text::match_score(query_words, &crate::text::extract_words(&text));
+            if score > 0.0 && score >= min_score {
+                matches.push((
+                    score,
+                    MemoryEntry {
+                        content: stored.content,
+                        author: stored.author,
+                        timestamp: stored.timestamp,
+                    },
+                ));
             }
         }
 
@@ -265,12 +262,15 @@ impl MemoryService for RedisMemoryService {
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
         let limit = req.limit.unwrap_or(10);
+        let min_score = req.min_score.unwrap_or(0.0);
         let query_words = crate::text::extract_words(&req.query);
         if query_words.is_empty() {
             return Ok(SearchResponse { memories: Vec::new() });
         }
 
-        let mut memories = Vec::new();
+        // Every entry in scope is scored before any is returned, so the best matches win
+        // regardless of the order Redis returns sessions in.
+        let mut matches = Vec::new();
 
         // Always query the global index
         let idx = index_key(&req.app_name, &req.user_id);
@@ -282,10 +282,7 @@ impl MemoryService for RedisMemoryService {
 
         for sid in &session_ids {
             let key = entries_key(&req.app_name, &req.user_id, sid);
-            self.search_entries_in_key(&key, &query_words, limit, &mut memories).await?;
-            if memories.len() >= limit {
-                return Ok(SearchResponse { memories });
-            }
+            self.search_entries_in_key(&key, &query_words, min_score, &mut matches).await?;
         }
 
         // When project_id is Some, also query the project index
@@ -299,14 +296,11 @@ impl MemoryService for RedisMemoryService {
 
             for sid in &proj_session_ids {
                 let key = project_entries_key(&req.app_name, &req.user_id, project_id, sid);
-                self.search_entries_in_key(&key, &query_words, limit, &mut memories).await?;
-                if memories.len() >= limit {
-                    return Ok(SearchResponse { memories });
-                }
+                self.search_entries_in_key(&key, &query_words, min_score, &mut matches).await?;
             }
         }
 
-        Ok(SearchResponse { memories })
+        Ok(SearchResponse { memories: crate::text::rank_matches(matches, limit) })
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
@@ -756,8 +750,8 @@ mod tests {
             let key = entries_key(&app, &user, &session);
             let expected = format!("mem:{app}:{user}:{session}");
             prop_assert_eq!(&key, &expected);
-            // Global key must NOT contain ":p:" project infix
-            prop_assert!(!key.contains(":p:"), "global entries key must not contain :p: infix");
+            // No project infix: exactly the prefix and three segments (an identifier may be "p").
+            prop_assert_eq!(key.split(':').count(), 4, "global entries key has a project infix");
         }
 
         /// **Feature: project-scoped-memory, Property 6: Redis Key Generation Correctness**
@@ -772,7 +766,7 @@ mod tests {
             let key = index_key(&app, &user);
             let expected = format!("mem_idx:{app}:{user}");
             prop_assert_eq!(&key, &expected);
-            prop_assert!(!key.contains(":p:"), "global index key must not contain :p: infix");
+            prop_assert_eq!(key.split(':').count(), 3, "global index key has a project infix");
         }
 
         /// **Feature: project-scoped-memory, Property 6: Redis Key Generation Correctness**
