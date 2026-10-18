@@ -40,6 +40,23 @@ and extracted with defense-in-depth zip validation (entry count, path
 traversal, symlinks, duplicate names, size, compression ratio, and depth
 limits) before any byte is used.
 
+A skill or revision name becomes the request path, which carries the client's
+Google credentials, so the client accepts only a bare ID or a
+`projects/{project}/locations/{location}/skills/{skill}` resource name whose
+segments use `[A-Za-z0-9._~-]` and are not `.` or `..`. Anything else is an
+`InvalidInput` error and no request is sent.
+
+## Registry skills in a `SkillToolset`
+
+`SkillToolset::with_registry_client` lets the model load registry skills by
+name with `load_skill`. The name comes from the model, so the toolset loads
+only a name that passes `validate_skill_name` (lowercase letters, digits and
+hyphens), or the client's own `{parent}/skills/{name}`. A full resource name in
+another project, or one with `/`, `..` or other characters, reports the skill
+as not found without a registry request, so the model cannot reach another
+project's skills — and the tools their `allowed-tools` enable — with the
+agent's credentials.
+
 ## Load registry skills into an agent
 
 `load_skill_index_from_registry` produces a standard `SkillIndex`, so

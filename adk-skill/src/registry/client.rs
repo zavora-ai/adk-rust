@@ -417,11 +417,41 @@ impl SkillRegistryClient {
     }
 
     /// Resolves a bare skill ID or full resource name to a full name.
-    fn skill_path(&self, skill: &str) -> String {
-        if skill.contains('/') {
-            skill.to_string()
-        } else {
-            format!("{}/skills/{skill}", self.parent)
+    ///
+    /// The name becomes the request path, which carries Google credentials, so it must
+    /// have the shape of a skill resource: a dot segment, an empty segment, or a
+    /// character outside `[A-Za-z0-9._~-]` would let it name another endpoint.
+    fn skill_path(&self, skill: &str) -> Result<String> {
+        let segments: Vec<&str> = skill.split('/').collect();
+        match segments.as_slice() {
+            [id] if is_resource_segment(id) => Ok(format!("{}/skills/{id}", self.parent)),
+            ["projects", project, "locations", location, "skills", id]
+                if [project, location, id].iter().all(|segment| is_resource_segment(segment)) =>
+            {
+                Ok(skill.to_string())
+            }
+            _ => Err(self.client.errors().invalid_input(format!(
+                "`{}` is not a skill ID or a projects/{{project}}/locations/{{location}}/skills/{{skill}} \
+                 resource name",
+                truncate_for_error(skill)
+            ))),
+        }
+    }
+
+    /// Resolves a revision ID or full revision resource name for `skill`.
+    fn revision_path(&self, skill: &str, revision: &str) -> Result<String> {
+        if is_resource_segment(revision) {
+            return Ok(format!("{}/revisions/{revision}", self.skill_path(skill)?));
+        }
+        match revision.rsplit_once("/revisions/") {
+            Some((skill_name, id)) if skill_name.contains('/') && is_resource_segment(id) => {
+                self.skill_path(skill_name).map(|_| revision.to_string())
+            }
+            _ => Err(self.client.errors().invalid_input(format!(
+                "`{}` is not a revision ID or a .../skills/{{skill}}/revisions/{{revision}} \
+                 resource name",
+                truncate_for_error(revision)
+            ))),
         }
     }
 
@@ -441,7 +471,7 @@ impl SkillRegistryClient {
     /// Returns an error on transport failure, timeout, a non-success HTTP
     /// status, or an unparseable response body.
     pub async fn get_skill(&self, skill: &str) -> Result<Skill> {
-        self.get_json(&self.skill_path(skill), &[]).await
+        self.get_json(&self.skill_path(skill)?, &[]).await
     }
 
     /// Lists skills under the configured project/location.
@@ -529,7 +559,7 @@ impl SkillRegistryClient {
         if let Some(filter) = filter {
             query.push(("filter", filter.to_string()));
         }
-        self.get_json(&format!("{}/revisions", self.skill_path(skill)), &query).await
+        self.get_json(&format!("{}/revisions", self.skill_path(skill)?), &query).await
     }
 
     /// Gets a single revision of a skill.
@@ -543,12 +573,7 @@ impl SkillRegistryClient {
     /// Returns an error on transport failure, timeout, a non-success HTTP
     /// status, or an unparseable response body.
     pub async fn get_skill_revision(&self, skill: &str, revision: &str) -> Result<SkillRevision> {
-        let path = if revision.contains('/') {
-            revision.to_string()
-        } else {
-            format!("{}/revisions/{revision}", self.skill_path(skill))
-        };
-        self.get_json(&path, &[]).await
+        self.get_json(&self.revision_path(skill, revision)?, &[]).await
     }
 
     /// Downloads, verifies, and safely extracts a skill's content.
@@ -686,6 +711,17 @@ impl SkillRegistryClient {
                 .invalid_response(format!("failed to parse skill registry response JSON: {error}"))
         })
     }
+}
+
+/// Whether `segment` is one safe path segment of a registry resource name.
+///
+/// `.` and `..` are rejected even though they are valid characters, because URL
+/// parsing resolves them (and their percent-encoded forms) as dot segments.
+fn is_resource_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte))
 }
 
 #[cfg(test)]

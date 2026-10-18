@@ -429,6 +429,26 @@ async fn test_fetch_skill_content_rejects_missing_and_undecodable_payloads() {
 }
 
 #[tokio::test]
+async fn test_names_that_are_not_resource_paths_are_rejected_before_any_request() {
+    let (state, client, _server) = test_client().await;
+    for name in [
+        "../other-project",
+        "projects/test-project/locations/us-central1/skills/../../../x/skills/y",
+        "projects/a/locations/b/skills/c/extra",
+        "projects/a//skills/c",
+        "demo skill",
+        "demo%2F..",
+        "",
+    ] {
+        let error = client.get_skill(name).await.expect_err(name);
+        assert_eq!(error.category, adk_core::ErrorCategory::InvalidInput, "{name}: {error}");
+    }
+    let error = client.get_skill_revision("demo-skill", "../../x").await.expect_err("revision");
+    assert_eq!(error.category, adk_core::ErrorCategory::InvalidInput, "{error}");
+    assert!(state.requests.lock().await.is_empty());
+}
+
+#[tokio::test]
 async fn test_upstream_error_statuses_map_to_adk_error_categories() {
     let (state, client, server) = test_client().await;
     register_fixture(

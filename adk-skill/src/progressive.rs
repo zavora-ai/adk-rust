@@ -434,6 +434,19 @@ impl SkillToolset {
 
         #[cfg(feature = "vertex-skill-registry")]
         if let Some(client) = &self.registry_client {
+            // The name comes from the model, and the registry request carries the agent's
+            // credentials, so only this project's skills may be named.
+            let own_skill = name
+                .strip_prefix(client.parent_resource_name())
+                .and_then(|rest| rest.strip_prefix("/skills/"))
+                .unwrap_or(name);
+            if crate::validate_skill_name(own_skill).is_err() {
+                return Err(AdkError::tool(format!(
+                    "skill '{}' was not found; registry skills are loaded by their name, such as \
+                     'expense-report', from the project this agent is configured for",
+                    name.escape_debug()
+                )));
+            }
             return Ok(LoadedSkill::Remote(
                 self.fetch_remote_skill(client, ctx.invocation_id(), name).await?,
             ));
@@ -1060,5 +1073,71 @@ mod tests {
             .await
             .expect_err("traversal must fail");
         assert!(error.to_string().contains("resource path"));
+    }
+
+    /// A registry endpoint on 127.0.0.1 that records every request path and answers 404.
+    #[cfg(feature = "vertex-skill-registry")]
+    async fn recording_registry() -> (Arc<SkillRegistryClient>, Arc<Mutex<Vec<String>>>) {
+        use crate::registry::SkillRegistryConfig;
+        let paths: Arc<Mutex<Vec<String>>> = Arc::default();
+        let recorded = paths.clone();
+        let app = axum::Router::new().fallback(move |uri: axum::http::Uri| {
+            let recorded = recorded.clone();
+            async move {
+                recorded.lock().expect("paths lock").push(uri.path().to_string());
+                axum::http::StatusCode::NOT_FOUND
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let endpoint = format!("http://{}", listener.local_addr().expect("address"));
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let config = SkillRegistryConfig::new("own", "us-central1").with_endpoint(endpoint);
+        let credentials =
+            google_cloud_auth::credentials::api_key_credentials::Builder::new("k").build();
+        let client = SkillRegistryClient::with_credentials(config, credentials).expect("client");
+        (Arc::new(client), paths)
+    }
+
+    #[cfg(feature = "vertex-skill-registry")]
+    #[tokio::test]
+    async fn model_supplied_names_reach_only_this_projects_registry_skills() {
+        let (client, paths) = recording_registry().await;
+        let toolset = SkillToolset::new(
+            Arc::new(SkillIndex::new(Vec::new())),
+            Arc::new(TestRegistry),
+            SkillToolsetConfig::default(),
+        )
+        .with_registry_client(client);
+        let context = Arc::new(TestContext::new());
+        let load =
+            tool_by_name(&toolset.tools(context.clone()).await.expect("tools"), "load_skill");
+
+        for hostile in [
+            "projects/victim/locations/us-central1/skills/payroll",
+            "../../victim/locations/us-central1/skills/payroll",
+            "projects/own/locations/us-central1/skills/../../../victim/skills/payroll",
+            "payroll?alt=media",
+            "Payroll",
+        ] {
+            let error = load
+                .execute(context.clone(), json!({ "skill_name": hostile }))
+                .await
+                .expect_err(hostile);
+            assert!(error.message.contains("was not found"), "{hostile}: {}", error.message);
+        }
+        assert_eq!(*paths.lock().expect("paths lock"), Vec::<String>::new());
+
+        for own in ["expense-report", "projects/own/locations/us-central1/skills/expense-report"] {
+            let _ = load.execute(context.clone(), json!({ "skill_name": own })).await;
+        }
+        assert_eq!(
+            *paths.lock().expect("paths lock"),
+            vec![
+                "/v1beta1/projects/own/locations/us-central1/skills/expense-report".to_string();
+                2
+            ]
+        );
     }
 }
