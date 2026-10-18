@@ -7,7 +7,7 @@ pub use controllers::{
 };
 
 use crate::{
-    ServerConfig,
+    SecurityConfig, ServerConfig,
     auth_bridge::{RequestContext, RequestContextError, RequestContextExtractor},
     web_ui,
 };
@@ -96,8 +96,9 @@ impl ComponentHealth {
     }
 }
 
-/// Build CORS layer based on security configuration
-fn build_cors_layer(config: &ServerConfig) -> CorsLayer {
+/// Builds the CORS layer: only [`SecurityConfig::allowed_origins`] get an
+/// `Access-Control-Allow-Origin`.
+fn build_cors_layer(security: &Arc<SecurityConfig>) -> CorsLayer {
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
         .allow_headers([
@@ -108,17 +109,90 @@ fn build_cors_layer(config: &ServerConfig) -> CorsLayer {
             HeaderName::from_static("x-adk-ui-transport"),
         ]);
 
-    if config.security.allowed_origins.is_empty() {
+    if security.allowed_origins.iter().any(|origin| origin.trim() == "*") {
         cors.allow_origin(AllowOrigin::any())
     } else {
-        let origins: Vec<HeaderValue> = config
-            .security
-            .allowed_origins
-            .iter()
-            .filter_map(|origin| origin.parse().ok())
-            .collect();
-        cors.allow_origin(origins)
+        let security = Arc::clone(security);
+        cors.allow_origin(AllowOrigin::predicate(move |origin, _| {
+            origin.to_str().is_ok_and(|origin| security.allows_origin(origin))
+        }))
     }
+}
+
+/// The authority a request names: the URI authority (HTTP/2) or the `Host` header.
+fn request_authority(request: &Request<Body>) -> Option<String> {
+    request.uri().authority().map(|authority| authority.as_str().to_string()).or_else(|| {
+        request
+            .headers()
+            .get(header::HOST)
+            .map(|host| String::from_utf8_lossy(host.as_bytes()).into_owned())
+    })
+}
+
+fn forbidden(error: &str, hint: &str) -> Response {
+    (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": error, "hint": hint })))
+        .into_response()
+}
+
+/// Refuses a request for a host the server does not answer.
+///
+/// A page on a DNS-rebinding domain reaches a loopback server as a same-origin request,
+/// so CORS never applies; the `Host` header still names the attacker's domain.
+async fn host_guard(
+    State(security): State<Arc<SecurityConfig>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Some(authority) = request_authority(&request)
+        && !security.allows_host(&authority)
+    {
+        tracing::warn!(http.host = %authority, "refused a request for a host not in allowed_hosts");
+        return forbidden(
+            "host not allowed",
+            "add the host to SecurityConfig::allowed_hosts to serve it",
+        );
+    }
+    next.run(request).await
+}
+
+/// Refuses a request whose `Origin` names another origin not in
+/// [`SecurityConfig::allowed_origins`].
+///
+/// CORS stops a browser from reading the response, but a simple cross-origin request still
+/// executes; this stops it before it reaches a handler.
+async fn origin_guard(
+    State(security): State<Arc<SecurityConfig>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Some(origin) = request.headers().get(header::ORIGIN) {
+        let origin = String::from_utf8_lossy(origin.as_bytes());
+        let same_origin = origin.split_once("://").is_some_and(|(_, authority)| {
+            request_authority(&request)
+                .is_some_and(|requested| requested.eq_ignore_ascii_case(authority))
+        });
+        if !same_origin && !security.allows_origin(&origin) {
+            tracing::warn!(http.origin = %origin, "refused a cross-origin request");
+            return forbidden(
+                "cross-origin request refused",
+                "add the origin to SecurityConfig::allowed_origins to allow it",
+            );
+        }
+    }
+    next.run(request).await
+}
+
+/// `security` with the hosts of the configured A2A base URL and backend URL added to
+/// its allowed hosts: the server advertises them, so peers and the web UI address it there.
+fn effective_security(security: &SecurityConfig, urls: [Option<&str>; 2]) -> Arc<SecurityConfig> {
+    let mut security = security.clone();
+    security.allowed_hosts.extend(
+        urls.into_iter()
+            .flatten()
+            .filter_map(|url| adk_core::Url::parse(url).ok())
+            .filter_map(|url| url.host_str().map(str::to_string)),
+    );
+    Arc::new(security)
 }
 
 fn validate_request_id(headers: &HeaderMap) -> Option<String> {
@@ -319,195 +393,16 @@ fn a2a_discovery_router(controller: A2aController) -> Router {
         .with_state(controller)
 }
 
-/// Create the server application with A2A support at the specified base URL
+/// Create the server application with A2A support at the specified base URL.
+///
+/// Builds the same router as [`ServerBuilder`] with only [`ServerBuilder::with_a2a`] set.
 pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> Router {
-    let session_controller = SessionController::new(config.session_service.clone());
-    let runtime_controller = RuntimeController::new(config.clone());
-    let apps_controller = AppsController::new(config.clone());
-    let artifacts_controller = ArtifactsController::new(config.clone());
-    let debug_controller = DebugController::new(config.clone());
-    let health_controller = HealthController::new(&config);
-
-    // Start YAML agent hot reload watchers if configured.
-    #[cfg(feature = "yaml-agent")]
-    {
-        let dirs = config.yaml_agent_dirs.clone();
-        if !dirs.is_empty() {
-            tokio::spawn(async move {
-                let _watchers = start_yaml_agent_watchers(&dirs).await;
-                // Watchers are kept alive for the lifetime of this task.
-                // They run background filesystem watch loops internally.
-                // We hold them here so they aren't dropped.
-                std::future::pending::<()>().await;
-            });
-        }
+    let builder = ServerBuilder::new(config);
+    match a2a_base_url {
+        Some(base_url) => builder.with_a2a(base_url),
+        None => builder,
     }
-
-    let auth_layer = middleware::from_fn({
-        let extractor = config.request_context_extractor.clone();
-        move |request: Request<Body>, next: Next| {
-            let extractor = extractor.clone();
-            async move { auth_middleware(request, next, extractor).await }
-        }
-    });
-
-    let health_router =
-        Router::new().route("/health", get(health_check)).with_state(health_controller);
-
-    let ui_api_router = Router::new()
-        .route("/apps", get(controllers::apps::list_apps))
-        .route("/list-apps", get(controllers::apps::list_apps_compat))
-        .route("/ui/agents/{name}", get(controllers::apps::get_agent_details))
-        .with_state(apps_controller)
-        .route("/ui/capabilities", get(controllers::ui::ui_capabilities))
-        .route("/ui/initialize", post(controllers::ui::ui_initialize))
-        .route("/ui/message", post(controllers::ui::ui_message))
-        .route("/ui/update-model-context", post(controllers::ui::ui_update_model_context))
-        .route("/ui/notifications/poll", post(controllers::ui::ui_poll_notifications))
-        .route(
-            "/ui/notifications/resources-list-changed",
-            post(controllers::ui::ui_notify_resources_list_changed),
-        )
-        .route(
-            "/ui/notifications/tools-list-changed",
-            post(controllers::ui::ui_notify_tools_list_changed),
-        )
-        .route("/ui/resources", get(controllers::ui::list_ui_resources))
-        .route("/ui/resources/read", get(controllers::ui::read_ui_resource))
-        .route("/ui/resources/register", post(controllers::ui::register_ui_resource))
-        // These routes mutate and read shared bridge and resource state, so they
-        // carry the same authentication as the session, artifact, and debug routers.
-        .layer(auth_layer.clone());
-
-    let session_router = Router::new()
-        .route("/sessions", post(controllers::session::create_session))
-        .route(
-            "/sessions/{app_name}/{user_id}/{session_id}",
-            get(controllers::session::get_session).delete(controllers::session::delete_session),
-        )
-        .route(
-            "/apps/{app_name}/users/{user_id}/sessions",
-            get(controllers::session::list_sessions)
-                .post(controllers::session::create_session_from_path),
-        )
-        .route(
-            "/apps/{app_name}/users/{user_id}/sessions/{session_id}",
-            get(controllers::session::get_session_from_path)
-                .post(controllers::session::create_session_from_path)
-                .delete(controllers::session::delete_session_from_path),
-        )
-        .with_state(session_controller)
-        .layer(auth_layer.clone());
-
-    let runtime_router = Router::new()
-        .route("/run", post(controllers::runtime::run_collect))
-        .route("/run/{app_name}/{user_id}/{session_id}", post(controllers::runtime::run_sse))
-        .route("/run_sse", post(controllers::runtime::run_sse_compat))
-        .with_state(runtime_controller);
-
-    let artifacts_router = Router::new()
-        .route(
-            "/sessions/{app_name}/{user_id}/{session_id}/artifacts",
-            get(controllers::artifacts::list_artifacts),
-        )
-        .route(
-            "/sessions/{app_name}/{user_id}/{session_id}/artifacts/{artifact_name}",
-            get(controllers::artifacts::get_artifact),
-        )
-        .with_state(artifacts_controller)
-        .layer(auth_layer.clone());
-
-    let mut debug_router = Router::new()
-        .route("/debug/trace/session/{session_id}", get(controllers::debug::get_session_traces))
-        .route(
-            "/debug/graph/{app_name}/{user_id}/{session_id}/{event_id}",
-            get(controllers::debug::get_graph),
-        )
-        .route(
-            "/apps/{app_name}/users/{user_id}/sessions/{session_id}/events/{event_id}/graph",
-            get(controllers::debug::get_graph),
-        )
-        .route("/apps/{app_name}/eval_sets", get(controllers::debug::get_eval_sets))
-        .route(
-            "/apps/{app_name}/users/{user_id}/sessions/{session_id}/events/{event_id}",
-            get(controllers::debug::get_event),
-        );
-
-    if config.request_context_extractor.is_none() || config.security.expose_admin_debug {
-        debug_router = debug_router
-            .route("/debug/trace/{event_id}", get(controllers::debug::get_trace_by_event_id));
-    }
-
-    let debug_router = debug_router.with_state(debug_controller.clone()).layer(auth_layer.clone());
-
-    let api_router = Router::new()
-        .merge(health_router)
-        .merge(ui_api_router)
-        .merge(session_router)
-        .merge(runtime_router)
-        .merge(artifacts_router)
-        .merge(debug_router);
-
-    let ui_router = Router::new()
-        .route("/", get(web_ui::root_redirect))
-        .route("/ui/", get(web_ui::serve_ui_index))
-        .route("/ui/assets/config/runtime-config.json", get(web_ui::serve_runtime_config))
-        .with_state(config.clone())
-        .route("/ui/{*path}", get(web_ui::serve_ui_assets));
-
-    let mut app = Router::new().nest("/api", api_router).merge(ui_router);
-
-    if let Some(base_url) = a2a_base_url {
-        let a2a_controller = A2aController::new(config.clone(), base_url);
-        // Discovery stays public — an agent card is meant to be fetched by unknown peers.
-        // The JSON-RPC routes execute agent and tool work, so they carry the same
-        // authentication as every other mutation surface. They were previously merged at the
-        // root, outside the layer applied to `/api`, so anyone who could reach the port could
-        // drive the agent and incur its costs.
-        let a2a_discovery = a2a_discovery_router(a2a_controller.clone());
-        let a2a_rpc = Router::new()
-            .route("/a2a", post(controllers::a2a::handle_jsonrpc_for_caller))
-            .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream_for_caller))
-            .with_state(a2a_controller)
-            .layer(auth_layer.clone());
-        app = app.merge(a2a_discovery).merge(a2a_rpc);
-    }
-
-    let cors_layer = build_cors_layer(&config);
-    let trace_layer = TraceLayer::new_for_http().make_span_with(|request: &Request<Body>| {
-        let request_id =
-            request.extensions().get::<RequestId>().map(RequestId::as_str).unwrap_or("");
-        tracing::info_span!(
-            "http.request",
-            request.id = %request_id,
-            http.method = %request.method(),
-            http.path = %request.uri().path()
-        )
-    });
-
-    app.layer(
-        ServiceBuilder::new()
-            .layer(middleware::from_fn(request_id_middleware))
-            .layer(trace_layer)
-            .layer(TimeoutLayer::with_status_code(
-                StatusCode::REQUEST_TIMEOUT,
-                config.security.request_timeout,
-            ))
-            .layer(DefaultBodyLimit::max(config.security.max_body_size))
-            .layer(cors_layer)
-            .layer(SetResponseHeaderLayer::if_not_present(
-                header::X_CONTENT_TYPE_OPTIONS,
-                HeaderValue::from_static("nosniff"),
-            ))
-            .layer(SetResponseHeaderLayer::if_not_present(
-                header::X_FRAME_OPTIONS,
-                HeaderValue::from_static("DENY"),
-            ))
-            .layer(SetResponseHeaderLayer::if_not_present(
-                header::X_XSS_PROTECTION,
-                HeaderValue::from_static("1; mode=block"),
-            )),
-    )
+    .build()
 }
 
 // ---------------------------------------------------------------------------
@@ -518,8 +413,12 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
 ///
 /// `ServerBuilder` allows registering additional Axum routers alongside the
 /// built-in REST, A2A, and UI routes. Custom routes benefit from the same
-/// middleware stack (auth, CORS, tracing, timeout, security headers) as the
-/// built-in routes.
+/// middleware stack (host and origin checks, auth, CORS, tracing, timeout,
+/// security headers) as the built-in routes.
+///
+/// The host and origin checks follow [`SecurityConfig`]: by
+/// default only loopback names and IP addresses are answered, and no other origin may
+/// call the server from a browser.
 ///
 /// # Example
 ///
@@ -542,7 +441,7 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
 ///     .with_a2a("http://localhost:8080")
 ///     .build();
 ///
-/// let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+/// let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
 /// axum::serve(listener, app).await?;
 /// ```
 pub struct ServerBuilder {
@@ -610,7 +509,8 @@ impl ServerBuilder {
     ///
     /// These routes are merged at the top level of the application, alongside
     /// the UI and A2A routes. They receive the full middleware stack (CORS,
-    /// tracing, timeout, security headers) but NOT the auth middleware.
+    /// tracing, timeout, security headers, host and origin checks) but NOT the auth
+    /// middleware.
     ///
     /// Use this for routes that need their own auth handling or public endpoints.
     pub fn add_root_routes(mut self, routes: Router) -> Self {
@@ -748,9 +648,9 @@ impl ServerBuilder {
     /// `POST /api/stream_reasoning_engine` serve the Gemini Enterprise Agent
     /// Platform runtime contract for the loader's root agent, using the
     /// configured session and artifact services. The routes carry the shared
-    /// middleware stack but **not** the auth middleware — a deployed engine is
-    /// fronted by the platform, which authenticates callers before they reach
-    /// the container. The memory class methods report `Unsupported`; use
+    /// middleware stack but **not** the auth middleware or the host check — a
+    /// deployed engine is fronted by the platform, which authenticates callers
+    /// before they reach the container and chooses the `Host` it forwards. The memory class methods report `Unsupported`; use
     /// [`serve_agent_engine`](crate::agent_engine::serve_agent_engine) with
     /// [`AgentEngineOptions`](crate::agent_engine::AgentEngineOptions) to
     /// configure a memory service.
@@ -838,7 +738,7 @@ impl ServerBuilder {
     ///     .enable_shutdown_endpoint()
     ///     .build_with_shutdown();
     ///
-    /// let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    /// let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
     /// axum::serve(listener, app)
     ///     .with_graceful_shutdown(shutdown_handle.signal())
     ///     .await?;
@@ -1064,31 +964,6 @@ impl ServerBuilder {
             app = app.merge(custom_routes);
         }
 
-        // Agent Engine dispatch surface: root-level merge (its routes carry
-        // their own /api/... paths) so the platform host reaches it without
-        // the local auth middleware — the platform authenticates callers
-        // before they reach the container.
-        #[cfg(feature = "agent-engine")]
-        if self.agent_engine {
-            let root_agent = config.agent_loader.root_agent();
-            let mut runner_builder = adk_runner::Runner::builder()
-                .app_name(root_agent.name())
-                .agent(root_agent.clone())
-                .session_service(config.session_service.clone())
-                .governance(config.governance.clone());
-            if let Some(artifact_service) = &config.artifact_service {
-                runner_builder = runner_builder.artifact_service(artifact_service.clone());
-            }
-            let runner = runner_builder
-                .build()
-                .expect("with_agent_engine requires the root agent's name to be a valid app name");
-            let mut state = crate::agent_engine::AgentEngineState::new(Arc::new(runner));
-            if let Some(artifact_service) = &config.artifact_service {
-                state = state.with_artifact_service(artifact_service.clone());
-            }
-            app = app.merge(crate::agent_engine::agent_engine_router(state));
-        }
-
         if let Some(base_url) = &self.a2a_base_url {
             let a2a_controller = match &self.skill_index {
                 Some(skill_index) => {
@@ -1110,7 +985,38 @@ impl ServerBuilder {
             app = app.merge(a2a_discovery).merge(a2a_rpc);
         }
 
-        let cors_layer = build_cors_layer(config);
+        let security = effective_security(
+            &config.security,
+            [self.a2a_base_url.as_deref(), config.backend_url.as_deref()],
+        );
+        app = app.layer(middleware::from_fn_with_state(Arc::clone(&security), host_guard));
+
+        // Agent Engine dispatch surface: root-level merge (its routes carry
+        // their own /api/... paths) so the platform host reaches it without
+        // the local auth middleware or the host check — the platform fronts the
+        // container, authenticates callers, and chooses the Host it forwards.
+        #[cfg(feature = "agent-engine")]
+        if self.agent_engine {
+            let root_agent = config.agent_loader.root_agent();
+            let mut runner_builder = adk_runner::Runner::builder()
+                .app_name(root_agent.name())
+                .agent(root_agent.clone())
+                .session_service(config.session_service.clone())
+                .governance(config.governance.clone());
+            if let Some(artifact_service) = &config.artifact_service {
+                runner_builder = runner_builder.artifact_service(artifact_service.clone());
+            }
+            let runner = runner_builder
+                .build()
+                .expect("with_agent_engine requires the root agent's name to be a valid app name");
+            let mut state = crate::agent_engine::AgentEngineState::new(Arc::new(runner));
+            if let Some(artifact_service) = &config.artifact_service {
+                state = state.with_artifact_service(artifact_service.clone());
+            }
+            app = app.merge(crate::agent_engine::agent_engine_router(state));
+        }
+
+        let cors_layer = build_cors_layer(&security);
         let trace_layer = TraceLayer::new_for_http().make_span_with(|request: &Request<Body>| {
             let request_id =
                 request.extensions().get::<RequestId>().map(RequestId::as_str).unwrap_or("");
@@ -1133,6 +1039,7 @@ impl ServerBuilder {
                     ))
                     .layer(DefaultBodyLimit::max(config.security.max_body_size))
                     .layer(cors_layer)
+                    .layer(middleware::from_fn_with_state(Arc::clone(&security), origin_guard))
                     .layer(SetResponseHeaderLayer::if_not_present(
                         header::X_CONTENT_TYPE_OPTIONS,
                         HeaderValue::from_static("nosniff"),
@@ -1194,7 +1101,7 @@ pub async fn shutdown_signal() {
 ///     .enable_shutdown_endpoint()
 ///     .build_with_shutdown();
 ///
-/// let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+/// let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
 /// axum::serve(listener, app)
 ///     .with_graceful_shutdown(shutdown_handle.signal())
 ///     .await?;

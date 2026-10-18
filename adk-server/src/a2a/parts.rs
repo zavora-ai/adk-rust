@@ -2,89 +2,94 @@ use adk_core::{Part, Result};
 use base64::{Engine as _, engine::general_purpose};
 use serde_json::{Map, Value};
 
+/// Converts ADK parts to A2A parts for a peer.
+///
+/// `Part::Thinking` is dropped: a model's reasoning is private to the agent, and an A2A
+/// peer would read a text part as answer text.
 pub fn adk_parts_to_a2a(
     parts: &[Part],
     long_running_ids: &[String],
 ) -> Result<Vec<crate::a2a::Part>> {
     parts
         .iter()
-        .map(|part| match part {
-            Part::Text { text } => Ok(crate::a2a::Part::text(text.clone())),
-            Part::InlineData { mime_type, data, .. } => {
-                let encoded = general_purpose::STANDARD.encode(data);
-                Ok(crate::a2a::Part::file(crate::a2a::FileContent {
-                    name: None,
-                    mime_type: Some(mime_type.clone()),
-                    bytes: Some(encoded),
-                    uri: None,
-                }))
-            }
-            Part::FileData { mime_type, file_uri, .. } => {
-                // FileData contains a URI reference to a file
-                Ok(crate::a2a::Part::file(crate::a2a::FileContent {
-                    name: None,
-                    mime_type: Some(mime_type.clone()),
-                    bytes: None,
-                    uri: Some(file_uri.clone()),
-                }))
-            }
-            Part::FunctionCall { name, args, id, .. } => {
-                let is_long_running = long_running_ids.contains(name);
-                let mut data = Map::new();
-                let mut call_data = Map::new();
-                call_data.insert("name".to_string(), Value::String(name.clone()));
-                call_data.insert("args".to_string(), args.clone());
-                if let Some(call_id) = id {
-                    call_data.insert("id".to_string(), Value::String(call_id.clone()));
-                }
-                data.insert("function_call".to_string(), Value::Object(call_data));
-
-                let mut metadata = Map::new();
-                metadata.insert("long_running".to_string(), Value::Bool(is_long_running));
-
-                Ok(crate::a2a::Part::Data { data, metadata: Some(metadata) })
-            }
-            Part::Thinking { thinking, .. } => {
-                // Convert thinking traces to text for A2A protocol
-                Ok(crate::a2a::Part::text(thinking.clone()))
-            }
-            Part::FunctionResponse { function_response, id, .. } => {
-                let mut data = Map::new();
-                let mut resp_data = Map::new();
-                resp_data.insert("name".to_string(), Value::String(function_response.name.clone()));
-                resp_data.insert("response".to_string(), function_response.response.clone());
-                if let Some(resp_id) = id {
-                    resp_data.insert("id".to_string(), Value::String(resp_id.clone()));
-                }
-                data.insert("function_response".to_string(), Value::Object(resp_data));
-
-                Ok(crate::a2a::Part::Data { data, metadata: None })
-            }
-            Part::ServerToolCall { server_tool_call } => {
-                let mut data = Map::new();
-                data.insert("server_tool_call".to_string(), server_tool_call.clone());
-                Ok(crate::a2a::Part::Data { data, metadata: None })
-            }
-            Part::ServerToolResponse { server_tool_response } => {
-                let mut data = Map::new();
-                data.insert("server_tool_response".to_string(), server_tool_response.clone());
-                Ok(crate::a2a::Part::Data { data, metadata: None })
-            }
-            // Embedded resources: text → text part; blob → inline file bytes.
-            Part::EmbeddedResource { resource } => match resource {
-                adk_core::EmbeddedResource::Text(text) => {
-                    Ok(crate::a2a::Part::text(text.text.clone()))
-                }
-                adk_core::EmbeddedResource::Blob(blob) => {
-                    let encoded = general_purpose::STANDARD.encode(&blob.data);
+        .filter_map(|part| {
+            let converted = match part {
+                Part::Text { text } => Ok(crate::a2a::Part::text(text.clone())),
+                Part::InlineData { mime_type, data, .. } => {
+                    let encoded = general_purpose::STANDARD.encode(data);
                     Ok(crate::a2a::Part::file(crate::a2a::FileContent {
                         name: None,
-                        mime_type: blob.mime_type.clone(),
+                        mime_type: Some(mime_type.clone()),
                         bytes: Some(encoded),
-                        uri: Some(blob.uri.clone()),
+                        uri: None,
                     }))
                 }
-            },
+                Part::FileData { mime_type, file_uri, .. } => {
+                    // FileData contains a URI reference to a file
+                    Ok(crate::a2a::Part::file(crate::a2a::FileContent {
+                        name: None,
+                        mime_type: Some(mime_type.clone()),
+                        bytes: None,
+                        uri: Some(file_uri.clone()),
+                    }))
+                }
+                Part::FunctionCall { name, args, id, .. } => {
+                    let is_long_running = long_running_ids.contains(name);
+                    let mut data = Map::new();
+                    let mut call_data = Map::new();
+                    call_data.insert("name".to_string(), Value::String(name.clone()));
+                    call_data.insert("args".to_string(), args.clone());
+                    if let Some(call_id) = id {
+                        call_data.insert("id".to_string(), Value::String(call_id.clone()));
+                    }
+                    data.insert("function_call".to_string(), Value::Object(call_data));
+
+                    let mut metadata = Map::new();
+                    metadata.insert("long_running".to_string(), Value::Bool(is_long_running));
+
+                    Ok(crate::a2a::Part::Data { data, metadata: Some(metadata) })
+                }
+                Part::Thinking { .. } => return None,
+                Part::FunctionResponse { function_response, id, .. } => {
+                    let mut data = Map::new();
+                    let mut resp_data = Map::new();
+                    resp_data
+                        .insert("name".to_string(), Value::String(function_response.name.clone()));
+                    resp_data.insert("response".to_string(), function_response.response.clone());
+                    if let Some(resp_id) = id {
+                        resp_data.insert("id".to_string(), Value::String(resp_id.clone()));
+                    }
+                    data.insert("function_response".to_string(), Value::Object(resp_data));
+
+                    Ok(crate::a2a::Part::Data { data, metadata: None })
+                }
+                Part::ServerToolCall { server_tool_call } => {
+                    let mut data = Map::new();
+                    data.insert("server_tool_call".to_string(), server_tool_call.clone());
+                    Ok(crate::a2a::Part::Data { data, metadata: None })
+                }
+                Part::ServerToolResponse { server_tool_response } => {
+                    let mut data = Map::new();
+                    data.insert("server_tool_response".to_string(), server_tool_response.clone());
+                    Ok(crate::a2a::Part::Data { data, metadata: None })
+                }
+                // Embedded resources: text → text part; blob → inline file bytes.
+                Part::EmbeddedResource { resource } => match resource {
+                    adk_core::EmbeddedResource::Text(text) => {
+                        Ok(crate::a2a::Part::text(text.text.clone()))
+                    }
+                    adk_core::EmbeddedResource::Blob(blob) => {
+                        let encoded = general_purpose::STANDARD.encode(&blob.data);
+                        Ok(crate::a2a::Part::file(crate::a2a::FileContent {
+                            name: None,
+                            mime_type: blob.mime_type.clone(),
+                            bytes: Some(encoded),
+                            uri: Some(blob.uri.clone()),
+                        }))
+                    }
+                },
+            };
+            Some(converted)
         })
         .collect()
 }
@@ -154,6 +159,17 @@ mod tests {
 
         let back = a2a_parts_to_adk(&a2a_parts).unwrap();
         assert_eq!(back.len(), 1);
+    }
+
+    #[test]
+    fn thinking_never_reaches_a_peer() {
+        let adk_parts = vec![
+            Part::Thinking { thinking: "private reasoning".to_string(), signature: None },
+            Part::Text { text: "answer".to_string() },
+        ];
+        let a2a_parts = adk_parts_to_a2a(&adk_parts, &[]).unwrap();
+        assert_eq!(a2a_parts.len(), 1);
+        assert!(matches!(&a2a_parts[0], crate::a2a::Part::Text { text, .. } if text == "answer"));
     }
 
     #[test]

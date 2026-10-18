@@ -141,9 +141,13 @@ let app = Router::new()
     .layer(axum::middleware::from_fn(version_negotiation));
 
 // 6. Serve
-let listener = tokio::net::TcpListener::bind("0.0.0.0:3001").await?;
+let listener = tokio::net::TcpListener::bind("127.0.0.1:3001").await?;
 axum::serve(listener, app).await?;
 ```
+
+A router served this way carries no host or origin checks. Mount it with
+`ServerBuilder::add_root_routes` to apply the server's
+[host and origin defaults](server.md#host-origin-and-bind-defaults).
 
 This exposes:
 - `GET /.well-known/agent-card.json` — Agent card with ETag caching
@@ -303,7 +307,7 @@ For direct protocol-level communication:
 ```rust
 use adk_server::a2a::client::v1_client::A2aV1Client;
 
-// Discover agent card
+// Discover agent card; its interfaces must be on the URL's origin
 let card = A2aV1Client::resolve_agent_card("http://localhost:3001").await?;
 let client = A2aV1Client::new(card);
 
@@ -326,6 +330,39 @@ let response = client.send_streaming_message(message).await?;
 let config = client.create_push_notification_config(config).await?;
 client.delete_push_notification_config(&task_id, &config_id).await?;
 ```
+
+### Card endpoints
+
+An agent card names the URL messages are sent to, and the card comes from the remote party.
+`A2aClient::resolve_agent_card`, `A2aClient::from_url`, `A2aV1Client::resolve_agent_card`, and
+`RemoteA2aAgent` accept a card only when its endpoint passes
+`adk_server::a2a::client::check_card_endpoint`:
+
+| Endpoint | Accepted |
+|----------|----------|
+| On the origin the card was fetched from (`localhost`, `127.0.0.1`, and `::1` count as one host) | yes |
+| On an origin passed to `resolve_agent_card_allowing` or `RemoteA2aAgentBuilder::allow_endpoint_origin`, over `https` or on loopback | yes |
+| Anywhere else, or an allowed origin over plain `http` | no — `a2a.card_endpoint_refused` |
+
+```rust
+use adk_server::a2a::RemoteA2aAgent;
+
+let remote = RemoteA2aAgent::builder("billing")
+    .agent_url("https://agents.example.com")
+    // The card at agents.example.com names its RPC endpoint on rpc.example.com.
+    .allow_endpoint_origin("https://rpc.example.com")
+    .build()?;
+```
+
+A card passed to `A2aClient::new` or `A2aV1Client::new` directly is trusted as given.
+
+### Streams
+
+The clients decode a stream only once a whole SSE line has arrived, so a multi-byte character
+split across reads arrives intact. A stream that ends before the task reaches a final status
+(`completed`, `failed`, `canceled`, `rejected`, `input-required`, or `auth-required`) ends in an
+error: `A2aClient::send_streaming_message` yields an `Err`, and `RemoteA2aAgent` and
+`RemoteA2aV1Agent` yield an event with `error_message` set.
 
 ## Error Handling
 
@@ -411,8 +448,15 @@ Use `SendStreamingMessage` when live updates are required.
 | first, before output | `Task`, then `TaskStatusUpdateEvent` — `Working` |
 | content, `partial = true` | `TaskArtifactUpdateEvent` — `append`, not last chunk |
 | content, `partial = false` | `TaskArtifactUpdateEvent` — final chunk |
+| stream ends after a call held for confirmation, or a long-running call | `TaskStatusUpdateEvent` — `InputRequired` |
+| stream ends after an `adk_request_credential` call | `TaskStatusUpdateEvent` — `AuthRequired` |
 | stream ends | `TaskStatusUpdateEvent` — `Completed` |
 | stream errors | `TaskStatusUpdateEvent` — `Failed` |
+
+`SendMessage` and the pre-v1 `message/send` and `message/stream` routes end a task in the same
+states (`input-required`, `auth-required`, `completed`). A message on the same `contextId`
+resumes an `InputRequired` task. Model thinking (`Part::Thinking`) is never sent to a peer:
+only the answer text is.
 
 All chunks of one response share an artifact ID so a client can reassemble them. The joined text
 is persisted, so a later `GetTask` returns what was streamed. This matches the contract

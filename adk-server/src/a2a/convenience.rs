@@ -37,7 +37,7 @@ use adk_session::{InMemorySessionService, SessionService};
 use axum::Router;
 
 use crate::a2a::types::{AgentCapabilities, AgentCard};
-use crate::config::ServerConfig;
+use crate::config::{SecurityConfig, ServerConfig};
 use crate::rest::{ServerBuilder, create_app_with_a2a};
 
 /// Convenience wrapper for quickly starting an A2A-capable server.
@@ -53,7 +53,7 @@ use crate::rest::{ServerBuilder, create_app_with_a2a};
 /// use std::sync::Arc;
 ///
 /// let app = A2aServer::quick_start(my_agent);
-/// let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+/// let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
 /// axum::serve(listener, app).await?;
 /// ```
 pub struct A2aServer;
@@ -75,7 +75,7 @@ impl A2aServer {
     /// use std::sync::Arc;
     ///
     /// let app = A2aServer::quick_start(my_agent);
-    /// let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    /// let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
     /// axum::serve(listener, app).await?;
     /// ```
     pub fn quick_start(agent: Arc<dyn Agent>) -> Router {
@@ -134,6 +134,7 @@ pub struct A2aServerBuilder {
     streaming_enabled: bool,
     push_notifications_enabled: bool,
     skill_index: Option<Arc<adk_skill::SkillIndex>>,
+    security: Option<SecurityConfig>,
 }
 
 impl Default for A2aServerBuilder {
@@ -152,6 +153,7 @@ impl Default for A2aServerBuilder {
             streaming_enabled: true,
             push_notifications_enabled: false,
             skill_index: None,
+            security: None,
         }
     }
 }
@@ -176,7 +178,10 @@ impl A2aServerBuilder {
     /// Set the bind address for the server.
     ///
     /// Defaults to `"127.0.0.1:8080"` (loopback only). Pass `"0.0.0.0:8080"` to
-    /// accept connections on every interface.
+    /// accept connections on every interface; the server then answers IP addresses,
+    /// `localhost`, and the host of the agent card URL, plus any host listed in
+    /// [`SecurityConfig::allowed_hosts`](crate::SecurityConfig::allowed_hosts) via
+    /// [`security_config`](Self::security_config).
     pub fn bind_addr(mut self, addr: impl Into<String>) -> Self {
         self.bind_addr = addr.into();
         self
@@ -252,6 +257,28 @@ impl A2aServerBuilder {
         self
     }
 
+    /// Set the server's CORS, host, body-size, and timeout settings.
+    ///
+    /// Defaults to [`SecurityConfig::default`]: no cross-origin access, and only
+    /// loopback names, IP addresses, and the agent card URL's host are answered.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_server::SecurityConfig;
+    ///
+    /// let server = A2aServer::builder()
+    ///     .agent(my_agent)
+    ///     .bind_addr("0.0.0.0:8080")
+    ///     .agent_card_url("https://agents.example.com")
+    ///     .security_config(SecurityConfig::default().with_allowed_hosts(["agents.internal"]))
+    ///     .build()?;
+    /// ```
+    pub fn security_config(mut self, security: SecurityConfig) -> Self {
+        self.security = Some(security);
+        self
+    }
+
     /// Build the configured A2A server application.
     ///
     /// # Errors
@@ -294,7 +321,10 @@ impl A2aServerBuilder {
             .unwrap_or_else(|| format!("http://localhost:{}", extract_port(&self.bind_addr)));
 
         let agent_loader = Arc::new(SingleAgentLoader::new(agent.clone()));
-        let config = ServerConfig::new(agent_loader, session_service);
+        let mut config = ServerConfig::new(agent_loader, session_service);
+        if let Some(security) = self.security {
+            config = config.with_security(security);
+        }
 
         // Build a custom agent card if any overrides were specified
         let _agent_card = build_custom_agent_card(
@@ -378,7 +408,7 @@ impl A2aServerApp {
                     ErrorCategory::Unavailable,
                     "server.a2a.port_in_use",
                     format!(
-                        "Port {port} is already in use. Try a different port with .bind_addr(\"0.0.0.0:{alt_port}\")"
+                        "Port {port} is already in use. Try a different port with .bind_addr(\"127.0.0.1:{alt_port}\")"
                     ),
                 )
                 .with_source(e)

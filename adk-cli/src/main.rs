@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
                 .await
                 .map_err(Into::into)
         }
-        Some(Commands::Serve { port }) => {
+        Some(Commands::Serve { port, host }) => {
             let agent = build_agent(
                 cli.provider,
                 cli.model,
@@ -54,6 +54,7 @@ async fn main() -> Result<()> {
             )?;
             Launcher::new(Arc::new(agent))
                 .app_name("adk-rust")
+                .with_bind_address(host)
                 .run_serve_directly(port)
                 .await
                 .map_err(Into::into)

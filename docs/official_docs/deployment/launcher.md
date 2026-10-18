@@ -59,8 +59,8 @@ cargo run
 The server will start and display:
 
 ```
-🚀 ADK Server starting on http://localhost:8080
-📱 Open http://localhost:8080 in your browser
+ADK Server starting on http://127.0.0.1:8080
+Open http://localhost:8080 in your browser
 Press Ctrl+C to stop
 ```
 
@@ -152,9 +152,12 @@ let app = Launcher::new(Arc::new(agent))
     .build_app()?;
 
 let app = app.merge(my_admin_routes());
-let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
 axum::serve(listener, app).await?;
 ```
+
+The app answers only loopback names, IP addresses, and the A2A base URL's host, and allows no
+cross-origin browser access; see [Host, Origin, and Bind Defaults](server.md#host-origin-and-bind-defaults).
 
 Use `build_app_with_a2a(...)` if you want the A2A routes enabled explicitly.
 
@@ -191,6 +194,11 @@ The full CLI launcher supports the following commands when a `cli-*` feature is 
 | `chat` | Interactive console (explicit) | `cargo run -- chat` |
 | `serve` | HTTP server mode | `cargo run -- serve` |
 | `serve --port PORT` | HTTP server on custom port | `cargo run -- serve --port 3000` |
+| `serve --host ADDRESS` | Listen on another address; `127.0.0.1` by default | `cargo run -- serve --host 0.0.0.0` |
+
+`serve` listens on `127.0.0.1` unless `--host` or `Launcher::with_bind_address` says otherwise.
+Before listening on every interface, configure authentication and list the server's public host
+names in `SecurityConfig::allowed_hosts`.
 
 ## Complete Example
 

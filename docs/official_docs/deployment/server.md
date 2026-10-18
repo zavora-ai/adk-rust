@@ -9,7 +9,8 @@ The server is built on Axum and provides:
 - **REST API**: HTTP endpoints for agent execution and session management
 - **Server-Sent Events (SSE)**: Real-time streaming of agent responses
 - **Web UI**: Interactive browser-based interface
-- **CORS Support**: Cross-origin requests enabled
+- **Host and origin checks**: loopback names and IP addresses only, and no cross-origin
+  browser access, until [configured](#host-origin-and-bind-defaults)
 - **Telemetry**: Built-in observability with tracing
 
 `ServerConfig` also exposes runner-level passthrough for long-running
@@ -551,9 +552,62 @@ The API uses structured error responses with HTTP status codes derived from the 
 
 Fields `requestId`, `retryAfter`, and `upstreamStatusCode` are included when available (null otherwise).
 
-## CORS Configuration
+## Host, Origin, and Bind Defaults
 
-The server enables permissive CORS by default, allowing requests from any origin. This is suitable for development but should be restricted in production.
+The defaults expose the server to this machine only. Each one is changed explicitly.
+
+| Setting | Default | Change it with |
+|---------|---------|----------------|
+| Listen address (`Launcher`, `adk_cli::serve::run_serve`, `serve` command) | `127.0.0.1` | `Launcher::with_bind_address`, `serve --host 0.0.0.0` |
+| `Host` names answered | `localhost`, `*.localhost`, any IP address | `SecurityConfig::allowed_hosts` / `ServerConfig::with_allowed_hosts` |
+| Cross-origin browser access (CORS) | none | `SecurityConfig::allowed_origins` / `ServerConfig::with_allowed_origins` |
+
+- **Host check**: a request whose `Host` names any other host is refused with `403`. A page on
+  a DNS-rebinding domain reaches a loopback server as a same-origin request, so CORS never
+  applies to it; the `Host` header still names the attacker's domain. The host of the A2A base
+  URL and of `ServerConfig::backend_url` is answered automatically. Entries are exact names
+  (`agents.example.com`), a domain with its subdomains (`.example.com`), or `*`.
+- **Origin check**: a request whose `Origin` names another origin not in `allowed_origins` is
+  refused with `403`, and preflights get no `Access-Control-Allow-Origin`. Entries are exact
+  origins (`https://app.example.com`), an origin on any port (`http://localhost:*`), or `*`.
+- **`SecurityConfig::development()`** admits loopback origins on any port, so a frontend dev
+  server on `http://localhost:5173` can call the API.
+- **Agent Engine routes** (`ServerBuilder::with_agent_engine`) skip the host check: the platform
+  fronts the container and chooses the `Host` it forwards.
+
+Expose a server beyond this machine by listening on every interface, naming its public hosts,
+and configuring authentication:
+
+```rust
+use adk_rust::prelude::*;
+use adk_rust::server::SecurityConfig;
+use adk_rust::Launcher;
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let agent = LlmAgentBuilder::new("my_agent").model(model).build()?;
+
+    Launcher::new(Arc::new(agent))
+        .with_bind_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+        .with_security_config(SecurityConfig {
+            allowed_hosts: vec!["agents.example.com".to_string()],
+            allowed_origins: vec!["https://app.example.com".to_string()],
+            ..SecurityConfig::default()
+        })
+        .run_serve_directly(8080)
+        .await
+}
+```
+
+> **Note:** Before 3.0 the server listened on `0.0.0.0`, answered every `Host`, and allowed every
+> origin when `allowed_origins` was empty. To migrate, pass `serve --host 0.0.0.0` or call
+> `with_bind_address` where the server must be reachable from other machines, list its public
+> host names in `allowed_hosts`, and list the browser origins that call it in `allowed_origins`
+> (`vec!["*".to_string()]` restores the previous CORS behaviour).
 
 ## Telemetry
 
@@ -577,7 +631,8 @@ RUST_LOG=debug cargo run
 1. **Session Management**: Always create a session before running an agent
 2. **Error Handling**: Check HTTP status codes and handle errors appropriately
 3. **Streaming**: Use SSE for real-time responses; parse events line by line
-4. **Security**: In production, implement authentication and restrict CORS
+4. **Security**: In production, implement authentication, and list only the hosts and origins
+   that reach the server in `SecurityConfig`
 5. **Persistence**: Use `SqliteSessionService` or `PostgresSessionService` for production deployments
 6. **Monitoring**: Enable telemetry and monitor logs for issues
 

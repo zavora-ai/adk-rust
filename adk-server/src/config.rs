@@ -7,10 +7,42 @@ use adk_core::{CacheCapable, ContextCacheConfig, EventsCompactionConfig};
 use std::path::PathBuf;
 
 /// Security configuration for the ADK server.
+///
+/// The defaults admit only same-origin browser traffic for loopback host names and IP
+/// addresses. Each field below lists what to set when the server is reached another way.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_server::SecurityConfig;
+///
+/// let security = SecurityConfig {
+///     allowed_origins: vec!["https://app.example.com".to_string()],
+///     allowed_hosts: vec!["agents.example.com".to_string()],
+///     ..SecurityConfig::default()
+/// };
+/// assert!(security.allows_host("agents.example.com:443"));
+/// assert!(!security.allows_host("rebind.attacker.example"));
+/// ```
 #[derive(Clone, Debug)]
 pub struct SecurityConfig {
-    /// Allowed origins for CORS (empty = allow all, which is NOT recommended for production)
+    /// Browser origins allowed to call the server from another origin (CORS).
+    ///
+    /// Empty — the default — allows no cross-origin access: preflights get no
+    /// `Access-Control-Allow-Origin`, and a request whose `Origin` names another origin is
+    /// refused with `403`. Entries are exact origins (`https://app.example.com`), an origin
+    /// with any port (`http://localhost:*`), or `*` for every origin.
     pub allowed_origins: Vec<String>,
+    /// Host names the server answers, in addition to `localhost`, `*.localhost`, and IP
+    /// addresses, which are always answered.
+    ///
+    /// A request whose `Host` names any other host is refused with `403`, so a page on a
+    /// DNS-rebinding domain cannot reach the server through the browser. Entries are exact
+    /// names (`agents.example.com`), a domain and its subdomains (`.example.com`), or `*`
+    /// for every host. The host of an A2A base URL and of the backend URL configured on
+    /// [`ServerConfig`] is added automatically. List the public host names here when the
+    /// server listens beyond loopback.
+    pub allowed_hosts: Vec<String>,
     /// Maximum request body size in bytes (default: 10MB)
     pub max_body_size: usize,
     /// Request timeout duration (default: 30 seconds)
@@ -24,7 +56,8 @@ pub struct SecurityConfig {
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
-            allowed_origins: Vec::new(), // Empty = permissive (for dev), should be configured for prod
+            allowed_origins: Vec::new(),
+            allowed_hosts: Vec::new(),
             max_body_size: 10 * 1024 * 1024, // 10MB
             request_timeout: Duration::from_secs(30),
             expose_error_details: false,
@@ -33,11 +66,24 @@ impl Default for SecurityConfig {
     }
 }
 
+/// Origins [`SecurityConfig::development`] admits: loopback on any port.
+const LOOPBACK_ORIGINS: [&str; 6] = [
+    "http://localhost:*",
+    "https://localhost:*",
+    "http://127.0.0.1:*",
+    "https://127.0.0.1:*",
+    "http://[::1]:*",
+    "https://[::1]:*",
+];
+
 impl SecurityConfig {
-    /// Create a development configuration (permissive CORS, detailed errors)
+    /// A development configuration: detailed errors, admin debug endpoints, and
+    /// cross-origin access from loopback origins on any port, so a frontend dev server on
+    /// `http://localhost:5173` can call the API.
     pub fn development() -> Self {
         Self {
-            allowed_origins: Vec::new(),
+            allowed_origins: LOOPBACK_ORIGINS.iter().map(|origin| (*origin).to_string()).collect(),
+            allowed_hosts: Vec::new(),
             max_body_size: 10 * 1024 * 1024,
             request_timeout: Duration::from_secs(60),
             expose_error_details: true,
@@ -45,15 +91,133 @@ impl SecurityConfig {
         }
     }
 
-    /// Create a production configuration with specific allowed origins
+    /// A production configuration admitting cross-origin calls from `allowed_origins` only.
     pub fn production(allowed_origins: Vec<String>) -> Self {
         Self {
             allowed_origins,
+            allowed_hosts: Vec::new(),
             max_body_size: 10 * 1024 * 1024,
             request_timeout: Duration::from_secs(30),
             expose_error_details: false,
             expose_admin_debug: false,
         }
+    }
+
+    /// Adds host names the server answers; see [`allowed_hosts`](Self::allowed_hosts).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_server::SecurityConfig;
+    ///
+    /// let security = SecurityConfig::default().with_allowed_hosts(["agents.example.com"]);
+    /// assert!(security.allows_host("agents.example.com"));
+    /// ```
+    pub fn with_allowed_hosts<I, S>(mut self, hosts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.allowed_hosts.extend(hosts.into_iter().map(Into::into));
+        self
+    }
+
+    /// Whether a request whose `Host` header (or URI authority) is `host` is answered.
+    ///
+    /// `localhost`, its subdomains, and IP addresses are always answered; any other name
+    /// must match [`allowed_hosts`](Self::allowed_hosts). The port is ignored.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_server::SecurityConfig;
+    ///
+    /// let security = SecurityConfig::default();
+    /// assert!(security.allows_host("127.0.0.1:8080"));
+    /// assert!(security.allows_host("localhost:8080"));
+    /// assert!(!security.allows_host("rebind.attacker.example:8080"));
+    /// ```
+    pub fn allows_host(&self, host: &str) -> bool {
+        host_allowed(host, &self.allowed_hosts)
+    }
+
+    /// Whether a browser on `origin` may call the server from another origin.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_server::SecurityConfig;
+    ///
+    /// assert!(!SecurityConfig::default().allows_origin("https://evil.example"));
+    /// assert!(SecurityConfig::development().allows_origin("http://localhost:5173"));
+    /// ```
+    pub fn allows_origin(&self, origin: &str) -> bool {
+        self.allowed_origins.iter().any(|entry| origin_matches(entry, origin))
+    }
+}
+
+/// The host part of a `Host` header or authority: no port, no IPv6 brackets, no trailing
+/// dot, lowercase.
+pub(crate) fn host_name(authority: &str) -> String {
+    let authority = authority.trim();
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or_default()
+    } else {
+        match authority.rsplit_once(':') {
+            // A bare IPv6 address has more than one colon and no port.
+            Some((host, port))
+                if !host.contains(':') && port.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                host
+            }
+            _ => authority,
+        }
+    };
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn host_allowed(authority: &str, allowed: &[String]) -> bool {
+    let host = host_name(authority);
+    if host.parse::<std::net::IpAddr>().is_ok()
+        || host == "localhost"
+        || host.ends_with(".localhost")
+    {
+        return true;
+    }
+    allowed.iter().any(|entry| {
+        let entry = entry.trim();
+        if entry == "*" {
+            return true;
+        }
+        match entry.strip_prefix("*.").or_else(|| entry.strip_prefix('.')) {
+            Some(domain) => {
+                let domain = host_name(domain);
+                host == domain || host.ends_with(&format!(".{domain}"))
+            }
+            None => host == host_name(entry),
+        }
+    })
+}
+
+fn origin_matches(entry: &str, origin: &str) -> bool {
+    let entry = entry.trim().trim_end_matches('/');
+    if entry == "*" || entry.eq_ignore_ascii_case(origin) {
+        return true;
+    }
+    let Some(prefix) = entry.strip_suffix(":*") else {
+        return false;
+    };
+    let Some(head) = origin.get(..prefix.len()) else {
+        return false;
+    };
+    if !head.eq_ignore_ascii_case(prefix) {
+        return false;
+    }
+    match &origin[prefix.len()..] {
+        "" => true,
+        rest => rest
+            .strip_prefix(':')
+            .is_some_and(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())),
     }
 }
 
@@ -188,9 +352,24 @@ impl ServerConfig {
         self
     }
 
-    /// Configure allowed CORS origins
+    /// Sets the browser origins allowed to call the server cross-origin; see
+    /// [`SecurityConfig::allowed_origins`].
     pub fn with_allowed_origins(mut self, origins: Vec<String>) -> Self {
         self.security.allowed_origins = origins;
+        self
+    }
+
+    /// Sets the host names the server answers besides loopback names and IP addresses;
+    /// see [`SecurityConfig::allowed_hosts`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let config = ServerConfig::new(loader, sessions)
+    ///     .with_allowed_hosts(vec!["agents.example.com".to_string()]);
+    /// ```
+    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.security.allowed_hosts = hosts;
         self
     }
 
@@ -336,6 +515,76 @@ mod tests {
         let agent_loader = Arc::new(SingleAgentLoader::new(Arc::new(TestAgent)));
         let session_service = Arc::new(InMemorySessionService::new());
         ServerConfig::new(agent_loader, session_service)
+    }
+
+    #[test]
+    fn host_name_strips_port_brackets_and_trailing_dot() {
+        assert_eq!(host_name("Agents.Example.com:8443"), "agents.example.com");
+        assert_eq!(host_name("[::1]:8080"), "::1");
+        assert_eq!(host_name("::1"), "::1");
+        assert_eq!(host_name("localhost."), "localhost");
+        assert_eq!(host_name("127.0.0.1:80"), "127.0.0.1");
+    }
+
+    #[test]
+    fn default_security_answers_loopback_names_and_ip_addresses_only() {
+        let security = SecurityConfig::default();
+        for host in ["localhost:8080", "app.localhost", "127.0.0.1:8080", "[::1]:8080", "10.0.0.5"]
+        {
+            assert!(security.allows_host(host), "{host} should be answered");
+        }
+        for host in ["rebind.attacker.example:8080", "localhost.attacker.example", "example.com"] {
+            assert!(!security.allows_host(host), "{host} should be refused");
+        }
+    }
+
+    #[test]
+    fn allowed_hosts_match_exact_names_domains_and_wildcard() {
+        let exact = SecurityConfig::default().with_allowed_hosts(["agents.example.com"]);
+        assert!(exact.allows_host("AGENTS.example.com:443"));
+        assert!(!exact.allows_host("api.agents.example.com"));
+
+        let domain = SecurityConfig::default().with_allowed_hosts([".example.com"]);
+        assert!(domain.allows_host("example.com"));
+        assert!(domain.allows_host("api.example.com"));
+        assert!(!domain.allows_host("example.com.attacker.example"));
+        assert!(!domain.allows_host("notexample.com"));
+
+        let any = SecurityConfig::default().with_allowed_hosts(["*"]);
+        assert!(any.allows_host("anything.example"));
+    }
+
+    #[test]
+    fn default_security_allows_no_cross_origin_access() {
+        let security = SecurityConfig::default();
+        assert!(!security.allows_origin("https://evil.example"));
+        assert!(!security.allows_origin("http://localhost:5173"));
+    }
+
+    #[test]
+    fn origin_entries_match_exact_any_port_and_wildcard() {
+        let security = SecurityConfig::production(vec![
+            "https://app.example.com".to_string(),
+            "http://localhost:*".to_string(),
+        ]);
+        assert!(security.allows_origin("https://app.example.com"));
+        assert!(!security.allows_origin("https://app.example.com.attacker.example"));
+        assert!(security.allows_origin("http://localhost:5173"));
+        assert!(security.allows_origin("http://localhost"));
+        assert!(!security.allows_origin("http://localhost.attacker.example"));
+        assert!(!security.allows_origin("http://localhost:"));
+        assert!(!security.allows_origin("https://localhost:5173"));
+
+        assert!(SecurityConfig::production(vec!["*".to_string()]).allows_origin("null"));
+    }
+
+    #[test]
+    fn development_security_allows_loopback_origins_on_any_port() {
+        let security = SecurityConfig::development();
+        assert!(security.allows_origin("http://localhost:5173"));
+        assert!(security.allows_origin("http://127.0.0.1:3000"));
+        assert!(security.allows_origin("http://[::1]:8080"));
+        assert!(!security.allows_origin("https://evil.example"));
     }
 
     #[test]

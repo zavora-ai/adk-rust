@@ -89,6 +89,10 @@ adk-rust deploy       External platform integration commands
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port` | `8080` | Server port |
+| `--host` | `127.0.0.1` | Listen address; `0.0.0.0` listens on every interface |
+
+The server answers only loopback names and IP addresses, and allows no cross-origin browser
+access, unless `SecurityConfig` lists more hosts and origins.
 
 ### `adk-rust skills` subcommands
 
@@ -202,7 +206,8 @@ Launcher::new(Arc::new(agent))
 | `with_memory_service(svc)` | Custom `Memory` service for semantic search |
 | `with_compaction(config)` | Enable runner-level context compaction in serve mode |
 | `with_context_cache(config, model)` | Enable automatic prompt cache lifecycle management |
-| `with_security_config(config)` | Custom server security settings |
+| `with_security_config(config)` | Custom server security settings: allowed hosts and origins, body size, timeout |
+| `with_bind_address(addr)` | Address serve mode listens on (default `127.0.0.1`) |
 | `with_request_context_extractor(ext)` | Request context extractor for authenticated deployments |
 | `with_a2a_base_url(url)` | Enable A2A routes when building or serving |
 | `with_telemetry(config)` | Configure telemetry initialization for serve mode |

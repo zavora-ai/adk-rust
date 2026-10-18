@@ -54,19 +54,27 @@ let config = ServerConfig::new(
 
 let app = create_app(config);
 
-let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
 axum::serve(listener, app).await?;
 ```
 
 ### Security Configuration
 
-Configure CORS, timeouts, and other security settings:
+By default the server answers only `localhost`, `*.localhost`, and IP addresses in the `Host`
+header (plus the host of the A2A base URL), and allows no cross-origin browser access. A request
+for any other host, or from any other origin, is refused with `403`. List what else reaches the
+server:
 
 ```rust
 use adk_server::{ServerConfig, SecurityConfig};
 use std::time::Duration;
 
-// Development mode (permissive CORS, detailed errors)
+// Public host names and the browser origins that call the API
+let config = ServerConfig::new(agent_loader, session_service)
+    .with_allowed_hosts(vec!["agents.example.com".to_string()])
+    .with_allowed_origins(vec!["https://app.example.com".to_string()]);
+
+// Development mode (loopback origins on any port, detailed errors)
 let config = ServerConfig::new(agent_loader, session_service)
     .with_security(SecurityConfig::development());
 
@@ -139,7 +147,7 @@ let app = ServerBuilder::new(config)
     .with_a2a("http://localhost:8080")
     .build();
 
-let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
 axum::serve(listener, app).await?;
 ```
 
@@ -166,7 +174,7 @@ let (app, shutdown_handle) = ServerBuilder::new(config)
     .enable_shutdown_endpoint()
     .build_with_shutdown();
 
-let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
 axum::serve(listener, app)
     .with_graceful_shutdown(shutdown_handle.signal())
     .await?;
@@ -218,6 +226,11 @@ let coordinator = LlmAgentBuilder::new("coordinator")
     .sub_agent(Arc::new(remote))
     .build()?;
 ```
+
+The agent card's endpoint must be on `agent_url`'s origin, or on an origin added with
+`allow_endpoint_origin` (over `https` unless loopback); a card naming any other host is refused
+with `a2a.card_endpoint_refused`. A stream that ends before its task reaches a final status is
+reported as an error event, and model thinking is never sent to a peer.
 
 ### Auth Bridge
 

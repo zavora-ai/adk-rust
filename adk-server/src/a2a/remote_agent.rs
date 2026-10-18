@@ -26,6 +26,10 @@ pub struct RemoteA2aConfig {
     pub credential_broker: Option<Arc<dyn adk_core::CredentialBroker>>,
     /// Scopes requested from the [`credential_broker`](Self::credential_broker).
     pub credential_scopes: Vec<String>,
+    /// Origins besides `agent_url`'s own that the agent card may name as its endpoint;
+    /// see [`check_card_endpoint`](crate::a2a::client::check_card_endpoint). Empty by
+    /// default, so a card naming another origin is refused.
+    pub allowed_endpoint_origins: Vec<String>,
 }
 
 /// Mints a token for `acting` at `resource` with `scopes`.
@@ -75,15 +79,16 @@ impl Agent for RemoteA2aAgent {
         let config_streaming = self.config.streaming;
         let broker = self.config.credential_broker.clone();
         let scopes = self.config.credential_scopes.clone();
+        let allowed_origins = self.config.allowed_endpoint_origins.clone();
         let acting = ctx.acting_context();
 
         // Get user content from context
         let user_content = get_user_content_from_context(ctx.as_ref());
 
         let stream = async_stream::stream! {
-            // Create A2A client
-            let mut client = match A2aClient::from_url(&url).await {
-                Ok(c) => c,
+            // Create A2A client from a card whose endpoint is on an expected origin
+            let mut client = match A2aClient::resolve_agent_card_allowing(&url, &allowed_origins).await {
+                Ok(card) => A2aClient::new(card),
                 Err(e) => {
                     yield Ok(create_error_event(&invocation_id, &agent_name, &e.to_string()));
                     return;
@@ -168,6 +173,7 @@ pub struct RemoteA2aAgentBuilder {
     streaming: Option<bool>,
     credential_broker: Option<Arc<dyn adk_core::CredentialBroker>>,
     credential_scopes: Vec<String>,
+    allowed_endpoint_origins: Vec<String>,
 }
 
 impl RemoteA2aAgentBuilder {
@@ -179,7 +185,17 @@ impl RemoteA2aAgentBuilder {
             streaming: None,
             credential_broker: None,
             credential_scopes: Vec::new(),
+            allowed_endpoint_origins: Vec::new(),
         }
+    }
+
+    /// Accepts an agent card endpoint on `origin`, such as `https://rpc.example.com`, in
+    /// addition to the agent URL's own origin.
+    ///
+    /// See [`RemoteA2aConfig::allowed_endpoint_origins`].
+    pub fn allow_endpoint_origin(mut self, origin: impl Into<String>) -> Self {
+        self.allowed_endpoint_origins.push(origin.into());
+        self
     }
 
     /// Authenticates to the remote agent with a token from `broker`, minted for the
@@ -224,6 +240,7 @@ impl RemoteA2aAgentBuilder {
             streaming: self.streaming,
             credential_broker: self.credential_broker,
             credential_scopes: self.credential_scopes,
+            allowed_endpoint_origins: self.allowed_endpoint_origins,
         }))
     }
 }
@@ -616,13 +633,16 @@ pub mod v1_remote {
                 let message = build_v1_message(user_content);
 
                 if use_streaming {
-                    // Send streaming message and process the SSE response
+                    // Send streaming message and process the SSE response. Bytes are decoded
+                    // only once a whole SSE line has arrived, and a stream that stops before a
+                    // final status is reported as an error.
                     match client.send_streaming_message(message).await {
                         Ok(response) => {
                             use futures::StreamExt;
 
                             let mut bytes_stream = response.bytes_stream();
-                            let mut buffer = String::new();
+                            let mut decoder = crate::a2a::client::SseDecoder::default();
+                            let mut finished = false;
 
                             while let Some(chunk_result) = bytes_stream.next().await {
                                 let chunk = match chunk_result {
@@ -633,32 +653,49 @@ pub mod v1_remote {
                                             &agent_name,
                                             &format!("stream error: {e}"),
                                         ));
-                                        break;
+                                        return;
+                                    }
+                                };
+                                let payloads = match decoder.push(&chunk) {
+                                    Ok(payloads) => payloads,
+                                    Err(e) => {
+                                        yield Ok(create_v1_error_event(&invocation_id, &agent_name, &e.to_string()));
+                                        return;
                                     }
                                 };
 
-                                buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                                // Process complete SSE events (delimited by \n\n)
-                                while let Some(event_end) = buffer.find("\n\n") {
-                                    let event_data = buffer[..event_end].to_string();
-                                    buffer = buffer[event_end + 2..].to_string();
-
-                                    if let Some(data) = parse_sse_data_line(&event_data) {
-                                        if data.is_empty() {
-                                            continue;
+                                for data in payloads {
+                                    if data.trim().is_empty() {
+                                        continue;
+                                    }
+                                    match parse_stream_payload(&data) {
+                                        Some(Ok(stream_response)) => {
+                                            finished |= ends_stream(&stream_response);
+                                            if let Some(event) = convert_stream_response(
+                                                &stream_response,
+                                                &invocation_id,
+                                                &agent_name,
+                                            ) {
+                                                yield Ok(event);
+                                            }
                                         }
-
-                                        // Parse as StreamResponse (may be wrapped in JSON-RPC or direct)
-                                        if let Some(event) = parse_stream_response(
-                                            &data,
-                                            &invocation_id,
-                                            &agent_name,
-                                        ) {
-                                            yield Ok(event);
+                                        Some(Err(error)) => {
+                                            yield Ok(create_v1_error_event(&invocation_id, &agent_name, &error));
+                                            return;
+                                        }
+                                        None => {
+                                            tracing::debug!("failed to parse SSE data as StreamResponse: {data}");
                                         }
                                     }
                                 }
+                            }
+
+                            if !finished {
+                                yield Ok(create_v1_error_event(
+                                    &invocation_id,
+                                    &agent_name,
+                                    &crate::a2a::client::truncated_stream_error().to_string(),
+                                ));
                             }
                         }
                         Err(e) => {
@@ -771,49 +808,49 @@ pub mod v1_remote {
         }
     }
 
-    /// Parses the `data:` field from an SSE event line.
-    fn parse_sse_data_line(event: &str) -> Option<String> {
-        for line in event.lines() {
-            if let Some(data) = line.strip_prefix("data:") {
-                return Some(data.trim().to_string());
-            }
-        }
-        None
-    }
-
-    /// Attempts to parse an SSE data payload as a StreamResponse (either
-    /// direct JSON or wrapped in a JSON-RPC response) and converts it to
-    /// an ADK Event.
-    fn parse_stream_response(data: &str, invocation_id: &str, agent_name: &str) -> Option<Event> {
+    /// Parses one SSE payload: a `StreamResponse`, bare (REST binding) or as a JSON-RPC
+    /// result, or a JSON-RPC error as its message. `None` when it is neither.
+    fn parse_stream_payload(
+        data: &str,
+    ) -> Option<std::result::Result<a2a_protocol_types::events::StreamResponse, String>> {
         use a2a_protocol_types::events::StreamResponse;
 
-        // Try direct StreamResponse first (REST binding)
         if let Ok(stream_resp) = serde_json::from_str::<StreamResponse>(data) {
-            return convert_stream_response(&stream_resp, invocation_id, agent_name);
+            return Some(Ok(stream_resp));
         }
-
-        // Try JSON-RPC wrapped response
-        if let Ok(rpc_value) = serde_json::from_str::<serde_json::Value>(data) {
-            if let Some(result) = rpc_value.get("result")
-                && let Ok(stream_resp) = serde_json::from_value::<StreamResponse>(result.clone())
-            {
-                return convert_stream_response(&stream_resp, invocation_id, agent_name);
-            }
-            // Check for JSON-RPC error
-            if let Some(error) = rpc_value.get("error") {
-                let message =
-                    error.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
-                let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
-                return Some(create_v1_error_event(
-                    invocation_id,
-                    agent_name,
-                    &format!("RPC error {code}: {message}"),
-                ));
-            }
+        let rpc_value = serde_json::from_str::<serde_json::Value>(data).ok()?;
+        if let Some(result) = rpc_value.get("result")
+            && let Ok(stream_resp) = serde_json::from_value::<StreamResponse>(result.clone())
+        {
+            return Some(Ok(stream_resp));
         }
+        let error = rpc_value.get("error")?;
+        let message = error.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+        let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+        Some(Err(format!("RPC error {code}: {message}")))
+    }
 
-        tracing::debug!("failed to parse SSE data as StreamResponse: {data}");
-        None
+    /// Whether `response` is the last of its stream: a direct message, or a task or status
+    /// in a state the task stops in.
+    fn ends_stream(response: &a2a_protocol_types::events::StreamResponse) -> bool {
+        use a2a_protocol_types::events::StreamResponse;
+        use a2a_protocol_types::task::TaskState;
+
+        let state = match response {
+            StreamResponse::StatusUpdate(update) => update.status.state,
+            StreamResponse::Task(task) => task.status.state,
+            StreamResponse::Message(_) => return true,
+            _ => return false,
+        };
+        matches!(
+            state,
+            TaskState::Completed
+                | TaskState::Failed
+                | TaskState::Canceled
+                | TaskState::Rejected
+                | TaskState::InputRequired
+                | TaskState::AuthRequired
+        )
     }
 
     /// Converts a `StreamResponse` into an ADK `Event`.
@@ -1032,15 +1069,57 @@ pub mod v1_remote {
         }
 
         #[test]
-        fn parse_sse_data_line_extracts_data() {
-            let event = "event: message\ndata: {\"test\": true}\n";
-            assert_eq!(parse_sse_data_line(event), Some("{\"test\": true}".to_string()));
+        fn stream_payloads_parse_bare_wrapped_and_error_forms() {
+            use a2a_protocol_types::events::StreamResponse;
+            use a2a_protocol_types::task::{ContextId, TaskId, TaskState, TaskStatus};
+
+            let update =
+                StreamResponse::StatusUpdate(a2a_protocol_types::events::TaskStatusUpdateEvent {
+                    task_id: TaskId::new("t1"),
+                    context_id: ContextId::new("c1"),
+                    status: TaskStatus::new(TaskState::InputRequired),
+                    metadata: None,
+                });
+            let bare = serde_json::to_string(&update).unwrap();
+            let wrapped =
+                serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": update}).to_string();
+            for data in [bare, wrapped] {
+                let parsed = parse_stream_payload(&data).unwrap().unwrap();
+                assert!(ends_stream(&parsed));
+            }
+
+            let error = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"boom"}}"#;
+            assert_eq!(parse_stream_payload(error).unwrap().unwrap_err(), "RPC error -32603: boom");
+            assert!(parse_stream_payload("not json").is_none());
         }
 
         #[test]
-        fn parse_sse_data_line_returns_none_without_data() {
-            let event = "event: ping\n";
-            assert!(parse_sse_data_line(event).is_none());
+        fn working_and_artifact_updates_do_not_end_a_stream() {
+            use a2a_protocol_types::events::StreamResponse;
+            use a2a_protocol_types::task::{ContextId, TaskId, TaskState, TaskStatus};
+
+            let working =
+                StreamResponse::StatusUpdate(a2a_protocol_types::events::TaskStatusUpdateEvent {
+                    task_id: TaskId::new("t1"),
+                    context_id: ContextId::new("c1"),
+                    status: TaskStatus::new(TaskState::Working),
+                    metadata: None,
+                });
+            assert!(!ends_stream(&working));
+            let artifact = StreamResponse::ArtifactUpdate(
+                a2a_protocol_types::events::TaskArtifactUpdateEvent {
+                    task_id: TaskId::new("t1"),
+                    context_id: ContextId::new("c1"),
+                    artifact: a2a_protocol_types::artifact::Artifact::new(
+                        a2a_protocol_types::ArtifactId::new("a1"),
+                        vec![a2a_protocol_types::Part::text("hi")],
+                    ),
+                    append: None,
+                    last_chunk: Some(true),
+                    metadata: None,
+                },
+            );
+            assert!(!ends_stream(&artifact));
         }
 
         #[test]

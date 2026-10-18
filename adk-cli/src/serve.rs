@@ -11,10 +11,11 @@ use anyhow::Result;
 use std::sync::Arc;
 use tracing::warn;
 
-/// Start a web server with the given agent loader.
+/// Start a web server with the given agent loader on `127.0.0.1:{port}`.
 ///
 /// This is a convenience wrapper kept for backward compatibility with
-/// existing examples. Prefer [`Launcher`](crate::Launcher) for new code.
+/// existing examples. Prefer [`Launcher`](crate::Launcher) for new code; its
+/// [`with_bind_address`](crate::Launcher::with_bind_address) listens on other interfaces.
 pub async fn run_serve(agent_loader: Arc<dyn AgentLoader>, port: u16) -> Result<()> {
     let span_exporter = match adk_telemetry::init_with_adk_exporter("adk-server") {
         Ok(exporter) => Some(exporter),
@@ -34,10 +35,10 @@ pub async fn run_serve(agent_loader: Arc<dyn AgentLoader>, port: u16) -> Result<
 
     let app = create_app(config);
 
-    let addr = format!("0.0.0.0:{port}");
+    let addr = format!("127.0.0.1:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    println!("ADK Server starting on http://localhost:{port}");
+    println!("ADK Server starting on http://{addr}");
     println!("Press Ctrl+C to stop");
 
     axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;

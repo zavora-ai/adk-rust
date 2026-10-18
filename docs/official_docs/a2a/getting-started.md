@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let app = A2aServer::quick_start(agent);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -131,7 +131,8 @@ async fn main() -> anyhow::Result<()> {
 | Builder Method | Default | Description |
 |----------------|---------|-------------|
 | `.agent(agent)` | *required* | The agent to expose |
-| `.bind_addr(addr)` | `0.0.0.0:8080` | Server bind address |
+| `.bind_addr(addr)` | `127.0.0.1:8080` | Server bind address; `0.0.0.0:8080` listens on every interface |
+| `.security_config(config)` | `SecurityConfig::default()` | Hosts and origins the server answers; the agent card URL's host is always answered |
 | `.session_service(svc)` | In-memory | Session backend |
 | `.agent_card_name(name)` | `agent.name()` | Agent card display name |
 | `.agent_card_description(desc)` | `agent.description()` | Agent card description |

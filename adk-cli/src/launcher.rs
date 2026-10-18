@@ -24,9 +24,12 @@
 //! # Interactive console (default)
 //! cargo run
 //!
-//! # Web server with UI
+//! # Web server with UI, on loopback
 //! cargo run -- serve
 //! cargo run -- serve --port 3000
+//!
+//! # Listen on every interface (configure authentication and allowed hosts first)
+//! cargo run -- serve --host 0.0.0.0
 //! ```
 
 use adk_artifact::ArtifactService;
@@ -47,6 +50,7 @@ use rustyline::DefaultEditor;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{self, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -70,6 +74,11 @@ enum LauncherCommand {
         /// Server port
         #[arg(long, default_value_t = 8080)]
         port: u16,
+        /// Address to listen on. Defaults to the launcher's bind address (127.0.0.1
+        /// unless `with_bind_address` changed it); pass 0.0.0.0 to listen on every
+        /// interface.
+        #[arg(long)]
+        host: Option<IpAddr>,
     },
     /// Optimize agent instructions using an evaluation set
     #[cfg(feature = "optimize")]
@@ -116,7 +125,10 @@ impl Default for TelemetryConfig {
 ///
 /// # Serve mode
 ///
-/// Starts an Axum HTTP server with the ADK web UI.
+/// Starts an Axum HTTP server with the ADK web UI on `127.0.0.1`. Listening on
+/// other interfaces is an explicit choice: [`with_bind_address`](Self::with_bind_address)
+/// or `serve --host`. The server then answers only loopback names and IP addresses until
+/// its public host names are listed in [`SecurityConfig::allowed_hosts`].
 ///
 /// # Note on `with_streaming_mode`
 ///
@@ -139,6 +151,7 @@ pub struct Launcher {
     shutdown_grace_period: Duration,
     run_config: Option<RunConfig>,
     thinking_mode: ThinkingDisplayMode,
+    bind_address: IpAddr,
 }
 
 impl Launcher {
@@ -160,6 +173,7 @@ impl Launcher {
             shutdown_grace_period: Duration::from_secs(30),
             run_config: None,
             thinking_mode: ThinkingDisplayMode::Auto,
+            bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
     }
 
@@ -201,6 +215,29 @@ impl Launcher {
     ) -> Self {
         self.context_cache_config = Some(config);
         self.cache_capable = Some(cache_capable);
+        self
+    }
+
+    /// Set the address serve mode listens on. Defaults to `127.0.0.1`.
+    ///
+    /// Pass `0.0.0.0` (or `::`) to accept connections on every interface. Configure
+    /// authentication with [`with_request_context_extractor`](Self::with_request_context_extractor)
+    /// first, and list the public host names in [`SecurityConfig::allowed_hosts`]
+    /// through [`with_security_config`](Self::with_security_config).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::net::{IpAddr, Ipv4Addr};
+    ///
+    /// Launcher::new(agent)
+    ///     .with_bind_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+    ///     .with_security_config(SecurityConfig::default().with_allowed_hosts(["agents.example.com"]))
+    ///     .run_serve_directly(8080)
+    ///     .await?;
+    /// ```
+    pub fn with_bind_address(mut self, address: IpAddr) -> Self {
+        self.bind_address = address;
         self
     }
 
@@ -255,13 +292,20 @@ impl Launcher {
     /// Run the launcher, parsing CLI arguments.
     ///
     /// - No arguments or `chat`: Interactive console
-    /// - `serve [--port PORT]`: Web server with UI
+    /// - `serve [--port PORT] [--host ADDRESS]`: Web server with UI, on `127.0.0.1` unless
+    ///   `--host` or [`with_bind_address`](Self::with_bind_address) says otherwise
     pub async fn run(self) -> Result<()> {
         let cli = LauncherCli::parse();
 
         match cli.command.unwrap_or(LauncherCommand::Chat) {
             LauncherCommand::Chat => self.run_console_directly().await,
-            LauncherCommand::Serve { port } => self.run_serve_directly(port).await,
+            LauncherCommand::Serve { port, host } => {
+                let launcher = match host {
+                    Some(host) => self.with_bind_address(host),
+                    None => self,
+                };
+                launcher.run_serve_directly(port).await
+            }
             #[cfg(feature = "optimize")]
             LauncherCommand::Optimize(args) => {
                 tracing::info!(
@@ -555,17 +599,24 @@ impl Launcher {
 
     /// Run web server without parsing CLI arguments.
     ///
+    /// Listens on the [bind address](Self::with_bind_address), `127.0.0.1` by default.
     /// Use this when you already know you want serve mode (e.g. from
     /// your own CLI parser). [`run`](Self::run) calls this internally.
     pub async fn run_serve_directly(self, port: u16) -> Result<()> {
+        let addr = SocketAddr::new(self.bind_address, port);
         let app = self.build_app()?;
 
-        let addr = format!("0.0.0.0:{port}");
-        let listener = tokio::net::TcpListener::bind(&addr)
+        let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| adk_core::AdkError::config(format!("failed to bind {addr}: {e}")))?;
 
-        println!("ADK Server starting on http://localhost:{port}");
+        if !addr.ip().is_loopback() {
+            warn!(
+                server.address = %addr,
+                "serving beyond loopback; configure authentication, and list public host names in SecurityConfig::allowed_hosts"
+            );
+        }
+        println!("ADK Server starting on http://{addr}");
         println!("Open http://localhost:{port} in your browser");
         println!("Press Ctrl+C to stop\n");
 
@@ -911,6 +962,39 @@ mod tests {
 
     fn test_launcher() -> Launcher {
         Launcher::new(Arc::new(TestAgent)).with_telemetry(TelemetryConfig::None)
+    }
+
+    #[test]
+    fn serve_listens_on_loopback_unless_told_otherwise() {
+        assert_eq!(test_launcher().bind_address, IpAddr::V4(Ipv4Addr::LOCALHOST));
+        let exposed = test_launcher().with_bind_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(exposed.bind_address, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    }
+
+    #[test]
+    fn serve_host_flag_is_an_explicit_opt_in() {
+        let default = LauncherCli::try_parse_from(["agent", "serve"]).unwrap();
+        assert!(matches!(default.command, Some(LauncherCommand::Serve { port: 8080, host: None })));
+
+        let exposed = LauncherCli::try_parse_from(["agent", "serve", "--host", "0.0.0.0"]).unwrap();
+        assert!(matches!(
+            exposed.command,
+            Some(LauncherCommand::Serve { host: Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn built_app_refuses_a_rebinding_host() {
+        let app = test_launcher().build_app().unwrap();
+        let request = |host: &str| {
+            Request::builder().uri("/api/health").header("host", host).body(Body::empty()).unwrap()
+        };
+
+        let refused = app.clone().oneshot(request("rebind.attacker.example:8080")).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        let answered = app.oneshot(request("localhost:8080")).await.unwrap();
+        assert_eq!(answered.status(), StatusCode::OK);
     }
 
     #[test]

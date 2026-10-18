@@ -214,5 +214,5 @@ async fn a_card_pointing_elsewhere_never_receives_the_token() {
 
     assert!(elsewhere.all().is_empty(), "no request reached the card's endpoint");
     assert!(trusted.all().is_empty());
-    assert!(output.iter().any(|text| text.contains("must not be sent")), "{output:?}");
+    assert!(output.iter().any(|text| text.contains("names an endpoint on")), "{output:?}");
 }

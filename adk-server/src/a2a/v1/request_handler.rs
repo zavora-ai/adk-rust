@@ -34,7 +34,18 @@ use super::push::PushNotificationSender;
 use super::stream::wrap_artifact_event;
 use super::task_store::{ListTasksParams, TaskStore, TaskStoreEntry};
 use super::text::ResponseText;
+use crate::a2a::processor::{Awaiting, awaiting};
 use crate::auth_bridge::RequestContext;
+
+/// The state a finished run leaves its task in: waiting on the caller when an event
+/// stopped the run for input or credentials, completed otherwise.
+fn finished_state(pending: Option<Awaiting>) -> TaskState {
+    match pending {
+        Some(Awaiting::Auth) => TaskState::AuthRequired,
+        Some(Awaiting::Input) => TaskState::InputRequired,
+        None => TaskState::Completed,
+    }
+}
 
 /// Validates an ID string (messageId or taskId).
 fn validate_id(id: &str, field_name: &str) -> Result<(), A2aError> {
@@ -503,9 +514,10 @@ impl CallerScope<'_> {
             handler.task_store.add_history_message(&task_id, msg.clone()).await?;
 
             // Run the agent if a runner config is available
+            let mut state = TaskState::Completed;
             if let Some(runner_config) = &handler.runner_config {
                 match self.run_agent(runner_config, &task_id, &context_id, &msg).await {
-                    Ok(()) => {}
+                    Ok(finished) => state = finished,
                     Err(e) => {
                         let _ =
                             handler.executor.fail_task(&task_id, &context_id, &e.to_string()).await;
@@ -515,11 +527,7 @@ impl CallerScope<'_> {
                 }
             }
 
-            // Transition to COMPLETED
-            handler
-                .executor
-                .transition_state(&task_id, &context_id, TaskState::Completed, None)
-                .await?;
+            handler.executor.transition_state(&task_id, &context_id, state, None).await?;
 
             // Record idempotency mapping
             handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
@@ -547,9 +555,10 @@ impl CallerScope<'_> {
         handler.executor.transition_state(&task_id, &context_id, TaskState::Working, None).await?;
 
         // Run the agent if a runner config is available
+        let mut state = TaskState::Completed;
         if let Some(runner_config) = &handler.runner_config {
             match self.run_agent(runner_config, &task_id, &context_id, &msg).await {
-                Ok(()) => {}
+                Ok(finished) => state = finished,
                 Err(e) => {
                     // Transition to FAILED on error
                     let _ = handler.executor.fail_task(&task_id, &context_id, &e.to_string()).await;
@@ -559,11 +568,7 @@ impl CallerScope<'_> {
             }
         }
 
-        // Transition to COMPLETED
-        handler
-            .executor
-            .transition_state(&task_id, &context_id, TaskState::Completed, None)
-            .await?;
+        handler.executor.transition_state(&task_id, &context_id, state, None).await?;
 
         // Record idempotency mapping
         handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
@@ -573,22 +578,25 @@ impl CallerScope<'_> {
         internal_task_to_wire(&entry)
     }
 
-    /// Runs the agent to completion and records its output as a single artifact.
+    /// Runs the agent to completion, records its output as a single artifact, and returns
+    /// the state the run leaves the task in.
     async fn run_agent(
         &self,
         runner_config: &Arc<adk_runner::RunnerConfig>,
         task_id: &str,
         context_id: &str,
         msg: &Message,
-    ) -> Result<(), A2aError> {
+    ) -> Result<TaskState, A2aError> {
         let mut event_stream =
             RequestHandler::start_agent(runner_config, self.caller.as_ref(), context_id, msg)
                 .await?;
 
         let mut response_text = ResponseText::default();
+        let mut pending = None;
         while let Some(result) = event_stream.next().await {
             match result {
                 Ok(event) => {
+                    pending = pending.max(awaiting(&event));
                     response_text.push(&event);
                 }
                 Err(e) => {
@@ -606,7 +614,7 @@ impl CallerScope<'_> {
             self.handler.executor.record_artifact(task_id, context_id, artifact).await?;
         }
 
-        Ok(())
+        Ok(finished_state(pending))
     }
 
     /// Sends a streaming message, returning a stream of SSE events.
@@ -618,6 +626,8 @@ impl CallerScope<'_> {
     /// | first, before any output | `Task`, then `TaskStatusUpdateEvent` — `Working` |
     /// | content with `partial = true` | `TaskArtifactUpdateEvent` — `append`, not last chunk |
     /// | content with `partial = false` | `TaskArtifactUpdateEvent` — final chunk |
+    /// | stream ends after a held or long-running call | `TaskStatusUpdateEvent` — `InputRequired` |
+    /// | stream ends after a credential request | `TaskStatusUpdateEvent` — `AuthRequired` |
     /// | stream ends | `TaskStatusUpdateEvent` — `Completed` |
     /// | stream errors | `TaskStatusUpdateEvent` — `Failed` |
     ///
@@ -692,6 +702,7 @@ impl CallerScope<'_> {
 
         let stream = async_stream::stream! {
             yield Ok(StreamResponse::Task(first_task));
+            let mut pending = None;
 
             match executor.transition_state(&tid, &cid, TaskState::Working, None).await {
                 Ok(event) => yield Ok(StreamResponse::StatusUpdate(event)),
@@ -728,6 +739,7 @@ impl CallerScope<'_> {
                 while let Some(result) = event_stream.next().await {
                     match result {
                         Ok(event) => {
+                            pending = pending.max(awaiting(&event));
                             let Some((text, append)) = full_text.push(&event) else { continue };
 
                             let partial = event.llm_response.partial;
@@ -775,7 +787,7 @@ impl CallerScope<'_> {
                 }
             }
 
-            match executor.transition_state(&tid, &cid, TaskState::Completed, None).await {
+            match executor.transition_state(&tid, &cid, finished_state(pending), None).await {
                 Ok(event) => yield Ok(StreamResponse::StatusUpdate(event)),
                 Err(e) => yield Err(e),
             }

@@ -526,7 +526,11 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
     let app = create_app(config);
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let addr = format!("0.0.0.0:{port}");
+    // Loopback by default. Set BIND_HOST=0.0.0.0 to expose this agent: configure
+    // authentication first, and list its public host names in
+    // SecurityConfig::allowed_hosts, since only loopback names and IP addresses are served.
+    let host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let addr = format!("{host}:{port}");
     tracing::info!("ADK agent server running on http://{addr}");
     tracing::info!("  GET  /api/health                                — health check");
     tracing::info!("  POST /api/sessions                              — create a session (appName, userId)");
@@ -639,6 +643,10 @@ FROM gcr.io/distroless/cc-debian12
 COPY --from=builder /build/target/release/{name} /app/agent
 
 ENV PORT=8080
+# A published port reaches the container from outside its network namespace, so the
+# server listens on every interface here; it still answers only loopback names and IP
+# addresses until its public host names are in SecurityConfig::allowed_hosts.
+ENV BIND_HOST=0.0.0.0
 ENTRYPOINT ["/app/agent"]
 "##;
 
@@ -684,6 +692,10 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifi
 COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/{name} /app/agent
 
 ENV PORT=8080
+# A published port reaches the container from outside its network namespace, so the
+# server listens on every interface here; it still answers only loopback names and IP
+# addresses until its public host names are in SecurityConfig::allowed_hosts.
+ENV BIND_HOST=0.0.0.0
 ENTRYPOINT ["/app/agent"]
 "##;
 
@@ -1066,7 +1078,10 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
             code_fragments: AddonCodeFragments {
                 imports: vec!["use adk_rust::server::A2aServer;"],
                 initialization: r#"let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let addr = format!("0.0.0.0:{port}");
+    // Loopback by default. Set BIND_HOST=0.0.0.0 to expose this agent, and configure
+    // authentication before you do: the A2A JSON-RPC routes run agent and tool work.
+    let host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let addr = format!("{host}:{port}");
 
     let server = A2aServer::builder()
         .agent(agent.clone())
@@ -1076,7 +1091,13 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
     tracing::info!("starting A2A server on http://{}", addr);
     server.serve().await?;"#,
                 agent_builder_calls: "",
-                env_vars: vec![("PORT", "Server port (default: 8080)")],
+                env_vars: vec![
+                    ("PORT", "Server port (default: 8080)"),
+                    (
+                        "BIND_HOST",
+                        "Listen address (default: 127.0.0.1; 0.0.0.0 for every interface)",
+                    ),
+                ],
                 additional_files: vec![],
             },
         },

@@ -55,11 +55,14 @@ pub enum Commands {
     /// Interactive REPL with an AI agent (this is the default)
     Chat,
 
-    /// Start web server with an AI agent
+    /// Start web server with an AI agent, on 127.0.0.1 unless --host says otherwise
     Serve {
         /// Server port
         #[arg(long, default_value_t = 8080)]
         port: u16,
+        /// Address to listen on; pass 0.0.0.0 to listen on every interface
+        #[arg(long, default_value = "127.0.0.1")]
+        host: std::net::IpAddr,
     },
 
     /// Run the coding agent on a task in a workspace directory.

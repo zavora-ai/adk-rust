@@ -361,7 +361,7 @@
 //! let app = create_app_with_a2a(config, Some("http://localhost:8080"));
 //!
 //! // Run the server (requires axum dependency)
-//! // let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+//! // let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
 //! // axum::serve(listener, app).await?;
 //! # Ok(())
 //! # }

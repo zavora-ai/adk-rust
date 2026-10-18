@@ -96,11 +96,14 @@ fn wire_data_to_adk(data: &Value) -> Result<adk_core::Part, A2aError> {
 /// - `Part::FileData` → `PartContent::Url`
 /// - `Part::FunctionCall` → `PartContent::Data` with `function_call` key
 /// - `Part::FunctionResponse` → `PartContent::Data` with `function_response` key
-/// - `Part::Thinking` → `PartContent::Text` (one-way, loses thinking metadata)
+/// - `Part::Thinking` → `None`: a model's reasoning is private to the agent, and a peer
+///   would read a text part as answer text
 /// - `Part::ServerToolCall` → `PartContent::Data` with `server_tool_call` key
 /// - `Part::ServerToolResponse` → `PartContent::Data` with `server_tool_response` key
-pub fn adk_part_to_wire(part: &adk_core::Part) -> Result<a2a_protocol_types::Part, A2aError> {
-    match part {
+pub fn adk_part_to_wire(
+    part: &adk_core::Part,
+) -> Result<Option<a2a_protocol_types::Part>, A2aError> {
+    let wire = match part {
         adk_core::Part::Text { text } => Ok(a2a_protocol_types::Part::text(text.clone())),
         adk_core::Part::InlineData { mime_type, data, .. } => {
             let encoded = general_purpose::STANDARD.encode(data);
@@ -129,10 +132,7 @@ pub fn adk_part_to_wire(part: &adk_core::Part) -> Result<a2a_protocol_types::Par
             let data = json!({ "function_response": Value::Object(resp_data) });
             Ok(a2a_protocol_types::Part::data(data))
         }
-        adk_core::Part::Thinking { thinking, .. } => {
-            // One-way: thinking metadata (signature) is lost
-            Ok(a2a_protocol_types::Part::text(thinking.clone()))
-        }
+        adk_core::Part::Thinking { .. } => return Ok(None),
         adk_core::Part::ServerToolCall { server_tool_call } => {
             let data = json!({ "server_tool_call": server_tool_call.clone() });
             Ok(a2a_protocol_types::Part::data(data))
@@ -155,7 +155,8 @@ pub fn adk_part_to_wire(part: &adk_core::Part) -> Result<a2a_protocol_types::Par
                 Ok(part)
             }
         },
-    }
+    };
+    wire.map(Some)
 }
 
 // ── Message conversion ───────────────────────────────────────────────────────
@@ -513,7 +514,7 @@ mod tests {
     #[test]
     fn text_adk_to_wire() {
         let adk = adk_core::Part::Text { text: "hello".to_string() };
-        let wire = adk_part_to_wire(&adk).unwrap();
+        let wire = adk_part_to_wire(&adk).unwrap().unwrap();
         assert!(
             matches!(wire.content, a2a_protocol_types::PartContent::Text(ref t) if t == "hello")
         );
@@ -527,7 +528,7 @@ mod tests {
             uri: None,
             annotations: None,
         };
-        let wire = adk_part_to_wire(&adk).unwrap();
+        let wire = adk_part_to_wire(&adk).unwrap().unwrap();
         match wire.content {
             a2a_protocol_types::PartContent::Raw(ref encoded) => {
                 let decoded = general_purpose::STANDARD.decode(encoded).unwrap();
@@ -545,7 +546,7 @@ mod tests {
             file_uri: "https://example.com/f.pdf".to_string(),
             annotations: None,
         };
-        let wire = adk_part_to_wire(&adk).unwrap();
+        let wire = adk_part_to_wire(&adk).unwrap().unwrap();
         assert!(
             matches!(wire.content, a2a_protocol_types::PartContent::Url(ref u) if u == "https://example.com/f.pdf")
         );
@@ -560,7 +561,7 @@ mod tests {
             id: Some("c1".to_string()),
             thought_signature: None,
         };
-        let wire = adk_part_to_wire(&adk).unwrap();
+        let wire = adk_part_to_wire(&adk).unwrap().unwrap();
         match wire.content {
             a2a_protocol_types::PartContent::Data(ref data) => {
                 let call = &data["function_call"];
@@ -582,7 +583,7 @@ mod tests {
             id: Some("r1".to_string()),
             annotations: None,
         };
-        let wire = adk_part_to_wire(&adk).unwrap();
+        let wire = adk_part_to_wire(&adk).unwrap().unwrap();
         match wire.content {
             a2a_protocol_types::PartContent::Data(ref data) => {
                 let resp = &data["function_response"];
@@ -595,21 +596,18 @@ mod tests {
     }
 
     #[test]
-    fn thinking_adk_to_wire_becomes_text() {
+    fn thinking_adk_to_wire_is_dropped() {
         let adk = adk_core::Part::Thinking {
             thinking: "let me think...".to_string(),
             signature: Some("sig123".to_string()),
         };
-        let wire = adk_part_to_wire(&adk).unwrap();
-        assert!(
-            matches!(wire.content, a2a_protocol_types::PartContent::Text(ref t) if t == "let me think...")
-        );
+        assert!(adk_part_to_wire(&adk).unwrap().is_none());
     }
 
     #[test]
     fn server_tool_call_adk_to_wire() {
         let adk = adk_core::Part::ServerToolCall { server_tool_call: json!({"tool": "search"}) };
-        let wire = adk_part_to_wire(&adk).unwrap();
+        let wire = adk_part_to_wire(&adk).unwrap().unwrap();
         match wire.content {
             a2a_protocol_types::PartContent::Data(ref data) => {
                 assert_eq!(data["server_tool_call"]["tool"], "search");
@@ -622,7 +620,7 @@ mod tests {
     fn server_tool_response_adk_to_wire() {
         let adk =
             adk_core::Part::ServerToolResponse { server_tool_response: json!({"result": "ok"}) };
-        let wire = adk_part_to_wire(&adk).unwrap();
+        let wire = adk_part_to_wire(&adk).unwrap().unwrap();
         match wire.content {
             a2a_protocol_types::PartContent::Data(ref data) => {
                 assert_eq!(data["server_tool_response"]["result"], "ok");
@@ -636,7 +634,7 @@ mod tests {
     #[test]
     fn text_roundtrip() {
         let original = adk_core::Part::Text { text: "round trip".to_string() };
-        let wire = adk_part_to_wire(&original).unwrap();
+        let wire = adk_part_to_wire(&original).unwrap().unwrap();
         let back = wire_part_to_adk(&wire).unwrap();
         assert!(matches!(back, adk_core::Part::Text { ref text } if text == "round trip"));
     }
@@ -649,7 +647,7 @@ mod tests {
             uri: None,
             annotations: None,
         };
-        let wire = adk_part_to_wire(&original).unwrap();
+        let wire = adk_part_to_wire(&original).unwrap().unwrap();
         let back = wire_part_to_adk(&wire).unwrap();
         match back {
             adk_core::Part::InlineData { mime_type, data, .. } => {
@@ -667,7 +665,7 @@ mod tests {
             file_uri: "gs://bucket/file.txt".to_string(),
             annotations: None,
         };
-        let wire = adk_part_to_wire(&original).unwrap();
+        let wire = adk_part_to_wire(&original).unwrap().unwrap();
         let back = wire_part_to_adk(&wire).unwrap();
         match back {
             adk_core::Part::FileData { mime_type, file_uri, .. } => {
@@ -686,7 +684,7 @@ mod tests {
             id: Some("id1".to_string()),
             thought_signature: None,
         };
-        let wire = adk_part_to_wire(&original).unwrap();
+        let wire = adk_part_to_wire(&original).unwrap().unwrap();
         let back = wire_part_to_adk(&wire).unwrap();
         match back {
             adk_core::Part::FunctionCall { name, args, id, .. } => {

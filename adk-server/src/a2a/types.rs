@@ -133,7 +133,10 @@ pub struct Artifact {
 pub enum TaskState {
     Submitted,
     Working,
+    /// The run stopped on a tool call held for confirmation or a long-running call.
     InputRequired,
+    /// The run stopped on a credential request (an `adk_request_credential` call).
+    AuthRequired,
     Completed,
     Failed,
     Canceled,

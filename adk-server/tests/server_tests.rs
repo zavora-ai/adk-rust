@@ -1894,7 +1894,8 @@ async fn test_run_path_honors_ui_protocol_header() {
 #[tokio::test]
 async fn test_run_sse_cors_preflight_allows_protocol_header() {
     let config =
-        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService));
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService))
+            .with_security(adk_server::SecurityConfig::development());
     let app = create_app(config);
 
     let response = app
@@ -1915,6 +1916,10 @@ async fn test_run_sse_cors_preflight_allows_protocol_header() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("access-control-allow-origin").and_then(|v| v.to_str().ok()),
+        Some("http://localhost:5173")
+    );
     let allow_headers = response
         .headers()
         .get("access-control-allow-headers")

@@ -142,22 +142,29 @@ async fn agent_card_is_served_at_both_well_known_paths() {
     }
 }
 
-/// Serves `app` on an ephemeral local port and returns its base URL.
-async fn serve(app: axum::Router) -> String {
+/// Serves the router built for its own base URL on an ephemeral local port and returns
+/// that base URL.
+async fn serve(build: impl FnOnce(&str) -> axum::Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let address = listener.local_addr().expect("address");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    let app = build(&base);
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });
-    format!("http://{address}")
+    base
 }
 
-/// A router that serves one agent card, named `name`, at `path` only.
-fn card_router(path: &str, name: &str) -> axum::Router {
+/// A router that serves one agent card, named `name`, at `path` only, with its endpoint
+/// at `{base}/a2a`.
+fn card_router(base: &str, path: &str, name: &str) -> axum::Router {
+    card_router_with_endpoint(path, name, &format!("{base}/a2a"))
+}
+
+fn card_router_with_endpoint(path: &str, name: &str, endpoint: &str) -> axum::Router {
     let card = serde_json::json!({
         "name": name,
         "description": "card fixture",
-        "url": "http://127.0.0.1/a2a",
+        "url": endpoint,
         "version": "1.0.0"
     });
     axum::Router::new().route(path, axum::routing::get(move || async move { axum::Json(card) }))
@@ -166,19 +173,40 @@ fn card_router(path: &str, name: &str) -> axum::Router {
 #[tokio::test]
 async fn client_resolves_the_card_this_server_serves() {
     let base_url =
-        serve(ServerBuilder::new(create_test_config()).with_a2a("http://localhost:8080").build())
-            .await;
+        serve(|base| ServerBuilder::new(create_test_config()).with_a2a(base).build()).await;
 
     let card = A2aClient::resolve_agent_card(&base_url).await.expect("resolve agent card");
     assert_eq!(card.name, "test_agent");
 }
 
 #[tokio::test]
+async fn client_refuses_a_card_naming_another_origin() {
+    let elsewhere =
+        serve(|base| card_router(base, "/.well-known/agent-card.json", "elsewhere")).await;
+    let endpoint = format!("{elsewhere}/a2a");
+    let base_url =
+        serve(|_| card_router_with_endpoint("/.well-known/agent-card.json", "hostile", &endpoint))
+            .await;
+
+    let error = A2aClient::resolve_agent_card(&base_url).await.expect_err("foreign endpoint");
+    assert_eq!(error.code, "a2a.card_endpoint_refused");
+    assert!(A2aClient::from_url(&base_url).await.is_err());
+
+    let card = A2aClient::resolve_agent_card_allowing(&base_url, &[elsewhere])
+        .await
+        .expect("an allowed loopback origin");
+    assert_eq!(card.url, endpoint);
+}
+
+#[tokio::test]
 async fn client_prefers_the_agent_card_json_path() {
-    let base_url = serve(
-        card_router("/.well-known/agent-card.json", "current")
-            .merge(card_router("/.well-known/agent.json", "legacy")),
-    )
+    let base_url = serve(|base| {
+        card_router(base, "/.well-known/agent-card.json", "current").merge(card_router(
+            base,
+            "/.well-known/agent.json",
+            "legacy",
+        ))
+    })
     .await;
 
     let card = A2aClient::resolve_agent_card(&base_url).await.expect("resolve agent card");
@@ -187,7 +215,7 @@ async fn client_prefers_the_agent_card_json_path() {
 
 #[tokio::test]
 async fn client_falls_back_to_agent_json_on_404() {
-    let base_url = serve(card_router("/.well-known/agent.json", "legacy")).await;
+    let base_url = serve(|base| card_router(base, "/.well-known/agent.json", "legacy")).await;
 
     let card = A2aClient::resolve_agent_card(&base_url).await.expect("resolve agent card");
     assert_eq!(card.name, "legacy");
@@ -195,11 +223,13 @@ async fn client_falls_back_to_agent_json_on_404() {
 
 #[tokio::test]
 async fn client_does_not_fall_back_on_other_errors() {
-    let app = card_router("/.well-known/agent.json", "legacy").route(
-        "/.well-known/agent-card.json",
-        axum::routing::get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
-    );
-    let base_url = serve(app).await;
+    let base_url = serve(|base| {
+        card_router(base, "/.well-known/agent.json", "legacy").route(
+            "/.well-known/agent-card.json",
+            axum::routing::get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+        )
+    })
+    .await;
 
     let error = A2aClient::resolve_agent_card(&base_url).await.expect_err("500 is not a 404");
     assert!(error.to_string().contains("HTTP 500"), "{error}");
@@ -213,8 +243,7 @@ async fn bundled_v1_client_finds_no_v1_interface_on_the_served_card() {
     use adk_server::a2a::client::v1_client::{A2aV1Client, V1ClientError};
 
     let base_url =
-        serve(ServerBuilder::new(create_test_config()).with_a2a("http://localhost:8080").build())
-            .await;
+        serve(|base| ServerBuilder::new(create_test_config()).with_a2a(base).build()).await;
 
     let card = A2aV1Client::resolve_agent_card(&base_url).await.expect("resolve agent card");
     assert_eq!(card.name, "test_agent");
@@ -229,6 +258,39 @@ async fn bundled_v1_client_finds_no_v1_interface_on_the_served_card() {
         ),
         "{error}"
     );
+}
+
+#[cfg(feature = "a2a-v1")]
+#[tokio::test]
+async fn v1_client_refuses_a_card_naming_another_origin() {
+    use adk_server::a2a::client::v1_client::{A2aV1Client, V1ClientError};
+
+    let card = adk_server::a2a::v1::card::build_v1_agent_card(
+        "hostile",
+        "card fixture",
+        "http://127.0.0.1:9/a2a",
+        "1.0.0",
+        vec![],
+        a2a_protocol_types::AgentCapabilities::none(),
+    );
+    let base_url = serve(move |_| {
+        axum::Router::new().route(
+            "/.well-known/agent-card.json",
+            axum::routing::get(move || async move { axum::Json(card) }),
+        )
+    })
+    .await;
+
+    let error = A2aV1Client::resolve_agent_card(&base_url).await.expect_err("foreign endpoint");
+    assert!(
+        matches!(&error, V1ClientError::CardEndpoint(refusal) if refusal.code == "a2a.card_endpoint_refused"),
+        "{error}"
+    );
+    let allowed =
+        A2aV1Client::resolve_agent_card_allowing(&base_url, &["http://127.0.0.1:9".to_string()])
+            .await
+            .expect("an allowed loopback origin");
+    assert_eq!(allowed.name, "hostile");
 }
 
 #[tokio::test]
