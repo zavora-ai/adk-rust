@@ -259,15 +259,36 @@ pub fn strip_null_from_enum(schema: &mut Value) {
     recurse_into_subschemas(schema, strip_null_from_enum);
 }
 
+/// The most JSON values [`resolve_refs`] copies into one schema from its definitions.
+///
+/// Inlining is what makes a reference cost anything: a definition reached through two
+/// references is copied twice, so references that fan out through a chain of definitions
+/// grow the document exponentially with the chain's length. Past this budget a reference
+/// falls back to `{"type": "object"}`. It matches the default node limit
+/// `McpToolset` applies to a server's schema before it is accepted.
+pub const MAX_INLINED_REF_NODES: usize = 10_000;
+
 /// Resolves `$ref` references by inlining the referenced sub-schema from a
 /// definitions map.
 ///
 /// Handles both `#/definitions/<name>` (Draft 4–7) and `#/$defs/<name>`
 /// (Draft 2019-09+) reference formats. Keywords beside a `$ref`, such as the
 /// field's own `description`, are kept on the inlined schema and take
-/// precedence over the definition's. Unresolvable references are replaced
-/// with `{"type": "object"}` plus those keywords. Circular reference chains are
-/// broken the same way when `depth` exceeds 10.
+/// precedence over the definition's. A reference falls back to
+/// `{"type": "object"}` plus those keywords when it:
+///
+/// - **cannot be resolved** — an unknown name or an external URI;
+/// - **is recursive** — it names a definition that is already being inlined on the
+///   path to it, so a self-referencing definition is expanded once and its inner
+///   references become the fallback;
+/// - **is nested past depth 10** — the chain of references leading to it is longer
+///   than ten;
+/// - **exceeds the budget** — inlining it would copy more than
+///   [`MAX_INLINED_REF_NODES`] values into the schema in total.
+///
+/// Together these bound the output linearly in the size of the input, so a small
+/// schema published by an untrusted MCP server cannot make normalization expand it
+/// exponentially.
 ///
 /// After resolving a `$ref`, the function recurses into the inlined schema
 /// (incrementing depth) to resolve any nested references. When no `$ref` is
@@ -303,39 +324,85 @@ pub fn strip_null_from_enum(schema: &mut Value) {
 /// assert!(schema["properties"]["home"].get("$ref").is_none());
 /// ```
 pub fn resolve_refs(schema: &mut Value, definitions: &Map<String, Value>, depth: usize) {
-    let Some(obj) = schema.as_object_mut() else {
-        return;
-    };
-    let Some(reference) = obj.get("$ref").and_then(Value::as_str).map(str::to_string) else {
-        resolve_refs_recurse(schema, definitions, depth);
-        return;
-    };
-    obj.remove("$ref");
-    let siblings = std::mem::take(obj);
+    let mut expansion =
+        RefExpansion { definitions, expanding: Vec::new(), budget: MAX_INLINED_REF_NODES };
+    expansion.resolve(schema, depth);
+}
 
-    // Past depth 10 the chain is circular, so it ends in the fallback.
-    let definition = reference
-        .strip_prefix("#/definitions/")
-        .or_else(|| reference.strip_prefix("#/$defs/"))
-        .and_then(|name| definitions.get(name))
-        .filter(|_| depth <= 10);
-    let mut inlined = match definition {
-        Some(Value::Object(definition)) => definition.clone(),
-        Some(_) | None => Map::from_iter([("type".to_string(), Value::from("object"))]),
-    };
-    // Keywords beside a `$ref` describe this use of the definition, so they win.
-    inlined.extend(siblings);
-    *schema = Value::Object(inlined);
+/// The state of one [`resolve_refs`] call.
+struct RefExpansion<'a> {
+    definitions: &'a Map<String, Value>,
+    /// Definitions being inlined on the path to the current schema.
+    expanding: Vec<&'a str>,
+    /// JSON values that may still be copied in from definitions.
+    budget: usize,
+}
 
-    if definition.is_some() {
-        resolve_refs(schema, definitions, depth + 1);
-    } else {
-        resolve_refs_recurse(schema, definitions, depth);
+impl<'a> RefExpansion<'a> {
+    fn resolve(&mut self, schema: &mut Value, depth: usize) {
+        let Some(obj) = schema.as_object_mut() else {
+            return;
+        };
+        let Some(reference) = obj.get("$ref").and_then(Value::as_str).map(str::to_string) else {
+            self.recurse(schema, depth);
+            return;
+        };
+        obj.remove("$ref");
+        let siblings = std::mem::take(obj);
+
+        let definitions = self.definitions;
+        let definition = reference
+            .strip_prefix("#/definitions/")
+            .or_else(|| reference.strip_prefix("#/$defs/"))
+            .and_then(|name| definitions.get_key_value(name))
+            .filter(|(name, _)| depth <= 10 && !self.expanding.contains(&name.as_str()))
+            .and_then(|(name, definition)| match definition {
+                Value::Object(map) => Some((name.as_str(), map)),
+                _ => None,
+            })
+            .filter(|(_, definition)| {
+                let cost = definition.values().map(count_values).sum::<usize>() + 1;
+                let affordable = cost <= self.budget;
+                if affordable {
+                    self.budget -= cost;
+                }
+                affordable
+            });
+        let mut inlined = match definition {
+            Some((_, definition)) => definition.clone(),
+            None => Map::from_iter([("type".to_string(), Value::from("object"))]),
+        };
+        // Keywords beside a `$ref` describe this use of the definition, so they win.
+        inlined.extend(siblings);
+        *schema = Value::Object(inlined);
+
+        match definition {
+            Some((name, _)) => {
+                self.expanding.push(name);
+                self.resolve(schema, depth + 1);
+                self.expanding.pop();
+            }
+            None => self.recurse(schema, depth),
+        }
+    }
+
+    /// Resolves the references in every sub-schema location of `schema`.
+    fn recurse(&mut self, schema: &mut Value, depth: usize) {
+        resolve_refs_recurse(schema, &mut |sub| self.resolve(sub, depth));
     }
 }
 
-/// Recurses into all sub-schema locations to resolve nested `$ref` references.
-fn resolve_refs_recurse(schema: &mut Value, definitions: &Map<String, Value>, depth: usize) {
+/// The number of JSON values in `value`, itself included.
+fn count_values(value: &Value) -> usize {
+    1 + match value {
+        Value::Array(items) => items.iter().map(count_values).sum(),
+        Value::Object(members) => members.values().map(count_values).sum(),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => 0,
+    }
+}
+
+/// Calls `resolve` on every sub-schema location of `schema`.
+fn resolve_refs_recurse(schema: &mut Value, resolve: &mut dyn FnMut(&mut Value)) {
     let Some(obj) = schema.as_object_mut() else {
         return;
     };
@@ -345,17 +412,17 @@ fn resolve_refs_recurse(schema: &mut Value, definitions: &Map<String, Value>, de
         && let Some(props_obj) = props.as_object_mut()
     {
         for value in props_obj.values_mut() {
-            resolve_refs(value, definitions, depth);
+            resolve(value);
         }
     }
 
     // items (single schema or array)
     if let Some(items) = obj.get_mut("items") {
         if items.is_object() {
-            resolve_refs(items, definitions, depth);
+            resolve(items);
         } else if let Some(arr) = items.as_array_mut() {
             for item in arr.iter_mut() {
-                resolve_refs(item, definitions, depth);
+                resolve(item);
             }
         }
     }
@@ -364,7 +431,7 @@ fn resolve_refs_recurse(schema: &mut Value, definitions: &Map<String, Value>, de
     if let Some(additional) = obj.get_mut("additionalProperties")
         && additional.is_object()
     {
-        resolve_refs(additional, definitions, depth);
+        resolve(additional);
     }
 
     // allOf, anyOf, oneOf
@@ -373,7 +440,7 @@ fn resolve_refs_recurse(schema: &mut Value, definitions: &Map<String, Value>, de
             && let Some(arr) = arr_val.as_array_mut()
         {
             for sub in arr.iter_mut() {
-                resolve_refs(sub, definitions, depth);
+                resolve(sub);
             }
         }
     }
@@ -382,7 +449,7 @@ fn resolve_refs_recurse(schema: &mut Value, definitions: &Map<String, Value>, de
     if let Some(not_schema) = obj.get_mut("not")
         && not_schema.is_object()
     {
-        resolve_refs(not_schema, definitions, depth);
+        resolve(not_schema);
     }
 
     // patternProperties
@@ -390,7 +457,7 @@ fn resolve_refs_recurse(schema: &mut Value, definitions: &Map<String, Value>, de
         && let Some(pp_obj) = pattern_props.as_object_mut()
     {
         for value in pp_obj.values_mut() {
-            resolve_refs(value, definitions, depth);
+            resolve(value);
         }
     }
 
@@ -399,7 +466,7 @@ fn resolve_refs_recurse(schema: &mut Value, definitions: &Map<String, Value>, de
         && let Some(arr) = prefix_items.as_array_mut()
     {
         for item in arr.iter_mut() {
-            resolve_refs(item, definitions, depth);
+            resolve(item);
         }
     }
 
@@ -408,7 +475,7 @@ fn resolve_refs_recurse(schema: &mut Value, definitions: &Map<String, Value>, de
         if let Some(sub) = obj.get_mut(*keyword)
             && sub.is_object()
         {
-            resolve_refs(sub, definitions, depth);
+            resolve(sub);
         }
     }
 }
@@ -1481,6 +1548,65 @@ mod tests {
             }
         }
         assert!(found_termination, "circular ref chain should terminate within depth limit");
+    }
+
+    #[test]
+    fn a_definition_referring_to_itself_three_times_is_expanded_once() {
+        let mut defs = Map::new();
+        defs.insert(
+            "Node".to_string(),
+            json!({
+                "type": "object",
+                "properties": {
+                    "label": { "type": "string" },
+                    "left": { "$ref": "#/$defs/Node" },
+                    "right": { "$ref": "#/$defs/Node", "description": "Right child." },
+                    "next": { "$ref": "#/$defs/Node" }
+                }
+            }),
+        );
+        let mut schema =
+            json!({ "type": "object", "properties": { "root": { "$ref": "#/$defs/Node" } } });
+
+        resolve_refs(&mut schema, &defs, 0);
+
+        assert_eq!(
+            schema,
+            json!({
+                "type": "object",
+                "properties": {
+                    "root": {
+                        "type": "object",
+                        "properties": {
+                            "label": { "type": "string" },
+                            "left": { "type": "object" },
+                            "right": { "type": "object", "description": "Right child." },
+                            "next": { "type": "object" }
+                        }
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn references_fanning_out_through_a_chain_stay_within_the_inlining_budget() {
+        // D0 refers to D1 twice, D1 to D2 twice, ...: 2^30 copies when inlined naively.
+        let mut defs = Map::new();
+        for level in 0..30 {
+            let next = format!("#/$defs/D{}", level + 1);
+            defs.insert(
+                format!("D{level}"),
+                json!({ "type": "object", "properties": { "a": { "$ref": next }, "b": { "$ref": next } } }),
+            );
+        }
+        defs.insert("D30".to_string(), json!({ "type": "string" }));
+        let mut schema = json!({ "$ref": "#/$defs/D0" });
+
+        resolve_refs(&mut schema, &defs, 0);
+
+        let values = count_values(&schema);
+        assert!(values <= MAX_INLINED_REF_NODES + 1, "{values} values after resolution");
     }
 
     #[test]

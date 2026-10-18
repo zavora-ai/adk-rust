@@ -42,7 +42,8 @@ use crate::{GenericSchemaAdapter, SchemaAdapter};
 /// # Thread Safety
 ///
 /// Uses [`std::sync::Mutex`] internally, making it safe to share across threads.
-/// The lock is held only briefly during hash lookup and insertion.
+/// The lock is held only for the lookup and the insertion, never while the adapter
+/// normalizes, so a slow schema delays only the request that carries it.
 ///
 /// # Placement
 ///
@@ -166,12 +167,18 @@ impl SchemaCache {
     /// assert!(normalized.get("$schema").is_none());
     /// ```
     pub fn normalize(&self, schema: &Value) -> Value {
-        let hash = Self::hash_schema(schema);
-        let mut cache = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        cache
-            .entry(CacheKey::Bound(hash))
-            .or_insert_with(|| self.adapter.normalize_schema(schema.clone()))
-            .clone()
+        let key = CacheKey::Bound(Self::hash_schema(schema));
+        if let Some(cached) = self.lock_entries().get(&key) {
+            return cached.clone();
+        }
+        // Normalized without the lock, so one slow schema does not stall every other
+        // request sharing this cache; two threads may then both normalize it once.
+        let normalized = self.adapter.normalize_schema(schema.clone());
+        self.lock_entries().entry(key).or_insert(normalized).clone()
+    }
+
+    fn lock_entries(&self) -> std::sync::MutexGuard<'_, HashMap<CacheKey, Value>> {
+        self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Returns a schema normalized by the supplied adapter.
@@ -188,8 +195,7 @@ impl SchemaCache {
         let normalized = adapter.normalize_schema(schema.clone());
         let key =
             CacheKey::Legacy { schema: schema_hash, normalized: Self::hash_schema(&normalized) };
-        let mut cache = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        cache.entry(key).or_insert(normalized).clone()
+        self.lock_entries().entry(key).or_insert(normalized).clone()
     }
 
     /// Clears all cached entries.
@@ -214,14 +220,12 @@ impl SchemaCache {
     /// cache.clear();
     /// ```
     pub fn clear(&self) {
-        let mut cache = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        cache.clear();
+        self.lock_entries().clear();
     }
 
     /// Returns the number of cached entries.
     pub fn len(&self) -> usize {
-        let cache = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        cache.len()
+        self.lock_entries().len()
     }
 
     /// Returns `true` if the cache contains no entries.
@@ -495,6 +499,46 @@ mod tests {
         cache.normalize(&json!({ "const": 5 }));
         cache.normalize(&json!({ "const": 5.0 }));
 
+        assert_eq!(cache.len(), 2);
+    }
+
+    /// Blocks normalizing any schema carrying `"slow": true` until released.
+    #[derive(Debug)]
+    struct GatedAdapter(std::sync::Mutex<std::sync::mpsc::Receiver<()>>);
+
+    impl SchemaAdapter for GatedAdapter {
+        fn normalize_schema(&self, schema: Value) -> Value {
+            if schema.get("slow").is_some() {
+                let _ = self.0.lock().map(|release| release.recv());
+            }
+            schema
+        }
+    }
+
+    #[test]
+    fn a_slow_normalization_does_not_block_other_schemas() {
+        let (release, gate) = std::sync::mpsc::channel();
+        let cache =
+            Arc::new(SchemaCache::for_adapter(Arc::new(GatedAdapter(std::sync::Mutex::new(gate)))));
+        let slow = {
+            let cache = cache.clone();
+            std::thread::spawn(move || cache.normalize(&json!({"slow": true})))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let (done, finished) = std::sync::mpsc::channel();
+        let fast = {
+            let cache = cache.clone();
+            std::thread::spawn(move || {
+                let _ = done.send(cache.normalize(&json!({"type": "string"})));
+            })
+        };
+        let result = finished.recv_timeout(std::time::Duration::from_secs(5));
+        release.send(()).expect("release the slow normalization");
+        slow.join().expect("slow normalization thread");
+        fast.join().expect("fast normalization thread");
+
+        assert_eq!(result, Ok(json!({"type": "string"})));
         assert_eq!(cache.len(), 2);
     }
 }
