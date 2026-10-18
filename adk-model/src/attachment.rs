@@ -5,7 +5,8 @@
     feature = "anthropic",
     feature = "deepseek",
     feature = "groq",
-    feature = "ollama"
+    feature = "ollama",
+    feature = "azure-ai"
 ))]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
@@ -17,7 +18,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     feature = "anthropic",
     feature = "deepseek",
     feature = "groq",
-    feature = "ollama"
+    feature = "ollama",
+    feature = "azure-ai"
 ))]
 pub(crate) fn encode_base64(data: &[u8]) -> String {
     BASE64_STANDARD.encode(data)

@@ -245,7 +245,9 @@ built-in tools, or server-side conversation state.
 
 ### Structured Output (JSON Schema)
 
-OpenAI supports guaranteed JSON output via `output_schema`. ADK-Rust automatically wires this to OpenAI's `response_format` API:
+OpenAI supports guaranteed JSON output via `output_schema`. ADK-Rust sends the schema as a
+strict JSON schema: `response_format` on Chat Completions and `text.format` on the Responses
+API, which also carries every tool-carrying GPT-5.6 request from `OpenAIClient`:
 
 ```rust
 use adk_rust::prelude::*;
@@ -839,7 +841,9 @@ OpenAI-compatible, Azure OpenAI, Azure AI Inference, Anthropic, DeepSeek, Groq).
 | Mid-stream Anthropic `error` event | Fails the stream with the category of the equivalent HTTP error, so `overloaded_error` and `rate_limit_error` are retryable |
 | Provider error codes | `AdkError::details.metadata["provider_error_code"]` holds the provider's own code as a string: the first Google `ErrorInfo.reason`, then the error object's string `code`, `type`, or `status`. Gemini (AI Studio and Vertex AI), OpenAI, OpenAI-compatible, Azure OpenAI, Azure AI Inference, DeepSeek, Anthropic, and OpenRouter record it; codes over 128 bytes or outside `[A-Za-z0-9_.-]` are dropped |
 | Malformed tool arguments | Arguments that are not a JSON object, streamed or not (truncated JSON, an array, a number), or an Anthropic call cut off by `max_tokens`, become `adk_core::invalid_tool_arguments(reason, raw)`; the turn continues and `LlmAgent` answers the call with an error without executing it, so the model can send it again. An empty payload is a zero-argument call with `{}` |
-| Text-encoded tool calls | Recognised only when the request declares the named tool; a ` ```json ` fence also needs an `arguments` or `parameters` object |
+| Text-encoded tool calls | Recognised only when the request declares the named tool; a ` ```json ` fence also needs an `arguments` or `parameters` object. DeepSeek-V3 native tokens (`<｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME` with a fenced arguments object, and the V3.1 `NAME<｜tool▁sep｜>{...}` form) become calls. The OpenAI-compatible clients and `OllamaModel` recognise them in streamed and complete responses |
+| Several function responses in one content | The Chat Completions clients (OpenAI-compatible and its presets, OpenCode Chat, Azure OpenAI, Azure AI Inference, Groq, DeepSeek, OpenRouter) send one `tool` message per response, in order, and the content's other parts as a user message after them |
+| Images a tool returns | Anthropic sends them inside the `tool_result` block and Bedrock inside the `toolResult`; the Chat Completions clients and Ollama, whose tool messages carry only text, send them in a user message after the tool messages |
 | Tool order | Anthropic and Bedrock send tool definitions sorted by name, so the prompt-cache prefix is stable |
 | API keys | Provider configs redact the key in `Debug` output and omit it when serialized |
 | Error messages | Every client, Gemini, Ollama, and OpenRouter included, quotes an HTTP error body or a provider's error message up to `adk_core::UPSTREAM_EXCERPT_BYTES` (512 bytes), since it can echo the prompt or tool arguments. A response that cannot be decoded is described by its decoder error class and position (`adk_core::json_error_summary`), never quoted |
@@ -861,6 +865,31 @@ fn build() -> Result<GroqClient, adk_core::AdkError> {
 }
 ```
 
+### Generation Config Fields
+
+Each client sends the `GenerateContentConfig` fields its API has a place for. A field the
+client cannot honour fails the request before anything is sent, with
+`model.unsupported_config` (`ErrorCategory::InvalidInput`) and a message naming the field,
+instead of a generation that silently runs without it.
+
+| Field | Chat Completions (OpenAI, OpenAI-compatible, Azure OpenAI) | OpenAI Responses | Anthropic | Bedrock | Groq | DeepSeek | Azure AI Inference |
+|-------|------|------|------|------|------|------|------|
+| `stop_sequences` | `stop` | rejected | `stop_sequences` | `stopSequences` | `stop` | `stop` | `stop` |
+| `seed` | `seed` | rejected | rejected | rejected | `seed` | rejected | `seed` |
+| `frequency_penalty`, `presence_penalty` | sent | rejected | rejected | rejected | sent | sent | sent |
+| `top_logprobs` | `logprobs` and `top_logprobs`; tokens in `provider_metadata["logprobs"]` | `top_logprobs`; tokens in `provider_metadata["openai"]["logprobs"]` | rejected | rejected | rejected | rejected | rejected |
+
+A model can still reject a field its API accepts: GPT-5 models answer `stop` with HTTP 400,
+so stop sequences on OpenAI need a model such as `gpt-4.1-mini`. OpenRouter sends every
+field; `top_k` is not covered by this check.
+
+```rust
+use adk_core::GenerateContentConfig;
+
+// Stops at the first "7" on every client in the table that sends `stop_sequences`.
+let config = GenerateContentConfig { stop_sequences: vec!["7".to_string()], ..Default::default() };
+```
+
 ### Stream Termination
 
 A streamed response is complete only when the provider sends its terminal event. A stream
@@ -879,7 +908,8 @@ state is not written, and no tool from the turn runs.
 | `OpenRouterClient`, Responses | `response.completed` or `response.incomplete` | `model.openrouter.responses_stream_incomplete` | `response.failed`: from the error's HTTP code, else `model.openrouter.response_failed` |
 
 - **Ends early** errors, and a connection that fails mid-stream, are
-  `ErrorCategory::Unavailable`, so the request can be retried.
+  `ErrorCategory::Unavailable`, and a stream that sends nothing for the idle timeout (see
+  [Timeouts](#timeouts)) is `ErrorCategory::Timeout`, so the request can be retried.
 - **Error inside the stream** covers a chunk with a top-level `error` object (an Ollama
   `{"error": "..."}` line included) and a chunk that finishes with `finish_reason: "error"`.
   For the OpenAI-compatible, Azure OpenAI, Groq, and Ollama clients, and an OpenRouter
@@ -944,6 +974,38 @@ async fn stream_text(client: &GroqClient, request: LlmRequest) -> Result<String,
         }
     }
     Ok(text)
+}
+```
+
+### Timeouts
+
+Every non-Gemini client bounds its HTTP transport, so a stream that stops sending data fails
+the run instead of holding it. Anthropic has its own bounds (see
+[Request Defaults](#request-defaults)); the other clients take an `HttpTimeouts`:
+
+| Bound | Default | Covers |
+|-------|---------|--------|
+| `connect` | 30 seconds | establishing the connection, TLS included |
+| `idle` | 10 minutes | each wait for data: the response headers, then every gap between body chunks |
+
+A stalled stream fails with `ErrorCategory::Timeout`, under the client's incomplete-stream
+code (`model.openai_compat.incomplete_stream` for the OpenAI-compatible clients,
+`model.bedrock.stream_idle_timeout` for Bedrock). A long stream that keeps sending data is
+never cut off, and a reasoning model that thinks for minutes before its first chunk stays
+within the 10-minute default. `with_timeouts` sets both bounds on `OpenAIClient` (Chat
+Completions and its Responses route), `OpenAICompatible`, `AzureOpenAIClient`,
+`OpenAIResponsesClient`, `AzureAIClient`, `GroqClient`, `DeepSeekClient`, `OpenRouterClient`,
+`OllamaModel`, and `BedrockClient`.
+
+```rust
+use std::time::Duration;
+
+use adk_model::groq::{GroqClient, GroqConfig};
+use adk_model::HttpTimeouts;
+
+fn build(api_key: String) -> Result<GroqClient, adk_core::AdkError> {
+    GroqClient::new(GroqConfig::new(api_key, "openai/gpt-oss-120b"))?
+        .with_timeouts(HttpTimeouts::new(Duration::from_secs(10), Duration::from_secs(120)))
 }
 ```
 
@@ -1097,6 +1159,8 @@ would refuse the documented textual fallback.
 | `InlineData` with a supported document type (PDF and similar) | `Converted` as a document block |
 | `InlineData` with audio, video, or arbitrary binary | `Omitted` |
 | `FileData` for an image or supported document | `Downgraded` to text — Converse takes S3 URIs, not arbitrary URLs |
+| `FunctionResponse` inline data with an image or supported document type | `Converted` inside the tool result |
+| `FunctionResponse` inline data of any other type | `Omitted`, recorded beside the converted response |
 | `FileData` for any other type | `Omitted` |
 | `ServerToolCall`, `ServerToolResponse` | `Omitted` — Gemini-specific |
 | `EmbeddedResource` text, or a blob of a supported type | `Converted` |

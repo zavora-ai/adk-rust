@@ -53,6 +53,8 @@ pub struct OpenAIResponsesClient {
     /// When `true`, relaxes strict OpenAI field validation and allows
     /// connecting to Open Responses-compatible endpoints without an OpenAI API key.
     open_responses_mode: bool,
+    /// Connect and idle bounds of both HTTP clients.
+    timeouts: crate::HttpTimeouts,
 }
 
 impl OpenAIResponsesClient {
@@ -118,10 +120,8 @@ impl OpenAIResponsesClient {
         }
         let client = async_openai::Client::with_config(openai_config);
         let uses_max_reasoning = matches!(reasoning_effort, Some(OpenAIReasoningEffort::Max));
-        let transport = reqwest_openai::Client::builder()
-            .redirect(reqwest_openai::redirect::Policy::none())
-            .build()
-            .map_err(|_| AdkError::model("failed to initialize Responses HTTP transport"))?;
+        let timeouts = crate::HttpTimeouts::default();
+        let (transport, http) = responses_http_clients(&http::HeaderMap::new(), timeouts)?;
         // ADK owns retry policy. async-openai's default executor has another
         // retry layer, including when this model's retries are disabled.
         let client =
@@ -136,7 +136,7 @@ impl OpenAIResponsesClient {
             reasoning_effort,
             reasoning_summary: config.reasoning_summary,
             retry_config: RetryConfig::default(),
-            http: reqwest::Client::new(),
+            http,
             transport,
             default_headers: http::HeaderMap::new(),
             adapter: None,
@@ -144,6 +144,7 @@ impl OpenAIResponsesClient {
             api_key: config.api_key,
             base_url,
             open_responses_mode,
+            timeouts,
         })
     }
 
@@ -175,15 +176,41 @@ impl OpenAIResponsesClient {
     /// either HTTP client cannot be built.
     pub fn with_default_headers(mut self, headers: http::HeaderMap) -> Result<Self, AdkError> {
         self.default_headers.extend(headers);
-        self.transport = reqwest_openai::Client::builder()
-            .default_headers(self.default_headers.clone())
-            .redirect(reqwest_openai::redirect::Policy::none())
-            .build()
-            .map_err(http_client_init_error)?;
-        self.http = reqwest::Client::builder()
-            .default_headers(self.default_headers.clone())
-            .build()
-            .map_err(http_client_init_error)?;
+        self.rebuild_http()
+    }
+
+    /// Sets the connect and idle timeouts of the generation transport and of the auxiliary
+    /// client, so a stalled stream fails instead of holding the run.
+    ///
+    /// See [`HttpTimeouts`](crate::HttpTimeouts) for the defaults. Like
+    /// [`Self::with_default_headers`], this rebuilds both `reqwest` clients, so it returns
+    /// `Result`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
+    /// use adk_model::HttpTimeouts;
+    ///
+    /// let client = OpenAIResponsesClient::new(OpenAIResponsesConfig::new("sk-key", "gpt-5.6-terra"))?
+    ///     .with_timeouts(HttpTimeouts::new(Duration::from_secs(10), Duration::from_secs(120)))?;
+    /// # let _ = client;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Internal` error with code `model.openai.http_client_init` when
+    /// either HTTP client cannot be built.
+    pub fn with_timeouts(mut self, timeouts: crate::HttpTimeouts) -> Result<Self, AdkError> {
+        self.timeouts = timeouts;
+        self.rebuild_http()
+    }
+
+    fn rebuild_http(mut self) -> Result<Self, AdkError> {
+        (self.transport, self.http) = responses_http_clients(&self.default_headers, self.timeouts)?;
         self.client = with_transport(
             self.client,
             &self.transport,
@@ -318,6 +345,27 @@ impl OpenAIResponsesClient {
     pub fn is_open_responses_mode(&self) -> bool {
         self.open_responses_mode
     }
+}
+
+/// The redirect-free generation transport and the auxiliary client, both with `headers` and
+/// `timeouts`.
+fn responses_http_clients(
+    headers: &http::HeaderMap,
+    timeouts: crate::HttpTimeouts,
+) -> Result<(reqwest_openai::Client, reqwest::Client), AdkError> {
+    let transport = reqwest_openai::Client::builder()
+        .default_headers(headers.clone())
+        .redirect(reqwest_openai::redirect::Policy::none())
+        .connect_timeout(timeouts.connect)
+        .read_timeout(timeouts.idle)
+        .build()
+        .map_err(http_client_init_error)?;
+    let http = timeouts
+        .apply(reqwest::Client::builder())
+        .default_headers(headers.clone())
+        .build()
+        .map_err(http_client_init_error)?;
+    Ok((transport, http))
 }
 
 fn http_client_init_error(err: impl std::error::Error + Send + Sync + 'static) -> AdkError {

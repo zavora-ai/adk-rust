@@ -574,6 +574,26 @@ mod ollama {
     }
 
     #[tokio::test]
+    async fn streamed_deepseek_native_tokens_become_a_call() {
+        let mut request = request("deepseek-v3");
+        request.tools.insert(
+            "get_weather".to_string(),
+            json!({"name": "get_weather", "description": "Weather", "parameters": {"type": "object"}}),
+        );
+        let model = client(vec![
+            line("<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_", false),
+            line("weather\n```json\n{\"city\": \"Paris\"}\n```<｜tool▁call▁end｜>", false),
+            line("<｜tool▁calls▁end｜>", false),
+            line("", true),
+        ])
+        .await;
+        let (responses, error) = collect(&model, request, true).await;
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(function_calls(&responses), 1);
+        assert!(!text(&responses).contains("tool▁"), "{responses:?}");
+    }
+
+    #[tokio::test]
     async fn streamed_tool_calls_are_partial_and_only_done_ends_the_turn() {
         let calls = json!({
             "model": "qwen3.5",

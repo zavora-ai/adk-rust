@@ -751,9 +751,14 @@ See [Ollama library](https://ollama.com/library) for all available models.
   OpenRouter, DeepSeek, Azure AI Inference; see "Stream Termination" in
   `docs/official_docs/models/providers.md`)
 - **Tool Calling** - Function calling support across all providers. Text-encoded tool calls
-  (Qwen, Llama, Mistral Nemo, DeepSeek, Gemma 4) are recognised only for tools the request
-  declares; arguments that are not a JSON object are marked with `adk_core::invalid_tool_arguments`
-  instead of becoming `{}`, so the agent answers the call with an error and the model can retry
+  (Qwen, Llama, Mistral Nemo, DeepSeek, DeepSeek-V3 native tokens, Gemma 4) are recognised only
+  for tools the request declares; arguments that are not a JSON object are marked with
+  `adk_core::invalid_tool_arguments` instead of becoming `{}`, so the agent answers the call with
+  an error and the model can retry. Chat Completions clients send one `tool` message per function
+  response, and images a tool returns reach every provider
+- **Timeouts** - `HttpTimeouts` bounds connecting (30 seconds) and every wait for data (10
+  minutes) on the non-Gemini clients, so a stalled stream fails instead of hanging the run;
+  `with_timeouts` changes both
 - **Async** - Full async/await support with backpressure
 - **Retry** - Automatic retry with exponential backoff for 408, 429, 500, 502, 503, 504, and 529;
   a `Retry-After` delay is honoured up to `RetryConfig::max_delay`
@@ -761,7 +766,9 @@ See [Ollama library](https://ollama.com/library) for all available models.
 - **Error privacy** - Error messages quote at most 512 bytes of an upstream error body, and clients
   log a failure's code, category, and status, never its message or a response body (see
   "Errors in spans and logs" in `docs/official_docs/observability/telemetry.md`)
-- **Generation Config** - Temperature, top_p, top_k, max_tokens
+- **Generation Config** - Temperature, top_p, top_k, max_tokens, stop sequences, seed,
+  penalties, and log probabilities where the provider supports them; a field a client cannot
+  honour fails with `model.unsupported_config` instead of being dropped
 - **Token Usage Telemetry** - Automatic `gen_ai.usage.*` span recording for all providers via `adk-telemetry`
 - **Test doubles** - `ScriptedLlm` answers each call with the next `ScriptedResponse` (text,
   function calls, streamed chunks, a stream error, a failed call, usage) and records every

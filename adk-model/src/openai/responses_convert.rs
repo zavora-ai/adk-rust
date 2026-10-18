@@ -16,8 +16,9 @@ use async_openai::types::responses::{
     InputItem, InputParam, Item, MessagePhase, OutputItem, OutputMessageContent, Prompt,
     PromptCacheRetention as OaiPromptCacheRetention, Reasoning,
     ReasoningEffort as OaiReasoningEffort, ReasoningItemContent,
-    ReasoningSummary as OaiReasoningSummary, Response, Role, ServiceTier as OaiServiceTier, Status,
-    SummaryPart, Tool, Truncation,
+    ReasoningSummary as OaiReasoningSummary, Response, ResponseTextParam, Role,
+    ServiceTier as OaiServiceTier, Status, SummaryPart, TextResponseFormatConfiguration, Tool,
+    Truncation,
 };
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -65,6 +66,7 @@ fn request_uses_computer_use_tool(request: &LlmRequest) -> bool {
 fn content_to_input_items(content: &Content) -> Vec<InputItem> {
     let role = content.role.as_str();
     let mut items = Vec::new();
+    let mut reasoning_items = 0;
 
     for part in &content.parts {
         match part {
@@ -153,18 +155,9 @@ fn content_to_input_items(content: &Content) -> Vec<InputItem> {
                 }));
             }
 
-            Part::Thinking { thinking, .. } => {
-                // Include thinking text as a text message in the input
-                let msg_role = match role {
-                    "model" | "assistant" => Role::Assistant,
-                    _ => Role::User,
-                };
-                items.push(InputItem::EasyMessage(EasyInputMessage {
-                    role: msg_role,
-                    content: EasyInputContent::Text(thinking.clone()),
-                    ..Default::default()
-                }));
-            }
+            // Reasoning goes back only as the reasoning items the history keeps beside the
+            // thinking text; as a message it would become an answer the model never gave.
+            Part::Thinking { .. } => {}
 
             Part::FileData { .. } => {
                 // FileData is not directly mapped to Responses API input items.
@@ -172,7 +165,14 @@ fn content_to_input_items(content: &Content) -> Vec<InputItem> {
             }
             Part::ServerToolCall { server_tool_call } => {
                 if let Ok(item) = serde_json::from_value::<Item>(server_tool_call.clone()) {
-                    items.push(InputItem::Item(item));
+                    // The history keeps reasoning items after the turn's outputs, and the API
+                    // takes each one ahead of the output it produced, as it returned them.
+                    if matches!(item, Item::Reasoning(_)) {
+                        items.insert(reasoning_items, InputItem::Item(item));
+                        reasoning_items += 1;
+                    } else {
+                        items.push(InputItem::Item(item));
+                    }
                 }
             }
             Part::ServerToolResponse { server_tool_response } => {
@@ -341,6 +341,12 @@ pub fn build_create_response(
     reasoning_summary: Option<ReasoningSummary>,
 ) -> Result<CreateResponse, AdkError> {
     let config = request.config.as_ref();
+    {
+        use crate::generation_config::{Supports, reject_unsupported};
+        let supports =
+            Supports { stop_sequences: false, seed: false, penalties: false, top_logprobs: true };
+        reject_unsupported("openai-responses", config, supports)?;
+    }
 
     // 1. Separate system content from non-system content
     let mut system_texts = Vec::new();
@@ -391,7 +397,7 @@ pub fn build_create_response(
 
     let tools = if tools_vec.is_empty() { None } else { Some(tools_vec) };
 
-    let include = openai_ext
+    let mut include = openai_ext
         .and_then(|o| o.get("include"))
         .map(|value| {
             serde_json::from_value::<Vec<IncludeEnum>>(value.clone()).map_err(|error| {
@@ -405,6 +411,14 @@ pub fn build_create_response(
             })
         })
         .transpose()?;
+    // Log probabilities come back only when the output text includes them.
+    let top_logprobs = config.and_then(|c| c.top_logprobs);
+    if top_logprobs.is_some() {
+        let include = include.get_or_insert_with(Vec::new);
+        if !include.contains(&IncludeEnum::MessageOutputTextLogprobs) {
+            include.push(IncludeEnum::MessageOutputTextLogprobs);
+        }
+    }
 
     let max_tool_calls = openai_ext
         .and_then(|o| o.get("max_tool_calls"))
@@ -530,9 +544,21 @@ pub fn build_create_response(
             _ => None,
         });
 
+    // 16. response_schema → text.format json_schema, as Chat Completions sends response_format
+    let text = config.and_then(|c| c.response_schema.as_ref()).map(|schema| ResponseTextParam {
+        format: TextResponseFormatConfiguration::JsonSchema(super::convert::json_schema_format(
+            &request.model,
+            schema,
+        )),
+        verbosity: None,
+    });
+
     // Build the CreateResponse using the builder
     let mut builder = CreateResponseArgs::default();
     builder.model(model.to_string()).input(input);
+    if let Some(text) = text {
+        builder.text(text);
+    }
 
     if let Some(inst) = instructions {
         builder.instructions(inst);
@@ -545,6 +571,9 @@ pub fn build_create_response(
     }
     if let Some(max_tool_calls) = max_tool_calls {
         builder.max_tool_calls(max_tool_calls);
+    }
+    if let Some(top_logprobs) = top_logprobs {
+        builder.top_logprobs(top_logprobs);
     }
     if let Some(temp) = temperature {
         builder.temperature(temp);
@@ -1057,6 +1086,25 @@ fn projection_metadata(response: &Projection) -> Option<serde_json::Value> {
             "built_in_tool_outputs".to_string(),
             serde_json::Value::Array(built_in_outputs),
         );
+    }
+
+    let logprobs: Vec<serde_json::Value> = response
+        .output
+        .iter()
+        .filter_map(|item| match item {
+            OutputItem::Message(message) => Some(&message.content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|content| match content {
+            OutputMessageContent::OutputText(text) => text.logprobs.as_ref(),
+            OutputMessageContent::Refusal(_) => None,
+        })
+        .flatten()
+        .filter_map(|logprob| serde_json::to_value(logprob).ok())
+        .collect();
+    if !logprobs.is_empty() {
+        openai.insert("logprobs".to_string(), serde_json::Value::Array(logprobs));
     }
 
     let history_parts = reasoning_history_parts(response);
@@ -2158,5 +2206,106 @@ mod tests {
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0], "tool_a");
         assert_eq!(selected[1], "tool_b");
+    }
+
+    #[test]
+    fn response_schema_becomes_strict_text_format() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"]
+        });
+        let mut request =
+            LlmRequest::new("gpt-5.6-terra", vec![Content::new("user").with_text("hi")]);
+        request.config =
+            Some(GenerateContentConfig { response_schema: Some(schema), ..Default::default() });
+
+        let body = serde_json::to_value(
+            build_create_response("gpt-5.6-terra", &request, None, None).expect("request builds"),
+        )
+        .expect("request serializes");
+
+        assert_eq!(
+            body["text"]["format"],
+            serde_json::json!({
+                "type": "json_schema",
+                "name": "gpt_5_6_terra",
+                "strict": true,
+                "schema": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                    "additionalProperties": false
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn thinking_is_replayed_only_as_its_reasoning_item() {
+        let reasoning = serde_json::json!({
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [{"type": "summary_text", "text": "Check both cities."}]
+        });
+        let model_turn = Content {
+            role: "model".to_string(),
+            parts: vec![
+                Part::Thinking { thinking: "Check both cities.".to_string(), signature: None },
+                Part::FunctionCall {
+                    name: "get_weather".to_string(),
+                    args: serde_json::json!({"city": "Paris"}),
+                    id: Some("call_1".to_string()),
+                    thought_signature: None,
+                },
+                Part::ServerToolCall { server_tool_call: reasoning },
+            ],
+        };
+
+        let items = serde_json::to_value(contents_to_input_items(&[model_turn])).unwrap();
+
+        let types: Vec<&str> = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["type"].as_str().unwrap_or("message"))
+            .collect();
+        assert_eq!(types, vec!["reasoning", "function_call"]);
+    }
+
+    #[test]
+    fn responses_rejects_fields_it_has_no_place_for_and_sends_logprobs() {
+        let request_with = |config: GenerateContentConfig| {
+            let mut request =
+                LlmRequest::new("gpt-5.6-terra", vec![Content::new("user").with_text("hi")]);
+            request.config = Some(config);
+            request
+        };
+        for config in [
+            GenerateContentConfig { stop_sequences: vec!["7".to_string()], ..Default::default() },
+            GenerateContentConfig { seed: Some(1), ..Default::default() },
+            GenerateContentConfig { presence_penalty: Some(0.5), ..Default::default() },
+            GenerateContentConfig { frequency_penalty: Some(0.5), ..Default::default() },
+        ] {
+            let error = build_create_response("gpt-5.6-terra", &request_with(config), None, None)
+                .expect_err("the Responses API has no such field");
+            assert_eq!(error.code, "model.unsupported_config");
+        }
+
+        let body = serde_json::to_value(
+            build_create_response(
+                "gpt-5.6-terra",
+                &request_with(GenerateContentConfig {
+                    top_logprobs: Some(3),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .expect("top_logprobs is supported"),
+        )
+        .unwrap();
+        assert_eq!(body["top_logprobs"], 3);
+        assert_eq!(body["include"], serde_json::json!(["message.output_text.logprobs"]));
     }
 }

@@ -161,13 +161,10 @@ pub fn chat_response_to_llm_response(
     }
 }
 
-/// Create a text delta response for streaming.
-pub fn text_delta_response(text: &str) -> LlmResponse {
+/// Create a streaming delta response carrying one part of the turn the `done` line ends.
+pub fn part_delta_response(part: Part) -> LlmResponse {
     LlmResponse {
-        content: Some(Content {
-            role: "model".to_string(),
-            parts: vec![Part::Text { text: text.to_string() }],
-        }),
+        content: Some(Content { role: "model".to_string(), parts: vec![part] }),
         usage_metadata: None,
         finish_reason: None,
         citation_metadata: None,

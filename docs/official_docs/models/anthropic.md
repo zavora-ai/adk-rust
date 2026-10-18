@@ -198,6 +198,9 @@ fn build(token: Arc<RwLock<String>>) -> Result<AnthropicClient, adk_core::AdkErr
 | Stream end | A stream must end with `message_stop` and a stop reason; otherwise it fails |
 | Final snapshot | The last streamed response carries the complete message with `provider_metadata.content_complete` set to `true`; replace the earlier text and thinking deltas with it |
 | Server tools and citations | Web search calls, results and citations are kept with the assistant turn and replayed natively on the next request; if the turn's text was edited afterwards, the turn is converted from its ADK parts instead |
+| Blank text and empty turns | Text that is empty or whitespace is left out, since the API rejects it; a turn left with no blocks (a whitespace-only answer, or reasoning from another provider that cannot be verified) is left out and the turns around it merge, so it cannot fail every later request |
+| Tool images | Images a tool returns (`FunctionResponseData::inline_data` and image `file_data`) go inside the `tool_result` block, after the JSON response |
+| Generation config | `stop_sequences` is sent; `seed`, `frequency_penalty`, `presence_penalty`, and `top_logprobs` fail with `model.unsupported_config` |
 
 ## Key Features
 
@@ -219,6 +222,23 @@ params.output_config = Some(OutputConfig::with_effort(EffortLevel::XHigh));
 let mut params = MessageCreateParams::simple("Solve this...", Model::claude_sonnet_5())
     .with_thinking(ThinkingConfig::adaptive());
 params.output_config = Some(OutputConfig::with_effort(EffortLevel::High));
+```
+
+Opus 4.7 and later, Sonnet 5 and later, and Haiku 5.5 omit the thinking text by default and
+return only its signature; Opus 4.6 and Sonnet 4.6 return a summary. Through `adk-model`,
+`AnthropicConfig::with_thinking_display` sets `thinking.display` for the configured thinking
+mode, so `Part::Thinking` carries readable text:
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig, Effort, ThinkingDisplay, ThinkingMode};
+
+let api_key = std::env::var("ANTHROPIC_API_KEY")?;
+let model = AnthropicClient::new(
+    AnthropicConfig::new(api_key, "claude-opus-5-5")
+        .with_thinking_mode(ThinkingMode::Adaptive)
+        .with_thinking_display(ThinkingDisplay::Summarized)
+        .with_effort(Effort::High),
+)?;
 ```
 
 ### Prompt Caching

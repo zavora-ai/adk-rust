@@ -255,6 +255,17 @@ impl AnthropicClient {
             .with_provider("anthropic"));
         }
 
+        {
+            use crate::generation_config::{Supports, reject_unsupported};
+            let supports = Supports {
+                stop_sequences: true,
+                seed: false,
+                penalties: false,
+                top_logprobs: false,
+            };
+            reject_unsupported("anthropic", request.config.as_ref(), supports)?;
+        }
+
         let mut system_parts: Vec<String> = Vec::new();
         let mut messages = Vec::new();
 
@@ -274,8 +285,17 @@ impl AnthropicClient {
                     system_parts.push(text);
                 }
             } else {
-                messages
-                    .push(convert::content_to_message(content, anthropic_config.prompt_caching)?);
+                let message =
+                    convert::content_to_message(content, anthropic_config.prompt_caching)?;
+                // A turn with no blocks (only whitespace, or reasoning the API cannot verify)
+                // would fail this request and every later one; the turns around it merge.
+                let empty = match &message.content {
+                    adk_anthropic::MessageParamContent::String(text) => text.trim().is_empty(),
+                    adk_anthropic::MessageParamContent::Array(blocks) => blocks.is_empty(),
+                };
+                if !empty {
+                    messages.push(message);
+                }
             }
         }
 
@@ -359,7 +379,7 @@ impl AnthropicClient {
         // Claude "learns to avoid parallel calls" from the conversation history.
         merge_consecutive_messages(&mut messages);
 
-        Ok(convert::build_message_params(
+        let mut params = convert::build_message_params(
             model,
             effective_max_tokens,
             messages,
@@ -376,7 +396,22 @@ impl AnthropicClient {
             anthropic_config.inference_geo.as_deref(),
             anthropic_config.service_tier.as_deref(),
             anthropic_config.context_management.as_ref(),
-        ))
+        );
+        if let Some(display) = anthropic_config.thinking_display {
+            match &mut params.thinking {
+                Some(adk_anthropic::ThinkingConfig::Enabled { display: slot, .. })
+                | Some(adk_anthropic::ThinkingConfig::Adaptive { display: slot }) => {
+                    *slot = Some(display);
+                }
+                Some(adk_anthropic::ThinkingConfig::Disabled) | None => {}
+            }
+        }
+        if let Some(config) = config
+            && !config.stop_sequences.is_empty()
+        {
+            params.stop_sequences = Some(config.stop_sequences.clone());
+        }
+        Ok(params)
     }
 }
 
@@ -819,6 +854,92 @@ mod tests {
                 .expect_err("Claude 5 budget thinking should be rejected locally");
 
         assert_eq!(error.code, "model.anthropic.claude5_manual_thinking_unsupported");
+    }
+
+    #[test]
+    fn stop_sequences_are_sent_and_unsupported_fields_rejected() {
+        let mut request = make_request(vec![Content::new("user").with_text("count")]);
+        request.config = Some(GenerateContentConfig {
+            stop_sequences: vec!["7".to_string()],
+            ..Default::default()
+        });
+        let config = AnthropicConfig::new("test", "claude-sonnet-4-6");
+        let params =
+            AnthropicClient::build_message_params("claude-sonnet-4-6", 4096, &request, &config)
+                .expect("stop sequences are supported");
+        assert_eq!(params.stop_sequences, Some(vec!["7".to_string()]));
+
+        for field in [
+            GenerateContentConfig { seed: Some(7), ..Default::default() },
+            GenerateContentConfig { presence_penalty: Some(0.5), ..Default::default() },
+            GenerateContentConfig { frequency_penalty: Some(0.5), ..Default::default() },
+            GenerateContentConfig { top_logprobs: Some(2), ..Default::default() },
+        ] {
+            request.config = Some(field);
+            let error =
+                AnthropicClient::build_message_params("claude-sonnet-4-6", 4096, &request, &config)
+                    .expect_err("the Messages API has no such field");
+            assert_eq!(error.code, "model.unsupported_config");
+        }
+    }
+
+    #[test]
+    fn thinking_display_reaches_the_thinking_config() {
+        let request = make_request(vec![Content::new("user").with_text("think")]);
+        let config = AnthropicConfig::new("test", "claude-opus-5-5")
+            .with_thinking_mode(super::super::config::ThinkingMode::Adaptive)
+            .with_thinking_display(adk_anthropic::ThinkingDisplay::Summarized);
+        let params =
+            AnthropicClient::build_message_params("claude-opus-5-5", 4096, &request, &config)
+                .expect("request should build");
+        assert_eq!(
+            serde_json::to_value(params.thinking).unwrap(),
+            json!({"type": "adaptive", "display": "summarized"})
+        );
+
+        // Without a thinking mode the display has nothing to apply to.
+        let config = AnthropicConfig::new("test", "claude-opus-5-5")
+            .with_thinking_display(adk_anthropic::ThinkingDisplay::Summarized);
+        let params =
+            AnthropicClient::build_message_params("claude-opus-5-5", 4096, &request, &config)
+                .expect("request should build");
+        assert!(params.thinking.is_none());
+    }
+
+    #[test]
+    fn blank_turns_and_text_are_left_out() {
+        let request = make_request(vec![
+            Content::new("user").with_text("hello"),
+            Content::new("model").with_text(" \n\n"),
+            Content::new("user").with_text("again"),
+            Content {
+                role: "model".to_string(),
+                parts: vec![
+                    Part::Thinking { thinking: "unsigned".to_string(), signature: None },
+                    Part::Text { text: String::new() },
+                ],
+            },
+            Content::new("user").with_text("third"),
+            Content::new("model").with_text("answer").with_text("\t"),
+        ]);
+        let config = AnthropicConfig::new("test", "claude-sonnet-4-6");
+
+        let params =
+            AnthropicClient::build_message_params("claude-sonnet-4-6", 4096, &request, &config)
+                .expect("request should build");
+
+        let messages = serde_json::to_value(&params.messages).unwrap();
+        assert_eq!(
+            messages,
+            serde_json::json!([
+                {"role": "user", "content": [
+                    {"type": "text", "text": "hello"},
+                    {"type": "text", "text": "again"},
+                    {"type": "text", "text": "third"}
+                ]},
+                {"role": "assistant", "content": [{"type": "text", "text": "answer"}]}
+            ])
+        );
     }
 
     #[test]

@@ -21,7 +21,8 @@ pub(crate) fn incomplete(provider: &str, code: &'static str, unfinished: &str) -
     .with_provider(provider)
 }
 
-/// The connection failed while the stream was being read. Retryable.
+/// The connection failed, or sent nothing for the idle timeout, while the stream was being
+/// read. Retryable.
 #[cfg(any(
     feature = "openai",
     feature = "groq",
@@ -30,6 +31,15 @@ pub(crate) fn incomplete(provider: &str, code: &'static str, unfinished: &str) -
     feature = "azure-ai"
 ))]
 pub(crate) fn interrupted(provider: &str, code: &'static str, error: &reqwest::Error) -> AdkError {
+    if error.is_timeout() {
+        return AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::Timeout,
+            code,
+            format!("{provider} stream sent no data within the idle timeout: {error}"),
+        )
+        .with_provider(provider);
+    }
     AdkError::new(
         ErrorComponent::Model,
         ErrorCategory::Unavailable,

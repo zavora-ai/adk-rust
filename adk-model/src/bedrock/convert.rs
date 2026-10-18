@@ -245,14 +245,46 @@ fn convert_one_part(
             Some(ContentBlock::ToolUse(tool_use))
         }
         Part::FunctionResponse { function_response, id, .. } => {
-            let tool_result = ToolResultBlock::builder()
+            let mut tool_result = ToolResultBlock::builder()
                 .tool_use_id(id.clone().unwrap_or_else(|| "unknown".to_string()))
                 .content(ToolResultContentBlock::Text(crate::tool_result::serialize_tool_result(
                     &function_response.response,
-                )))
-                .build()
-                .ok()?;
-            Some(ContentBlock::ToolResult(tool_result))
+                )));
+            // Images and documents the tool returned stay in its result, where the model
+            // reads them.
+            let mut unsupported = Vec::new();
+            for data in &function_response.inline_data {
+                let blob = || aws_smithy_types::Blob::new(data.data.as_slice());
+                if let Some(format) = mime_to_bedrock_image_format(&data.mime_type) {
+                    let image = ImageBlock::builder()
+                        .format(format)
+                        .source(ImageSource::Bytes(blob()))
+                        .build()
+                        .ok()?;
+                    tool_result = tool_result.content(ToolResultContentBlock::Image(image));
+                } else if let Some(format) = mime_to_bedrock_document_format(&data.mime_type) {
+                    let document = DocumentBlock::builder()
+                        .format(format)
+                        .name("document")
+                        .source(DocumentSource::Bytes(blob()))
+                        .build()
+                        .ok()?;
+                    tool_result = tool_result.content(ToolResultContentBlock::Document(document));
+                } else {
+                    unsupported.push(data.mime_type.as_str());
+                }
+            }
+            if !unsupported.is_empty() {
+                report.converted(part_kind(part));
+                for mime_type in unsupported {
+                    report.omitted(
+                        part_kind(part),
+                        Some(mime_type),
+                        "Bedrock tool results carry text, image, and document blocks only",
+                    );
+                }
+            }
+            Some(ContentBlock::ToolResult(tool_result.build().ok()?))
         }
         Part::Thinking { thinking, .. } => {
             if thinking.is_empty() || contains_function_call {
@@ -458,6 +490,9 @@ fn adk_config_to_bedrock(config: &GenerateContentConfig) -> InferenceConfigurati
     }
     if let Some(max_tokens) = config.max_output_tokens {
         builder = builder.max_tokens(max_tokens);
+    }
+    if !config.stop_sequences.is_empty() {
+        builder = builder.set_stop_sequences(Some(config.stop_sequences.clone()));
     }
 
     builder.build()
@@ -935,6 +970,41 @@ mod tests {
     }
 
     #[test]
+    fn tool_result_images_stay_in_the_tool_result() {
+        let contents = vec![Content {
+            role: "function".to_string(),
+            parts: vec![Part::FunctionResponse {
+                function_response: FunctionResponseData::with_inline_data(
+                    "render",
+                    serde_json::json!({"status": "rendered"}),
+                    vec![adk_core::InlineDataPart {
+                        mime_type: "image/png".to_string(),
+                        data: vec![0x89, 0x50, 0x4E, 0x47],
+                        uri: None,
+                        annotations: None,
+                    }],
+                ),
+                id: Some("call_1".to_string()),
+                annotations: None,
+            }],
+        }];
+
+        let result = adk_request_to_bedrock(&contents, &HashMap::new(), None, None).unwrap();
+
+        let ContentBlock::ToolResult(tool_result) = &result.messages[0].content[0] else {
+            panic!("tool result expected");
+        };
+        assert_eq!(tool_result.content.len(), 2);
+        assert!(
+            matches!(&tool_result.content[0], ToolResultContentBlock::Text(text) if text.contains("rendered"))
+        );
+        let ToolResultContentBlock::Image(image) = &tool_result.content[1] else {
+            panic!("image block expected");
+        };
+        assert_eq!(image.format, BedrockImageFormat::Png);
+    }
+
+    #[test]
     fn test_consecutive_tool_results_are_merged_for_bedrock() {
         let contents = vec![
             Content {
@@ -1024,6 +1094,20 @@ mod tests {
         assert_eq!(inf.temperature, Some(0.7));
         assert_eq!(inf.top_p, Some(0.9));
         assert_eq!(inf.max_tokens, Some(1024));
+        assert_eq!(inf.stop_sequences, None);
+    }
+
+    #[test]
+    fn stop_sequences_reach_the_inference_config() {
+        let config = GenerateContentConfig {
+            stop_sequences: vec!["END".to_string(), "STOP".to_string()],
+            ..Default::default()
+        };
+        let result = adk_request_to_bedrock(&[], &HashMap::new(), Some(&config), None).unwrap();
+        assert_eq!(
+            result.inference_config.unwrap().stop_sequences,
+            Some(vec!["END".to_string(), "STOP".to_string()])
+        );
     }
 
     #[test]

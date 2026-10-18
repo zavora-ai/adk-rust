@@ -1,6 +1,6 @@
 //! Configuration types for Anthropic provider.
 
-use adk_anthropic::ToolSearchConfig;
+use adk_anthropic::{ThinkingDisplay, ToolSearchConfig};
 use serde::{Deserialize, Serialize};
 
 /// Thinking mode configuration for Anthropic models.
@@ -14,9 +14,10 @@ pub enum ThinkingMode {
         /// Token budget for thinking (must be ≥ 1024).
         budget_tokens: u32,
     },
-    /// Adaptive thinking for Opus 4.7 / Opus 4.6 / Sonnet 4.6.
+    /// Adaptive thinking, the thinking mode of Claude 4.6 and later models.
     /// Claude decides when and how much to think.
-    /// Control depth via `effort` on `AnthropicConfig`.
+    /// Control depth via `effort` on `AnthropicConfig`, and whether the thinking text is
+    /// returned via [`AnthropicConfig::with_thinking_display`].
     Adaptive,
 }
 
@@ -112,6 +113,13 @@ pub struct AnthropicConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingMode>,
 
+    /// Whether responses carry the thinking text (`thinking.display`), for the configured
+    /// [`thinking`](AnthropicConfig::thinking) mode. `None` uses the model's default: Opus 4.7
+    /// and later, Sonnet 5 and later, and Haiku 5.5 omit the text and return only the
+    /// signature; Opus 4.6 and Sonnet 4.6 return a summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_display: Option<ThinkingDisplay>,
+
     /// Effort level (goes into `output_config.effort`).
     /// Works with or without thinking enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -166,6 +174,7 @@ impl std::fmt::Debug for AnthropicConfig {
             .field("prompt_caching", &self.prompt_caching)
             .field("prompt_cache_ttl", &self.prompt_cache_ttl)
             .field("thinking", &self.thinking)
+            .field("thinking_display", &self.thinking_display)
             .field("effort", &self.effort)
             .field("fast_mode", &self.fast_mode)
             .field("citations", &self.citations)
@@ -195,6 +204,7 @@ impl Default for AnthropicConfig {
             prompt_caching: true,
             prompt_cache_ttl: None,
             thinking: None,
+            thinking_display: None,
             effort: None,
             fast_mode: false,
             citations: false,
@@ -314,6 +324,25 @@ impl AnthropicConfig {
         self
     }
 
+    /// Set whether responses carry the thinking text, for the configured thinking mode.
+    ///
+    /// Current models omit it by default; [`ThinkingDisplay::Summarized`] returns a summary.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::anthropic::{AnthropicConfig, ThinkingDisplay, ThinkingMode};
+    ///
+    /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-opus-5-5")
+    ///     .with_thinking_mode(ThinkingMode::Adaptive)
+    ///     .with_thinking_display(ThinkingDisplay::Summarized);
+    /// assert_eq!(config.thinking_display, Some(ThinkingDisplay::Summarized));
+    /// ```
+    pub fn with_thinking_display(mut self, display: ThinkingDisplay) -> Self {
+        self.thinking_display = Some(display);
+        self
+    }
+
     /// Convenience: enable budget-based thinking with the given token budget.
     pub fn with_thinking(mut self, budget_tokens: u32) -> Self {
         self.thinking = Some(ThinkingMode::Enabled { budget_tokens });
@@ -377,7 +406,7 @@ impl AnthropicConfig {
     ///
     /// ```rust
     /// use adk_model::anthropic::AnthropicConfig;
-    /// use adk_anthropic::ToolSearchConfig;
+    /// use adk_anthropic::{ThinkingDisplay, ToolSearchConfig};
     ///
     /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-6")
     ///     .with_tool_search(ToolSearchConfig::new("^(search|fetch)_.*"));

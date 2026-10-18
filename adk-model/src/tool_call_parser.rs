@@ -15,6 +15,9 @@
 //! - **Llama**: `<|python_tag|>{"name":"...", "parameters":{...}}`
 //! - **Mistral Nemo**: `[TOOL_CALLS][{"name":"...", "arguments":{...}}]`
 //! - **DeepSeek**: `` ```json\n{"name":"...","arguments":{...}}\n``` `` with `<｜tool▁call▁end｜>`
+//! - **DeepSeek-V3 native**: `<｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME` followed by a
+//!   ` ```json ` fenced arguments object, and the V3.1 form `NAME<｜tool▁sep｜>{...}`, up to
+//!   `<｜tool▁calls▁end｜>`
 //! - **Gemma 4**: `<|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>`
 //! - **Action tags**: `<|action_start|>JSON<|action_end|>`
 //!
@@ -65,6 +68,11 @@ pub fn parse_text_tool_calls(text: &str) -> Option<Vec<Part>> {
 
     // Try Mistral Nemo format: [TOOL_CALLS][JSON]
     if let Some(parsed) = parse_mistral_nemo_format(text, &mut parts) {
+        return Some(parsed);
+    }
+
+    // Try DeepSeek-V3 native tokens: <｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME ```json ...```
+    if let Some(parsed) = parse_deepseek_native_format(text) {
         return Some(parsed);
     }
 
@@ -263,10 +271,7 @@ fn parse_mistral_nemo_format(text: &str, _parts: &mut Vec<Part>) -> Option<Vec<P
 }
 
 /// DeepSeek end-of-call markers that may follow the closing fence.
-const DEEPSEEK_END_MARKERS: &[&str] = &[
-    "<\u{ff5c}tool\u{2581}call\u{2581}end\u{ff5c}>",
-    "<\u{ff5c}tool\u{2581}calls\u{2581}end\u{ff5c}>",
-];
+const DEEPSEEK_END_MARKERS: &[&str] = &[DEEPSEEK_CALL_END, DEEPSEEK_CALLS_END];
 
 /// Parse DeepSeek format: ` ```json\n{"name":"...","arguments":{...}}\n``` `
 ///
@@ -309,6 +314,68 @@ fn parse_deepseek_format(text: &str) -> Option<Vec<Part>> {
         result.push(Part::Text { text: trailing.to_string() });
     }
 
+    Some(result)
+}
+
+const DEEPSEEK_CALLS_BEGIN: &str = "<\u{ff5c}tool\u{2581}calls\u{2581}begin\u{ff5c}>";
+const DEEPSEEK_CALL_BEGIN: &str = "<\u{ff5c}tool\u{2581}call\u{2581}begin\u{ff5c}>";
+const DEEPSEEK_SEP: &str = "<\u{ff5c}tool\u{2581}sep\u{ff5c}>";
+const DEEPSEEK_CALL_END: &str = "<\u{ff5c}tool\u{2581}call\u{2581}end\u{ff5c}>";
+const DEEPSEEK_CALLS_END: &str = "<\u{ff5c}tool\u{2581}calls\u{2581}end\u{ff5c}>";
+
+/// Parse DeepSeek-V3's native tool-call tokens, as its chat template renders them when the
+/// server has no tool-call parser.
+///
+/// V3 writes `<｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\n{...}\n```<｜tool▁call▁end｜>`;
+/// V3.1 writes `<｜tool▁call▁begin｜>NAME<｜tool▁sep｜>{...}<｜tool▁call▁end｜>`. Calls sit between
+/// `<｜tool▁calls▁begin｜>` and `<｜tool▁calls▁end｜>`; text around them is kept. Every call must
+/// carry a name and an arguments object.
+fn parse_deepseek_native_format(text: &str) -> Option<Vec<Part>> {
+    let first_call = text.find(DEEPSEEK_CALL_BEGIN)?;
+    let start = text[..first_call].rfind(DEEPSEEK_CALLS_BEGIN).unwrap_or(first_call);
+    let mut result = Vec::new();
+    if !text[..start].trim().is_empty() {
+        result.push(Part::Text { text: text[..start].to_string() });
+    }
+
+    let mut rest = &text[first_call..];
+    while let Some(begin) = rest.find(DEEPSEEK_CALL_BEGIN) {
+        let body = &rest[begin + DEEPSEEK_CALL_BEGIN.len()..];
+        let end = [DEEPSEEK_CALL_END, DEEPSEEK_CALLS_END, DEEPSEEK_CALL_BEGIN]
+            .iter()
+            .filter_map(|marker| body.find(marker))
+            .min()
+            .unwrap_or(body.len());
+        let (head, arguments) = body[..end].split_once(DEEPSEEK_SEP)?;
+        let (name, arguments) = if head.trim() == "function" {
+            let (name, arguments) = arguments.split_once('\n').unwrap_or((arguments, ""));
+            (name.trim(), arguments)
+        } else {
+            (head.trim(), arguments)
+        };
+        let arguments = arguments.trim();
+        let arguments = arguments
+            .strip_prefix("```json")
+            .or_else(|| arguments.strip_prefix("```"))
+            .map(|fenced| fenced.trim_end().trim_end_matches("```"))
+            .unwrap_or(arguments);
+        let args: serde_json::Value = serde_json::from_str(arguments.trim()).ok()?;
+        if name.is_empty() || !args.is_object() {
+            return None;
+        }
+        result.push(Part::FunctionCall {
+            name: name.to_string(),
+            args,
+            id: None,
+            thought_signature: None,
+        });
+        rest = body[end..].strip_prefix(DEEPSEEK_CALL_END).unwrap_or(&body[end..]);
+    }
+
+    let trailing = rest.trim_start().strip_prefix(DEEPSEEK_CALLS_END).unwrap_or(rest);
+    if !trailing.trim().is_empty() {
+        result.push(Part::Text { text: trailing.to_string() });
+    }
     Some(result)
 }
 
@@ -422,7 +489,7 @@ const TOOL_CALL_PREFIXES: &[&str] = &[
     "<|python_tag|",
     "[TOOL_CALLS]",
     "<|action_start|>",
-    "<\u{ff5c}\u{2581}tool", // <｜tool (DeepSeek full-width)
+    "<\u{ff5c}tool", // <｜tool (DeepSeek full-width)
 ];
 
 /// Maximum buffer size before flushing as plain text (safety valve).
@@ -588,6 +655,10 @@ impl ToolCallBuffer {
     }
 
     fn has_complete_tool_call(&self) -> bool {
+        // DeepSeek-V3 native calls hold a ```json fence each, so only the closing token ends them.
+        if self.buffer.contains(DEEPSEEK_CALL_BEGIN) {
+            return self.buffer.contains(DEEPSEEK_CALLS_END);
+        }
         (self.buffer.contains("<tool_call>") && self.buffer.contains("</tool_call>"))
             || (self.buffer.contains("<|tool_call>") && self.buffer.contains("<tool_call|>"))
             || (self.buffer.contains("<|python_tag|>")
@@ -1208,5 +1279,67 @@ mod tests {
             _ => panic!("expected FunctionCall"),
         }
         assert!(matches!(&parts[2], Part::Text { text } if text == "\n post"));
+    }
+
+    const V3_CALLS: &str = "Checking.<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n```json\n{\"city\": \"Paris\"}\n```<｜tool▁call▁end｜>\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_time\n```json\n{\"city\": \"Tokyo\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+
+    fn call(name: &str, args: serde_json::Value) -> Part {
+        Part::FunctionCall { name: name.to_string(), args, id: None, thought_signature: None }
+    }
+
+    #[test]
+    fn deepseek_v3_native_tokens_parse_into_calls() {
+        let parts =
+            parse_declared_tool_calls(V3_CALLS, &declared(&["get_weather", "get_time"])).unwrap();
+        assert_eq!(
+            parts,
+            vec![
+                Part::Text { text: "Checking.".to_string() },
+                call("get_weather", serde_json::json!({"city": "Paris"})),
+                call("get_time", serde_json::json!({"city": "Tokyo"})),
+            ]
+        );
+    }
+
+    #[test]
+    fn deepseek_v31_native_tokens_parse_into_calls() {
+        let text = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{\"city\": \"Paris\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+        let parts = parse_declared_tool_calls(text, &declared(&["get_weather"])).unwrap();
+        assert_eq!(parts, vec![call("get_weather", serde_json::json!({"city": "Paris"}))]);
+    }
+
+    #[test]
+    fn deepseek_native_call_to_undeclared_tool_stays_text() {
+        assert!(parse_declared_tool_calls(V3_CALLS, &declared(&["get_weather"])).is_none());
+    }
+
+    #[test]
+    fn deepseek_native_tokens_stream_into_calls() {
+        let mut buffer = ToolCallBuffer::for_declared_tools(declared(&["get_weather", "get_time"]));
+        let mut parts = Vec::new();
+        let chars: Vec<char> = V3_CALLS.chars().collect();
+        for chunk in chars.chunks(7) {
+            if let BufferAction::Emit(emitted) = buffer.push(&chunk.iter().collect::<String>()) {
+                parts.extend(emitted);
+            }
+        }
+        parts.extend(buffer.flush());
+        let calls: Vec<&Part> =
+            parts.iter().filter(|part| matches!(part, Part::FunctionCall { .. })).collect();
+        assert_eq!(
+            calls,
+            vec![
+                &call("get_weather", serde_json::json!({"city": "Paris"})),
+                &call("get_time", serde_json::json!({"city": "Tokyo"})),
+            ]
+        );
+        let text: String = parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(!text.contains("tool▁"), "native tokens leaked as text: {text}");
     }
 }

@@ -119,6 +119,40 @@ impl AzureOpenAIClient {
     pub fn retry_config(&self) -> &RetryConfig {
         self.inner.retry_config()
     }
+
+    /// Sets the connect and idle timeouts of the HTTP transport, so a stalled stream fails
+    /// instead of holding the run.
+    ///
+    /// See [`HttpTimeouts`](crate::HttpTimeouts) for the defaults.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use adk_model::openai::{AzureConfig, AzureOpenAIClient};
+    /// use adk_model::HttpTimeouts;
+    ///
+    /// let config = AzureConfig::new(
+    ///     "azure-key",
+    ///     "https://my-resource.openai.azure.com",
+    ///     "2024-12-01-preview",
+    ///     "gpt-4o",
+    /// );
+    /// let client = AzureOpenAIClient::new(config)?
+    ///     .with_timeouts(HttpTimeouts::new(Duration::from_secs(10), Duration::from_secs(120)))?;
+    /// # let _ = client;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Internal` error with code `model.openai.http_client_init` when the HTTP
+    /// client cannot be built.
+    pub fn with_timeouts(mut self, timeouts: crate::HttpTimeouts) -> Result<Self, AdkError> {
+        self.inner = self.inner.with_timeouts(timeouts)?;
+        Ok(self)
+    }
 }
 
 #[async_trait]

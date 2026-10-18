@@ -191,7 +191,6 @@ Gaps that remain open after the fixes in #848–#877: from the October 2026 revi
 |-----|-----|--------|
 | Merge-queue builds skip the standalone examples, so lockfile drift between two pull requests can reach `main` | Run `cargo metadata --locked` over every example lockfile in the merge queue | #868 |
 | `examples/tier_examples/*` lockfiles are stale, and `scripts/check-examples-compile.sh` does not reach them | Include them in the script, or remove them | #864 |
-| `cargo clippy -p adk-model` with a single provider feature (`groq`, `ollama`, `deepseek`, `azure-ai`) fails on an unused helper | Gate the helper on the features that use it | #850 |
 | `cargo clippy -p adk-payments --features ap2 --all-targets` fails in the ap2 test files | Fix the test-file lints | #853 |
 | `zip` 0.6.6 reaches the `livekit` build through `webrtc-sys-build`, under a reviewed exception | Remove the exception once `webrtc-sys-build` moves to zip 9 | #864 |
 | No fuzzing | `cargo-fuzz` targets for the stream decoders, the text tool-call parser, sandbox path resolution, Responses parsing, A2A decoding and the schema adapters before 3.0; an OSS-Fuzz submission after | October 2026 review |

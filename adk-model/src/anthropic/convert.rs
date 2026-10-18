@@ -17,17 +17,60 @@ use adk_core::{
 use serde_json::Value;
 use std::collections::HashMap;
 
-fn tool_result_content(value: &Value) -> ToolResultBlockContent {
-    match value {
-        Value::String(text) => ToolResultBlockContent::String(text.clone()),
-        Value::Object(_) | Value::Array(_) => {
-            ToolResultBlockContent::String(serde_json::to_string(value).unwrap_or_default())
-        }
-        other => ToolResultBlockContent::String(other.to_string()),
+fn image_media_type(mime_type: &str) -> Option<ImageMediaType> {
+    match mime_type {
+        "image/jpeg" => Some(ImageMediaType::Jpeg),
+        "image/png" => Some(ImageMediaType::Png),
+        "image/gif" => Some(ImageMediaType::Gif),
+        "image/webp" => Some(ImageMediaType::Webp),
+        _ => None,
     }
 }
 
+/// The `tool_result` content for a function response: its JSON as text, then each image or
+/// file the tool returned, so the model reads them with the result.
+fn tool_result_content(response: &adk_core::FunctionResponseData) -> ToolResultBlockContent {
+    let text = match &response.response {
+        Value::String(text) => text.clone(),
+        Value::Object(_) | Value::Array(_) => {
+            serde_json::to_string(&response.response).unwrap_or_default()
+        }
+        other => other.to_string(),
+    };
+    if response.inline_data.is_empty() && response.file_data.is_empty() {
+        return ToolResultBlockContent::String(text);
+    }
+    let mut items = Vec::new();
+    if !text.trim().is_empty() {
+        items.push(adk_anthropic::Content::Text(TextBlock::new(text)));
+    }
+    for data in &response.inline_data {
+        items.push(match image_media_type(&data.mime_type) {
+            Some(media_type) => adk_anthropic::Content::Image(ImageBlock::new_with_base64(
+                Base64ImageSource::new(attachment::encode_base64(&data.data), media_type),
+            )),
+            None => adk_anthropic::Content::Text(TextBlock::new(
+                attachment::inline_attachment_to_text(&data.mime_type, &data.data),
+            )),
+        });
+    }
+    for file in &response.file_data {
+        items.push(match image_media_type(&file.mime_type) {
+            Some(_) => adk_anthropic::Content::Image(ImageBlock::new_with_url(
+                UrlImageSource::new(file.file_uri.clone()),
+            )),
+            None => adk_anthropic::Content::Text(TextBlock::new(
+                attachment::file_attachment_to_text(&file.mime_type, &file.file_uri),
+            )),
+        });
+    }
+    ToolResultBlockContent::Array(items)
+}
+
 /// Convert ADK Content to adk-anthropic MessageParam.
+///
+/// Text that is empty or whitespace is left out, since the API rejects it, so the message
+/// can have no blocks; the caller leaves such a message out of the request.
 ///
 /// When `prompt_caching` is true, eligible content blocks will have
 /// `cache_control: {"type": "ephemeral"}` set on them.
@@ -44,7 +87,10 @@ pub fn content_to_message(
         _ => MessageRole::User,
     };
 
-    if let Some(blocks) = super::history::restore(content) {
+    if let Some(mut blocks) = super::history::restore(content) {
+        blocks.retain(
+            |block| !matches!(block, ContentBlock::Text(text) if text.text.trim().is_empty()),
+        );
         return Ok(MessageParam::new_with_blocks(blocks, role));
     }
 
@@ -57,7 +103,7 @@ pub fn content_to_message(
         .iter()
         .filter_map(|part| match part {
             Part::Text { text } => {
-                if text.is_empty() {
+                if text.trim().is_empty() {
                     None
                 } else {
                     Some(ContentBlock::Text(TextBlock::new(text.clone())))
@@ -75,20 +121,13 @@ pub fn content_to_message(
             Part::FunctionResponse { function_response, id, .. } => {
                 Some(ContentBlock::ToolResult(ToolResultBlock {
                     tool_use_id: id.clone().unwrap_or_else(|| "unknown".to_string()),
-                    content: Some(tool_result_content(&function_response.response)),
+                    content: Some(tool_result_content(function_response)),
                     is_error: None,
                     cache_control: None,
                 }))
             }
             Part::InlineData { mime_type, data, .. } => {
-                let media_type = match mime_type.as_str() {
-                    "image/jpeg" => Some(ImageMediaType::Jpeg),
-                    "image/png" => Some(ImageMediaType::Png),
-                    "image/gif" => Some(ImageMediaType::Gif),
-                    "image/webp" => Some(ImageMediaType::Webp),
-                    _ => None,
-                };
-                if let Some(media_type) = media_type {
+                if let Some(media_type) = image_media_type(mime_type) {
                     let encoded = attachment::encode_base64(data);
                     Some(ContentBlock::Image(ImageBlock::new_with_base64(Base64ImageSource::new(
                         encoded, media_type,
@@ -168,7 +207,7 @@ pub fn content_to_message(
             // Embedded resources: text → text block; blob → inline bytes handling.
             Part::EmbeddedResource { resource } => match resource {
                 adk_core::EmbeddedResource::Text(text) => {
-                    if text.text.is_empty() {
+                    if text.text.trim().is_empty() {
                         None
                     } else {
                         Some(ContentBlock::Text(TextBlock::new(text.text.clone())))
@@ -176,14 +215,7 @@ pub fn content_to_message(
                 }
                 adk_core::EmbeddedResource::Blob(blob) => {
                     let mime_type = blob.mime_type.as_deref().unwrap_or("application/octet-stream");
-                    let media_type = match mime_type {
-                        "image/jpeg" => Some(ImageMediaType::Jpeg),
-                        "image/png" => Some(ImageMediaType::Png),
-                        "image/gif" => Some(ImageMediaType::Gif),
-                        "image/webp" => Some(ImageMediaType::Webp),
-                        _ => None,
-                    };
-                    if let Some(media_type) = media_type {
+                    if let Some(media_type) = image_media_type(mime_type) {
                         let encoded = attachment::encode_base64(&blob.data);
                         Some(ContentBlock::Image(ImageBlock::new_with_base64(
                             Base64ImageSource::new(encoded, media_type),
@@ -211,15 +243,6 @@ pub fn content_to_message(
             },
         })
         .collect();
-
-    // If no blocks, add a placeholder for assistant messages
-    let blocks = if blocks.is_empty() && role == MessageRole::Assistant {
-        vec![ContentBlock::Text(TextBlock::new(" ".to_string()))]
-    } else if blocks.is_empty() {
-        vec![ContentBlock::Text(TextBlock::new("".to_string()))]
-    } else {
-        blocks
-    };
 
     Ok(MessageParam::new_with_blocks(blocks, role))
 }
@@ -638,6 +661,43 @@ mod tests {
             .expect("code execution result part");
         assert_eq!(result["tool_use_id"], "srvtoolu_01");
         assert_eq!(result["content"]["stdout"], "4\n");
+    }
+
+    #[test]
+    fn tool_result_carries_the_images_a_tool_returned() {
+        let content = Content {
+            role: "function".to_string(),
+            parts: vec![Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::with_multimodal(
+                    "render",
+                    serde_json::json!({"status": "rendered"}),
+                    vec![adk_core::InlineDataPart {
+                        mime_type: "image/png".to_string(),
+                        data: vec![1, 2, 3],
+                        uri: None,
+                        annotations: None,
+                    }],
+                    vec![adk_core::FileDataPart {
+                        mime_type: "image/jpeg".to_string(),
+                        file_uri: "https://example.com/badge.jpg".to_string(),
+                        annotations: None,
+                    }],
+                ),
+                id: Some("toolu_1".to_string()),
+                annotations: None,
+            }],
+        };
+
+        let message = serde_json::to_value(content_to_message(&content, false).unwrap()).unwrap();
+
+        assert_eq!(
+            message["content"][0]["content"],
+            serde_json::json!([
+                {"type": "text", "text": "{\"status\":\"rendered\"}"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AQID"}},
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/badge.jpg"}}
+            ])
+        );
     }
 
     #[test]

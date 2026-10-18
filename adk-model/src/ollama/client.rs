@@ -50,17 +50,37 @@ impl OllamaModel {
             .with_provider("ollama")
         })?;
 
-        let http = reqwest::Client::builder().build().map_err(|e| {
-            AdkError::new(
-                ErrorComponent::Model,
-                ErrorCategory::Internal,
-                "model.ollama.client_init",
-                format!("Failed to create Ollama HTTP client: {e}"),
-            )
-            .with_provider("ollama")
-        })?;
+        let http = ollama_http_client(crate::HttpTimeouts::default())?;
 
         Ok(Self { client, http, model_name: config.model.clone(), config })
+    }
+
+    /// Sets the connect and idle timeouts of the HTTP transport, so a stalled stream fails
+    /// with a `Timeout` error instead of holding the run.
+    ///
+    /// See [`HttpTimeouts`](crate::HttpTimeouts) for the defaults; a local model that takes
+    /// longer than the idle timeout to load needs a longer one.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use adk_model::ollama::{OllamaConfig, OllamaModel};
+    /// use adk_model::HttpTimeouts;
+    ///
+    /// let model = OllamaModel::new(OllamaConfig::new("qwen3.5"))?
+    ///     .with_timeouts(HttpTimeouts::new(Duration::from_secs(5), Duration::from_secs(900)))?;
+    /// # let _ = model;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `model.ollama.client_init` when the HTTP client cannot be built.
+    pub fn with_timeouts(mut self, timeouts: crate::HttpTimeouts) -> Result<Self> {
+        self.http = ollama_http_client(timeouts)?;
+        Ok(self)
     }
 
     /// Create a client with default settings for a given model.
@@ -124,6 +144,18 @@ impl OllamaModel {
             })
             .collect()
     }
+}
+
+fn ollama_http_client(timeouts: crate::HttpTimeouts) -> Result<reqwest::Client> {
+    timeouts.apply(reqwest::Client::builder()).build().map_err(|e| {
+        AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::Internal,
+            "model.ollama.client_init",
+            format!("Failed to create Ollama HTTP client: {e}"),
+        )
+        .with_provider("ollama")
+    })
 }
 
 /// Map an Ollama error message to a structured `AdkError`.
@@ -218,8 +250,9 @@ impl Llm for OllamaModel {
         let options = self.build_options(&request);
 
         // Convert ADK contents to Ollama messages
+        // A tool message carries only text, so images a tool returned follow it.
         let mut messages: Vec<ChatMessage> = Vec::new();
-        for content in &request.contents {
+        for content in crate::tool_result::with_images(&request.contents).iter() {
             if let Some(msg) = convert::content_to_chat_message(content) {
                 messages.push(msg);
             }
@@ -293,6 +326,10 @@ impl Llm for OllamaModel {
                 let mut buffer = Vec::new();
                 // Only a `done: true` line marks a complete response.
                 let mut done = false;
+                // Text-encoded tool calls can span lines, so text passes through the buffer.
+                let mut text_tool_buffer = crate::tool_call_parser::ToolCallBuffer::for_declared_tools(
+                    declared_tools.clone(),
+                );
                 let mut ended = false;
 
                 while !ended {
@@ -334,8 +371,13 @@ impl Llm for OllamaModel {
                             }
 
                         // Yield text delta for each chunk
-                        if !response.message.content.is_empty() {
-                            yield convert::text_delta_response(&response.message.content);
+                        if !response.message.content.is_empty()
+                            && let crate::tool_call_parser::BufferAction::Emit(parts) =
+                                text_tool_buffer.push(&response.message.content)
+                        {
+                            for part in parts {
+                                yield convert::part_delta_response(part);
+                            }
                         }
 
                         // Yield tool calls if present in this chunk. They are part of the
@@ -370,6 +412,9 @@ impl Llm for OllamaModel {
 
                         // If done, yield final response with metadata
                         if response.done {
+                            for part in text_tool_buffer.flush() {
+                                yield convert::part_delta_response(part);
+                            }
                             done = true;
                             yield convert::chat_response_to_llm_response(&response, &value, false, &declared_tools);
                         }

@@ -69,6 +69,16 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<Tool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_reasoning: Option<bool>,
+    /// Stop sequences.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
+    /// Sampling seed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
 }
 
 /// Groq chat completion response.
@@ -152,6 +162,30 @@ pub struct DeltaFunction {
     pub name: Option<String>,
     #[serde(default)]
     pub arguments: Option<String>,
+}
+
+/// Convert one ADK content to the Groq messages that carry it.
+///
+/// A content holding function responses becomes one `tool` message per response, in order,
+/// followed by a user message with any other parts; every other content is one message.
+pub fn content_to_messages(content: &Content) -> Vec<Message> {
+    if matches!(content.role.as_str(), "user" | "function" | "tool")
+        && let Some((responses, rest)) = crate::tool_result::split_function_responses(content)
+    {
+        let mut messages: Vec<Message> = responses
+            .into_iter()
+            .map(|(id, response)| Message {
+                role: "tool".to_string(),
+                content: Some(crate::tool_result::serialize_tool_result(&response.response)),
+                name: None,
+                tool_calls: None,
+                tool_call_id: id.map(str::to_string),
+            })
+            .collect();
+        messages.extend(rest.map(|rest| content_to_message(&rest)));
+        return messages;
+    }
+    vec![content_to_message(content)]
 }
 
 /// Convert ADK Content to Groq Message.
@@ -385,5 +419,36 @@ mod tests {
         let payload = message.content.unwrap_or_default();
         assert!(payload.contains("application/pdf"));
         assert!(payload.contains("https://example.com/report.pdf"));
+    }
+
+    #[test]
+    fn several_function_responses_become_one_tool_message_each() {
+        let response = |id: &str| Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(
+                "get_weather",
+                serde_json::json!({"ok": id}),
+            ),
+            id: Some(id.to_string()),
+            annotations: None,
+        };
+        let content = Content {
+            role: "function".to_string(),
+            parts: vec![
+                response("call_a"),
+                response("call_b"),
+                Part::Text { text: "note".to_string() },
+            ],
+        };
+        let messages = content_to_messages(&content);
+        let shape: Vec<(String, Option<String>)> =
+            messages.iter().map(|m| (m.role.clone(), m.tool_call_id.clone())).collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("tool".to_string(), Some("call_a".to_string())),
+                ("tool".to_string(), Some("call_b".to_string())),
+                ("user".to_string(), None),
+            ]
+        );
     }
 }

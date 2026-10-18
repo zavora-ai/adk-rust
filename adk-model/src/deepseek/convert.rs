@@ -110,6 +110,10 @@ pub struct ChatCompletionRequest {
     /// Stop sequences.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
 }
 
 /// Response format configuration.
@@ -219,7 +223,6 @@ pub fn usage(u: &Value) -> Option<UsageMetadata> {
     Some(meta)
 }
 
-/// Convert ADK Content to DeepSeek Message.
 /// Builds a system message carrying `text`.
 pub fn system_message(text: impl Into<String>) -> Message {
     Message {
@@ -233,6 +236,33 @@ pub fn system_message(text: impl Into<String>) -> Message {
     }
 }
 
+/// Convert one ADK content to the DeepSeek messages that carry it.
+///
+/// A content holding function responses becomes one `tool` message per response, in order,
+/// followed by a user message with any other parts; every other content is one message.
+pub fn content_to_messages(content: &Content) -> Vec<Message> {
+    if matches!(content.role.as_str(), "user" | "function" | "tool")
+        && let Some((responses, rest)) = crate::tool_result::split_function_responses(content)
+    {
+        let mut messages: Vec<Message> = responses
+            .into_iter()
+            .map(|(id, response)| Message {
+                role: "tool".to_string(),
+                content: Some(crate::tool_result::serialize_tool_result(&response.response)),
+                content_parts: None,
+                name: None,
+                tool_calls: None,
+                tool_call_id: id.map(str::to_string),
+                reasoning_content: None,
+            })
+            .collect();
+        messages.extend(rest.map(|rest| content_to_message(&rest)));
+        return messages;
+    }
+    vec![content_to_message(content)]
+}
+
+/// Convert ADK Content to DeepSeek Message.
 pub fn content_to_message(content: &Content) -> Message {
     let role = match content.role.as_str() {
         "model" | "assistant" => "assistant",
@@ -646,5 +676,36 @@ mod tests {
         assert_eq!(message.role, "assistant");
         assert_eq!(message.reasoning_content.as_deref(), Some("reason through the tool plan"));
         assert_eq!(message.content.as_deref(), Some("let me check the prices"));
+    }
+
+    #[test]
+    fn several_function_responses_become_one_tool_message_each() {
+        let response = |id: &str| Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(
+                "get_weather",
+                serde_json::json!({"ok": id}),
+            ),
+            id: Some(id.to_string()),
+            annotations: None,
+        };
+        let content = Content {
+            role: "function".to_string(),
+            parts: vec![
+                response("call_a"),
+                response("call_b"),
+                Part::Text { text: "note".to_string() },
+            ],
+        };
+        let messages = content_to_messages(&content);
+        let shape: Vec<(String, Option<String>)> =
+            messages.iter().map(|m| (m.role.clone(), m.tool_call_id.clone())).collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("tool".to_string(), Some("call_a".to_string())),
+                ("tool".to_string(), Some("call_b".to_string())),
+                ("user".to_string(), None),
+            ]
+        );
     }
 }

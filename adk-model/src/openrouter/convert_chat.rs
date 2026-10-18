@@ -16,10 +16,37 @@ const FILE_PARSER_PLUGIN_ID: &str = "file-parser";
 const DEFAULT_BLOB_MIME_TYPE: &str = "application/octet-stream";
 
 /// Convert ADK contents into OpenRouter chat messages with multimodal parts preserved.
+///
+/// A content holding function responses becomes one `tool` message per response, in order,
+/// followed by a user message with any other parts.
 pub fn adk_contents_to_chat_messages(
     contents: &[Content],
 ) -> Result<Vec<OpenRouterChatMessage>, AdkError> {
-    contents.iter().map(adk_content_to_chat_message).collect()
+    let mut messages = Vec::with_capacity(contents.len());
+    for content in contents {
+        if matches!(content.role.as_str(), "user" | "function" | "tool")
+            && let Some((responses, rest)) = crate::tool_result::split_function_responses(content)
+        {
+            messages.extend(responses.into_iter().map(|(id, function_response)| {
+                OpenRouterChatMessage {
+                    role: "tool".to_string(),
+                    tool_call_id: id
+                        .map(str::to_string)
+                        .or_else(|| Some(format!("call_{}", function_response.name))),
+                    content: Some(OpenRouterChatMessageContent::Text(
+                        serde_json::to_string(&function_response.response).unwrap_or_default(),
+                    )),
+                    ..Default::default()
+                }
+            }));
+            if let Some(rest) = rest {
+                messages.push(adk_content_to_chat_message(&rest)?);
+            }
+        } else {
+            messages.push(adk_content_to_chat_message(content)?);
+        }
+    }
+    Ok(messages)
 }
 
 /// Ensure the `file-parser` plugin is present when chat content includes file inputs.
@@ -90,8 +117,12 @@ pub fn reasoning_replay_from_extension_value(
 }
 
 fn adk_content_to_chat_message(content: &Content) -> Result<OpenRouterChatMessage, AdkError> {
+    // A tool-role content without a function response carries only user-visible parts.
     if matches!(content.role.as_str(), "function" | "tool") {
-        return Ok(tool_response_chat_message(content));
+        return adk_content_to_chat_message(&Content {
+            role: "user".to_string(),
+            parts: content.parts.clone(),
+        });
     }
 
     let mut text_fragments = Vec::new();
@@ -176,25 +207,6 @@ fn adk_content_to_chat_message(content: &Content) -> Result<OpenRouterChatMessag
         tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
         ..Default::default()
     })
-}
-
-fn tool_response_chat_message(content: &Content) -> OpenRouterChatMessage {
-    if let Some(Part::FunctionResponse { function_response, id, .. }) = content.parts.first() {
-        return OpenRouterChatMessage {
-            role: "tool".to_string(),
-            tool_call_id: id.clone().or_else(|| Some(format!("call_{}", function_response.name))),
-            content: Some(OpenRouterChatMessageContent::Text(
-                serde_json::to_string(&function_response.response).unwrap_or_default(),
-            )),
-            ..Default::default()
-        };
-    }
-
-    OpenRouterChatMessage {
-        role: "tool".to_string(),
-        content: Some(OpenRouterChatMessageContent::Text(String::new())),
-        ..Default::default()
-    }
 }
 
 fn push_text_fragment(
@@ -610,5 +622,32 @@ mod tests {
                 .and_then(|details| details.get("encrypted_content")),
             Some(&serde_json::json!("abc123"))
         );
+    }
+
+    #[test]
+    fn several_function_responses_become_one_tool_message_each() {
+        let response = |id: &str| Part::FunctionResponse {
+            function_response: FunctionResponseData::new(
+                "get_weather",
+                serde_json::json!({"ok": id}),
+            ),
+            id: Some(id.to_string()),
+            annotations: None,
+        };
+        let messages = adk_contents_to_chat_messages(&[Content {
+            role: "function".to_string(),
+            parts: vec![
+                response("call_a"),
+                response("call_b"),
+                Part::Text { text: "note".to_string() },
+            ],
+        }])
+        .expect("messages should convert");
+
+        let shape: Vec<(&str, Option<&str>)> = messages
+            .iter()
+            .map(|message| (message.role.as_str(), message.tool_call_id.as_deref()))
+            .collect();
+        assert_eq!(shape, vec![("tool", Some("call_a")), ("tool", Some("call_b")), ("user", None)]);
     }
 }

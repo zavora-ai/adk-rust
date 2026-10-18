@@ -40,11 +40,42 @@ impl GroqClient {
     /// Create a new Groq client.
     pub fn new(config: GroqConfig) -> Result<Self, AdkError> {
         crate::catalog::warn_if_obsolete("groq", &config.model);
-        let client = Client::builder()
+        let client = crate::HttpTimeouts::default()
+            .apply(Client::builder())
             .build()
             .map_err(|e| AdkError::model(format!("Failed to create HTTP client: {e}")))?;
 
         Ok(Self { client, config, retry_config: RetryConfig::default() })
+    }
+
+    /// Sets the connect and idle timeouts of the HTTP transport, so a stalled stream fails
+    /// with a `Timeout` error instead of holding the run.
+    ///
+    /// See [`HttpTimeouts`](crate::HttpTimeouts) for the defaults.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use adk_model::groq::{GroqClient, GroqConfig};
+    /// use adk_model::HttpTimeouts;
+    ///
+    /// let client = GroqClient::new(GroqConfig::new("gsk-key", "openai/gpt-oss-120b"))?
+    ///     .with_timeouts(HttpTimeouts::new(Duration::from_secs(10), Duration::from_secs(120)))?;
+    /// # let _ = client;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the Groq HTTP client cannot be built.
+    pub fn with_timeouts(mut self, timeouts: crate::HttpTimeouts) -> Result<Self, AdkError> {
+        self.client = timeouts
+            .apply(Client::builder())
+            .build()
+            .map_err(|e| AdkError::model(format!("Failed to create HTTP client: {e}")))?;
+        Ok(self)
     }
 
     /// Create a client for llama-3.3-70b-versatile model.
@@ -86,8 +117,32 @@ impl GroqClient {
     }
 
     /// Build a chat completion request from an LLM request.
-    fn build_request(&self, request: &LlmRequest, stream: bool) -> ChatCompletionRequest {
-        let messages: Vec<_> = request.contents.iter().map(convert::content_to_message).collect();
+    ///
+    /// # Errors
+    ///
+    /// Returns `model.unsupported_config` when the config sets `top_logprobs`, which Groq
+    /// models do not support.
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+        stream: bool,
+    ) -> Result<ChatCompletionRequest, AdkError> {
+        let config = request.config.as_ref();
+        crate::generation_config::reject_unsupported(
+            "groq",
+            config,
+            crate::generation_config::Supports {
+                stop_sequences: true,
+                seed: true,
+                penalties: true,
+                top_logprobs: false,
+            },
+        )?;
+        // A tool message carries only text, so images a tool returned follow it.
+        let messages: Vec<_> = crate::tool_result::with_images(&request.contents)
+            .iter()
+            .flat_map(convert::content_to_messages)
+            .collect();
 
         let tools = if request.tools.is_empty() {
             None
@@ -106,7 +161,7 @@ impl GroqClient {
 
         let include_reasoning = if self.config.reasoning_enabled { Some(true) } else { None };
 
-        ChatCompletionRequest {
+        Ok(ChatCompletionRequest {
             model: self.config.model.clone(),
             messages,
             temperature,
@@ -115,7 +170,11 @@ impl GroqClient {
             stream: Some(stream),
             tools,
             include_reasoning,
-        }
+            stop: config.map(|c| c.stop_sequences.clone()).filter(|stop| !stop.is_empty()),
+            seed: config.and_then(|c| c.seed),
+            frequency_penalty: config.and_then(|c| c.frequency_penalty),
+            presence_penalty: config.and_then(|c| c.presence_penalty),
+        })
     }
 }
 
@@ -153,7 +212,7 @@ impl Llm for GroqClient {
         let usage_span = adk_telemetry::llm_generate_span("groq", &self.config.model, stream);
         let api_url = self.api_url();
         let api_key = self.config.api_key.clone();
-        let chat_request = self.build_request(&request, stream);
+        let chat_request = self.build_request(&request, stream)?;
         let client = self.client.clone();
         let retry_config = self.retry_config.clone();
 
@@ -434,5 +493,48 @@ impl Llm for GroqClient {
             "groq",
             &self.config.model,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adk_core::{Content, GenerateContentConfig};
+
+    fn request(config: GenerateContentConfig) -> LlmRequest {
+        let mut request =
+            LlmRequest::new("qwen/qwen3.8-27b", vec![Content::new("user").with_text("hi")]);
+        request.config = Some(config);
+        request
+    }
+
+    #[test]
+    fn stop_seed_and_penalties_are_sent_and_logprobs_are_rejected() {
+        let client = GroqClient::new(GroqConfig::new("test-key", "qwen/qwen3.8-27b")).unwrap();
+        let built = client
+            .build_request(
+                &request(GenerateContentConfig {
+                    stop_sequences: vec!["END".to_string()],
+                    seed: Some(42),
+                    presence_penalty: Some(0.5),
+                    frequency_penalty: Some(0.25),
+                    ..Default::default()
+                }),
+                false,
+            )
+            .unwrap();
+        let wire = serde_json::to_value(built).unwrap();
+        assert_eq!(wire["stop"], serde_json::json!(["END"]));
+        assert_eq!(wire["seed"], 42);
+        assert_eq!(wire["presence_penalty"], 0.5);
+        assert_eq!(wire["frequency_penalty"], 0.25);
+
+        let error = client
+            .build_request(
+                &request(GenerateContentConfig { top_logprobs: Some(2), ..Default::default() }),
+                false,
+            )
+            .expect_err("Groq models do not return log probabilities");
+        assert_eq!(error.code, "model.unsupported_config");
     }
 }

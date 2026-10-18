@@ -48,7 +48,8 @@ pub struct AzureAIClient {
 impl AzureAIClient {
     /// Create a new Azure AI Inference client from the given config.
     pub fn new(config: AzureAIConfig) -> Result<Self, AdkError> {
-        let client = Client::builder()
+        let client = crate::HttpTimeouts::default()
+            .apply(Client::builder())
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| AdkError::model(format!("Failed to create HTTP client: {e}")))?;
@@ -60,6 +61,38 @@ impl AzureAIClient {
             model: config.model,
             retry_config: RetryConfig::default(),
         })
+    }
+
+    /// Sets the connect and idle timeouts of the HTTP transport, so a stalled stream fails
+    /// with a `Timeout` error instead of holding the run.
+    ///
+    /// See [`HttpTimeouts`](crate::HttpTimeouts) for the defaults.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use adk_model::azure_ai::{AzureAIClient, AzureAIConfig};
+    /// use adk_model::HttpTimeouts;
+    ///
+    /// let config = AzureAIConfig::new("https://my-endpoint.inference.ai.azure.com", "key", "model");
+    /// let client = AzureAIClient::new(config)?
+    ///     .with_timeouts(HttpTimeouts::new(Duration::from_secs(10), Duration::from_secs(120)))?;
+    /// # let _ = client;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the Azure AI HTTP client cannot be built.
+    pub fn with_timeouts(mut self, timeouts: crate::HttpTimeouts) -> Result<Self, AdkError> {
+        self.client = timeouts
+            .apply(Client::builder())
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| AdkError::model(format!("Failed to create HTTP client: {e}")))?;
+        Ok(self)
     }
 
     /// Set the retry configuration, consuming and returning `self` for builder chaining.
@@ -132,7 +165,7 @@ impl Llm for AzureAIClient {
             &request.tools,
             request.config.as_ref(),
             stream,
-        );
+        )?;
 
         let response_stream = try_stream! {
             let response = execute_with_retry(&retry_config, is_retryable_model_error, || {

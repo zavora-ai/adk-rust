@@ -173,6 +173,35 @@ impl OpenAIClient {
     pub fn retry_config(&self) -> &RetryConfig {
         self.inner.retry_config()
     }
+
+    /// Sets the connect and idle timeouts of the Chat Completions transport and of the
+    /// Responses route, so a stalled stream fails instead of holding the run.
+    ///
+    /// See [`HttpTimeouts`](crate::HttpTimeouts) for the defaults.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use adk_model::openai::{OpenAIClient, OpenAIConfig};
+    /// use adk_model::HttpTimeouts;
+    ///
+    /// let client = OpenAIClient::new(OpenAIConfig::new("sk-key", "gpt-5.6-terra"))?
+    ///     .with_timeouts(HttpTimeouts::new(Duration::from_secs(10), Duration::from_secs(120)))?;
+    /// # let _ = client;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Internal` error with code `model.openai.http_client_init` when an HTTP
+    /// client cannot be built.
+    pub fn with_timeouts(mut self, timeouts: crate::HttpTimeouts) -> Result<Self, AdkError> {
+        self.inner = self.inner.with_timeouts(timeouts)?;
+        self.tool_route = self.tool_route.map(|route| route.with_timeouts(timeouts)).transpose()?;
+        Ok(self)
+    }
 }
 
 #[async_trait]

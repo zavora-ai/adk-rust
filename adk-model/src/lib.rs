@@ -277,8 +277,19 @@ mod error_metadata;
 /// Gemini model provider (Google AI Studio and Vertex AI).
 #[cfg(feature = "gemini")]
 pub mod gemini;
+#[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "bedrock",
+    feature = "groq",
+    feature = "deepseek",
+    feature = "azure-ai"
+))]
+mod generation_config;
 #[cfg(feature = "groq")]
 pub mod groq;
+/// Connect and idle timeouts for the HTTP transport of model clients.
+pub mod http_timeouts;
 /// Mock LLM for testing without real API calls.
 pub mod mock;
 #[cfg(feature = "ollama")]
@@ -336,7 +347,8 @@ pub mod tool_call_parser;
     feature = "deepseek",
     feature = "groq",
     feature = "bedrock",
-    feature = "azure-ai"
+    feature = "azure-ai",
+    feature = "openrouter"
 ))]
 pub(crate) mod tool_result;
 #[cfg(any(feature = "openai", feature = "ollama", feature = "deepseek", feature = "groq"))]
@@ -355,6 +367,7 @@ pub use deepseek::{DeepSeekClient, DeepSeekConfig};
 pub use gemini::GeminiModel;
 #[cfg(feature = "groq")]
 pub use groq::{GroqClient, GroqConfig};
+pub use http_timeouts::HttpTimeouts;
 pub use mock::MockLlm;
 #[cfg(feature = "ollama")]
 pub use ollama::{OllamaConfig, OllamaModel};

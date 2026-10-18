@@ -9,7 +9,6 @@ use adk_core::{
 };
 use async_openai::types::chat::{
     CreateChatCompletionRequestArgs, ReasoningEffort as OaiReasoningEffort, ResponseFormat,
-    ResponseFormatJsonSchema,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -347,6 +346,30 @@ pub struct OpenAICompatible {
     parallel_tool_calls: bool,
     reasoning_replay_field: Option<ReasoningReplayField>,
     error_codes: ErrorCodes,
+    timeouts: crate::HttpTimeouts,
+}
+
+/// Builds the redirect-free HTTP client with `headers` and `timeouts`.
+fn compatible_http_client(
+    headers: &http::HeaderMap,
+    timeouts: crate::HttpTimeouts,
+    provider_name: &str,
+) -> Result<reqwest::Client, AdkError> {
+    timeouts
+        .apply(reqwest::Client::builder())
+        .default_headers(headers.clone())
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|err| {
+            AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Internal,
+                "model.openai.http_client_init",
+                format!("failed to initialize the {provider_name} HTTP client: {err}"),
+            )
+            .with_provider(provider_name)
+            .with_source(err)
+        })
 }
 
 impl OpenAICompatible {
@@ -374,12 +397,10 @@ impl OpenAICompatible {
         crate::catalog::warn_if_obsolete(&config.provider_name, &config.model);
         let base_url = config.base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
+        let timeouts = crate::HttpTimeouts::default();
         Ok(Self {
             completion_url: None,
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|_| AdkError::model("failed to initialize compatible HTTP transport"))?,
+            http: compatible_http_client(&http::HeaderMap::new(), timeouts, &config.provider_name)?,
             default_headers: http::HeaderMap::new(),
             request_adapter: None,
             api_key: config.api_key,
@@ -392,6 +413,7 @@ impl OpenAICompatible {
             parallel_tool_calls: config.parallel_tool_calls,
             reasoning_replay_field: None,
             error_codes: ErrorCodes::COMPATIBLE,
+            timeouts,
         })
     }
 
@@ -420,20 +442,39 @@ impl OpenAICompatible {
     /// HTTP client cannot be built.
     pub fn with_default_headers(mut self, headers: http::HeaderMap) -> Result<Self, AdkError> {
         self.default_headers.extend(headers);
-        self.http = reqwest::Client::builder()
-            .default_headers(self.default_headers.clone())
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|err| {
-                AdkError::new(
-                    ErrorComponent::Model,
-                    ErrorCategory::Internal,
-                    "model.openai.http_client_init",
-                    format!("failed to initialize the {} HTTP client: {err}", self.provider_name),
-                )
-                .with_provider(&self.provider_name)
-                .with_source(err)
-            })?;
+        self.http =
+            compatible_http_client(&self.default_headers, self.timeouts, &self.provider_name)?;
+        Ok(self)
+    }
+
+    /// Sets the connect and idle timeouts of the HTTP transport.
+    ///
+    /// The idle timeout bounds each wait for data, so a stream that stalls fails with a
+    /// `Timeout` error instead of holding the run; see [`HttpTimeouts`](crate::HttpTimeouts)
+    /// for the defaults. Like [`with_default_headers`](Self::with_default_headers), this
+    /// rebuilds the `reqwest` client, so it returns `Result`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use adk_model::{HttpTimeouts, OpenAICompatible, OpenAICompatibleConfig};
+    ///
+    /// let client = OpenAICompatible::new(OpenAICompatibleConfig::new("api-key", "model"))?
+    ///     .with_timeouts(HttpTimeouts::new(Duration::from_secs(10), Duration::from_secs(120)))?;
+    /// # let _ = client;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Internal` error with code `model.openai.http_client_init` when the
+    /// HTTP client cannot be built.
+    pub fn with_timeouts(mut self, timeouts: crate::HttpTimeouts) -> Result<Self, AdkError> {
+        self.timeouts = timeouts;
+        self.http =
+            compatible_http_client(&self.default_headers, self.timeouts, &self.provider_name)?;
         Ok(self)
     }
 
@@ -528,9 +569,12 @@ impl OpenAICompatible {
     }
 }
 
+/// Adds the reasoning of each assistant content to the message it became; `owners[i]` is the
+/// index in `contents` of the content that produced message `i`.
 fn inject_assistant_reasoning(
     body: &mut serde_json::Value,
     contents: &[Content],
+    owners: &[usize],
     field: Option<ReasoningReplayField>,
 ) {
     let Some(field) = field else {
@@ -544,7 +588,8 @@ fn inject_assistant_reasoning(
         ReasoningReplayField::Reasoning => "reasoning",
     };
 
-    for (message, content) in messages.iter_mut().zip(contents) {
+    for (message, content) in messages.iter_mut().zip(owners.iter().map(|owner| &contents[*owner]))
+    {
         if !matches!(content.role.as_str(), "model" | "assistant") {
             continue;
         }
@@ -599,10 +644,14 @@ pub(crate) fn build_request_json(
         .with_provider("gemini"));
     }
     let contents = crate::tool_result::with_images(&request.contents);
-    let messages: Vec<_> = contents
-        .iter()
-        .map(|content| convert::content_to_message(content, capabilities.native_pdf))
-        .collect();
+    let mut messages = Vec::with_capacity(contents.len());
+    let mut owners = Vec::with_capacity(contents.len());
+    for (index, content) in contents.iter().enumerate() {
+        for message in convert::content_to_messages(content, capabilities.native_pdf) {
+            messages.push(message);
+            owners.push(index);
+        }
+    }
 
     let mut request_builder = CreateChatCompletionRequestArgs::default();
     request_builder.model(model).messages(messages);
@@ -630,16 +679,7 @@ pub(crate) fn build_request_json(
         }
 
         if let Some(schema) = &config.response_schema {
-            let mut schema_with_strict = schema.clone();
-            if let Some(obj) = schema_with_strict.as_object_mut() {
-                obj.insert("additionalProperties".to_string(), serde_json::json!(false));
-            }
-            let json_schema = ResponseFormatJsonSchema {
-                name: request.model.replace(['-', '.', '/'], "_"),
-                description: None,
-                schema: schema_with_strict,
-                strict: Some(true),
-            };
+            let json_schema = convert::json_schema_format(&request.model, schema);
             request_builder.response_format(ResponseFormat::JsonSchema { json_schema });
         }
     }
@@ -655,7 +695,29 @@ pub(crate) fn build_request_json(
         body["reasoning_effort"] = serde_json::Value::String("max".to_string());
     }
 
-    inject_assistant_reasoning(&mut body, &contents, reasoning_replay_field);
+    // Written into the body: the typed request marks `seed` deprecated.
+    if let Some(config) = &request.config
+        && let Some(fields) = body.as_object_mut()
+    {
+        if !config.stop_sequences.is_empty() {
+            fields.insert("stop".to_string(), serde_json::json!(config.stop_sequences));
+        }
+        if let Some(seed) = config.seed {
+            fields.insert("seed".to_string(), serde_json::json!(seed));
+        }
+        if let Some(penalty) = config.frequency_penalty {
+            fields.insert("frequency_penalty".to_string(), serde_json::json!(penalty));
+        }
+        if let Some(penalty) = config.presence_penalty {
+            fields.insert("presence_penalty".to_string(), serde_json::json!(penalty));
+        }
+        if let Some(top_logprobs) = config.top_logprobs {
+            fields.insert("logprobs".to_string(), serde_json::Value::Bool(true));
+            fields.insert("top_logprobs".to_string(), serde_json::json!(top_logprobs));
+        }
+    }
+
+    inject_assistant_reasoning(&mut body, &contents, &owners, reasoning_replay_field);
 
     // Merge provider-specific extensions from config.extensions["openai"] into
     // the request body.  This allows users to pass provider-specific fields
@@ -728,7 +790,7 @@ async fn send_request(
     let http_resp = http_req.send().await.map_err(|e| {
         AdkError::new(
             ErrorComponent::Model,
-            ErrorCategory::Unavailable,
+            if e.is_timeout() { ErrorCategory::Timeout } else { ErrorCategory::Unavailable },
             error_codes.request,
             format!("{provider_name} request error: {e}"),
         )
@@ -901,6 +963,8 @@ impl Llm for OpenAICompatible {
                 let mut text_tool_buffer =
                     crate::tool_call_parser::ToolCallBuffer::for_declared_tools(declared_tools);
                 let mut pending_final_response: Option<LlmResponse> = None;
+                // Token log probabilities from every chunk, reported on the final response.
+                let mut logprobs: Vec<serde_json::Value> = Vec::new();
                 // A finish reason or `[DONE]` marks a complete response; without one the
                 // answer or a tool call may be truncated.
                 let mut finished = false;
@@ -981,6 +1045,11 @@ impl Llm for OpenAICompatible {
                                     continue;
                                 }
                             };
+                            if let Some(tokens) =
+                                choice.pointer("/logprobs/content").and_then(|v| v.as_array())
+                            {
+                                logprobs.extend(tokens.iter().cloned());
+                            }
                             let delta = match choice.get("delta") {
                                 Some(d) => d,
                                 None => continue,
@@ -1083,6 +1152,11 @@ impl Llm for OpenAICompatible {
                                 } else {
                                     parse_finish_reason(fr)
                                 });
+                                let provider_metadata = (!logprobs.is_empty()).then(|| {
+                                    serde_json::json!({
+                                        "logprobs": {"content": std::mem::take(&mut logprobs)}
+                                    })
+                                });
 
                                 // Emit accumulated tool calls if any.
                                 if !tool_call_accumulators.is_empty() {
@@ -1122,7 +1196,7 @@ impl Llm for OpenAICompatible {
                                         interrupted: false,
                                         error_code: None,
                                         error_message: None,
-                                        provider_metadata: None,
+                                        provider_metadata,
                                         interaction_id: None,
                                         model: None,
                                         provider: None,
@@ -1157,7 +1231,7 @@ impl Llm for OpenAICompatible {
                                     interrupted: false,
                                     error_code: None,
                                     error_message: None,
-                                    provider_metadata: None,
+                                    provider_metadata,
                                     interaction_id: None,
                                     model: None,
                                     provider: None,
@@ -1594,5 +1668,142 @@ mod tests {
         let config = OpenAICompatibleConfig::gemini("k", "gemini-3.5-flash");
         let client = OpenAICompatible::new(config).expect("client builds");
         assert_eq!(client.name(), "gemini-3.5-flash");
+    }
+
+    fn chat_body(contents: Vec<Content>) -> serde_json::Value {
+        let request = LlmRequest::new("gpt-4.1-mini", contents);
+        let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
+        build_request_json(
+            "gpt-4.1-mini",
+            &request,
+            &None,
+            ChatCapabilities { parallel_tool_calls: true, native_pdf: false },
+            Some(ReasoningReplayField::ReasoningContent),
+            &GenericSchemaAdapter,
+            &cache,
+        )
+        .expect("request should build")
+    }
+
+    fn response(id: &str, value: serde_json::Value) -> Part {
+        Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new("get_weather", value),
+            id: Some(id.to_string()),
+            annotations: None,
+        }
+    }
+
+    #[test]
+    fn several_function_responses_become_one_tool_message_each() {
+        let call = |id: &str| Part::FunctionCall {
+            name: "get_weather".to_string(),
+            args: serde_json::json!({"city": id}),
+            id: Some(id.to_string()),
+            thought_signature: None,
+        };
+        let body = chat_body(vec![
+            Content::new("user").with_text("Weather in Paris and Tokyo?"),
+            Content {
+                role: "model".to_string(),
+                parts: vec![
+                    Part::Thinking { thinking: "two cities".to_string(), signature: None },
+                    call("call_paris"),
+                    call("call_tokyo"),
+                ],
+            },
+            Content {
+                role: "function".to_string(),
+                parts: vec![
+                    response("call_paris", serde_json::json!({"error": "not run"})),
+                    response("call_tokyo", serde_json::json!({"error": "not run"})),
+                    Part::Text { text: "Both calls were refused.".to_string() },
+                ],
+            },
+            Content::new("model").with_text("I could not check."),
+        ]);
+
+        let messages = body["messages"].as_array().expect("messages");
+        let shape: Vec<(String, Option<String>)> = messages
+            .iter()
+            .map(|message| {
+                (
+                    message["role"].as_str().unwrap_or_default().to_string(),
+                    message["tool_call_id"].as_str().map(str::to_string),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("user".to_string(), None),
+                ("assistant".to_string(), None),
+                ("tool".to_string(), Some("call_paris".to_string())),
+                ("tool".to_string(), Some("call_tokyo".to_string())),
+                ("user".to_string(), None),
+                ("assistant".to_string(), None),
+            ]
+        );
+        assert_eq!(messages[4]["content"], "Both calls were refused.");
+        // Reasoning stays on the assistant message its content became.
+        assert_eq!(messages[1]["reasoning_content"], "two cities");
+        assert!(messages[5].get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn user_role_function_responses_are_tool_messages() {
+        let body = chat_body(vec![Content {
+            role: "user".to_string(),
+            parts: vec![response("call_1", serde_json::json!({"ok": true}))],
+        }]);
+        assert_eq!(body["messages"][0]["role"], "tool");
+        assert_eq!(body["messages"][0]["tool_call_id"], "call_1");
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn generation_config_fields_reach_the_chat_request() {
+        let mut request =
+            LlmRequest::new("gpt-4.1-mini", vec![Content::new("user").with_text("hi")]);
+        request.config = Some(adk_core::GenerateContentConfig {
+            stop_sequences: vec!["7".to_string()],
+            seed: Some(42),
+            presence_penalty: Some(0.5),
+            frequency_penalty: Some(0.25),
+            top_logprobs: Some(2),
+            ..Default::default()
+        });
+        let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
+        let body = build_request_json(
+            "gpt-4.1-mini",
+            &request,
+            &None,
+            ChatCapabilities { parallel_tool_calls: true, native_pdf: false },
+            None,
+            &GenericSchemaAdapter,
+            &cache,
+        )
+        .expect("request should build");
+
+        assert_eq!(body["stop"], serde_json::json!(["7"]));
+        assert_eq!(body["seed"], 42);
+        assert_eq!(body["presence_penalty"], 0.5);
+        assert_eq!(body["frequency_penalty"], 0.25);
+        assert_eq!(body["logprobs"], true);
+        assert_eq!(body["top_logprobs"], 2);
+    }
+
+    #[test]
+    fn returned_logprobs_are_kept_in_provider_metadata() {
+        let raw = serde_json::json!({
+            "model": "gpt-4.1-mini",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "1"},
+                "logprobs": {"content": [{"token": "1", "logprob": -0.01, "top_logprobs": []}]},
+                "finish_reason": "stop"
+            }]
+        });
+        let response = convert::from_raw_openai_response("openai", &raw, &Default::default());
+        assert_eq!(response.provider_metadata.unwrap()["logprobs"]["content"][0]["token"], "1");
     }
 }

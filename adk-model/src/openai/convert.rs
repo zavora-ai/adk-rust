@@ -17,10 +17,37 @@ use async_openai::types::chat::{
 };
 use std::collections::{HashMap, HashSet};
 
-/// Convert ADK Content to OpenAI ChatCompletionRequestMessage.
+/// Convert one ADK content to the Chat Completions messages that carry it.
 ///
+/// A content holding function responses becomes one `tool` message per response, in order,
+/// followed by a user message with any other parts; every other content is one message.
 /// `native_pdf` sends inline PDFs as `file` parts; without it they become text.
-pub fn content_to_message(content: &Content, native_pdf: bool) -> ChatCompletionRequestMessage {
+pub fn content_to_messages(
+    content: &Content,
+    native_pdf: bool,
+) -> Vec<ChatCompletionRequestMessage> {
+    if matches!(content.role.as_str(), "user" | "function" | "tool")
+        && let Some((responses, rest)) = crate::tool_result::split_function_responses(content)
+    {
+        let mut messages: Vec<ChatCompletionRequestMessage> = responses
+            .into_iter()
+            .map(|(id, response)| {
+                ChatCompletionRequestToolMessageArgs::default()
+                    .tool_call_id(id.unwrap_or("unknown"))
+                    .content(crate::tool_result::serialize_tool_result(&response.response))
+                    .build()
+                    .unwrap()
+                    .into()
+            })
+            .collect();
+        messages.extend(rest.map(|rest| content_to_message(&rest, native_pdf)));
+        return messages;
+    }
+    vec![content_to_message(content, native_pdf)]
+}
+
+/// Convert an ADK content that carries no function response to one Chat Completions message.
+fn content_to_message(content: &Content, native_pdf: bool) -> ChatCompletionRequestMessage {
     match content.role.as_str() {
         "user" => {
             let has_attachments = content
@@ -118,27 +145,11 @@ pub fn content_to_message(content: &Content, native_pdf: bool) -> ChatCompletion
             let text = extract_text(&content.parts);
             ChatCompletionRequestSystemMessageArgs::default().content(text).build().unwrap().into()
         }
-        "function" | "tool" => {
-            // Tool response message
-            if let Some(Part::FunctionResponse { function_response, id, .. }) =
-                content.parts.first()
-            {
-                let tool_call_id = id.clone().unwrap_or_else(|| "unknown".to_string());
-                ChatCompletionRequestToolMessageArgs::default()
-                    .tool_call_id(tool_call_id)
-                    .content(crate::tool_result::serialize_tool_result(&function_response.response))
-                    .build()
-                    .unwrap()
-                    .into()
-            } else {
-                // Fallback to user message
-                ChatCompletionRequestUserMessageArgs::default()
-                    .content(ChatCompletionRequestUserMessageContent::Text(String::new()))
-                    .build()
-                    .unwrap()
-                    .into()
-            }
-        }
+        // A tool-role content without a function response carries only user-visible parts.
+        "function" | "tool" => content_to_message(
+            &Content { role: "user".to_string(), parts: content.parts.clone() },
+            native_pdf,
+        ),
         _ => {
             let text = extract_text(&content.parts);
             ChatCompletionRequestUserMessageArgs::default()
@@ -261,6 +272,35 @@ fn extract_tool_calls(parts: &[Part]) -> Vec<ChatCompletionMessageToolCalls> {
             }
         })
         .collect()
+}
+
+/// The strict structured-output format OpenAI's Chat Completions `response_format` and
+/// Responses `text.format` take for `schema`.
+///
+/// The schema is sent strict, with `additionalProperties: false` at the top level, and named
+/// after `model` with every character the API does not accept in a name replaced by `_`.
+pub(crate) fn json_schema_format(
+    model: &str,
+    schema: &serde_json::Value,
+) -> async_openai::types::chat::ResponseFormatJsonSchema {
+    let mut schema = schema.clone();
+    if let Some(object) = schema.as_object_mut() {
+        object.insert("additionalProperties".to_string(), serde_json::json!(false));
+    }
+    let mut name: String = model
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .take(64)
+        .collect();
+    if name.is_empty() {
+        name.push_str("response");
+    }
+    async_openai::types::chat::ResponseFormatJsonSchema {
+        name,
+        description: None,
+        schema,
+        strict: Some(true),
+    }
 }
 
 /// Convert ADK tools to OpenAI ChatCompletionTools.
@@ -498,7 +538,10 @@ pub(crate) fn from_raw_openai_response(
         interrupted: false,
         error_code: None,
         error_message: None,
-        provider_metadata: None,
+        provider_metadata: choice
+            .and_then(|choice| choice.get("logprobs"))
+            .filter(|logprobs| !logprobs.is_null())
+            .map(|logprobs| serde_json::json!({"logprobs": logprobs})),
         interaction_id: None,
         model: json
             .get("model")

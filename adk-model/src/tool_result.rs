@@ -1,5 +1,12 @@
 /// Expand nested tool images for providers whose tool-result wire format is text-only.
 /// Keep all consecutive results ahead of image messages so parallel calls stay paired.
+#[cfg(any(
+    feature = "openai",
+    feature = "ollama",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "azure-ai"
+))]
 pub(crate) fn with_images(
     contents: &[adk_core::Content],
 ) -> std::borrow::Cow<'_, [adk_core::Content]> {
@@ -51,11 +58,66 @@ pub(crate) fn with_images(
     std::borrow::Cow::Owned(output)
 }
 
+/// A function response with the ID of the call it answers.
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "azure-ai",
+    feature = "openrouter"
+))]
+pub(crate) type CallResponse<'a> = (Option<&'a str>, &'a adk_core::FunctionResponseData);
+
+/// The function responses of `content`, in order, and a user content holding its other parts.
+///
+/// Chat Completions answers each tool call with its own `tool` message, so a content that
+/// carries several responses (a refused parallel batch, or a history another runtime wrote)
+/// becomes several messages, and text beside the responses follows them as a user turn.
+/// Returns `None` when `content` carries no function response.
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "azure-ai",
+    feature = "openrouter"
+))]
+pub(crate) fn split_function_responses(
+    content: &adk_core::Content,
+) -> Option<(Vec<CallResponse<'_>>, Option<adk_core::Content>)> {
+    use adk_core::{Content, Part};
+    let mut responses = Vec::new();
+    let mut rest = Vec::new();
+    for part in &content.parts {
+        match part {
+            Part::FunctionResponse { function_response, id, .. } => {
+                responses.push((id.as_deref(), function_response));
+            }
+            // Reasoning is not user input, and a blank text part has nothing to say.
+            Part::Thinking { .. } => {}
+            Part::Text { text } if text.trim().is_empty() => {}
+            other => rest.push(other.clone()),
+        }
+    }
+    if responses.is_empty() {
+        return None;
+    }
+    let rest = (!rest.is_empty()).then(|| Content { role: "user".to_string(), parts: rest });
+    Some((responses, rest))
+}
+
 /// Serialize a tool result `Value` into a string suitable for model provider APIs.
 ///
 /// This avoids double-encoding: when the value is already a `String`, it is returned
 /// as-is. JSON objects and arrays are serialized to their JSON text representation.
 /// Primitive values (numbers, booleans, null) are converted via `to_string()`.
+#[cfg(any(
+    feature = "openai",
+    feature = "ollama",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "bedrock",
+    feature = "azure-ai"
+))]
 pub(crate) fn serialize_tool_result(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(s) => s.clone(),
@@ -66,7 +128,16 @@ pub(crate) fn serialize_tool_result(value: &serde_json::Value) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "openai",
+        feature = "ollama",
+        feature = "deepseek",
+        feature = "groq",
+        feature = "azure-ai"
+    )
+))]
 mod tests {
     use super::*;
     use serde_json::json;

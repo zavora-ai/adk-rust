@@ -59,12 +59,44 @@ impl DeepSeekClient {
     /// Create a new DeepSeek client.
     pub fn new(config: DeepSeekConfig) -> Result<Self, AdkError> {
         crate::catalog::warn_if_obsolete("deepseek", &config.model);
-        let client = Client::builder()
+        let client = crate::HttpTimeouts::default()
+            .apply(Client::builder())
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| AdkError::model(format!("failed to create HTTP client: {e}")))?;
 
         Ok(Self { client, config, retry_config: RetryConfig::default() })
+    }
+
+    /// Sets the connect and idle timeouts of the HTTP transport, so a stalled stream fails
+    /// with a `Timeout` error instead of holding the run.
+    ///
+    /// See [`HttpTimeouts`](crate::HttpTimeouts) for the defaults.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use adk_model::deepseek::{DeepSeekClient, DeepSeekConfig};
+    /// use adk_model::HttpTimeouts;
+    ///
+    /// let client = DeepSeekClient::new(DeepSeekConfig::v4_flash("sk-key"))?
+    ///     .with_timeouts(HttpTimeouts::new(Duration::from_secs(10), Duration::from_secs(120)))?;
+    /// # let _ = client;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the DeepSeek HTTP client cannot be built.
+    pub fn with_timeouts(mut self, timeouts: crate::HttpTimeouts) -> Result<Self, AdkError> {
+        self.client = timeouts
+            .apply(Client::builder())
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| AdkError::model(format!("failed to create HTTP client: {e}")))?;
+        Ok(self)
     }
 
     /// Create a client for `deepseek-v4-pro` (strongest reasoning, thinking enabled).
@@ -111,9 +143,32 @@ impl DeepSeekClient {
     }
 
     /// Build a chat completion request from an LLM request.
-    fn build_request(&self, request: &LlmRequest, stream: bool) -> ChatCompletionRequest {
-        let mut messages: Vec<_> =
-            request.contents.iter().map(convert::content_to_message).collect();
+    ///
+    /// # Errors
+    ///
+    /// Returns `model.unsupported_config` when the config sets `seed`, which DeepSeek does not
+    /// accept, or `top_logprobs`, whose results this client does not return.
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+        stream: bool,
+    ) -> Result<ChatCompletionRequest, AdkError> {
+        let config = request.config.as_ref();
+        {
+            use crate::generation_config::{Supports, reject_unsupported};
+            let supports = Supports {
+                stop_sequences: true,
+                seed: false,
+                penalties: true,
+                top_logprobs: false,
+            };
+            reject_unsupported("deepseek", config, supports)?;
+        }
+        // A tool message carries only text, so images a tool returned follow it.
+        let mut messages: Vec<_> = crate::tool_result::with_images(&request.contents)
+            .iter()
+            .flat_map(convert::content_to_messages)
+            .collect();
 
         // DeepSeek's structured-output contract is JSON Output: `response_format`
         // accepts only `{"type": "json_object"}` — there is no `json_schema` mode —
@@ -168,7 +223,7 @@ impl DeepSeekClient {
         // Reasoning effort
         let reasoning_effort = self.config.reasoning_effort.map(|e| e.to_string());
 
-        ChatCompletionRequest {
+        Ok(ChatCompletionRequest {
             model: self.config.model.clone(),
             messages,
             temperature,
@@ -179,8 +234,10 @@ impl DeepSeekClient {
             response_format,
             thinking,
             reasoning_effort,
-            stop: None,
-        }
+            stop: config.map(|c| c.stop_sequences.clone()).filter(|stop| !stop.is_empty()),
+            frequency_penalty: config.and_then(|c| c.frequency_penalty),
+            presence_penalty: config.and_then(|c| c.presence_penalty),
+        })
     }
 }
 
@@ -233,7 +290,7 @@ impl Llm for DeepSeekClient {
         let usage_span = adk_telemetry::llm_generate_span("deepseek", &self.config.model, stream);
         let api_url = self.api_url();
         let api_key = self.config.api_key.clone();
-        let chat_request = self.build_request(&request, stream);
+        let chat_request = self.build_request(&request, stream)?;
         let client = self.client.clone();
         let retry_config = self.retry_config.clone();
         let thinking_enabled = self.config.is_thinking_enabled();
@@ -532,7 +589,7 @@ mod response_format_tests {
             "give me the answer as json",
         );
 
-        let built = client().build_request(&request, false);
+        let built = client().build_request(&request, false).expect("request builds");
         let wire = serde_json::to_value(&built).expect("request serializes");
 
         // DeepSeek accepts only `json_object`; there is no `json_schema` mode.
@@ -546,7 +603,7 @@ mod response_format_tests {
     #[test]
     fn no_schema_leaves_the_response_format_unset() {
         let request = request_with(None, "hello");
-        let built = client().build_request(&request, false);
+        let built = client().build_request(&request, false).expect("request builds");
         let wire = serde_json::to_value(&built).expect("request serializes");
 
         assert!(
@@ -564,7 +621,7 @@ mod response_format_tests {
             "summarise the document",
         );
 
-        let built = client().build_request(&request, false);
+        let built = client().build_request(&request, false).expect("request builds");
 
         assert!(
             built.messages.iter().any(|m| m
@@ -582,12 +639,39 @@ mod response_format_tests {
             "reply in json please",
         );
 
-        let built = client().build_request(&request, false);
+        let built = client().build_request(&request, false).expect("request builds");
 
         assert_eq!(
             built.messages.len(),
             1,
             "the prompt already mentions json, so nothing needs to be added"
         );
+    }
+
+    #[test]
+    fn stop_sequences_and_penalties_are_sent_and_seed_is_rejected() {
+        let request = request_with(
+            Some(GenerateContentConfig {
+                stop_sequences: vec!["END".to_string()],
+                presence_penalty: Some(0.5),
+                frequency_penalty: Some(0.25),
+                ..Default::default()
+            }),
+            "hi",
+        );
+        let wire = serde_json::to_value(client().build_request(&request, false).unwrap()).unwrap();
+        assert_eq!(wire["stop"], json!(["END"]));
+        assert_eq!(wire["presence_penalty"], json!(0.5));
+        assert_eq!(wire["frequency_penalty"], json!(0.25));
+
+        for config in [
+            GenerateContentConfig { seed: Some(1), ..Default::default() },
+            GenerateContentConfig { top_logprobs: Some(2), ..Default::default() },
+        ] {
+            let error = client()
+                .build_request(&request_with(Some(config), "hi"), false)
+                .expect_err("the field is unsupported");
+            assert_eq!(error.code, "model.unsupported_config");
+        }
     }
 }

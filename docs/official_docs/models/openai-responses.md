@@ -205,6 +205,9 @@ Responses API. Chat Completions supports up to `XHigh`.
 | `Detailed` | Thorough summary of reasoning |
 
 Reasoning summaries appear as `Part::Thinking` in the response stream, letting you show the model's thought process to users.
+On the next request the reasoning goes back only as the reasoning item the history keeps
+beside the summary, placed ahead of the output it produced; the summary text is never replayed
+as an assistant message.
 
 ### Retry Configuration
 

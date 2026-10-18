@@ -1,12 +1,15 @@
 use serde::{Deserialize, Serialize};
 
 /// Controls whether thinking content appears in the response.
+///
+/// Opus 4.7 and later, Sonnet 5 and later, and Haiku 5.5 default to `Omitted`; Opus 4.6 and
+/// Sonnet 4.6 default to `Summarized`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingDisplay {
-    /// Summarized thinking content (default for Claude 4+ models).
+    /// A readable summary of the thinking.
     Summarized,
-    /// Thinking content omitted; only signature is populated.
+    /// Thinking content omitted; only the signature is populated.
     Omitted,
 }
 
