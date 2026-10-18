@@ -1,0 +1,28 @@
+[package]
+name = "artifacts-eval-memory"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Live validation of artifact versioning, artifact naming, evaluation verdicts, and memory search"
+
+[workspace]
+
+[dependencies]
+adk-agent = { path = "../../adk-agent" }
+adk-artifact = { path = "../../adk-artifact", features = ["gcs"] }
+adk-core = { path = "../../adk-core" }
+adk-eval = { path = "../../adk-eval" }
+adk-memory = { path = "../../adk-memory" }
+adk-model = { path = "../../adk-model", default-features = false, features = ["gemini", "openai", "anthropic"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+anyhow = "1.0"
+async-trait = "0.1"
+axum = "0.8"
+chrono = "0.4"
+dotenvy = "0.15"
+futures = "0.3"
+google-cloud-auth = { version = "1.8", default-features = false, features = ["default-rustls-provider"] }
+serde_json = "1.0"
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }
