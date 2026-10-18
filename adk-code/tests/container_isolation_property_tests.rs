@@ -207,8 +207,9 @@ fn custom_config_is_respected() {
     let config = ContainerConfig {
         runtime: "podman".to_string(),
         default_image: "node:20-slim".to_string(),
-        extra_flags: vec!["--security-opt=no-new-privileges".to_string()],
+        extra_flags: vec!["--read-only".to_string()],
         auto_remove: false,
+        ..ContainerConfig::default()
     };
     let executor = ContainerCommandExecutor::new(config);
     assert_eq!(executor.name(), "container-command");

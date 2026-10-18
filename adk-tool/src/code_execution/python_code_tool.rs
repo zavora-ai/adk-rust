@@ -44,10 +44,8 @@ impl PythonCodeTool {
     pub fn new() -> Self {
         Self {
             executor: Arc::new(ContainerCommandExecutor::new(ContainerConfig {
-                runtime: "docker".to_string(),
                 default_image: "python:3.12-slim".to_string(),
-                extra_flags: vec![],
-                auto_remove: true,
+                ..ContainerConfig::default()
             })),
         }
     }

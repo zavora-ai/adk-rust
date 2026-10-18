@@ -232,12 +232,13 @@ use adk_code::{ContainerCommandExecutor, ContainerConfig};
 let executor = ContainerCommandExecutor::new(ContainerConfig {
     runtime: "docker".to_string(),
     default_image: "python:3.12-slim".to_string(),
-    extra_flags: vec![],
-    auto_remove: true,
+    ..ContainerConfig::default()
 });
 ```
 
 Supports Python, JavaScript, and Command languages. Enforces network policy via `--network=none`, filesystem via bind mounts, and environment via `--env`.
+
+Each container is named. When the request's timeout passes, or the call is dropped, the executor runs `{runtime} kill {name}`: ending the `docker run` client leaves its container running. Containers run with `--cap-drop=ALL`, `--security-opt=no-new-privileges` and `--pids-limit=256`; `ContainerConfig::drop_capabilities`, `no_new_privileges` and `pids_limit` turn each off. `DockerExecutor` applies the same three limits through `DockerConfig`, kills a timed-out exec's process inside the container, and discards output past the request's byte limits as it streams.
 
 ### DockerExecutor (`docker` feature)
 

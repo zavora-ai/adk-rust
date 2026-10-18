@@ -34,7 +34,9 @@
 //! | Network policy | Yes | `NetworkPolicy::Disabled` requires a container created with network mode `none` |
 //! | Filesystem policy | Yes | Every bind mount must lie within the paths the policy grants |
 //! | Environment policy | Yes | Container variables must be on the allowlist; allowlisted host variables are passed to the exec |
-//! | Timeout | Yes | `tokio::time::timeout` on exec |
+//! | Timeout | Yes | `tokio::time::timeout` on exec; the timed-out process is killed inside the container |
+//! | Privileges | Yes | All capabilities dropped, `no-new-privileges`, a process limit (each can be turned off) |
+//! | Output limits | Yes | Output past the request's byte limits is discarded as it streams |
 //! | Structured output | Yes | Last-line JSON extraction from stdout |
 //! | Persistent workspace | Yes | Container survives across executions |
 //! | Interactive sessions | No | Each execute is a separate exec |
@@ -114,6 +116,16 @@ pub struct DockerConfig {
     pub auto_start: bool,
     /// Whether to auto-stop and remove the container on drop.
     pub auto_remove: bool,
+    /// Drop every Linux capability (`CapDrop: ["ALL"]`). Default: `true`.
+    ///
+    /// Setup commands that switch users, such as `apt-get`, need it turned off.
+    pub drop_capabilities: bool,
+    /// Forbid gaining privileges, such as through setuid binaries
+    /// (`SecurityOpt: ["no-new-privileges"]`). Default: `true`.
+    pub no_new_privileges: bool,
+    /// Most processes the container may run (`PidsLimit`), which stops a fork bomb;
+    /// `None` sets no limit. Default: [`DEFAULT_PIDS_LIMIT`].
+    pub pids_limit: Option<u32>,
 }
 
 impl DockerConfig {
@@ -129,6 +141,9 @@ impl DockerConfig {
             container_name_prefix: "adk-python".to_string(),
             auto_start: true,
             auto_remove: true,
+            drop_capabilities: true,
+            no_new_privileges: true,
+            pids_limit: Some(DEFAULT_PIDS_LIMIT),
         }
     }
 
@@ -144,6 +159,9 @@ impl DockerConfig {
             container_name_prefix: "adk-node".to_string(),
             auto_start: true,
             auto_remove: true,
+            drop_capabilities: true,
+            no_new_privileges: true,
+            pids_limit: Some(DEFAULT_PIDS_LIMIT),
         }
     }
 
@@ -159,6 +177,9 @@ impl DockerConfig {
             container_name_prefix: "adk-custom".to_string(),
             auto_start: true,
             auto_remove: true,
+            drop_capabilities: true,
+            no_new_privileges: true,
+            pids_limit: Some(DEFAULT_PIDS_LIMIT),
         }
     }
 
@@ -327,6 +348,9 @@ mod docker_impl {
     use rand::Rng;
     use tokio::sync::RwLock;
 
+    /// Output kept from the executor's own commands (file writes, setup).
+    const SETUP_OUTPUT_LIMITS: (usize, usize) = (64 * 1024, 64 * 1024);
+
     /// State of the managed container.
     #[derive(Debug)]
     struct ContainerState {
@@ -431,6 +455,21 @@ mod docker_impl {
             Ok(())
         }
 
+        /// The container's network, mounts and privilege limits.
+        fn host_config(&self) -> bollard::models::HostConfig {
+            let config = &self.config;
+            bollard::models::HostConfig {
+                network_mode: config.network_disabled.then(|| "none".to_string()),
+                binds: (!config.bind_mounts.is_empty()).then(|| config.bind_mounts.clone()),
+                cap_drop: config.drop_capabilities.then(|| vec!["ALL".to_string()]),
+                security_opt: config
+                    .no_new_privileges
+                    .then(|| vec!["no-new-privileges".to_string()]),
+                pids_limit: config.pids_limit.map(i64::from),
+                ..Default::default()
+            }
+        }
+
         /// Generate a unique container name.
         fn container_name(&self) -> String {
             let suffix: u32 = rand::rng().random_range(100_000..999_999);
@@ -479,27 +518,58 @@ mod docker_impl {
                 "-c".to_string(),
                 format!("echo '{encoded}' | base64 -d > {path}"),
             ];
-            self.exec_in_container(container_id, &cmd, None, None).await?;
+            self.exec_in_container(container_id, &cmd, None, None, SETUP_OUTPUT_LIMITS).await?;
             Ok(())
         }
 
         /// Execute a command inside the running container and capture output.
         ///
         /// `env` entries (`KEY=VALUE`) are added to the container's own environment
-        /// for this exec only.
+        /// for this exec only. Output past `limits` (stdout, stderr bytes) is discarded
+        /// while the stream is drained. When `timeout` passes, the process is killed
+        /// inside the container: ending the exec stream alone leaves it running.
         async fn exec_in_container(
             &self,
             container_id: &str,
             cmd: &[String],
             env: Option<Vec<String>>,
             timeout: Option<std::time::Duration>,
-        ) -> Result<(String, String, Option<i64>), ExecutionError> {
+            limits: (usize, usize),
+        ) -> Result<ExecOutput, ExecutionError> {
+            let pid_file =
+                timeout.map(|_| format!("/tmp/.adk-exec-{}.pid", super::container_name("pid")));
+            let cmd = match &pid_file {
+                Some(pid_file) => with_pid_file(pid_file, cmd),
+                None => cmd.to_vec(),
+            };
+            let exec_output = self.run_exec(container_id, cmd, env, limits);
+
+            match (timeout, pid_file) {
+                (Some(dur), Some(pid_file)) => match tokio::time::timeout(dur, exec_output).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        self.kill_exec(container_id, &pid_file).await;
+                        Err(ExecutionError::Timeout(dur.as_millis() as u64))
+                    }
+                },
+                _ => exec_output.await,
+            }
+        }
+
+        /// Runs one exec to completion and captures its output within `limits`.
+        async fn run_exec(
+            &self,
+            container_id: &str,
+            cmd: Vec<String>,
+            env: Option<Vec<String>>,
+            limits: (usize, usize),
+        ) -> Result<ExecOutput, ExecutionError> {
             let exec = self
                 .docker
                 .create_exec(
                     container_id,
                     CreateExecOptions {
-                        cmd: Some(cmd.to_vec()),
+                        cmd: Some(cmd),
                         env,
                         attach_stdout: Some(true),
                         attach_stderr: Some(true),
@@ -512,19 +582,28 @@ mod docker_impl {
                     ExecutionError::ExecutionFailed(format!("failed to create exec: {e}"))
                 })?;
 
-            let exec_output = async {
+            {
                 match self.docker.start_exec(&exec.id, None).await {
                     Ok(StartExecResults::Attached { mut output, .. }) => {
-                        let mut stdout = String::new();
-                        let mut stderr = String::new();
+                        let mut captured = ExecOutput::default();
 
                         while let Some(chunk) = output.next().await {
                             match chunk {
                                 Ok(bollard::container::LogOutput::StdOut { message }) => {
-                                    stdout.push_str(&String::from_utf8_lossy(&message));
+                                    push_bounded(
+                                        &mut captured.stdout,
+                                        &mut captured.stdout_truncated,
+                                        &message,
+                                        limits.0,
+                                    );
                                 }
                                 Ok(bollard::container::LogOutput::StdErr { message }) => {
-                                    stderr.push_str(&String::from_utf8_lossy(&message));
+                                    push_bounded(
+                                        &mut captured.stderr,
+                                        &mut captured.stderr_truncated,
+                                        &message,
+                                        limits.1,
+                                    );
                                 }
                                 Ok(_) => {}
                                 Err(e) => {
@@ -539,25 +618,85 @@ mod docker_impl {
                         let inspect = self.docker.inspect_exec(&exec.id).await.map_err(|e| {
                             ExecutionError::ExecutionFailed(format!("failed to inspect exec: {e}"))
                         })?;
-                        let exit_code = inspect.exit_code;
+                        captured.exit_code = inspect.exit_code;
 
-                        Ok((stdout, stderr, exit_code))
+                        Ok(captured)
                     }
-                    Ok(StartExecResults::Detached) => Ok((String::new(), String::new(), None)),
+                    Ok(StartExecResults::Detached) => Ok(ExecOutput::default()),
                     Err(e) => {
                         Err(ExecutionError::ExecutionFailed(format!("failed to start exec: {e}")))
                     }
                 }
-            };
-
-            if let Some(dur) = timeout {
-                match tokio::time::timeout(dur, exec_output).await {
-                    Ok(result) => result,
-                    Err(_) => Err(ExecutionError::Timeout(dur.as_millis() as u64)),
-                }
-            } else {
-                exec_output.await
             }
+        }
+
+        /// Kills the process group, or failing that the process, recorded in `pid_file`.
+        async fn kill_exec(&self, container_id: &str, pid_file: &str) {
+            let kill = vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                r#"pid=$(cat "$0") && { kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid"; }"#
+                    .to_string(),
+                pid_file.to_string(),
+            ];
+            let killed = tokio::time::timeout(
+                super::KILL_TIMEOUT,
+                self.run_exec(container_id, kill, None, (0, 4096)),
+            )
+            .await;
+            match killed {
+                Ok(Ok(output)) if output.exit_code == Some(0) => {}
+                Ok(Ok(output)) => warn!(
+                    container_id = %container_id,
+                    exit_code = ?output.exit_code,
+                    stderr = %output.stderr,
+                    "killing the timed-out exec failed"
+                ),
+                Ok(Err(error)) => {
+                    warn!(container_id = %container_id, %error, "killing the timed-out exec failed")
+                }
+                Err(_) => {
+                    warn!(container_id = %container_id, "killing the timed-out exec did not finish")
+                }
+            }
+        }
+    }
+
+    /// What one exec printed, within the request's limits.
+    #[derive(Debug, Default)]
+    struct ExecOutput {
+        stdout: String,
+        stderr: String,
+        exit_code: Option<i64>,
+        stdout_truncated: bool,
+        stderr_truncated: bool,
+    }
+
+    /// `cmd` run through a shell that first writes its PID to `pid_file`; `exec` keeps
+    /// the PID for `cmd` itself.
+    fn with_pid_file(pid_file: &str, cmd: &[String]) -> Vec<String> {
+        let mut wrapped = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            r#"echo $$ > "$0" && exec "$@""#.to_string(),
+            pid_file.to_string(),
+        ];
+        wrapped.extend(cmd.iter().cloned());
+        wrapped
+    }
+
+    /// Appends `chunk` to `buffer` without taking it past `limit` bytes.
+    fn push_bounded(buffer: &mut String, truncated: &mut bool, chunk: &[u8], limit: usize) {
+        if *truncated {
+            return;
+        }
+        let text = String::from_utf8_lossy(chunk);
+        let room = limit.saturating_sub(buffer.len());
+        if text.len() <= room {
+            buffer.push_str(&text);
+        } else {
+            buffer.push_str(&text[..text.floor_char_boundary(room)]);
+            *truncated = true;
         }
     }
 
@@ -599,16 +738,7 @@ mod docker_impl {
             let name = self.container_name();
             info!(image = %self.config.image, container = %name, "creating container");
 
-            // Build container config.
-            let mut host_config = bollard::models::HostConfig::default();
-
-            if self.config.network_disabled {
-                host_config.network_mode = Some("none".to_string());
-            }
-
-            if !self.config.bind_mounts.is_empty() {
-                host_config.binds = Some(self.config.bind_mounts.clone());
-            }
+            let host_config = self.host_config();
 
             let env = if self.config.environment.is_empty() {
                 None
@@ -650,14 +780,17 @@ mod docker_impl {
             // Create workspace directory.
             let mkdir_cmd =
                 vec!["mkdir".to_string(), "-p".to_string(), self.config.work_dir.clone()];
-            let _ = self.exec_in_container(&container_id, &mkdir_cmd, None, None).await;
+            let _ = self
+                .exec_in_container(&container_id, &mkdir_cmd, None, None, SETUP_OUTPUT_LIMITS)
+                .await;
 
             // Run setup commands.
             for setup_cmd in &self.config.setup_commands {
                 info!(cmd = %setup_cmd, "running setup command");
                 let cmd = vec!["sh".to_string(), "-c".to_string(), setup_cmd.clone()];
-                let (_stdout, stderr, exit_code) =
-                    self.exec_in_container(&container_id, &cmd, None, None).await?;
+                let ExecOutput { stderr, exit_code, .. } = self
+                    .exec_in_container(&container_id, &cmd, None, None, SETUP_OUTPUT_LIMITS)
+                    .await?;
 
                 if exit_code != Some(0) {
                     warn!(
@@ -778,21 +911,17 @@ mod docker_impl {
                 .collect::<Vec<_>>();
 
             // Execute with timeout.
-            let (stdout, stderr, exit_code) = self
+            let ExecOutput { stdout, stderr, exit_code, stdout_truncated, stderr_truncated } = self
                 .exec_in_container(
                     &container_id,
                     &exec_cmd,
                     Some(exec_env),
                     Some(request.sandbox.timeout),
+                    (request.sandbox.max_stdout_bytes, request.sandbox.max_stderr_bytes),
                 )
                 .await?;
 
             let duration_ms = start.elapsed().as_millis() as u64;
-
-            let (stdout, stdout_truncated) =
-                truncate_output(stdout, request.sandbox.max_stdout_bytes);
-            let (stderr, stderr_truncated) =
-                truncate_output(stderr, request.sandbox.max_stderr_bytes);
 
             let (structured_output, display_stdout) = extract_structured_output(&stdout);
 
@@ -881,6 +1010,52 @@ mod docker_impl {
         }
         result
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn the_container_drops_privileges_and_limits_processes_unless_opted_out() {
+            let docker = Docker::connect_with_local_defaults().expect("client");
+            let hardened = DockerExecutor::with_docker(DockerConfig::python(), docker.clone());
+            let host = hardened.host_config();
+            assert_eq!(host.cap_drop, Some(vec!["ALL".to_string()]));
+            assert_eq!(host.security_opt, Some(vec!["no-new-privileges".to_string()]));
+            assert_eq!(host.pids_limit, Some(i64::from(DEFAULT_PIDS_LIMIT)));
+            assert_eq!(host.network_mode.as_deref(), Some("none"));
+
+            let config = DockerConfig {
+                drop_capabilities: false,
+                no_new_privileges: false,
+                pids_limit: None,
+                ..DockerConfig::python()
+            };
+            let host = DockerExecutor::with_docker(config, docker).host_config();
+            assert_eq!((host.cap_drop, host.security_opt, host.pids_limit), (None, None, None));
+        }
+
+        #[test]
+        fn exec_commands_record_their_pid_and_keep_it() {
+            let cmd = with_pid_file("/tmp/x.pid", &["python3".to_string(), "a.py".to_string()]);
+            assert_eq!(
+                cmd,
+                ["sh", "-c", r#"echo $$ > "$0" && exec "$@""#, "/tmp/x.pid", "python3", "a.py"]
+            );
+        }
+
+        #[test]
+        fn output_past_the_limit_is_discarded_as_it_arrives() {
+            let (mut buffer, mut truncated) = (String::new(), false);
+            push_bounded(&mut buffer, &mut truncated, b"abc", 5);
+            assert_eq!((buffer.as_str(), truncated), ("abc", false));
+            push_bounded(&mut buffer, &mut truncated, "déf".as_bytes(), 5);
+            // "é" would cross the limit, so the cut falls before it.
+            assert_eq!((buffer.as_str(), truncated), ("abcd", true));
+            push_bounded(&mut buffer, &mut truncated, b"more", 5);
+            assert_eq!(buffer, "abcd");
+        }
+    }
 }
 
 #[cfg(feature = "docker")]
@@ -912,7 +1087,18 @@ pub struct ContainerConfig {
     pub extra_flags: Vec<String>,
     /// Whether to automatically remove the container after execution.
     pub auto_remove: bool,
+    /// Drop every Linux capability (`--cap-drop=ALL`). Default: `true`.
+    pub drop_capabilities: bool,
+    /// Forbid gaining privileges, such as through setuid binaries
+    /// (`--security-opt=no-new-privileges`). Default: `true`.
+    pub no_new_privileges: bool,
+    /// Most processes the container may run (`--pids-limit`), which stops a fork bomb;
+    /// `None` sets no limit. Default: [`DEFAULT_PIDS_LIMIT`].
+    pub pids_limit: Option<u32>,
 }
+
+/// Default process limit for containers the executors create.
+pub const DEFAULT_PIDS_LIMIT: u32 = 256;
 
 impl Default for ContainerConfig {
     fn default() -> Self {
@@ -921,6 +1107,9 @@ impl Default for ContainerConfig {
             default_image: "python:3.12-slim".to_string(),
             extra_flags: vec![],
             auto_remove: true,
+            drop_capabilities: true,
+            no_new_privileges: true,
+            pids_limit: Some(DEFAULT_PIDS_LIMIT),
         }
     }
 }
@@ -930,6 +1119,12 @@ impl Default for ContainerConfig {
 /// Each [`execute`](CodeExecutor::execute) call spawns a new ephemeral container.
 /// This is simpler but less efficient than `DockerExecutor` which reuses a
 /// persistent container.
+///
+/// Each container is named, so it can be stopped: when the request's timeout passes,
+/// or the call is dropped, the executor runs `{runtime} kill {name}`, because ending
+/// the `docker run` client process leaves the container running. Containers run with
+/// every capability dropped, `no-new-privileges` and a process limit unless
+/// [`ContainerConfig`] turns them off.
 ///
 /// For production use, prefer `DockerExecutor` (behind the `docker` feature).
 ///
@@ -954,7 +1149,7 @@ impl ContainerCommandExecutor {
     }
 
     /// Build the container `run` command arguments for a given request.
-    fn build_run_args(&self, request: &ExecutionRequest) -> Vec<String> {
+    fn build_run_args(&self, request: &ExecutionRequest, name: &str) -> Vec<String> {
         let mut args = vec!["run".to_string()];
 
         if self.config.auto_remove {
@@ -962,6 +1157,17 @@ impl ContainerCommandExecutor {
         }
 
         args.push("-i".to_string());
+        args.push("--name".to_string());
+        args.push(name.to_string());
+        if self.config.drop_capabilities {
+            args.push("--cap-drop=ALL".to_string());
+        }
+        if self.config.no_new_privileges {
+            args.push("--security-opt=no-new-privileges".to_string());
+        }
+        if let Some(limit) = self.config.pids_limit {
+            args.push(format!("--pids-limit={limit}"));
+        }
 
         match request.sandbox.network {
             NetworkPolicy::Disabled => {
@@ -1087,7 +1293,8 @@ impl CodeExecutor for ContainerCommandExecutor {
         }
 
         let start = Instant::now();
-        let run_args = self.build_run_args(&request);
+        let name = container_name("adk-exec");
+        let run_args = self.build_run_args(&request, &name);
 
         debug!(
             runtime = %self.config.runtime,
@@ -1116,6 +1323,8 @@ impl CodeExecutor for ContainerCommandExecutor {
                 self.config.runtime
             ))
         })?;
+        // Killing the `run` client process does not stop its container.
+        let mut container = RunningContainer::new(&self.config.runtime, &name);
 
         let completed = host_process::run_to_completion(
             child,
@@ -1130,7 +1339,8 @@ impl CodeExecutor for ContainerCommandExecutor {
         })?;
 
         let Some(output) = completed else {
-            warn!("container execution timed out");
+            warn!(container.name = %name, "container execution timed out; killing the container");
+            container.kill().await;
             return Ok(ExecutionResult {
                 status: ExecutionStatus::Timeout,
                 stdout: String::new(),
@@ -1144,6 +1354,7 @@ impl CodeExecutor for ContainerCommandExecutor {
             });
         };
 
+        container.finished();
         let duration_ms = start.elapsed().as_millis() as u64;
 
         let raw_stdout = String::from_utf8_lossy(&output.stdout.bytes).into_owned();
@@ -1186,6 +1397,73 @@ impl CodeExecutor for ContainerCommandExecutor {
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────
+
+/// How long the executors wait for `kill` to stop a container that outlived its timeout.
+const KILL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A container name unique to this process: `{prefix}-{pid}-{nanos}-{counter}`.
+fn container_name(prefix: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.subsec_nanos())
+        .unwrap_or_default();
+    let counter = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}-{}-{nanos}-{counter}", std::process::id())
+}
+
+/// A container started by `{runtime} run`, killed unless it is marked finished.
+struct RunningContainer {
+    runtime: String,
+    name: String,
+    running: bool,
+}
+
+impl RunningContainer {
+    fn new(runtime: &str, name: &str) -> Self {
+        Self { runtime: runtime.to_string(), name: name.to_string(), running: true }
+    }
+
+    /// The container exited on its own.
+    fn finished(&mut self) {
+        self.running = false;
+    }
+
+    /// Runs `{runtime} kill {name}` and waits for it.
+    async fn kill(&mut self) {
+        self.running = false;
+        let kill = tokio::process::Command::new(&self.runtime)
+            .args(["kill", &self.name])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status();
+        match tokio::time::timeout(KILL_TIMEOUT, kill).await {
+            Ok(Ok(status)) if status.success() => {}
+            Ok(Ok(status)) => warn!(container.name = %self.name, ?status, "container kill failed"),
+            Ok(Err(error)) => warn!(container.name = %self.name, %error, "container kill failed"),
+            Err(_) => warn!(container.name = %self.name, "container kill did not finish"),
+        }
+    }
+}
+
+impl Drop for RunningContainer {
+    fn drop(&mut self) {
+        // The call was dropped mid-run; the container would otherwise keep running.
+        if self.running {
+            let mut kill = std::process::Command::new(&self.runtime);
+            kill.args(["kill", &self.name])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            // A thread, so the kill is reaped without blocking the dropping task.
+            std::thread::spawn(move || {
+                let _ = kill.status();
+            });
+        }
+    }
+}
 
 /// Truncate output to the given byte limit.
 fn truncate_output(output: String, max_bytes: usize) -> (String, bool) {
@@ -1273,7 +1551,7 @@ mod tests {
             identity: None,
         };
 
-        let args = executor.build_run_args(&request);
+        let args = executor.build_run_args(&request, "adk-exec-test");
         assert!(args.contains(&"run".to_string()));
         assert!(args.contains(&"--rm".to_string()));
         assert!(args.contains(&"-i".to_string()));
@@ -1299,8 +1577,141 @@ mod tests {
             identity: None,
         };
 
-        let args = executor.build_run_args(&request);
+        let args = executor.build_run_args(&request, "adk-exec-test");
         assert!(!args.contains(&"--network=none".to_string()));
+    }
+
+    fn python_request(code: &str, timeout: std::time::Duration) -> ExecutionRequest {
+        let mut sandbox = crate::SandboxPolicy::strict_rust();
+        sandbox.timeout = timeout;
+        ExecutionRequest {
+            language: ExecutionLanguage::Python,
+            payload: ExecutionPayload::Source { code: code.to_string() },
+            argv: vec![],
+            stdin: None,
+            input: None,
+            sandbox,
+            identity: None,
+        }
+    }
+
+    #[test]
+    fn build_run_args_names_and_hardens_the_container_unless_opted_out() {
+        let request = python_request("print(1)", std::time::Duration::from_secs(5));
+        let args = ContainerCommandExecutor::default().build_run_args(&request, "adk-exec-test");
+        let name_at = args.iter().position(|arg| arg == "--name").expect("--name");
+        assert_eq!(args[name_at + 1], "adk-exec-test");
+        for flag in ["--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=256"] {
+            assert!(args.contains(&flag.to_string()), "{flag} missing from {args:?}");
+        }
+
+        let open = ContainerCommandExecutor::new(ContainerConfig {
+            drop_capabilities: false,
+            no_new_privileges: false,
+            pids_limit: None,
+            ..ContainerConfig::default()
+        });
+        let args = open.build_run_args(&request, "adk-exec-test");
+        assert!(!args.iter().any(|arg| arg.starts_with("--cap-drop")
+            || arg.starts_with("--security-opt")
+            || arg.starts_with("--pids-limit")));
+    }
+
+    /// A stand-in container runtime that logs its arguments; `run` blocks like a
+    /// container whose code never ends.
+    #[cfg(unix)]
+    fn logging_runtime(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let log = dir.join("runtime.log");
+        let runtime = dir.join("runtime");
+        std::fs::write(
+            &runtime,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$1\" in run) exec sleep 30 ;; esac\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The first run of a new executable can be delayed by the OS (macOS scans it).
+        std::process::Command::new(&runtime).arg("warm-up").status().unwrap();
+        (runtime, log)
+    }
+
+    /// The name given to `run`, and whether a later invocation killed it.
+    #[cfg(unix)]
+    fn killed_container(log: &std::path::Path) -> (Option<String>, bool) {
+        let lines: Vec<String> =
+            std::fs::read_to_string(log).unwrap_or_default().lines().map(str::to_string).collect();
+        let name = lines.iter().find(|line| line.starts_with("run ")).and_then(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            words.windows(2).find(|pair| pair[0] == "--name").map(|pair| pair[1].to_string())
+        });
+        let killed = name
+            .as_ref()
+            .is_some_and(|name| lines.iter().any(|line| *line == format!("kill {name}")));
+        (name, killed)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_timed_out_container_is_killed_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let (runtime, log) = logging_runtime(dir.path());
+        let executor = ContainerCommandExecutor::new(ContainerConfig {
+            runtime: runtime.display().to_string(),
+            ..ContainerConfig::default()
+        });
+
+        let result = executor
+            .execute(python_request("while True: pass", std::time::Duration::from_millis(1500)))
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, ExecutionStatus::Timeout);
+        let (name, killed) = killed_container(&log);
+        assert!(
+            name.is_some() && killed,
+            "{name:?} not killed: {:?}",
+            std::fs::read_to_string(&log)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dropped_execution_kills_its_container() {
+        let dir = tempfile::tempdir().unwrap();
+        let (runtime, log) = logging_runtime(dir.path());
+        let executor = ContainerCommandExecutor::new(ContainerConfig {
+            runtime: runtime.display().to_string(),
+            ..ContainerConfig::default()
+        });
+
+        let execution = tokio::spawn(async move {
+            executor
+                .execute(python_request("while True: pass", std::time::Duration::from_secs(30)))
+                .await
+        });
+        let mut started = false;
+        for _ in 0..250 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            started = killed_container(&log).0.is_some();
+            if started {
+                break;
+            }
+        }
+        assert!(started, "the container never started: {:?}", std::fs::read_to_string(&log));
+        execution.abort();
+
+        let mut killed = false;
+        for _ in 0..250 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            killed = killed_container(&log).1;
+            if killed {
+                break;
+            }
+        }
+        assert!(killed, "{:?}", std::fs::read_to_string(&log));
     }
 
     #[test]

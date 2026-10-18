@@ -57,6 +57,18 @@ let tool = Arc::new(SandboxTool::new(backend));
 
 `DockerExecutor` fixes its network mode, bind mounts, and environment when the container is created. `DockerConfig::validate_sandbox_policy()` checks each request against them, and a request stricter than the container fails with `ExecutionError::UnsupportedPolicy`.
 
+Both container executors stop runaway code and limit what it can do:
+
+| Behaviour | `ContainerCommandExecutor` | `DockerExecutor` |
+|-----------|----------------------------|------------------|
+| Timeout | Runs `{runtime} kill {name}` on the named container; also when the call is dropped | Kills the exec's process group (or process) inside the persistent container |
+| Capabilities | `--cap-drop=ALL` (`ContainerConfig::drop_capabilities`) | `CapDrop: ["ALL"]` (`DockerConfig::drop_capabilities`) |
+| Privilege escalation | `--security-opt=no-new-privileges` (`no_new_privileges`) | `SecurityOpt: ["no-new-privileges"]` (`no_new_privileges`) |
+| Process limit | `--pids-limit=256` (`pids_limit`, `None` for none) | `PidsLimit: 256` (`pids_limit`) |
+| Output limits | Read up to the request's byte limits | Discarded past the request's byte limits as it streams |
+
+> **Note:** Setup commands that switch users, such as `apt-get install`, fail without capabilities; set `drop_capabilities: false` for an image that needs them.
+
 ## Tools
 
 | Tool | Crate | Name | Language | Scopes |

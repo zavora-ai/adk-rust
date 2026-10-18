@@ -44,10 +44,8 @@ impl FrontendCodeTool {
         Self {
             framework: "react".to_string(),
             executor: Arc::new(ContainerCommandExecutor::new(ContainerConfig {
-                runtime: "docker".to_string(),
                 default_image: "node:20-slim".to_string(),
-                extra_flags: vec![],
-                auto_remove: true,
+                ..ContainerConfig::default()
             })),
         }
     }
@@ -57,10 +55,8 @@ impl FrontendCodeTool {
         Self {
             framework: framework.into(),
             executor: Arc::new(ContainerCommandExecutor::new(ContainerConfig {
-                runtime: "docker".to_string(),
                 default_image: "node:20-slim".to_string(),
-                extra_flags: vec![],
-                auto_remove: true,
+                ..ContainerConfig::default()
             })),
         }
     }
