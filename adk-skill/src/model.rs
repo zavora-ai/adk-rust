@@ -20,8 +20,11 @@ pub struct SkillFrontmatter {
     /// A collection of categorizing labels for discovery and filtering.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Experimental: A list of space-delimited pre-approved tools the skill may use.
-    #[serde(default, rename = "allowed-tools")]
+    /// Experimental: pre-approved tools the skill may use.
+    ///
+    /// Accepts a YAML list or, as the `agentskills.io` specification writes it, one
+    /// string of names separated by spaces or commas (`allowed-tools: Read Grep`).
+    #[serde(default, rename = "allowed-tools", deserialize_with = "names_or_list")]
     pub allowed_tools: Vec<String>,
     /// Optional list of paths to supporting resources (e.g., "references/data.json").
     #[serde(default)]
@@ -36,6 +39,28 @@ pub struct SkillFrontmatter {
     /// File glob patterns that determine when this skill activates (e.g., `["*.rs", "Cargo.toml"]`).
     #[serde(default)]
     pub triggers: Vec<String>,
+}
+
+/// Reads a list of names written either as a sequence or as one delimited string.
+fn names_or_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Names {
+        List(Vec<String>),
+        Text(String),
+    }
+    Ok(match Option::<Names>::deserialize(deserializer)? {
+        Some(Names::List(names)) => names,
+        Some(Names::Text(text)) => text
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect(),
+        None => Vec::new(),
+    })
 }
 
 /// A parsed skill before it is assigned an ID and indexed.

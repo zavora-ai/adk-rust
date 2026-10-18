@@ -49,7 +49,7 @@ You are Zenith, the voice receptionist for Mario's Plumbing...
 | `license` | No | License identifier (e.g., MIT, Apache-2.0). |
 | `compatibility` | No | Environment or model constraints. |
 | `tags` | No | List of discovery and filtering labels. |
-| `allowed-tools` | No | List of tools the agent is permitted to use for this skill. |
+| `allowed-tools` | No | Tools the agent is permitted to use for this skill: a list, or one string of names separated by spaces or commas. |
 | `references` | No | External assets (JSON, CSV) required by the skill. |
 | `trigger` | No | If true, requires explicit `@name` invocation. |
 | `hint` | No | UI guidance for user input. |

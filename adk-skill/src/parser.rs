@@ -264,6 +264,22 @@ Body content.
     }
 
     #[test]
+    fn allowed_tools_may_be_one_delimited_string() {
+        for (written, expected) in [
+            ("allowed-tools: lookup_order", vec!["lookup_order"]),
+            ("allowed-tools: Read Grep Glob", vec!["Read", "Grep", "Glob"]),
+            ("allowed-tools: \"Read, Grep\"", vec!["Read", "Grep"]),
+            ("allowed-tools: [Read, Grep]", vec!["Read", "Grep"]),
+            ("allowed-tools:", vec![]),
+        ] {
+            let content = format!("---\nname: s\ndescription: d\n{written}\n---\nBody\n");
+            let parsed = parse_skill_markdown(Path::new("SKILL.md"), &content)
+                .unwrap_or_else(|error| panic!("{written}: {error}"));
+            assert_eq!(parsed.allowed_tools, expected, "{written}");
+        }
+    }
+
+    #[test]
     fn rejects_missing_required_fields() {
         let content = r#"---
 name: ""

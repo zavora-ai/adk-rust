@@ -62,7 +62,10 @@ pub fn load_skill_index(root: impl AsRef<Path>) -> SkillResult<SkillIndex> {
         // to coexist under .skills/ without causing parse errors.
         let parsed = match parse_instruction_markdown(&path, &content) {
             Ok(p) => p,
-            Err(_) => continue,
+            Err(error) => {
+                warn_unparsed_skill(&path, &content, &error);
+                continue;
+            }
         };
 
         let last_modified = fs::metadata(&path)
@@ -101,7 +104,10 @@ pub fn load_skill_index_with_extras(
         };
         let parsed = match parse_instruction_markdown(&path, &content) {
             Ok(p) => p,
-            Err(_) => continue,
+            Err(error) => {
+                warn_unparsed_skill(&path, &content, &error);
+                continue;
+            }
         };
 
         let last_modified = fs::metadata(&path)
@@ -142,6 +148,15 @@ pub fn load_skill_index_with_extras(
 
     deduped.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
     Ok(SkillIndex::new(deduped))
+}
+
+/// Warns about a file that was meant as a skill, one with frontmatter, but did not parse.
+///
+/// Other Markdown, such as a README under `.skills/`, is skipped without a word.
+fn warn_unparsed_skill(path: &Path, content: &str, error: &crate::SkillError) {
+    if content.trim_start().starts_with("---") {
+        tracing::warn!(skill.path = %path.display(), error = %error, "skipping skill that does not parse");
+    }
 }
 
 fn normalize_id(value: &str) -> String {
