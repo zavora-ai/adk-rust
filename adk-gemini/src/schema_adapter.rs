@@ -7,26 +7,28 @@
 //!
 //! # Transform Order
 //!
-//! Steps 3-10 exist because Gemini's **OpenAPI subset** cannot express those
+//! Steps 3-12 exist because Gemini's **OpenAPI subset** cannot express those
 //! keywords, so they are skipped for [`GeminiSchemaDialect::JsonSchema`], whose
-//! field accepts them. Steps 1, 2, 11, 12 and 13 are about what the *endpoint*
+//! field accepts them. Steps 1, 2, 13, 14 and 15 are about what the *endpoint*
 //! rejects regardless of dialect, so they always run.
 //!
 //! | # | Transform | OpenAPI subset | JSON Schema |
 //! | --- | --- | --- | --- |
-//! | 1 | Resolve `$ref` (inline from definitions/`$defs`, break cycles at depth 10) | ✓ | ✓ |
+//! | 1 | Resolve `$ref` (inline from definitions/`$defs`; recursive, over-long or over-budget references become `{"type": "object"}`) | ✓ | ✓ |
 //! | 2 | Strip `$schema` keyword | ✓ | ✓ |
-//! | 3 | Collapse `anyOf`/`oneOf` combiners (select first non-null sub-schema) | ✓ | — |
-//! | 4 | Merge `allOf` sub-schemas | ✓ | — |
-//! | 5 | Collapse type arrays (`["string", "null"]` → `"string"`) | ✓ | — |
-//! | 6 | Strip conditional keywords (`if`/`then`/`else`) | ✓ | — |
-//! | 7 | Convert `const` to single-element `enum` | ✓ | — |
-//! | 8 | Strip null values from `enum` arrays | ✓ | — |
-//! | 9 | Add implicit `"type": "object"` when `properties` exists | ✓ | — |
-//! | 10 | Remove unsupported keywords recursively (bounds the Schema proto defines are kept) | ✓ | — |
-//! | 11 | Strip unsupported `format` values | ✓ | ✓ |
-//! | 12 | Enforce nesting depth limit (5 levels) | ✓ | ✓ |
-//! | 13 | Remove `definitions`/`$defs` blocks | ✓ | ✓ |
+//! | 3 | Replace boolean subschemas (`true` → `{}`; a `false` property is dropped) | ✓ | — |
+//! | 4 | Reduce `anyOf`/`oneOf` (null branches → `nullable: true`; one branch is merged, several stay as `anyOf`) | ✓ | — |
+//! | 5 | Merge `allOf` sub-schemas | ✓ | — |
+//! | 6 | Reduce type arrays (`["string", "null"]` → `"string"` + `nullable: true`; several types → `anyOf`) | ✓ | — |
+//! | 7 | Strip conditional keywords (`if`/`then`/`else`) | ✓ | — |
+//! | 8 | Convert `const` to single-element `enum` | ✓ | — |
+//! | 9 | Reduce `enum` to strings (`null` → `nullable: true`; `1` → `"1"`, keeping `type`) | ✓ | — |
+//! | 10 | Add implicit `"type": "object"` when `properties` exists | ✓ | — |
+//! | 11 | Describe a map's value type (`additionalProperties` schema) in its `description` | ✓ | — |
+//! | 12 | Remove unsupported keywords recursively (bounds the Schema proto defines are kept) | ✓ | — |
+//! | 13 | Strip unsupported `format` values | ✓ | ✓ |
+//! | 14 | Enforce nesting depth limit (5 levels) | ✓ | ✓ |
+//! | 15 | Remove `definitions`/`$defs` blocks | ✓ | ✓ |
 //!
 //! # Example
 //!
@@ -289,7 +291,7 @@ impl SchemaAdapter for GeminiSchemaAdapter {
         // transform that exists because the *OpenAPI subset cannot express* a
         // keyword is skipped for JSON Schema, which can; a transform that
         // exists because the *endpoint rejects* something runs for every
-        // dialect. Steps 3-10 below are the first kind. Steps 1, 2, 11 and 12
+        // dialect. Steps 3-12 below are the first kind. Steps 1, 2 and 13-15
         // are the second, so they are unconditional.
 
         // Step 1: Extract definitions and resolve $ref references.
@@ -306,34 +308,43 @@ impl SchemaAdapter for GeminiSchemaAdapter {
         schema_utils::strip_schema_keyword(&mut schema);
 
         if self.dialect.requires_openapi_reduction() {
-            // Step 3: Collapse anyOf/oneOf combiners
-            schema_utils::collapse_combiners(&mut schema);
+            // Step 3: Replace boolean subschemas, which the Schema proto cannot carry.
+            replace_boolean_subschemas(&mut schema);
 
-            // Step 4: Merge allOf sub-schemas
+            // Step 4: Reduce anyOf/oneOf: null branches become `nullable`, a single
+            // remaining branch is merged, several stay as `anyOf`.
+            reduce_combiners(&mut schema);
+
+            // Step 5: Merge allOf sub-schemas
             schema_utils::merge_all_of(&mut schema);
 
-            // Step 5: Collapse type arrays
-            schema_utils::collapse_type_arrays(&mut schema);
+            // Step 6: Reduce type arrays: `null` becomes `nullable`, several types an `anyOf`.
+            reduce_type_arrays(&mut schema);
 
-            // Step 6: Strip conditional keywords (if/then/else)
+            // Step 7: Strip conditional keywords (if/then/else)
             schema_utils::strip_conditional_keywords(&mut schema);
 
-            // Step 7: Convert const to single-element enum
+            // Step 8: Convert const to single-element enum
             schema_utils::convert_const_to_enum(&mut schema);
 
-            // Step 8: Strip null from enum arrays
-            schema_utils::strip_null_from_enum(&mut schema);
+            // Step 9: Reduce enums to strings: `null` becomes `nullable`, numbers and
+            // booleans become their text, because the proto's `enum` is a string list.
+            reduce_enums(&mut schema);
 
-            // Step 9: Add implicit object type.
+            // Step 10: Add implicit object type.
             //
             // Skipped for JSON Schema not merely as unnecessary but as
             // *harmful*: it injects `type: "object"` into every schema-shaped
             // node it walks, including the `if` clause of a conditional, which
             // changes what that clause matches.
             schema_utils::add_implicit_object_type(&mut schema);
+
+            // Step 11: Record a map's value type in its description before step 12
+            // removes `additionalProperties`.
+            describe_map_values(&mut schema);
         }
 
-        // Step 10: Remove unsupported keywords recursively.
+        // Step 12: Remove unsupported keywords recursively.
         //
         // Matched exhaustively rather than defaulted: a dialect added later
         // must state what it strips, instead of silently inheriting the
@@ -350,13 +361,13 @@ impl SchemaAdapter for GeminiSchemaAdapter {
             GeminiSchemaDialect::OpenApiSubset => remove_unsupported_keywords(&mut schema),
         }
 
-        // Step 11: Strip unsupported format values
+        // Step 13: Strip unsupported format values
         schema_utils::strip_unsupported_formats(&mut schema, GEMINI_ALLOWED_FORMATS);
 
-        // Step 12: Enforce nesting depth (max 5 levels)
+        // Step 14: Enforce nesting depth (max 5 levels)
         schema_utils::enforce_nesting_depth(&mut schema, 5, 0);
 
-        // Step 13: Remove definitions/$defs blocks
+        // Step 15: Remove definitions/$defs blocks
         if let Some(obj) = schema.as_object_mut() {
             obj.remove("definitions");
             obj.remove("$defs");
@@ -393,6 +404,212 @@ impl SchemaAdapter for GeminiSchemaAdapter {
     fn parameters_field(&self) -> &'static str {
         self.dialect.parameters_field()
     }
+}
+
+/// Calls `visit` on every sub-schema location of `schema`.
+fn for_each_subschema(schema: &mut Value, visit: &mut dyn FnMut(&mut Value)) {
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
+    for keyword in ["properties", "patternProperties"] {
+        if let Some(Value::Object(members)) = obj.get_mut(keyword) {
+            members.values_mut().for_each(&mut *visit);
+        }
+    }
+    for keyword in ["additionalProperties", "not", "if", "then", "else"] {
+        if let Some(sub @ Value::Object(_)) = obj.get_mut(keyword) {
+            visit(sub);
+        }
+    }
+    match obj.get_mut("items") {
+        Some(Value::Array(items)) => items.iter_mut().for_each(&mut *visit),
+        Some(items @ Value::Object(_)) => visit(items),
+        _ => {}
+    }
+    for keyword in ["prefixItems", "allOf", "anyOf", "oneOf"] {
+        if let Some(Value::Array(subs)) = obj.get_mut(keyword) {
+            subs.iter_mut().for_each(&mut *visit);
+        }
+    }
+}
+
+/// Replaces boolean subschemas, which the Schema proto rejects with a 400.
+///
+/// `true` accepts anything and becomes `{}`. A property whose schema is `false` can
+/// never be supplied, so it is dropped together with its `required` entry, and a
+/// `false` branch of `anyOf`/`oneOf` is dropped; elsewhere `false` becomes `{}`.
+fn replace_boolean_subschemas(schema: &mut Value) {
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
+    if let Some(Value::Object(properties)) = obj.get_mut("properties") {
+        let never: Vec<String> = properties
+            .iter()
+            .filter(|(_, sub)| **sub == Value::Bool(false))
+            .map(|(name, _)| name.clone())
+            .collect();
+        properties.retain(|name, _| !never.contains(name));
+        if let Some(Value::Array(required)) = obj.get_mut("required") {
+            required
+                .retain(|name| name.as_str().is_none_or(|name| !never.iter().any(|n| n == name)));
+        }
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        if let Some(Value::Array(branches)) = obj.get_mut(keyword) {
+            branches.retain(|branch| *branch != Value::Bool(false));
+        }
+    }
+    for_each_subschema(schema, &mut |sub| {
+        if sub.is_boolean() {
+            *sub = Value::Object(Map::new());
+        }
+        replace_boolean_subschemas(sub);
+    });
+    // `items` and `additionalProperties` may themselves be booleans.
+    if let Some(obj) = schema.as_object_mut()
+        && let Some(items @ Value::Bool(_)) = obj.get_mut("items")
+    {
+        *items = Value::Object(Map::new());
+    }
+}
+
+fn is_null_type(schema: &Value) -> bool {
+    schema.get("type").and_then(Value::as_str) == Some("null")
+}
+
+/// Reduces `anyOf` and `oneOf` to what the Schema proto carries.
+///
+/// Null branches become `nullable: true` on the parent. One remaining branch is merged
+/// into the parent; several remain as `anyOf`, which the proto supports, rather than
+/// being cut down to the first.
+fn reduce_combiners(schema: &mut Value) {
+    if let Some(obj) = schema.as_object_mut() {
+        for keyword in ["anyOf", "oneOf"] {
+            let Some(Value::Array(branches)) = obj.remove(keyword) else {
+                continue;
+            };
+            let total = branches.len();
+            let mut branches: Vec<Value> =
+                branches.into_iter().filter(|branch| !is_null_type(branch)).collect();
+            if branches.len() < total {
+                obj.insert("nullable".to_string(), Value::Bool(true));
+            }
+            match branches.len() {
+                0 => {
+                    obj.insert("type".to_string(), Value::from("null"));
+                }
+                1 => {
+                    if let Some(Value::Object(branch)) = branches.pop() {
+                        obj.extend(branch);
+                    }
+                }
+                _ if !obj.contains_key("anyOf") => {
+                    obj.insert("anyOf".to_string(), Value::Array(branches));
+                }
+                // Both keywords carried a union; only one `anyOf` can be sent.
+                _ => {
+                    if let Some(Value::Object(branch)) = branches.into_iter().next() {
+                        obj.extend(branch);
+                    }
+                }
+            }
+        }
+    }
+    for_each_subschema(schema, &mut reduce_combiners);
+}
+
+/// Reduces `type` arrays: `"null"` becomes `nullable: true`, and several remaining
+/// types become an `anyOf` of single-type schemas.
+fn reduce_type_arrays(schema: &mut Value) {
+    if let Some(obj) = schema.as_object_mut()
+        && let Some(Value::Array(types)) = obj.get("type").cloned()
+    {
+        let mut kinds: Vec<Value> = types.into_iter().filter(|kind| kind != "null").collect();
+        let nullable = kinds.len() < obj.get("type").and_then(Value::as_array).map_or(0, Vec::len);
+        obj.remove("type");
+        if nullable {
+            obj.insert("nullable".to_string(), Value::Bool(true));
+        }
+        match kinds.len() {
+            0 => {
+                obj.insert("type".to_string(), Value::from("null"));
+            }
+            1 => {
+                obj.insert("type".to_string(), kinds.remove(0));
+            }
+            _ if !obj.contains_key("anyOf") => {
+                let branches = kinds.into_iter().map(|kind| serde_json::json!({ "type": kind }));
+                obj.insert("anyOf".to_string(), Value::Array(branches.collect()));
+            }
+            _ => {
+                obj.insert("type".to_string(), kinds.remove(0));
+            }
+        }
+    }
+    for_each_subschema(schema, &mut reduce_type_arrays);
+}
+
+/// Reduces `enum` to the string list the Schema proto defines.
+///
+/// `null` becomes `nullable: true`. Numbers and booleans become their JSON text and
+/// the schema keeps (or is given) its numeric or boolean `type`, so Gemini still
+/// answers with a number: `{"type": "integer", "enum": ["1", "2"]}` yields `2`, not
+/// `"2"`.
+fn reduce_enums(schema: &mut Value) {
+    if let Some(obj) = schema.as_object_mut()
+        && let Some(Value::Array(values)) = obj.remove("enum")
+    {
+        let total = values.len();
+        let values: Vec<Value> = values.into_iter().filter(|value| !value.is_null()).collect();
+        if values.len() < total {
+            obj.insert("nullable".to_string(), Value::Bool(true));
+        }
+        if !obj.contains_key("type") {
+            let kind = if values.iter().all(Value::is_string) {
+                None
+            } else if values.iter().all(|value| value.is_i64() || value.is_u64()) {
+                Some("integer")
+            } else if values.iter().all(Value::is_number) {
+                Some("number")
+            } else if values.iter().all(Value::is_boolean) {
+                Some("boolean")
+            } else {
+                Some("string")
+            };
+            if let Some(kind) = kind {
+                obj.insert("type".to_string(), Value::from(kind));
+            }
+        }
+        if !values.is_empty() {
+            let values = values.into_iter().map(|value| match value {
+                Value::String(text) => Value::String(text),
+                other => Value::String(other.to_string()),
+            });
+            obj.insert("enum".to_string(), Value::Array(values.collect()));
+        }
+    }
+    for_each_subschema(schema, &mut reduce_enums);
+}
+
+/// Records a map's value type in its description.
+///
+/// A map is an object whose `additionalProperties` is a schema and which declares no
+/// properties. The Schema proto has no `additionalProperties`, so without this the
+/// model sees only an empty object.
+fn describe_map_values(schema: &mut Value) {
+    if let Some(obj) = schema.as_object_mut()
+        && obj.get("properties").and_then(Value::as_object).is_none_or(Map::is_empty)
+        && let Some(Value::Object(values)) = obj.get("additionalProperties")
+    {
+        let kind = values.get("type").and_then(Value::as_str).unwrap_or("any");
+        let note = format!("An object mapping string keys to {kind} values.");
+        let description = match obj.get("description").and_then(Value::as_str) {
+            Some(text) if !text.trim().is_empty() => format!("{} {note}", text.trim_end()),
+            _ => note,
+        };
+        obj.insert("description".to_string(), Value::String(description));
+    }
+    for_each_subschema(schema, &mut describe_map_values);
 }
 
 /// Extracts and merges `definitions` and `$defs` from the top-level schema
@@ -1525,5 +1742,92 @@ mod tests {
             assert_eq!(result["properties"]["party_size"]["minimum"], 1);
             assert_eq!(result["properties"]["party_size"]["maximum"], 40);
         }
+    }
+
+    /// The declaration that Gemini rejected with a 400 before step 3 and step 9 existed:
+    /// a boolean subschema and a numeric enum, beside a nullable string, a union and a map.
+    fn schema_beyond_the_subset() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "priority": { "type": "integer", "enum": [1, 2, 3] },
+                "level": { "enum": [1, 2, null] },
+                "note": { "type": ["string", "null"] },
+                "owner": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                "reference": { "oneOf": [{ "type": "string" }, { "type": "integer" }] },
+                "code": { "type": ["string", "integer"] },
+                "labels": { "type": "object", "additionalProperties": { "type": "integer" } },
+                "extra": true,
+                "forbidden": false,
+                "tags": { "type": "array", "items": true }
+            },
+            "required": ["priority", "forbidden"]
+        })
+    }
+
+    #[test]
+    fn openapi_subset_dialects_carry_nullability_unions_enums_and_maps() {
+        for adapter in [GeminiSchemaAdapter::new(), GeminiSchemaAdapter::vertex_ai()] {
+            let result = adapter.normalize_schema(schema_beyond_the_subset());
+            let props = &result["properties"];
+
+            assert_eq!(props["priority"], json!({ "type": "integer", "enum": ["1", "2", "3"] }));
+            assert_eq!(
+                props["level"],
+                json!({ "type": "integer", "enum": ["1", "2"], "nullable": true })
+            );
+            assert_eq!(props["note"], json!({ "type": "string", "nullable": true }));
+            assert_eq!(props["owner"], json!({ "type": "string", "nullable": true }));
+            assert_eq!(
+                props["reference"],
+                json!({ "anyOf": [{ "type": "string" }, { "type": "integer" }] })
+            );
+            assert_eq!(
+                props["code"],
+                json!({ "anyOf": [{ "type": "string" }, { "type": "integer" }] })
+            );
+            assert_eq!(
+                props["labels"]["description"],
+                "An object mapping string keys to integer values."
+            );
+            assert_eq!(props["extra"], json!({}));
+            assert!(props.get("forbidden").is_none(), "{result}");
+            assert_eq!(result["required"], json!(["priority"]));
+            assert_eq!(props["tags"]["items"], json!({}));
+        }
+    }
+
+    #[test]
+    fn a_map_description_keeps_the_fields_own_text() {
+        let result = GeminiSchemaAdapter::new().normalize_schema(json!({
+            "type": "object",
+            "description": "Label counts.",
+            "additionalProperties": { "type": "integer" }
+        }));
+        assert_eq!(
+            result,
+            json!({
+                "type": "object",
+                "description": "Label counts. An object mapping string keys to integer values."
+            })
+        );
+    }
+
+    #[test]
+    fn the_reductions_are_idempotent() {
+        for adapter in [GeminiSchemaAdapter::new(), GeminiSchemaAdapter::vertex_ai()] {
+            let first = adapter.normalize_schema(schema_beyond_the_subset());
+            assert_eq!(adapter.normalize_schema(first.clone()), first);
+        }
+    }
+
+    #[test]
+    fn json_schema_dialect_leaves_booleans_unions_and_enums_alone() {
+        let result =
+            GeminiSchemaAdapter::json_schema().normalize_schema(schema_beyond_the_subset());
+        let props = &result["properties"];
+        assert_eq!(props["extra"], json!(true));
+        assert_eq!(props["priority"]["enum"], json!([1, 2, 3]));
+        assert_eq!(props["note"]["type"], json!(["string", "null"]));
     }
 }

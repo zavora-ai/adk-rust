@@ -82,8 +82,8 @@ fn main() {
         &raw_schema,
         &[
             "• Resolves $ref → inlines Address definition",
-            "• Collapses anyOf → picks first non-null sub-schema",
-            "• Collapses type arrays → [\"string\", \"null\"] becomes \"string\"",
+            "• Reduces anyOf → a null branch becomes nullable: true, one branch is merged",
+            "• Reduces type arrays → [\"string\", \"null\"] becomes \"string\" + nullable: true",
             "• Removes: $schema, additionalProperties, exclusiveMin/Max, if/then",
             "• Converts const → single-element enum",
             "• Strips unsupported format (postal-code, hostname)",

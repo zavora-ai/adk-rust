@@ -17,17 +17,20 @@ MCP Server → raw JSON Schema → McpToolset (stores verbatim)
 1. **McpToolset** discovers tools and stores their raw `inputSchema` without modification
 2. When the model builds a request, it calls `schema_adapter().normalize_schema()` on each tool's schema
 3. Each provider has its own adapter that applies only the transforms its API requires
-4. Results are cached by content hash to avoid redundant normalization
+4. Results are cached by content hash to avoid redundant normalization. The cache lock is
+   not held while a schema is normalized, so one slow schema does not delay other requests
 
 ## Provider Behavior
 
 | Feature | Gemini | OpenAI Strict | OpenAI | Anthropic | Generic |
 |---------|--------|---------------|--------|-----------|---------|
 | `$ref` resolution | ✅ Inlines, keeping the keywords beside the `$ref` | ❌ Preserves | ❌ Preserves | ❌ Preserves | ❌ Preserves |
-| `anyOf`/`oneOf` | Collapses | Preserves | Preserves | Preserves | Preserves |
+| `anyOf`/`oneOf` | Null branch → `nullable`; one branch merged, several kept as `anyOf` | Preserves | Preserves | Preserves | Preserves |
 | `allOf` | Merges | Preserves | Preserves | Preserves | Preserves |
 | `additionalProperties` | Removes | Sets `false` | Preserves | Preserves | Preserves |
-| Type arrays | Collapses | Preserves | Preserves | Preserves | Preserves |
+| Type arrays | `null` → `nullable`; several types → `anyOf` | Preserves | Preserves | Preserves | Preserves |
+| Boolean subschemas | `true` → `{}`; a `false` property is dropped | Preserves | Preserves | Preserves | Preserves |
+| Non-string `enum` values | → strings, `type` kept (`1` → `"1"`) | Preserves | Preserves | Preserves | Preserves |
 | `$schema` | Strips | Strips | Strips | Strips | Strips |
 | `if`/`then`/`else` | Strips | Strips | Strips | Strips | Strips |
 | `const` | → `enum` | → `enum` | → `enum` | Preserves | → `enum` |
@@ -83,23 +86,31 @@ let adapter = GeminiSchemaAdapter::vertex_ai();
 ```
 
 Transform pipeline:
-1. Resolve `$ref` (inline from definitions, break cycles at depth 10). Keywords beside a
-   `$ref`, such as a field's own `description`, stay on the inlined schema and take precedence
-   over the definition's.
+1. Resolve `$ref` (inline from definitions). Keywords beside a `$ref`, such as a field's own
+   `description`, stay on the inlined schema and take precedence over the definition's. A
+   reference becomes `{"type": "object"}` when it names a definition already being inlined on
+   its path (so a self-referencing definition is expanded once), when the chain of references
+   is longer than 10, or when inlining it would copy more than
+   `schema_utils::MAX_INLINED_REF_NODES` values in total.
 2. Strip `$schema`
-3. Collapse `anyOf`/`oneOf` → first non-null sub-schema
-4. Merge `allOf` sub-schemas
-5. Collapse type arrays (`["string", "null"]` → `"string"`)
-6. Strip `if`/`then`/`else`
-7. Convert `const` → single-element `enum`
-8. Strip null from `enum` arrays
-9. Add implicit `type: "object"`
-10. Remove keywords the Gemini `Schema` proto does not define. The bounds it does define —
+3. Replace boolean subschemas: `true` → `{}`; a property whose schema is `false` is dropped
+4. Reduce `anyOf`/`oneOf`: null branches → `nullable: true`; one remaining branch is merged,
+   several stay as `anyOf`
+5. Merge `allOf` sub-schemas
+6. Reduce type arrays: `["string", "null"]` → `"string"` + `nullable: true`;
+   `["string", "integer"]` → `anyOf`
+7. Strip `if`/`then`/`else`
+8. Convert `const` → single-element `enum`
+9. Reduce `enum` to strings: `null` → `nullable: true`; `[1, 2]` → `["1", "2"]` with
+   `type: "integer"` kept, so Gemini still answers with a number
+10. Add implicit `type: "object"`
+11. Describe a map's value type (`additionalProperties` schema) in its `description`
+12. Remove keywords the Gemini `Schema` proto does not define. The bounds it does define —
     `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `minItems`, `maxItems` — are kept,
     so the model is shown the limits a `#[tool]` enforces.
-11. Strip unsupported `format` values
-12. Enforce nesting depth (5 levels)
-13. Remove `definitions`/`$defs`
+13. Strip unsupported `format` values
+14. Enforce nesting depth (5 levels)
+15. Remove `definitions`/`$defs`
 
 ### OpenAiStrictSchemaAdapter
 
@@ -228,9 +239,9 @@ Available utilities:
 - `strip_null_from_enum` — removes null from enum arrays
 - `truncate_tool_name` — truncates at UTF-8 boundary
 - `resolve_refs` — inlines `$ref` references from definitions, keeping the keywords beside each `$ref`
-- `collapse_combiners` — collapses `anyOf`/`oneOf` to first non-null
+- `collapse_combiners` — collapses `anyOf`/`oneOf` to first non-null (not used by the Gemini adapter)
 - `merge_all_of` — merges `allOf` sub-schemas
-- `collapse_type_arrays` — collapses `["string", "null"]` to `"string"`
+- `collapse_type_arrays` — collapses `["string", "null"]` to `"string"` (not used by the Gemini adapter)
 - `enforce_nesting_depth` — replaces deep schemas with `{"type": "object"}`
 
 ## Custom Adapters

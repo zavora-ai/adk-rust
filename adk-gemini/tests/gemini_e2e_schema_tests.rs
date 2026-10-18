@@ -28,7 +28,7 @@ fn test_e2e_simple_schema_matches_old_sanitize_schema() {
     let expected = json!({
         "type": "object",
         "properties": {
-            "name": { "type": "string" },
+            "name": { "type": "string", "nullable": true },
             "count": { "type": "integer" }
         }
     });
@@ -100,8 +100,8 @@ fn test_e2e_strips_schema_and_additional_properties_and_items_on_non_array() {
     assert_eq!(result, expected);
 }
 
-/// Verify that type arrays are collapsed to the first non-null type,
-/// matching old sanitize_schema behavior.
+/// Verify that type arrays are reduced to their non-null type, with the null
+/// kept as `nullable`.
 #[test]
 fn test_e2e_collapses_type_arrays() {
     let adapter = GeminiSchemaAdapter::new();
@@ -118,9 +118,9 @@ fn test_e2e_collapses_type_arrays() {
     let expected = json!({
         "type": "object",
         "properties": {
-            "age": { "type": "integer" },
-            "score": { "type": "number" },
-            "active": { "type": "boolean" }
+            "age": { "type": "integer", "nullable": true },
+            "score": { "type": "number", "nullable": true },
+            "active": { "type": "boolean", "nullable": true }
         }
     });
 
@@ -233,7 +233,7 @@ fn test_e2e_const_to_enum_conversion() {
     assert_eq!(result, expected);
 }
 
-/// Verify that null values are stripped from enum arrays.
+/// Verify that null values are stripped from enum arrays and kept as `nullable`.
 #[test]
 fn test_e2e_strips_null_from_enums() {
     let adapter = GeminiSchemaAdapter::new();
@@ -253,7 +253,8 @@ fn test_e2e_strips_null_from_enums() {
         "properties": {
             "status": {
                 "type": "string",
-                "enum": ["active", "inactive"]
+                "enum": ["active", "inactive"],
+                "nullable": true
             }
         }
     });
@@ -325,7 +326,7 @@ fn test_e2e_complex_schema_without_combiners() {
             "user": {
                 "type": "object",
                 "properties": {
-                    "name": { "type": "string" },
+                    "name": { "type": "string", "nullable": true },
                     "email": { "type": "string", "format": "email" },
                     "age": { "type": "integer" }
                 }
