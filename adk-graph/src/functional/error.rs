@@ -99,8 +99,18 @@ pub enum FunctionalError {
     },
 }
 
+/// A suspension and a cancellation keep their meaning as
+/// [`GraphError::Suspended`] and [`GraphError::Cancelled`], so a `#[task]` retry
+/// policy can tell them from failures; every other error becomes
+/// [`GraphError::Other`].
 impl From<FunctionalError> for GraphError {
     fn from(e: FunctionalError) -> Self {
-        GraphError::Other(e.to_string())
+        match e {
+            FunctionalError::Suspended { continuation_key, message } => {
+                GraphError::Suspended { continuation_key, message }
+            }
+            FunctionalError::Cancelled => GraphError::Cancelled,
+            other => GraphError::Other(other.to_string()),
+        }
     }
 }

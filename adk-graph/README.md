@@ -13,7 +13,7 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 ## Features
 
 - **Graph-Based Workflows**: Define agent workflows as directed graphs with nodes and edges
-- **AgentNode**: Wrap LLM agents as graph nodes with custom input/output mappers
+- **AgentNode**: Wrap LLM agents as graph nodes with custom input/output mappers. Under a `Runner` the agent sees the caller's session — its id, and its state with the graph's state on top, so instruction templates resolve — and `GraphAgent` streams the agent's events to the caller as they are produced, so the session records them. An agent's failure keeps its `AdkError` category
 - **Cyclic Support**: Native support for loops and iterative reasoning (ReAct pattern)
 - **Conditional Routing**: Dynamic edge routing based on state
 - **Fan-out / fan-in**: parallel branches run concurrently in a super-step. A node with more than one incoming direct edge is deferred **automatically**, so it runs once after the branches that can still reach it arrive — branches of unequal length, a merge after a conditional branch, and a node re-entered by a loop join correctly with no configuration. `mark_deferred` sets a `fan_in_timeout` or an *n*-of-*m* `min_predecessors` quorum
@@ -22,11 +22,11 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **Durability modes**: `Sync` (default), `Async`, or `Exit` per run; a step with a declared `NonIdempotent` node writes earlier checkpoints first
 - **Pending writes**: when one node of a parallel step fails, the finished nodes are not run again on resume
 - **Durable Resume**: Automatically resume from the last checkpoint after a crash — skips nodes of every checkpointed step. Execution is at-least-once: a crash mid-step re-runs that step's nodes; see [Execution Guarantees](#execution-guarantees)
-- **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts. A pause is resumable, including one raised inside a subgraph
+- **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts. A pause is resumable, including one raised inside a subgraph. Every pause of a step reaches the caller, and `NodeContext::resume_value` hands a paused node the answer to that pause alone
 - **Subgraphs**: run a compiled graph as a node with mapped channels (`SubgraphNode`). A pause inside pauses the parent, and a channel mapping that names a channel neither side declares fails when the parent **compiles**
 - **Routing from inside a node**: `NodeOutput::with_goto` names successors and replaces the node's declared edges; `AgentNode::with_goto_mapper` routes on what the agent answered; `with_goto_parent` hands control to a node of the parent graph
-- **Reliability**: per-node retry with capped backoff and jitter, a concurrency bound, per-node timeouts, graph-wide `NodeDefaults`, and `with_node_error_handler` to recover once a retry budget is spent
-- **Invoking a node directly**: `ctx.run_node_with` runs a node the graph has no edge to, sized from state, and records it so a resume does not pay for it twice
+- **Reliability**: per-node retry with backoff and jitter that never exceeds `max_delay`, a concurrency bound, per-node timeouts, graph-wide `NodeDefaults`, and `with_node_error_handler` to recover once a retry budget is spent. A failure no handler recovers stops the step: queued nodes do not start and sibling retries stop waiting
+- **Invoking a node directly**: `ctx.run_node_with` runs a node the graph has no edge to, sized from state, and records it so a resume does not pay for it twice; concurrent calls under one run id run the child once
 - **As a tool**: `NodeTool` exposes a graph or a single node through the `Tool` trait, so an `LlmAgent` can call a whole graph
 - **Bounded growth**: `RetentionPolicy` limits how many checkpoints a thread keeps, by count or age
 - **Strictness, opt-in**: `with_strict_channels` fails the run when a node writes a channel the schema does not declare
@@ -262,17 +262,17 @@ let graph = StateGraph::with_channels(&["task", "plan", "risk_level", "approved"
     .add_node(executor_node)
     .add_node_fn("review", |ctx| async move {
         let risk = ctx.get("risk_level").and_then(|v| v.as_str()).unwrap_or("low");
-        let approved = ctx.get("approved").and_then(|v| v.as_bool());
 
-        if approved == Some(true) {
-            return Ok(NodeOutput::new());  // Continue
+        // Resuming this pause: the reviewer's answer, which is not kept in state
+        if let Some(answer) = ctx.resume_value() {
+            return Ok(NodeOutput::new().with_update("approved", json!(answer == "approve")));
         }
 
         if risk == "high" || risk == "medium" {
             // Interrupt for human approval
             return Ok(NodeOutput::interrupt_with_data(
                 "Human approval required",
-                json!({"risk_level": risk, "action": "Set 'approved' to true to continue"})
+                json!({"risk_level": risk, "action": "Resume with \"approve\""})
             ));
         }
 
@@ -293,11 +293,9 @@ match result {
     Err(GraphError::Interrupted(interrupt)) => {
         println!("Paused: {}", interrupt.interrupt);
 
-        // Human reviews and approves...
-        graph.update_state("task-001", [("approved".to_string(), json!(true))]).await?;
-
-        // Resume
-        let final_result = graph.invoke(State::new(), ExecutionConfig::new("task-001")).await?;
+        // Human reviews and approves; the answer goes to the node that paused
+        let config = ExecutionConfig::new("task-001").with_resume_value("review", json!("approve"));
+        let final_result = graph.invoke(State::new(), config).await?;
     }
     Ok(result) => println!("Completed: {:?}", result),
     Err(e) => println!("Error: {}", e),
@@ -603,7 +601,7 @@ updates before it saves its checkpoint:
 | Event | Effect on resume |
 |-------|------------------|
 | Crash while a super-step is running | Every node of that step runs again, including nodes that had finished |
-| A node of a super-step fails | Finished nodes are kept as pending writes; a resume runs only the failed node |
+| A node of a super-step fails | No queued node of the step starts; finished nodes are kept as pending writes; a resume runs only the nodes that did not finish |
 | Pause or completed step | No node of a checkpointed step runs again |
 
 Make a node with external side effects idempotent, for example with an idempotency
@@ -617,7 +615,9 @@ each call is a turn. A
 paused thread resumes; a finished thread runs again from its entry nodes, starting
 from the previous turn's final state with the new input merged on top. The recursion
 limit applies per turn. `invoke` keeps the direct-graph behaviour, where a finished
-thread returns its final state.
+thread returns its final state. A turn that resumes a paused node answers it: the node
+reads the turn's text with `ctx.resume_value()`, or what
+`GraphAgentBuilder::resume_mapper` returns.
 
 ## Examples
 

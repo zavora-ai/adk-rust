@@ -128,6 +128,50 @@ pub mod __private {
             None
         }
     }
+
+    /// Wraps a task's error so method resolution picks [`HaltingTaskError`] for
+    /// this crate's error types and [`OpaqueTaskError`] otherwise.
+    pub struct TaskError<'a, E: ?Sized>(pub &'a E);
+
+    /// Reads whether a task's error stops the task rather than failing it.
+    pub trait HaltingTaskError {
+        /// `true` for a suspension or a cancellation, which a retry policy does
+        /// not retry and the execution log does not record as a failure.
+        fn halts_task(&self) -> bool;
+    }
+
+    impl HaltingTaskError for TaskError<'_, crate::error::GraphError> {
+        fn halts_task(&self) -> bool {
+            matches!(
+                self.0,
+                crate::error::GraphError::Suspended { .. }
+                    | crate::error::GraphError::Cancelled
+                    | crate::error::GraphError::Interrupted(_)
+            )
+        }
+    }
+
+    impl HaltingTaskError for TaskError<'_, crate::functional::FunctionalError> {
+        fn halts_task(&self) -> bool {
+            matches!(
+                self.0,
+                crate::functional::FunctionalError::Suspended { .. }
+                    | crate::functional::FunctionalError::Cancelled
+            )
+        }
+    }
+
+    /// Fallback for an error type this crate does not define.
+    pub trait OpaqueTaskError {
+        /// Always `false`: the error is a failure.
+        fn halts_task(&self) -> bool;
+    }
+
+    impl<E: ?Sized> OpaqueTaskError for &TaskError<'_, E> {
+        fn halts_task(&self) -> bool {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -172,6 +216,27 @@ mod tests {
 
     // The explicit borrow is what selects between the two traits, exactly as in
     // the `#[task]` expansion; without it the opaque argument finds no method.
+    #[allow(clippy::needless_borrow)]
+    #[test]
+    fn the_error_probe_halts_only_on_a_suspension_or_a_cancellation() {
+        use super::__private::{HaltingTaskError, OpaqueTaskError, TaskError};
+        use crate::error::GraphError;
+        use crate::functional::FunctionalError;
+
+        let suspended = GraphError::Suspended {
+            continuation_key: "interrupt-1".to_string(),
+            message: "approve?".to_string(),
+        };
+        let failed = GraphError::Other("boom".to_string());
+        let foreign = std::io::Error::other("boom");
+
+        assert!((&TaskError(&suspended)).halts_task());
+        assert!((&TaskError(&GraphError::Cancelled)).halts_task());
+        assert!((&TaskError(&FunctionalError::Cancelled)).halts_task());
+        assert!(!(&TaskError(&failed)).halts_task());
+        assert!(!(&TaskError(&foreign)).halts_task());
+    }
+
     #[allow(clippy::needless_borrow)]
     #[test]
     fn the_argument_probe_serializes_only_what_it_can() {

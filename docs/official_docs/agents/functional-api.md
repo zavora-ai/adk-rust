@@ -170,6 +170,42 @@ a crash between the two runs the task again on resume. Make a task with external
 side effects idempotent. `rerun_on_resume` opts a task out of replay entirely, so
 it runs on every resume.
 
+### Retries, Pauses, and Cancellation
+
+`#[task(retry(max_attempts = N, backoff = "Xs"))]` retries a failure. A pause and a
+cancellation are not failures:
+
+| The task's error | Behaviour |
+|------------------|-----------|
+| A failure | Retried after `backoff × attempt`; recorded as failed in the execution log after the last attempt |
+| `GraphError::Suspended` or `FunctionalError::Suspended`, from `ctx.interrupt` | Not retried: the workflow suspends at once under the interrupt's own key, such as `interrupt-1`, and the task is not recorded as failed |
+| `GraphError::Cancelled`, `FunctionalError::Cancelled`, or `GraphError::Interrupted` | Not retried and not recorded as failed |
+
+A caller cancels a run with a token on the `ExecutionConfig`. The run stops when the
+token is cancelled: the task running at that moment is abandoned, no later task
+starts, and `invoke` returns `GraphError::Cancelled`. The cancelled run writes no
+checkpoint, so the thread's latest checkpoint is the one its last completed task
+wrote, and a resume from it runs the abandoned task again. Tasks read the same token
+through `TaskContext::cancel_token` and `TaskContext::is_cancelled`.
+
+```rust,ignore
+use adk_graph::error::GraphError;
+use adk_graph::node::ExecutionConfig;
+use adk_graph::state::State;
+use tokio_util::sync::CancellationToken;
+
+let token = CancellationToken::new();
+let config = ExecutionConfig::new("triage-7").with_cancellation_token(token.clone());
+
+// Elsewhere, for example when the user closes the request:
+// token.cancel();
+
+match agent.invoke(State::new(), config).await {
+    Err(GraphError::Cancelled) => { /* stopped; resume later from the latest checkpoint */ }
+    other => { /* finished, failed, or suspended */ }
+}
+```
+
 ### Resuming a Run
 
 `invoke` starts fresh unless `ExecutionConfig::resume_from` names a checkpoint. It then
@@ -356,6 +392,9 @@ start_cron_scheduler(cron_state);
 # Functional API (TaskContext, ReducedValue, MessagesValue, etc.)
 cargo run --manifest-path examples/functional_workflow/Cargo.toml
 
+# A retried task that pauses, and a cancelled workflow, with LlmAgent tasks
+cargo run --manifest-path examples/graph_runtime/Cargo.toml -- --scenario suspension_skips_retry,cancellation_stops_workflow
+
 # Background Runs (REST API with Axum)
 cargo run --manifest-path examples/background_runs/Cargo.toml
 
@@ -422,7 +461,7 @@ let state = agent
 
 | Situation | Result |
 |-----------|--------|
-| No value for the key, and none recorded | `FunctionalError::Suspended { continuation_key, message }` |
+| No value for the key, and none recorded | `GraphError::Suspended { continuation_key, message }` |
 | A value that deserializes into `T` | `Ok(value)`, recorded in the execution log |
 | A value that does not deserialize into `T` | `FunctionalError::InterruptTypeMismatch` naming the site |
 | An answer recorded by an earlier run | `Ok(recorded)`, whether or not a value is supplied |
@@ -439,5 +478,6 @@ because the tasks that ran after the interrupt already acted on the recorded one
 > could not tell "needs input" from "your value was the wrong type", had no key to supply a value
 > under, and never received a typed value at the call site.
 
-> **Note:** `From<FunctionalError> for GraphError` flattens to `GraphError::Other(String)`, so a
-> caller matching structurally should match on `FunctionalError` before conversion.
+> **Note:** `From<FunctionalError> for GraphError` keeps a suspension and a cancellation as
+> `GraphError::Suspended` and `GraphError::Cancelled`; every other `FunctionalError` becomes
+> `GraphError::Other(String)`.

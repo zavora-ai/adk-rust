@@ -14,6 +14,7 @@ use adk_core::{Agent, Event};
 use adk_graph::agent::{GraphAgent, session_thread_id};
 use adk_graph::checkpoint::{Checkpointer, MemoryCheckpointer};
 use adk_graph::edge::{END, START};
+use adk_graph::interrupt::GraphInterruptPayload;
 use adk_graph::node::NodeOutput;
 use adk_graph::state::State;
 use futures::StreamExt;
@@ -27,6 +28,14 @@ async fn turn(agent: &GraphAgent, text: &str) -> Vec<Event> {
         .map(|event| event.expect("event"))
         .collect()
         .await
+}
+
+/// The kind of the pause each event reports, `None` for an event that is not one.
+fn pause_kinds(events: &[Event]) -> Vec<Option<String>> {
+    events
+        .iter()
+        .map(|event| GraphInterruptPayload::from_event(event).map(|pause| pause.kind))
+        .collect()
 }
 
 fn text_of(events: &[Event]) -> Vec<String> {
@@ -114,11 +123,8 @@ async fn a_turn_after_a_pause_resumes_the_paused_run() {
     let resumed = turn(&agent, "approve").await;
 
     assert_eq!(
-        (
-            paused.iter().map(|event| event.invocation_id.as_str()).collect::<Vec<_>>(),
-            text_of(&resumed)
-        ),
-        (vec!["graph_interrupted"], vec!["approved".to_string()])
+        (pause_kinds(&paused), text_of(&resumed)),
+        (vec![Some("dynamic".to_string())], vec!["approved".to_string()])
     );
     assert_eq!(prepares.load(Ordering::SeqCst), 1, "the resumed turn must not start over");
 }
@@ -170,8 +176,8 @@ async fn two_users_with_the_same_session_id_do_not_share_a_thread() {
     let bob = run("bob", "approve").await;
 
     assert_eq!(
-        (alice.iter().map(|event| event.invocation_id.as_str()).collect::<Vec<_>>(), text_of(&bob)),
-        (vec!["graph_interrupted"], vec!["none".to_string()]),
+        (pause_kinds(&alice), text_of(&bob)),
+        (vec![Some("dynamic".to_string())], vec!["none".to_string()]),
         "bob must run his own thread, not resume alice's paused one"
     );
 

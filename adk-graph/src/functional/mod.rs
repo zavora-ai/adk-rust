@@ -94,6 +94,21 @@ pub use schema::{ExpectedType, StateSchemaValidator};
 pub mod __private {
     pub use super::resume::load_resume_point;
     pub use super::task_id::__private::*;
+
+    /// Runs `workflow` until it finishes or `token` is cancelled.
+    ///
+    /// Called by the `#[entrypoint]` expansion, so the generated code needs no
+    /// `tokio` macros of its own.
+    pub async fn until_cancelled<T>(
+        token: &tokio_util::sync::CancellationToken,
+        workflow: impl std::future::Future<Output = crate::error::Result<T>>,
+    ) -> crate::error::Result<T> {
+        tokio::select! {
+            biased;
+            () = token.cancelled() => Err(crate::error::GraphError::Cancelled),
+            result = workflow => result,
+        }
+    }
 }
 pub use task_id::task_call_id;
 pub use typed_reducer::{AppendReducer, MergeReducer, ReplaceReducer, TypedReducer};

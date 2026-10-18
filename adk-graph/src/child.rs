@@ -17,6 +17,12 @@
 //! Only a successful invocation is recorded. A child that failed or interrupted
 //! has to run again, because its work did not finish.
 //!
+//! Invocations under one identity are single-flight: a second call made while
+//! the first is running waits for it and is served its recorded output, so a
+//! parent that starts the same child twice concurrently, under one explicit run
+//! id, runs it once. A first call that fails records nothing, so the waiting call
+//! then runs the child itself.
+//!
 //! The parent's step is part of the path, and a parent's entries are dropped once
 //! its step completes, so a parent that runs again in a later pass of a loop runs
 //! its children again rather than receiving the earlier pass's output.
@@ -79,6 +85,8 @@ pub(crate) struct ChildInvoker {
     activation: String,
     /// Invocations so far per child name in this attempt, for the default run id.
     counters: Mutex<HashMap<String, u32>>,
+    /// One gate per child path, held while that child runs.
+    running: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl ChildInvoker {
@@ -95,6 +103,7 @@ impl ChildInvoker {
             ledger,
             activation: Self::activation_prefix(parent, step),
             counters: Mutex::new(HashMap::new()),
+            running: Mutex::new(HashMap::new()),
         }
     }
 
@@ -132,6 +141,12 @@ impl ChildInvoker {
         parent: &NodeContext,
     ) -> Result<Value> {
         let path = self.path_for(child, &options);
+
+        // A call under an identity that is running waits for it, then reads the
+        // ledger like any later call.
+        let gate =
+            Arc::clone(self.running.lock().expect("child gates").entry(path.clone()).or_default());
+        let _running = gate.lock().await;
 
         // A child that already completed under this identity is not run again.
         if let Some(recorded) = self.ledger.lock().expect("child ledger").get(&path) {

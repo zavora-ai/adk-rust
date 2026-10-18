@@ -277,6 +277,15 @@ impl Node for SubgraphNode {
         if let Some(parent) = ctx.config.parent_context.clone() {
             config = config.with_parent_context(parent);
         }
+        // Agents inside the subgraph report to the same caller as the parent's.
+        config.event_sink = ctx.config.event_sink.clone();
+        // The answer to this node's pause answers the node inside that paused; the
+        // inner run hands it only to a node resuming its own pause.
+        if let Some(answer) = ctx.resume_value() {
+            for node in self.graph.nodes.keys() {
+                config = config.with_resume_value(node.clone(), answer.clone());
+            }
+        }
 
         let outcome = match ctx.run_config() {
             Some(run_config) => {

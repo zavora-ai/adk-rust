@@ -44,6 +44,12 @@ pub type InputMapper = Arc<dyn Fn(&dyn InvocationContext) -> State + Send + Sync
 /// Type alias for output mapper function
 pub type OutputMapper = Arc<dyn Fn(&State) -> Vec<Event> + Send + Sync>;
 
+/// Maps a turn to the answer for the graph's paused nodes.
+///
+/// See [`GraphAgentBuilder::resume_mapper`].
+pub type ResumeMapper =
+    Arc<dyn Fn(&dyn InvocationContext) -> Option<serde_json::Value> + Send + Sync>;
+
 /// GraphAgent wraps a CompiledGraph as an ADK Agent
 ///
 /// # Turns and checkpoints
@@ -62,6 +68,21 @@ pub type OutputMapper = Arc<dyn Fn(&State) -> Vec<Event> + Send + Sync>;
 /// The recursion limit applies to each turn separately. [`GraphAgent::invoke`]
 /// keeps the direct-graph behaviour, where re-invoking a finished thread returns
 /// its final state without running anything.
+///
+/// # Events
+///
+/// A turn yields the events of the agents inside the graph as they produce them,
+/// each on its node's branch, then the events the output mapper builds from the
+/// final state, or one event per pause when the graph paused. A runner therefore
+/// streams the inner agents' work and records it in the session. Every event
+/// carries the turn's invocation id.
+///
+/// # Answering a pause
+///
+/// When a turn resumes a node that paused with a dynamic interrupt, the node
+/// reads the turn's answer with [`NodeContext::resume_value`]: by default the
+/// turn's text, or what [`GraphAgentBuilder::resume_mapper`] returns. The answer
+/// is not written to state, so a later pause asks again.
 pub struct GraphAgent {
     name: String,
     description: String,
@@ -74,6 +95,8 @@ pub struct GraphAgent {
     before_callback: Option<BeforeAgentCallback>,
     /// After agent callback
     after_callback: Option<AfterAgentCallback>,
+    /// Map the turn to the answer for paused nodes
+    resume_mapper: ResumeMapper,
 }
 
 impl GraphAgent {
@@ -92,6 +115,7 @@ impl GraphAgent {
             output_mapper: Arc::new(default_output_mapper),
             before_callback: None,
             after_callback: None,
+            resume_mapper: Arc::new(default_resume_mapper),
         }
     }
 
@@ -224,26 +248,70 @@ impl Agent for GraphAgent {
 
         // Create execution config from context, carrying the invocation so an
         // `AgentNode` inside the graph presents this run's identity, services, and
-        // cancellation rather than a synthetic standalone context.
+        // cancellation rather than a synthetic standalone context. Agent nodes send
+        // their agents' events to `node_events` as they run.
         let thread_id = session_thread_id(ctx.app_name(), ctx.user_id(), ctx.session_id());
-        let config = ExecutionConfig::new(&thread_id).with_parent_context(ctx.clone());
+        let (sink, mut node_events) = tokio::sync::mpsc::unbounded_channel();
+        let mut config =
+            ExecutionConfig::new(&thread_id).with_parent_context(ctx.clone()).with_event_sink(sink);
+        // Offered to every node; the executor hands it only to a node resuming its
+        // own pause.
+        if let Some(answer) = (self.resume_mapper)(ctx.as_ref()) {
+            for node in self.graph.nodes.keys() {
+                config = config.with_resume_value(node.clone(), answer.clone());
+            }
+        }
 
         // Execute graph
         let graph = self.graph.clone();
         let output_mapper = self.output_mapper.clone();
         let after_callback = self.after_callback.clone();
         let ctx_clone = ctx.clone();
+        let name = self.name.clone();
 
         let stream = async_stream::stream! {
+            // Events this agent builds are the turn's, whatever the mapper set.
+            let stamp = |mut event: Event| {
+                event.invocation_id = ctx_clone.invocation_id().to_string();
+                if event.author.is_empty() {
+                    event.author = name.clone();
+                }
+                if event.branch.is_empty() {
+                    event.branch = ctx_clone.branch().to_string();
+                }
+                event
+            };
+
             // Each call is one turn on the session's thread: a paused thread
             // resumes, and a finished one runs again from its entry nodes with the
             // previous turn's state carried over.
             let mut executor =
                 crate::executor::PregelExecutor::new(&graph, config).restarting_completed_threads();
-            match executor.run(input).await {
+            let outcome = {
+                let run = executor.run(input);
+                tokio::pin!(run);
+                loop {
+                    let next = tokio::select! {
+                        biased;
+                        Some(event) = node_events.recv() => Next::Event(Box::new(event)),
+                        outcome = &mut run => Next::Done(outcome),
+                    };
+                    match next {
+                        Next::Event(event) => yield Ok(*event),
+                        Next::Done(outcome) => break outcome,
+                    }
+                }
+            };
+            // Whatever a node sent as the run finished.
+            while let Ok(event) = node_events.try_recv() {
+                yield Ok(event);
+            }
+
+            match outcome {
                 Ok(state) => {
                     let events = output_mapper(&state);
                     for event in events {
+                        let event = stamp(event);
                         // Call after callback for each event
                         if let Some(callback) = &after_callback
                             && let Err(e) = callback(ctx_clone.clone(), event.clone()).await {
@@ -256,40 +324,54 @@ impl Agent for GraphAgent {
                 Err(GraphError::Interrupted(interrupt)) => {
                     // The `Agent` trait yields events, so an interrupt cannot be
                     // returned as an error without ending the invocation. Emit one
-                    // event carrying the structured pause so a caller can read the
-                    // node, the payload, and the checkpoint to resume from.
-                    let tool_confirmation = crate::interrupt::GraphToolConfirmationPause::from_interrupted_execution(&interrupt);
-                    let payload = tool_confirmation.clone().map_or_else(
-                        || crate::interrupt::GraphInterruptPayload::new(
-                            &interrupt.interrupt,
-                            &interrupt.thread_id,
-                            &interrupt.checkpoint_id,
-                        ),
-                        crate::interrupt::GraphInterruptPayload::from_tool_confirmation_pause,
-                    );
-                    let mut event = Event::new("graph_interrupted");
-                    if let Some(pause) = tool_confirmation {
-                        event.llm_response.interrupted = true;
-                        event.llm_response.turn_complete = true;
-                        event.actions.tool_confirmation = Some(pause.request);
+                    // event per pause of the step, each carrying its structured
+                    // pause so a caller can read the node, the payload, and the
+                    // checkpoint to resume from.
+                    for paused in &interrupt.interrupts {
+                        let tool_confirmation =
+                            crate::interrupt::GraphToolConfirmationPause::from_interrupt(
+                                paused,
+                                &interrupt.thread_id,
+                                &interrupt.checkpoint_id,
+                            );
+                        let payload = tool_confirmation.clone().map_or_else(
+                            || crate::interrupt::GraphInterruptPayload::new(
+                                paused,
+                                &interrupt.thread_id,
+                                &interrupt.checkpoint_id,
+                            ),
+                            crate::interrupt::GraphInterruptPayload::from_tool_confirmation_pause,
+                        );
+                        let mut event = Event::new("graph_interrupted");
+                        if let Some(pause) = tool_confirmation {
+                            event.llm_response.interrupted = true;
+                            event.llm_response.turn_complete = true;
+                            event.actions.tool_confirmation = Some(pause.request);
+                        }
+                        event.set_content(Content::new("assistant").with_text(paused.to_string()));
+                        event.provider_metadata.insert(
+                            crate::interrupt::INTERRUPT_METADATA_KEY.to_string(),
+                            payload.to_metadata_value(),
+                        );
+                        yield Ok(stamp(event));
                     }
-                    event.set_content(
-                        Content::new("assistant").with_text(interrupt.interrupt.to_string()),
-                    );
-                    event.provider_metadata.insert(
-                        crate::interrupt::INTERRUPT_METADATA_KEY.to_string(),
-                        payload.to_metadata_value(),
-                    );
-                    yield Ok(event);
                 }
                 Err(e) => {
-                    yield Err(adk_core::AdkError::agent(e.to_string()));
+                    // Converted, not re-wrapped, so an agent node's failure keeps the
+                    // agent's category and a node timeout stays a timeout.
+                    yield Err(e.into());
                 }
             }
         };
 
         Ok(Box::pin(stream))
     }
+}
+
+/// What a running turn produced next: an agent node's event, or the run's outcome.
+enum Next {
+    Event(Box<Event>),
+    Done(Result<State>),
 }
 
 /// Returns the checkpoint thread id for an ADK session.
@@ -382,6 +464,13 @@ fn default_input_mapper(ctx: &dyn InvocationContext) -> State {
     state
 }
 
+/// Default resume mapper - the turn's text, when it has any
+fn default_resume_mapper(ctx: &dyn InvocationContext) -> Option<serde_json::Value> {
+    let text: String =
+        ctx.user_content().parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("\n");
+    (!text.is_empty()).then(|| json!(text))
+}
+
 /// Default output mapper - creates events from state
 fn default_output_mapper(state: &State) -> Vec<Event> {
     let mut events = Vec::new();
@@ -430,6 +519,7 @@ pub struct GraphAgentBuilder {
     output_mapper: Option<OutputMapper>,
     before_callback: Option<BeforeAgentCallback>,
     after_callback: Option<AfterAgentCallback>,
+    resume_mapper: Option<ResumeMapper>,
     timeout_policies: HashMap<String, TimeoutPolicy>,
     default_timeout: Option<TimeoutPolicy>,
     deferred_configs: HashMap<String, DeferredNodeConfig>,
@@ -455,6 +545,7 @@ impl GraphAgentBuilder {
             output_mapper: None,
             before_callback: None,
             after_callback: None,
+            resume_mapper: None,
             timeout_policies: HashMap::new(),
             default_timeout: None,
             deferred_configs: HashMap::new(),
@@ -737,6 +828,33 @@ impl GraphAgentBuilder {
         self
     }
 
+    /// Maps a turn to the answer a paused node reads with
+    /// [`NodeContext::resume_value`].
+    ///
+    /// Called on every turn; the answer reaches only a node that the turn resumes
+    /// from its own dynamic interrupt. Return `None` to resume without one. The
+    /// default answers with the turn's text.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::agent::GraphAgent;
+    /// use serde_json::json;
+    ///
+    /// let builder = GraphAgent::builder("refunds").resume_mapper(|ctx| {
+    ///     let text: String = ctx.user_content().parts.iter().filter_map(|p| p.text()).collect();
+    ///     Some(json!({ "approved": text.trim().eq_ignore_ascii_case("approve") }))
+    /// });
+    /// # let _ = builder;
+    /// ```
+    pub fn resume_mapper<F>(mut self, mapper: F) -> Self
+    where
+        F: Fn(&dyn InvocationContext) -> Option<serde_json::Value> + Send + Sync + 'static,
+    {
+        self.resume_mapper = Some(Arc::new(mapper));
+        self
+    }
+
     /// Set before agent callback
     pub fn before_agent_callback<F, Fut>(mut self, callback: F) -> Self
     where
@@ -866,6 +984,7 @@ impl GraphAgentBuilder {
             output_mapper: self.output_mapper.unwrap_or(Arc::new(default_output_mapper)),
             before_callback: self.before_callback,
             after_callback: self.after_callback,
+            resume_mapper: self.resume_mapper.unwrap_or(Arc::new(default_resume_mapper)),
         })
     }
 }

@@ -5,6 +5,8 @@
 //! whatever text arrived first. Retry policies never fired and the nodes after it
 //! ran on a missing answer.
 
+mod support;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -17,6 +19,7 @@ use adk_graph::node::{AgentNode, ExecutionConfig, NodeOutput};
 use adk_graph::retry::RetryPolicy;
 use adk_graph::state::State;
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde_json::json;
 
 /// Yields part of an answer, then a rate-limit error, for its first `failures`
@@ -91,14 +94,71 @@ async fn an_agent_error_fails_the_node_and_stops_the_graph() {
 
     let outcome = graph.invoke(State::new(), ExecutionConfig::new("agent-error")).await;
 
-    let message = match &outcome {
-        Err(GraphError::NodeExecutionFailed { node, message }) if node == "writer" => {
-            message.clone()
+    let (node, category, code) = match &outcome {
+        Err(GraphError::AgentFailed { node, source }) => {
+            (node.as_str(), source.category, source.code)
         }
         other => panic!("expected the writer node to fail, got {other:?}"),
     };
-    assert!(message.contains("rate limited"), "the agent's error must be reported: {message}");
+    assert_eq!(
+        (node, category, code),
+        ("writer", adk_core::ErrorCategory::RateLimited, "model.test.rate_limited"),
+        "the agent's own error must be reported"
+    );
     assert_eq!(published.load(Ordering::SeqCst), 0, "nothing after a failed node may run");
+}
+
+/// The agent's error reached a `Runner` as `Internal`, so a rate limit looked like
+/// a defect: not retryable, and HTTP 500 instead of 429.
+#[tokio::test]
+async fn a_graph_agent_reports_the_agent_errors_category() {
+    let graph = graph_with(
+        FlakyAgent { runs: Arc::new(AtomicUsize::new(0)), failures: usize::MAX },
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let agent = adk_graph::agent::GraphAgent::from_graph("drafts", graph);
+
+    let mut stream = agent.run(support::test_context("drafts")).await.expect("run");
+    let error = loop {
+        match stream.next().await {
+            Some(Err(error)) => break error,
+            Some(Ok(_)) => continue,
+            None => panic!("the turn must fail"),
+        }
+    };
+
+    assert_eq!(
+        (error.category, error.code, error.is_retryable(), error.http_status_code()),
+        (adk_core::ErrorCategory::RateLimited, "model.test.rate_limited", true, 429)
+    );
+    assert!(error.message.contains("writer"), "the failing node is named: {}", error.message);
+}
+
+/// A subgraph's agent failure keeps the agent's error, and names the path to it.
+#[tokio::test]
+async fn an_agent_error_inside_a_subgraph_keeps_its_category() {
+    let inner = graph_with(
+        FlakyAgent { runs: Arc::new(AtomicUsize::new(0)), failures: usize::MAX },
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let graph = StateGraph::with_channels(&["messages"])
+        .add_node(adk_graph::subgraph::SubgraphNode::new("drafting", Arc::new(inner)))
+        .add_edge(START, "drafting")
+        .add_edge("drafting", END)
+        .compile()
+        .unwrap();
+
+    let outcome = graph.invoke(State::new(), ExecutionConfig::new("nested-agent-error")).await;
+
+    match outcome {
+        Err(GraphError::AgentFailed { node, source }) => {
+            assert_eq!(
+                (node.as_str(), source.category),
+                ("drafting.writer", adk_core::ErrorCategory::RateLimited)
+            );
+        }
+        other => panic!("expected the nested agent's failure, got {other:?}"),
+    }
 }
 
 #[tokio::test]

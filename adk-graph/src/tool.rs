@@ -192,10 +192,7 @@ impl Tool for NodeTool {
                     .node(node)
                     .ok_or_else(|| AdkError::tool(format!("no graph node named '{node}'")))?;
                 let node_ctx = crate::node::NodeContext::new(input, config, 0);
-                let output = node_impl
-                    .execute(&node_ctx)
-                    .await
-                    .map_err(|error| AdkError::tool(error.to_string()))?;
+                let output = node_impl.execute(&node_ctx).await.map_err(AdkError::from)?;
                 if let Some(interrupt) = output.interrupt {
                     return Ok(interrupt_value(&interrupt, &thread_id, ""));
                 }
@@ -215,7 +212,7 @@ impl Tool for NodeTool {
                         &interrupted.thread_id,
                         &interrupted.checkpoint_id,
                     )),
-                    Err(error) => Err(AdkError::tool(error.to_string())),
+                    Err(error) => Err(AdkError::from(error)),
                 }
             }
         }

@@ -26,14 +26,35 @@ impl State for SentinelState {
     }
 }
 
+/// Session state a test sets up front.
+#[derive(Default)]
+pub struct MapState(HashMap<String, Value>);
+
+impl State for MapState {
+    fn get(&self, key: &str) -> Option<Value> {
+        self.0.get(key).cloned()
+    }
+    fn set(&mut self, key: String, value: Value) {
+        self.0.insert(key, value);
+    }
+    fn all(&self) -> HashMap<String, Value> {
+        self.0.clone()
+    }
+}
+
 pub struct SentinelSession {
     user_id: String,
     session_id: String,
+    state: MapState,
 }
 
 impl Default for SentinelSession {
     fn default() -> Self {
-        Self { user_id: "caller-user".to_string(), session_id: "caller-session".to_string() }
+        Self {
+            user_id: "caller-user".to_string(),
+            session_id: "caller-session".to_string(),
+            state: MapState::default(),
+        }
     }
 }
 
@@ -48,7 +69,7 @@ impl Session for SentinelSession {
         &self.user_id
     }
     fn state(&self) -> &dyn State {
-        &SentinelState
+        &self.state
     }
     fn conversation_history(&self) -> Vec<Content> {
         Vec::new()
@@ -167,8 +188,22 @@ pub fn test_context_with_text(text: &str) -> Arc<dyn InvocationContext> {
 /// A context for `user_id` in `session_id` whose user message is `text`.
 pub fn test_context_for(user_id: &str, session_id: &str, text: &str) -> Arc<dyn InvocationContext> {
     let mut context = SentinelContext::new(false);
-    context.session =
-        SentinelSession { user_id: user_id.to_string(), session_id: session_id.to_string() };
+    context.session = SentinelSession {
+        user_id: user_id.to_string(),
+        session_id: session_id.to_string(),
+        state: MapState::default(),
+    };
+    context.user_content.parts = vec![Part::Text { text: text.to_string() }];
+    Arc::new(context) as Arc<dyn InvocationContext>
+}
+
+/// A context whose session holds `state` and whose user message is `text`.
+pub fn test_context_with_state(
+    text: &str,
+    state: HashMap<String, Value>,
+) -> Arc<dyn InvocationContext> {
+    let mut context = SentinelContext::new(false);
+    context.session.state = MapState(state);
     context.user_content.parts = vec![Part::Text { text: text.to_string() }];
     Arc::new(context) as Arc<dyn InvocationContext>
 }

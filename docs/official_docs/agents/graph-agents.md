@@ -781,6 +781,8 @@ automatically:
 | Carried through | Note |
 |-----------------|------|
 | `app_name`, `user_id`, `session_id` | The caller's, not a synthetic one |
+| `invocation_id` | The caller's, so the node's events belong to the caller's invocation |
+| Session state | The caller's session state, read live, with the graph's state layered on top, so an instruction template such as `{customer_name}` resolves from either; writes through `State::set` stay with the node |
 | Scopes and request metadata | So scope checks see the caller's grants |
 | Secret service, memory, artifacts, shared state | Available exactly as outside the graph |
 | Cancellation | `Runner::interrupt` reaches an agent running as a node |
@@ -803,16 +805,33 @@ let thread_id = session_thread_id(ctx.app_name(), ctx.user_id(), ctx.session_id(
 let config = ExecutionConfig::new(&thread_id).with_parent_context(ctx.clone());
 ```
 
-> **Note:** the node still runs on its own in-memory graph session, so agent
-> conversation history inside a node is scoped to the node rather than appended to the
-> caller's session.
+> **Note:** the node's conversation is its own: the agent's history is the input the
+> node's mapper built and the agent's own turns, not the caller's conversation.
+
+#### What the caller sees
+
+Under a `GraphAgent`, each agent node forwards its agent's events as the agent
+produces them, so a `Runner` streams them to its caller while the graph runs and
+records them in the session. Each forwarded event carries the caller's invocation id
+and the node's branch, `{caller_branch}.{agent_name}`, so events from nodes that run
+in parallel stay attributable. A confirmation request is not forwarded on its own:
+the graph reports the pause once, with the checkpoint to resume from. A transfer the
+agent asks for names an agent of the node's own tree, so the forwarded event does
+not carry it, and the runner does not act on it. The events the
+output mapper builds from the final state follow, stamped with the turn's invocation
+id and the graph agent's name.
 
 #### When the agent fails
 
 An error the agent yields — a model failure, a guardrail block, a budget stop —
-fails the node with `GraphError::NodeExecutionFailed`, in blocking and streaming
-execution alike. A retry policy on the node runs the agent again, and the nodes
-after it do not run on a missing answer.
+fails the node with `GraphError::AgentFailed { node, source }`, in blocking and
+streaming execution alike. `source` is the agent's own `AdkError`. A retry policy on
+the node runs the agent again, and the nodes after it do not run on a missing answer.
+
+Under a `GraphAgent`, the turn fails with that error: a rate-limited model is still
+`ErrorCategory::RateLimited`, retryable, and HTTP 429, with the node named in the
+message. An agent node inside a subgraph is named by its path, such as
+`drafting.writer`.
 
 
 
@@ -981,6 +1000,7 @@ pass:
 | Which predecessors arrive | Each one that routed to the node in this step, along a direct edge, a conditional edge, or a `goto`. A predecessor that ran but routed elsewhere has not arrived. |
 | A merge after a conditional branch | Runs with the branch that was taken, because the untaken branch can no longer run. |
 | A node re-entered by a loop's back edge | Runs on every pass. A predecessor reached only through the node itself belongs to the next pass, so it is not waited for. |
+| A node reached from `START` and from another node | Waits like any join: `START` has arrived, and the node runs once, after its other predecessors that can still run. A loop's head reached from `START` starts at once, because its other predecessors run only after it. |
 | A predecessor behind another waiting join | Waited for, because the other join still runs and its successors can still arrive. |
 | Nothing else can run | Every waiting node is released, so a run never ends with a join that did not fire. |
 | What `{node}_fan_in` holds | One entry per arrival: the value the predecessor wrote to a channel named after itself, or else every update it wrote. |
@@ -1243,7 +1263,7 @@ updates, and only then saves its checkpoint, so:
 | Event | Effect on resume |
 |-------|------------------|
 | Crash while a super-step is running | Every node of that step runs again, including nodes that had finished |
-| A node of a super-step fails | The step is saved with the finished nodes' outputs as pending writes; a resume runs only the failed node |
+| A node of a super-step fails | No node still queued for the step starts, a sibling waiting to retry stops waiting, and the step is saved with the finished nodes' outputs as pending writes; a resume runs only the nodes that did not finish |
 | Checkpoint save fails | The run fails; the last saved step is where a resume starts |
 | Another writer advanced the thread | The save fails with `GraphError::CheckpointConflict` and the run stops |
 | Pause or completed step | No node of a checkpointed step runs again |
@@ -1313,11 +1333,12 @@ let graph = StateGraph::with_channels(&["task", "plan", "risk_level", "approved"
     .add_node(executor_node)
     .add_node_fn("review", |ctx| async move {
         let risk = ctx.get("risk_level").and_then(|v| v.as_str()).unwrap_or("low");
-        let approved = ctx.get("approved").and_then(|v| v.as_bool());
 
-        // Already approved - continue
-        if approved == Some(true) {
-            return Ok(NodeOutput::new());
+        // Resuming this pause: the reviewer's answer
+        match ctx.resume_value().and_then(|v| v.as_str()) {
+            Some("approve") => return Ok(NodeOutput::new().with_update("approved", json!(true))),
+            Some(_) => return Ok(NodeOutput::new().with_update("approved", json!(false)).with_goto([END])),
+            None => {}
         }
 
         // High/medium risk - interrupt for approval
@@ -1327,7 +1348,7 @@ let graph = StateGraph::with_channels(&["task", "plan", "risk_level", "approved"
                 json!({
                     "plan": ctx.get("plan"),
                     "risk_level": risk,
-                    "action": "Set 'approved' to true to continue"
+                    "action": "Resume with \"approve\" or \"reject\""
                 })
             ));
         }
@@ -1352,13 +1373,9 @@ match result {
         println!("Reason: {}", interrupt.interrupt);
         println!("Plan awaiting approval: {:?}", interrupt.state.get("plan"));
 
-        // Human reviews and approves...
-
-        // Update state with approval
-        graph.update_state(thread_id, [("approved".to_string(), json!(true))]).await?;
-
-        // Resume execution
-        let final_result = graph.invoke(State::new(), ExecutionConfig::new(thread_id)).await?;
+        // Human reviews and approves; the answer goes to the node that paused
+        let config = ExecutionConfig::new(thread_id).with_resume_value("review", json!("approve"));
+        let final_result = graph.invoke(State::new(), config).await?;
         println!("Final result: {:?}", final_result.get("result"));
     }
     Ok(result) => {
@@ -1369,6 +1386,16 @@ match result {
     }
 }
 ```
+
+`ctx.resume_value()` holds the answer only in the step that resumes the node's own
+pause, and the answer is not written to state, so the next pause — a later pass of
+a loop, or the next turn of a `GraphAgent` — asks again. An answer written to state,
+with `update_state` or through the next run's input, stays there: a node that reads
+it treats every later pause as already answered.
+
+When several nodes of one step pause, `InterruptedExecution::interrupts` holds
+every pause in node-name order; `interrupt` is the first. Supply an answer under
+each paused node's name.
 
 ### Static Interrupts
 
@@ -1431,6 +1458,11 @@ call per node.
 
 Timeout policies apply to the streamed execution itself. For a stream,
 `idle_timeout` means no event was produced within the limit.
+
+A paused step ends the stream with one `StreamEvent::Interrupted { node, message }`
+per pause, in node-name order, each tool-confirmation pause preceded by its
+`tool_confirmation` custom event. In `Messages` mode a node's own pause no longer
+stops the step: the other nodes of the step run, as they do in the other modes.
 
 ## Subgraphs
 
@@ -1524,14 +1556,34 @@ let graph = graph.with_node_retry(
 );
 ```
 
-The delay grows by `backoff_factor`, is capped at `max_delay`, and then has jitter
-applied. A node with **no policy runs once**, so retry stays opt-in. A policy from
-`RetryPolicy::default()` allows ten attempts, whose nine sleeps total about 243
-seconds — lower `max_attempts` where a caller is waiting on the answer.
+The delay grows by `backoff_factor`, is capped at `max_delay / (1 + jitter)`, and
+then varies by up to `jitter` of itself either way, so no delay exceeds `max_delay`.
+A node with **no policy runs once**, so retry stays opt-in. A policy from
+`RetryPolicy::default()` allows ten attempts with full jitter: its nine sleeps
+total about 151 seconds on average and at most about 302 — lower `max_attempts`
+where a caller is waiting on the answer.
 
 An interrupt is never retried, whatever `retry_on` says: a pause is not a failure.
 The attempt count is checkpointed, so a resumed run continues the budget rather
 than restarting it.
+
+A failure the node's error handler does not recover ends the step's retries: a
+sibling sleeping before its next attempt stops waiting, so the run reports the
+failure without waiting for the longest retry chain. An agent node's
+`GraphError::AgentFailed` carries the model's `AdkError`, so a `RetryOn::Custom`
+predicate can retry on its category:
+
+```rust
+use adk_graph::error::GraphError;
+use adk_graph::retry::{RetryOn, RetryPolicy};
+use std::sync::Arc;
+
+let retry_on_transient = RetryOn::Custom(Arc::new(|error: &GraphError| match error {
+    GraphError::AgentFailed { source, .. } => source.is_retryable(),
+    _ => false,
+}));
+let graph = graph.with_node_retry("call_model", RetryPolicy::new(3).with_retry_on(retry_on_transient));
+```
 
 ### Bounding concurrency
 
@@ -1543,8 +1595,11 @@ let graph = graph.with_max_concurrency(4);
 ```
 
 Nodes beyond the cap wait for a slot. The admission order is the frontier sorted by
-name, so it does not depend on timing. Imperative child invocations are outside
-this budget, because a parent awaits its children while holding its own slot.
+name, so it does not depend on timing. Once a node of the step fails without
+recovery, a node still waiting for a slot does not start, so its side effects do
+not run for a step that failed; it runs when the step resumes. Imperative child
+invocations are outside this budget, because a parent awaits its children while
+holding its own slot.
 
 ### Per-node timeouts
 
@@ -1573,6 +1628,7 @@ The target needs no edge. Each completed child is recorded under
 | Retried by its retry policy | Those that finished are served from the record; the rest run |
 | Resumed after a pause or a failed step | Those that finished are served from the record; the rest run |
 | Re-entered by a loop in a later step | All run again, because the record is dropped once the step completes |
+| Calls the same child under the same run id while that call runs | The second call waits for the first and is served its output, so concurrent calls run the child once |
 
 The default run id counts calls to that child within one attempt of the parent, so
 pass your own when the parent's order of calls can change between attempts. A child
@@ -1724,6 +1780,13 @@ The recursion limit applies to each turn separately. `GraphAgent::invoke` and
 `CompiledGraph::invoke` keep the direct-graph behaviour: re-invoking a finished
 thread returns its final state without running anything.
 
+A turn that resumes a paused node is that node's answer: the node reads the turn's
+text with `ctx.resume_value()`, or the value `GraphAgentBuilder::resume_mapper`
+returns. A turn whose step paused in several nodes yields one event per pause, each
+carrying its `GraphInterruptPayload` and, for a tool-confirmation pause,
+`actions.tool_confirmation`, so a caller can answer every request before the next
+turn.
+
 ## Examples
 
 Validated graph examples in this repository:
@@ -1732,6 +1795,8 @@ Validated graph examples in this repository:
 cargo run --manifest-path examples/tier_examples/standard/Cargo.toml --bin 11-standard-graph
 cargo run --manifest-path examples/tier_examples/standard/Cargo.toml --bin 12-standard-sequential
 cargo run --manifest-path examples/competitive_graph_resume/Cargo.toml
+# Streaming node events, session state in templates, failed steps, retries and pauses
+cargo run --manifest-path examples/graph_runtime/Cargo.toml -- --checkpointer sqlite
 ```
 
 The full graph gallery with real LLM integration lives in [adk-playground](https://github.com/zavora-ai/adk-playground).

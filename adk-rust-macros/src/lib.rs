@@ -539,8 +539,9 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
             /// # Errors
             ///
             /// Returns `GraphError::CheckpointError` when `resume_from` names a
-            /// checkpoint this thread does not have, and the workflow's own error
-            /// when it fails or suspends at an interrupt.
+            /// checkpoint this thread does not have, `GraphError::Cancelled` when
+            /// `execution_config.cancellation_token` is cancelled, and the
+            /// workflow's own error when it fails or suspends at an interrupt.
             pub async fn invoke(
                 &self,
                 initial_state: adk_graph::state::State,
@@ -561,7 +562,9 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
                 // Create broadcast channel for stream events
                 let (event_tx, _) = tokio::sync::broadcast::channel::<StreamEvent>(256);
-                let cancel_token = tokio_util::sync::CancellationToken::new();
+                // The caller's token, so the caller can cancel the run.
+                let cancel_token =
+                    execution_config.cancellation_token.clone().unwrap_or_default();
                 let pre_step = execution_log.current_step();
                 let pre_log = serde_json::to_value(&execution_log)?;
                 let execution_log = std::sync::Arc::new(tokio::sync::RwLock::new(execution_log));
@@ -573,7 +576,7 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     self.checkpointer.clone(),
                     event_tx.clone(),
                     execution_log.clone(),
-                    cancel_token,
+                    cancel_token.clone(),
                     None,
                 )
                 .with_resume_values(execution_config.resume_values);
@@ -597,9 +600,15 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 // Emit workflow start event
                 let _ = event_tx.send(StreamEvent::node_start(#fn_name_str, 0));
 
-                // Call the workflow function
+                // Call the workflow function. A cancellation abandons it where it
+                // is: the task running then is not recorded, so it runs again when
+                // the thread resumes from its latest checkpoint.
                 let start = std::time::Instant::now();
-                let result = #fn_name(&mut ctx).await;
+                let result = adk_graph::functional::__private::until_cancelled(
+                    &cancel_token,
+                    #fn_name(&mut ctx),
+                )
+                .await;
 
                 let duration = start.elapsed().as_millis() as u64;
 
@@ -625,6 +634,12 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         let _ = event_tx.send(StreamEvent::node_end(#fn_name_str, step, duration));
 
                         Ok(ctx.state().clone())
+                    }
+                    // A cancelled run writes nothing more: the thread's latest
+                    // checkpoint is the one the last completed task wrote.
+                    Err(adk_graph::error::GraphError::Cancelled) => {
+                        let _ = event_tx.send(StreamEvent::error("workflow cancelled", Some(#fn_name_str)));
+                        Err(adk_graph::error::GraphError::Cancelled)
                     }
                     Err(e) => {
                         // Persist failure checkpoint
@@ -688,7 +703,9 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - `retry(max_attempts = N, backoff = "Xs")` — retry on failure, sleeping
 ///   `backoff × attempt` between tries, so the delay grows linearly: `Xs`, `2Xs`,
 ///   `3Xs`. For exponential growth, a cap, or jitter, attach an
-///   `adk_graph::retry::RetryPolicy` to a graph node instead
+///   `adk_graph::retry::RetryPolicy` to a graph node instead. A suspension at an
+///   interrupt and a cancellation are not failures: they end the task at once,
+///   without a retry, and are not recorded as failures
 /// - `rerun_on_resume` — always re-execute on workflow resume, skip cached results
 /// - `rerun_on_resume = true` / `rerun_on_resume = false` — explicit boolean form
 ///
@@ -821,6 +838,19 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    // A suspension or a cancellation stops the task without failing it: it is not
+    // retried, and the execution log does not record it as a failure, so the
+    // resumed run calls the task again.
+    let halts = quote! {
+        {
+            #[allow(unused_imports)]
+            use adk_graph::functional::__private::{
+                HaltingTaskError as _, OpaqueTaskError as _,
+            };
+            (&adk_graph::functional::__private::TaskError(&e)).halts_task()
+        }
+    };
+
     // Generate retry logic or single-attempt logic
     let execution_body = if let Some(retry_config) = &task_attrs.retry {
         let max_attempts = retry_config.max_attempts;
@@ -834,6 +864,7 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
                 __adk_attempts += 1;
                 match #call_expr {
                     Ok(value) => break Ok(value),
+                    Err(e) if #halts => break Err(e),
                     Err(_) if __adk_attempts < __adk_max_attempts => {
                         tokio::time::sleep(__adk_backoff * __adk_attempts).await;
                         continue;
@@ -853,6 +884,7 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             let __adk_result = match #call_expr {
                 Ok(value) => Ok(value),
+                Err(e) if #halts => Err(e),
                 Err(e) => {
                     #ctx_ident.record_failure(__adk_task_id, &e.to_string()).await?;
                     #ctx_ident.emit(adk_graph::stream::StreamEvent::error(

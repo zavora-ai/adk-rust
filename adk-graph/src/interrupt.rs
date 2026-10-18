@@ -77,15 +77,46 @@ impl GraphToolConfirmationPause {
     }
 
     /// Read a tool-confirmation pause from an interrupted graph execution.
+    ///
+    /// Reads the first pause; [`Self::all_from_interrupted_execution`] reads every
+    /// pause of the step.
     pub fn from_interrupted_execution(
         interrupted: &crate::error::InterruptedExecution,
     ) -> Option<Self> {
-        let (node, request) = pending_from_interrupt(&interrupted.interrupt)?;
+        Self::from_interrupt(
+            &interrupted.interrupt,
+            &interrupted.thread_id,
+            &interrupted.checkpoint_id,
+        )
+    }
+
+    /// Read every tool-confirmation pause of an interrupted graph execution, in
+    /// node-name order.
+    pub fn all_from_interrupted_execution(
+        interrupted: &crate::error::InterruptedExecution,
+    ) -> Vec<Self> {
+        interrupted
+            .interrupts
+            .iter()
+            .filter_map(|interrupt| {
+                Self::from_interrupt(interrupt, &interrupted.thread_id, &interrupted.checkpoint_id)
+            })
+            .collect()
+    }
+
+    /// Read a tool-confirmation pause from one interrupt of the run that stopped
+    /// at `checkpoint_id` on `thread_id`.
+    pub fn from_interrupt(
+        interrupt: &Interrupt,
+        thread_id: &str,
+        checkpoint_id: &str,
+    ) -> Option<Self> {
+        let (node, request) = pending_from_interrupt(interrupt)?;
         Some(Self {
             node,
             request,
-            thread_id: interrupted.thread_id.clone(),
-            checkpoint_id: interrupted.checkpoint_id.clone(),
+            thread_id: thread_id.to_string(),
+            checkpoint_id: checkpoint_id.to_string(),
         })
     }
 

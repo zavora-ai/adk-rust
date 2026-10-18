@@ -91,10 +91,13 @@ pub struct RetryPolicy {
     pub retry_on: RetryOn,
 }
 
-/// Ten attempts, one second of initial delay, doubling to a sixty-second cap.
+/// Ten attempts, one second of initial delay, doubling to a sixty-second cap, with
+/// full jitter.
 ///
-/// The nine sleeps between ten attempts total about 243 seconds, so a node that
-/// keeps failing takes roughly four minutes to give up, plus the time each attempt
+/// Without jitter the nine sleeps between ten attempts total about 243 seconds. The
+/// default jitter draws each sleep from zero to twice its delay, with the delay held
+/// at thirty seconds so no sleep exceeds the sixty-second cap: the nine sleeps total
+/// about 151 seconds on average and at most about 302, plus the time each attempt
 /// itself takes. Lower `max_attempts` where a caller is waiting.
 ///
 /// Attaching no policy at all is still one attempt: this default applies only to a
@@ -156,14 +159,28 @@ impl RetryPolicy {
     /// The delay before attempt number `attempt`, counting the first attempt as
     /// zero, so `delay_for_attempt(1)` precedes the second attempt.
     ///
-    /// The delay grows by `backoff_factor` each time, is clamped to `max_delay`,
-    /// and is then varied by up to `jitter` of itself. A `backoff_factor` at or
+    /// The delay grows by `backoff_factor` each time, is clamped, and is then
+    /// varied by up to `jitter` of itself either way. A `backoff_factor` at or
     /// below zero is treated as `1.0`, giving a constant delay rather than
     /// collapsing to nothing.
     ///
-    /// The clamp happens before the jitter, so a jittered delay can sit slightly
-    /// above `max_delay` only when `jitter` is positive; with `jitter` at zero the
-    /// ceiling is exact.
+    /// The clamp is `max_delay / (1 + jitter)`, so a jittered delay never exceeds
+    /// `max_delay`; with `jitter` at zero the clamp is `max_delay` itself.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_graph::retry::RetryPolicy;
+    /// use std::time::Duration;
+    ///
+    /// let policy = RetryPolicy::new(10)
+    ///     .with_initial_delay(Duration::from_secs(8))
+    ///     .with_max_delay(Duration::from_secs(10))
+    ///     .with_jitter(1.0);
+    /// for attempt in 1..10 {
+    ///     assert!(policy.delay_for_attempt(attempt) <= Duration::from_secs(10));
+    /// }
+    /// ```
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         if attempt == 0 {
             return Duration::ZERO;
@@ -173,15 +190,17 @@ impl RetryPolicy {
         for _ in 1..attempt {
             millis *= factor;
         }
-        let capped = millis.min(self.max_delay.as_millis() as f64);
+        // The field is public, so it is clamped here as well as in `with_jitter`.
+        let jitter = if self.jitter.is_nan() { 0.0 } else { self.jitter.clamp(0.0, 1.0) };
+        let capped = millis.min(self.max_delay.as_millis() as f64 / (1.0 + jitter));
 
-        if self.jitter <= 0.0 {
+        if jitter <= 0.0 {
             return Duration::from_millis(capped as u64);
         }
         // Vary symmetrically around the capped delay, floored at zero.
-        let spread = capped * self.jitter;
+        let spread = capped * jitter;
         let offset = pseudo_random_unit() * 2.0 * spread - spread;
-        Duration::from_millis((capped + offset).max(0.0) as u64)
+        Duration::from_millis((capped + offset).clamp(0.0, capped + spread) as u64)
     }
 }
 
@@ -238,6 +257,32 @@ mod tests {
             .with_backoff_factor(10.0)
             .with_jitter(0.0);
         assert_eq!(policy.delay_for_attempt(3), Duration::from_millis(250));
+    }
+
+    /// Full jitter on the default policy once read up to twice `max_delay`.
+    #[test]
+    fn a_jittered_delay_never_exceeds_max_delay() {
+        for jitter in [0.25, 0.5, 1.0] {
+            let policy = RetryPolicy::default().with_jitter(jitter);
+            for _ in 0..200 {
+                for attempt in 1..policy.max_attempts {
+                    let delay = policy.delay_for_attempt(attempt);
+                    assert!(
+                        delay <= policy.max_delay,
+                        "attempt {attempt} with jitter {jitter} slept {delay:?}, over {:?}",
+                        policy.max_delay
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_jitter_is_clamped() {
+        let policy = RetryPolicy { jitter: 4.0, ..RetryPolicy::default() };
+        for attempt in 1..policy.max_attempts {
+            assert!(policy.delay_for_attempt(attempt) <= policy.max_delay);
+        }
     }
 
     #[test]

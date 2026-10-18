@@ -39,6 +39,20 @@ pub enum GraphError {
     #[error("Node '{node}' execution failed: {message}")]
     NodeExecutionFailed { node: String, message: String },
 
+    /// The agent an [`AgentNode`](crate::node::AgentNode) runs failed.
+    ///
+    /// Carries the agent's own error, so its category, code, retry hint, and
+    /// upstream status reach the caller: a rate-limited model is still
+    /// `RateLimited` once the graph reports it.
+    #[error("node '{node}' agent failed: {source}")]
+    AgentFailed {
+        /// The node whose agent failed.
+        node: String,
+        /// The error the agent returned or yielded.
+        #[source]
+        source: Box<adk_core::AdkError>,
+    },
+
     /// Node timed out
     #[error("Node '{node}' timed out after {elapsed:?}")]
     NodeTimedOut { node: String, elapsed: Duration },
@@ -127,6 +141,27 @@ pub enum GraphError {
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
 
+    /// A functional-API workflow suspended at an interrupt and needs an answer.
+    ///
+    /// Supply the answer under `continuation_key` with
+    /// [`ExecutionConfig::with_resume_value`](crate::node::ExecutionConfig::with_resume_value)
+    /// and invoke the entrypoint again. A `#[task]` retry policy does not retry it.
+    #[error("workflow suspended at interrupt '{continuation_key}': {message}")]
+    Suspended {
+        /// Key identifying the interrupt site within the thread.
+        continuation_key: String,
+        /// The message passed to the interrupt.
+        message: String,
+    },
+
+    /// The caller cancelled a functional-API run.
+    ///
+    /// Raised when the run's
+    /// [`ExecutionConfig::cancellation_token`](crate::node::ExecutionConfig) is
+    /// cancelled. A `#[task]` retry policy does not retry it.
+    #[error("workflow cancelled")]
+    Cancelled,
+
     /// Other error (used by extensions like the functional API)
     #[error("{0}")]
     Other(String),
@@ -139,8 +174,14 @@ pub struct InterruptedExecution {
     pub thread_id: String,
     /// Checkpoint ID for resumption
     pub checkpoint_id: String,
-    /// The interrupt that occurred
+    /// The interrupt that occurred: the first of [`Self::interrupts`].
     pub interrupt: Interrupt,
+    /// Every pause of the step, in node-name order.
+    ///
+    /// Nodes of one super-step run together, so several can pause at once, such
+    /// as two agent nodes each asking to confirm a tool call. A static gate is a
+    /// single pause.
+    pub interrupts: Vec<Interrupt>,
     /// Current state at interruption
     pub state: crate::state::State,
     /// Step number when interrupted
@@ -148,7 +189,7 @@ pub struct InterruptedExecution {
 }
 
 impl InterruptedExecution {
-    /// Create a new interrupted execution
+    /// Create a new interrupted execution with a single pause.
     pub fn new(
         thread_id: String,
         checkpoint_id: String,
@@ -156,13 +197,37 @@ impl InterruptedExecution {
         state: crate::state::State,
         step: usize,
     ) -> Self {
-        Self { thread_id, checkpoint_id, interrupt, state, step }
+        let interrupts = vec![interrupt.clone()];
+        Self { thread_id, checkpoint_id, interrupt, interrupts, state, step }
+    }
+
+    /// Records every pause of the step; the first stays [`Self::interrupt`].
+    ///
+    /// An empty list leaves the single pause given to [`Self::new`].
+    #[must_use]
+    pub fn with_interrupts(mut self, interrupts: Vec<Interrupt>) -> Self {
+        if let Some(first) = interrupts.first() {
+            self.interrupt = first.clone();
+            self.interrupts = interrupts;
+        }
+        self
     }
 }
 
+/// Converts a graph error into the structured ADK error.
+///
+/// A [`GraphError::AgentFailed`] becomes the agent's own error, with the node
+/// named in its message, so its category, code, and retry hint are unchanged.
+/// Every other variant maps to an `ErrorComponent::Graph` error that carries the
+/// graph error as its source.
 impl From<GraphError> for adk_core::AdkError {
     fn from(err: GraphError) -> Self {
         use adk_core::{ErrorCategory, ErrorComponent};
+        if let GraphError::AgentFailed { node, source } = err {
+            let mut error = *source;
+            error.message = format!("graph node '{node}': {}", error.message);
+            return error;
+        }
         let (category, code) = match &err {
             GraphError::InvalidGraph(_) => (ErrorCategory::InvalidInput, "graph.invalid"),
             GraphError::NodeNotFound(_) => (ErrorCategory::NotFound, "graph.node_not_found"),
@@ -177,6 +242,7 @@ impl From<GraphError> for adk_core::AdkError {
             GraphError::NodeExecutionFailed { .. } => {
                 (ErrorCategory::Internal, "graph.node_execution_failed")
             }
+            GraphError::AgentFailed { source, .. } => (source.category, source.code),
             GraphError::NodeTimedOut { .. } => (ErrorCategory::Timeout, "graph.node_timed_out"),
             GraphError::FanInTimedOut { .. } => (ErrorCategory::Timeout, "graph.fan_in_timed_out"),
             GraphError::FanInIncomplete { .. } => {
@@ -196,6 +262,8 @@ impl From<GraphError> for adk_core::AdkError {
             GraphError::UnknownRouteTarget(_) => {
                 (ErrorCategory::NotFound, "graph.unknown_route_target")
             }
+            GraphError::Suspended { .. } => (ErrorCategory::Cancelled, "graph.suspended"),
+            GraphError::Cancelled => (ErrorCategory::Cancelled, "graph.cancelled"),
             GraphError::IoError(_) => (ErrorCategory::Internal, "graph.io"),
             GraphError::JsonError(_) => (ErrorCategory::Internal, "graph.json"),
             GraphError::Other(_) => (ErrorCategory::Internal, "graph.other"),
