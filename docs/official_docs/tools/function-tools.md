@@ -40,8 +40,9 @@ sequenceDiagram
     end
 ```
 
-A `#[tool]` tool checks its arguments itself; a `FunctionTool` handler receives the raw
-arguments and can check them with [`ToolArgumentValidator`](#argument-validation).
+A `#[tool]` tool, and a `FunctionTool` or `StatefulTool` given a schema with
+`with_parameters_schema`, checks its arguments itself; a hand-written `Tool` can check them
+with [`ToolArgumentValidator`](#argument-validation).
 
 ---
 
@@ -135,6 +136,7 @@ fields. The closure applies to the check only: Gemini's function declarations re
 | A value outside a `#[schemars(range(...))]`, `length(...)` or `pattern(...)` bound | Rejected |
 | A missing required field, or a value of the wrong type | Rejected |
 | `null` for an `Option` field | Accepted |
+| An integral float such as `3.0` for an integer field | Accepted, and read as `3` (also with `lenient_args`) |
 
 A rejected call fails with an `ErrorCategory::InvalidInput` error with code
 `TOOL_INVALID_ARGUMENTS_CODE` (`tool.invalid_arguments`) that lists each violation by JSON
@@ -175,8 +177,11 @@ as a `#[serde(alias = "...")]` key or a field with a custom `deserialize_with`. 
 struct's keys open with `#[schemars(extend("additionalProperties" = true))]`, or opt the whole
 tool out with `#[tool(lenient_args)]`.
 
-Hand-written tools use the same check through `adk_tool::ToolArgumentValidator`, with
-`adk_tool::close_object_schemas` to reject undeclared keys:
+`FunctionTool` and `StatefulTool` apply the same check from the type given to
+`with_parameters_schema::<T>()`; `.with_lenient_args(true)` turns it off. Hand-written tools
+use the check through `adk_tool::ToolArgumentValidator`, with
+`adk_tool::close_object_schemas` to reject undeclared keys and
+`adk_tool::coerce_integral_floats` to read `3.0` as `3`:
 
 ```rust
 use adk_core::AdkError;
@@ -725,7 +730,7 @@ let cache_tool = StatefulTool::new(
 .with_concurrency_safe(true);
 ```
 
-`StatefulTool` clones the `Arc<S>` on each invocation (cheap reference count bump), so all executions share the same underlying state. It supports the same builder methods as `FunctionTool`: `with_long_running`, `with_parameters_schema`, `with_response_schema`, `with_scopes`, `with_read_only`, and `with_concurrency_safe`.
+`StatefulTool` clones the `Arc<S>` on each invocation (cheap reference count bump), so all executions share the same underlying state. It supports the same builder methods as `FunctionTool`: `with_long_running`, `with_parameters_schema` (which also [validates arguments](#argument-validation)), `with_lenient_args`, `with_response_schema`, `with_scopes`, `with_read_only`, and `with_concurrency_safe`.
 
 ---
 

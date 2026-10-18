@@ -1,3 +1,4 @@
+use crate::arguments::ArgumentCheck;
 use adk_core::{Result, Tool, ToolContext, ToolEffect};
 use async_trait::async_trait;
 use schemars::{
@@ -21,6 +22,18 @@ type AsyncHandler = Box<
 /// `FunctionTool` wraps an async closure and exposes it as a [`Tool`] that
 /// LLM agents can invoke. Use the builder methods to configure schema,
 /// execution flags, and required scopes.
+///
+/// # Argument validation
+///
+/// A tool given a schema with [`with_parameters_schema`](Self::with_parameters_schema)
+/// checks each call's arguments against it before the handler runs, as `#[tool]` does:
+/// a key the type does not declare, a value outside a `#[schemars(range(...))]`,
+/// `length(...)` or `pattern(...)` bound, or a missing required field fails the call
+/// with an `ErrorCategory::InvalidInput` error with code
+/// [`TOOL_INVALID_ARGUMENTS_CODE`](adk_core::TOOL_INVALID_ARGUMENTS_CODE) that the model
+/// sees and can correct. An integral float at an integer field, such as `3.0`, reaches
+/// the handler as the integer. [`with_lenient_args`](Self::with_lenient_args) turns the
+/// check off.
 pub struct FunctionTool {
     name: String,
     description: String,
@@ -30,6 +43,8 @@ pub struct FunctionTool {
     concurrency_safe: bool,
     effect: Option<ToolEffect>,
     parameters_schema: Option<Value>,
+    arguments: Option<ArgumentCheck>,
+    lenient_args: bool,
     response_schema: Option<Value>,
     scopes: Vec<&'static str>,
 }
@@ -50,6 +65,8 @@ impl FunctionTool {
             concurrency_safe: false,
             effect: None,
             parameters_schema: None,
+            arguments: None,
+            lenient_args: false,
             response_schema: None,
             scopes: Vec::new(),
         }
@@ -97,12 +114,51 @@ impl FunctionTool {
         self
     }
 
-    /// Derive the parameters JSON Schema from a type implementing `JsonSchema`.
+    /// Derive the parameters JSON Schema from a type implementing `JsonSchema`, and
+    /// check each call's arguments against it; see [Argument validation](Self#argument-validation).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{TOOL_INVALID_ARGUMENTS_CODE, Tool};
+    /// use adk_tool::{FunctionTool, SimpleToolContext};
+    /// use schemars::JsonSchema;
+    /// use serde::Serialize;
+    /// use serde_json::json;
+    /// use std::sync::Arc;
+    ///
+    /// #[derive(Serialize, JsonSchema)]
+    /// struct Order {
+    ///     #[schemars(range(min = 1, max = 5))]
+    ///     quantity: u32,
+    /// }
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let tool = FunctionTool::new("order", "Orders widgets", |_ctx, args| async move { Ok(args) })
+    ///     .with_parameters_schema::<Order>();
+    /// let ctx = Arc::new(SimpleToolContext::new("doc"));
+    ///
+    /// let err = tool.execute(ctx.clone(), json!({ "quantity": 50 })).await.unwrap_err();
+    /// assert_eq!(err.code, TOOL_INVALID_ARGUMENTS_CODE);
+    /// assert_eq!(tool.execute(ctx, json!({ "quantity": 3.0 })).await.unwrap(), json!({ "quantity": 3 }));
+    /// # }
+    /// ```
     pub fn with_parameters_schema<T>(mut self) -> Self
     where
         T: JsonSchema + Serialize,
     {
         self.parameters_schema = Some(generate_schema::<T>());
+        self.arguments = Some(ArgumentCheck::for_type::<T>());
+        self
+    }
+
+    /// Turn off the argument check of [`with_parameters_schema`](Self::with_parameters_schema).
+    ///
+    /// The handler then receives the arguments as the model sent them, apart from integral
+    /// floats at integer fields: undeclared keys are kept and schema bounds are advisory.
+    pub fn with_lenient_args(mut self, lenient: bool) -> Self {
+        self.lenient_args = lenient;
         self
     }
 
@@ -210,8 +266,11 @@ impl Tool for FunctionTool {
             function_call.id = %ctx.function_call_id()
         )
     )]
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, mut args: Value) -> Result<Value> {
         adk_telemetry::debug!("Executing tool");
+        if let Some(check) = &self.arguments {
+            check.apply(&self.name, self.lenient_args, &mut args)?;
+        }
         (self.handler)(ctx, args).await
     }
 }

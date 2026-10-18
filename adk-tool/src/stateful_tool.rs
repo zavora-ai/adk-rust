@@ -60,6 +60,8 @@ pub struct StatefulTool<S: Send + Sync + 'static> {
     read_only: bool,
     concurrency_safe: bool,
     parameters_schema: Option<Value>,
+    arguments: Option<crate::arguments::ArgumentCheck>,
+    lenient_args: bool,
     response_schema: Option<Value>,
     scopes: Vec<&'static str>,
 }
@@ -92,6 +94,8 @@ impl<S: Send + Sync + 'static> StatefulTool<S> {
             read_only: false,
             concurrency_safe: false,
             parameters_schema: None,
+            arguments: None,
+            lenient_args: false,
             response_schema: None,
             scopes: Vec::new(),
         }
@@ -115,12 +119,22 @@ impl<S: Send + Sync + 'static> StatefulTool<S> {
         self
     }
 
-    /// Derive the parameters JSON Schema from a type implementing `JsonSchema`.
+    /// Derive the parameters JSON Schema from a type implementing `JsonSchema`, and
+    /// check each call's arguments against it as
+    /// [`FunctionTool`](crate::FunctionTool#argument-validation) does.
     pub fn with_parameters_schema<T>(mut self) -> Self
     where
         T: JsonSchema + Serialize,
     {
         self.parameters_schema = Some(generate_schema::<T>());
+        self.arguments = Some(crate::arguments::ArgumentCheck::for_type::<T>());
+        self
+    }
+
+    /// Turn off the argument check of [`with_parameters_schema`](Self::with_parameters_schema);
+    /// integral floats at integer fields are still read as integers.
+    pub fn with_lenient_args(mut self, lenient: bool) -> Self {
+        self.lenient_args = lenient;
         self
     }
 
@@ -211,8 +225,11 @@ impl<S: Send + Sync + 'static> Tool for StatefulTool<S> {
             function_call.id = %ctx.function_call_id()
         )
     )]
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, mut args: Value) -> Result<Value> {
         adk_telemetry::debug!("Executing stateful tool");
+        if let Some(check) = &self.arguments {
+            check.apply(&self.name, self.lenient_args, &mut args)?;
+        }
         let state = Arc::clone(&self.state);
         (self.handler)(state, ctx, args).await
     }

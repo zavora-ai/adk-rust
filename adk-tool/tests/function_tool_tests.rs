@@ -255,3 +255,55 @@ fn test_function_tool_scopes_chainable() {
     assert_eq!(tool.required_scopes(), &["admin"]);
     assert!(tool.is_long_running());
 }
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct OrderParams {
+    /// Widgets ship in boxes of five.
+    #[schemars(range(min = 5, max = 50), extend("multipleOf" = 5))]
+    quantity: u32,
+    note: Option<String>,
+}
+
+fn order_tool(ran: Arc<Mutex<Vec<serde_json::Value>>>) -> FunctionTool {
+    FunctionTool::new("order", "Orders widgets", move |_ctx, args| {
+        let ran = ran.clone();
+        async move {
+            ran.lock().unwrap().push(args.clone());
+            Ok(args)
+        }
+    })
+    .with_parameters_schema::<OrderParams>()
+}
+
+#[tokio::test]
+async fn arguments_outside_the_schema_are_rejected_before_the_handler_runs() {
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let tool = order_tool(ran.clone());
+    let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
+
+    for (args, fragment) in [
+        (json!({ "quantity": 7 }), "/quantity"),
+        (json!({ "quantity": 500 }), "/quantity"),
+        (json!({ "quantity": 10, "rush": true }), "rush"),
+        (json!({}), "quantity"),
+    ] {
+        let err = tool.execute(ctx.clone(), args.clone()).await.unwrap_err();
+        assert_eq!(err.code, adk_core::TOOL_INVALID_ARGUMENTS_CODE, "{args}");
+        assert!(err.message.contains(fragment), "{fragment} missing from {}", err.message);
+    }
+    assert!(ran.lock().unwrap().is_empty());
+
+    let ok = tool.execute(ctx.clone(), json!({ "quantity": 10.0, "note": null })).await.unwrap();
+    assert_eq!(ok, json!({ "quantity": 10, "note": null }));
+    assert_eq!(ran.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn lenient_args_passes_arguments_through_with_integral_floats_read_as_integers() {
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let tool = order_tool(ran.clone()).with_lenient_args(true);
+    let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
+
+    let result = tool.execute(ctx, json!({ "quantity": 7.0, "rush": true })).await.unwrap();
+    assert_eq!(result, json!({ "quantity": 7, "rush": true }));
+}

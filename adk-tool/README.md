@@ -98,7 +98,10 @@ let tool = FunctionTool::new("get_weather", "Get weather", get_weather)
 A `#[tool]` tool checks each call's arguments against its schema before the function runs:
 a key the schema does not name, a value outside a `range`, `length` or `pattern` bound, or a
 missing field fails the call with a `tool.invalid_arguments` error the model sees and can
-correct. `#[tool(lenient_args)]` opts a tool out. Hand-written tools use the same check:
+correct. `#[tool(lenient_args)]` opts a tool out. A `FunctionTool` or `StatefulTool` given a
+schema with `with_parameters_schema::<T>()` applies the same check (`with_lenient_args(true)`
+opts out), and every one of them reads an integral float such as `3.0` at an integer field as
+`3`. Hand-written tools use the same check:
 
 ```rust
 use adk_tool::{ToolArgumentValidator, close_object_schemas};

@@ -121,7 +121,7 @@ pub use agent_tool::{
 };
 pub use arguments::{
     TOOL_INVALID_PARAMETERS_SCHEMA_CODE, ToolArgumentValidator, close_object_schemas,
-    model_facing_schema,
+    coerce_integral_floats, model_facing_schema,
 };
 pub use async_trait::async_trait;
 pub use builtin::{

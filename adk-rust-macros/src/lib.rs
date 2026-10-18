@@ -80,7 +80,12 @@ use syn::{FnArg, ItemFn, Meta, Type, parse_macro_input};
 /// `#[tool(lenient_args)]`, which deserializes with serde alone: unknown keys are dropped and
 /// schema bounds are advisory.
 ///
+/// In both modes an integral float at an integer field, such as `3.0` for a `u32`, is read as
+/// the integer ([`coerce_integral_floats`]); some models write every number with a decimal
+/// point.
+///
 /// [`close_object_schemas`]: https://docs.rs/adk-tool/latest/adk_tool/fn.close_object_schemas.html
+/// [`coerce_integral_floats`]: https://docs.rs/adk-tool/latest/adk_tool/fn.coerce_integral_floats.html
 ///
 /// # Examples
 ///
@@ -215,6 +220,18 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
         },
         _ => quote! {},
     };
+    // Applies with or without `lenient_args`: `3.0` for an integer field is a valid integer
+    // to the schema, but serde rejects it.
+    let coerce_args = args_type.as_ref().map(|args_ty| {
+        quote! {
+            static PARAMETERS: std::sync::LazyLock<serde_json::Value> =
+                std::sync::LazyLock::new(|| {
+                    serde_json::to_value(schemars::schema_for!(#args_ty)).unwrap_or_default()
+                });
+            let mut args = args;
+            adk_tool::coerce_integral_floats(&PARAMETERS, &mut args);
+        }
+    });
     let deserialize_args = args_type.as_ref().map(|args_ty| {
         quote! {
             let typed_args: #args_ty = serde_json::from_value(args)
@@ -236,6 +253,7 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
         (false, false) => quote! { let _ = args; #fn_name().await },
     };
     let execute_body = quote! {
+        #coerce_args
         #validate_args
         #deserialize_args
         #call

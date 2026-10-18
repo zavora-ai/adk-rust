@@ -345,6 +345,24 @@ async fn lenient_args_keeps_serde_only_behaviour() {
     assert_eq!(err.code, adk_tool::TOOL_INVALID_ARGUMENTS_CODE);
 }
 
+#[tokio::test]
+async fn integral_floats_are_read_as_integers() {
+    let mut args = valid();
+    args["count"] = json!(3.0);
+    let (result, ran) = run_book(args).await;
+    assert_eq!(result.unwrap()["count"], 3);
+    assert_eq!(ran, 1);
+
+    let result = LegacyBook.execute(ctx(), json!({ "count": 4.0 })).await;
+    assert_eq!(result.unwrap(), json!({ "count": 4 }));
+
+    // A fraction is still not an integer.
+    let mut args = valid();
+    args["count"] = json!(2.5);
+    let (result, ran) = run_book(args).await;
+    rejected(result, ran, &["/count"]);
+}
+
 // === Test 11: Composed argument types are not falsely rejected ===
 
 #[derive(Deserialize, JsonSchema)]

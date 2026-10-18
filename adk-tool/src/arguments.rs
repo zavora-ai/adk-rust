@@ -127,6 +127,148 @@ fn truncate(message: &str) -> String {
     }
 }
 
+/// The argument check a builder tool compiles from its parameters type.
+pub(crate) struct ArgumentCheck {
+    /// The type's JSON Schema, for reading integral floats as integers.
+    schema: Value,
+    /// The same schema with its objects closed, or why it did not compile.
+    validator: std::result::Result<ToolArgumentValidator, String>,
+}
+
+impl ArgumentCheck {
+    /// Compiles the check for `T`.
+    ///
+    /// Built from the standard schema of `T`, which keeps `null` for an `Option` field where
+    /// the model-facing OpenAPI form says `nullable`.
+    pub(crate) fn for_type<T: schemars::JsonSchema>() -> Self {
+        let schema = serde_json::to_value(schemars::schema_for!(T)).unwrap_or_default();
+        let mut closed = schema.clone();
+        close_object_schemas(&mut closed);
+        let validator = ToolArgumentValidator::new(&closed).map_err(|error| error.message);
+        Self { schema, validator }
+    }
+
+    /// Reads integral floats at integer fields as integers, then, unless `lenient`, checks
+    /// `args` against the schema.
+    pub(crate) fn apply(&self, tool_name: &str, lenient: bool, args: &mut Value) -> Result<()> {
+        coerce_integral_floats(&self.schema, args);
+        if lenient {
+            return Ok(());
+        }
+        match &self.validator {
+            Ok(validator) => validator.validate(tool_name, args),
+            Err(message) => Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::Internal,
+                TOOL_INVALID_PARAMETERS_SCHEMA_CODE,
+                message.clone(),
+            )),
+        }
+    }
+}
+
+/// Largest magnitude below which every integer is exactly representable as an `f64`.
+const EXACT_F64_INTEGERS: f64 = 9_007_199_254_740_992.0;
+
+/// Rewrites each integral float in `args` at a position `schema` types as an integer, so
+/// `3.0` becomes `3`.
+///
+/// Some models write every number with a decimal point. JSON Schema counts `3.0` as an
+/// integer, but serde's integer types reject it, so without this the call fails after it
+/// passed validation. Follows `properties`, `additionalProperties`, `items`,
+/// `prefixItems`, `allOf`/`anyOf`/`oneOf` and local `$ref`s; a float with a fraction, or
+/// one too large to be an exact integer, is left as it is.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_tool::coerce_integral_floats;
+/// use serde_json::json;
+///
+/// let schema = json!({
+///     "type": "object",
+///     "properties": { "count": { "type": "integer" }, "ratio": { "type": "number" } }
+/// });
+/// let mut args = json!({ "count": 3.0, "ratio": 2.0 });
+/// coerce_integral_floats(&schema, &mut args);
+/// assert_eq!(args, json!({ "count": 3, "ratio": 2.0 }));
+/// ```
+pub fn coerce_integral_floats(schema: &Value, args: &mut Value) {
+    coerce_at(schema, schema, args, 0);
+}
+
+fn coerce_at(root: &Value, schema: &Value, value: &mut Value, depth: usize) {
+    // Deep enough for any argument document; stops a `$ref` cycle.
+    if depth > 64 {
+        return;
+    }
+    let Some(obj) = schema.as_object() else {
+        return;
+    };
+    if let Some(target) = obj
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| reference.strip_prefix('#'))
+        .and_then(|pointer| root.pointer(pointer))
+    {
+        coerce_at(root, target, value, depth + 1);
+    }
+    let integer_only = match obj.get("type") {
+        Some(Value::String(kind)) => kind == "integer",
+        Some(Value::Array(kinds)) => {
+            kinds.iter().any(|kind| kind == "integer") && !kinds.iter().any(|kind| kind == "number")
+        }
+        _ => false,
+    };
+    match value {
+        Value::Number(number) if integer_only && number.is_f64() => {
+            if let Some(float) = number.as_f64()
+                && float.fract() == 0.0
+                && float.abs() < EXACT_F64_INTEGERS
+            {
+                // The guard above keeps both casts exact.
+                *value =
+                    if float < 0.0 { Value::from(float as i64) } else { Value::from(float as u64) };
+            }
+        }
+        Value::Object(members) => {
+            let properties = obj.get("properties").and_then(Value::as_object);
+            for (name, member) in members.iter_mut() {
+                match properties.and_then(|properties| properties.get(name)) {
+                    Some(sub) => coerce_at(root, sub, member, depth + 1),
+                    None => {
+                        if let Some(sub @ Value::Object(_)) = obj.get("additionalProperties") {
+                            coerce_at(root, sub, member, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+        Value::Array(items) => {
+            let prefix =
+                obj.get("prefixItems").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+            for (index, item) in items.iter_mut().enumerate() {
+                match prefix.get(index) {
+                    Some(sub) => coerce_at(root, sub, item, depth + 1),
+                    None => {
+                        if let Some(sub @ Value::Object(_)) = obj.get("items") {
+                            coerce_at(root, sub, item, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        if let Some(Value::Array(branches)) = obj.get(keyword) {
+            for branch in branches {
+                coerce_at(root, branch, value, depth + 1);
+            }
+        }
+    }
+}
+
 /// Sets `additionalProperties: false` on each object schema in `schema` that declares all of its
 /// fields, so a validator rejects keys the schema does not name.
 ///
@@ -461,5 +603,55 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn integral_floats_become_integers_only_where_the_schema_says_integer() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "count": { "type": "integer" },
+                "maybe": { "type": ["integer", "null"] },
+                "ratio": { "type": "number" },
+                "seats": { "type": "array", "items": { "$ref": "#/$defs/Seat" } },
+                "pick": { "anyOf": [{ "type": "integer" }, { "type": "string" }] },
+                "extra": { "type": "object", "additionalProperties": { "type": "integer" } }
+            },
+            "$defs": {
+                "Seat": { "type": "object", "properties": { "row": { "type": "integer" } } }
+            }
+        });
+        let mut args = json!({
+            "count": 3.0,
+            "maybe": -2.0,
+            "ratio": 2.0,
+            "seats": [{ "row": 7.0 }, { "row": 7.5 }],
+            "pick": 4.0,
+            "extra": { "a": 1.0 },
+            "undeclared": 5.0
+        });
+
+        coerce_integral_floats(&schema, &mut args);
+
+        assert_eq!(
+            args,
+            json!({
+                "count": 3,
+                "maybe": -2,
+                "ratio": 2.0,
+                "seats": [{ "row": 7 }, { "row": 7.5 }],
+                "pick": 4,
+                "extra": { "a": 1 },
+                "undeclared": 5.0
+            })
+        );
+    }
+
+    #[test]
+    fn floats_beyond_exact_integers_are_left_alone() {
+        let schema = json!({ "type": "integer" });
+        let mut args = json!(1.0e300);
+        coerce_integral_floats(&schema, &mut args);
+        assert_eq!(args, json!(1.0e300));
     }
 }
