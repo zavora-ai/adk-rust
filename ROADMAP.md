@@ -107,7 +107,7 @@ Autonomous agents that do vertically integrated tasks well, demonstrating:
 
 ## Hardening Backlog 🔮
 
-Gaps from the October 2026 review that remain open after the fixes in #848–#868. Each row names the follow-up fix and the pull request that recorded it.
+Gaps that remain open after the fixes in #848–#877: from the October 2026 review, and from the adk-python and adk-go parity review (rows marked "parity review"). Each row names the follow-up fix and the pull request or review that recorded it.
 
 ### Realtime
 
@@ -119,6 +119,33 @@ Gaps from the October 2026 review that remain open after the fixes in #848–#86
 | Provider options leak into the OpenAI session config, and transcription options are limited | Strip `language_code`, `thinking_level` and `resumeToken` before merging `extra`; merge `extra` recursively; add language and prompt to `TranscriptionConfig` | October 2026 review |
 | No content guardrails on the model's own text or transcript events | Run output guardrails on realtime text and transcripts, as `LlmAgent` does for final text | #857 |
 | A runner built without `tool_governance` has no payload switch, and error messages logged under `record_payloads` are not length-capped | Give realtime runners their own `record_payloads` and apply `trace_payload_max_bytes` | #857 |
+| Gemini Live never captures the session resumption handle (it reads `resumptionToken`; the wire field is `sessionResumptionUpdate.newHandle`), so every reconnect starts a blank session | Read `newHandle` when `resumable` is true and keep the latest | parity review |
+| Realtime runs do not persist user turns, and on Gemini persist no turns at all | Persist input transcripts and typed text as user events; open a Gemini turn on the first delta and close it at `turnComplete`/`generationComplete` | parity review |
+| `RealtimeAgent` saves every audio delta (about 48 KB of rows per second of speech) and no transcript | Keep audio deltas out of the session, or mark them partial; emit one transcript event per response | parity review |
+| Realtime usage is not reported, so realtime spend is unmetered | Translate Gemini `usageMetadata` and OpenAI `response.done` usage and meter it | parity review |
+| Gemini Live `GoAway` is dropped, so the connection ends without warning | Surface `GoAway{timeLeft}` and offer a resume helper that uses the resumption handle | parity review |
+| `RealtimeAgent` does not replay session history on connect, so memory is lost after a transfer or a new invocation | Send the session's text history as `clientContent` turns on connect | parity review |
+| Gemini Live `interrupted` and `turnCompleteReason` are dropped | Map `interrupted` to an interruption event and carry the reason on `ResponseDone` | parity review |
+| Gemini Live setup ignores generic config fields such as output caps and tool choice | Map `max_response_output_tokens` and `tool_choice`; add safety and thinking fields | parity review |
+| No `audioStreamEnd`, and the input sample rate is hard-coded to 16 kHz | Add `audio_stream_end`; take the rate from `AudioChunk.format` | parity review |
+| Transparent session resumption is not modelled | Add a `transparent` flag | parity review |
+| An `adk-realtime`-only build panics on Gemini Live connect with no process-level rustls `CryptoProvider` | Make `ensure_crypto_provider()` effective without `adk-core`'s `rustls` feature, or install the provider in `adk-realtime` | parity review |
+
+### Gemini and Interactions
+
+| Gap | Fix | Origin |
+|-----|-----|--------|
+| Gemini Interactions streaming drops every tool call (`step.start` and `arguments_delta` are ignored), so a tool-using agent on `use_interactions_api(true)` ends each tool turn with an empty answer | Build the call from `step.start`, accumulate `arguments_delta` by index, attach thought-signature deltas | parity review |
+| Stateful Interactions follow-ups send the user turn instead of the tool results, so the model answers without the tool's output | In stateful mode, send every content after the last model turn, function results as `function_result` steps | parity review |
+| Interactions streaming turns unparseable tool arguments into `{}` | Mark the call invalid, as the other providers do | parity review |
+| Gemini continuation (`continuationToken`, `CONTINUATION`) is not resumed, so long answers are cut and saved as final | Resend with the output so far, a resume cap and summed usage | parity review |
+| `MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL` and `TOO_MANY_TOOL_CALLS` end the run silently | Map them to an `error_code` the agent fails or retries on | parity review |
+| Context caching never creates a cache on the default model | Serialize model ids with `models/`; build the cache from the resolved instruction and tools; honour the 1,024-token minimum; refresh on TTL; omit `tools`/`systemInstruction` when `cachedContent` is set | parity review |
+| Gemini function declarations go out in a different order on every request, so implicit prefix caching misses | Sort declarations by name, as the other providers do | parity review |
+| Grounding and citation metadata from earlier stream chunks is lost | Keep the last non-empty metadata and put it on the terminal event | parity review |
+| Gemini generation config fields (stop sequences, seed, penalties, logprobs) are dropped | Map each supported field; reject the rest by name | parity review |
+| Thought signatures on text parts are dropped | Carry and echo signatures on text parts | parity review |
+| The Gemini model client has no connect or stream-idle timeout | Configurable connect and stream-idle timeouts | parity review |
 
 ### Guardrails
 
