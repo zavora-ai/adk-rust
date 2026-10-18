@@ -43,8 +43,10 @@ impl EvaluationReport {
     }
 
     /// Check if all tests passed
+    ///
+    /// A report without results has not passed: it evaluated nothing.
     pub fn all_passed(&self) -> bool {
-        self.summary.failed == 0
+        self.summary.total > 0 && self.summary.failed == 0
     }
 
     /// Get failed results only
@@ -304,6 +306,19 @@ mod tests {
         assert_eq!(summary.passed, 2);
         assert_eq!(summary.failed, 1);
         assert!((summary.pass_rate - 0.666).abs() < 0.01);
+    }
+
+    #[test]
+    fn an_empty_report_has_not_passed() {
+        let report = EvaluationReport::new("run", vec![], chrono::Utc::now());
+        assert!(!report.all_passed());
+
+        let passed = EvaluationReport::new(
+            "run",
+            vec![EvaluationResult::passed("t", HashMap::new(), Duration::ZERO)],
+            chrono::Utc::now(),
+        );
+        assert!(passed.all_passed());
     }
 
     #[test]

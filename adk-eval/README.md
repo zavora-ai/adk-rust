@@ -229,13 +229,15 @@ let json = report.to_json()?;
 
 ## Batch Evaluation
 
-Evaluate multiple test cases in parallel:
+Evaluate multiple test cases in parallel (results follow the order of `cases`; a concurrency of 0 or no cases is a `ConfigError`):
 
 ```rust
 let results = evaluator
     .evaluate_cases_parallel(agent, &cases, 4)  // 4 concurrent
-    .await;
+    .await?;
 ```
+
+A case passes only when at least one criterion was evaluated and none failed: an empty test file, a case without turns, or an evaluator without criteria returns `EvalError::ConfigError`, and a case no criterion applies to fails as `not_evaluated`.
 
 Evaluate all test files in a directory:
 

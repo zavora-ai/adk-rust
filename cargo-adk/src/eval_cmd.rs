@@ -67,7 +67,8 @@ pub(crate) struct EvalOptions {
 /// # Errors
 ///
 /// Returns an error, before running any case, when the eval set, criteria, or judge
-/// model cannot be loaded, or `--check-regression` has no baseline to compare with; and
+/// model cannot be loaded, an eval set has no cases, or `--check-regression` has no
+/// baseline to compare with; and
 /// after the run when the baseline cannot be read or saved, or the report cannot be
 /// written.
 pub(crate) async fn run_eval(options: &EvalOptions) -> Result<bool, String> {
@@ -76,6 +77,12 @@ pub(crate) async fn run_eval(options: &EvalOptions) -> Result<bool, String> {
     for file in &files {
         let test_file =
             TestFile::load(file).map_err(|e| format!("failed to load {}: {e}", file.display()))?;
+        if test_file.eval_cases.is_empty() {
+            return Err(format!(
+                "{} has no eval cases, so it would pass unchecked; add at least one case",
+                file.display()
+            ));
+        }
         test_files.push(test_file);
     }
 

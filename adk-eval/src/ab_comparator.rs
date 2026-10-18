@@ -88,8 +88,8 @@ impl AbComparator {
     ///
     /// # Errors
     ///
-    /// Returns [`EvalError::StatisticsError`] if evaluation or statistical
-    /// computation fails.
+    /// Returns [`EvalError::ConfigError`] when `eval_cases` is empty or the evaluator has
+    /// no criteria, and [`EvalError::StatisticsError`] if statistical computation fails.
     pub async fn compare(
         &self,
         agent_a: Arc<dyn Agent>,
@@ -102,12 +102,10 @@ impl AbComparator {
         let agent_b_name = agent_b.name().to_string();
 
         // Evaluate agent A against all cases
-        let results_a: Vec<_> =
-            self.evaluator.evaluate_cases_parallel(agent_a, eval_cases, 1).await;
+        let results_a = self.evaluator.evaluate_cases_parallel(agent_a, eval_cases, 1).await?;
 
         // Evaluate agent B against all cases
-        let results_b: Vec<_> =
-            self.evaluator.evaluate_cases_parallel(agent_b, eval_cases, 1).await;
+        let results_b = self.evaluator.evaluate_cases_parallel(agent_b, eval_cases, 1).await?;
 
         // Collect per-criterion scores for each agent, keyed by criterion name
         // Each entry maps criterion -> vec of (score_a, score_b) pairs

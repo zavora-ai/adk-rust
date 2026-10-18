@@ -239,6 +239,19 @@ A `SAFE: NO` or `HALLUCINATION_FREE: NO` verdict from the judge fails the criter
 
 `semantic_match_score` skips turns that have no expected `final_response`, as `response_similarity` does.
 
+### Nothing to Evaluate
+
+A case passes only when at least one criterion was evaluated and none failed. Inputs that evaluate nothing never read as a pass:
+
+| Input | Result |
+|-------|--------|
+| A test file with no `eval_cases` | `evaluate_test_file` / `evaluate_file` return `EvalError::ConfigError` |
+| A case with no `conversation` turns | `evaluate_case` returns `EvalError::ConfigError`; in a test file the case fails with an `execution` failure |
+| An evaluator with no criteria (no threshold set and no structured or embedding scorer) | `evaluate_case` and `evaluate_test_file` return `EvalError::ConfigError` before the agent runs |
+| Criteria that apply to no turn, such as `semantic_match_score` with no expected responses | the case fails with a `not_evaluated` failure |
+| A directory with no `*.test.json` file | `evaluate_directory` returns `EvalError::ConfigError` |
+| A report without results | `EvaluationReport::all_passed()` returns `false` |
+
 ### Scores Across Turns and Errors
 
 A criterion's case score is the arithmetic mean of its per-turn scores. When the agent fails to start or its event stream yields an error, the case fails with an `execution` failure and carries no scores.
@@ -278,13 +291,15 @@ std::fs::write("eval_results.json", json)?;
 
 ### Parallel Evaluation
 
-Evaluate multiple test cases concurrently:
+Evaluate multiple test cases concurrently. Results come back in the order of `cases`, one per case:
 
 ```rust
 let results = evaluator
     .evaluate_cases_parallel(agent, &cases, 4)  // 4 concurrent evaluations
-    .await;
+    .await?;
 ```
+
+A `concurrency` of 0, or an empty `cases` slice, returns `EvalError::ConfigError`.
 
 ### Directory Evaluation
 

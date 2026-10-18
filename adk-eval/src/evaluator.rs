@@ -198,7 +198,27 @@ impl Evaluator {
         self.conversation_scorer.is_some()
     }
 
+    /// Fails when no criterion that can score a case is configured.
+    fn check_criteria(&self) -> Result<()> {
+        #[cfg(feature = "embedding")]
+        let embedding = self.embedding_scorer.is_some();
+        #[cfg(not(feature = "embedding"))]
+        let embedding = false;
+        if self.config.criteria.has_criteria() || self.structured_judge.is_some() || embedding {
+            return Ok(());
+        }
+        Err(crate::error::EvalError::ConfigError(
+            "no evaluation criteria are configured, so no case can pass or fail; set a \
+             threshold in EvaluationCriteria or attach a structured judge"
+                .to_string(),
+        ))
+    }
+
     /// Evaluate a test file against an agent
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be loaded or has no eval cases.
     pub async fn evaluate_file(
         &self,
         agent: Arc<dyn Agent>,
@@ -209,11 +229,27 @@ impl Evaluator {
     }
 
     /// Evaluate a TestFile struct
+    ///
+    /// A case that cannot run (no turns, or an agent error) is reported as a failed case
+    /// with an `execution` failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvalError::ConfigError`](crate::EvalError::ConfigError) when the file has
+    /// no eval cases or the evaluator has no criteria, since the report would otherwise
+    /// read as a pass.
     pub async fn evaluate_test_file(
         &self,
         agent: Arc<dyn Agent>,
         test_file: &TestFile,
     ) -> Result<EvaluationReport> {
+        if test_file.eval_cases.is_empty() {
+            return Err(crate::error::EvalError::ConfigError(format!(
+                "test file '{}' has no eval cases; add at least one case to evaluate",
+                test_file.eval_set_id
+            )));
+        }
+        self.check_criteria()?;
         let started_at = chrono::Utc::now();
         let run_id = format!("{}_{}", test_file.eval_set_id, uuid::Uuid::new_v4());
         let mut results = Vec::new();
@@ -264,15 +300,28 @@ impl Evaluator {
     /// Each criterion's case score is the arithmetic mean of its per-turn scores. Cost
     /// and trace analysis use the events from every turn of this run.
     ///
+    /// A case passes only when at least one criterion was evaluated and none failed. A case
+    /// that no configured criterion applies to (for example `semantic_match_score` with no
+    /// expected response in any turn) fails with a `not_evaluated` failure.
+    ///
     /// # Errors
     ///
-    /// Returns an error when the session cannot be created from `session_input`, the
-    /// agent fails to start, or its event stream yields an error.
+    /// Returns [`EvalError::ConfigError`](crate::EvalError::ConfigError) when the case has
+    /// no turns or the evaluator has no criteria, and an error when the session cannot be
+    /// created from `session_input`, the agent fails to start, or its event stream yields
+    /// an error.
     pub async fn evaluate_case(
         &self,
         agent: Arc<dyn Agent>,
         eval_case: &EvalCase,
     ) -> Result<EvaluationResult> {
+        if eval_case.conversation.is_empty() {
+            return Err(crate::error::EvalError::ConfigError(format!(
+                "eval case '{}' has no conversation turns; add at least one turn to evaluate",
+                eval_case.eval_id
+            )));
+        }
+        self.check_criteria()?;
         let start = Instant::now();
         let mut score_totals: HashMap<String, (f64, usize)> = HashMap::new();
         let mut all_failures: Vec<Failure> = Vec::new();
@@ -388,6 +437,15 @@ impl Evaluator {
                     tracing::warn!("Embedding scorer failed: {e}");
                 }
             }
+        }
+
+        if all_scores.is_empty() && all_failures.is_empty() {
+            all_failures.push(unjudged(
+                "not_evaluated",
+                0.0,
+                "no configured criterion applied to this case, so it was not evaluated; give \
+                 its turns the expected responses or tool calls the criteria compare against",
+            ));
         }
 
         let passed = all_failures.is_empty();
@@ -820,32 +878,57 @@ impl Evaluator {
     }
 
     /// Evaluate multiple test cases in parallel
+    ///
+    /// Runs up to `concurrency` cases at a time and returns one result per case, in the
+    /// order of `cases`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvalError::ConfigError`](crate::EvalError::ConfigError) when `concurrency`
+    /// is 0, which could never run a case, or `cases` is empty.
     pub async fn evaluate_cases_parallel(
         &self,
         agent: Arc<dyn Agent>,
         cases: &[EvalCase],
         concurrency: usize,
-    ) -> Vec<Result<EvaluationResult>> {
+    ) -> Result<Vec<Result<EvaluationResult>>> {
         use futures::stream::{self, StreamExt};
 
-        let results: Vec<_> = stream::iter(cases)
+        if concurrency == 0 {
+            return Err(crate::error::EvalError::ConfigError(
+                "concurrency must be at least 1".to_string(),
+            ));
+        }
+        if cases.is_empty() {
+            return Err(crate::error::EvalError::ConfigError(
+                "no eval cases to evaluate; pass at least one case".to_string(),
+            ));
+        }
+
+        Ok(stream::iter(cases)
             .map(|case| {
                 let agent = agent.clone();
                 async move { self.evaluate_case(agent, case).await }
             })
-            .buffer_unordered(concurrency)
+            .buffered(concurrency)
             .collect()
-            .await;
-
-        results
+            .await)
     }
 
     /// Evaluate a directory of test files
+    ///
+    /// Evaluates every `*.test.json` file in `dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the directory cannot be read, a test file fails to load or
+    /// has no cases, or the directory holds no `*.test.json` file.
     pub async fn evaluate_directory(
         &self,
         agent: Arc<dyn Agent>,
         dir: impl AsRef<Path>,
     ) -> Result<Vec<EvaluationReport>> {
+        let dir = dir.as_ref();
         let mut reports = Vec::new();
 
         let entries = std::fs::read_dir(dir)?;
@@ -862,6 +945,12 @@ impl Evaluator {
             }
         }
 
+        if reports.is_empty() {
+            return Err(crate::error::EvalError::ConfigError(format!(
+                "no *.test.json files in {}",
+                dir.display()
+            )));
+        }
         Ok(reports)
     }
 
@@ -1359,6 +1448,128 @@ mod tests {
 
         assert!(result.passed);
         assert_eq!(result.scores["structured_judge"], 1.0);
+    }
+
+    fn exact_similarity() -> EvaluationConfig {
+        criteria(EvaluationCriteria {
+            response_similarity: Some(1.0),
+            response_match_config: Some(ResponseMatchConfig {
+                algorithm: SimilarityAlgorithm::Exact,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
+    fn config_error(error: crate::EvalError) -> String {
+        match error {
+            crate::EvalError::ConfigError(message) => message,
+            other => panic!("expected a config error, got {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_test_file_without_cases_is_rejected() {
+        let test_file = TestFile {
+            eval_set_id: "empty_set".to_string(),
+            name: "empty".to_string(),
+            description: String::new(),
+            eval_cases: vec![],
+        };
+        let error = Evaluator::new(exact_similarity())
+            .evaluate_test_file(echo_agent(), &test_file)
+            .await
+            .unwrap_err();
+        assert!(config_error(error).contains("'empty_set' has no eval cases"));
+    }
+
+    #[tokio::test]
+    async fn a_case_without_turns_is_rejected() {
+        let error = Evaluator::new(exact_similarity())
+            .evaluate_case(echo_agent(), &case(vec![]))
+            .await
+            .unwrap_err();
+        assert!(config_error(error).contains("'case_1' has no conversation turns"));
+    }
+
+    #[tokio::test]
+    async fn an_evaluator_without_criteria_is_rejected() {
+        let error = Evaluator::new(EvaluationConfig::default())
+            .evaluate_case(echo_agent(), &case(vec![turn("hi", "hi")]))
+            .await
+            .unwrap_err();
+        assert!(config_error(error).contains("no evaluation criteria are configured"));
+
+        // Custom criteria are not scored by the evaluator, so they cannot pass a case.
+        let custom = Evaluator::new(criteria(EvaluationCriteria {
+            custom: vec![crate::criteria::CustomCriterion {
+                name: "tone".to_string(),
+                description: "friendly".to_string(),
+                threshold: 0.5,
+                config: Value::Null,
+            }],
+            ..Default::default()
+        }));
+        let result = custom.evaluate_case(echo_agent(), &case(vec![turn("hi", "hi")])).await;
+        assert!(!result.unwrap().passed);
+    }
+
+    #[tokio::test]
+    async fn a_case_no_criterion_applies_to_is_not_evaluated() {
+        let evaluator = Evaluator::with_llm_judge(
+            criteria(EvaluationCriteria::semantic_match(0.8)),
+            judge_replying("EQUIVALENT: YES\nSCORE: 1.0\nREASONING: same"),
+        );
+        let unexpected = Turn { final_response: None, ..turn("hi", "unused") };
+
+        let result = evaluator.evaluate_case(echo_agent(), &case(vec![unexpected])).await.unwrap();
+
+        assert!(!result.passed);
+        assert_eq!(failure_details(&result)[0].0, "not_evaluated");
+        assert!(result.scores.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_zero_concurrency_is_rejected_without_waiting() {
+        let evaluator = Evaluator::new(exact_similarity());
+        let cases = vec![case(vec![turn("hi", "hi")])];
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            evaluator.evaluate_cases_parallel(echo_agent(), &cases, 0),
+        )
+        .await
+        .expect("concurrency 0 must not hang");
+        assert_eq!(config_error(outcome.unwrap_err()), "concurrency must be at least 1");
+
+        let empty = evaluator.evaluate_cases_parallel(echo_agent(), &[], 2).await;
+        assert!(config_error(empty.unwrap_err()).contains("no eval cases"));
+    }
+
+    #[tokio::test]
+    async fn parallel_results_follow_case_order() {
+        let evaluator = Evaluator::new(exact_similarity());
+        let cases: Vec<EvalCase> = (0..6)
+            .map(|index| EvalCase {
+                eval_id: format!("case_{index}"),
+                ..case(vec![turn(&format!("m{index}"), &format!("m{index}"))])
+            })
+            .collect();
+
+        let results = evaluator.evaluate_cases_parallel(echo_agent(), &cases, 3).await.unwrap();
+
+        let ids: Vec<String> = results.into_iter().map(|r| r.unwrap().eval_id).collect();
+        let expected: Vec<String> = cases.iter().map(|c| c.eval_id.clone()).collect();
+        assert_eq!(ids, expected);
+    }
+
+    #[tokio::test]
+    async fn a_directory_without_test_files_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = Evaluator::new(exact_similarity())
+            .evaluate_directory(echo_agent(), dir.path())
+            .await
+            .unwrap_err();
+        assert!(config_error(error).contains("no *.test.json files"));
     }
 
     #[test]

@@ -269,6 +269,21 @@ fn junit_output_is_written_to_the_requested_file() {
 }
 
 #[test]
+fn an_eval_set_without_cases_is_refused_before_running() {
+    let dir = TempDir::new().unwrap();
+    let set = write(
+        dir.path(),
+        "empty.test.json",
+        r#"{"eval_set_id": "empty", "name": "Empty", "eval_cases": []}"#,
+    );
+
+    let output = cargo_adk_eval(&[set.to_str().unwrap(), "--agent-cmd", "exit 3"]);
+
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(text(&output).contains("has no eval cases"), "{}", text(&output));
+}
+
+#[test]
 fn judged_criteria_without_a_judge_are_refused_before_running() {
     let dir = TempDir::new().unwrap();
     let set = write(dir.path(), "weather.test.json", WEATHER_SET);
