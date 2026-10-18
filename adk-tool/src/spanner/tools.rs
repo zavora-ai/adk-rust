@@ -1,16 +1,40 @@
 //! Individual Spanner tool implementations.
 //!
-//! Each tool creates a Spanner client on demand and maps Spanner API errors
-//! to [`AdkError`]. Table listing and schema inspection use Spanner's
-//! `INFORMATION_SCHEMA` SQL queries.
+//! Each tool creates a Spanner client on demand, closes it (and its session pool) on
+//! every exit, and maps Spanner API errors to [`AdkError`]. Table listing and schema
+//! inspection use Spanner's `INFORMATION_SCHEMA` SQL queries.
 
 use crate::spanner::toolset::CredentialSource;
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result, Tool, ToolContext};
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use google_cloud_spanner::client::{Client, ClientConfig, Error as SpannerError};
 use google_cloud_spanner::statement::Statement;
 use serde_json::{Value, json};
 use std::sync::Arc;
+
+/// A client that holds resources, such as a session pool, until it is closed.
+pub(crate) trait Closeable: Send + Sync {
+    /// Releases the client's resources.
+    fn close(self) -> impl std::future::Future<Output = ()> + Send;
+}
+
+impl Closeable for Client {
+    fn close(self) -> impl std::future::Future<Output = ()> + Send {
+        Client::close(self)
+    }
+}
+
+/// Runs `work` with `client` and closes the client however `work` ends.
+async fn run_then_close<C, T, F>(client: C, work: F) -> Result<T>
+where
+    C: Closeable,
+    F: for<'c> FnOnce(&'c C) -> BoxFuture<'c, Result<T>>,
+{
+    let result = work(&client).await;
+    client.close().await;
+    result
+}
 
 /// Convenience wrapper: convert a gRPC `Status` (from query iterators)
 /// into a `SpannerError` for uniform error handling.
@@ -212,6 +236,17 @@ impl Tool for SpannerExecuteSql {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        let sql = args["query"]
+            .as_str()
+            .ok_or_else(|| {
+                AdkError::new(
+                    ErrorComponent::Tool,
+                    ErrorCategory::InvalidInput,
+                    "tool.spanner.missing_query",
+                    "Missing required parameter 'query'",
+                )
+            })?
+            .to_string();
         let client = create_client(
             &self.project_id,
             &self.instance_id,
@@ -220,81 +255,70 @@ impl Tool for SpannerExecuteSql {
             &ctx,
         )
         .await?;
-
-        let sql = args["query"].as_str().ok_or_else(|| {
-            AdkError::new(
-                ErrorComponent::Tool,
-                ErrorCategory::InvalidInput,
-                "tool.spanner.missing_query",
-                "Missing required parameter 'query'",
-            )
-        })?;
-
-        let stmt = Statement::new(sql);
-        let mut tx =
-            client.single().await.map_err(|e| map_spanner_error("begin transaction", e))?;
-        let mut iter = tx
-            .query(stmt)
-            .await
-            .map_err(|e| map_spanner_error("query execution", wrap_status(e)))?;
-
-        // Extract column metadata for building row objects
-        let fields = iter.columns_metadata().clone();
-        let column_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-
-        let mut rows: Vec<Value> = Vec::new();
-        while let Some(row) = iter
-            .next()
-            .await
-            .map_err(|status| map_spanner_error("reading row", SpannerError::GRPC(status)))?
-        {
-            let mut row_obj = serde_json::Map::new();
-            for (idx, col_name) in column_names.iter().enumerate() {
-                // Try to extract as String; fall back to null for unsupported types
-                let value: Value = if let Ok(v) = row.column::<String>(idx) {
-                    Value::String(v)
-                } else if let Ok(v) = row.column::<Option<String>>(idx) {
-                    match v {
-                        Some(s) => Value::String(s),
-                        None => Value::Null,
-                    }
-                } else if let Ok(v) = row.column::<i64>(idx) {
-                    json!(v)
-                } else if let Ok(v) = row.column::<Option<i64>>(idx) {
-                    match v {
-                        Some(n) => json!(n),
-                        None => Value::Null,
-                    }
-                } else if let Ok(v) = row.column::<f64>(idx) {
-                    json!(v)
-                } else if let Ok(v) = row.column::<Option<f64>>(idx) {
-                    match v {
-                        Some(n) => json!(n),
-                        None => Value::Null,
-                    }
-                } else if let Ok(v) = row.column::<bool>(idx) {
-                    json!(v)
-                } else if let Ok(v) = row.column::<Option<bool>>(idx) {
-                    match v {
-                        Some(b) => json!(b),
-                        None => Value::Null,
-                    }
-                } else {
-                    // Fallback: try as nullable string for any other type
-                    Value::Null
-                };
-                row_obj.insert(col_name.clone(), value);
-            }
-            rows.push(Value::Object(row_obj));
-        }
-
-        client.close().await;
-
-        Ok(json!({
-            "rows": rows,
-            "total_rows": rows.len(),
-        }))
+        run_then_close(client, move |client| Box::pin(execute_sql(client, sql))).await
     }
+}
+
+async fn execute_sql(client: &Client, sql: String) -> Result<Value> {
+    let stmt = Statement::new(sql);
+    let mut tx = client.single().await.map_err(|e| map_spanner_error("begin transaction", e))?;
+    let mut iter =
+        tx.query(stmt).await.map_err(|e| map_spanner_error("query execution", wrap_status(e)))?;
+
+    // Extract column metadata for building row objects
+    let fields = iter.columns_metadata().clone();
+    let column_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+
+    let mut rows: Vec<Value> = Vec::new();
+    while let Some(row) = iter
+        .next()
+        .await
+        .map_err(|status| map_spanner_error("reading row", SpannerError::GRPC(status)))?
+    {
+        let mut row_obj = serde_json::Map::new();
+        for (idx, col_name) in column_names.iter().enumerate() {
+            // Try to extract as String; fall back to null for unsupported types
+            let value: Value = if let Ok(v) = row.column::<String>(idx) {
+                Value::String(v)
+            } else if let Ok(v) = row.column::<Option<String>>(idx) {
+                match v {
+                    Some(s) => Value::String(s),
+                    None => Value::Null,
+                }
+            } else if let Ok(v) = row.column::<i64>(idx) {
+                json!(v)
+            } else if let Ok(v) = row.column::<Option<i64>>(idx) {
+                match v {
+                    Some(n) => json!(n),
+                    None => Value::Null,
+                }
+            } else if let Ok(v) = row.column::<f64>(idx) {
+                json!(v)
+            } else if let Ok(v) = row.column::<Option<f64>>(idx) {
+                match v {
+                    Some(n) => json!(n),
+                    None => Value::Null,
+                }
+            } else if let Ok(v) = row.column::<bool>(idx) {
+                json!(v)
+            } else if let Ok(v) = row.column::<Option<bool>>(idx) {
+                match v {
+                    Some(b) => json!(b),
+                    None => Value::Null,
+                }
+            } else {
+                // Fallback: try as nullable string for any other type
+                Value::Null
+            };
+            row_obj.insert(col_name.clone(), value);
+        }
+        rows.push(Value::Object(row_obj));
+    }
+
+    Ok(json!({
+        "rows": rows,
+        "total_rows": rows.len(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +372,17 @@ impl Tool for SpannerGetTableSchema {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        let table_name = args["table_name"]
+            .as_str()
+            .ok_or_else(|| {
+                AdkError::new(
+                    ErrorComponent::Tool,
+                    ErrorCategory::InvalidInput,
+                    "tool.spanner.missing_table_name",
+                    "Missing required parameter 'table_name'",
+                )
+            })?
+            .to_string();
         let client = create_client(
             &self.project_id,
             &self.instance_id,
@@ -356,88 +391,80 @@ impl Tool for SpannerGetTableSchema {
             &ctx,
         )
         .await?;
-
-        let table_name = args["table_name"].as_str().ok_or_else(|| {
-            AdkError::new(
-                ErrorComponent::Tool,
-                ErrorCategory::InvalidInput,
-                "tool.spanner.missing_table_name",
-                "Missing required parameter 'table_name'",
-            )
-        })?;
-
-        // Query column definitions from INFORMATION_SCHEMA
-        let mut col_stmt = Statement::new(
-            "SELECT COLUMN_NAME, SPANNER_TYPE, IS_NULLABLE, ORDINAL_POSITION \
-             FROM INFORMATION_SCHEMA.COLUMNS \
-             WHERE TABLE_NAME = @table_name \
-             ORDER BY ORDINAL_POSITION",
-        );
-        col_stmt.add_param("table_name", &table_name);
-
-        let mut tx =
-            client.single().await.map_err(|e| map_spanner_error("begin transaction", e))?;
-        let mut col_iter = tx
-            .query(col_stmt)
-            .await
-            .map_err(|e| map_spanner_error("query columns", wrap_status(e)))?;
-
-        let mut columns: Vec<Value> = Vec::new();
-        while let Some(row) = col_iter.next().await.map_err(|status| {
-            map_spanner_error("reading column metadata", SpannerError::GRPC(status))
-        })? {
-            let col_name = row.column_by_name::<String>("COLUMN_NAME").unwrap_or_default();
-            let spanner_type = row.column_by_name::<String>("SPANNER_TYPE").unwrap_or_default();
-            let is_nullable = row.column_by_name::<String>("IS_NULLABLE").unwrap_or_default();
-            let ordinal = row.column_by_name::<i64>("ORDINAL_POSITION").unwrap_or(0);
-
-            columns.push(json!({
-                "name": col_name,
-                "type": spanner_type,
-                "nullable": is_nullable == "YES",
-                "ordinal_position": ordinal,
-            }));
-        }
-
-        // Query primary key columns from INFORMATION_SCHEMA
-        let mut pk_stmt = Statement::new(
-            "SELECT COLUMN_NAME, COLUMN_ORDERING, ORDINAL_POSITION \
-             FROM INFORMATION_SCHEMA.INDEX_COLUMNS \
-             WHERE TABLE_NAME = @table_name AND INDEX_NAME = 'PRIMARY_KEY' \
-             ORDER BY ORDINAL_POSITION",
-        );
-        pk_stmt.add_param("table_name", &table_name);
-
-        let mut pk_iter = tx
-            .query(pk_stmt)
-            .await
-            .map_err(|e| map_spanner_error("query primary keys", wrap_status(e)))?;
-
-        let mut primary_keys: Vec<Value> = Vec::new();
-        while let Some(row) = pk_iter.next().await.map_err(|status| {
-            map_spanner_error("reading primary key metadata", SpannerError::GRPC(status))
-        })? {
-            let col_name = row.column_by_name::<String>("COLUMN_NAME").unwrap_or_default();
-            let ordering = row.column_by_name::<Option<String>>("COLUMN_ORDERING").unwrap_or(None);
-
-            primary_keys.push(json!({
-                "column": col_name,
-                "ordering": ordering.unwrap_or_else(|| "ASC".to_string()),
-            }));
-        }
-
-        client.close().await;
-
-        Ok(json!({
-            "table": table_name,
-            "database": format!(
-                "projects/{}/instances/{}/databases/{}",
-                self.project_id, self.instance_id, self.database_id
-            ),
-            "columns": columns,
-            "primary_key": primary_keys,
-        }))
+        let database = database_path(&self.project_id, &self.instance_id, &self.database_id);
+        run_then_close(client, move |client| {
+            Box::pin(get_table_schema(client, table_name, database))
+        })
+        .await
     }
+}
+
+async fn get_table_schema(client: &Client, table_name: String, database: String) -> Result<Value> {
+    let table_name = table_name.as_str();
+
+    // Query column definitions from INFORMATION_SCHEMA
+    let mut col_stmt = Statement::new(
+        "SELECT COLUMN_NAME, SPANNER_TYPE, IS_NULLABLE, ORDINAL_POSITION \
+         FROM INFORMATION_SCHEMA.COLUMNS \
+         WHERE TABLE_NAME = @table_name \
+         ORDER BY ORDINAL_POSITION",
+    );
+    col_stmt.add_param("table_name", &table_name);
+
+    let mut tx = client.single().await.map_err(|e| map_spanner_error("begin transaction", e))?;
+    let mut col_iter =
+        tx.query(col_stmt).await.map_err(|e| map_spanner_error("query columns", wrap_status(e)))?;
+
+    let mut columns: Vec<Value> = Vec::new();
+    while let Some(row) = col_iter.next().await.map_err(|status| {
+        map_spanner_error("reading column metadata", SpannerError::GRPC(status))
+    })? {
+        let col_name = row.column_by_name::<String>("COLUMN_NAME").unwrap_or_default();
+        let spanner_type = row.column_by_name::<String>("SPANNER_TYPE").unwrap_or_default();
+        let is_nullable = row.column_by_name::<String>("IS_NULLABLE").unwrap_or_default();
+        let ordinal = row.column_by_name::<i64>("ORDINAL_POSITION").unwrap_or(0);
+
+        columns.push(json!({
+            "name": col_name,
+            "type": spanner_type,
+            "nullable": is_nullable == "YES",
+            "ordinal_position": ordinal,
+        }));
+    }
+
+    // Query primary key columns from INFORMATION_SCHEMA
+    let mut pk_stmt = Statement::new(
+        "SELECT COLUMN_NAME, COLUMN_ORDERING, ORDINAL_POSITION \
+         FROM INFORMATION_SCHEMA.INDEX_COLUMNS \
+         WHERE TABLE_NAME = @table_name AND INDEX_NAME = 'PRIMARY_KEY' \
+         ORDER BY ORDINAL_POSITION",
+    );
+    pk_stmt.add_param("table_name", &table_name);
+
+    let mut pk_iter = tx
+        .query(pk_stmt)
+        .await
+        .map_err(|e| map_spanner_error("query primary keys", wrap_status(e)))?;
+
+    let mut primary_keys: Vec<Value> = Vec::new();
+    while let Some(row) = pk_iter.next().await.map_err(|status| {
+        map_spanner_error("reading primary key metadata", SpannerError::GRPC(status))
+    })? {
+        let col_name = row.column_by_name::<String>("COLUMN_NAME").unwrap_or_default();
+        let ordering = row.column_by_name::<Option<String>>("COLUMN_ORDERING").unwrap_or(None);
+
+        primary_keys.push(json!({
+            "column": col_name,
+            "ordering": ordering.unwrap_or_else(|| "ASC".to_string()),
+        }));
+    }
+
+    Ok(json!({
+        "table": table_name,
+        "database": database,
+        "columns": columns,
+        "primary_key": primary_keys,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -493,43 +520,77 @@ impl Tool for SpannerListTables {
             &ctx,
         )
         .await?;
+        let database = database_path(&self.project_id, &self.instance_id, &self.database_id);
+        run_then_close(client, move |client| Box::pin(list_tables(client, database))).await
+    }
+}
 
-        let stmt = Statement::new(
-            "SELECT TABLE_NAME, PARENT_TABLE_NAME, TABLE_TYPE \
-             FROM INFORMATION_SCHEMA.TABLES \
-             WHERE TABLE_SCHEMA = '' \
-             ORDER BY TABLE_NAME",
-        );
+async fn list_tables(client: &Client, database: String) -> Result<Value> {
+    let stmt = Statement::new(
+        "SELECT TABLE_NAME, PARENT_TABLE_NAME, TABLE_TYPE \
+         FROM INFORMATION_SCHEMA.TABLES \
+         WHERE TABLE_SCHEMA = '' \
+         ORDER BY TABLE_NAME",
+    );
 
-        let mut tx =
-            client.single().await.map_err(|e| map_spanner_error("begin transaction", e))?;
-        let mut iter =
-            tx.query(stmt).await.map_err(|e| map_spanner_error("list tables", wrap_status(e)))?;
+    let mut tx = client.single().await.map_err(|e| map_spanner_error("begin transaction", e))?;
+    let mut iter =
+        tx.query(stmt).await.map_err(|e| map_spanner_error("list tables", wrap_status(e)))?;
 
-        let mut tables: Vec<Value> = Vec::new();
-        while let Some(row) = iter.next().await.map_err(|status| {
-            map_spanner_error("reading table metadata", SpannerError::GRPC(status))
-        })? {
-            let table_name = row.column_by_name::<String>("TABLE_NAME").unwrap_or_default();
-            let parent = row.column_by_name::<Option<String>>("PARENT_TABLE_NAME").unwrap_or(None);
-            let table_type = row.column_by_name::<Option<String>>("TABLE_TYPE").unwrap_or(None);
+    let mut tables: Vec<Value> = Vec::new();
+    while let Some(row) = iter
+        .next()
+        .await
+        .map_err(|status| map_spanner_error("reading table metadata", SpannerError::GRPC(status)))?
+    {
+        let table_name = row.column_by_name::<String>("TABLE_NAME").unwrap_or_default();
+        let parent = row.column_by_name::<Option<String>>("PARENT_TABLE_NAME").unwrap_or(None);
+        let table_type = row.column_by_name::<Option<String>>("TABLE_TYPE").unwrap_or(None);
 
-            tables.push(json!({
-                "table_name": table_name,
-                "parent_table": parent,
-                "type": table_type.unwrap_or_else(|| "BASE TABLE".to_string()),
-            }));
+        tables.push(json!({
+            "table_name": table_name,
+            "parent_table": parent,
+            "type": table_type.unwrap_or_else(|| "BASE TABLE".to_string()),
+        }));
+    }
+
+    Ok(json!({
+        "database": database,
+        "tables": tables,
+        "total": tables.len(),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingClient(Arc<AtomicUsize>);
+
+    impl Closeable for CountingClient {
+        fn close(self) -> impl std::future::Future<Output = ()> + Send {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(())
         }
+    }
 
-        client.close().await;
+    #[tokio::test]
+    async fn the_client_is_closed_when_the_query_fails_and_when_it_succeeds() {
+        let closes = Arc::new(AtomicUsize::new(0));
 
-        Ok(json!({
-            "database": format!(
-                "projects/{}/instances/{}/databases/{}",
-                self.project_id, self.instance_id, self.database_id
-            ),
-            "tables": tables,
-            "total": tables.len(),
-        }))
+        let failed = run_then_close(CountingClient(closes.clone()), |_client| {
+            Box::pin(async { Err::<Value, _>(AdkError::tool("query execution failed")) })
+        })
+        .await;
+        assert!(failed.is_err());
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+
+        let done = run_then_close(CountingClient(closes.clone()), |_client| {
+            Box::pin(async { Ok(json!({"rows": []})) })
+        })
+        .await;
+        assert_eq!(done.unwrap(), json!({"rows": []}));
+        assert_eq!(closes.load(Ordering::SeqCst), 2);
     }
 }

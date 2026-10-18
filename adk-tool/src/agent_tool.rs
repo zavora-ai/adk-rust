@@ -162,6 +162,9 @@ struct HeldDelegation {
 ///
 /// Every field is named, so a new one has to be classed as shared with the delegate or as
 /// belonging to the caller's own agent.
+/// The output text of a delegation that produced nothing.
+const NO_RESPONSE: &str = "No response from agent";
+
 fn delegated_run_config(parent: RunConfig) -> RunConfig {
     let RunConfig {
         streaming_mode: _,
@@ -572,10 +575,53 @@ impl AgentTool {
 
     /// Extracts the delegation's output from its events.
     ///
-    /// The output is the text of the final response. A delegate that ends on a tool result,
-    /// as one whose tool skips summarization does, hands back that result: the payload of a
-    /// single function response, or `{"responses": [{"name", "response"}, ...]}` for several.
+    /// The output is the text of the final response, as `{"response": text}`. Results of
+    /// the delegate's provider-side tools, such as Gemini code execution, are added as
+    /// `"server_tool_responses"`: the code's output is often the answer, and the model's
+    /// text may not repeat it. A delegate that ends on a tool result, as one whose tool
+    /// skips summarization does, hands back that result: the payload of a single function
+    /// response, or `{"responses": [{"name", "response"}, ...]}` for several.
     fn extract_response(events: &[Event]) -> Value {
+        let mut output = Self::final_output(events);
+        let server_tool_responses = Self::server_tool_responses(events);
+        if !server_tool_responses.is_empty()
+            && let Some(map) = output.as_object_mut()
+            && map.len() == 1
+            && map.contains_key("response")
+        {
+            // The code's output is the answer; no placeholder text beside it.
+            if map["response"] == NO_RESPONSE {
+                map.insert("response".to_string(), json!(""));
+            }
+            map.insert("server_tool_responses".to_string(), Value::Array(server_tool_responses));
+        }
+        output
+    }
+
+    /// The `ServerToolResponse` payloads of the delegation, each once.
+    ///
+    /// A streamed turn delivers each part in a partial event and may repeat it in the
+    /// aggregated final event, so complete events are read when they carry any.
+    fn server_tool_responses(events: &[Event]) -> Vec<Value> {
+        let collect = |partial: bool| -> Vec<Value> {
+            events
+                .iter()
+                .filter(|event| event.llm_response.partial == partial)
+                .flat_map(|event| event.llm_response.content.iter())
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| match part {
+                    Part::ServerToolResponse { server_tool_response } => {
+                        Some(server_tool_response.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let complete = collect(false);
+        if complete.is_empty() { collect(true) } else { complete }
+    }
+
+    fn final_output(events: &[Event]) -> Value {
         let function_responses = |event: &Event| {
             let responses: Vec<_> = event
                 .llm_response
@@ -642,7 +688,7 @@ impl AgentTool {
                 return payload;
             }
         }
-        json!({ "response": "No response from agent" })
+        json!({ "response": NO_RESPONSE })
     }
 
     fn project_parent_history(history: Vec<Content>, max_events: Option<usize>) -> Vec<Content> {
@@ -2428,6 +2474,40 @@ mod tests {
                 .collect(),
         });
         event
+    }
+
+    #[test]
+    fn code_execution_results_are_part_of_the_delegations_output() {
+        let result = json!({"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "5117\n"}});
+        let mut answer = Event::new("inv");
+        answer.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![
+                Part::ServerToolCall {
+                    server_tool_call: json!({"executableCode": {"language": "PYTHON", "code": "print(5117)"}}),
+                },
+                Part::ServerToolResponse { server_tool_response: result.clone() },
+                Part::Text { text: "The sum is 5117.".to_string() },
+            ],
+        });
+        let mut streamed = answer.clone();
+        streamed.llm_response.partial = true;
+
+        assert_eq!(
+            AgentTool::extract_response(&[streamed.clone(), answer]),
+            json!({"response": "The sum is 5117.", "server_tool_responses": [result.clone()]})
+        );
+
+        // Only the code ran; no final text followed.
+        let mut code_only = Event::new("inv");
+        code_only.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![Part::ServerToolResponse { server_tool_response: result.clone() }],
+        });
+        assert_eq!(
+            AgentTool::extract_response(&[code_only]),
+            json!({"response": "", "server_tool_responses": [result]})
+        );
     }
 
     #[test]
