@@ -43,12 +43,14 @@ async fn list_objects(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let prefix = params.get("prefix").cloned().unwrap_or_default();
-    let store = store.lock().unwrap();
     let items: Vec<Value> = store
+        .lock()
+        .unwrap()
         .iter()
         .filter(|(name, _)| name.starts_with(&prefix))
         .map(|(name, object)| object_resource(name, object))
         .collect();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     axum::Json(json!({ "items": items })).into_response()
 }
 
@@ -108,7 +110,12 @@ fn parse_multipart_related(headers: &HeaderMap, body: &[u8]) -> (Value, Vec<u8>)
     (resource, parts[1].clone())
 }
 
-async fn upload_object(State(store): State<Store>, headers: HeaderMap, body: Bytes) -> Response {
+async fn upload_object(
+    State(store): State<Store>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let (resource, data) = parse_multipart_related(&headers, &body);
     let name = resource["name"].as_str().unwrap().to_string();
     let content_type = resource["contentType"].as_str().map(str::to_string);
@@ -119,7 +126,16 @@ async fn upload_object(State(store): State<Store>, headers: HeaderMap, body: Byt
         .unwrap_or_default();
     let object = StoredObject { data, content_type, metadata };
     let response = object_resource(&name, &object);
-    store.lock().unwrap().insert(name, object);
+    // Listing a real bucket takes a few milliseconds; the pause lets concurrent saves overlap.
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    let mut store = store.lock().unwrap();
+    // GCS answers 412 when `ifGenerationMatch=0` names an existing object.
+    if params.get("ifGenerationMatch").is_some_and(|value| value == "0")
+        && store.contains_key(&name)
+    {
+        return StatusCode::PRECONDITION_FAILED.into_response();
+    }
+    store.insert(name, object);
     axum::Json(response).into_response()
 }
 
@@ -313,6 +329,75 @@ async fn test_engine_id_app_name_round_trips() {
 
     let store = store.lock().unwrap();
     assert!(store.contains_key("1234567890123456789/user123/session456/output.png/0"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_concurrent_saves_each_store_a_distinct_version() {
+    let (endpoint, store) = spawn_mock_gcs().await;
+    let service = Arc::new(mock_service(&endpoint));
+    let writers = 12;
+    let barrier = Arc::new(tokio::sync::Barrier::new(writers));
+    let tasks: Vec<_> = (0..writers)
+        .map(|writer| {
+            let (service, barrier) = (service.clone(), barrier.clone());
+            tokio::spawn(async move {
+                barrier.wait().await;
+                service.save(save_request("my-app", "race.png", inline_part(&[writer as u8]))).await
+            })
+        })
+        .collect();
+    let mut returned = Vec::new();
+    for task in tasks {
+        returned.push(task.await.unwrap().unwrap().version);
+    }
+    returned.sort_unstable();
+    assert_eq!(returned, (0..writers as i64).collect::<Vec<_>>());
+
+    let store = store.lock().unwrap();
+    let stored: Vec<u8> = (0..writers)
+        .map(|version| store[&format!("my-app/user123/session456/race.png/{version}")].data[0])
+        .collect();
+    let mut distinct = stored.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(distinct.len(), writers, "every save's bytes are stored: {stored:?}");
+}
+
+#[tokio::test]
+async fn test_explicit_existing_version_is_never_replaced() {
+    let (endpoint, store) = spawn_mock_gcs().await;
+    let service = mock_service(&endpoint);
+    service.save(save_request("my-app", "chart.png", inline_part(b"original"))).await.unwrap();
+
+    let mut replace = save_request("my-app", "chart.png", inline_part(b"replacement"));
+    replace.version = Some(0);
+    let error = service.save(replace).await.unwrap_err();
+    assert!(error.is_conflict(), "{error}");
+    assert_eq!(error.code, "artifact.version_exists");
+    assert_eq!(store.lock().unwrap()["my-app/user123/session456/chart.png/0"].data, b"original");
+}
+
+#[tokio::test]
+async fn test_user_session_id_is_rejected() {
+    let (endpoint, store) = spawn_mock_gcs().await;
+    let service = mock_service(&endpoint);
+
+    for file_name in ["draft.png", "user:draft.png"] {
+        let mut request = save_request("my-app", file_name, inline_part(b"x"));
+        request.session_id = "user".to_string();
+        let error = service.save(request).await.unwrap_err();
+        assert_eq!(error.code, "artifact.reserved_session_id", "{file_name}: {error}");
+    }
+    let error = service
+        .list(ListRequest {
+            app_name: "my-app".to_string(),
+            user_id: "user123".to_string(),
+            session_id: "user".to_string(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "artifact.reserved_session_id");
+    assert!(store.lock().unwrap().is_empty());
 }
 
 /// Live round-trip against a real bucket. Requires ADC plus

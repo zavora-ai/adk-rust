@@ -109,9 +109,12 @@ let service = InMemoryArtifactService::new();
 Persists artifacts to the local filesystem. Each version is stored as a JSON-serialized file under a directory hierarchy:
 
 ```
-<base_dir>/<app_name>/<user_id>/<session_id>/<file_name>/v1.json
-                                                         v2.json
+<base_dir>/<app_name>/<user_id>/<session_id>/<name>/v1.json
+                                                    v2.json
+<base_dir>/<app_name>/<user_id>/user/<name>/v1.json        (user: names)
 ```
+
+`<name>` is the artifact name with `%`, `:`, the other characters Windows forbids in file names, and the second `_` of every `__` written as `%XX` escapes, so `a:b` and `a__b` are stored apart. A save writes the version to a temporary file, flushes it, and links it into place without replacing an existing file, so a crash never leaves a partial version. Artifacts written in the earlier layout (`:` stored as `__`, user scope under `_user_scoped_`) stay loadable.
 
 ```rust
 use adk_artifact::FileArtifactService;
@@ -136,7 +139,7 @@ All backends implement the full `ArtifactService` trait:
 
 ## Versioning
 
-Every artifact supports multiple versions. When saving with `version: None`, the version auto-increments starting from 1. You can also write to an explicit version:
+Every artifact supports multiple versions. When saving with `version: None`, the version auto-increments starting from 1. You can also write to an explicit version that does not exist yet:
 
 ```rust
 // Auto-increment: first save → v1, second save → v2
@@ -153,8 +156,17 @@ let resp = service.versions(VersionsRequest {
     session_id: "sess".into(),
     file_name: "report.pdf".into(),
 }).await?;
-// resp.versions == [2, 1]
+// resp.versions == [42, 2, 1]
 ```
+
+Every backend keeps the same contract:
+
+| Rule | Behaviour |
+|------|-----------|
+| **Versions are immutable** | A save never replaces a stored version; an explicit existing version fails with `ErrorCategory::Conflict`. |
+| **Concurrent saves each get a version** | Simultaneous saves without a version return distinct versions, and all are stored. |
+| **Distinct names are distinct artifacts** | No two file names share storage. |
+| **`user` is not a session id** | It names the user scope; every operation rejects it with `ErrorCategory::InvalidInput`. |
 
 ## Scoping
 
@@ -187,7 +199,7 @@ let resp = service.list(ListRequest {
 // resp.file_names includes "user:profile.png"
 ```
 
-Internally, user-scoped artifacts are stored under a shared `_user_scoped_` directory (filesystem) or a `"user"` session key (in-memory), so they're visible regardless of which session ID is used.
+Internally, user-scoped artifacts are stored under the reserved session segment `user` (`USER_SCOPE_SESSION_ID`) in every backend, so they're visible regardless of which session ID is used. Because the segment is reserved, every backend rejects `user` as a session id.
 
 ## Deleting Artifacts
 

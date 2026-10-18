@@ -22,7 +22,7 @@
 
 use crate::service::{
     ArtifactService, DeleteRequest, ListRequest, ListResponse, LoadRequest, LoadResponse,
-    SaveRequest, SaveResponse, VersionsRequest, VersionsResponse,
+    SaveRequest, SaveResponse, VersionsRequest, VersionsResponse, check_session_id, version_exists,
 };
 use adk_core::{AdkError, ErrorComponent, Part, Result};
 use adk_gcp::{GcpErrorCodes, GcpErrorContext, GcpHttpClient};
@@ -38,6 +38,9 @@ use std::time::Duration;
 const DEFAULT_ENDPOINT: &str = "https://storage.googleapis.com";
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How many versions taken by concurrent saves one save steps past before it gives up.
+const MAX_SAVE_ATTEMPTS: usize = 64;
 
 // Error identity stamped by the shared adk-gcp plumbing. Only the
 // credential-path slots (unauthorized, credentials_unavailable, timeout) and
@@ -81,6 +84,12 @@ const GCS_FILE_MIME_TYPE_METADATA_KEY: &str = "adkFileMimeType";
 /// Auto-assigned versions start at `0` and increment by one, matching
 /// adk-python. This differs from [`InMemoryArtifactService`](crate::InMemoryArtifactService),
 /// which starts at `1`.
+///
+/// Every upload carries the `ifGenerationMatch=0` precondition, so GCS creates the
+/// object only when no version of that number exists. A save that loses the race to a
+/// concurrent save moves on to the next version; a save naming an explicit version that
+/// exists fails with [`Conflict`](adk_core::ErrorCategory::Conflict). The session id
+/// `user` names the user-namespace segment and is rejected.
 ///
 /// # `app_name` consistency
 ///
@@ -270,11 +279,11 @@ impl GcsArtifactService {
     ) -> Result<String> {
         validate_path_segment(app_name, "app_name")?;
         validate_path_segment(user_id, "user_id")?;
+        validate_session_id(session_id)?;
         validate_file_name(file_name)?;
         if file_has_user_namespace(file_name) {
             return Ok(format!("{app_name}/{user_id}/user/{file_name}"));
         }
-        validate_path_segment(session_id, "session_id")?;
         Ok(format!("{app_name}/{user_id}/{session_id}/{file_name}"))
     }
 
@@ -387,13 +396,16 @@ impl GcsArtifactService {
         Ok(bytes.to_vec())
     }
 
-    async fn upload_object(
+    /// Uploads `blob_name` only if it does not exist yet (`ifGenerationMatch=0`).
+    ///
+    /// Returns `false` when the object already exists.
+    async fn create_object(
         &self,
         blob_name: &str,
         content_type: Option<&str>,
         metadata: &HashMap<String, String>,
         data: &[u8],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut resource = json!({ "name": blob_name });
         if let Some(content_type) = content_type {
             resource["contentType"] = Value::String(content_type.to_string());
@@ -407,7 +419,7 @@ impl GcsArtifactService {
             .apply_auth(
                 self.http_client
                     .post(self.upload_url())
-                    .query(&[("uploadType", "multipart")])
+                    .query(&[("uploadType", "multipart"), ("ifGenerationMatch", "0")])
                     .header(
                         reqwest::header::CONTENT_TYPE,
                         format!("multipart/related; boundary={boundary}"),
@@ -419,11 +431,14 @@ impl GcsArtifactService {
             Self::internal_error(format!("gcs upload request failed: {}", error.without_url()))
         })?;
         let status = response.status();
+        if status == StatusCode::PRECONDITION_FAILED {
+            return Ok(false);
+        }
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             return Err(Self::http_error(status, "upload object", &body));
         }
-        Ok(())
+        Ok(true)
     }
 
     async fn delete_object(&self, blob_name: &str) -> Result<()> {
@@ -445,6 +460,11 @@ impl GcsArtifactService {
 
 fn file_has_user_namespace(file_name: &str) -> bool {
     file_name.starts_with("user:")
+}
+
+fn validate_session_id(session_id: &str) -> Result<()> {
+    validate_path_segment(session_id, "session_id")?;
+    check_session_id(session_id).map_err(|error| error.with_provider("gcs"))
 }
 
 fn validate_path_segment(segment: &str, field: &str) -> Result<()> {
@@ -649,7 +669,8 @@ fn reconstruct_part(object: &ObjectResource, data: Option<Vec<u8>>) -> Result<Pa
 impl ArtifactService for GcsArtifactService {
     #[tracing::instrument(skip_all, fields(artifact.file_name = %req.file_name))]
     async fn save(&self, req: SaveRequest) -> Result<SaveResponse> {
-        let version = match req.version {
+        let plan = plan_upload(&req.part)?;
+        let mut version = match req.version {
             Some(version) => version,
             // First auto-assigned version is 0, matching adk-python.
             None => self
@@ -658,13 +679,45 @@ impl ArtifactService for GcsArtifactService {
                 .last()
                 .map_or(0, |latest| latest + 1),
         };
-        let blob_name =
-            Self::blob_name(&req.app_name, &req.user_id, &req.session_id, &req.file_name, version)?;
-        let plan = plan_upload(&req.part)?;
-        self.upload_object(&blob_name, plan.content_type.as_deref(), &plan.metadata, &plan.data)
-            .await?;
-        tracing::debug!(gcs.blob_name = blob_name, artifact.version = version, "artifact saved");
-        Ok(SaveResponse { version })
+        for _ in 0..MAX_SAVE_ATTEMPTS {
+            let blob_name = Self::blob_name(
+                &req.app_name,
+                &req.user_id,
+                &req.session_id,
+                &req.file_name,
+                version,
+            )?;
+            if self
+                .create_object(&blob_name, plan.content_type.as_deref(), &plan.metadata, &plan.data)
+                .await?
+            {
+                tracing::debug!(
+                    gcs.blob_name = blob_name,
+                    artifact.version = version,
+                    "artifact saved"
+                );
+                return Ok(SaveResponse { version });
+            }
+            if req.version.is_some() {
+                return Err(version_exists(&req.file_name, version).with_provider("gcs"));
+            }
+            tracing::debug!(
+                gcs.blob_name = blob_name,
+                artifact.version = version,
+                "version taken by a concurrent save; trying the next"
+            );
+            version += 1;
+        }
+        Err(AdkError::new(
+            ErrorComponent::Artifact,
+            adk_core::ErrorCategory::Conflict,
+            "artifact.save_contended",
+            format!(
+                "artifact '{}' gained {MAX_SAVE_ATTEMPTS} versions while this save ran; retry the save",
+                req.file_name
+            ),
+        )
+        .with_provider("gcs"))
     }
 
     #[tracing::instrument(skip_all, fields(artifact.file_name = %req.file_name))]
@@ -717,7 +770,7 @@ impl ArtifactService for GcsArtifactService {
     async fn list(&self, req: ListRequest) -> Result<ListResponse> {
         validate_path_segment(&req.app_name, "app_name")?;
         validate_path_segment(&req.user_id, "user_id")?;
-        validate_path_segment(&req.session_id, "session_id")?;
+        validate_session_id(&req.session_id)?;
         let mut file_names = BTreeSet::new();
         let session_prefix = format!("{}/{}/{}/", req.app_name, req.user_id, req.session_id);
         let user_prefix = format!("{}/{}/user/", req.app_name, req.user_id);

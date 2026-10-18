@@ -201,9 +201,17 @@ println!("Available versions: {:?}", response.versions);
 Artifacts support automatic versioning:
 
 - When saving without specifying a version, the system auto-increments from the latest version
-- Version 1 is assigned to the first save
+- Version 1 is assigned to the first save (version 0 on `GcsArtifactService`, matching adk-python)
 - Each subsequent save increments the version number
 - You can load, delete, or query specific versions
+
+Every backend keeps the same versioning contract:
+
+| Rule | Behaviour |
+|------|-----------|
+| **Versions are immutable** | A save never replaces a stored version. A save with `version: Some(n)` for an existing `n` fails with `ErrorCategory::Conflict` (`artifact.version_exists`). |
+| **Concurrent saves each get a version** | Saves of one artifact that run at the same time without a version return distinct versions, and every one is stored. |
+| **Distinct names are distinct artifacts** | No two file names share storage, so `a:b` and `a__b` are different artifacts. |
 
 ```rust
 // First save - becomes version 1
@@ -290,6 +298,11 @@ The `user:` prefix enables:
 - Persistent user preferences
 - User-level caching
 
+> **Note:** user-scoped artifacts are stored under the reserved session segment `user`
+> (`adk_artifact::USER_SCOPE_SESSION_ID`). Every backend rejects `user` as a session id
+> with `ErrorCategory::InvalidInput` (`artifact.reserved_session_id`), so a session's
+> artifacts never appear in the listings of the user's other sessions.
+
 ## InMemoryArtifactService
 
 The `InMemoryArtifactService` provides an in-memory implementation suitable for development and testing:
@@ -308,7 +321,47 @@ let agent = LlmAgentBuilder::new("my_agent")
 // The service can be passed to runners or used directly
 ```
 
-**Note**: Data is not persisted to disk. For production use, consider implementing a custom `ArtifactService` backed by a database or cloud storage.
+**Note**: Data is not persisted to disk. For durable storage, use `FileArtifactService` or `GcsArtifactService` (feature `gcs`), or implement a custom `ArtifactService`.
+
+## FileArtifactService
+
+`FileArtifactService` stores each version as one JSON file under a base directory:
+
+| Scope | Path |
+|-------|------|
+| Session | `{app_name}/{user_id}/{session_id}/{name}/v{version}.json` |
+| User (`user:` names) | `{app_name}/{user_id}/user/{name}/v{version}.json` |
+
+- **Names** — `{name}` is the artifact name with `%`, `:`, the other characters Windows forbids in file names (`<>"|?*` and control characters), and the second `_` of every `__` written as `%XX` escapes. The encoding is injective, so no two names share a directory.
+- **Crash safety** — a save writes the version to a temporary file (`.save-*.tmp`), flushes it to disk, and links it into place without replacing an existing file. A crash mid-save leaves the earlier versions intact; the leftover temporary file is ignored. On filesystems without hard links (FAT, exFAT) the version file is created exclusively and written in place instead.
+- **Earlier layout** — artifacts written by releases that stored `:` as `__` and kept user-scoped artifacts under `_user_scoped_` are still loaded, listed, versioned, and deleted. New versions of them go to the current layout and continue their numbering. A name saved under the earlier layout with `:` or `__` is found under both spellings, as it was before.
+
+```rust
+use adk_artifact::{ArtifactService, FileArtifactService, SaveRequest};
+use adk_core::Part;
+
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = FileArtifactService::new("./artifacts")?;
+    let saved = service
+        .save(SaveRequest {
+            app_name: "my_app".to_string(),
+            user_id: "user_123".to_string(),
+            session_id: "session_456".to_string(),
+            file_name: "report:q1".to_string(),
+            part: Part::Text { text: "quarterly numbers".to_string() },
+            version: None,
+        })
+        .await?;
+    // Stored at ./artifacts/my_app/user_123/session_456/report%3Aq1/v1.json
+    assert_eq!(saved.version, 1);
+    Ok(())
+}
+```
+
+## GcsArtifactService
+
+`GcsArtifactService` (feature `gcs`) uses adk-python's blob names: `{app_name}/{user_id}/{session_id}/{filename}/{version}`, and `{app_name}/{user_id}/user/{filename}/{version}` for `user:` names. Every upload carries the `ifGenerationMatch=0` precondition, so GCS creates an object only when that version does not exist yet; a save that loses the race to a concurrent save moves on to the next version.
 
 ## ScopedArtifacts
 
