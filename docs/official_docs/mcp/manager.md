@@ -14,8 +14,10 @@ remote configuration.
 stateDiagram-v2
     [*] --> Stopped
     [*] --> Disabled
-    Stopped --> Running: start + MCP handshake
-    Stopped --> FailedToStart: spawn or handshake error
+    Stopped --> Starting: start
+    Starting --> Running: MCP handshake succeeds
+    Starting --> FailedToStart: spawn or handshake error, or startup timeout
+    Starting --> Stopped: stop during the handshake
     Running --> Stopped: stop
     Running --> Restarting: manual restart
     Running --> Crashed: closed connection detected
@@ -88,9 +90,22 @@ let agent = LlmAgentBuilder::new("operator")
     .build()?;
 ```
 
-Registry mutations are serialized while a child completes its MCP handshake.
-`start_all` returns an independent result for every enabled server, but startup
-is not currently a parallel-handshake path.
+A server is `Starting` while its child completes the MCP handshake. The registry
+is not locked during the handshake, so the other servers keep serving tools,
+status and lifecycle calls, and `start_all` runs the handshakes concurrently,
+returning an independent result for every enabled server. A handshake that does
+not finish within the startup timeout (30 seconds by default) ends the child and
+leaves the server `FailedToStart`; stopping, updating, disabling or removing a
+`Starting` server cancels its handshake.
+
+```rust
+use adk_tool::mcp::manager::McpServerManager;
+use std::time::Duration;
+
+// `npx` may download its package on the first start.
+let manager = McpServerManager::from_json_file("mcp.json")?
+    .with_startup_timeout(Duration::from_secs(120));
+```
 
 `with_schema_limits` sets the tool-schema size limits for every managed server.
 Each managed toolset is named after its server ID, so the warning for a skipped

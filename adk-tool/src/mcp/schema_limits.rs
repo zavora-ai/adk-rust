@@ -1,8 +1,8 @@
-//! Size limits for the tool schemas an MCP server publishes.
+//! Size limits for the tool schemas and descriptions an MCP server publishes.
 
 use serde_json::{Map, Value};
 
-/// Size limits applied to each tool schema an MCP server publishes.
+/// Size limits applied to each tool schema and description an MCP server publishes.
 ///
 /// [`McpToolset`](super::McpToolset) measures a tool's input schema and, when
 /// present, its output schema during discovery, before it copies or logs either
@@ -10,10 +10,16 @@ use serde_json::{Map, Value};
 /// the toolset and the tool, and discovery continues with the remaining tools.
 /// Accepted tools log the measured size at `debug`, never the document.
 ///
+/// A tool's description is text the server chooses and every model request
+/// carries, so it is untrusted input to the prompt. A description longer than
+/// `max_description_bytes` is cut at a character boundary, with a `warn!` giving
+/// both sizes, and the tool is kept.
+///
 /// | Limit | Measures | Default |
 /// |-------|----------|---------|
 /// | `max_bytes` | Approximate compact-JSON size of one schema | 262 144 (256 KiB) |
 /// | `max_nodes` | JSON values in one schema, the root object included | 10 000 |
+/// | `max_description_bytes` | UTF-8 bytes of one tool description | 8 192 (8 KiB) |
 ///
 /// The byte measure counts each key and string by its decoded length plus two
 /// quotes, each number by its display length, and every `{}`, `[]`, `:` and `,`.
@@ -30,6 +36,8 @@ use serde_json::{Map, Value};
 /// - **10 000 nodes** is what a typical schema, at roughly 25 bytes per value,
 ///   holds at the byte limit. It bounds documents of many small values, such as
 ///   `[0,0,0]`, whose in-memory cost per value far exceeds their serialized size.
+/// - **8 KiB** is about 2 000 tokens. Published MCP tool descriptions run from a
+///   sentence to a few kilobytes of usage notes.
 ///
 /// # Example
 ///
@@ -49,6 +57,8 @@ pub struct McpSchemaLimits {
     pub max_bytes: usize,
     /// Most JSON values accepted in one schema.
     pub max_nodes: usize,
+    /// Longest tool description kept, in bytes; a longer one is truncated.
+    pub max_description_bytes: usize,
 }
 
 impl McpSchemaLimits {
@@ -57,6 +67,9 @@ impl McpSchemaLimits {
 
     /// Default value of [`max_nodes`](Self::max_nodes).
     pub const DEFAULT_MAX_NODES: usize = 10_000;
+
+    /// Default value of [`max_description_bytes`](Self::max_description_bytes): 8 KiB.
+    pub const DEFAULT_MAX_DESCRIPTION_BYTES: usize = 8 * 1024;
 
     /// Sets the largest accepted schema size in bytes.
     ///
@@ -86,6 +99,28 @@ impl McpSchemaLimits {
     pub fn with_max_nodes(mut self, max_nodes: usize) -> Self {
         self.max_nodes = max_nodes;
         self
+    }
+
+    /// Sets the longest tool description kept, in bytes.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_tool::mcp::McpSchemaLimits;
+    ///
+    /// let limits = McpSchemaLimits::default().with_max_description_bytes(32 * 1024);
+    /// assert_eq!(limits.max_description_bytes, 32_768);
+    /// ```
+    pub fn with_max_description_bytes(mut self, max_description_bytes: usize) -> Self {
+        self.max_description_bytes = max_description_bytes;
+        self
+    }
+
+    /// `description` cut to at most [`max_description_bytes`](Self::max_description_bytes)
+    /// at a character boundary, or `None` when it already fits.
+    pub(crate) fn truncate_description<'a>(&self, description: &'a str) -> Option<&'a str> {
+        (description.len() > self.max_description_bytes)
+            .then(|| &description[..description.floor_char_boundary(self.max_description_bytes)])
     }
 
     /// Measures `schema`, stopping at the first value that takes it over a limit.
@@ -145,7 +180,11 @@ impl McpSchemaLimits {
 
 impl Default for McpSchemaLimits {
     fn default() -> Self {
-        Self { max_bytes: Self::DEFAULT_MAX_BYTES, max_nodes: Self::DEFAULT_MAX_NODES }
+        Self {
+            max_bytes: Self::DEFAULT_MAX_BYTES,
+            max_nodes: Self::DEFAULT_MAX_NODES,
+            max_description_bytes: Self::DEFAULT_MAX_DESCRIPTION_BYTES,
+        }
     }
 }
 
@@ -171,7 +210,11 @@ mod tests {
     }
 
     fn unlimited() -> McpSchemaLimits {
-        McpSchemaLimits { max_bytes: usize::MAX, max_nodes: usize::MAX }
+        McpSchemaLimits {
+            max_bytes: usize::MAX,
+            max_nodes: usize::MAX,
+            max_description_bytes: usize::MAX,
+        }
     }
 
     /// The input schema of a typical issue-tracker tool.
@@ -193,11 +236,22 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_256_kib_and_10_000_nodes() {
+    fn defaults_are_256_kib_10_000_nodes_and_8_kib_descriptions() {
         assert_eq!(
             McpSchemaLimits::default(),
-            McpSchemaLimits { max_bytes: 262_144, max_nodes: 10_000 }
+            McpSchemaLimits { max_bytes: 262_144, max_nodes: 10_000, max_description_bytes: 8_192 }
         );
+    }
+
+    #[test]
+    fn long_descriptions_are_cut_at_a_character_boundary() {
+        let limits = McpSchemaLimits::default().with_max_description_bytes(5);
+        assert_eq!(limits.truncate_description("short"), None);
+        assert_eq!(limits.truncate_description("longer text"), Some("longe"));
+        // "é" is two bytes; the cut falls before one that would be split.
+        assert_eq!(limits.truncate_description("aaaé"), None);
+        assert_eq!(limits.truncate_description("aaaaé"), Some("aaaa"));
+        assert_eq!(limits.truncate_description("aaaéé"), Some("aaaé"));
     }
 
     #[test]

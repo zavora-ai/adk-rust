@@ -70,10 +70,13 @@ Use `with_tools` or `with_filter` to keep unnecessary capabilities out of the
 model request. Then apply ADK-Rust tool authorization and confirmation at
 execution time.
 
-Tool schemas are server-controlled input. `McpToolset` skips a tool whose input
-or output schema exceeds `McpSchemaLimits` (256 KiB and 10 000 JSON values by
-default) and logs the measured size, never the schema. See
-[Schema size limits](client.md#schema-size-limits).
+Tool schemas and descriptions are server-controlled input. `McpToolset` skips a
+tool whose input or output schema exceeds `McpSchemaLimits` (256 KiB and 10 000
+JSON values by default) and logs the measured size, never the schema. It cuts a
+description over 8 KiB. A schema whose definitions refer to themselves, or fan
+out through a chain of references, is inlined at most once per definition on
+each path and within a fixed budget, so normalizing it for a provider stays
+linear in its size. See [Schema size limits](client.md#schema-size-limits).
 
 For consequential tools:
 

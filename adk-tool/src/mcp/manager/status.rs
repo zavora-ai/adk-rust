@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 /// - `Disabled` (set at construction, no transitions out unless re-configured)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ServerStatus {
+    /// The server process has been spawned and its MCP handshake is in progress.
+    Starting,
     /// The server process is running and the MCP connection is active.
     Running,
     /// The server has been stopped (manually or via shutdown).
@@ -29,7 +31,8 @@ pub enum ServerStatus {
     Restarting,
     /// The server configuration has `disabled: true`; it will not be started.
     Disabled,
-    /// The server failed to start (spawn failure, handshake failure, or max restarts exceeded).
+    /// The server failed to start (spawn failure, handshake failure or timeout, or max
+    /// restarts exceeded).
     FailedToStart,
 }
 
@@ -70,6 +73,7 @@ mod tests {
     #[test]
     fn test_server_status_serde_round_trip() {
         let statuses = [
+            ServerStatus::Starting,
             ServerStatus::Running,
             ServerStatus::Stopped,
             ServerStatus::Crashed,

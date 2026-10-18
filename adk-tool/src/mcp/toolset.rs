@@ -416,7 +416,9 @@ fn call_tool_result_to_adk_value(
         (Some(structured), false) => json!({ "output": structured, "text": text_parts }),
         (None, false) => json!({ "output": text_parts.join("\n") }),
         (None, true) if !inline_data.is_empty() || !file_data.is_empty() => Value::Null,
-        (None, true) => return Err("MCP tool returned no content".to_string()),
+        // A successful call may return nothing; reporting it as a failure would invite a
+        // retry of a tool that already ran.
+        (None, true) => json!({ "output": "" }),
     };
 
     if inline_data.is_empty() && file_data.is_empty() {
@@ -1444,10 +1446,22 @@ where
             );
             let annotations_json =
                 mcp_tool.annotations.as_ref().and_then(|hints| serde_json::to_value(hints).ok());
+            let mut description = mcp_tool.description.map(|d| d.to_string()).unwrap_or_default();
+            if let Some(kept) = limits.truncate_description(&description) {
+                warn!(
+                    toolset.name = %self.name,
+                    tool.name = %logged_name,
+                    description.bytes = description.len(),
+                    description.max_bytes = limits.max_description_bytes,
+                    "truncating MCP tool description that exceeds the size limit; raise it with \
+                     McpSchemaLimits::with_max_description_bytes if the server is trusted"
+                );
+                description = kept.to_string();
+            }
             let adk_tool = McpTool {
                 name: tool_name,
                 origin: format!("mcp:{}", self.name),
-                description: mcp_tool.description.map(|d| d.to_string()).unwrap_or_default(),
+                description,
                 input_schema: Some(Value::Object(Arc::unwrap_or_clone(mcp_tool.input_schema))),
                 output_schema: mcp_tool
                     .output_schema
@@ -2409,6 +2423,37 @@ mod tests {
         assert_eq!(names(discover(catalog.clone(), at).await), vec!["lookup"]);
         assert!(discover(catalog.clone(), at.with_max_bytes(bytes - 1)).await.is_empty());
         assert!(discover(catalog, at.with_max_nodes(nodes - 1)).await.is_empty());
+    }
+
+    #[test]
+    fn a_successful_result_without_content_is_an_empty_output() {
+        let result = rmcp::model::CallToolResult::success(vec![]);
+        assert_eq!(call_tool_result_to_adk_value(&result), Ok(json!({ "output": "" })));
+    }
+
+    #[tokio::test]
+    async fn discovery_truncates_descriptions_over_the_limit_and_keeps_the_tool() {
+        let catalog = vec![
+            rmcp::model::Tool::new("huge", "é".repeat(600_000), small_schema()),
+            rmcp::model::Tool::new("short", "Valid.", small_schema()),
+        ];
+
+        let tools = discover(catalog, McpSchemaLimits::default()).await;
+
+        let registered: Vec<_> = tools
+            .iter()
+            .map(|tool| (tool.name().to_string(), tool.description().to_string()))
+            .collect();
+        assert_eq!(
+            registered,
+            vec![
+                (
+                    "huge".to_string(),
+                    "é".repeat(McpSchemaLimits::DEFAULT_MAX_DESCRIPTION_BYTES / 2)
+                ),
+                ("short".to_string(), "Valid.".to_string()),
+            ]
+        );
     }
 
     #[test]

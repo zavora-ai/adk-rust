@@ -177,6 +177,11 @@ schema itself.
 |-------|----------|---------|
 | `max_bytes` | Approximate compact-JSON size of one schema | 256 KiB |
 | `max_nodes` | JSON values in one schema, the root object included | 10 000 |
+| `max_description_bytes` | UTF-8 bytes of one tool description | 8 KiB |
+
+A tool's description is text the server chooses and every model request carries.
+A description over `max_description_bytes` is cut at a character boundary with a
+`warn!` giving both sizes, and the tool is kept.
 
 ```rust
 use adk_tool::mcp::{McpSchemaLimits, McpToolset};
@@ -184,7 +189,8 @@ use adk_tool::mcp::{McpSchemaLimits, McpToolset};
 let toolset = McpToolset::new(client).with_schema_limits(
     McpSchemaLimits::default()
         .with_max_bytes(1024 * 1024)
-        .with_max_nodes(40_000),
+        .with_max_nodes(40_000)
+        .with_max_description_bytes(32 * 1024),
 );
 ```
 

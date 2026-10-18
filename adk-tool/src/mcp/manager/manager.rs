@@ -96,6 +96,9 @@ pub struct McpServerManager {
 
     /// Bounds on each catalog listing of every managed server.
     pub(crate) discovery_limits: McpDiscoveryLimits,
+
+    /// Longest time a server's spawn and MCP handshake may take. Default: 30 seconds.
+    pub(crate) startup_timeout: Duration,
 }
 
 /// The limits every managed toolset is built with.
@@ -103,6 +106,163 @@ pub struct McpServerManager {
 struct ToolsetLimits {
     schema: McpSchemaLimits,
     discovery: McpDiscoveryLimits,
+}
+
+/// Everything a server start needs, detached from the manager so the health monitor's
+/// task can start servers too.
+#[derive(Clone)]
+struct Launcher {
+    servers: Arc<RwLock<HashMap<String, McpServerEntry>>>,
+    elicitation_handler: Option<Arc<dyn ElicitationHandler>>,
+    resource_notification_handler: Option<Arc<dyn ResourceNotificationHandler>>,
+    resource_subscriptions: Arc<RwLock<HashMap<String, BTreeSet<String>>>>,
+    limits: ToolsetLimits,
+    startup_timeout: Duration,
+    #[cfg(feature = "mcp-sampling")]
+    sampling_handler: Option<Arc<dyn crate::sampling::SamplingHandler>>,
+}
+
+impl Launcher {
+    /// Starts server `id`.
+    ///
+    /// The registry lock is held only to read the configuration and to record the
+    /// outcome, never across the spawn and handshake, so a server that never answers
+    /// delays only its own start. Starts of one server are serialized by its gate.
+    async fn start(&self, id: &str) -> adk_core::Result<()> {
+        let unknown = || AdkError::tool(format!("unknown server ID: '{id}'"));
+        let gate = self.servers.read().await.get(id).map(|entry| entry.start_gate.clone());
+        let gate = gate.ok_or_else(unknown)?;
+        let _starting = gate.lock().await;
+
+        let (config, generation, cancel) = {
+            let mut servers = self.servers.write().await;
+            let entry = servers.get_mut(id).ok_or_else(unknown)?;
+            if entry.status == ServerStatus::Running {
+                return Ok(());
+            }
+            if entry.config.disabled {
+                entry.status = ServerStatus::Disabled;
+                return Err(AdkError::tool(format!(
+                    "MCP server '{id}' is disabled; enable it before starting"
+                )));
+            }
+            if entry.config.command.trim().is_empty() {
+                entry.status = ServerStatus::FailedToStart;
+                return Err(AdkError::tool(format!("MCP server '{id}' has an empty command")));
+            }
+            entry.status = ServerStatus::Starting;
+            entry.generation += 1;
+            entry.startup_cancel = CancellationToken::new();
+            (entry.config.clone(), entry.generation, entry.startup_cancel.clone())
+        };
+
+        let connected = tokio::select! {
+            connected = tokio::time::timeout(self.startup_timeout, self.connect(id, &config)) => {
+                connected.unwrap_or_else(|_| {
+                    Err(AdkError::tool(format!(
+                        "MCP server '{id}' did not complete its handshake within {:?}; raise \
+                         McpServerManager::with_startup_timeout if it starts this slowly",
+                        self.startup_timeout
+                    )))
+                })
+            }
+            // Dropping the handshake drops its transport, which ends the child.
+            () = cancel.cancelled() => Err(AdkError::tool(format!(
+                "MCP server '{id}' was stopped while it was starting"
+            ))),
+        };
+
+        let mut servers = self.servers.write().await;
+        let Some(entry) = servers.get_mut(id).filter(|entry| entry.generation == generation) else {
+            // Stopped, updated or removed meanwhile: a new connection is dropped here,
+            // which ends its child process.
+            return Err(AdkError::tool(format!(
+                "MCP server '{id}' was stopped while it was starting"
+            )));
+        };
+        match connected {
+            Ok(toolset) => {
+                entry.status = ServerStatus::Running;
+                entry.toolset = Some(toolset);
+                entry.child = None; // Child is owned by the transport/toolset
+                tracing::info!(
+                    server.id = id,
+                    server.command = config.command,
+                    server.args = ?config.args,
+                    "started MCP server"
+                );
+                Ok(())
+            }
+            Err(error) => {
+                entry.status = ServerStatus::FailedToStart;
+                Err(error)
+            }
+        }
+    }
+
+    /// Spawns the configured command and completes the MCP handshake with it.
+    async fn connect(
+        &self,
+        id: &str,
+        config: &McpServerConfig,
+    ) -> adk_core::Result<McpToolset<AdkClientHandler>> {
+        let mut cmd = tokio::process::Command::new(&config.command);
+        cmd.args(&config.args);
+        cmd.envs(&config.env);
+
+        // TokioChildProcess::new spawns the child; dropping the transport ends it.
+        let transport = rmcp::transport::TokioChildProcess::new(cmd).map_err(|e| {
+            AdkError::tool(format!(
+                "failed to spawn server '{id}': command '{}' not found. Verify it is installed and on PATH: {e}",
+                config.command
+            ))
+        })?;
+
+        // Build one handler for both lifecycle negotiation and later MRTR/task input.
+        let handler: Arc<dyn ElicitationHandler> = self
+            .elicitation_handler
+            .clone()
+            .unwrap_or_else(|| Arc::new(AutoDeclineElicitationHandler));
+
+        let mut adk_handler = AdkClientHandler::new(handler);
+        if config.task_config.enable_tasks {
+            adk_handler = adk_handler.with_tasks();
+        }
+        if let Some(resource_handler) = &self.resource_notification_handler {
+            adk_handler =
+                adk_handler.with_resource_notification_handler(Arc::clone(resource_handler));
+        }
+        #[cfg(feature = "mcp-sampling")]
+        if let Some(sampling) = &self.sampling_handler {
+            adk_handler = adk_handler.with_sampling_handler(Arc::clone(sampling));
+        }
+
+        let input_handler = adk_handler.clone();
+        use rmcp::ClientServiceExt;
+        let client = adk_handler
+            .serve_with_lifecycle(transport, config.lifecycle.to_rmcp())
+            .await
+            .map_err(|error| {
+                AdkError::tool(format!(
+                    "MCP handshake failed for server '{id}': failed to connect MCP server: {error}"
+                ))
+            })?;
+        let toolset = McpToolset::new(client)
+            .with_name(id)
+            .with_schema_limits(self.limits.schema)
+            .with_discovery_limits(self.limits.discovery)
+            .with_task_support(config.task_config.clone())
+            .with_mrtr_handler(input_handler);
+
+        let subscriptions =
+            self.resource_subscriptions.read().await.get(id).cloned().unwrap_or_default();
+        for uri in subscriptions {
+            if let Err(error) = toolset.subscribe_resource(&uri).await {
+                tracing::warn!(server.id = id, %uri, %error, "failed to restore MCP resource subscription");
+            }
+        }
+        Ok(toolset)
+    }
 }
 
 impl McpServerManager {
@@ -128,16 +288,8 @@ impl McpServerManager {
     /// No servers are started automatically — call [`start_server`](Self::start_server)
     /// or [`start_all`](Self::start_all) to begin spawning processes.
     pub fn new(configs: HashMap<String, McpServerConfig>) -> Self {
-        let servers: HashMap<String, McpServerEntry> = configs
-            .into_iter()
-            .map(|(id, config)| {
-                let status =
-                    if config.disabled { ServerStatus::Disabled } else { ServerStatus::Stopped };
-                let backoff = BackoffState::new(&config.restart_policy);
-                let entry = McpServerEntry { config, status, toolset: None, child: None, backoff };
-                (id, entry)
-            })
-            .collect();
+        let servers: HashMap<String, McpServerEntry> =
+            configs.into_iter().map(|(id, config)| (id, McpServerEntry::new(config))).collect();
 
         Self {
             servers: Arc::new(RwLock::new(servers)),
@@ -153,6 +305,7 @@ impl McpServerManager {
             name: "mcp_server_manager".to_string(),
             schema_limits: McpSchemaLimits::default(),
             discovery_limits: McpDiscoveryLimits::default(),
+            startup_timeout: Self::DEFAULT_STARTUP_TIMEOUT,
         }
     }
 
@@ -308,15 +461,56 @@ impl McpServerManager {
         self
     }
 
+    /// Default for [`with_startup_timeout`](Self::with_startup_timeout): 30 seconds.
+    pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Set the longest time a server's spawn and MCP handshake may take.
+    ///
+    /// A server that has not completed its handshake by then is stopped and marked
+    /// [`ServerStatus::FailedToStart`]. The other servers' tools, statuses and
+    /// lifecycle calls are not held up while one server starts. Default:
+    /// [`DEFAULT_STARTUP_TIMEOUT`](Self::DEFAULT_STARTUP_TIMEOUT).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_tool::mcp::McpServerManager;
+    /// use std::collections::HashMap;
+    /// use std::time::Duration;
+    ///
+    /// // `npx` may download its package on first start.
+    /// let manager = McpServerManager::new(HashMap::new())
+    ///     .with_startup_timeout(Duration::from_secs(120));
+    /// ```
+    pub fn with_startup_timeout(mut self, timeout: Duration) -> Self {
+        self.startup_timeout = timeout;
+        self
+    }
+
     fn toolset_limits(&self) -> ToolsetLimits {
         ToolsetLimits { schema: self.schema_limits, discovery: self.discovery_limits }
+    }
+
+    fn launcher(&self) -> Launcher {
+        Launcher {
+            servers: Arc::clone(&self.servers),
+            elicitation_handler: self.elicitation_handler.clone(),
+            resource_notification_handler: self.resource_notification_handler.clone(),
+            resource_subscriptions: Arc::clone(&self.resource_subscriptions),
+            limits: self.toolset_limits(),
+            startup_timeout: self.startup_timeout,
+            #[cfg(feature = "mcp-sampling")]
+            sampling_handler: self.sampling_handler.clone(),
+        }
     }
 
     /// Start a managed MCP server by ID.
     ///
     /// Spawns the configured command as a child process, creates a
     /// `TokioChildProcess` transport, and connects via `McpToolset` with the
-    /// configured elicitation (and optionally sampling) handler.
+    /// configured elicitation (and optionally sampling) handler. While the
+    /// handshake runs the server is [`ServerStatus::Starting`]; the registry is not
+    /// locked, so other servers keep serving tools and status.
     ///
     /// If the server is already `Running`, this is a no-op and returns `Ok(())`.
     ///
@@ -325,7 +519,9 @@ impl McpServerManager {
     /// Returns `AdkError::Tool` if:
     /// - The server ID does not exist
     /// - The child process fails to spawn
-    /// - The MCP handshake fails
+    /// - The MCP handshake fails or does not finish within the
+    ///   [startup timeout](Self::with_startup_timeout)
+    /// - The server is stopped, updated or removed before its handshake finishes
     ///
     /// # Example
     ///
@@ -333,127 +529,7 @@ impl McpServerManager {
     /// manager.start_server("my-server").await?;
     /// ```
     pub async fn start_server(&self, id: &str) -> adk_core::Result<()> {
-        let mut servers = self.servers.write().await;
-        let entry = servers
-            .get_mut(id)
-            .ok_or_else(|| AdkError::tool(format!("unknown server ID: '{id}'")))?;
-
-        Self::start_server_inner(
-            id,
-            entry,
-            &self.elicitation_handler,
-            &self.resource_notification_handler,
-            &self.resource_subscriptions,
-            self.toolset_limits(),
-            #[cfg(feature = "mcp-sampling")]
-            &self.sampling_handler,
-        )
-        .await
-    }
-
-    /// Internal start logic operating on a mutable entry reference.
-    ///
-    /// This avoids double-locking when called from `restart_server`.
-    async fn start_server_inner(
-        id: &str,
-        entry: &mut McpServerEntry,
-        elicitation_handler: &Option<Arc<dyn ElicitationHandler>>,
-        resource_notification_handler: &Option<Arc<dyn ResourceNotificationHandler>>,
-        resource_subscriptions: &Arc<RwLock<HashMap<String, BTreeSet<String>>>>,
-        limits: ToolsetLimits,
-        #[cfg(feature = "mcp-sampling")] sampling_handler: &Option<
-            Arc<dyn crate::sampling::SamplingHandler>,
-        >,
-    ) -> adk_core::Result<()> {
-        // If already running, nothing to do
-        if entry.status == ServerStatus::Running {
-            return Ok(());
-        }
-
-        let config = &entry.config;
-        if config.disabled {
-            entry.status = ServerStatus::Disabled;
-            return Err(AdkError::tool(format!(
-                "MCP server '{id}' is disabled; enable it before starting"
-            )));
-        }
-        if config.command.trim().is_empty() {
-            entry.status = ServerStatus::FailedToStart;
-            return Err(AdkError::tool(format!("MCP server '{id}' has an empty command")));
-        }
-
-        // Build the command
-        let mut cmd = tokio::process::Command::new(&config.command);
-        cmd.args(&config.args);
-        cmd.envs(&config.env);
-
-        // Create transport — TokioChildProcess::new spawns the child internally
-        let transport = rmcp::transport::TokioChildProcess::new(cmd).map_err(|e| {
-            entry.status = ServerStatus::FailedToStart;
-            AdkError::tool(format!(
-                "failed to spawn server '{id}': command '{}' not found. Verify it is installed and on PATH: {e}",
-                config.command
-            ))
-        })?;
-
-        // Build one handler for both lifecycle negotiation and later MRTR/task input.
-        let handler: Arc<dyn ElicitationHandler> =
-            elicitation_handler.clone().unwrap_or_else(|| Arc::new(AutoDeclineElicitationHandler));
-
-        let mut adk_handler = AdkClientHandler::new(handler);
-        if config.task_config.enable_tasks {
-            adk_handler = adk_handler.with_tasks();
-        }
-        if let Some(resource_handler) = resource_notification_handler {
-            adk_handler =
-                adk_handler.with_resource_notification_handler(Arc::clone(resource_handler));
-        }
-        #[cfg(feature = "mcp-sampling")]
-        if let Some(sampling) = sampling_handler {
-            adk_handler = adk_handler.with_sampling_handler(Arc::clone(sampling));
-        }
-
-        let input_handler = adk_handler.clone();
-        use rmcp::ClientServiceExt;
-        let toolset_result = adk_handler
-            .serve_with_lifecycle(transport, config.lifecycle.to_rmcp())
-            .await
-            .map(|client| {
-                McpToolset::new(client)
-                    .with_name(id)
-                    .with_schema_limits(limits.schema)
-                    .with_discovery_limits(limits.discovery)
-                    .with_task_support(config.task_config.clone())
-                    .with_mrtr_handler(input_handler)
-            })
-            .map_err(|error| AdkError::tool(format!("failed to connect MCP server: {error}")));
-
-        let toolset = toolset_result.map_err(|e| {
-            entry.status = ServerStatus::FailedToStart;
-            AdkError::tool(format!("MCP handshake failed for server '{id}': {e}"))
-        })?;
-
-        let subscriptions =
-            resource_subscriptions.read().await.get(id).cloned().unwrap_or_default();
-        for uri in subscriptions {
-            if let Err(error) = toolset.subscribe_resource(&uri).await {
-                tracing::warn!(server.id = id, %uri, %error, "failed to restore MCP resource subscription");
-            }
-        }
-
-        // Success — update entry
-        entry.status = ServerStatus::Running;
-        entry.toolset = Some(toolset);
-        entry.child = None; // Child is owned by the transport/toolset
-
-        tracing::info!(
-            server.id = id,
-            server.command = config.command,
-            server.args = ?config.args,
-            "started MCP server"
-        );
-
-        Ok(())
+        self.launcher().start(id).await
     }
 
     /// Stop a managed MCP server by ID.
@@ -493,6 +569,19 @@ impl McpServerManager {
         reason: &str,
         grace_period: Duration,
     ) {
+        // A handshake still in progress is cancelled, and discarded should it finish.
+        entry.generation += 1;
+        entry.startup_cancel.cancel();
+        if entry.status == ServerStatus::Starting {
+            entry.status = ServerStatus::Stopped;
+            tracing::info!(
+                server.id = id,
+                stop.reason = reason,
+                "stopped MCP server during startup"
+            );
+            return;
+        }
+
         // If not running, nothing to do
         if entry.status != ServerStatus::Running && entry.status != ServerStatus::Restarting {
             return;
@@ -577,29 +666,17 @@ impl McpServerManager {
     /// manager.restart_server("my-server").await?;
     /// ```
     pub async fn restart_server(&self, id: &str) -> adk_core::Result<()> {
-        let mut servers = self.servers.write().await;
-        let entry = servers
-            .get_mut(id)
-            .ok_or_else(|| AdkError::tool(format!("unknown server ID: '{id}'")))?;
-
-        // Set status to Restarting
-        entry.status = ServerStatus::Restarting;
-
-        // Stop the server (inline to avoid double-locking)
-        Self::stop_server_inner(id, entry, "restart", self.grace_period).await;
-
-        // Start the server again
-        Self::start_server_inner(
-            id,
-            entry,
-            &self.elicitation_handler,
-            &self.resource_notification_handler,
-            &self.resource_subscriptions,
-            self.toolset_limits(),
-            #[cfg(feature = "mcp-sampling")]
-            &self.sampling_handler,
-        )
-        .await
+        {
+            let mut servers = self.servers.write().await;
+            let entry = servers
+                .get_mut(id)
+                .ok_or_else(|| AdkError::tool(format!("unknown server ID: '{id}'")))?;
+            if entry.status != ServerStatus::Starting {
+                entry.status = ServerStatus::Restarting;
+            }
+            Self::stop_server_inner(id, entry, "restart", self.grace_period).await;
+        }
+        self.launcher().start(id).await
     }
 
     /// Return the current [`ServerStatus`] for a given server ID.
@@ -762,12 +839,7 @@ impl McpServerManager {
         };
         let monitor_running = Arc::clone(&self.monitor_running);
         let interval = self.health_check_interval;
-        let elicitation_handler = self.elicitation_handler.clone();
-        let resource_notification_handler = self.resource_notification_handler.clone();
-        let resource_subscriptions = Arc::clone(&self.resource_subscriptions);
-        let limits = self.toolset_limits();
-        #[cfg(feature = "mcp-sampling")]
-        let sampling_handler = self.sampling_handler.clone();
+        let launcher = self.launcher();
 
         tokio::spawn(async move {
             loop {
@@ -894,26 +966,18 @@ impl McpServerManager {
                                     break;
                                 }
 
-                                // Attempt restart under write lock
-                                let restart_result = {
+                                {
                                     let mut servers = servers.write().await;
-                                    if let Some(entry) = servers.get_mut(&id) {
-                                        entry.status = ServerStatus::Restarting;
-                                        Self::start_server_inner(
-                                            &id,
-                                            entry,
-                                            &elicitation_handler,
-                                            &resource_notification_handler,
-                                            &resource_subscriptions,
-                                            limits,
-                                            #[cfg(feature = "mcp-sampling")]
-                                            &sampling_handler,
-                                        )
-                                        .await
-                                    } else {
-                                        continue;
+                                    match servers.get_mut(&id) {
+                                        Some(entry) if matches!(
+                                            entry.status,
+                                            ServerStatus::Crashed | ServerStatus::FailedToStart
+                                        ) => entry.status = ServerStatus::Restarting,
+                                        // Stopped, restarted or removed during the backoff.
+                                        _ => continue,
                                     }
-                                };
+                                }
+                                let restart_result = launcher.start(&id).await;
 
                                 match restart_result {
                                     Ok(()) => {
@@ -933,7 +997,7 @@ impl McpServerManager {
                                             error = %e,
                                             "auto-restart failed"
                                         );
-                                        // Status already set to FailedToStart by start_server_inner
+                                        // Status already set to FailedToStart by the launcher
                                     }
                                 }
                             }
@@ -986,10 +1050,7 @@ impl McpServerManager {
         if servers.contains_key(&id) {
             return Err(AdkError::tool(format!("server ID '{id}' already exists")));
         }
-        let status = if config.disabled { ServerStatus::Disabled } else { ServerStatus::Stopped };
-        let backoff = BackoffState::new(&config.restart_policy);
-        let entry = McpServerEntry { config, status, toolset: None, child: None, backoff };
-        servers.insert(id, entry);
+        servers.insert(id, McpServerEntry::new(config));
         Ok(())
     }
 
@@ -1136,8 +1197,9 @@ impl McpServerManager {
     ///
     /// Collects all server IDs where `disabled == false`, then starts each one
     /// via [`start_server`](Self::start_server). Failures are logged but do not
-    /// prevent other servers from starting. Registry mutations are serialized
-    /// while each child process completes its MCP handshake.
+    /// prevent other servers from starting. The servers complete their MCP
+    /// handshakes concurrently, each bounded by the
+    /// [startup timeout](Self::with_startup_timeout).
     ///
     /// # Returns
     ///
@@ -1166,8 +1228,8 @@ impl McpServerManager {
                 .collect()
         };
 
-        // Gather independent results. Registry mutations remain serialized by
-        // start_server's write lock while the child completes its handshake.
+        // Each start locks the registry only to read its configuration and record
+        // its outcome, so the handshakes run concurrently.
         let futures: Vec<_> = ids_to_start
             .iter()
             .map(|id| {
@@ -1210,7 +1272,9 @@ impl McpServerManager {
         let mut servers = self.servers.write().await;
         let ids: Vec<String> = servers
             .iter()
-            .filter(|(_, entry)| entry.status == ServerStatus::Running)
+            .filter(|(_, entry)| {
+                matches!(entry.status, ServerStatus::Running | ServerStatus::Starting)
+            })
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -2152,5 +2216,73 @@ mod tests {
             .expect("stopping a server must not wait on a hung call")
             .unwrap();
         assert_eq!(manager.server_status("hung").await.unwrap(), ServerStatus::Stopped);
+    }
+
+    /// A server that reads its stdin and never answers the `initialize` request.
+    #[cfg(unix)]
+    fn silent_server() -> McpServerConfig {
+        McpServerConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "cat > /dev/null".to_string()],
+            ..Default::default()
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_hung_handshake_times_out_without_holding_the_registry() {
+        let manager = Arc::new(
+            McpServerManager::new(HashMap::from([
+                ("silent".to_string(), silent_server()),
+                (
+                    "other".to_string(),
+                    McpServerConfig { command: "echo".into(), ..Default::default() },
+                ),
+            ]))
+            .with_startup_timeout(Duration::from_millis(500)),
+        );
+        let starting = {
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.start_server("silent").await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let prompt = Duration::from_millis(200);
+        let statuses = tokio::time::timeout(prompt, manager.all_statuses()).await.unwrap();
+        assert_eq!(statuses["silent"], ServerStatus::Starting);
+        assert_eq!(statuses["other"], ServerStatus::Stopped);
+        let ctx = Arc::new(crate::SimpleToolContext::new("manager-test"));
+        let tools = tokio::time::timeout(prompt, adk_core::Toolset::tools(&*manager, ctx)).await;
+        assert!(tools.unwrap().unwrap().is_empty());
+
+        let error = starting.await.unwrap().unwrap_err();
+        assert!(error.message.contains("did not complete its handshake"), "{}", error.message);
+        assert_eq!(manager.server_status("silent").await.unwrap(), ServerStatus::FailedToStart);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stopping_a_server_during_its_handshake_cancels_the_start() {
+        let manager = Arc::new(McpServerManager::new(HashMap::from([(
+            "silent".to_string(),
+            silent_server(),
+        )])));
+        let starting = {
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.start_server("silent").await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        tokio::time::timeout(Duration::from_millis(200), manager.stop_server("silent"))
+            .await
+            .unwrap()
+            .unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(2), starting)
+            .await
+            .expect("the start returns once the server is stopped")
+            .unwrap()
+            .unwrap_err();
+        assert!(error.message.contains("stopped while it was starting"), "{}", error.message);
+        assert_eq!(manager.server_status("silent").await.unwrap(), ServerStatus::Stopped);
     }
 }

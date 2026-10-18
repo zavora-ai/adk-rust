@@ -73,6 +73,30 @@ pub(crate) struct McpServerEntry {
     pub child: Option<tokio::process::Child>,
     /// Exponential backoff state for auto-restart.
     pub backoff: BackoffState,
+    /// Advanced by every stop, so a handshake that finishes after one is discarded.
+    pub generation: u64,
+    /// Serializes starts of this server without holding the registry lock.
+    pub start_gate: std::sync::Arc<tokio::sync::Mutex<()>>,
+    /// Cancels the handshake in progress, if any, when the server is stopped.
+    pub startup_cancel: tokio_util::sync::CancellationToken,
+}
+
+impl McpServerEntry {
+    /// A stopped (or, when `config.disabled`, disabled) entry for `config`.
+    pub fn new(config: McpServerConfig) -> Self {
+        let status = if config.disabled { ServerStatus::Disabled } else { ServerStatus::Stopped };
+        let backoff = BackoffState::new(&config.restart_policy);
+        Self {
+            config,
+            status,
+            toolset: None,
+            child: None,
+            backoff,
+            generation: 0,
+            start_gate: std::sync::Arc::default(),
+            startup_cancel: tokio_util::sync::CancellationToken::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -205,13 +229,7 @@ mod tests {
             lifecycle: Default::default(),
             task_config: Default::default(),
         };
-        let entry = McpServerEntry {
-            backoff: BackoffState::new(&config.restart_policy),
-            config,
-            status: ServerStatus::Stopped,
-            toolset: None,
-            child: None,
-        };
+        let entry = McpServerEntry::new(config);
         assert_eq!(entry.status, ServerStatus::Stopped);
         assert!(entry.toolset.is_none());
         assert!(entry.child.is_none());
