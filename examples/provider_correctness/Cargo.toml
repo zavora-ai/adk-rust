@@ -1,0 +1,32 @@
+[package]
+name = "provider-correctness"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Request-correctness checks for the OpenAI, Anthropic, Groq, DeepSeek, Azure AI, and Ollama clients, live and against a scripted upstream"
+
+[workspace]
+
+[features]
+default = ["fixed"]
+# Scenarios that configure options added by the provider-correctness fixes (HTTP timeouts and
+# the Anthropic thinking display). Build with `--no-default-features` against a revision
+# without them to record the baseline.
+fixed = []
+
+[dependencies]
+adk-agent = { path = "../../adk-agent" }
+adk-core = { path = "../../adk-core" }
+adk-model = { path = "../../adk-model", default-features = false, features = ["openai", "anthropic", "groq", "deepseek", "azure-ai", "ollama"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+anyhow = "1.0"
+async-trait = "0.1"
+axum = "0.8"
+bytes = "1"
+dotenvy = "0.15"
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots"] }
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
