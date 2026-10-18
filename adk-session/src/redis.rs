@@ -1409,12 +1409,12 @@ mod tests {
             assert_eq!(
                 fred::util::redis_keyslot(session_k.as_bytes()),
                 fred::util::redis_keyslot(events_k.as_bytes()),
-                "{session_k} and {events_k}"
+                "{app}/{user}/{session}: the session and its events hash to different slots"
             );
             assert_eq!(
                 fred::util::redis_keyslot(user_k.as_bytes()),
                 fred::util::redis_keyslot(index_k.as_bytes()),
-                "{user_k} and {index_k}"
+                "{app}/{user}: the user state and the session index hash to different slots"
             );
         }
     }
@@ -1453,8 +1453,14 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for (app, user, session) in identities {
             let [session_k, events_k, ..] = cluster_keys(app, user, session);
-            assert!(seen.insert(session_k.clone()), "{session_k} collided");
-            assert!(seen.insert(events_k.clone()), "{events_k} collided");
+            assert!(
+                seen.insert(session_k.clone()),
+                "{app}/{user}/{session}: the session key collided"
+            );
+            assert!(
+                seen.insert(events_k.clone()),
+                "{app}/{user}/{session}: the events key collided"
+            );
         }
     }
 

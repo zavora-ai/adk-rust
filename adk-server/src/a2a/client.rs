@@ -24,9 +24,8 @@ fn bearer(
     let Some(token) = token else {
         return Ok(request);
     };
-    let target = adk_core::Url::parse(url).map_err(|error| {
-        adk_core::AdkError::agent(format!("invalid A2A endpoint URL '{url}': {error}"))
-    })?;
+    let target = adk_core::Url::parse(url)
+        .map_err(|error| adk_core::AdkError::agent(format!("invalid A2A endpoint URL: {error}")))?;
     Ok(request.bearer_auth(token.authorize_for(&target)?.expose()))
 }
 
@@ -382,7 +381,7 @@ pub mod v1_client {
             let mut headers = Self::default_headers();
             if let Some(token) = &self.credential {
                 let target = adk_core::Url::parse(url).map_err(|error| {
-                    adk_core::AdkError::agent(format!("invalid A2A endpoint URL '{url}': {error}"))
+                    adk_core::AdkError::agent(format!("invalid A2A endpoint URL: {error}"))
                 })?;
                 let secret = token.authorize_for(&target)?;
                 let mut value = HeaderValue::from_str(&format!("Bearer {}", secret.expose()))

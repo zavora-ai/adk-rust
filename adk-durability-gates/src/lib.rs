@@ -224,7 +224,8 @@ impl Backend {
             #[cfg(feature = "neo4j")]
             BackendKind::Neo4j => {
                 let user = env_or("NEO4J_USER", "neo4j");
-                let password = env_or("NEO4J_PASSWORD", "conformance-pass");
+                let password = std::env::var("NEO4J_PASSWORD")
+                    .expect("set NEO4J_PASSWORD to the Neo4j server's password");
                 let runs =
                     adk_session::Neo4jRunStore::new(url, &user, &password).await.expect("runs");
                 runs.migrate().await.expect("run schema");
