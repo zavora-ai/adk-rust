@@ -1606,7 +1606,8 @@ async fn test_vertex_automatic_legacy_fallback_is_exact_and_full_lifecycle() {
         .await
         .err()
         .expect("legacy duplicate must block a computed-ID create");
-    assert_eq!(duplicate.category, adk_core::ErrorCategory::InvalidInput);
+    assert_eq!(duplicate.category, adk_core::ErrorCategory::Conflict);
+    assert_eq!(duplicate.code, "session.already_exists");
 
     let wrong_user = service
         .get(GetRequest {

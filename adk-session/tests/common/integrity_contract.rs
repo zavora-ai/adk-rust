@@ -156,10 +156,12 @@ pub async fn assert_create_and_append_errors_contract(
     );
 
     let missing = unique("missing");
+    let mut missing_event = Event::new("inv-missing");
+    missing_event.author = "user".to_string();
     let not_found = service
         .append_event_for_identity(AppendEventRequest {
             identity: identity(app_name, user, &missing),
-            event: Event::new("inv-missing"),
+            event: missing_event,
         })
         .await
         .expect_err("appending to a missing session must fail");
