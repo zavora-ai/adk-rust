@@ -57,6 +57,9 @@ pub mod scope;
 #[cfg(feature = "auth-bridge")]
 pub mod auth_bridge;
 
+#[cfg(any(feature = "sso", feature = "token-exchange"))]
+mod http;
+
 // SSO module (feature-gated)
 #[cfg(feature = "sso")]
 pub mod sso;

@@ -19,6 +19,11 @@ use super::TokenError;
 /// - Cache is empty
 /// - Refresh interval has passed
 /// - A key ID is requested but not found (key rotation)
+///
+/// A refresh gives up after [`JwksCache::DEFAULT_REQUEST_TIMEOUT`] (connect timeout 5
+/// seconds), so an endpoint that never answers fails the validation instead of holding
+/// it and every other refresh waiting on the refresh lock. Override the client with
+/// [`with_http_client`](Self::with_http_client).
 #[cfg(feature = "sso")]
 pub struct JwksCache {
     /// Cached decoding keys by key ID (kid).
@@ -39,6 +44,9 @@ pub struct JwksCache {
 
 #[cfg(feature = "sso")]
 impl JwksCache {
+    /// Longest time one JWKS request may take by default: 10 seconds.
+    pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
     /// Create a new JWKS cache.
     pub fn new(jwks_uri: impl Into<String>) -> Self {
         Self {
@@ -48,8 +56,14 @@ impl JwksCache {
             refresh_interval: Duration::from_secs(3600), // 1 hour
             max_keys: 100,
             refresh_lock: Mutex::new(()),
-            client: reqwest::Client::new(),
+            client: crate::http::client(Self::DEFAULT_REQUEST_TIMEOUT),
         }
+    }
+
+    /// Fetch keys with `client`, for example one with other timeouts or a proxy.
+    pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
+        self.client = client;
+        self
     }
 
     /// Create with custom refresh interval.
@@ -226,5 +240,29 @@ pub struct JwksCache;
 impl JwksCache {
     pub fn new(_jwks_uri: impl Into<String>) -> Self {
         Self
+    }
+}
+
+#[cfg(all(test, feature = "sso"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_jwks_endpoint_that_never_answers_fails_the_refresh() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let uri = format!("http://{}/jwks", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let cache = JwksCache::new(uri);
+
+        let refreshed =
+            tokio::time::timeout(JwksCache::DEFAULT_REQUEST_TIMEOUT * 4, cache.refresh()).await;
+        assert!(refreshed.expect("the refresh gives up on its own").is_err());
+        // The refresh lock is free again.
+        assert!(cache.refresh_lock.try_lock().is_ok());
     }
 }

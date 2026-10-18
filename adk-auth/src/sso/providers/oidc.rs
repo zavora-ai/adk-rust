@@ -32,6 +32,8 @@ impl OidcProvider {
     }
 
     /// Create from OIDC discovery endpoint.
+    ///
+    /// The discovery request gives up after [`JwksCache::DEFAULT_REQUEST_TIMEOUT`].
     #[cfg(feature = "sso")]
     pub async fn from_discovery(
         issuer_url: impl Into<String>,
@@ -41,7 +43,7 @@ impl OidcProvider {
         let discovery_url =
             format!("{}/.well-known/openid-configuration", issuer.trim_end_matches('/'));
 
-        let client = reqwest::Client::new();
+        let client = crate::http::client(JwksCache::DEFAULT_REQUEST_TIMEOUT);
         let response = client
             .get(&discovery_url)
             .send()

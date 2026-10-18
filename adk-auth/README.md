@@ -295,6 +295,7 @@ cargo run --example auth_google --features sso  # Google Identity
 
 - Prefer short-lived access tokens and rotate signing keys regularly.
 - The JWKS cache refreshes hourly by default; lower the refresh interval with `JwksCache::with_refresh_interval()` if your IdP rotates keys aggressively.
+- JWKS refreshes and OIDC discovery give up after 10 seconds, and `TokenExchangeBroker` requests after 30 seconds, each with a 5-second connect timeout.
 - `OidcProvider::from_discovery()` rejects discovery documents whose `issuer` does not match the requested issuer URL.
 - Token revocation and blacklist checks are not built in. If you need immediate revocation, enforce it in a custom `TokenValidator` or request extractor.
 - `JwtValidator` rejects symmetric algorithms (HS256/HS384/HS512) and EdDSA — only RSA and EC algorithms are supported with JWKS-based validation.

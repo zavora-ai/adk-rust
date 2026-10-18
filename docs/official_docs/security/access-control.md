@@ -229,6 +229,8 @@ let protected = scoped.protect(rbac.protect(transfer_tool));
 
 `AzureADProvider::multi_tenant()` accepts any tenant for the configured audience unless you explicitly restrict it with `with_allowed_tenants(...)`.
 
+OIDC discovery and every JWKS refresh give up after 10 seconds (connect timeout 5 seconds), so an identity provider that accepts the connection and never answers fails the validation instead of holding it and the JWKS refresh lock. `JwksCache::with_http_client` replaces the client.
+
 ### TokenClaims
 
 Claims extracted from validated JWTs:

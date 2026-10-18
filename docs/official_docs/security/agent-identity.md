@@ -229,6 +229,11 @@ host, and port and a path at or below the audience path; any other URL fails wit
 | `SecretCredentialBroker` | `adk-auth` | A `SecretProvider` secret bound to an exact `(AgentId, resource)` pair with its granted scopes |
 | `TokenExchangeBroker` | `adk-auth`, `token-exchange` | An RFC 8693 token exchange of the identity source's credential at an authorization server; optional RFC 7009 revocation |
 
+`TokenExchangeBroker` caches each token until shortly before it expires. Concurrent
+requests for a token that is not cached send one exchange and share its result. Its
+requests give up after 30 seconds (connect timeout 5 seconds); `with_http_client`
+replaces the client.
+
 ```rust
 use std::sync::Arc;
 

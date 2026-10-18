@@ -23,6 +23,9 @@ const TOKEN_TYPE_ACCESS: &str = "urn:ietf:params:oauth:token-type:access_token";
 /// Tokens are refreshed this long before the server says they expire.
 const EXPIRY_SKEW: Duration = Duration::from_secs(30);
 
+/// Longest time one token or revocation request may take by default.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 type CacheKey = (AgentId, Url, Vec<String>);
 
 #[derive(Debug, Deserialize)]
@@ -49,8 +52,12 @@ fn exchange_error(category: ErrorCategory, code: &'static str, message: String) 
 /// | `subject_token_type` | `…:token-type:jwt` for a JWT-SVID, `…:token-type:access_token` for an opaque credential |
 ///
 /// Issued tokens are cached per agent, resource, and scope set until shortly before
-/// they expire. [`revoke`](CredentialBroker::revoke) drops cached tokens and, when a
-/// revocation endpoint is configured, revokes each one there (RFC 7009).
+/// they expire. Concurrent requests for a token that is not cached send one exchange
+/// and share its result. [`revoke`](CredentialBroker::revoke) drops cached tokens and,
+/// when a revocation endpoint is configured, revokes each one there (RFC 7009).
+///
+/// Requests give up after 30 seconds (connect timeout 5 seconds); pass a client with
+/// other timeouts to [`with_http_client`](Self::with_http_client).
 ///
 /// # Example
 ///
@@ -80,6 +87,8 @@ pub struct TokenExchangeBroker {
     client: reqwest::Client,
     client_auth: Option<(String, CredentialSecret)>,
     cache: RwLock<HashMap<CacheKey, ScopedToken>>,
+    /// One gate per key with an exchange in flight; waiters reuse its result.
+    exchanges: std::sync::Mutex<HashMap<CacheKey, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl std::fmt::Debug for TokenExchangeBroker {
@@ -99,9 +108,10 @@ impl TokenExchangeBroker {
             token_endpoint,
             revocation_endpoint: None,
             identity,
-            client: reqwest::Client::new(),
+            client: crate::http::client(REQUEST_TIMEOUT),
             client_auth: None,
             cache: RwLock::new(HashMap::new()),
+            exchanges: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -136,6 +146,18 @@ impl TokenExchangeBroker {
             None => request,
         }
     }
+
+    /// The cached token for `key`, unless it expires within [`EXPIRY_SKEW`].
+    async fn cached(&self, key: &CacheKey) -> Option<ScopedToken> {
+        let refresh_at = Utc::now() + chrono::Duration::from_std(EXPIRY_SKEW).unwrap_or_default();
+        self.cache.read().await.get(key).filter(|token| token.is_live(refresh_at)).cloned()
+    }
+
+    fn lock_exchanges(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<CacheKey, Arc<tokio::sync::Mutex<()>>>> {
+        self.exchanges.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 #[async_trait]
@@ -150,14 +172,42 @@ impl CredentialBroker for TokenExchangeBroker {
         sorted.sort();
         sorted.dedup();
         let key = (acting.agent.id.clone(), resource.clone(), sorted);
-        if let Some(cached) = self.cache.read().await.get(&key) {
-            let refresh_at =
-                Utc::now() + chrono::Duration::from_std(EXPIRY_SKEW).unwrap_or_default();
-            if cached.is_live(refresh_at) {
-                return Ok(cached.clone());
-            }
+        if let Some(cached) = self.cached(&key).await {
+            return Ok(cached);
         }
 
+        let gate = self.lock_exchanges().entry(key.clone()).or_default().clone();
+        let exchanged = {
+            let _exchanging = gate.lock().await;
+            // A caller that waited here is answered by the exchange it waited for.
+            match self.cached(&key).await {
+                Some(cached) => Ok(cached),
+                None => self.exchange(acting, resource, &key).await,
+            }
+        };
+        let mut exchanges = self.lock_exchanges();
+        // The map's handle and this one: no other caller waits on the gate.
+        if Arc::strong_count(&gate) == 2
+            && exchanges.get(&key).is_some_and(|current| Arc::ptr_eq(current, &gate))
+        {
+            exchanges.remove(&key);
+        }
+        exchanged
+    }
+
+    async fn revoke(&self, scope: &RevocationScope) -> adk_core::Result<u64> {
+        self.revoke_cached(scope).await
+    }
+}
+
+impl TokenExchangeBroker {
+    /// Sends one RFC 8693 exchange for `key` and caches the issued token.
+    async fn exchange(
+        &self,
+        acting: &ActingContext,
+        resource: &Url,
+        key: &CacheKey,
+    ) -> adk_core::Result<ScopedToken> {
         let credential = self.identity.credential().await?;
         if credential.subject != acting.agent.id {
             return Err(exchange_error(
@@ -253,11 +303,11 @@ impl CredentialBroker for TokenExchangeBroker {
             credential.resource = %resource,
             "token exchanged"
         );
-        self.cache.write().await.insert(key, token.clone());
+        self.cache.write().await.insert(key.clone(), token.clone());
         Ok(token)
     }
 
-    async fn revoke(&self, scope: &RevocationScope) -> adk_core::Result<u64> {
+    async fn revoke_cached(&self, scope: &RevocationScope) -> adk_core::Result<u64> {
         let withdrawn: Vec<ScopedToken> = {
             let mut cache = self.cache.write().await;
             let keys: Vec<CacheKey> = cache
@@ -439,5 +489,55 @@ mod tests {
         assert_eq!(broker.revoke(&unrelated).await.unwrap(), 0);
         assert_eq!(broker.revoke(&RevocationScope::Agent(agent())).await.unwrap(), 1);
         broker.token_for(&acting(), &a, &[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_misses_for_one_token_send_one_exchange() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(Duration::from_millis(200)).set_body_json(
+                    serde_json::json!({"access_token": "shared", "expires_in": 3600}),
+                ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let broker = Arc::new(broker(&server));
+        let resource = resource_indicator("https://a.example.com/mcp").unwrap();
+
+        let calls: Vec<_> = (0..8)
+            .map(|_| {
+                let (broker, resource) = (broker.clone(), resource.clone());
+                tokio::spawn(async move { broker.token_for(&acting(), &resource, &[]).await })
+            })
+            .collect();
+        for call in calls {
+            assert_eq!(call.await.unwrap().unwrap().secret.expose(), "shared");
+        }
+        assert!(broker.lock_exchanges().is_empty(), "finished exchanges leave no gate behind");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_token_endpoint_that_never_answers_fails_the_exchange() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/token", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let source = StaticIdentitySource::new(AgentPrincipal::new(agent()))
+            .with_credential(AgentCredential::new(agent(), CredentialKind::JwtSvid, "svid-jwt"));
+        let broker = TokenExchangeBroker::new(Url::parse(&endpoint).unwrap(), Arc::new(source));
+        let resource = resource_indicator("https://a.example.com/mcp").unwrap();
+
+        let outcome =
+            tokio::time::timeout(REQUEST_TIMEOUT * 4, broker.token_for(&acting(), &resource, &[]))
+                .await
+                .expect("the exchange gives up on its own");
+        assert_eq!(outcome.unwrap_err().code, "credential.exchange_failed");
     }
 }
