@@ -2,45 +2,45 @@
 //!
 //! Agent evaluation framework for ADK-Rust.
 //!
-//! This crate provides comprehensive tools for testing and validating agent behavior,
-//! enabling developers to ensure their agents perform correctly and consistently.
+//! This crate runs agents against eval sets and scores their tool calls and responses, so
+//! agent behaviour can be checked in tests and CI.
 //!
 //! ## Features
 //!
-//! - **Test Definitions**: Structured format for defining test cases (`.test.json`)
-//! - **Trajectory Evaluation**: Validate tool call sequences
-//! - **Response Quality**: Assess final output quality with multiple metrics
-//! - **Multiple Criteria**: Ground truth, rubric-based, and LLM-judged evaluation
-//! - **Automation**: Run evaluations programmatically, for example from integration tests in CI
+//! - **Test definitions**: JSON eval sets (`.test.json`) with multi-turn conversations
+//! - **Trajectory evaluation**: tool call sequences with ordered or unordered, exact or subset
+//!   argument matching
+//! - **Response quality**: text similarity (exact, contains, Levenshtein, Jaccard, ROUGE)
+//! - **LLM-judged criteria**: semantic match, rubrics, safety, and hallucination checks, which
+//!   fail closed when they cannot be judged
+//! - **Analysis**: structured judge, cost and latency tracking, trace analysis, regression
+//!   baselines, human annotation, test generation, and conversation metrics
 //!
-//! ## Quick Start
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `embedding` | `EmbeddingScorer` |
+//! | `ci-helpers` | `JunitReporter` |
+//! | `statistics` | `AbComparator` |
+//! | `vertex-eval` | Vertex AI Gen AI Evaluation Service bridge |
+//! | `personas` | Simulated users for multi-turn evaluation |
 //!
-//! ```rust,ignore
-//! use adk_eval::{Evaluator, EvaluationConfig, EvaluationCriteria};
+//! ## Quick start
+//!
+//! ```rust,no_run
 //! use std::sync::Arc;
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Create your agent
-//!     let agent = create_my_agent()?;
+//! use adk_core::Agent;
+//! use adk_eval::{EvaluationConfig, EvaluationCriteria, Evaluator};
 //!
-//!     // Configure evaluator
-//!     let config = EvaluationConfig {
-//!         criteria: EvaluationCriteria {
-//!             tool_trajectory_score: Some(1.0),  // Exact tool match
-//!             response_similarity: Some(0.8),    // 80% text similarity
-//!             ..Default::default()
-//!         },
+//! async fn evaluate(agent: Arc<dyn Agent>) -> adk_eval::Result<()> {
+//!     let criteria = EvaluationCriteria {
+//!         tool_trajectory_score: Some(1.0), // exact tool match
+//!         response_similarity: Some(0.8),   // 80% text similarity
 //!         ..Default::default()
 //!     };
+//!     let evaluator = Evaluator::new(EvaluationConfig::with_criteria(criteria));
 //!
-//!     let evaluator = Evaluator::new(config);
-//!
-//!     // Run evaluation
-//!     let report = evaluator
-//!         .evaluate_file(agent, "tests/my_agent.test.json")
-//!         .await?;
-//!
+//!     let report = evaluator.evaluate_file(agent, "tests/my_agent.test.json").await?;
 //!     assert!(report.all_passed(), "{}", report.format_summary());
 //!     Ok(())
 //! }

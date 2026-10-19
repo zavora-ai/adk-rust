@@ -9,6 +9,10 @@ description = "Agent evaluation framework for ADK-Rust"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-eval"
 readme = "README.md"
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+features = ["embedding", "ci-helpers", "statistics", "vertex-eval", "personas"]
 keywords = ["ai", "agent", "evaluation", "testing", "llm"]
 categories = ["development-tools::testing"]
 

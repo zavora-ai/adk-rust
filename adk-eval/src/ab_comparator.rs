@@ -88,8 +88,10 @@ impl AbComparator {
     ///
     /// # Errors
     ///
-    /// Returns [`EvalError::ConfigError`] when `eval_cases` is empty or the evaluator has
-    /// no criteria, and [`EvalError::StatisticsError`] if statistical computation fails.
+    /// Returns [`EvalError::ConfigError`](crate::EvalError::ConfigError) when `eval_cases`
+    /// is empty or the evaluator has no criteria, and
+    /// [`EvalError::StatisticsError`](crate::EvalError::StatisticsError) if statistical
+    /// computation fails.
     pub async fn compare(
         &self,
         agent_a: Arc<dyn Agent>,
