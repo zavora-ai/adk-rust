@@ -9,7 +9,7 @@ also appropriate:
 
 ```toml
 [dependencies]
-rmcp = { version = "2.2", features = ["transport-io", "schemars"] }
+rmcp = { version = "3.4", features = ["transport-io", "schemars"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 ```
@@ -20,7 +20,7 @@ tokio = { version = "1", features = ["full"] }
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
+    model::{ServerCapabilities, ServerConfig},
     schemars, tool, tool_handler, tool_router,
 };
 use serde::Deserialize;
@@ -48,8 +48,8 @@ impl OrderServer {
 
 #[tool_handler]
 impl ServerHandler for OrderServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("Read-only order investigation tools")
     }
 }
@@ -62,7 +62,9 @@ service.waiting().await?;
 ```
 
 The deterministic `examples/mcp_manager` fixture uses this server shape and is
-compiled and executed by the MCP verification gates.
+compiled and executed by the MCP verification gates. `ServerConfig` is the name
+rmcp 3.4 gives the initialize result; earlier releases call it `ServerInfo`,
+which rmcp 3.4 and later keep as a deprecated alias.
 
 ## Publish honest capabilities
 
@@ -70,9 +72,12 @@ Only advertise a capability when the handler implements it. A client uses the
 initialization response to decide whether it may call resources, prompts,
 completion, elicitation, subscriptions, or tasks.
 
-For task-capable tools, declare the tool's task support and advertise
-`tasks.requests.tools.call`. The client may reject a required task tool when the
-server did not negotiate task support.
+To run a slow call as an SEP-2663 task, declare the
+`io.modelcontextprotocol/tasks` extension in the server's capabilities
+(`ServerCapabilities::builder().enable_tools().enable_tasks()`), and answer
+`tools/call` with a task only when the client declared the extension too
+(`ClientCapabilities::supports_tasks()`). `examples/mcp_protocol_revisions`
+contains a server that does both.
 
 ## Tools are security boundaries
 
@@ -94,6 +99,6 @@ the server is an independently deployed service. Remote deployments also need
 authentication, request limits, session policy, observability, and an
 application-level health probe.
 
-See the official [`rmcp` documentation](https://docs.rs/rmcp/3.1.2/rmcp/) for
+See the official [`rmcp` documentation](https://docs.rs/rmcp/3.5.1/rmcp/) for
 server routers, resources, prompts, custom handlers, transports, authorization,
 and extension APIs.

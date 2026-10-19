@@ -13,25 +13,28 @@ remote configuration.
 ```mermaid
 stateDiagram-v2
     [*] --> Stopped
-    [*] --> Disabled
+    [*] --> Disabled: disabled in config
     Stopped --> Starting: start
     Starting --> Running: MCP handshake succeeds
     Starting --> FailedToStart: spawn or handshake error, or startup timeout
     Starting --> Stopped: stop during the handshake
     Running --> Stopped: stop
-    Running --> Restarting: manual restart
-    Running --> Crashed: closed connection detected
-    Crashed --> Restarting: restart policy
+    Running --> Restarting: restart_server
+    Running --> Crashed: monitor finds the connection closed
+    Crashed --> Restarting: restart policy has attempts left
     FailedToStart --> Restarting: restart policy has attempts left
-    Restarting --> Running: handshake succeeds
-    Restarting --> FailedToStart: handshake fails
+    Crashed --> FailedToStart: restart attempts exhausted
+    Restarting --> Starting: start
     Disabled --> Stopped: enable
     Stopped --> Disabled: disable
     Running --> Disabled: disable
 ```
 
-The monitor checks whether the MCP connection has closed. It retries crashed or
-failed starts only while the configured `RestartPolicy` has attempts remaining.
+The monitor checks whether the MCP connection has closed. It restarts a
+`Crashed` or `FailedToStart` server only when the server's configuration has a
+`restartPolicy` with attempts remaining, and marks it `FailedToStart` once they
+run out. `disable_server` moves a server in any state to `Disabled`, and
+`start_server` starts any server that is not disabled.
 
 ## Configuration
 
@@ -51,11 +54,24 @@ failed starts only while the configured `RestartPolicy` has attempts remaining.
         "maxDelayMs": 15000,
         "backoffMultiplier": 2.0,
         "maxRestartAttempts": 5
+      },
+      "lifecycle": "initialize",
+      "taskConfig": {
+        "enableTasks": false
       }
     }
   }
 }
 ```
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `command`, `args`, `env` | — / `[]` / `{}` | The child process to spawn |
+| `disabled` | `false` | Leave the server `Disabled` until it is enabled |
+| `autoApprove` | `[]` | Kept for compatibility; never read as approval |
+| `restartPolicy` | none (no automatic restart) | Each omitted field defaults to `initialDelayMs` 1000, `maxDelayMs` 30000, `backoffMultiplier` 2.0, `maxRestartAttempts` 10 |
+| `lifecycle` | `initialize` | `initialize`, or `auto` / `discover` to probe with `server/discover` (`McpLifecycleMode`) |
+| `taskConfig` | tasks off | `McpTaskConfig` in camelCase (`enableTasks`, `pollIntervalMs`, `timeoutMs`, `maxPollAttempts`, `maxInputRounds`); `enableTasks` also declares the tasks extension to the server |
 
 Server IDs accept ASCII letters, numbers, hyphens, and underscores. Use a
 stable ID because it becomes part of a collision-prefixed tool name.
@@ -109,7 +125,7 @@ let manager = McpServerManager::from_json_file("mcp.json")?
 
 `with_schema_limits` sets the tool-schema size limits for every managed server.
 Each managed toolset is named after its server ID, so the warning for a skipped
-tool names the server. See
+tool names the server, and each managed tool's origin is `mcp:{server_id}`. See
 [Schema size limits](client.md#schema-size-limits) for the defaults.
 
 `with_discovery_limits` sets the [discovery bounds](client.md#discovery-bounds)

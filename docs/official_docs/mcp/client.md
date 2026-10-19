@@ -47,6 +47,11 @@ Use an absolute binary path in production. Avoid package tags such as `latest`
 in deployment configuration because they make builds and incident recovery
 non-reproducible.
 
+Give each toolset its own `with_name`. Its tools report the origin
+`mcp:{toolset name}`, which tool-call approvals are bound to, so two servers
+sharing the default name `mcp_toolset` would share one identity in approvals.
+See [Security](security.md#tool-exposure-and-execution).
+
 ## Tool discovery and filtering
 
 `McpToolset` converts each published MCP tool into an ADK-Rust `Tool`. It keeps
@@ -64,8 +69,10 @@ safety signals:
 | Neither | `NonIdempotent` | `false` | `false` |
 
 An `Idempotent` or `ReadOnly` effect permits safe replay after reconnecting and
-retries under a `ToolRetryConfig`; a `NonIdempotent` call is recorded in the
-action ledger when one is configured. `Tool::annotations()` returns the server's
+retries under a [`RetryBudget`](../tools/tool-effects.md#retries); a
+`NonIdempotent` call is recorded in the action ledger when one is configured.
+`with_tool_call_retries()` allows replay after a reconnect for every tool of the
+toolset; enable it only when the server's tools are safe to repeat. `Tool::annotations()` returns the server's
 `annotations` object unchanged, so a policy or callback can read `title`,
 `destructiveHint`, and `openWorldHint` as well:
 
@@ -96,6 +103,11 @@ naming the toolset and the escaped name, any tool that no model can call:
 Names from different toolsets are not renamed: an agent whose toolsets publish
 the same name still fails the turn. Use `PrefixedToolset`, or
 `McpServerManager`, which prefixes names shared by its servers.
+
+A tool call's result reaches the model as `{"output": ...}`; a call that
+succeeds with no content is `{"output": ""}`, not a failure. A result with
+`isError: true` is a tool error, whose text `LlmAgent` keeps out of the model
+request by default. See [what the model receives](../tools/mcp-tools.md#connect-one-local-server).
 
 ```rust
 let reviewed = McpToolset::new(client).with_filter(|name| {
@@ -369,10 +381,21 @@ See `examples/mcp_elicitation` for a complete client and server pair.
 
 ## Negotiated tasks
 
-```rust
-use adk_tool::McpTaskConfig;
-use std::time::Duration;
+Under the SEP-2663 tasks extension the server decides per call whether to
+answer `tools/call` with a task, and only for a client that declared the
+extension:
 
+```rust
+use adk_tool::mcp::rmcp::{ServiceExt, transport::TokioChildProcess};
+use adk_tool::mcp::{AdkClientHandler, AutoDeclineElicitationHandler, McpTaskConfig, McpToolset};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::process::Command;
+
+let client = AdkClientHandler::new(Arc::new(AutoDeclineElicitationHandler))
+    .with_tasks() // declares the extension; without it the server answers inline
+    .serve(TokioChildProcess::new(Command::new("/opt/company/bin/report-mcp"))?)
+    .await?;
 let toolset = McpToolset::new(client).with_task_support(
     McpTaskConfig::enabled()
         .poll_interval(Duration::from_secs(1))
@@ -381,15 +404,19 @@ let toolset = McpToolset::new(client).with_task_support(
 );
 ```
 
-Task mode is selected from two negotiated facts:
+| `McpTaskConfig` | Default | Effect |
+|-----------------|---------|--------|
+| `enable_tasks` | `false` (`enabled()` sets it) | Poll a task the server returns; with it off, the task is cancelled and the call fails |
+| `poll_interval_ms` | 1000 | Used when the server's task carries no `pollIntervalMs` |
+| `timeout_ms` | 300 000 (`no_timeout()` removes it) | `tasks/cancel`, then the call fails |
+| `max_poll_attempts` | Unlimited | `tasks/cancel`, then the call fails |
+| `max_input_rounds` | 10 | Most `input_required` rounds answered for one call |
 
-1. the server advertises `tasks.requests.tools.call`; and
-2. the tool declares task support as required or optional.
-
-ADK-Rust sends task metadata with `tools/call`, receives the created task, polls
-`tasks/get`, reads `tasks/result`, and calls `tasks/cancel` when local bounds are
-exceeded. `input_required` is returned as a typed error because an ordinary ADK
-tool call does not yet provide a protocol-neutral task-resume input channel.
+The completed task's result comes back inline from `tasks/get`. An
+`input_required` round — in a task or on a plain `tools/call` — is answered
+through the connection's handler: elicitation always, and sampling or roots only
+when the client declared them. `McpServerManager` declares the extension for a
+server whose configuration sets `taskConfig.enableTasks`.
 
 ## Remote Streamable HTTP
 
@@ -406,9 +433,17 @@ let toolset = McpHttpClientBuilder::new("https://mcp.example.com/mcp")
     .await?;
 ```
 
-The builder supports bearer tokens, a custom API-key header, and fixed OAuth
-2.0 client credentials. See [Security and authorization](security.md) before
-choosing an authentication flow.
+`connect()` returns an `McpToolset` with a connection factory attached, so a
+failed connection is re-established. The request timeout defaults to 30 seconds,
+and `reinit_on_expired_session` is on by default. Name the returned toolset
+with `with_name`.
+
+The builder supports bearer tokens (`McpAuth::bearer`), a custom API-key header
+(`McpAuth::api_key`), fixed OAuth 2.0 client credentials (`McpAuth::oauth2`), and
+tokens minted per request by a credential broker
+(`with_credential_broker(broker, acting, scopes)`), which are sent only to the
+endpoint they were minted for. See [Security and authorization](security.md)
+before choosing an authentication flow.
 
 With OAuth 2.0, each request carries the current access token rather than the
 one fetched at connect time, so a long-lived connection outlives its first
@@ -421,4 +456,9 @@ token:
 | The new token is also rejected | The 401 reaches the toolset, which reconnects through its connection factory |
 
 A request rejected with 401 never ran, so it is resent even for tools whose
-calls are not otherwise replayed after a connection failure.
+calls are not otherwise replayed after a connection failure. A token that cannot
+be fetched at connect time fails `connect()`, so bad credentials surface before
+the first tool call.
+
+Reconnects follow `RefreshConfig` (`with_refresh_config`): three attempts, one
+second apart, by default.
