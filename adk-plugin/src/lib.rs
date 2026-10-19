@@ -4,6 +4,9 @@
 //!
 //! This crate provides a plugin architecture similar to adk-go's plugin package,
 //! allowing you to extend agent behavior through callbacks at various lifecycle points.
+//! Install a [`PluginManager`] with `Runner::builder().plugin_manager(...)`: the runner calls
+//! the run, user-message, and event callbacks, and agents run the agent, model, and tool
+//! callbacks ahead of their own through `RunConfig::invocation_hooks`.
 //!
 //! ## Overview
 //!
@@ -19,7 +22,7 @@
 //!
 //! ### Using `PluginConfig` directly
 //!
-//! ```rust,ignore
+//! ```rust
 //! use adk_plugin::{Plugin, PluginConfig, PluginManager};
 //!
 //! // Create a logging plugin via PluginConfig
@@ -39,11 +42,13 @@
 //!     })),
 //!     ..Default::default()
 //! });
+//! let manager = PluginManager::new(vec![logging_plugin]);
+//! assert_eq!(manager.plugin_count(), 1);
 //! ```
 //!
 //! ### Using `PluginBuilder`
 //!
-//! ```rust,ignore
+//! ```rust
 //! use adk_plugin::{PluginBuilder, PluginManager};
 //!
 //! // Create the same plugin via the builder API

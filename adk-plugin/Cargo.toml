@@ -5,10 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+homepage.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-plugin"
 readme = "README.md"
-description = "Plugin system for ADK-Rust agents"
+description = "Plugin system for ADK-Rust agents: run, agent, model, and tool lifecycle callbacks"
 keywords = ["adk", "agent", "plugin", "ai", "llm"]
 categories = ["development-tools", "asynchronous"]
 

@@ -108,7 +108,7 @@ pub enum AfterToolCallResult {
 ///
 /// // Modify the request (e.g., inject a system instruction)
 /// let mut request = LlmRequest::default();
-/// request.model = "gemini-2.5-flash".to_string();
+/// request.model = "gemini-3.7-flash".to_string();
 /// let result = BeforeModelCallResult::Continue(request);
 /// ```
 ///
