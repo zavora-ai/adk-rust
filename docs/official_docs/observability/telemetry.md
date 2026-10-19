@@ -79,7 +79,7 @@ Control logging verbosity using the `RUST_LOG` environment variable:
 | Level | Description | Use Case |
 |-------|-------------|----------|
 | `error` | Only errors | Production (minimal) |
-| `warn` | Warnings and errors | Production (default) |
+| `warn` | Warnings and errors | Production |
 | `info` | Informational messages | Development, staging |
 | `debug` | Detailed debugging info | Local development |
 | `trace` | Very verbose tracing | Deep debugging |
@@ -396,7 +396,7 @@ record_llm_usage(&LlmUsage {
 });
 ```
 
-All ADK model providers (Gemini, OpenAI, Anthropic, Ollama, Bedrock, DeepSeek, Groq, Azure AI, and all OpenAI-compatible providers) automatically record token usage on every `generate_content` call. No manual instrumentation is needed — the tracking is built into the provider layer.
+The `adk-model` provider clients (Gemini, OpenAI, Anthropic, Ollama, Bedrock, DeepSeek, Groq, Azure AI, OpenRouter, and OpenAI-compatible endpoints) open a `gen_ai.generate` span, with `gen_ai.system`, `gen_ai.request.model`, and `gen_ai.request.stream`, for every `generate_content` call and record the usage the provider reports. No manual instrumentation is needed.
 
 Recorded span fields follow [OpenTelemetry GenAI conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/):
 
@@ -488,6 +488,7 @@ ADK-Rust components automatically emit telemetry when the telemetry system is in
 
 ```rust
 use adk_rust::prelude::*;
+use adk_rust::Launcher;
 use adk_telemetry::init_telemetry;
 use std::sync::Arc;
 
@@ -531,7 +532,15 @@ Add telemetry to custom tools:
 ```rust
 use adk_rust::prelude::*;
 use adk_telemetry::{info, instrument, tool_execute_span};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+#[derive(Deserialize, Serialize, JsonSchema)]
+struct WeatherArgs {
+    /// City to look up
+    location: String,
+}
 
 #[instrument(skip(ctx))]
 async fn weather_tool_impl(
@@ -557,15 +566,9 @@ async fn weather_tool_impl(
 let weather_tool = FunctionTool::new(
     "get_weather",
     "Get current weather for a location",
-    json!({
-        "type": "object",
-        "properties": {
-            "location": {"type": "string"}
-        },
-        "required": ["location"]
-    }),
     weather_tool_impl,
-);
+)
+.with_parameters_schema::<WeatherArgs>();
 ```
 
 ## Custom Telemetry in Callbacks

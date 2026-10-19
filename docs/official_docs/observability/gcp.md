@@ -18,7 +18,7 @@ adk-rust = { version = "3.0.0", features = ["minimal", "gcp-telemetry"] }
 
 ## Direct Export to Google Cloud
 
-`init_with_gcp` exports spans to `https://telemetry.googleapis.com` over gRPC, authenticating each request with a Bearer token minted from Application Default Credentials (ADC) plus an `x-goog-user-project` header. A background task re-mints the token every five minutes, so long-running agents keep exporting across token expiry.
+`init_with_gcp` exports spans to `https://telemetry.googleapis.com` over gRPC, authenticating each request with a Bearer token minted from Application Default Credentials (ADC) plus an `x-goog-user-project` header. A background task re-mints the token periodically, so long-running agents keep exporting across token expiry.
 
 ```rust
 use adk_telemetry::init_with_gcp;
@@ -42,7 +42,7 @@ Requirements:
 | `GOOGLE_CLOUD_PROJECT` | Set to the project that receives (and is billed for) the telemetry |
 | Credentials | `gcloud auth application-default login` locally, or an attached service account when deployed |
 | API | Enable the Telemetry API (`telemetry.googleapis.com`) on the project |
-| IAM | The principal needs the `telemetry.traces.write` permission (`roles/telemetry.tracesWriter`) |
+| IAM | The principal needs permission to write traces through the Telemetry API |
 
 > **Note:** This path exports traces only. Route metrics through the collector sidecar below.
 
@@ -56,7 +56,7 @@ Requirements:
 | `gcp.project_id` | `GOOGLE_CLOUD_PROJECT` (omitted when unset) |
 | `cloud.platform` | `gcp.agent_engine` when `GOOGLE_CLOUD_AGENT_ENGINE_ID` is set |
 
-`GOOGLE_CLOUD_AGENT_ENGINE_ID` is the bare numeric engine ID that Vertex AI Agent Engine sets in deployed containers. `gcp.agent_engine` is the canonical `cloud.platform` value from the OpenTelemetry semantic conventions (added upstream in October 2025).
+`GOOGLE_CLOUD_AGENT_ENGINE_ID` is the bare numeric engine ID that Vertex AI Agent Engine sets in deployed containers. `gcp.agent_engine` is the `cloud.platform` value the OpenTelemetry semantic conventions define for it.
 
 The same detection is available standalone for composing your own pipeline:
 
