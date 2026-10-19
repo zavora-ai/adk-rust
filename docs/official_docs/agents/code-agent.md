@@ -79,11 +79,11 @@ runs long-running tools inline and rejects confirmation pauses.
 
 ## Building a CodeActAgent
 
-```rust,ignore
+```rust
 use adk_agent::codeact::CodeActAgent;
 use std::sync::Arc;
 
-// `model` implements `adk_core::Llm`; `runtime` implements `CodeRuntime`.
+// `model` is an Arc<dyn adk_core::Llm>; `runtime` an Arc<dyn CodeRuntime>.
 let agent = CodeActAgent::builder()
     .name("analyst")
     .model(model)
@@ -94,7 +94,8 @@ let agent = CodeActAgent::builder()
     .build()?;
 ```
 
-`model` and `runtime` are required; everything else has a default.
+`model` and `runtime` are required; everything else has a default. As with `LlmAgentBuilder`,
+two tools with one name fail `build()` with `agent.duplicate_tool_name`.
 
 ## Parity with LlmAgent
 
@@ -103,8 +104,8 @@ The builder mirrors `LlmAgentBuilder`:
 - **Model**: `generate_content_config` plus `temperature`/`top_p`/`top_k`/
   `max_output_tokens` shorthands.
 - **Instructions**: `instruction`/`instruction_provider`,
-  `global_instruction`/`global_instruction_provider`, with `{state.key}`
-  template injection; plus skills (`skills` feature).
+  `global_instruction`/`global_instruction_provider`, with the same `{key}`
+  templating as `LlmAgent`; plus skills (`skills` feature).
 - **History**: `include_contents`.
 - **Tools**: static `tool`s and per-invocation `toolset`s; `tool_timeout`,
   `default_retry_budget`/`tool_retry_budget`, `circuit_breaker_threshold`, and
@@ -154,12 +155,17 @@ cargo run --manifest-path examples/codeact_agent/Cargo.toml
 
 A `CodeRuntime` parses and steps a script, surfacing one external call at a time:
 
-```rust,ignore
+```rust
+use adk_agent::codeact::{ResumeWith, RunStep, RuntimeCapabilities, RuntimeError};
+use adk_core::Tool;
+use std::sync::Arc;
+
 pub trait CodeRuntime: Send + Sync {
     fn start(&self, script: &str, script_name: &str) -> Result<RunStep, RuntimeError>;
     fn resume(&self, snapshot: &[u8], with: ResumeWith) -> Result<RunStep, RuntimeError>;
-    fn capabilities(&self) -> RuntimeCapabilities { /* default */ }
-    fn render_tools(&self, tools: &[Arc<dyn Tool>]) -> String { /* default */ }
+    // Provided methods; override as needed.
+    fn capabilities(&self) -> RuntimeCapabilities;
+    fn render_tools(&self, tools: &[Arc<dyn Tool>]) -> String;
 }
 ```
 
@@ -210,8 +216,9 @@ Or through the umbrella crate (re-exported as `adk_rust::codeact_monty`):
 adk-rust = { version = "3.0.0", features = ["minimal", "codeact-monty"] }
 ```
 
-```rust,ignore
+```rust
 use adk_codeact_monty::MontyRuntime;
+use std::sync::Arc;
 
 // Conservative default resource limits (per-advance time + memory caps) make
 // `new()` safe for untrusted, LLM-generated code.
@@ -236,8 +243,9 @@ pause the agent loop. By default a runtime is fully sandboxed (no filesystem
 access, an empty environment, host clock enabled). Grant specific access with
 the builder:
 
-```rust,ignore
+```rust
 use adk_codeact_monty::{MontyRuntime, PathAccess};
+use std::sync::Arc;
 
 let runtime = Arc::new(
     MontyRuntime::builder()

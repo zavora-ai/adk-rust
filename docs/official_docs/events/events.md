@@ -17,30 +17,42 @@ The event system serves several critical purposes:
 An `Event` represents a single interaction in a conversation. ADK-Rust uses a unified Event type that embeds `LlmResponse`, matching the design pattern used in ADK-Go:
 
 ```rust
+use adk_rust::{EventActions, LlmResponse};
+use chrono::{DateTime, Utc};
+use std::collections::HashMap;
+
 pub struct Event {
     pub id: String,                    // Unique event identifier (UUID)
     pub timestamp: DateTime<Utc>,      // When the event occurred
     pub invocation_id: String,         // Links related events in a single invocation
-    pub branch: String,                // For future branching support
-    pub author: String,                // Who created this event (user, agent name, tool name)
-    pub llm_response: LlmResponse,     // Contains content and LLM metadata
+    pub branch: String,                // Conversation branch (see below)
+    pub author: String,                // Who created this event ("user" or an agent name)
+    pub llm_response: LlmResponse,     // Contains content and LLM metadata (flattened when serialized)
     pub actions: EventActions,         // Side effects and metadata
     pub long_running_tool_ids: Vec<String>,  // IDs of long-running tools
-    pub provider_metadata: HashMap<String, String>,  // Provider-specific metadata
+    pub llm_request: Option<String>,   // The serialized model request, when recorded
+    pub provider_metadata: HashMap<String, String>,  // Event-level metadata, serialized as `event_metadata`
 }
 ```
 
 The `LlmResponse` struct contains:
 ```rust
+use adk_rust::{CitationMetadata, Content, FinishReason, UsageMetadata};
+
 pub struct LlmResponse {
     pub content: Option<Content>,      // The message content (text, parts, etc.)
     pub usage_metadata: Option<UsageMetadata>,
     pub finish_reason: Option<FinishReason>,
+    pub citation_metadata: Option<CitationMetadata>,
     pub partial: bool,                 // True for streaming partial responses
     pub turn_complete: bool,           // True when the turn is complete
     pub interrupted: bool,             // True if generation was interrupted
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+    pub provider_metadata: Option<serde_json::Value>,  // Provider-specific response metadata
+    pub interaction_id: Option<String>,  // Gemini Interactions API interaction ID
+    pub model: Option<String>,         // The model that produced the response, when known
+    pub provider: Option<String>,      // The provider that served it, when known
 }
 ```
 
@@ -66,10 +78,9 @@ if let Some(content) = &event.llm_response.content {
 - **branch**: The conversation branch the event was produced on. `ParallelAgent` places each sub-agent on its own branch (`{parent}.{parallel_agent}.{sub_agent}`) and stamps the events it emits, so history reads scoped to a branch exclude what sibling branches produced. An event is visible from a branch when its own branch equals that branch or is an *ancestor* of it; siblings and nested descendants are not. An empty branch means "unscoped" and stays visible everywhere, so events written without one are unaffected. See [Workflow Agents](../agents/workflow-agents.md#parallelagent).
 
 - **author**: Identifies who created the event:
-  - User messages: typically "user" or a user identifier
+  - User messages: `"user"`
   - Agent responses: the agent's name
-  - Tool executions: the tool's name
-  - System events: "system"
+  - Tool calls and tool results: the name of the agent that issued the call
 
 - **llm_response**: Contains the message content and LLM metadata. Access content via `event.llm_response.content`. The `Content` type can contain text, multimodal parts (images, audio), or structured data. Some events (like pure state updates) may have `content: None`.
 
@@ -92,17 +103,22 @@ if let Some(code) = &event.llm_response.error_code {
 The `EventActions` struct contains metadata and side effects associated with an event:
 
 ```rust
+use adk_rust::{EventCompaction, ToolConfirmationDecision, ToolConfirmationRequest, WorkflowPosition};
+use serde_json::Value;
+use std::collections::HashMap;
+
 pub struct EventActions {
     pub state_delta: HashMap<String, Value>,    // State changes to apply
     pub artifact_delta: HashMap<String, i64>,   // Artifact version changes
     pub skip_summarization: bool,               // Skip this event in summaries
     pub transfer_to_agent: Option<String>,      // Transfer control to another agent
-    pub escalate: bool,                         // Escalate to human or supervisor
+    pub escalate: bool,                         // End the enclosing loop or fan-out
     pub tool_confirmation: Option<ToolConfirmationRequest>,      // Pending tool confirmation
     pub tool_confirmation_decision: Option<ToolConfirmationDecision>, // Approval/denial
     pub compaction: Option<EventCompaction>,     // Context compaction summary
     pub route: Option<Vec<String>>,              // Graph route targets
     pub input_screened: bool,                    // User message screened before it was saved
+    pub workflow_positions: HashMap<String, WorkflowPosition>, // Where workflows stopped on a held call
 }
 ```
 
@@ -113,7 +129,7 @@ The `state_delta` field contains key-value pairs representing changes to the ses
 State keys can use prefixes to control scope:
 - `app:key` - Application-scoped state (shared across all users)
 - `user:key` - User-scoped state (shared across all sessions for a user)
-- `temp:key` - Temporary state (cleared between invocations)
+- `temp:key` - Temporary state: visible to later tools, transferred agents and `{temp:key}` instructions for the rest of the invocation, and never persisted by the session service
 - No prefix - Session-scoped state (default)
 
 Example:
@@ -135,11 +151,14 @@ actions.artifact_delta.insert("chart.png".to_string(), 2);
 
 ### skip_summarization
 
-When `true`, this event will be excluded from conversation summaries. Useful for internal events, debugging information, or verbose tool outputs that shouldn't be part of the main conversation flow.
+Set by a tool on its result (through `ToolContext::set_actions`) to end the agent's turn on that
+result: `LlmAgent` does not call the model again to summarize it, and the tool-result event is
+the turn's final response (`is_final_response()` returns `true`). `AgentTool::skip_summarization(true)`
+sets it for a delegation.
 
 ### transfer_to_agent
 
-When set to an agent name, control is transferred to that agent. This enables multi-agent workflows where one agent can hand off to another. The target agent must be configured as a sub-agent.
+When set to an agent name, control is transferred to that agent. This enables multi-agent workflows where one agent can hand off to another. The runner checks every transfer, whether the model's `transfer_to_agent` call, a tool or a custom agent requested it: the target must be one of the source agent's sub-agents, its parent (unless `disallow_transfer_to_parent`) or its parent's other sub-agents (unless `disallow_transfer_to_peers`). A refused transfer is logged and control stays with the source. See [Transfer Restrictions](../agents/multi-agent.md#transfer-restrictions).
 
 Example:
 ```rust
@@ -148,7 +167,7 @@ actions.transfer_to_agent = Some("specialist_agent".to_string());
 
 ### escalate
 
-When `true`, signals that the conversation should be escalated to a human operator or supervisor agent. The specific escalation behavior depends on your application's implementation.
+When `true`, ends the enclosing workflow step: a `LoopAgent` stops iterating, and a `ParallelAgent` stops its other branches and passes the escalation on. `ExitLoopTool` sets it. Like `skip_summarization`, an escalating tool result also ends the agent's turn.
 
 ### input_screened
 
@@ -164,24 +183,36 @@ Events form the conversation history by accumulating in chronological order with
 4. **Tool Execution Events**: Each tool call may generate additional events
 5. **State Updates**: State deltas from all events are merged into the session state
 
-The conversation history is constructed by:
-- Retrieving all events from the session in chronological order
-- Converting each event's content into the appropriate format for the LLM
-- Including state information from accumulated state deltas
-- Filtering out events marked with `skip_summarization` when appropriate
+`LlmAgent` builds each model request from its instructions, sent as `system`-role contents,
+followed by the session's events in order, projected for the agent that asks:
+
+| Events | What the agent's request carries |
+|--------|----------------------------------|
+| The user's messages and the agent's own turns | Their own roles (`user`, `model`, function calls and responses) |
+| Another agent's text, calls and results, as in a workflow | User-role context: one message per event, opening with `adk_core::history::OTHER_AGENT_CONTEXT_PREAMBLE` and quoting the payload between `<<<BEGIN_QUOTED_AGENT_CONTENT>>>` and `<<<END_QUOTED_AGENT_CONTENT>>>`; the other agent's thinking is left out |
+| Another agent's turns, for an agent that received control by transfer | Left out |
+| Events of a sibling `ParallelAgent` branch | Left out (see `branch` above) |
+| Events a compaction summarized | The compaction summary |
+| A held call's confirmation-pending response, once the call is resumed | Replaced by the call's real response |
+| A function response whose call is no longer in the history | Left out, so every response has its call |
+
+A request whose history would end on a model answer, such as a loop running the agent again
+after its own answer, gets a short user turn, since models without assistant prefill reject a
+request that ends on one. `RunConfig::history_max_events` limits how many recent persisted
+events a run loads. Partial (streamed) events are not persisted, so they never reach the history.
 
 ### Event Flow Example
 
 ```
 Session Start
   ↓
-[Event 1] User: "What's the weather in Tokyo?"
+[Event 1] author "user":          "What's the weather in Tokyo?"
   ↓
-[Event 2] Agent: "Let me check that for you."
+[Event 2] author "weather_agent": FunctionCall get_weather({"city": "Tokyo"})
   ↓
-[Event 3] Tool (weather_api): {"temp": 22, "condition": "sunny"}
+[Event 3] author "weather_agent": FunctionResponse get_weather → {"temp": 22, "condition": "sunny"}
   ↓
-[Event 4] Agent: "It's 22°C and sunny in Tokyo."
+[Event 4] author "weather_agent": "It's 22°C and sunny in Tokyo."
   ↓
 Session State Updated
 ```
@@ -266,6 +297,8 @@ if let Some(event) = events.at(0) {
 For long conversations, you may want to retrieve only recent events:
 
 ```rust
+use adk_rust::session::{GetRequest, SessionService};
+
 // Get only the last 10 events
 let session = session_service.get(GetRequest {
     app_name: "my_app".to_string(),
@@ -295,16 +328,14 @@ When an event is generated, it follows this processing path:
 
 1. **Generation**: An event is created and yielded by its source (agent, tool, or user input handler)
 2. **Runner Receives**: The Runner executing the agent receives the event
-3. **SessionService Processing**: The Runner sends the event to the SessionService, which:
-   - **Applies Deltas**: Merges `state_delta` into session state and updates artifact records
-   - **Finalizes Metadata**: Assigns unique `id` if not present, sets `timestamp`
+3. **SessionService Processing**: The Runner sends each complete (non-partial) event to the SessionService, which:
+   - **Applies Deltas**: Merges `state_delta` into session state, leaving out `temp:` keys
    - **Persists to History**: Appends the event to `session.events`
-4. **Stream Output**: The Runner yields the processed event to the calling application
+4. **Stream Output**: The Runner yields the event to the calling application. Partial (streamed) events are yielded without being persisted
 
 This flow ensures that state changes and history are consistently recorded alongside the communication content.
 
-```rust
-// Conceptual flow
+```text
 User Input → Runner → Agent → LLM → Event Generated
                                          ↓
                                    SessionService
@@ -404,8 +435,8 @@ When running an agent, you receive a stream of events. Here's how to process the
 ### Processing Events from Runner
 
 ```rust
-use adk_core::{SessionId, UserId};
-use futures::StreamExt;
+use adk_rust::futures::StreamExt;
+use adk_rust::{EventTextDeltas, SessionId, UserId};
 
 let mut stream = runner.run(
     UserId::new("user_123")?,
@@ -413,6 +444,9 @@ let mut stream = runner.run(
     user_input,
 ).await?;
 
+// A streamed answer arrives as partial deltas and then one complete event with the whole
+// text; EventTextDeltas reduces that complete event to the text not yet printed.
+let mut text_deltas = EventTextDeltas::default();
 while let Some(event_result) = stream.next().await {
     match event_result {
         Ok(event) => {
@@ -420,6 +454,7 @@ while let Some(event_result) = stream.next().await {
             println!("Event from: {}", event.author);
 
             // Extract text content
+            let event = text_deltas.push(&event);
             if let Some(content) = &event.llm_response.content {
                 for part in &content.parts {
                     if let Part::Text { text } = part {
@@ -503,6 +538,8 @@ for result in event.tool_results() {
 `Vec<ToolResultView>`:
 
 ```rust
+use serde_json::Value;
+
 pub struct ToolCallView<'a>   { pub call_id: Option<&'a str>, pub name: &'a str, pub args: &'a Value }
 pub struct ToolResultView<'a> { pub call_id: Option<&'a str>, pub name: &'a str, pub response: &'a Value }
 ```
@@ -514,8 +551,10 @@ streaming output, but its result still arrives as an ordinary event you can
 render — not just `bash`-style tools.
 
 **Correlation.** Use `call_id` to attach a result (and any progress chunks, see
-below) back to its originating call. Providers that omit call ids (e.g. Gemini)
-leave it `None`; fall back to `name` in that case.
+below) back to its originating call. When a provider sends a call without an ID (Ollama,
+tool-call markup in text), `LlmAgent` assigns one starting with `adk-call-`
+(`adk_core::GENERATED_CALL_ID_PREFIX`) in the saved event and its response, and removes it again
+from model requests.
 
 ### Complete response snapshots
 
@@ -631,10 +670,14 @@ Here are typical event sequences you'll encounter:
 ### Agent Transfer
 
 ```
-[Event 1] author="router", content=Text("Transferring to specialist")
+[Event 1] author="router", content=FunctionCall(name="transfer_to_agent", args={"agent_name": "specialist_agent"})
+[Event 2] author="router", content=FunctionResponse(name="transfer_to_agent", response={...})
            actions.transfer_to_agent=Some("specialist_agent")
-[Event 2] author="specialist_agent", content=Text("I can help with that")
+[Event 3] author="specialist_agent", content=Text("I can help with that")
 ```
+
+The event that carries `transfer_to_agent` also answers every other call of the same model
+turn, which the transfer skips, so each call in the history has exactly one response.
 
 ## Event Metadata and Identifiers
 
@@ -655,7 +698,7 @@ The `invocation_id` groups all events from a single user request through to the 
 println!("Invocation: {}", event.invocation_id);
 
 // Use this for logging and tracing
-log::info!("Processing event {} in invocation {}", event.id, event.invocation_id);
+tracing::info!(event.id = %event.id, invocation.id = %event.invocation_id, "processing event");
 ```
 
 ### Timestamp
@@ -674,7 +717,7 @@ println!("Event occurred at: {}", event.timestamp.format("%Y-%m-%d %H:%M:%S"));
 
 3. **Meaningful Authors**: Set clear, descriptive author names to make event logs easier to understand.
 
-4. **Selective Summarization**: Use `skip_summarization` for verbose or internal events that would clutter the conversation history.
+4. **Ending a Turn on a Tool Result**: Set `skip_summarization` when a tool's result is the answer, so the agent does not call the model again to restate it.
 
 5. **Invocation Grouping**: Keep the same `invocation_id` for all events generated during a single agent invocation to maintain logical grouping.
 

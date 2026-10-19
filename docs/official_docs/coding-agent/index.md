@@ -25,11 +25,10 @@ This is assembled from a few focused pieces rather than a monolithic framework:
   route". The agent explores, edits, runs tests, and reports.
 - **Autonomous goal mode** — give a goal + a verifiable success condition (a
   command that must exit 0); the agent loops *plan → act → verify*, self-correcting
-  until it passes or a budget runs out. Durable and resumable. (Codex/Hermes
-  `/goal` style.)
+  until it passes or a budget runs out. Durable and resumable.
 - **Ultra-review workflows** — implement, then fan out to parallel
   correctness/edge-case/style reviewers, synthesize their verdicts, and revise
-  until they approve. (Claude Code `ultracode`/`ultrareview` style.)
+  until they approve.
 
 ## Install
 
@@ -55,7 +54,7 @@ use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_core::{Content, SessionId, UserId};
 use std::sync::Arc;
 
-# async fn run(model: std::sync::Arc<dyn adk_core::Llm>) -> anyhow::Result<()> {
+async fn run(model: Arc<dyn adk_core::Llm>) -> anyhow::Result<()> {
 // One call builds a coding agent over a confined workspace.
 let coding = CodingAgent::builder()
     .model(model)
@@ -79,7 +78,8 @@ let mut events = runner
          Content::new("user").with_text("Add a function add(a,b) to add.py and run it."))
     .await?;
 // stream `events`: FunctionCall / FunctionResponse / Text …
-# Ok(()) }
+Ok(())
+}
 ```
 
 Prefer the terminal? `adk-rust code "make the failing test pass"` does the same —

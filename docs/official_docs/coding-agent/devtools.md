@@ -82,11 +82,10 @@ let ws = Workspace::new("./my-repo")
   entirely (the model only ever sees `read_file`/`glob`/`grep`).
 - **`bash` environment is cleared** — the command receives only `PATH`, `HOME`, `LANG`,
   `LC_ALL`, `TMPDIR`, `TERM`, `USER`, and `SHELL`, so provider API keys held by the agent
-  process are not readable with `env`. `Workspace::inherit_env(true)` restores the old
-  pass-everything behaviour, and `env_allowlist` replaces the set.
+  process are not readable with `env`. `Workspace::inherit_env(true)` passes the full
+  environment, and `env_allowlist` replaces the set.
 - **`bash` timeout + output caps** — long or chatty commands are bounded. A timed-out
-  command is killed as a **process group**, so anything it started is killed too;
-  previously only the direct child was signalled and descendants survived. Dropping
+  command is killed as a **process group**, so anything it started is killed too. Dropping
   the tool call's future (for example when the run is cancelled) kills the group the
   same way. Each stream keeps at most `max_output_bytes` (default 1 MiB) as it is
   read; output past the cap is drained and discarded, so the command still runs to
@@ -113,8 +112,9 @@ workspace yields a read-only agent automatically.
 
 ## Sandboxing model
 
-Phase 1 runs `bash` **host-local** (`sh -c`, working directory pinned to the root) with a
-timeout and a cleared environment. What that does and does not give you:
+`bash` runs **host-local** (`sh -c`, working directory pinned to the root) with a
+timeout and a cleared environment, and only when the workspace allows it
+(`Workspace::allow_bash(true)`; `Workspace::new` leaves it off). What that does and does not give you:
 
 | Enforced | Not enforced |
 |----------|--------------|

@@ -22,10 +22,9 @@ nothing else.
 one. It loads full checkpoints but lists the stored diffs, so it is not run against
 the suite's round-trip cases.
 
-The backends live in `adk-graph` rather than `adk-session`: `adk-graph` depends only on
-`adk-core`, and putting them in `adk-session` would add an `adk-session → adk-graph`
-edge and move `adk-session` and every crate above it one publish tier later. Driver
-versions match `adk-session`, so the lockfile holds one copy of each driver.
+The backends live in `adk-graph`, which depends only on `adk-core`. Their database
+drivers are the versions `adk-session` uses, so an application with both holds one copy
+of each driver.
 
 ## Setup
 

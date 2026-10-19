@@ -130,7 +130,7 @@ the `ExecutionLog` under its own key, built by `adk_graph::functional::task_call
 | `#<ordinal>` | How many calls of this task preceded this one in the run, from `0` |
 | `:<arg_hash>` | A stable 64-bit FNV-1a hash of the canonical JSON of the arguments that implement `Serialize`; omitted when none does |
 
-```rust,ignore
+```rust
 use adk_graph::error::Result;
 use adk_graph::functional::TaskContext;
 use adk_rust_macros::{entrypoint, task};
@@ -158,11 +158,6 @@ ordinal it had in the run being resumed, so it returns its own recorded result.
 A call whose arguments differ from the recorded call at that position gets a new
 key and runs again rather than returning another call's result.
 
-> **Note:** Before this scheme a task was keyed by its name alone, so a task called
-> in a loop returned the first call's result for every later call. An execution log
-> written under the old keys does not match the new ones, so a workflow resumed
-> across the upgrade runs its tasks again.
-
 ### Execution Guarantees
 
 A task is **at-least-once**. Its body runs, then its completion is checkpointed;
@@ -188,7 +183,7 @@ checkpoint, so the thread's latest checkpoint is the one its last completed task
 wrote, and a resume from it runs the abandoned task again. Tasks read the same token
 through `TaskContext::cancel_token` and `TaskContext::is_cancelled`.
 
-```rust,ignore
+```rust
 use adk_graph::error::GraphError;
 use adk_graph::node::ExecutionConfig;
 use adk_graph::state::State;
@@ -223,7 +218,7 @@ interrupt, and final — carries the execution log, so a run resumed from any of
 replays the tasks completed before it, however many times the workflow crashes and
 resumes. To resume where the thread left off, pass the id of its latest checkpoint:
 
-```rust,ignore
+```rust
 use adk_graph::checkpoint::Checkpointer;
 use adk_graph::node::ExecutionConfig;
 use adk_graph::state::State;
@@ -234,10 +229,69 @@ let state = agent
     .await?;
 ```
 
-> **Note:** `resume_from` previously loaded the thread's latest checkpoint whatever
-> value it held, and the pre-execution checkpoint of a resumed run dropped the log. A
-> crash during a resumed run therefore left a log-less latest checkpoint, and the next
-> resume ran every completed task again.
+## Interrupt and typed resume
+
+`TaskContext::interrupt<T>` suspends the workflow and, on a later run, returns the value supplied
+for that site.
+
+Each interrupt site gets a **continuation key** from its position in the run — `interrupt-1`,
+`interrupt-2`, and so on — so a replayed workflow reaches the same interrupts in the same order
+and finds the value it was given.
+
+```rust
+// First run: no value supplied, so the workflow suspends.
+let error = ctx.interrupt::<Approval>("approve the refund").await.unwrap_err();
+// workflow suspended at interrupt 'interrupt-1': approve the refund
+
+// Second run: supply the value under that key.
+let ctx = ctx.with_resume_values(HashMap::from([
+    ("interrupt-1".to_string(), serde_json::json!({ "approved": true, "approver": "alice" })),
+]));
+let approval: Approval = ctx.interrupt("approve the refund").await?;
+```
+
+The key is also written to the interrupt checkpoint under `continuation_key`.
+
+Through a generated `#[entrypoint]` agent, supply the value on the `ExecutionConfig`.
+`invoke` hands `resume_values` to the run's `TaskContext`:
+
+```rust
+use adk_graph::checkpoint::Checkpointer;
+use adk_graph::node::ExecutionConfig;
+use adk_graph::state::State;
+
+// The first run suspends at `interrupt-1`.
+let error = agent.invoke(State::new(), ExecutionConfig::new("refund-42")).await.unwrap_err();
+
+// Resume the thread with the value for that site.
+let latest = checkpointer.load("refund-42").await?.expect("the run left a checkpoint");
+let state = agent
+    .invoke(
+        State::new(),
+        ExecutionConfig::new("refund-42")
+            .with_resume_from(&latest.checkpoint_id)
+            .with_resume_value("interrupt-1", serde_json::json!({ "approved": true, "approver": "alice" })),
+    )
+    .await?;
+```
+
+| Situation | Result |
+|-----------|--------|
+| No value for the key, and none recorded | `GraphError::Suspended { continuation_key, message }` |
+| A value that deserializes into `T` | `Ok(value)`, recorded in the execution log |
+| A value that does not deserialize into `T` | `FunctionalError::InterruptTypeMismatch` naming the site |
+| An answer recorded by an earlier run | `Ok(recorded)`, whether or not a value is supplied |
+
+The first answer an interrupt receives is recorded in the execution log, under its continuation
+key, and checkpointed before `interrupt` returns. A run resumed from any later checkpoint — for
+example after a crash in a task that ran on the approval — replays the recorded answer, so the
+caller does not supply it again. A different value supplied later is ignored with a warning,
+because the tasks that ran after the interrupt already acted on the recorded one.
+`ExecutionLog::interrupt_answer` reads a recorded answer.
+
+> **Note:** `From<FunctionalError> for GraphError` keeps a suspension and a cancellation as
+> `GraphError::Suspended` and `GraphError::Cancelled`; every other `FunctionalError` becomes
+> `GraphError::Other(String)`.
 
 ## Background Runs
 
@@ -412,72 +466,3 @@ cargo run --manifest-path examples/cron_scheduling/Cargo.toml
 ---
 
 **Previous**: [← Graph Agents](./graph-agents.md) | **Next**: [Realtime Agents →](./realtime-agents.md)
-
-## Interrupt and typed resume
-
-`TaskContext::interrupt<T>` suspends the workflow and, on a later run, returns the value supplied
-for that site.
-
-Each interrupt site gets a **continuation key** from its position in the run — `interrupt-1`,
-`interrupt-2`, and so on — so a replayed workflow reaches the same interrupts in the same order
-and finds the value it was given.
-
-```rust,ignore
-// First run: no value supplied, so the workflow suspends.
-let error = ctx.interrupt::<Approval>("approve the refund").await.unwrap_err();
-// workflow suspended at interrupt 'interrupt-1': approve the refund
-
-// Second run: supply the value under that key.
-let ctx = ctx.with_resume_values(HashMap::from([
-    ("interrupt-1".to_string(), serde_json::json!({ "approved": true, "approver": "alice" })),
-]));
-let approval: Approval = ctx.interrupt("approve the refund").await?;
-```
-
-The key is also written to the interrupt checkpoint under `continuation_key`.
-
-Through a generated `#[entrypoint]` agent, supply the value on the `ExecutionConfig`.
-`invoke` hands `resume_values` to the run's `TaskContext`:
-
-```rust,ignore
-use adk_graph::checkpoint::Checkpointer;
-use adk_graph::node::ExecutionConfig;
-use adk_graph::state::State;
-
-// The first run suspends at `interrupt-1`.
-let error = agent.invoke(State::new(), ExecutionConfig::new("refund-42")).await.unwrap_err();
-
-// Resume the thread with the value for that site.
-let latest = checkpointer.load("refund-42").await?.expect("the run left a checkpoint");
-let state = agent
-    .invoke(
-        State::new(),
-        ExecutionConfig::new("refund-42")
-            .with_resume_from(&latest.checkpoint_id)
-            .with_resume_value("interrupt-1", serde_json::json!({ "approved": true, "approver": "alice" })),
-    )
-    .await?;
-```
-
-| Situation | Result |
-|-----------|--------|
-| No value for the key, and none recorded | `GraphError::Suspended { continuation_key, message }` |
-| A value that deserializes into `T` | `Ok(value)`, recorded in the execution log |
-| A value that does not deserialize into `T` | `FunctionalError::InterruptTypeMismatch` naming the site |
-| An answer recorded by an earlier run | `Ok(recorded)`, whether or not a value is supplied |
-
-The first answer an interrupt receives is recorded in the execution log, under its continuation
-key, and checkpointed before `interrupt` returns. A run resumed from any later checkpoint — for
-example after a crash in a task that ran on the approval — replays the recorded answer, so the
-caller does not supply it again. A different value supplied later is ignored with a warning,
-because the tasks that ran after the interrupt already acted on the recorded one.
-`ExecutionLog::interrupt_answer` reads a recorded answer.
-
-> **Important:** `interrupt` previously returned `InterruptTypeMismatch` with "workflow
-> interrupted" on **every** call, and nothing outside the method consumed a resume value. A caller
-> could not tell "needs input" from "your value was the wrong type", had no key to supply a value
-> under, and never received a typed value at the call site.
-
-> **Note:** `From<FunctionalError> for GraphError` keeps a suspension and a cancellation as
-> `GraphError::Suspended` and `GraphError::Cancelled`; every other `FunctionalError` becomes
-> `GraphError::Other(String)`.

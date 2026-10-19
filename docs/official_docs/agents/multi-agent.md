@@ -113,7 +113,8 @@ never widens their authority.
 Team-wide policy bounds handoff/delegation depth, concurrency, events, model and
 tool calls, tokens, cost, relationship counts, and wall time. Termination rules
 can stop on escalation, an exact final author, or a text marker. Every event
-carries a serializable execution receipt in `__adk_team_execution_v1`, including
+carries a serializable execution receipt in its `state_delta` under
+`__adk_team_execution_v1` (`TEAM_EXECUTION_STATE_KEY`), including
 the frozen roster, causal delegation/handoff edges, aggregate usage, and terminal
 status. Use `CompiledTeam::execution_snapshot` to inspect it and
 `restore_execution_snapshot` before resuming with the same invocation ID.
@@ -274,19 +275,20 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 **Example Interaction:**
 
+The launcher prints the coordinator's `transfer_to_agent` call, then the billing agent's answer
+in the same turn. The next message goes straight to `billing_agent`, the agent that answered
+last (abridged):
+
 ```
-You: I have a question about my last invoice
+You > I have a question about my last invoice
 
-[Agent: coordinator]
-Assistant: I'll connect you with our billing specialist to help with your invoice question.
+[tool] transfer_to_agent({"agent_name":"billing_agent"})I would be happy to help you with your invoice!
 
-[Agent: billing_agent]
-Assistant: Hello! I can help you with your invoice. What specific question do you have about your last invoice?
+To get started, could you please provide a few details?
+...
 
-You: Why was I charged twice?
-
-[Agent: billing_agent]
-Assistant: I understand your concern about the duplicate charge. Let me help you investigate this...
+You > Why was I charged twice?
+I completely understand your concern, and I apologize for the double charge. ...
 ```
 
 ## How Multi-Agent Transfer Works
@@ -355,6 +357,7 @@ Here's exactly what happens when a user asks a billing question:
 │   └─────────┘   (same user message)   └─────────────────┘           │
 │                                                                      │
 │   • Runner finds "billing_agent" in agent tree                       │
+│   • Checks the source agent may transfer to it                       │
 │   • Creates new context with SAME user message                       │
 │   • Invokes billing_agent immediately                                │
 │                                                                      │
@@ -383,8 +386,8 @@ Here's exactly what happens when a user asks a billing question:
 | `.sub_agent()` | Registers specialists under parent |
 | `transfer_to_agent` tool | Auto-injected when sub-agents exist |
 | Agent descriptions | Help LLM decide which agent handles what |
-| Runner | Detects transfer events and invokes target agent |
-| Shared session | State and history preserved across transfers |
+| Runner | Checks each transfer against the source agent's restrictions and invokes the target |
+| Shared session | State is shared across transfers; the target sees the user's messages and its own turns, not the other agents' answers |
 
 ### Before vs After Adding Sub-Agents
 
@@ -556,7 +559,9 @@ let parent = LlmAgentBuilder::new("parent")
 **Key Points:**
 - Each agent can have multiple sub-agents
 - Sub-agents can have their own sub-agents (multi-level hierarchies)
-- Agent names must be unique within the hierarchy
+- Agent names must be unique within the hierarchy, since the runner resolves a transfer target by name
+- A transfer chain is bounded by `RunConfig::max_transfer_depth` (default 10)
+- The next user message goes to the agent that answered last, unless a workflow agent sits between it and the root
 - Descriptions help the LLM decide which agent to transfer to
 
 ### Transfer Restrictions
@@ -658,7 +663,7 @@ If transfers aren't working as expected:
 2. **Review descriptions** - Make them more specific and keyword-rich
 3. **Clarify instructions** - Be explicit about when to transfer
 4. **Test edge cases** - Try ambiguous requests to see routing behavior
-5. **Look for transfer indicators** - `[Agent: name]` shows which agent is responding
+5. **Read the events** - `event.author` names the agent that answered, and `event.actions.transfer_to_agent` marks a handoff
 
 ## Global Instruction
 
@@ -679,29 +684,28 @@ let agent = LlmAgentBuilder::new("assistant")
 
 ### Global vs Agent Instruction
 
-- **Global Instruction**: Applied to all agents in the hierarchy, sets overall personality/context
+- **Global Instruction**: Shared personality or context. It applies to the agent that sets it; sub-agents do not inherit it, so set it on each agent that needs it
 - **Agent Instruction**: Specific to each agent, defines its particular role and behavior
 
-Both instructions are included in the conversation history, with global instruction appearing first.
+Both are sent as `system`-role contents at the start of each request, the global instruction first.
 
 ### Dynamic Global Instructions
 
 For more advanced scenarios, you can use a global instruction provider that computes the instruction dynamically:
 
 ```rust
-use adk_core::GlobalInstructionProvider;
+use adk_rust::GlobalInstructionProvider;
 
-let provider: GlobalInstructionProvider = Arc::new(|ctx| {
+let provider: GlobalInstructionProvider = Box::new(|ctx| {
     Box::pin(async move {
         // Access context information
         let user_id = ctx.user_id();
-        
+
         // Compute dynamic instruction
         let instruction = format!(
-            "You are assisting user {}. Tailor your responses to their preferences.",
-            user_id
+            "You are assisting user {user_id}. Tailor your responses to their preferences."
         );
-        
+
         Ok(instruction)
     })
 });
@@ -732,7 +736,9 @@ let agent = LlmAgentBuilder::new("assistant")
     .build()?;
 ```
 
-The framework automatically injects values from the session state into the instruction templates.
+The framework injects values from the session state into the instruction templates. A missing
+`{variable}` fails the turn; write `{variable?}` for a value that may not be set yet. See
+[Instruction Templating](llm-agent.md#instruction-templating).
 
 ## Common Multi-Agent Patterns
 
@@ -759,30 +765,11 @@ let coordinator = LlmAgentBuilder::new("coordinator")
     .build()?;
 ```
 
-**Example Conversation:**
-
-```
-User: I have a question about my last invoice
-
-[Agent: coordinator]
-Assistant: I'll connect you with our billing specialist.
-🔄 [Transfer requested to: billing]
-
-[Agent: billing]
-Assistant: Hello! I can help you with your invoice. 
-What specific question do you have?
-
-User: Why was I charged twice?
-
-[Agent: billing]
-Assistant: Let me investigate that duplicate charge for you...
-```
-
 **Key Points:**
-- The coordinator analyzes the request and transfers to the billing agent
+- The coordinator analyzes the request and calls `transfer_to_agent` with `billing`
 - The billing agent responds **immediately** in the same turn
 - Subsequent messages continue with the billing agent
-- Transfer indicators (`🔄`) show when handoffs occur
+- The transfer event carries `actions.transfer_to_agent`, and each answer's `event.author` names the agent that wrote it
 
 ### Hierarchical Task Decomposition
 
@@ -821,7 +808,7 @@ let project_manager = LlmAgentBuilder::new("project_manager")
 Multi-agent systems work well with workflow agents (Sequential, Parallel, Loop):
 
 ```rust
-use adk_agent::workflow::{SequentialAgent, ParallelAgent};
+use adk_rust::prelude::*;
 
 // Create specialized agents
 let validator = LlmAgentBuilder::new("validator")
@@ -876,7 +863,7 @@ The `output_key` configuration automatically saves an agent's final response to 
 When using `AgentTool` to wrap agents as tools, state changes and artifacts from sub-agents are automatically forwarded to the parent context:
 
 ```rust
-use adk_tool::AgentTool;
+use adk_rust::tool::AgentTool; // `tools` feature
 
 // Create a sub-agent that modifies state
 let data_processor = LlmAgentBuilder::new("data_processor")
@@ -890,7 +877,7 @@ let processor_tool = AgentTool::new(Arc::new(data_processor));
 
 // Parent agent can use the tool and see state changes
 let coordinator = LlmAgentBuilder::new("coordinator")
-    .instruction("Use the data_processor tool, then access {processed_data}.")
+    .instruction("Use the data_processor tool, then report {processed_data?}.")
     .model(model.clone())
     .tool(Arc::new(processor_tool))
     .build()?;
@@ -914,12 +901,11 @@ The `Launcher` provides an easy way to run and test multi-agent systems:
 
 ```rust
 use adk_rust::Launcher;
+use adk_rust::prelude::*;
 
-let coordinator = /* your multi-agent setup */;
-
-Launcher::new(Arc::new(coordinator))
-    .run()
-    .await?;
+async fn launch(coordinator: LlmAgent) -> Result<()> {
+    Launcher::new(Arc::new(coordinator)).run().await
+}
 ```
 
 **Run Modes:**
@@ -932,21 +918,19 @@ cargo run --manifest-path examples/tier_examples/enterprise/Cargo.toml --bin 14-
 cargo adk new multi_agent_api --template api
 ```
 
-**Features:**
-- **Agent indicators**: Shows which agent is responding `[Agent: coordinator]`
-- **Transfer visualization**: Displays transfer events `🔄 [Transfer requested to: billing_agent]`
-- **Seamless handoffs**: Target agent responds immediately after transfer
-- **Conversation history**: Maintains context across agent transfers
+The console launcher prints each tool call, including `transfer_to_agent`, as
+`[tool] name(args)`, followed by the answer of the agent that took over. To label each answer
+with its agent, run the system with a `Runner` and read `event.author` (see
+[Observing Workflow Execution](workflow-agents.md#observing-workflow-execution)).
 
 ### Testing Transfers
 
 To verify your multi-agent system works correctly:
 
-1. **Check agent names** appear in brackets when they respond
-2. **Look for transfer indicators** (`🔄`) when agents hand off
-3. **Verify immediate responses** from target agents without re-prompting
-4. **Test different request types** to ensure proper routing
-5. **Check edge cases** like transferring to non-existent agents
+1. **Look for the `transfer_to_agent` call** when an agent hands off
+2. **Verify immediate responses** from target agents without re-prompting
+3. **Test different request types** to ensure proper routing
+4. **Check edge cases** such as a request no sub-agent covers
 
 ### Debugging Transfer Issues
 

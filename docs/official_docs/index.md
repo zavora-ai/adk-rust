@@ -6,7 +6,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 - [Introduction](introduction.md) - Overview of ADK-Rust, its architecture, and key concepts
 - [Quickstart](quickstart.md) - Scaffold, run, and test your first agent in the embedded UI in under 5 minutes
-- [A2UI Quickstart](quickstart-a2ui.md) - Emit A2UI JSONL and render it in React
+- [A2UI Quickstart](quickstart-a2ui.md) - Render A2UI JSONL in React; the `adk-ui` tools that emit it await an `adk-core` 3 release
 - [Migrating 2.x → 3.0](migration/2.x-to-3.0.md) - Every breaking change since 2.3.0, with before/after code
 - [Migrating 1.0 → 2.0](migration/1.0-to-2.0.md) - Complete breaking-change list with before/after code
 - [SQLx 0.9 in ADK-Rust 3.0](migration/sqlx-0.9.md) - Sharing SQLx pools, TLS flags, and migration-runner inputs
@@ -22,6 +22,9 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 ## Models
 
 - [Model Providers](models/providers.md) - LLM integrations: Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama
+- [Anthropic Client](models/anthropic.md) - `adk-anthropic`: the Messages API with streaming, thinking, prompt caching, and citations
+- [OpenAI Responses API](models/openai-responses.md) - The dedicated `/v1/responses` client
+- [Gemini Interactions API](models/gemini-interactions.md) - The Beta Interactions client and its `GeminiModel` transport
 - [OpenCode Go and Zen](models/opencode.md) - Per-model routing across four wire APIs with conversation headers
 - [Ollama](models/ollama.md) - Local inference with Ollama
 - [mistral.rs Integration](models/mistralrs.md) - Native mistral.rs for high-performance local inference
@@ -34,7 +37,10 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Multi-Agent Systems](agents/multi-agent.md) - Building agent hierarchies with sub-agents
 - [Graph Agents](agents/graph-agents.md) - LangGraph-style workflow orchestration
 - [Graph Checkpointing](agents/graph-checkpointing.md) - Checkpointer backends, the version rule, durability modes, pending writes, and the conformance suite
+- [Functional API](agents/functional-api.md) - Workflows as async functions with `#[entrypoint]`/`#[task]`, background runs, and cron scheduling
+- [Ambient Agents](agents/ambient-agents.md) - Agents driven by cron, file-watch, and webhook triggers
 - [Realtime Agents](agents/realtime-agents.md) - Voice-enabled agents with OpenAI/Gemini
+- [Desktop Audio](agents/desktop-audio.md) - Microphone capture, speaker playback, and VAD turn-taking with `adk-audio`
 
 ## Coding Agent
 
@@ -64,8 +70,15 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 ## Tools
 
 - [Function Tools](tools/function-tools.md) - Create custom tools with async Rust functions
+- [Tool Authorization](security/tool-authorization.md) - Tool policy, confirmation, callbacks, RBAC, and graph interrupts
+- [Schema Normalization](tools/schema-normalization.md) - Provider-specific tool-schema normalization
 - [Tool Effects and the Action Ledger](tools/tool-effects.md) - Retry safety, idempotency keys, delegation timeouts, and calls that must not repeat
 - [Built-in Tools](tools/built-in-tools.md) - Pre-built tools like GoogleSearchTool
+- [Memory Tools](tools/memory-tools.md) - Let an agent search its own long-term memory
+- [Code Execution](tools/code-execution.md) - Code tools over `adk-code` and `adk-sandbox`
+- [Python Code Execution](tools/python-code-execution.md) - In-process Python through the Monty interpreter
+- [Sandboxed Code Execution](sandbox/index.md) - `adk-sandbox` process and WASM backends with OS-level profiles
+- [MCP Tools](tools/mcp-tools.md) - Connecting MCP servers as agent tools
 - [MCP overview and architecture](mcp/index.md) - Where MCP fits and which ADK-Rust surface to use
 - [MCP client](mcp/client.md) - Tools, resources, prompts, completion, subscriptions, elicitation, tasks, and HTTP
 - [Dynamic MCP server manager](mcp/manager.md) - Runtime local-server registry, persistence, monitoring, and restart
@@ -73,8 +86,11 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [MCP security](mcp/security.md) - Authentication, visibility, authorization, approval, and secret handling
 - [MCP testing](mcp/testing.md) - Deterministic gates and deployment verification
 - [Browser Tools](tools/browser-tools.md) - 46 WebDriver tools for web automation
-- [UI Tools](tools/ui-tools.md) - Dynamic UI generation with forms, cards, charts
+- [UI Tools](tools/ui-tools.md) - `adk-ui` render tools and the server's UI protocol profiles (`adk_ui`, `a2ui`, `ag_ui`, `mcp_apps`)
 - [RAG](tools/rag.md) - Retrieval-Augmented Generation for knowledge base search
+- [Vertex AI RAG Engine](rag/vertex-rag-engine.md) - Retrieval from managed RAG Engine corpora
+- [Agent Retrieval](rag/agent-retrieval.md) - The Agent Retrieval (Vector Search 2.0) vector store
+- [Governed Desktop Automation](computer-use/index.md) - `adk-computer-use` over the `computer-use-mcp` server
 - [ACP Tools](tools/acp-tools.md) - Use an ACP coding agent as a typed ADK-Rust tool
 - [Retry & Reflect](tools/retry-reflect.md) - Tool failure recovery with reflection prompts
 - [Action Nodes](tools/action-nodes.md) - 14 deterministic node types for workflow graphs
@@ -94,6 +110,7 @@ editor through stable ACP v1.
 
 - [Sessions](sessions/sessions.md) - Session management and lifecycle
 - [State Management](sessions/state.md) - Managing conversation state with prefixes
+- [Context Compaction](sessions/context-compaction.md) - Summarizing older events to bound request size
 
 ## Memory
 
@@ -104,6 +121,10 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Backends](memory/backends.md) - The six stores (InMemory, SQLite, Postgres+pgvector, Redis, MongoDB, Neo4j) and how to choose
 - [Knowledge Graph](memory/knowledge-graph.md) - `GraphMemoryService`: entities, observations, relations, and why bi-temporal matters
 - [Tools & Agents](memory/tools-and-agents.md) - Wiring memory into agents; `remember`/`relate` and the memory tools
+
+## Skills
+
+- [Vertex AI Skill Registry](skills/skill-registry.md) - Reading skills from the Gemini Enterprise Agent Platform Skill Registry
 
 ## Callbacks & Events
 
@@ -117,19 +138,23 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 ## Observability
 
 - [Telemetry](observability/telemetry.md) - Logging, tracing, and monitoring
+- [Telemetry to Google Cloud](observability/gcp.md) - Cloud Trace export and Cloud Logging JSON logs
 
 ## Deployment
 
 - [Launcher](deployment/launcher.md) - Running agents in console or server mode
 - [Server](deployment/server.md) - REST API and web UI integration
+- [A2A Getting Started](a2a/getting-started.md) - Create and run an A2A agent
 - [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication
 - [Agentic Web Protocol](deployment/awp.md) - AWP protocol for agent-native web services
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
+- [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform
 
 ## Evaluation
 
 - [Agent Evaluation](evaluation/evaluation.md) - Testing and validating agent behavior
 - [Benchmark Results](evaluation/benchmarks.md) - Published performance comparison data
+- [Vertex AI Evaluation](evaluation/vertex-eval.md) - The Gen AI Evaluation Service bridge
 
 ## Managed Agents
 
@@ -160,10 +185,12 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 ## Development
 
 - [Development Guidelines](development/development-guidelines.md) - Contributing guide and best practices
+- [Composable Templates](development/composable-templates.md) - `cargo adk new` templates, addons, and enterprise patterns
+- [cargo adk build](development/cargo-adk-build.md) - Compile an agent project without deploying it
 - [Performance 0.8](development/performance-0-8.md) - Optimization release examples and adoption-focused validation
 
 ---
 
 ## Validation Status
 
-Copy-paste Cargo commands and dependency snippets in the README and official docs are validated by `scripts/check-doc-examples.sh`. CI also checks cargo-adk scaffolds with `scripts/check-cargo-adk-templates.sh`, rejects duplicate example target names with `scripts/check-example-name-collisions.sh`, and compiles workspace examples with `cargo check --workspace --examples`.
+Copy-paste Cargo commands and dependency snippets in the README and official docs are validated by `scripts/check-doc-examples.sh`, and their versions and `adk-rust` feature names by `scripts/check-doc-versions.sh`. CI also checks cargo-adk scaffolds with `scripts/check-cargo-adk-templates.sh`, rejects duplicate example target names with `scripts/check-example-name-collisions.sh`, and compiles every standalone example under `examples/` with `scripts/check-examples-compile.sh`.

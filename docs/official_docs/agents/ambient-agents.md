@@ -1,14 +1,26 @@
 # Ambient Agents
 
+Ambient agents react to events instead of to a user turn. An `EventSource` produces
+`TriggerEvent`s and the agent runs for each one.
+
+Requires the `ambient` feature:
+
+```toml
+[dependencies]
+adk-agent = { version = "3.0.0", features = ["ambient"] }
+```
+
 ## Running an ambient agent
 
 A trigger handler is required. The supported path is `with_invoker`, which takes anything
 implementing `adk_core::AgentInvoker` — `Runner` does:
 
-```rust,ignore
+```rust
 use adk_agent::ambient::{AmbientAgent, RunnerTriggerConfig};
 use std::sync::Arc;
 
+// `agent` is the Arc<dyn Agent> to run, `source` an Arc<dyn EventSource>, and `runner` an
+// Arc<Runner> over the same agent.
 let mut ambient = AmbientAgent::new(agent, source)
     .with_invoker(runner, RunnerTriggerConfig::new("system"))
     .with_max_concurrent_triggers(4);
@@ -22,7 +34,7 @@ ambient.start().await?;
 | Method | Purpose | Default |
 |--------|---------|---------|
 | `new(user_id)` | Identity the runs are recorded under. A trigger has no interactive user, so use `"system"` or a service account name. | required |
-| `with_session_policy` | `PerTrigger` gives each event its own session; `Shared(id)` reuses one. | `PerTrigger` |
+| `with_session_policy` | `TriggerSessionPolicy::PerTrigger` gives each event its own session; `Shared(id)` reuses one. | `PerTrigger` |
 | `with_prompt` | Turns the event into prompt text. | states the source and serializes the payload |
 
 `PerTrigger` is the default because a schedule firing every minute into one shared session grows
@@ -44,7 +56,7 @@ actually handles the trigger.
 receives the event and the agent and must return the event stream; creating the session is then
 the handler's responsibility.
 
-```rust,ignore
+```rust
 use adk_agent::ambient::{AmbientAgent, TriggerHandler};
 use std::sync::Arc;
 
@@ -64,9 +76,6 @@ invoking the agent. Call `with_trigger_handler` with a closure that drives the a
 Runner.
 ```
 
-> **Important:** starting without a handler previously succeeded and then logged each trigger,
-> so `AmbientAgent::new(..).start()` looked like it was running an agent that never ran.
-
 ## Output and concurrency
 
 | Behaviour | Control |
@@ -74,24 +83,10 @@ Runner.
 | Events and errors the agent produces are delivered to a channel | `take_output(capacity)` |
 | Triggers handled at once | `with_max_concurrent_triggers` (default 4, zero treated as one) |
 
-Produced events were previously logged at debug level and dropped, so a caller could not observe
-what a run did or whether it failed. Triggers were also handled strictly one at a time — the loop
-drained a handler's entire event stream before polling the source again — so one slow trigger
-blocked every later one.
-
 > **Note:** the bound governs concurrency, not parallelism. Handlers share the ambient task, so a
 > handler that blocks the thread still stalls the loop. Use `tokio::task::spawn_blocking` for
 > those. Durable trigger offsets, dead-letter handling, and retry remain the caller's
 > responsibility.
-Ambient agents react to events instead of to a user turn. An `EventSource` produces
-`TriggerEvent`s and the agent runs for each one.
-
-Requires the `ambient` feature:
-
-```toml
-[dependencies]
-adk-agent = { version = "3.0.0", features = ["ambient"] }
-```
 
 ## Event sources
 
@@ -121,7 +116,7 @@ tick and every tick that came due in between is discarded.
 A policy alone only covers gaps inside one subscription. Detecting a gap that spans a process
 restart needs a `TickWatermark` to record where the schedule left off:
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 use adk_agent::ambient::{CronTrigger, FileTickWatermark, MissedTickPolicy};
 
@@ -191,6 +186,21 @@ let trigger = WebhookTrigger::new(8080, "/webhook")
     .with_verifier(Arc::new(SharedToken(std::env::var("WEBHOOK_TOKEN").unwrap_or_default())));
 ```
 
+For senders that sign with [Standard Webhooks](../core/wake-ups.md), use
+`StandardWebhookVerifier`: it checks the `webhook-timestamp` against the tolerance and the
+`webhook-signature` against every configured secret, refuses a replayed `webhook-id`, and
+attributes every accepted request to the principal it was built with:
+
+```rust
+use adk_agent::ambient::{StandardWebhookVerifier, WebhookTrigger};
+use adk_core::webhook::{WebhookSecret, WebhookVerifier};
+use std::sync::Arc;
+
+let secret = WebhookSecret::from_base64("whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw")?;
+let trigger = WebhookTrigger::new(8080, "/hooks/ci")
+    .with_verifier(Arc::new(StandardWebhookVerifier::new("ci", WebhookVerifier::new(secret))));
+```
+
 Subscribing to a non-loopback address without a verifier fails with
 `agent.ambient.webhook_unauthenticated`. The check happens at subscribe time, where the
 mistake is still cheap.
@@ -221,12 +231,8 @@ trigger event indistinguishable from a deliberate one.
 The HTTP listener belongs to the stream returned by `subscribe`. Dropping the stream shuts
 the server down gracefully and releases the port, so the same port can be rebound:
 
-```rust,ignore
+```rust
 let stream = trigger.subscribe().await?;
 // ... consume events ...
 drop(stream); // the listener stops and the port is free
 ```
-
-> **Note:** the listener previously outlived its consumer. Dropping the stream left the
-> server bound, still accepting requests it could not deliver, and a restart on the same port
-> failed.

@@ -31,14 +31,13 @@ Replace `src/main.rs`:
 
 ```rust
 use adk_rust::prelude::*;
-use adk_rust::{SessionId, UserId};
 use adk_rust::Launcher;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
-    
+
     let api_key = std::env::var("GOOGLE_API_KEY")?;
     let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
 
@@ -60,35 +59,36 @@ cargo run
 
 ### Interacting with Your Agent
 
-You'll see an interactive prompt:
+`Launcher` opens a console session: it streams the agent's answer after each `You >` prompt,
+and `exit` or `quit` ends it.
 
 ```
-🤖 Agent ready! Type your questions (or 'exit' to quit).
+  ADK-Rust — my_agent
+  Type a message to chat. Type 'exit' to quit.
 
-You: Hello! What can you help me with?
-Assistant: Hello! I'm a helpful assistant. I can help you with:
-- Answering questions on various topics
-- Explaining concepts clearly
-- Having a conversation
+You > Hello! What can you help me with?
+I can assist you with answering questions, writing, brainstorming, and solving problems.
+Just let me know what you need help with today!
 
-What would you like to know?
+You > exit
 
-You: exit
-👋 Goodbye!
+Goodbye.
 ```
 
 ---
 
 ## Shaping Agent Behavior with Instructions
 
-The `instruction()` method defines your agent's personality and behavior. This is the **system prompt** that guides every response:
+The `instruction()` method defines your agent's personality and behavior. It is the **system prompt**: `LlmAgent` sends it as a `system`-role content at the start of every request, and each provider places it in its native system prompt:
 
 ```rust
+let model = Arc::new(model);
+
 // A formal business assistant
 let formal_agent = LlmAgentBuilder::new("formal_assistant")
     .instruction("You are a professional business consultant. \
                  Use formal language. Be concise and data-driven.")
-    .model(Arc::new(model))
+    .model(model.clone())
     .build()?;
 
 // A friendly coding tutor
@@ -96,7 +96,7 @@ let tutor_agent = LlmAgentBuilder::new("code_tutor")
     .instruction("You are a friendly coding tutor for beginners. \
                  Explain concepts simply. Use examples. \
                  Encourage questions. Never make the user feel bad for not knowing.")
-    .model(Arc::new(model))
+    .model(model.clone())
     .build()?;
 
 // A creative storyteller
@@ -104,7 +104,7 @@ let story_agent = LlmAgentBuilder::new("storyteller")
     .instruction("You are a creative storyteller. \
                  Craft engaging narratives with vivid descriptions. \
                  Use plot twists and memorable characters.")
-    .model(Arc::new(model))
+    .model(model.clone())
     .build()?;
 ```
 
@@ -169,9 +169,8 @@ Here's a complete working example:
 
 ```rust
 use adk_rust::prelude::*;
-use adk_rust::{SessionId, UserId};
-use adk_rust::runner::{Runner, RunnerConfig};
-use adk_rust::session::{CreateRequest, InMemorySessionService, SessionService};
+use adk_rust::{EventTextDeltas, SessionId, UserId};
+use adk_rust::session::{CreateRequest, SessionService};
 use adk_rust::futures::StreamExt;
 use serde_json::json;
 use std::collections::HashMap;
@@ -192,14 +191,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     // 2. Create session service and runner
     let session_service = Arc::new(InMemorySessionService::new());
-    let runner = Runner::new(RunnerConfig {
-        app_name: "templating_demo".to_string(),
-        agent: Arc::new(agent),
-        session_service: session_service.clone(),
-        artifact_service: None,
-        memory_service: None,
-        run_config: None,
-    })?;
+    let runner = Runner::builder()
+        .app_name("templating_demo")
+        .agent(Arc::new(agent))
+        .session_service(session_service.clone())
+        .build()?;
 
     // 3. Create session with state variables
     let mut state = HashMap::new();
@@ -221,17 +217,21 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Content::new("user").with_text("Explain async/await in Rust"),
     ).await?;
 
-    // Print the response
+    // Print the response. Streamed deltas end with a snapshot of the whole answer;
+    // EventTextDeltas turns that snapshot into the text not yet printed.
+    let mut text_deltas = EventTextDeltas::default();
     while let Some(event) = response_stream.next().await {
         let event = event?;
+        let event = text_deltas.push(&event);
         if let Some(content) = event.content() {
             for part in &content.parts {
                 if let Part::Text { text } = part {
-                    print!("{}", text);
+                    print!("{text}");
                 }
             }
         }
     }
+    println!();
 
     Ok(())
 }
@@ -245,6 +245,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 | `{prefix:var}` | `{user:name}`, `{app:config}` | Prefixed state |
 | `{var?}` | `{user_name?}` | Optional (empty if missing) |
 | `{artifact.file}` | `{artifact.resume.pdf}` | Artifact content |
+
+A required `{var}` that is missing from state fails the turn with `State variable 'var' not found`;
+use `{var?}` when the value may be absent.
 
 Text that is not a placeholder stays as written, so an instruction can quote code:
 
@@ -291,7 +294,12 @@ let weather_tool = FunctionTool::new(
     },
 );
 ```
-Built-in provider-native tools can now be mixed with `FunctionTool` instances in the same agent. ADK forwards the native tool declarations to the provider while still executing ordinary function tools locally.
+A `FunctionTool` built with `new` alone declares no parameters, so the examples on this page
+name them in the description. To declare them, and have each call's arguments checked against
+them, add `.with_parameters_schema::<Args>()` with a `schemars::JsonSchema` type; see
+[Function Tools](../tools/function-tools.md).
+
+Provider-native tools, such as `GoogleSearchTool`, can be mixed with `FunctionTool` instances in the same agent. ADK forwards the native tool declarations to the provider and executes the function tools locally. See [Built-in Tools](../tools/built-in-tools.md).
 
 ### Build a Multi-Tool Agent
 
@@ -318,7 +326,7 @@ Create `.env`:
 echo 'GOOGLE_API_KEY=your-api-key' > .env
 ```
 
-Replace `src/main.rs` with an agent that has three tools:
+Replace `src/main.rs` with an agent that has two tools:
 
 ```rust
 use adk_rust::prelude::*;
@@ -361,9 +369,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // Tool 3: Built-in Google Search (Note: Currently unsupported in ADK-Rust)
-    // let search_tool = GoogleSearchTool::new();
-
     // Build agent with weather and calculator tools
     let agent = LlmAgentBuilder::new("multi_tool_agent")
         .instruction("You are a helpful assistant. Use tools when needed: \
@@ -372,7 +377,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .model(Arc::new(model))
         .tool(Arc::new(weather_tool))
         .tool(Arc::new(calculator))
-        // .tool(Arc::new(search_tool))  // Currently unsupported
         .build()?;
 
     Launcher::new(Arc::new(agent)).run().await?;
@@ -388,27 +392,31 @@ cargo run
 
 ### Example Interaction
 
+The launcher prints each tool call as `[tool] name(args)` before the answer:
+
 ```
-You: What's 15% of 250?
-Assistant: [Using calculate tool with a=250, b=0.15, operation=multiply]
-15% of 250 is 37.5.
+You > What's 15% of 250? Use the calculator.
 
-You: What's the weather in Tokyo?
-Assistant: [Using get_weather tool with city=Tokyo]
-The weather in Tokyo is sunny with a temperature of 22°C.
+[tool] calculate({"a":0.15,"b":250,"operation":"multiply"})15% of 250 is **37.5**.
 
-You: Search for latest Rust features
-Assistant: I don't have access to search functionality at the moment, but I can help with other questions about Rust or perform calculations!
+You > What's the weather in Tokyo?
+
+[tool] get_weather({"city":"Tokyo"})The current weather in Tokyo is sunny with a temperature of 22°C.
 ```
 
 ---
 
 ## Structured Output with JSON Schema
 
-For applications that need structured data, use `output_schema()`:
+For applications that need structured data, use `output_schema()`. This program extracts
+entities from one sentence and deserializes the validated answer:
 
 ```rust
+use adk_rust::agent::extract_typed;
+use adk_rust::futures::StreamExt;
 use adk_rust::prelude::*;
+use adk_rust::session::{CreateRequest, SessionService};
+use adk_rust::{SessionId, UserId};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -439,9 +447,38 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             },
             "required": ["people", "locations", "dates"]
         }))
+        .output_key("entities") // the validated JSON is also saved to state["entities"]
         .build()?;
 
-    println!("Entity extractor ready!");
+    let sessions = Arc::new(InMemorySessionService::new());
+    let runner = Runner::builder()
+        .app_name("extractor")
+        .agent(Arc::new(extractor))
+        .session_service(sessions.clone())
+        .build()?;
+    let session = sessions
+        .create(CreateRequest {
+            app_name: "extractor".to_string(),
+            user_id: "user".to_string(),
+            session_id: None,
+            state: Default::default(),
+        })
+        .await?;
+
+    let mut stream = runner
+        .run(
+            UserId::new("user")?,
+            SessionId::new(session.id())?,
+            Content::new("user").with_text("John met Sarah in Paris on December 25th"),
+        )
+        .await?;
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event?);
+    }
+
+    let entities: serde_json::Value = extract_typed(&events)?;
+    println!("{entities:#}");
     Ok(())
 }
 ```
@@ -457,11 +494,16 @@ way:
 | Gemini | Full schema, sent as the response schema |
 | OpenAI and OpenAI-compatible | Full schema, sent as a strict `json_schema` response format |
 | OpenRouter | Full schema |
+| Ollama | Full schema, sent as the request's `format` |
 | DeepSeek | JSON **syntax** only — DeepSeek's JSON Output mode has no `json_schema` variant, so the schema is enforced by the agent's validation |
+| Anthropic, Groq, Bedrock | None — the agent's instruction and validation enforce it |
 
-Where a provider enforces syntax only, or nothing at all, the agent still injects the
-schema as an instruction and validates the reply, so a non-conforming answer costs a
-retry rather than returning bad data.
+Whatever the provider does, the agent adds the schema to the request as a `system`
+instruction and validates the reply. A reply that fails validation is answered with a
+correction prompt, up to `output_max_retries` times (default 3), so a non-conforming
+answer costs a retry rather than returning bad data. Use `output_type::<T>()` to derive
+the schema from a type that implements `schemars::JsonSchema`, and
+`adk_rust::agent::extract_typed::<T>(&events)` to deserialize the validated answer.
 
 A reply wrapped in one Markdown code fence (```` ```json ... ``` ````), which models
 sometimes produce when tools are configured beside the schema, is unwrapped before
@@ -493,14 +535,20 @@ so the session keeps it.
 
 ### JSON Output Example
 
-Input: "John met Sarah in Paris on December 25th"
+The program above prints:
 
-Output:
 ```json
 {
-  "people": ["John", "Sarah"],
-  "locations": ["Paris"],
-  "dates": ["December 25th"]
+  "dates": [
+    "December 25th"
+  ],
+  "locations": [
+    "Paris"
+  ],
+  "people": [
+    "John",
+    "Sarah"
+  ]
 }
 ```
 
@@ -513,10 +561,12 @@ Output:
 Control conversation history visibility:
 
 ```rust
+use adk_rust::IncludeContents;
+
 // Full history (default)
 .include_contents(IncludeContents::Default)
 
-// Stateless - sees only injected instructions plus the current user turn
+// Stateless - sees only its instructions plus the current user turn
 .include_contents(IncludeContents::None)
 ```
 
@@ -536,28 +586,29 @@ the JSON it validated as.
 
 ### Dynamic Instructions
 
-Compute instructions at runtime:
+Compute instructions at runtime. A provider replaces `instruction()`, and its result is sent
+as written, without `{var}` substitution:
 
 ```rust
-.instruction_provider(|ctx| {
+.instruction_provider(Box::new(|ctx| {
     Box::pin(async move {
         let user_id = ctx.user_id();
-        Ok(format!("You are assisting user {}.", user_id))
+        Ok(format!("You are assisting user {user_id}."))
     })
-})
+}))
 ```
 
 ### Callbacks
 
-Intercept agent behavior:
+Intercept agent behavior. See [Callbacks](../callbacks/callbacks.md) for every callback type:
 
 ```rust
-.before_model_callback(|ctx, request| {
+.before_model_callback(Box::new(|_ctx, request| {
     Box::pin(async move {
-        println!("About to call LLM with {} messages", request.contents.len());
-        Ok(BeforeModelResult::Continue)
+        println!("About to call the model with {} contents", request.contents.len());
+        Ok(BeforeModelResult::Continue(request))
     })
-})
+}))
 ```
 
 ---
@@ -569,14 +620,21 @@ Intercept agent behavior:
 | `new(name)` | Creates builder with agent name |
 | `model(Arc<dyn Llm>)` | Sets the LLM (required) |
 | `description(text)` | Agent description |
-| `instruction(text)` | System prompt |
+| `instruction(text)` | System prompt, with `{var}` templating |
+| `instruction_provider(provider)` | Computes the system prompt per request |
+| `global_instruction(text)` | Instruction sent before `instruction`, for this agent only |
+| `sub_agent(Arc<dyn Agent>)` | Adds a transfer target (see [Multi-Agent Systems](multi-agent.md)) |
 | `tool(Arc<dyn Tool>)` | Adds a static tool |
 | `toolset(Arc<dyn Toolset>)` | Adds a dynamic toolset resolved per invocation |
 | `strict_toolsets(bool)` | Fails the turn when a toolset cannot resolve its tools (default: skip it) |
 | `output_schema(json)` | JSON schema for structured output |
+| `output_type::<T>()` | Derives `output_schema` from a `schemars::JsonSchema` type |
+| `output_max_retries(n)` | Correction retries after a reply fails the schema (default: 3) |
 | `output_key(key)` | Saves response to state |
 | `include_contents(mode)` | History visibility |
 | `max_iterations(n)` | Maximum LLM round-trips (default: 100) |
+| `tool_timeout(Duration)` | Per-call tool timeout (default: 5 minutes) |
+| `require_tool_confirmation(name)` | Holds calls to the tool for approval (see [Tool Authorization](../security/tool-authorization.md)) |
 | `tool_execution_strategy(strategy)` | Tool dispatch mode: `Sequential`, `Parallel`, or `Auto` |
 | `parallelize_agent_delegations(bool)` | Overlap consecutive agent-delegation calls without parallelizing ordinary tools |
 | `default_retry_budget(RetryBudget)` | Retry failed read-only and idempotent tools up to N times with exponential backoff |
@@ -609,7 +667,7 @@ The default is 100 iterations, which is sufficient for most use cases. Lower val
 
 ## Dynamic Toolsets
 
-For tools that depend on invocation context (e.g., per-user browser sessions), use `.toolset()` instead of `.tool()`. Toolsets are resolved at the start of each `run()` call:
+For tools that depend on invocation context (e.g., per-user browser sessions), use `.toolset()` instead of `.tool()`. Toolsets are resolved at the start of each `run()` call, and again after each round of tool calls:
 
 ```rust
 use adk_browser::{BrowserSessionPool, BrowserToolset, BrowserConfig};
@@ -641,6 +699,16 @@ let agent = LlmAgentBuilder::new("operator")
 Strict mode covers toolsets added with `.toolset()` and `RunConfig::runtime_toolsets`. Duplicate tool names fail the turn in both modes.
 
 `RealtimeAgentBuilder` also supports `.toolset()` with the same semantics, so realtime voice agents get dynamic tool resolution too.
+
+### Closing Toolsets
+
+`Runner::close` releases what an agent tree holds: it calls `Agent::close` on the root agent,
+then closes the runner's plugins. `LlmAgent::close` closes each of its toolsets through
+`Toolset::close`, then its enhanced plugins, then its sub-agents. `McpToolset` stops its
+server process or ends its HTTP session there, and `FilteredToolset`, `MergedToolset` and
+`PrefixedToolset` forward the call; the default `Toolset::close` does nothing, so implement it
+for a toolset of your own that holds a connection or a subprocess. Call `runner.close().await`
+once the application stops running the agent.
 
 ### Toolset Composition
 
@@ -786,7 +854,7 @@ After-tool callbacks can inspect structured `ToolOutcome` metadata via `Callback
 
 ## Complete Example
 
-A production-ready agent with multiple tools (weather, calculator, search) and output saved to session state:
+An agent with weather and calculator tools whose final answer is saved to session state. It needs the `tools` feature, as in [Build a Multi-Tool Agent](#build-a-multi-tool-agent):
 
 ```rust
 use adk_rust::prelude::*;
@@ -835,28 +903,16 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .model(Arc::new(model))
         .tool(Arc::new(weather))
         .tool(Arc::new(calc))
-        // .tool(Arc::new(GoogleSearchTool::new()))  // Provider-native tools can be mixed with FunctionTool
         .output_key("last_response")
         .build()?;
 
-    println!("✅ Agent '{}' ready!", agent.name());
+    println!("Agent '{}' ready", agent.name());
     Launcher::new(Arc::new(agent)).run().await?;
     Ok(())
 }
 ```
 
-Try these prompts:
-
-```
-You: What's 25 times 4?
-Assistant: It's 100.
-
-You: How's the weather in New York?
-Assistant: The weather in New York is partly cloudy with a temperature of 22°C and 65% humidity.
-
-You: Calculate 15% tip on $85
-Assistant: A 15% tip on $85 is $12.75, making the total $97.75.
-```
+Try a prompt such as "How's the weather in New York?".
 
 ---
 

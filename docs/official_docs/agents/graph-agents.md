@@ -11,7 +11,7 @@ GraphAgent allows you to define workflows as directed graphs with nodes and edge
 - **Conditional Routing**: Dynamic edge routing based on state
 - **State Management**: Typed state with reducers (overwrite, append, sum, custom)
 - **Checkpointing**: Persistent state for fault tolerance and human-in-the-loop
-- **Streaming**: Multiple stream modes (values, updates, messages, debug)
+- **Streaming**: Multiple stream modes (values, updates, messages, custom, debug)
 
 The `adk-graph` crate provides LangGraph-style workflow orchestration for building complex, stateful agent workflows. It brings graph-based workflow capabilities to the ADK-Rust ecosystem while maintaining full compatibility with ADK's agent system.
 
@@ -111,7 +111,7 @@ In this guide, you'll create a **Text Processing Pipeline** that runs translatio
 Nodes are where the actual work happens. Each node can:
 - **AgentNode**: Wrap an LLM agent to process natural language
 - **Function Node**: Execute custom Rust code for data processing
-- **Built-in Nodes**: Use predefined logic like counters or validators
+- **Action Nodes**: Deterministic node types from `adk-action` (the `action` feature), such as set, transform, switch and HTTP
 
 Think of nodes as specialized workers in an assembly line - each has a specific job and expertise.
 
@@ -158,10 +158,14 @@ adk-graph = { version = "3.0.0", features = ["sqlite"] }
 adk-agent = "3.0.0"
 adk-model = "3.0.0"
 adk-core = "3.0.0"
+adk-tool = "3.0.0"
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"
+anyhow = "1"
 ```
+
+`adk-tool` is used by the ReAct example, and the `sqlite` feature by `SqliteCheckpointer`.
 
 Create `.env` with your API key:
 
@@ -415,6 +419,7 @@ Build smart routing systems where LLMs decide the execution path:
 
 ```rust
 use adk_agent::LlmAgentBuilder;
+use adk_core::Agent;
 use adk_graph::{
     edge::{END, Router, START},
     graph::StateGraph,
@@ -508,31 +513,37 @@ async fn main() -> anyhow::Result<()> {
             updates
         });
 
-    // Response nodes (similar pattern for each)
-    let positive_node = AgentNode::new(positive_agent)
-        .with_input_mapper(|state| {
-            let text = state.get("feedback").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(text)
-        })
-        .with_output_mapper(|events| {
-            let mut updates = std::collections::HashMap::new();
-            for event in events {
-                if let Some(content) = event.content() {
-                    let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
-                        .collect::<Vec<_>>()
-                        .join("");
-                    updates.insert("response".to_string(), json!(text));
+    // Response nodes share one input and output mapping
+    let response_node = |agent: Arc<dyn Agent>| {
+        AgentNode::new(agent)
+            .with_input_mapper(|state| {
+                let text = state.get("feedback").and_then(|v| v.as_str()).unwrap_or("");
+                adk_core::Content::new("user").with_text(text)
+            })
+            .with_output_mapper(|events| {
+                let mut updates = std::collections::HashMap::new();
+                // Streamed deltas end with one complete event; read only complete events.
+                for event in events.iter().filter(|event| !event.llm_response.partial) {
+                    if let Some(content) = event.content() {
+                        let text: String = content.parts.iter()
+                            .filter_map(|p| p.text())
+                            .collect::<Vec<_>>()
+                            .join("");
+                        if !text.is_empty() {
+                            updates.insert("response".to_string(), json!(text));
+                        }
+                    }
                 }
-            }
-            updates
-        });
+                updates
+            })
+    };
 
     // Build graph with conditional routing
     let graph = StateGraph::with_channels(&["feedback", "sentiment", "response"])
         .add_node(classifier_node)
-        .add_node(positive_node)
-        // ... add negative_node and neutral_node similarly
+        .add_node(response_node(positive_agent))
+        .add_node(response_node(negative_agent))
+        .add_node(response_node(neutral_agent))
         .add_edge(START, "classifier")
         .add_conditional_edges(
             "classifier",
@@ -573,41 +584,19 @@ Positive Agent: "Thank you so much for the wonderful feedback!
 
 ## ReAct Pattern: Reasoning + Acting
 
-Build agents that can use tools iteratively to solve complex problems:
+An `LlmAgent` with tools already runs the reason–act loop: it calls tools, reads their
+results and asks the model again until the model answers without a tool call. Inside a
+graph, that whole loop happens within one run of its `AgentNode`, and the node's output
+mapper receives every event of it — the tool calls, their results and the final answer.
 
-### Visual: ReAct Cycle
+### Visual: ReAct Inside One Node
 
 ```
-                        ┌─────────────────────┐
-       User Question    │                     │
-      ────────────────▶ │      REASONER       │
-                        │  🧠 Think + Act     │
-                        └──────────┬──────────┘
-                                   │
-                                   ▼
-                        ┌─────────────────────┐
-                        │   Has tool calls?   │
-                        │                     │
-                        └──────────┬──────────┘
-                                   │
-                   ┌───────────────┴───────────────┐
-                   │                               │
-                   ▼                               ▼
-        ┌──────────────────┐            ┌──────────────────┐
-        │       YES        │            │        NO        │
-        │                  │            │                  │
-        │  🔄 Loop back    │            │  ✅ Final answer │
-        │     to reasoner  │            │      END         │
-        └─────────┬────────┘            └──────────────────┘
-                  │
-                  └─────────────────┐
-                                    │
-                                    ▼
-                        ┌─────────────────────┐
-                        │      REASONER       │
-                        │  🧠 Think + Act     │
-                        │   (next iteration)  │
-                        └─────────────────────┘
+                        ┌──────────────────────────────────┐
+       User Question    │            REASONER              │
+      ────────────────▶ │  🧠 model → 🔧 tools → 🧠 model   │ ──▶ END
+                        │  (repeats until it answers)      │
+                        └──────────────────────────────────┘
 ```
 
 ### Complete ReAct Example
@@ -618,7 +607,7 @@ use adk_core::{Part, Tool};
 use adk_graph::{
     edge::{END, START},
     graph::StateGraph,
-    node::{AgentNode, ExecutionConfig, NodeOutput},
+    node::{AgentNode, ExecutionConfig},
     state::State,
 };
 use adk_model::GeminiModel;
@@ -649,17 +638,11 @@ async fn main() -> anyhow::Result<()> {
 
     let calculator_tool = Arc::new(FunctionTool::new(
         "calculator",
-        "Perform mathematical calculations. Takes an 'expression' parameter (string).",
+        "Add two numbers. Takes 'a' and 'b' parameters (numbers).",
         |_ctx, args| async move {
-            let expr = args.get("expression").and_then(|v| v.as_str()).unwrap_or("0");
-            let result = match expr {
-                "2 + 2" => "4",
-                "10 * 5" => "50",
-                "100 / 4" => "25",
-                "15 - 7" => "8",
-                _ => "Unable to evaluate",
-            };
-            Ok(json!({ "result": result, "expression": expr }))
+            let a = args.get("a").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let b = args.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            Ok(json!({ "result": a + b }))
         },
     )) as Arc<dyn Tool>;
 
@@ -677,7 +660,7 @@ async fn main() -> anyhow::Result<()> {
             .build()?,
     );
 
-    // Create reasoner node that detects tool usage
+    // Record the tools the agent called and its final answer
     let reasoner_node = AgentNode::new(reasoner_agent)
         .with_input_mapper(|state| {
             let question = state.get("question").and_then(|v| v.as_str()).unwrap_or("");
@@ -685,66 +668,39 @@ async fn main() -> anyhow::Result<()> {
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
-            let mut has_tool_calls = false;
+            let mut tools_used = Vec::new();
             let mut response = String::new();
 
-            for event in events {
+            // Streamed deltas end with one complete event; read only complete events.
+            for event in events.iter().filter(|event| !event.llm_response.partial) {
                 if let Some(content) = event.content() {
                     for part in &content.parts {
                         match part {
-                            Part::FunctionCall { .. } => {
-                                has_tool_calls = true;
-                            }
-                            Part::Text { text } => {
-                                response.push_str(text);
-                            }
+                            Part::FunctionCall { name, .. } => tools_used.push(name.clone()),
+                            Part::Text { text } => response.push_str(text),
                             _ => {}
                         }
                     }
                 }
             }
 
-            updates.insert("has_tool_calls".to_string(), json!(has_tool_calls));
+            updates.insert("tools_used".to_string(), json!(tools_used));
             updates.insert("response".to_string(), json!(response));
             updates
         });
 
-    // Build ReAct graph with cycle
-    let graph = StateGraph::with_channels(&["question", "has_tool_calls", "response", "iteration"])
+    let graph = StateGraph::with_channels(&["question", "tools_used", "response"])
         .add_node(reasoner_node)
-        .add_node_fn("counter", |ctx| async move {
-            let i = ctx.get("iteration").and_then(|v| v.as_i64()).unwrap_or(0);
-            Ok(NodeOutput::new().with_update("iteration", json!(i + 1)))
-        })
-        .add_edge(START, "counter")
-        .add_edge("counter", "reasoner")
-        .add_conditional_edges(
-            "reasoner",
-            |state| {
-                let has_tools = state.get("has_tool_calls").and_then(|v| v.as_bool()).unwrap_or(false);
-                let iteration = state.get("iteration").and_then(|v| v.as_i64()).unwrap_or(0);
+        .add_edge(START, "reasoner")
+        .add_edge("reasoner", END)
+        .compile()?;
 
-                // Safety limit
-                if iteration >= 5 { return END.to_string(); }
-
-                if has_tools {
-                    "counter".to_string()  // Loop back for more reasoning
-                } else {
-                    END.to_string()  // Done - final answer
-                }
-            },
-            [("counter", "counter"), (END, END)],
-        )
-        .compile()?
-        .with_recursion_limit(10);
-
-    // Test the ReAct agent
     let mut input = State::new();
     input.insert("question".to_string(), json!("What's the weather in Paris and what's 15 + 25?"));
 
     let result = graph.invoke(input, ExecutionConfig::new("react-1")).await?;
+    println!("Tools used: {}", result.get("tools_used").cloned().unwrap_or_default());
     println!("Final answer: {}", result.get("response").and_then(|v| v.as_str()).unwrap_or(""));
-    println!("Iterations: {}", result.get("iteration").and_then(|v| v.as_i64()).unwrap_or(0));
 
     Ok(())
 }
@@ -754,18 +710,14 @@ async fn main() -> anyhow::Result<()> {
 ```
 Question: "What's the weather in Paris and what's 15 + 25?"
 
-Iteration 1:
-  Reasoner: "I need to get weather info and do math"
-  → Calls get_weather(location="Paris") and calculator(expression="15 + 25")
-  → has_tool_calls = true → Loop back
-
-Iteration 2:
-  Reasoner: "Based on the results: Paris is 72°F and sunny, 15 + 25 = 40"
-  → No tool calls → has_tool_calls = false → END
-
-Final Answer: "The weather in Paris is 72°F and sunny with 45% humidity. 
-              And 15 + 25 equals 40."
+Reasoner (one node run):
+  model  → calls get_weather(location="Paris") and calculator(a=15, b=25)
+  tools  → {"temperature": "72°F", "condition": "Sunny", ...}, {"result": 40.0}
+  model  → "The weather in Paris is 72°F and sunny, and 15 + 25 = 40."
 ```
+
+Use a graph cycle when a step *outside* the agent decides whether to go again, as in
+[Cyclic Graphs](#cyclic-graphs-review-loop).
 
 ### AgentNode
 
@@ -951,16 +903,16 @@ use adk_graph::edge::Router;
     ("neutral", "neutral_handler"),
 ])
 
-// Route based on boolean field
-.conditional_edge("check", Router::by_bool("approved"), [
-    ("true", "execute"),
-    ("false", "reject"),
+// Route based on a boolean field: its true target, then its false target
+.conditional_edge("check", Router::by_bool("approved", "execute", "reject"), [
+    ("execute", "execute"),
+    ("reject", "reject"),
 ])
 
-// Limit iterations
-.conditional_edge("loop", Router::max_iterations("count", 5), [
-    ("continue", "process"),
-    ("done", END),
+// Limit iterations: "process" while count < 5, then END
+.conditional_edge("loop", Router::max_iterations("count", 5, "process", END), [
+    ("process", "process"),
+    (END, END),
 ])
 ```
 
@@ -1009,83 +961,73 @@ pass:
 Reachability follows declared edges, so a `goto` to a node no edge reaches is not
 anticipated.
 
-## Cyclic Graphs (ReAct Pattern)
+## Cyclic Graphs (Review Loop)
 
-Build iterative reasoning agents with cycles:
+A back edge makes a cycle: here a writer drafts, a reviewer approves or asks for changes,
+and the graph returns to the writer until the reviewer approves or the round limit is hit.
 
 ```rust
-use adk_core::Part;
+use adk_graph::edge::{END, START};
 
-// Create agent with tools
-let reasoner = Arc::new(
-    LlmAgentBuilder::new("reasoner")
-        .model(model)
-        .instruction("Use tools to answer questions. Provide final answer when done.")
-        .tool(search_tool)
-        .tool(calculator_tool)
-        .build()?
-);
-
-let reasoner_node = AgentNode::new(reasoner)
+// Writer drafts from the task and the last review
+let writer_node = AgentNode::new(writer)
     .with_input_mapper(|state| {
-        let question = state.get("question").and_then(|v| v.as_str()).unwrap_or("");
-        adk_core::Content::new("user").with_text(question)
+        let task = state.get("task").and_then(|v| v.as_str()).unwrap_or("");
+        let review = state.get("review").and_then(|v| v.as_str()).unwrap_or("none yet");
+        adk_core::Content::new("user").with_text(format!("Task: {task}\nLast review: {review}"))
     })
     .with_output_mapper(|events| {
         let mut updates = std::collections::HashMap::new();
-        let mut has_tool_calls = false;
-        let mut response = String::new();
-
-        for event in events {
-            if let Some(content) = event.content() {
-                for part in &content.parts {
-                    match part {
-                        Part::FunctionCall { name, .. } => {
-                            has_tool_calls = true;
-                        }
-                        Part::Text { text } => {
-                            response.push_str(text);
-                        }
-                        _ => {}
-                    }
-                }
+        for event in events.iter().filter(|event| !event.llm_response.partial) {
+            if let Some(text) = event.content().and_then(|c| c.parts.iter().find_map(|p| p.text())) {
+                updates.insert("draft".to_string(), json!(text));
             }
         }
-
-        updates.insert("has_tool_calls".to_string(), json!(has_tool_calls));
-        updates.insert("response".to_string(), json!(response));
         updates
     });
 
-// Build graph with cycle
-let react_agent = StateGraph::with_channels(&["question", "has_tool_calls", "response", "iteration"])
-    .add_node(reasoner_node)
-    .add_node_fn("counter", |ctx| async move {
-        let i = ctx.get("iteration").and_then(|v| v.as_i64()).unwrap_or(0);
-        Ok(NodeOutput::new().with_update("iteration", json!(i + 1)))
+// Reviewer answers APPROVED, or lists the changes it wants
+let reviewer_node = AgentNode::new(reviewer)
+    .with_input_mapper(|state| {
+        let draft = state.get("draft").and_then(|v| v.as_str()).unwrap_or("");
+        adk_core::Content::new("user").with_text(draft)
     })
-    .add_edge(START, "counter")
-    .add_edge("counter", "reasoner")
-    .add_conditional_edges(
-        "reasoner",
-        |state| {
-            let has_tools = state.get("has_tool_calls").and_then(|v| v.as_bool()).unwrap_or(false);
-            let iteration = state.get("iteration").and_then(|v| v.as_i64()).unwrap_or(0);
-
-            // Safety limit
-            if iteration >= 5 { return END.to_string(); }
-
-            if has_tools {
-                "counter".to_string()  // Loop back
-            } else {
-                END.to_string()  // Done
+    .with_output_mapper(|events| {
+        let mut updates = std::collections::HashMap::new();
+        for event in events.iter().filter(|event| !event.llm_response.partial) {
+            if let Some(text) = event.content().and_then(|c| c.parts.iter().find_map(|p| p.text())) {
+                updates.insert("approved".to_string(), json!(text.contains("APPROVED")));
+                updates.insert("review".to_string(), json!(text));
             }
+        }
+        updates
+    });
+
+let review_loop = StateGraph::with_channels(&["task", "draft", "review", "approved", "round"])
+    .add_node(writer_node)
+    .add_node(reviewer_node)
+    .add_node_fn("count", |ctx| async move {
+        let round = ctx.get("round").and_then(|v| v.as_i64()).unwrap_or(0);
+        Ok(NodeOutput::new().with_update("round", json!(round + 1)))
+    })
+    .add_edge(START, "writer")
+    .add_edge("writer", "reviewer")
+    .add_edge("reviewer", "count")
+    .add_conditional_edges(
+        "count",
+        |state| {
+            let approved = state.get("approved").and_then(|v| v.as_bool()).unwrap_or(false);
+            let round = state.get("round").and_then(|v| v.as_i64()).unwrap_or(0);
+            if approved || round >= 3 { END.to_string() } else { "writer".to_string() }
         },
-        [("counter", "counter"), (END, END)],
+        [("writer", "writer"), (END, END)],
     )
     .compile()?
-    .with_recursion_limit(10);
+    .with_recursion_limit(20);
 ```
+
+`with_recursion_limit` bounds the super-steps a run may take, so a cycle whose exit
+condition never holds still ends, with `GraphError::RecursionLimitExceeded`.
 
 ## Multi-Agent Supervisor
 
@@ -1214,7 +1156,8 @@ let graph = StateGraph::with_channels(&["task", "result"])
 ```rust
 use adk_graph::checkpoint::SqliteCheckpointer;
 
-let checkpointer = SqliteCheckpointer::new("checkpoints.db").await?;
+// `mode=rwc` creates the database file when it does not exist
+let checkpointer = SqliteCheckpointer::new("sqlite:checkpoints.db?mode=rwc").await?;
 
 let graph = StateGraph::with_channels(&["task", "result"])
     // ... nodes and edges
@@ -1277,9 +1220,7 @@ and step, so a repeated execution is harmless.
 > **Reads only.** `TimeTravelHandle::state_history(from, to)` returns the state that
 > was *stored* at each checkpointed step. It executes nothing — no node runs, no event
 > is regenerated, and no side effect repeats. To re-run from a point in history, use
-> `fork_at` to branch that checkpoint and invoke the graph on the forked thread. The
-> method was previously named `replay` and documented as re-executing the graph, which
-> it never did.
+> `fork_at` to branch that checkpoint and invoke the graph on the forked thread.
 
 
 Checkpoints also enable **durable resume** — if a graph execution crashes or the process restarts, execution resumes from the last persisted checkpoint rather than starting over. Use a durable backend — `SqliteCheckpointer`, `PostgresCheckpointer`, `RedisCheckpointer`, `MongoCheckpointer`, `Neo4jCheckpointer`, or `FirestoreCheckpointer` — for crash-safe persistence. `MemoryCheckpointer` holds checkpoints in the process, so they do not survive a restart. A custom backend implements the `Checkpointer` trait and runs the conformance suite; see [Graph Checkpointing](graph-checkpointing.md).
@@ -1417,19 +1358,20 @@ let graph = StateGraph::with_channels(&["task", "plan", "result"])
 Stream events as the graph executes:
 
 ```rust
+use adk_graph::stream::{StreamEvent, StreamMode};
 use futures::StreamExt;
-use adk_graph::stream::StreamMode;
 
 let stream = agent.stream(input, config, StreamMode::Updates);
+futures::pin_mut!(stream);
 
 while let Some(event) = stream.next().await {
     match event? {
-        StreamEvent::NodeStart(name) => println!("Starting: {}", name),
+        StreamEvent::NodeStart { node, step } => println!("Starting: {node} (step {step})"),
         StreamEvent::Updates { node, updates } => {
-            println!("{} updated state: {:?}", node, updates);
+            println!("{node} updated state: {updates:?}");
         }
-        StreamEvent::NodeEnd(name) => println!("Completed: {}", name),
-        StreamEvent::Done(state) => println!("Final state: {:?}", state),
+        StreamEvent::NodeEnd { node, duration_ms, .. } => println!("Completed: {node} in {duration_ms} ms"),
+        StreamEvent::Done { state, .. } => println!("Final state: {state:?}"),
         _ => {}
     }
 }
@@ -1439,9 +1381,10 @@ while let Some(event) = stream.next().await {
 
 | Mode | Description |
 |------|-------------|
-| `Values` | Stream full state after each node |
+| `Values` | Stream the full state after each super-step (default) |
 | `Updates` | Stream only state changes |
-| `Messages` | Stream message-type updates |
+| `Messages` | Stream LLM tokens and messages as nodes produce them |
+| `Custom` | Stream custom events nodes emit |
 | `Debug` | Stream all internal events |
 
 `Messages` mode reads tokens from `Node::execute_stream` as they are produced.
@@ -1461,8 +1404,8 @@ Timeout policies apply to the streamed execution itself. For a stream,
 
 A paused step ends the stream with one `StreamEvent::Interrupted { node, message }`
 per pause, in node-name order, each tool-confirmation pause preceded by its
-`tool_confirmation` custom event. In `Messages` mode a node's own pause no longer
-stops the step: the other nodes of the step run, as they do in the other modes.
+`tool_confirmation` custom event. In `Messages` mode a node's own pause does not
+stop the step: the other nodes of the step run, as they do in the other modes.
 
 ## Subgraphs
 
@@ -1536,7 +1479,7 @@ nodes.
 
 ## Reliability and Cost Controls
 
-Each of these is off by default, so a graph behaves as it did before you set one.
+Each of these is off by default.
 
 ### Per-node retry
 
@@ -1743,11 +1686,11 @@ GraphAgent implements the ADK `Agent` trait, so it works with:
 use adk_runner::Runner;
 
 let graph_agent = GraphAgent::builder("workflow")
-    .before_agent_callback(|ctx| async {
+    .before_agent_callback(|ctx| async move {
         println!("Starting graph execution for session: {}", ctx.session_id());
         Ok(())
     })
-    .after_agent_callback(|ctx, event| async {
+    .after_agent_callback(|ctx, event| async move {
         if let Some(content) = event.content() {
             println!("Graph completed with content");
         }
@@ -1807,9 +1750,9 @@ The full graph gallery with real LLM integration lives in [adk-playground](https
 |---------|-----------|-----------|
 | State management | TypedDict + reducers | `StateSchema` + reducers |
 | Execution model | Pregel super-steps | Pregel super-steps |
-| Checkpointing | Memory, SQLite, Postgres | Memory, SQLite |
+| Checkpointing | Memory, SQLite, Postgres | Memory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j, Firestore |
 | Human-in-the-loop | `interrupt_before`/`after` | `interrupt_before`/`after` + dynamic |
-| Streaming | 5 modes | 5 modes |
+| Streaming | Several modes | `Values`, `Updates`, `Messages`, `Custom`, `Debug` |
 | Cycles | Native | Native |
 | Type safety | Python typing | Rust type system |
 | LLM integration | LangChain | `AgentNode` + ADK agents |
@@ -1821,13 +1764,12 @@ The full graph gallery with real LLM integration lives in [adk-playground](https
 | Deferred join | `defer=True` | Automatic for multiple direct predecessors, plus an *n*-of-*m* quorum |
 | Subgraph as a node | `add_node("sub", compiled)` | `SubgraphNode`, with channel mapping checked when the parent compiles |
 | Subgraph to parent hop | `Command(graph=Command.PARENT)` | `NodeOutput::with_goto_parent` |
-| Graph-wide node defaults | `set_node_defaults` (≥1.2) | `with_node_defaults`, plus the pre-existing `default_timeout` |
-| Node failure handlers | `error_handler` (≥1.2) | `with_node_error_handler`, run once the retry budget is spent |
+| Graph-wide node defaults | `set_node_defaults` | `with_node_defaults`, plus `default_timeout` |
+| Node failure handlers | `error_handler` | `with_node_error_handler`, run once the retry budget is spent |
 
-Two differences are worth stating plainly. `run_node_with` returns the child's
-result inline and records it, so a resumed run does not pay for a completed child
-again, whereas `Send` hands work to the scheduler and collects it through a
-reducer. And a hop from a subgraph into its parent has no equivalent here yet.
+`run_node_with` returns the child's result inline and records it, so a resumed run
+does not pay for a completed child again, whereas `Send` hands work to the scheduler
+and collects it through a reducer.
 
 ---
 

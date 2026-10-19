@@ -15,10 +15,13 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "3.0.0"
+adk-rust = { version = "3.0.0", features = ["tools"] }
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 ```
+
+The `tools` feature provides `ExitLoopTool` for the `LoopAgent` example; the other examples
+build with the default features.
 
 Create `.env`:
 
@@ -108,29 +111,18 @@ cargo run
 
 ### Example Interaction
 
+The launcher prints each sub-agent's answer in turn, without a label (abridged):
+
 ```
-You: Tell me about Rust programming language
+You > Tell me about the Rust programming language. Keep every answer under 50 words.
+* **Memory Safety:** Rust guarantees memory safety without using a garbage collector, ...
+* **Performance:** It offers high performance comparable to C and C++, ...
+* **Concurrency:** Rust enables fearless concurrency by preventing data races at compile time.
+**Key Insights:**
+1. **Compile-time safety:** Rust eliminates entire classes of bugs ...
+**Executive Summary**
 
-🔄 [researcher] Researching...
-Here are key facts about Rust:
-1. Systems programming language created at Mozilla in 2010
-2. Memory safety without garbage collection via ownership system
-3. Zero-cost abstractions and minimal runtime
-4. Voted "most loved language" on Stack Overflow for 7 years
-5. Used by Firefox, Discord, Dropbox, and Linux kernel
-
-🔄 [analyzer] Analyzing...
-Key insights:
-1. Rust solves the memory safety vs performance tradeoff
-2. Strong developer satisfaction drives rapid adoption
-3. Trust from major tech companies validates production-readiness
-
-🔄 [summarizer] Summarizing...
-Rust is a systems language that achieves memory safety without garbage 
-collection through its ownership model. Created at Mozilla in 2010, it's 
-been rated the most loved language for 7 consecutive years. Major companies 
-like Discord and Linux kernel adopt it for its zero-cost abstractions 
-and performance guarantees.
+Rust redefines systems programming by eliminating memory errors and data races at compile time. ...
 ```
 
 ### How It Works
@@ -246,24 +238,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 ### Example Interaction
 
-```
-You: Evaluate a mobile banking app
-
-🔧 TECHNICAL:
-• Requires robust API security: OAuth 2.0, certificate pinning, encrypted storage
-• Offline mode with sync requires complex state management and conflict resolution
-• Biometric auth integration varies significantly across iOS/Android platforms
-
-💼 BUSINESS:
-• Highly competitive market - need unique differentiator (neobanks, traditional banks)
-• Revenue model: interchange fees, premium tiers, or lending products cross-sell
-• Regulatory compliance costs significant: PCI-DSS, regional banking laws, KYC/AML
-
-🎨 UX:
-• Critical: fast task completion - check balance must be < 3 seconds
-• Accessibility essential: screen reader support, high contrast mode, large touch targets
-• Trust indicators important: security badges, familiar banking patterns
-```
+The three analysts answer at the same time, so the console shows their streamed chunks
+interleaved as they arrive. To present each answer separately, run the agent with a `Runner`
+and group the events by `event.author` (see
+[Observing Workflow Execution](#observing-workflow-execution)).
 
 ### How It Works
 
@@ -281,7 +259,7 @@ You: Evaluate a mobile banking app
     (response 1)       (response 2)       (response 3)
 ```
 
-All agents start simultaneously and results stream as they complete.
+All agents start simultaneously and their events stream as they are produced.
 
 ---
 
@@ -352,32 +330,17 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 ### Example Interaction
 
+Each pass prints the critic's review and the refiner's answer. When the refiner calls
+`exit_loop`, the launcher prints the call and the loop ends (abridged):
+
 ```
-You: Write a tagline for a coffee shop
-
-🔄 Iteration 1
-[critic] Score: 5/10. "Good coffee here" is too generic. Needs:
-- Unique value proposition
-- Emotional connection
-- Memorable phrasing
-
-[refiner] Improved: "Where every cup tells a story"
-
-🔄 Iteration 2
-[critic] Score: 7/10. Better! But could be stronger:
-- More action-oriented
-- Hint at the experience
-
-[refiner] Improved: "Brew your perfect moment"
-
-🔄 Iteration 3
-[critic] Score: 8/10. Strong, action-oriented, experiential.
-Minor: could be more distinctive.
-
-[refiner] Score is 8+, quality threshold met!
-[exit_loop called]
-
-Final: "Brew your perfect moment"
+You > Write a five-word tagline for a coffee shop.
+**Tagline:**
+Fuel your daily morning grind.
+...
+* **Score:** 6/10
+...
+[tool] exit_loop({})
 ```
 
 ### How It Works
@@ -405,9 +368,27 @@ Final: "Brew your perfect moment"
 `ConditionalAgent` branches execution based on a **synchronous, rule-based** condition. Use this for deterministic routing like A/B testing or environment-based routing.
 
 ```rust
-ConditionalAgent::new("router", |ctx| ctx.session().state().get("premium")..., premium_agent)
+use adk_rust::prelude::*;
+use std::sync::Arc;
+
+fn router(premium_agent: Arc<dyn Agent>, basic_agent: Arc<dyn Agent>) -> ConditionalAgent {
+    ConditionalAgent::new(
+        "router",
+        |ctx| {
+            ctx.session()
+                .state()
+                .get("premium")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        },
+        premium_agent,
+    )
     .with_else(basic_agent)
+}
 ```
+
+The condition receives the `InvocationContext` and runs once per invocation. Without
+`with_else`, a false condition runs no agent.
 
 > **Note:** For LLM-based intelligent routing, use `LlmConditionalAgent` instead.
 
@@ -479,24 +460,17 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 ### Example Interaction
 
-```
-You: How do I fix a borrow error in Rust?
-[Routing to: technical]
-[Agent: tech_expert]
-A borrow error occurs when Rust's ownership rules are violated...
+The router emits a `[Routing to: <label>]` event before the chosen agent answers:
 
-You: What's the capital of France?
-[Routing to: general]
-[Agent: general_helper]
-The capital of France is Paris! It's a beautiful city...
-
-You: Write me a haiku about the moon
-[Routing to: creative]
-[Agent: creative_writer]
-Silver orb above,
-Shadows dance on silent waves—
-Night whispers secrets.
 ```
+You > Write me a haiku about the moon
+[Routing to: creative]Silver pearl adrift,
+Glowing in the velvet night,
+Tears of ancient skies.
+```
+
+The label is the model's reply, trimmed and lowercased. An exact match selects its route;
+otherwise the longest route label that the reply contains is used, and then `default_route`.
 
 ### How It Works
 
@@ -593,7 +567,7 @@ run resumes the paused turn at that sub-agent instead of starting over.
 use adk_rust::prelude::*;
 use std::sync::Arc;
 
-fn pipeline(model: Arc<dyn Llm>, transfer: Arc<dyn Tool>) -> anyhow::Result<SequentialAgent> {
+fn pipeline(model: Arc<dyn Llm>, transfer: Arc<dyn Tool>) -> Result<SequentialAgent> {
     let intake = LlmAgentBuilder::new("intake").model(model.clone()).build()?;
     let ops = LlmAgentBuilder::new("ops")
         .model(model.clone())
@@ -612,73 +586,85 @@ fn pipeline(model: Arc<dyn Llm>, transfer: Arc<dyn Tool>) -> anyhow::Result<Sequ
 
 ---
 
-## Tracing Workflow Execution
+## Observing Workflow Execution
 
-To see what's happening inside a workflow, enable tracing:
+To see which agent produced each event, run the workflow with a `Runner` and read
+`event.author`:
 
 ```rust
-use adk_rust::prelude::*;
-use adk_rust::{SessionId, UserId};
-use adk_rust::runner::{Runner, RunnerConfig};
 use adk_rust::futures::StreamExt;
+use adk_rust::prelude::*;
+use adk_rust::session::{CreateRequest, SessionService};
+use adk_rust::{EventTextDeltas, SessionId, UserId};
 use std::sync::Arc;
 
-// Create pipeline as before...
+async fn trace(pipeline: SequentialAgent) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let session_service = Arc::new(InMemorySessionService::new());
+    let runner = Runner::builder()
+        .app_name("workflow_trace")
+        .agent(Arc::new(pipeline))
+        .session_service(session_service.clone())
+        .build()?;
 
-// Use Runner instead of Launcher for detailed control
-let session_service = Arc::new(InMemorySessionService::new());
-let runner = Runner::new(RunnerConfig {
-    app_name: "workflow_trace".to_string(),
-    agent: Arc::new(pipeline),
-    session_service: session_service.clone(),
-    artifact_service: None,
-    memory_service: None,
-    run_config: None,
-})?;
+    let session = session_service
+        .create(CreateRequest {
+            app_name: "workflow_trace".to_string(),
+            user_id: "user".to_string(),
+            session_id: None,
+            state: Default::default(),
+        })
+        .await?;
 
-let session = session_service.create(CreateRequest {
-    app_name: "workflow_trace".to_string(),
-    user_id: "user".to_string(),
-    session_id: None,
-    state: Default::default(),
-}).await?;
+    let mut stream = runner
+        .run(
+            UserId::new("user")?,
+            SessionId::new(session.id())?,
+            Content::new("user").with_text("Analyze Rust"),
+        )
+        .await?;
 
-let mut stream = runner.run(
-    UserId::new("user")?,
-    SessionId::new(session.id())?,
-    Content::new("user").with_text("Analyze Rust"),
-).await?;
-
-// Process each event to see workflow execution
-while let Some(event) = stream.next().await {
-    let event = event?;
-    
-    // Show which agent is responding
-    println!("📍 Agent: {}", event.author);
-    
-    // Show the response content
-    if let Some(content) = event.content() {
-        for part in &content.parts {
-            if let Part::Text { text } = part {
-                println!("   {}", text);
+    // Streamed deltas end with a snapshot of the whole answer; EventTextDeltas
+    // reduces that snapshot to the text not yet printed.
+    let mut text_deltas = EventTextDeltas::default();
+    let mut current_author = String::new();
+    while let Some(event) = stream.next().await {
+        let event = event?;
+        if event.author != current_author {
+            current_author = event.author.clone();
+            println!("\n[{current_author}]");
+        }
+        let event = text_deltas.push(&event);
+        if let Some(content) = event.content() {
+            for part in &content.parts {
+                if let Part::Text { text } = part {
+                    print!("{text}");
+                }
             }
         }
     }
     println!();
+    Ok(())
 }
 ```
+
+Events from a `ParallelAgent` interleave, so a consumer that renders each branch separately
+keys its buffers by `event.author` or `event.branch`.
 
 ---
 
 ## API Reference
+
+In these signatures, `before` and `after` are `BeforeAgentCallback` and `AfterAgentCallback`
+values (see [Callbacks](../callbacks/callbacks.md)), the agents are `Arc<dyn Agent>`, and
+`is_premium` is a `fn(&dyn InvocationContext) -> bool`.
 
 ### SequentialAgent
 
 ```rust
 SequentialAgent::new("name", vec![agent1, agent2, agent3])
     .with_description("Optional description")
-    .before_callback(callback)  // Called before execution
-    .after_callback(callback)   // Called after execution
+    .before_callback(before)  // Runs before the sub-agents
+    .after_callback(after)    // Runs after the last sub-agent
 ```
 
 ### ParallelAgent
@@ -686,11 +672,11 @@ SequentialAgent::new("name", vec![agent1, agent2, agent3])
 ```rust
 ParallelAgent::new("name", vec![agent1, agent2, agent3])
     .with_description("Optional description")
-    .before_callback(callback)
-    .after_callback(callback)
+    .before_callback(before)
+    .after_callback(after)
 ```
 
-If any sub-agent fails, `ParallelAgent` drains all remaining futures before propagating the first error, preventing resource leaks.
+If a sub-agent fails, the other branches run to their end, and then `ParallelAgent` returns the error of the earliest-declared sub-agent that failed. `with_shared_state()` gives the branches a `SharedState` for coordination.
 
 ### LoopAgent
 
@@ -698,16 +684,31 @@ If any sub-agent fails, `ParallelAgent` drains all remaining futures before prop
 LoopAgent::new("name", vec![agent1, agent2])
     .with_max_iterations(5)     // Safety limit (recommended, default: 1000)
     .with_description("Optional description")
-    .before_callback(callback)
-    .after_callback(callback)
+    .before_callback(before)
+    .after_callback(after)
 ```
 
 ### ConditionalAgent
 
 ```rust
-ConditionalAgent::new("name", |ctx| condition_fn, if_agent)
+ConditionalAgent::new("name", |ctx| is_premium(ctx), if_agent)
     .with_else(else_agent)      // Optional else branch
     .with_description("Optional description")
+    .before_callback(before)
+    .after_callback(after)
+```
+
+### LlmConditionalAgent
+
+```rust
+LlmConditionalAgent::builder("name", model)
+    .instruction("Classification prompt")
+    .route("label", agent)
+    .default_route(fallback_agent) // Optional
+    .description("Optional description")
+    .before_callback(before)
+    .after_callback(after)
+    .build()?
 ```
 
 ### ExitLoopTool

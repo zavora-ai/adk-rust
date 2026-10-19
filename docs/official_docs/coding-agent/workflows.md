@@ -28,54 +28,67 @@ command and the [`coding_graph` example](examples.md#coding_graph) work.
 
 ## Fan-out / fan-in in adk-graph
 
-Two `adk-graph` capabilities make this correct:
+Two `adk-graph` behaviours make this correct:
 
 - **Parallel fan-out** — several nodes reachable from one upstream node run
   **concurrently** in the same super-step.
-- **Fan-in barrier** — a node declared with `add_deferred_node_fn` runs **exactly
-  once**, only after **all** its upstream paths complete (not once per upstream).
+- **Fan-in barrier** — a node with more than one incoming edge is deferred when the
+  graph compiles: it runs **once**, after every upstream path that can still run in
+  this pass arrives. `add_deferred_node_fn` (or `mark_deferred`) sets a
+  `DeferredNodeConfig` explicitly, for a merge strategy, a timeout, or a quorum.
 
 ```rust
-use adk_graph::graph::StateGraph;
-use adk_graph::{DeferredNodeConfig, MergeStrategy};
-use adk_graph::edge::{START, END};
+use adk_graph::edge::{END, START};
+use adk_graph::error::Result;
+use adk_graph::graph::{CompiledGraph, StateGraph};
+use adk_graph::node::{NodeContext, NodeOutput};
+use serde_json::json;
 
-let graph = StateGraph::with_channels(&["task", "round", "decision", "notes",
-                                        "rev_correctness", "rev_edge-cases", "rev_style"])
-    .add_node_fn("implement", /* coding agent */)
-    .add_node_fn("review_correctness", /* read-only reviewer */)
-    .add_node_fn("review_edge-cases",  /* … */)
-    .add_node_fn("review_style",       /* … */)
-    // fan-in: runs once, after all three reviewers finish
-    .add_deferred_node_fn("synthesize", /* aggregate verdicts */,
-        DeferredNodeConfig { merge_strategy: MergeStrategy::Collect, fan_in_timeout: None })
-    .add_node_fn("revise", /* coding agent applies notes */)
-    .add_node_fn("finalize", /* done */)
-    .add_edge(START, "implement")
-    .add_edge("implement", "review_correctness")
-    .add_edge("implement", "review_edge-cases")
-    .add_edge("implement", "review_style")
-    .add_edge("revise", "review_correctness")     // loop fans out again
-    .add_edge("revise", "review_edge-cases")
-    .add_edge("revise", "review_style")
-    .add_edge("review_correctness", "synthesize") // fan-in
-    .add_edge("review_edge-cases", "synthesize")
-    .add_edge("review_style", "synthesize")
-    .add_conditional_edges("synthesize",
-        |s| s.get("decision").and_then(|v| v.as_str()).unwrap_or("finalize").to_string(),
-        [("revise", "revise"), ("finalize", "finalize")])
-    .add_edge("finalize", END)
-    .compile()?
-    .with_recursion_limit(16);
+// In the coding_graph example, each of these runs an agent and writes its result.
+async fn run_agent(_ctx: NodeContext) -> Result<NodeOutput> {
+    Ok(NodeOutput::new())
+}
+
+// Aggregates the reviewers' verdicts into a decision.
+async fn synthesize(ctx: NodeContext) -> Result<NodeOutput> {
+    let approved = ["rev_correctness", "rev_edge-cases", "rev_style"]
+        .iter()
+        .all(|key| ctx.get(key).and_then(|v| v.as_str()).is_some_and(|v| v.contains("approve")));
+    let decision = if approved { "finalize" } else { "revise" };
+    Ok(NodeOutput::new().with_update("decision", json!(decision)))
+}
+
+fn ultra_review() -> Result<CompiledGraph> {
+    Ok(StateGraph::with_channels(&["task", "round", "decision", "notes",
+                                   "rev_correctness", "rev_edge-cases", "rev_style"])
+        .add_node_fn("implement", run_agent)          // coding agent
+        .add_node_fn("review_correctness", run_agent) // read-only reviewers
+        .add_node_fn("review_edge-cases", run_agent)
+        .add_node_fn("review_style", run_agent)
+        .add_node_fn("synthesize", synthesize)        // fan-in: runs once per round
+        .add_node_fn("revise", run_agent)             // coding agent applies notes
+        .add_node_fn("finalize", run_agent)
+        .add_edge(START, "implement")
+        .add_edge("implement", "review_correctness")
+        .add_edge("implement", "review_edge-cases")
+        .add_edge("implement", "review_style")
+        .add_edge("revise", "review_correctness")     // loop fans out again
+        .add_edge("revise", "review_edge-cases")
+        .add_edge("revise", "review_style")
+        .add_edge("review_correctness", "synthesize") // fan-in
+        .add_edge("review_edge-cases", "synthesize")
+        .add_edge("review_style", "synthesize")
+        .add_conditional_edges("synthesize",
+            |s| s.get("decision").and_then(|v| v.as_str()).unwrap_or("finalize").to_string(),
+            [("revise", "revise"), ("finalize", "finalize")])
+        .add_edge("finalize", END)
+        .compile()?
+        .with_recursion_limit(16))
+}
 ```
 
-> **`add_deferred_node_fn`** (and `mark_deferred` for custom nodes) brings fan-in
-> to the core `StateGraph` builder — previously only the higher-level
-> `GraphAgentBuilder` could declare a deferred node. Without it, an aggregator
-> with multiple upstream edges would fire as soon as the *first* branch finished.
-
-Each node is an `async` closure that runs an agent and writes its result into the
-graph state; the conditional edge reads `decision` to loop or finish. See the full,
+Each node runs an agent and writes its result into the graph state; the conditional
+edge reads `decision` to loop or finish. See the full,
 runnable implementation in the [`coding_graph` example](examples.md#coding_graph)
 and the [Graph Agents](../agents/graph-agents.md) reference for the general API.
 

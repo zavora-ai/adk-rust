@@ -32,8 +32,8 @@ Realtime agents differ from text-based LlmAgents in several key ways:
 
 `RealtimeAgent` implements the same `Agent` trait as `LlmAgent`, sharing:
 - Instructions (static and dynamic)
-- Tool registration and execution
-- Callbacks (before_agent, after_agent, before_tool, after_tool)
+- Tool registration and execution, governed by the run's tool policy, kill switch, and confirmation
+- Callbacks (before_agent, after_agent, before_tool, after_tool), plus the runner's plugin callbacks
 - Sub-agent handoffs
 
 ## Quick Start
@@ -97,9 +97,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Process events
     while let Some(event) = session.next_event().await {
         match event? {
-            ServerEvent::TextDelta { delta, .. } => print!("{}", delta),
+            ServerEvent::TextDelta { delta, .. } => print!("{delta}"),
+            // The transcript of the spoken reply
+            ServerEvent::TranscriptDelta { delta, .. } => print!("{delta}"),
             ServerEvent::AudioDelta { delta, .. } => {
-                // Play audio (delta is base64-encoded PCM)
+                // Play audio (delta is raw PCM16 bytes)
             }
             ServerEvent::ResponseDone { .. } => break,
             _ => {}
@@ -136,19 +138,23 @@ ADK-Realtime supports multiple transport layers:
 The `RealtimeAgentBuilder` provides a fluent API for configuring agents:
 
 ```rust
+use adk_realtime::{RealtimeAgent, VadConfig, VadMode};
+use std::sync::Arc;
+
 let agent = RealtimeAgent::builder("assistant")
     // Required
     .model(model)
 
     // Instructions (same as LlmAgent)
     .instruction("You are helpful.")
-    .instruction_provider(|ctx| format!("User: {}", ctx.user_name()))
+    .instruction_provider(Box::new(|ctx| {
+        Box::pin(async move { Ok(format!("The user's id is {}.", ctx.user_id())) })
+    }))
 
     // Voice settings
     .voice("alloy")  // Options: alloy, coral, sage, shimmer, etc.
 
     // Voice Activity Detection
-    .server_vad()  // Use defaults
     .vad(VadConfig {
         mode: VadMode::ServerVad,
         threshold: Some(0.5),
@@ -166,18 +172,21 @@ let agent = RealtimeAgent::builder("assistant")
     .sub_agent(booking_agent)
     .sub_agent(support_agent)
 
-    // Callbacks (same as LlmAgent)
-    .before_agent_callback(|ctx| async { Ok(()) })
-    .after_agent_callback(|ctx, event| async { Ok(()) })
-    .before_tool_callback(|ctx, tool, args| async { Ok(None) })
-    .after_tool_callback(|ctx, tool, result| async { Ok(result) })
+    // Callbacks: the same adk_core callback types LlmAgent takes
+    .before_agent_callback(Box::new(|_ctx| Box::pin(async { Ok(None) })))
+    .after_agent_callback(Box::new(|_ctx| Box::pin(async { Ok(None) })))
+    .before_tool_callback(Box::new(|_ctx| Box::pin(async { Ok(None) })))
+    .after_tool_callback(Box::new(|_ctx| Box::pin(async { Ok(None) })))
 
-    // Realtime-specific callbacks
-    .on_audio(|audio_chunk| { /* play audio */ })
-    .on_transcript(|text| { /* show transcript */ })
+    // Realtime-specific callbacks: PCM audio and transcript deltas, with the item id
+    .on_audio(Arc::new(|_pcm: &[u8], _item_id: &str| Box::pin(async { /* play audio */ })))
+    .on_transcript(Arc::new(|_text: &str, _item_id: &str| Box::pin(async { /* show transcript */ })))
 
     .build()?;
 ```
+
+When both are set, `instruction_provider` is used and computes the instruction for each run.
+`.server_vad()` is shorthand for server VAD with its defaults.
 
 ## Voice Activity Detection (VAD)
 
@@ -212,11 +221,14 @@ let agent = RealtimeAgent::builder("assistant")
     .build()?;
 ```
 
-### Semantic VAD (Gemini)
+### Semantic VAD (OpenAI)
 
-For Gemini models, you can use semantic VAD which considers meaning:
+For OpenAI realtime models, semantic VAD decides the end of a turn from what was said.
+Gemini Live has no equivalent and keeps its own automatic detection:
 
 ```rust
+use adk_realtime::{VadConfig, VadMode};
+
 let vad = VadConfig {
     mode: VadMode::SemanticVad,
     eagerness: Some("high".to_string()),  // low, medium, high
@@ -297,7 +309,31 @@ let receptionist = RealtimeAgent::builder("receptionist")
     .build()?;
 ```
 
-When the model calls `transfer_to_agent`, the RealtimeRunner handles the handoff automatically.
+When the model calls `transfer_to_agent`, the `RealtimeAgent` closes its session and emits an
+event carrying `actions.transfer_to_agent`; the `Runner` running the agent hands control to the
+target, under the same [transfer restrictions](multi-agent.md#transfer-restrictions) as any
+agent. A `transfer_to_agent` call without a readable `agent_name` is answered with an error
+instead of transferring.
+
+## Governed Tool Calls
+
+`RealtimeAgent`, `RealtimeRunner` and `IntegratedRealtimeRunner` dispatch every tool call
+through `adk_core::authorize_tool_call`, the path `LlmAgent` uses:
+
+| Control | `RealtimeAgent` | `RealtimeRunner` / `IntegratedRealtimeRunner` |
+|---------|-----------------|-----------------------------------------------|
+| Kill switch, `ToolPolicy`, confirmation | Read from the run's `RunConfig` | Set with `tool_governance(run_config, approval_scope)` on the builder |
+| Runner plugin agent and tool callbacks | Run ahead of the agent's own | — |
+| Per-call timeout | `tool_timeout` (default five minutes) | `tool_timeout` (default five minutes) |
+| Result screening | `tool_result_screen` | `tool_result_screen` |
+
+- **Malformed arguments**: a call whose arguments are not valid JSON is answered with an error,
+  and the tool does not run.
+- **Result screening**: a `ToolResultScreen`, such as `adk-guardrail`'s `ToolGuardrailSet`,
+  rewrites or withholds each result after the after-tool stages; a screen that cannot decide
+  withholds the result.
+- **Error text**: a failed call is answered with the error's component, category, and code;
+  `expose_tool_error_messages(true)` sends the full message.
 
 ## Audio Formats
 
@@ -309,13 +345,14 @@ When the model calls `transfer_to_agent`, the RealtimeRunner handles the handoff
 | G711 A-law | 8000 Hz | 8 | Mono | Telephony |
 
 ```rust
-use adk_realtime::{AudioFormat, AudioChunk};
+use adk_realtime::AudioFormat;
+use adk_realtime::audio::AudioChunk;
 
 // Create audio format
 let format = AudioFormat::pcm16_24khz();
 
 // Work with audio chunks
-let chunk = AudioChunk::new(audio_bytes, format);
+let chunk = AudioChunk::new(audio_bytes, format.clone());
 let base64 = chunk.to_base64();
 let decoded = AudioChunk::from_base64(&base64, format)?;
 ```
@@ -327,9 +364,10 @@ let decoded = AudioChunk::from_base64(&base64, format)?;
 | Event | Description |
 |-------|-------------|
 | `SessionCreated` | Connection established |
-| `AudioDelta` | Audio chunk (base64 PCM) |
+| `AudioDelta` | Audio chunk (raw PCM16 bytes) |
 | `TextDelta` | Text response chunk |
-| `TranscriptDelta` | Input audio transcript |
+| `TranscriptDelta` | Transcript of the response audio |
+| `InputTranscriptDelta` | Transcript of the user's input audio |
 | `FunctionCallDone` | Tool call request |
 | `ResponseDone` | Response completed |
 | `SpeechStarted` | VAD detected speech start |
@@ -362,11 +400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "us-central1".to_string());
 
     // Use Application Default Credentials
-    let credentials = google_cloud_auth::credentials::Builder::default()
-        .build()
-        .await?;
-
-    let backend = GeminiLiveBackend::Vertex { credentials, region, project_id };
+    let backend = GeminiLiveBackend::vertex_adc(project_id, region)?;
     let model = GeminiRealtimeModel::new(backend, "models/gemini-3.1-flash-live-preview");
 
     let config = RealtimeConfig::default()
@@ -381,14 +415,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-There's also a convenience constructor for ADC:
+`GeminiLiveBackend::vertex_adc` discovers Application Default Credentials. To supply
+credentials yourself, build the variant directly with a
+`google_cloud_auth::credentials::Credentials`:
 
 ```rust
-let model = GeminiRealtimeModel::vertex_adc(
-    "us-central1",
-    "my-project-id",
-    "models/gemini-3.1-flash-live-preview",
-).await?;
+use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};
+
+let backend = GeminiLiveBackend::Vertex {
+    credentials,
+    region: "us-central1".to_string(),
+    project_id: "my-project-id".to_string(),
+};
+let model = GeminiRealtimeModel::new(backend, "models/gemini-3.1-flash-live-preview");
 ```
 
 ### Vertex AI Live with Tool Calling
@@ -485,7 +524,7 @@ let bundle = LiveKitRoomBuilder::new(config)
 // The bundle contains everything you need
 let room = bundle.room;
 let mut events = bundle.events;
-let audio_source = bundle.audio_source;  // for publishing audio
+let audio_source = bundle.audio_source;  // Some(..) when with_audio was set
 let audio_track = bundle.audio_track;
 ```
 
@@ -496,12 +535,17 @@ Use the bridge utilities to connect LiveKit audio to a `RealtimeRunner`:
 ```rust
 use adk_realtime::livekit::{LiveKitEventHandler, bridge_input};
 
-// Wrap your event handler to publish model audio to LiveKit
+// Wrap your event handler to publish model audio to LiveKit; the bundle's
+// `audio_source` is Some(..) because the room was built with `with_audio`
+let audio_source = audio_source.expect("the room was built with with_audio");
 let lk_handler = LiveKitEventHandler::new(inner_handler, audio_source, 24000, 1);
 
-// Bridge participant audio from LiveKit into the RealtimeRunner
-tokio::spawn(bridge_input(remote_track, runner));
+// Bridge participant audio from LiveKit into the RealtimeRunner (an Arc<RealtimeRunner>)
+let input_runner = runner.clone();
+tokio::spawn(async move { bridge_input(remote_track, &input_runner).await });
 ```
+
+`bridge_gemini_input` does the same for a runner on a Gemini Live session.
 
 ## Examples
 
@@ -543,7 +587,7 @@ ADK-Rust's realtime implementation follows the OpenAI Agents SDK pattern:
 |---------|------------|----------|
 | Agent base class | `Agent` | `Agent` trait |
 | Realtime agent | `RealtimeAgent` | `RealtimeAgent` |
-| Tools | Function definitions | `Tool` trait + `ToolDefinition` |
+| Tools | Function definitions | `Tool` trait, or `ToolDefinition` on a raw session |
 | Handoffs | `transfer_to_agent` | `sub_agents` + auto-generated tool |
 | Callbacks | Hooks | `before_*` / `after_*` callbacks |
 

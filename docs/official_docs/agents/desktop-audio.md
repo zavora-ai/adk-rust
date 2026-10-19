@@ -20,13 +20,13 @@ All components use the `cpal` crate for cross-platform audio (CoreAudio on macOS
 adk-audio = { version = "3.0.0", features = ["desktop-audio"] }
 ```
 
-The `desktop-audio` feature implies `vad` (for `VadProcessor`) and adds `cpal` as a dependency. It is intentionally excluded from the `all` feature to avoid pulling platform-specific audio dependencies into CI builds.
+The `desktop-audio` feature adds `cpal` as a dependency (and enables the no-op `vad` feature; `VadProcessor` is always compiled). It is not part of the `all` feature, since it needs audio hardware. On Linux it links ALSA, so install `libasound2-dev`.
 
 ### PipeWire Support
 
 On modern Linux (Fedora 34+, Ubuntu 22.10+, Arch), PipeWire has replaced PulseAudio and ALSA as the default audio server. The `desktop-audio` feature works on PipeWire transparently through its ALSA compatibility layer — no extra configuration needed.
 
-A native PipeWire backend (`desktop-pipewire`) using the [`pipewire`](https://crates.io/crates/pipewire) crate (v0.9) is planned for a future release. Native PipeWire would provide lower latency and direct session management. It is currently blocked by a dependency conflict: `redis-protocol 6.0.0` pins `cookie-factory =0.3.2` while `pipewire`'s `libspa` requires `0.3.3`. Once upstream relaxes this pin, the native backend can be added.
+There is no native PipeWire backend; audio reaches PipeWire through ALSA.
 
 ## Quick Start
 
@@ -90,29 +90,36 @@ playback.stop();
 ```rust
 use std::sync::Arc;
 use adk_audio::{
-    AudioCapture, CaptureConfig, VadConfig, VadMode,
+    AudioCapture, AudioResult, CaptureConfig, VadConfig, VadMode,
     VadTurnManager, VoiceActivityEvent, VadProcessor,
 };
 
-let vad: Arc<dyn VadProcessor> = /* your VadProcessor impl */;
-let config = VadConfig {
-    mode: VadMode::HandsFree,
-    silence_threshold_ms: 500,
-    speech_threshold_ms: 200,
-};
+// `vad` is your VadProcessor implementation; `device_id` comes from list_input_devices.
+// Call it inside a Tokio runtime: the manager spawns a task.
+fn start_turn_taking(
+    vad: Arc<dyn VadProcessor>,
+    capture: &mut AudioCapture,
+    device_id: &str,
+) -> AudioResult<VadTurnManager> {
+    let config = VadConfig {
+        mode: VadMode::HandsFree,
+        silence_threshold_ms: 500,
+        speech_threshold_ms: 200,
+    };
 
-let mut manager = VadTurnManager::new(vad, config)?;
-let mut capture = AudioCapture::new();
-let stream = capture.start_capture(device_id, &CaptureConfig::default())?;
+    let mut manager = VadTurnManager::new(vad, config)?;
+    let stream = capture.start_capture(device_id, &CaptureConfig::default())?;
 
-manager.start(stream, |event| {
-    match event {
-        VoiceActivityEvent::SpeechStarted => println!("Speech started"),
-        VoiceActivityEvent::SpeechEnded { duration_ms } => {
-            println!("Speech ended ({duration_ms}ms)");
+    manager.start(stream, |event| {
+        match event {
+            VoiceActivityEvent::SpeechStarted => println!("Speech started"),
+            VoiceActivityEvent::SpeechEnded { duration_ms } => {
+                println!("Speech ended ({duration_ms}ms)");
+            }
         }
-    }
-});
+    });
+    Ok(manager)
+}
 ```
 
 ## Components
@@ -170,7 +177,7 @@ The full conversational voice agent pattern:
 5. Synthesize response with GeminiTts (or any `TtsProvider`)
 6. Play synthesized audio through speaker
 
-See `examples/desktop_audio/src/voice_agent.rs` for a complete working example using real Gemini cloud providers.
+See `examples/desktop_audio/src/voice_agent.rs` for a complete example using the Gemini STT and TTS providers.
 
 ## Thread Safety
 
@@ -195,8 +202,12 @@ Desktop audio errors use the existing `AudioError` enum:
 | Linux | ALSA / PulseAudio (legacy) | Supported (install `libasound2-dev`) |
 | Windows | WASAPI | Supported |
 
-On modern Linux, PipeWire is the default audio server and has replaced PulseAudio and ALSA. The `desktop-audio` feature works on PipeWire transparently through its ALSA compatibility layer. A native PipeWire backend using the `pipewire` crate is planned for a future release (currently blocked by an upstream dependency conflict in `redis-protocol`).
+On modern Linux, PipeWire is the default audio server. The `desktop-audio` feature reaches it through PipeWire's ALSA compatibility layer.
 
 ## Examples
 
-See `examples/desktop_audio/` for 6 practical examples including a full conversational voice agent with real Gemini STT/TTS.
+`examples/desktop_audio/` has six programs — `list-devices`, `capture-audio`, `playback-audio`, `vad-turn-taking`, `config-validation`, and `voice-agent`, a conversational voice agent with Gemini STT and TTS:
+
+```bash
+cargo run --manifest-path examples/desktop_audio/Cargo.toml --bin voice-agent
+```

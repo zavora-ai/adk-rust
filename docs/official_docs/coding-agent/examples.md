@@ -52,7 +52,7 @@ fan-in) → revise loop → finalize.
 cargo run --manifest-path examples/coding_graph/Cargo.toml
 ```
 
-Read it for: parallel agents in one super-step, `add_deferred_node_fn` fan-in,
+Read it for: parallel agents in one super-step, deferred fan-in,
 conditional cyclic routing. Verifies by importing the produced function and
 asserting the spec + edge cases.
 

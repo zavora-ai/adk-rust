@@ -17,7 +17,9 @@ ADK-Rust supports eight callback types that intercept different stages of agent 
 | `after_tool_full` | After tool execution (V2 rich) | Inspect/modify tool args and response directly |
 | `on_tool_error` | After tool failure (retries exhausted) | Fallback results, error recovery |
 
-Run-wide hooks (`InvocationHooks`, which a runner's `PluginManager` installs) add
+Run-wide hooks (`InvocationHooks`, which a runner's `PluginManager` installs) run the plugins'
+agent, model and tool callbacks ahead of each agent's own, for every agent the run reaches; a
+plugin callback that returns a value skips the agent's callbacks of that kind. They add
 `on_model_error`: it runs when a model call or its response stream fails, and a response it
 returns answers the turn in the failed call's place. See [Plugins](../core/plugins.md).
 
@@ -40,8 +42,12 @@ returns answers the turn in the failed call's place. See [Plugins](../core/plugi
 
 Agent callbacks wrap the entire agent execution cycle.
 
+These aliases are defined in `adk_core` and re-exported by `adk_rust`:
+
 ```rust
-use adk_rust::prelude::*;
+use adk_rust::{CallbackContext, Content, Result};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 // BeforeAgentCallback type signature
@@ -64,7 +70,9 @@ type AfterAgentCallback = Box<
 Model callbacks intercept LLM requests and responses.
 
 ```rust
-use adk_rust::prelude::*;
+use adk_rust::{CallbackContext, LlmRequest, LlmResponse, Result};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 // BeforeModelResult - controls what happens after the callback
@@ -93,7 +101,9 @@ type AfterModelCallback = Box<
 Tool callbacks intercept tool execution.
 
 ```rust
-use adk_rust::prelude::*;
+use adk_rust::{CallbackContext, Content, Result, Tool};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 // BeforeToolCallback - can skip tool by returning Some(Content); LlmAgent sends
@@ -209,12 +219,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 ## CallbackContext Interface
 
-The `CallbackContext` trait provides access to execution context:
+The `CallbackContext` trait provides access to execution context. These are its methods and
+those of `ReadonlyContext`, which it extends (abridged from `adk_core`):
 
 ```rust
-use adk_rust::prelude::*;
+use adk_rust::{ActingContext, Artifacts, Content, SharedState, State, ToolOutcome};
+use std::sync::Arc;
 
-#[async_trait]
 pub trait CallbackContext: ReadonlyContext {
     /// Access artifact storage (if configured)
     fn artifacts(&self) -> Option<Arc<dyn Artifacts>>;
@@ -224,45 +235,60 @@ pub trait CallbackContext: ReadonlyContext {
     fn tool_outcome(&self) -> Option<ToolOutcome> { None }
 
     /// Name of the tool being executed.
-    /// Available in before-tool and after-tool callbacks via `ToolCallbackContext`.
+    /// Available in before-tool and after-tool callbacks.
     fn tool_name(&self) -> Option<&str> { None }
 
     /// Input arguments for the tool being executed.
-    /// Available in before-tool and after-tool callbacks via `ToolCallbackContext`.
+    /// Available in before-tool and after-tool callbacks.
     fn tool_input(&self) -> Option<&serde_json::Value> { None }
+
+    /// Shared state of a `ParallelAgent` built with `with_shared_state()`.
+    fn shared_state(&self) -> Option<Arc<SharedState>> { None }
 }
 
-// CallbackContext extends ReadonlyContext
-#[async_trait]
 pub trait ReadonlyContext: Send + Sync {
     /// Current invocation ID
     fn invocation_id(&self) -> &str;
-    
+
     /// Name of the current agent
     fn agent_name(&self) -> &str;
-    
+
     /// User ID from session
     fn user_id(&self) -> &str;
-    
+
     /// Application name
     fn app_name(&self) -> &str;
-    
+
     /// Session ID
     fn session_id(&self) -> &str;
-    
+
     /// Current branch (for multi-agent)
     fn branch(&self) -> &str;
-    
+
     /// The user's input content
     fn user_content(&self) -> &Content;
+
+    /// The acting agent and the subject it acts for (see Agent Identity)
+    fn acting_context(&self) -> ActingContext;
+
+    /// Session state, where the runtime exposes it
+    fn state(&self) -> Option<&dyn State> { None }
 }
 ```
+
+`ReadonlyContext` also has `try_app_name`, `try_user_id`, `try_session_id`,
+`try_invocation_id` and `try_identity`, which return the typed identifiers. A context wrapper
+that implements `ReadonlyContext` must forward `acting_context()`, or it reports the derived
+identity. See [Agent Identity](../security/agent-identity.md).
 
 ### ToolOutcome
 
 `ToolOutcome` carries structured metadata about a completed tool execution. It is available via `ctx.tool_outcome()` in after-tool and `on_tool_error` callbacks, and in an enhanced plugin's `after_tool_call`:
 
 ```rust
+use adk_rust::AdkError;
+use std::sync::Arc;
+
 pub struct ToolOutcome {
     pub tool_name: String,
     pub tool_args: serde_json::Value,
@@ -360,7 +386,7 @@ let agent = LlmAgentBuilder::new("cached_agent")
             // Create cache key from request contents
             let key = format!("{:?}", request.contents);
 
-            // Check cache
+            // Check the cache, which your application fills with responses it has seen
             if let Some(cached) = cache.lock().unwrap().get(&key) {
                 println!("[CACHE] Hit for request");
                 return Ok(BeforeModelResult::Skip(cached.clone()));
@@ -378,43 +404,45 @@ let agent = LlmAgentBuilder::new("cached_agent")
 Inject images or other binary content into LLM requests for multimodal analysis:
 
 ```rust
-use adk_rust::prelude::*;
 use adk_rust::artifact::{ArtifactService, LoadRequest};
+use adk_rust::prelude::*;
 use std::sync::Arc;
 
-// Artifact service with pre-loaded image
-let artifact_service: Arc<dyn ArtifactService> = /* ... */;
-let callback_service = artifact_service.clone();
-
-let agent = LlmAgentBuilder::new("image_analyst")
-    .model(model)
-    .instruction("Describe the image provided by the user.")
-    .before_model_callback(Box::new(move |_ctx, mut request| {
-        let service = callback_service.clone();
-        Box::pin(async move {
-            // Load image from artifact storage
-            if let Ok(response) = service.load(LoadRequest {
-                app_name: "my_app".to_string(),
-                user_id: "user".to_string(),
-                session_id: "session".to_string(),
-                file_name: "user:photo.png".to_string(),
-                version: None,
-            }).await {
-                // Inject image into the user's message
-                if let Some(last_content) = request.contents.last_mut() {
-                    if last_content.role == "user" {
+// `artifact_service` holds an image saved earlier as "user:photo.png"
+fn image_analyst(model: Arc<dyn Llm>, artifact_service: Arc<dyn ArtifactService>) -> Result<LlmAgent> {
+    LlmAgentBuilder::new("image_analyst")
+        .model(model)
+        .instruction("Describe the image provided by the user.")
+        .before_model_callback(Box::new(move |_ctx, mut request| {
+            let service = artifact_service.clone();
+            Box::pin(async move {
+                // Load image from artifact storage
+                if let Ok(response) = service
+                    .load(LoadRequest {
+                        app_name: "my_app".to_string(),
+                        user_id: "user".to_string(),
+                        session_id: "session".to_string(),
+                        file_name: "user:photo.png".to_string(),
+                        version: None,
+                    })
+                    .await
+                {
+                    // Inject image into the user's message
+                    if let Some(last_content) = request.contents.last_mut()
+                        && last_content.role == "user"
+                    {
                         last_content.parts.push(response.part);
                     }
                 }
-            }
 
-            Ok(BeforeModelResult::Continue(request))
-        })
-    }))
-    .build()?;
+                Ok(BeforeModelResult::Continue(request))
+            })
+        }))
+        .build()
+}
 ```
 
-This pattern is essential for multimodal AI because tool responses are JSON text - the model can't "see" images returned by tools. By injecting the image directly into the request, the model receives actual image data.
+This pattern puts image data in the request itself, so the model receives the image rather than a description of it.
 
 ### Response Modification (After Model)
 
@@ -445,7 +473,9 @@ let agent = LlmAgentBuilder::new("filtered_agent")
 
 ### Tool Permission Check (Before Tool)
 
-Validate tool execution permissions:
+Validate tool execution permissions. Tool callbacks run for the tools the agent executes; a
+provider-native tool such as `GoogleSearchTool` runs on the provider's side, so these examples
+use a function tool, `my_tool`:
 
 ```rust
 use adk_rust::prelude::*;
@@ -453,7 +483,7 @@ use std::sync::Arc;
 
 let agent = LlmAgentBuilder::new("permission_agent")
     .model(model)
-    .tool(Arc::new(GoogleSearchTool::new()))
+    .tool(Arc::new(my_tool))
     .before_tool_callback(Box::new(|ctx| {
         Box::pin(async move {
             // Access tool name and input via ToolCallbackContext
@@ -493,7 +523,7 @@ use std::sync::Arc;
 
 let agent = LlmAgentBuilder::new("tool_logged_agent")
     .model(model)
-    .tool(Arc::new(GoogleSearchTool::new()))
+    .tool(Arc::new(my_tool))
     .after_tool_callback(Box::new(|ctx| {
         Box::pin(async move {
             println!("[TOOL LOG] Tool executed for agent: {}", ctx.agent_name());

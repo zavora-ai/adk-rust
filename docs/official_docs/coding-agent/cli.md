@@ -1,10 +1,15 @@
 # Coding Agent CLI
 
 The `adk-rust` CLI ships three native coding commands. All run a real agent in a
-**confined workspace**, default to a Gemini 3 model, and resolve the API key
+**confined workspace**, default to Gemini (`gemini-3.7-flash`), and resolve the API key
 non-interactively from `--api-key` or the environment
 (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `OPENAI_API_KEY`, …) — so they never block on
 a setup prompt.
+
+> **Important:** `code` (unless `--read-only`), `goal`, and `ultracode` give the agent the
+> `bash` tool. It runs model-written commands on the host with a cleared environment; the
+> file tools are confined to `--dir`, but `bash` is not an OS sandbox. See
+> [Dev tools](devtools.md#sandboxing-model).
 
 ## `code` — one-shot task
 
@@ -19,7 +24,7 @@ results, text) plus the final plan.
 
 ## `goal` — autonomous goal mode (durable, resumable)
 
-The Codex/Hermes `/goal` pattern: give a goal **and a verifiable success
+Give a goal **and a verifiable success
 condition** (`--until` is a shell command that must exit 0). The agent loops
 **plan → act → verify**, self-correcting from the check's output, until it passes
 or the iteration budget is reached.
@@ -54,7 +59,7 @@ budget-`exhausted` run from where it left off.
 
 ## `ultracode` — parallel ultra-review
 
-The Claude Code `ultracode`/`ultrareview` pattern: implement the task, then fan
+Implement the task, then fan
 out to **parallel specialist reviewers** (correctness, edge-cases, style),
 synthesize their verdicts, and **revise** until they approve — built on
 [`adk-graph`](workflows.md).
@@ -75,7 +80,6 @@ revise steps, ending in `finalize`.
 ## Picking a model
 
 All three commands accept the global `--model` / `--provider` / `--api-key`
-flags. The default is `gemini-3.1-flash-lite` (fast, reliable multi-step tool
-use). For OpenAI: `--provider openai --model gpt-5.6-terra` (with `OPENAI_API_KEY`).
+flags. Without them the commands use Gemini's default model, `gemini-3.7-flash`. For OpenAI: `--provider openai --model gpt-5.6-terra` (with `OPENAI_API_KEY`).
 
 Next: [Workflows →](workflows.md)

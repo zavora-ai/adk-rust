@@ -74,8 +74,7 @@ Because it's an `LlmAgent` underneath, everything else in ADK composes:
 
 - Attach a [`MemoryService`](../memory/index.md) (e.g. the bi-temporal knowledge
   graph) on the `Runner` for cross-session project memory.
-- Add [lazy skills](../agents/realtime-agents.md) via `adk-skill` to extend
-  capabilities without bloating the prompt.
+- Add skills with `adk-skill` to extend capabilities without bloating the prompt.
 - Hooks/guardrails (`adk-plugin`, `adk-guardrail`) gate tool calls deterministically.
 
 ## Running it

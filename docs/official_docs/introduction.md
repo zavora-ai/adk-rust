@@ -1,8 +1,9 @@
 # Introduction to ADK-Rust
 
-Agent Development Kit (ADK) is a flexible and modular framework for developing and deploying AI agents. While optimized for Gemini and the Google ecosystem, ADK is model-agnostic, deployment-agnostic, and built for compatibility with other frameworks. ADK was designed to make agent development feel more like software development, making it easier for developers to create, deploy, and orchestrate agentic architectures that range from simple tasks to complex workflows.
+Agent Development Kit (ADK) is a flexible and modular framework for developing and deploying AI agents. ADK-Rust is model-agnostic and deployment-agnostic: Gemini is the default provider, and OpenAI, Anthropic, DeepSeek, Groq, Ollama and others are a feature flag away. ADK was designed to make agent development feel more like software development, making it easier for developers to create, deploy, and orchestrate agentic architectures that range from simple tasks to complex workflows.
 
-> **Note:** ADK-Rust requires Rust 1.95.0 or higher.
+> **Note:** ADK-Rust requires Rust 1.95.0 or higher. Upgrading from 2.x? See
+> [Migrating 2.x → 3.0](migration/2.x-to-3.0.md).
 
 ## Installation
 
@@ -30,16 +31,18 @@ use std::sync::Arc;
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
     let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
-    
+
     let agent = LlmAgentBuilder::new("assistant")
         .description("A helpful AI assistant")
         .model(Arc::new(model))
         .build()?;
-    
+
     println!("Agent '{}' ready!", agent.name());
     Ok(())
 }
 ```
+
+This builds the agent without calling the model. The [Quickstart](quickstart.md) runs one.
 
 ## Architecture Overview
 
@@ -50,7 +53,7 @@ graph TB
     subgraph Application["Application Layer"]
         CLI["CLI (adk-cli)"]
         Server["REST + A2A (adk-server)"]
-        Studio["Studio (adk-studio)"]
+        Studio["Studio (separate repository)"]
     end
 
     subgraph Execution["Execution Layer"]
@@ -62,7 +65,9 @@ graph TB
 
     subgraph Agents["Agent Layer"]
         LLM["LlmAgent"]
-        Workflow["Sequential / Parallel / Loop"]
+        Workflow["Sequential / Parallel / Loop / Conditional"]
+        Graph2["GraphAgent"]
+        CodeAct["CodeActAgent"]
         Realtime["RealtimeAgent"]
         Custom["CustomAgent"]
     end
@@ -71,7 +76,7 @@ graph TB
         Models["Models (adk-model)\nGemini • OpenAI • Anthropic\nDeepSeek • Groq • Ollama"]
         Tools["Tools (adk-tool)\nFunctionTool • MCP • Browser"]
         Sessions["Sessions (adk-session)\nSQLite • PostgreSQL • Redis"]
-        Memory["Memory (adk-memory)\nSemantic Search • RAG"]
+        Memory["Memory (adk-memory)\nSemantic Search • Knowledge Graph"]
     end
 
     subgraph Foundation["Foundation"]
@@ -98,11 +103,13 @@ The fundamental worker unit designed for specific tasks. ADK-Rust provides sever
 - **LlmAgent**: Uses a Large Language Model for reasoning and decision-making. This is the primary agent type for most use cases.
 - **RealtimeAgent**: Voice-enabled agents using OpenAI Realtime API or Gemini Live API for bidirectional audio streaming.
 - **GraphAgent**: LangGraph-style workflow orchestration with state management, checkpointing, and human-in-the-loop support.
+- **CodeActAgent**: Acts by writing code that a `CodeRuntime` executes (the `codeact` feature).
 - **CustomAgent**: Allows you to implement custom logic with full control over agent behavior.
 - **Workflow Agents**: Deterministic agents that follow predefined execution paths:
   - `SequentialAgent`: Executes sub-agents in order
   - `ParallelAgent`: Executes sub-agents concurrently
-  - `LoopAgent`: Iteratively executes sub-agents until a condition is met
+  - `LoopAgent`: Executes sub-agents repeatedly until one escalates or the iteration limit is reached
+  - `ConditionalAgent` and `LlmConditionalAgent`: Route to one sub-agent, by a rule or by a model's classification
 
 ### Tools
 
@@ -131,16 +138,17 @@ Custom code that runs at specific points in the agent's execution:
 
 - `before_agent` / `after_agent`: Intercept agent invocations
 - `before_model` / `after_model`: Intercept LLM calls
-- `before_tool` / `after_tool`: Intercept tool executions
+- `before_tool` / `after_tool` / `on_tool_error`: Intercept tool executions
 
-Callbacks enable logging, guardrails, caching, and behavior modification.
+Callbacks enable logging, guardrails, caching, and behavior modification. Runner plugins add the
+same hooks for every agent in a run.
 
 ### Artifacts
 
 Binary data storage for files, images, or other non-text content:
 
 - Save and load artifacts with versioning
-- Namespace scoping (session-level or user-level)
+- Namespace scoping (session-level, or user-level with a `user:` name prefix)
 - Pluggable storage backends
 
 ### Events
@@ -156,33 +164,44 @@ Events form the conversation history and enable replay and debugging.
 
 ### Models
 
-The underlying LLM that powers LlmAgents. ADK-Rust is optimized for Gemini but supports multiple providers through the `Llm` trait:
+The underlying LLM that powers LlmAgents. Gemini is the default provider, and every provider implements the `Llm` trait:
 
-- **Gemini**: `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite`
-- **OpenAI**: `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna`, Azure OpenAI deployments
-- **Anthropic**: `claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`
-- **DeepSeek**: `deepseek-v4-flash`, `deepseek-v4-pro`
-- **Groq**: Ultra-fast inference with `openai/gpt-oss-120b` and `openai/gpt-oss-20b`
-- **Ollama**: Local inference with `qwen3.6:35b-a3b`, `qwen3.5`, `llama3.2:3b`, `deepseek-r1:14b`
-- **mistral.rs**: High-performance local inference with hardware acceleration
+- **Gemini**: `gemini-3.7-flash` (default), `gemini-3.6-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`
+- **OpenAI**: `gpt-5.6-terra` (default), `gpt-5.6-sol`, `gpt-5.6-luna`, Azure OpenAI deployments
+- **Anthropic**: `claude-sonnet-5` (default), `claude-opus-5`, `claude-fable-5`, `claude-haiku-4-5`
+- **DeepSeek**: `deepseek-flash` (default), `deepseek-v4-pro`
+- **Groq**: `openai/gpt-oss-120b` (default), `openai/gpt-oss-20b`
+- **Ollama**: Local inference, for example `qwen3.5` (default) or `llama3.2`
+- **mistral.rs**: Local inference through the `adk-mistralrs` crate
 
-All providers implement the same trait for interchangeable use:
+All providers implement the same trait for interchangeable use (abridged):
 
 ```rust
+use adk_rust::{LlmRequest, LlmResponseStream, Result, async_trait};
+
+#[async_trait]
 pub trait Llm: Send + Sync {
-    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse>;
-    async fn generate_stream(&self, request: LlmRequest) -> Result<LlmResponseStream>;
+    /// The model identifier, such as "gemini-3.7-flash".
+    fn name(&self) -> &str;
+
+    /// Sends one request; `stream` asks for partial responses as they arrive.
+    async fn generate_content(&self, request: LlmRequest, stream: bool) -> Result<LlmResponseStream>;
 }
 ```
+
+`Llm` also has provided methods with defaults, such as `schema_adapter` for provider-specific
+tool-schema normalization and `max_cost_micro_usd` for budget reservations.
 
 ### Runner
 
 The engine that manages execution flow, orchestrates agent interactions, and coordinates with backend services. The Runner handles:
 
 - Agent invocation and response processing
-- Tool execution
-- Session and state management
+- Agent transfers, checked against each agent's transfer restrictions
+- Session and state management, persisting each complete event
 - Event streaming
+- Run-wide plugins, tool policy, budgets and the kill switch
+- Releasing toolsets and plugins with `Runner::close`
 
 ## Feature Flags
 
@@ -192,13 +211,14 @@ ADK-Rust uses Cargo features for modularity. Four presets control which crates a
 # Minimal (default) — Gemini, agents, runner, sessions
 adk-rust = "3.0.0"
 
-# Standard — adds tools, memory, telemetry, server, auth, graph, eval, guardrail, plugins, artifacts, skills
+# Standard — adds OpenAI, Anthropic, tools, memory, telemetry, server, auth, graph, eval,
+# guardrail, plugins, artifacts, skills, computer-use
 adk-rust = { version = "3.0.0", features = ["standard"] }
 
 # Enterprise — standard + realtime, browser, RAG, payments, AWP
 adk-rust = { version = "3.0.0", features = ["enterprise"] }
 
-# Full — enterprise + audio, code execution, sandbox
+# Full — enterprise + audio, code execution, sandbox, code tools, graph capabilities
 adk-rust = { version = "3.0.0", features = ["full"] }
 
 # Equivalent explicit minimal selection
@@ -210,12 +230,13 @@ adk-rust = { version = "3.0.0", default-features = false, features = ["agents", 
 
 Available features:
 - `agents`: Agent implementations (LlmAgent, CustomAgent, workflow agents)
-- `models`: Model integrations (Gemini)
-- `openai`: OpenAI models (GPT-5, GPT-5 Mini)
-- `anthropic`: Anthropic models (Claude 4.6, Claude 4.5)
-- `deepseek`: DeepSeek models (chat, reasoner)
-- `groq`: Groq ultra-fast inference
+- `models`: The model facade; `gemini` adds the Gemini provider (both in `minimal`)
+- `openai`: OpenAI models and OpenAI-compatible endpoints
+- `anthropic`: Anthropic Claude models
+- `deepseek`: DeepSeek models
+- `groq`: Groq inference
 - `ollama`: Local Ollama models
+- `codeact`: The CodeActAgent
 - `tools`: Tool system and built-in tools
 - `sessions`: Session management
 - `artifacts`: Artifact storage
