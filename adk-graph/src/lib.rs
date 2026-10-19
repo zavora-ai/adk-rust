@@ -1,25 +1,28 @@
 //! # adk-graph
-#![allow(clippy::result_large_err)]
 //!
 //! Graph-based workflow orchestration for ADK-Rust agents, inspired by LangGraph.
 //!
 //! ## Overview
 //!
-//! `adk-graph` provides a powerful way to build complex, stateful agent workflows
-//! using a graph-based approach. It brings LangGraph-style capabilities to the Rust
-//! ADK ecosystem while maintaining full compatibility with ADK's agent system,
-//! callbacks, and streaming infrastructure.
+//! `adk-graph` builds stateful agent workflows as graphs of nodes and edges. A
+//! [`GraphAgent`] implements the ADK `Agent` trait, so a graph runs under a `Runner`
+//! and streams through it like any other agent.
 //!
 //! ## Features
 //!
 //! - **Graph-Based Workflows**: Define agent workflows as directed graphs
 //! - **Cyclic Support**: Native support for loops and iterative reasoning
-//! - **Conditional Routing**: Dynamic edge routing based on state
+//! - **Conditional Routing**: Dynamic edge routing based on state, or a goto from inside a node
+//! - **Fan-out / fan-in**: Parallel branches in one super-step; a node with several
+//!   incoming edges waits for the predecessors that can still reach it
 //! - **State Management**: Typed state with reducers (overwrite, append, sum, custom)
-//! - **Checkpointing**: Persistent state after each step
-//! - **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts
-//! - **Streaming**: Multiple stream modes (values, updates, messages, debug)
-//! - **ADK Integration**: Full callback support, works with existing runners
+//! - **Checkpointing**: Persistent, versioned state after each step, with memory, SQLite,
+//!   PostgreSQL, Redis, MongoDB, Neo4j, and Firestore backends
+//! - **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts, and
+//!   [`NodeContext::resume_value`] for the answer to a pause
+//! - **Streaming**: Multiple stream modes (values, updates, messages, custom, debug)
+//! - **ADK Integration**: [`AgentNode`] runs any ADK agent as a node, and an agent's failure is
+//!   [`GraphError::AgentFailed`] with the agent's own `AdkError`
 //! - **Functional API** (`functional` feature): Write workflows as async functions
 //!   with `#[entrypoint]`/`#[task]` macros, automatic checkpointing, typed state
 //!   reducers (ReducedValue, UntrackedValue, MessagesValue), state schema
@@ -27,17 +30,20 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
+//! ```rust
 //! use adk_graph::prelude::*;
 //!
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> adk_graph::Result<()> {
 //! let agent = GraphAgent::builder("processor")
 //!     .description("Process data through multiple steps")
-//!     .node_fn("fetch", |ctx| async move {
+//!     .channels(&["data", "result"])
+//!     .node_fn("fetch", |_ctx| async move {
 //!         Ok(NodeOutput::new().with_update("data", json!({"items": [1, 2, 3]})))
 //!     })
 //!     .node_fn("transform", |ctx| async move {
-//!         let data = ctx.state.get("data").unwrap();
-//!         Ok(NodeOutput::new().with_update("result", data.clone()))
+//!         let data = ctx.get("data").cloned().unwrap_or_default();
+//!         Ok(NodeOutput::new().with_update("result", data))
 //!     })
 //!     .edge(START, "fetch")
 //!     .edge("fetch", "transform")
@@ -46,28 +52,42 @@
 //!
 //! // Execute
 //! let result = agent.invoke(State::new(), ExecutionConfig::new("thread_1")).await?;
+//! assert_eq!(result["result"], json!({"items": [1, 2, 3]}));
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! ## ReAct Pattern
+//! ## Loops and Conditional Edges
 //!
-//! ```rust,ignore
+//! ```rust
 //! use adk_graph::prelude::*;
 //!
-//! let react_agent = GraphAgent::builder("react")
-//!     .node(llm_agent_node)
-//!     .node_fn("tools", execute_tools)
-//!     .edge(START, "llm")
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> adk_graph::Result<()> {
+//! let agent = GraphAgent::builder("counter")
+//!     .channels(&["count"])
+//!     .node_fn("step", |ctx| async move {
+//!         let count = ctx.get("count").and_then(Value::as_i64).unwrap_or(0);
+//!         Ok(NodeOutput::new().with_update("count", json!(count + 1)))
+//!     })
+//!     .edge(START, "step")
 //!     .conditional_edge(
-//!         "llm",
-//!         |state| {
-//!             if has_tool_calls(state) { "tools" } else { END }
+//!         "step",
+//!         |state: &State| {
+//!             let count = state.get("count").and_then(Value::as_i64).unwrap_or(0);
+//!             if count < 3 { "step".to_string() } else { END.to_string() }
 //!         },
-//!         [("tools", "tools"), (END, END)],
+//!         [("step", "step"), (END, END)], // Cycle back until the count reaches 3
 //!     )
-//!     .edge("tools", "llm")  // Cycle back
-//!     .recursion_limit(25)
 //!     .build()?;
+//!
+//! let result = agent.invoke(State::new(), ExecutionConfig::new("thread_2")).await?;
+//! assert_eq!(result["count"], json!(3));
+//! # Ok(())
+//! # }
 //! ```
+
+#![allow(clippy::result_large_err)]
 
 pub mod agent;
 pub mod checkpoint;

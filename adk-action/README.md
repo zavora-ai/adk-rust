@@ -2,13 +2,17 @@
 
 Shared action node types for ADK-Rust graph workflows.
 
-This crate provides the type definitions, error types, and variable interpolation utilities used by both `adk-studio` (visual builder) and `adk-graph` (runtime engine) for deterministic, non-LLM workflow operations.
+[![Crates.io](https://img.shields.io/crates/v/adk-action.svg)](https://crates.io/crates/adk-action)
+[![Documentation](https://docs.rs/adk-action/badge.svg)](https://docs.rs/adk-action)
+[![License](https://img.shields.io/crates/l/adk-action.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
+
+This crate provides the type definitions, error types, and variable interpolation utilities used by both [`adk-studio`](https://github.com/zavora-ai/adk-studio) (visual builder) and `adk-graph` (runtime engine) for deterministic, non-LLM workflow operations.
 
 ## Overview
 
-Action nodes are programmatic graph nodes that perform specific operations — HTTP calls, state manipulation, conditional branching, looping, file I/O, database queries, notifications, and more. They complement LLM agent nodes in `adk-graph` workflows.
+Action nodes are programmatic graph nodes that perform specific operations — HTTP calls, state manipulation, conditional branching, looping, file I/O, notifications, and more. They complement LLM agent nodes in `adk-graph` workflows.
 
-`adk-action` is the shared type layer. It contains no execution logic, no HTTP clients, no database drivers. Execution lives in `adk-graph` behind feature flags.
+`adk-action` is the shared type layer. It contains no execution logic, no HTTP clients, no database drivers. Execution lives in `adk-graph`'s `ActionNodeExecutor` behind the `action` feature flags.
 
 ## Contents
 
@@ -20,28 +24,34 @@ Action nodes are programmatic graph nodes that perform specific operations — H
 
 ## Action Node Types
 
-| Category | Node | Description |
-|----------|------|-------------|
-| Trigger | `TriggerNodeConfig` | Manual, webhook, schedule, and event triggers |
-| Data | `HttpNodeConfig` | HTTP requests with auth, interpolation, status validation |
-| Data | `SetNodeConfig` | Set, merge, and delete state variables |
-| Data | `TransformNodeConfig` | Template interpolation, JSONPath extraction, type coercion |
-| Control | `SwitchNodeConfig` | Conditional routing with 12 typed operators |
-| Control | `LoopNodeConfig` | forEach, while, and times iteration |
-| Control | `MergeNodeConfig` | Synchronize parallel branches (waitAll/waitAny/waitN) |
-| Control | `WaitNodeConfig` | Fixed delays, condition polling, timestamp waits |
-| Compute | `CodeNodeConfig` | Execute Rust or sandboxed JavaScript code |
-| Infra | `DatabaseNodeConfig` | SQL (PostgreSQL/MySQL/SQLite), MongoDB, Redis |
-| Comms | `EmailNodeConfig` | IMAP monitoring and SMTP sending |
-| Comms | `NotificationNodeConfig` | Slack, Discord, Teams, generic webhooks |
-| Comms | `RssNodeConfig` | RSS/Atom feed fetching with filters and seen-item tracking |
-| IO | `FileNodeConfig` | Read, write, list, and delete files |
+The last column is the node's status in `adk-graph` 3.0.
+
+| Category | Node | Description | Runs in `adk-graph` |
+|----------|------|-------------|---------------------|
+| Trigger | `TriggerNodeConfig` | `manual`, `webhook`, `schedule`, and `event` triggers | Yes (`action`; `action-trigger` for the cron/webhook runtime) |
+| Data | `HttpNodeConfig` | HTTP requests with auth, interpolation, status validation | Yes (`action-http`) |
+| Data | `SetNodeConfig` | `set`, `merge`, and `delete` state variables | Yes |
+| Data | `TransformNodeConfig` | `template`, `jsonpath`, and `builtin` transforms with type coercion | Yes |
+| Control | `SwitchNodeConfig` | Conditional routing (`first_match` or `all_match`) on a field, operator, and value | Yes |
+| Control | `LoopNodeConfig` | `for_each`, `while`, and `times` iteration | Yes |
+| Control | `MergeNodeConfig` | Synchronize parallel branches (`wait_all`, `wait_any`, `wait_n`) | Yes |
+| Control | `WaitNodeConfig` | `fixed` delays, `until` a timestamp, `condition` polling, `webhook` waits | Yes |
+| Compute | `CodeNodeConfig` | Code in `rust`, `javascript`, or `typescript` | `rust` only; JavaScript and TypeScript are rejected when the graph compiles |
+| Infra | `DatabaseNodeConfig` | SQL (PostgreSQL/MySQL/SQLite), MongoDB, Redis | No — rejected when the graph compiles |
+| Comms | `EmailNodeConfig` | IMAP monitoring and SMTP sending | No — rejected when the graph compiles |
+| Comms | `NotificationNodeConfig` | Slack, Discord, Teams, generic webhooks | Yes (`action-http`) |
+| Comms | `RssNodeConfig` | RSS/Atom feed fetching with filters and seen-item tracking | Yes (`action-rss`) |
+| IO | `FileNodeConfig` | `read`, `write`, `list`, and `delete` files | Yes, confined to allowed roots |
+
+`adk-graph` evaluates the switch operators `eq`, `neq`, `gt`, `lt`, `gte`, `lte`, `contains`,
+`startsWith`, `endsWith`, `matches`, `in`, `empty`, and `exists`; the operator is a string in
+`ExpressionMode`.
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-action = "3.0.0"
+adk-action = "3.0"
 ```
 
 ## Usage
@@ -52,60 +62,60 @@ adk-action = "3.0.0"
 use adk_action::*;
 use serde_json::json;
 
-let config = ActionNodeConfig::Set(SetNodeConfig {
-    standard: StandardProperties {
-        id: "init_vars".into(),
-        name: "Initialize Variables".into(),
-        description: None,
-        position: None,
-        error_handling: ErrorHandling {
-            mode: ErrorMode::Stop,
-            retry_count: None,
-            retry_delay: None,
-            fallback_value: None,
+fn main() {
+    let config = ActionNodeConfig::Set(SetNodeConfig {
+        standard: StandardProperties {
+            id: "init_vars".into(),
+            name: "Initialize Variables".into(),
+            description: None,
+            position: None,
+            error_handling: ErrorHandling {
+                mode: ErrorMode::Stop,
+                retry_count: None,
+                retry_delay: None,
+                fallback_value: None,
+            },
+            tracing: Tracing { enabled: true, log_level: LogLevel::Debug },
+            callbacks: Callbacks::default(),
+            execution: ExecutionControl { timeout: 30000, condition: None },
+            mapping: InputOutputMapping { input_mapping: None, output_key: "initResult".into() },
         },
-        tracing: Tracing { enabled: true, log_level: LogLevel::Debug },
-        callbacks: Callbacks::default(),
-        execution: ExecutionControl { timeout: 30000, condition: None },
-        mapping: InputOutputMapping {
-            input_mapping: None,
-            output_key: "initResult".into(),
-        },
-    },
-    mode: SetMode::Set,
-    variables: vec![
-        Variable {
+        mode: SetMode::Set,
+        variables: vec![Variable {
             key: "greeting".into(),
             value: json!("Hello, ADK!"),
             value_type: "string".into(),
             is_secret: false,
-        },
-    ],
-    env_vars: None,
-});
+        }],
+        env_vars: None,
+    });
 
-// Serialize to JSON (same format as adk-studio projects)
-let json = serde_json::to_string_pretty(&config).unwrap();
+    // Serialize to JSON (same format as adk-studio projects)
+    let json = serde_json::to_string_pretty(&config).unwrap();
+    assert!(json.contains(r#""type": "set""#));
+}
 ```
 
 ### Variable interpolation
 
 ```rust
-use adk_action::interpolate_variables;
-use std::collections::HashMap;
+use adk_action::{get_nested_value, interpolate_variables};
 use serde_json::json;
+use std::collections::HashMap;
 
-let mut state = HashMap::new();
-state.insert("name".to_string(), json!("Alice"));
-state.insert("user".to_string(), json!({"email": "alice@example.com"}));
+fn main() {
+    let mut state = HashMap::new();
+    state.insert("name".to_string(), json!("Alice"));
+    state.insert("user".to_string(), json!({ "email": "alice@example.com" }));
 
-// Simple interpolation
-let result = interpolate_variables("Hello, {{name}}!", &state);
-assert_eq!(result, "Hello, Alice!");
+    // Simple interpolation
+    let result = interpolate_variables("Hello, {{name}}!", &state);
+    assert_eq!(result, "Hello, Alice!");
 
-// Nested dot-notation
-let email = adk_action::get_nested_value(&state, "user.email");
-assert_eq!(email, Some(&json!("alice@example.com")));
+    // Nested dot-notation
+    let email = get_nested_value(&state, "user.email");
+    assert_eq!(email, Some(&json!("alice@example.com")));
+}
 ```
 
 ### JSON round-trip (adk-studio ↔ adk-graph)
@@ -113,18 +123,20 @@ assert_eq!(email, Some(&json!("alice@example.com")));
 ```rust
 use adk_action::ActionNodeConfig;
 
-// Deserialize from adk-studio JSON
-let json = r#"{"type":"set","id":"my_node","name":"Set Vars",
-  "errorHandling":{"mode":"stop"},"tracing":{"enabled":true,"logLevel":"debug"},
-  "callbacks":{},"execution":{"timeout":30000},
-  "mapping":{"outputKey":"result"},"mode":"set","variables":[]}"#;
+fn main() {
+    // Deserialize from adk-studio JSON
+    let json = r#"{"type":"set","id":"my_node","name":"Set Vars",
+      "errorHandling":{"mode":"stop"},"tracing":{"enabled":true,"logLevel":"debug"},
+      "callbacks":{},"execution":{"timeout":30000},
+      "mapping":{"outputKey":"result"},"mode":"set","variables":[]}"#;
 
-let config: ActionNodeConfig = serde_json::from_str(json).unwrap();
+    let config: ActionNodeConfig = serde_json::from_str(json).unwrap();
 
-// Re-serialize produces identical JSON
-let roundtrip = serde_json::to_string(&config).unwrap();
-let reparsed: ActionNodeConfig = serde_json::from_str(&roundtrip).unwrap();
-assert_eq!(config, reparsed);
+    // Re-serializing and parsing again yields an equal config
+    let roundtrip = serde_json::to_string(&config).unwrap();
+    let reparsed: ActionNodeConfig = serde_json::from_str(&roundtrip).unwrap();
+    assert_eq!(config, reparsed);
+}
 ```
 
 ## StandardProperties
@@ -146,13 +158,15 @@ Every action node includes `StandardProperties` with:
 |----------|----------|
 | HTTP | `HttpStatus`, `Timeout` |
 | Control flow | `NoMatchingBranch`, `NoBranchCompleted`, `InsufficientBranches` |
-| Timing | `ConditionTimeout`, `WebhookTimeout`, `InvalidTimestamp` |
+| Timing | `ConditionTimeout`, `WebhookTimeout`, `WebhookCancelled`, `InvalidTimestamp` |
 | Compute | `CodeExecution`, `SandboxInit`, `Transform` |
 | Infrastructure | `MissingCredential`, `NoDatabase` |
 | Communication | `EmailAuth`, `EmailSend`, `NotificationSend`, `RssFetch`, `RssParse` |
 | File I/O | `FileRead`, `FileWrite`, `FileDelete`, `FileParse` |
+| Other | `Other` |
 
-All variants implement `From<ActionError> for AdkError` for seamless integration with the ADK error system.
+`From<ActionError> for AdkError` maps every variant to an `ErrorCategory` and an `action.*`
+error code, such as `action.timeout` (`Timeout`) or `action.missing_credential` (`Unauthorized`).
 
 ## Design Principles
 
@@ -164,3 +178,7 @@ All variants implement `From<ActionError> for AdkError` for seamless integration
 ## License
 
 Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.
