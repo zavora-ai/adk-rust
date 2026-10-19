@@ -4,14 +4,15 @@ Command-line launcher for Rust Agent Development Kit (ADK-Rust) agents.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-cli.svg)](https://crates.io/crates/adk-cli)
 [![Documentation](https://docs.rs/adk-cli/badge.svg)](https://docs.rs/adk-cli)
-[![License](https://img.shields.io/crates/l/adk-cli.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-cli.svg)](../LICENSE)
 
 ## Overview
 
 `adk-cli` provides two things:
 
 - **`adk-rust` binary** — chat with an AI agent (6 providers), serve a web UI, run the
-  **coding agent** (`code` / `goal` / `ultracode`), or manage skills
+  **coding agent** (`code` / `goal` / `ultracode`), manage skills, inspect graph checkpoints,
+  verify signed audit logs, and deploy
 - **`Launcher` library** — embed a REPL and web server into any custom agent binary
 
 ## Quick Start
@@ -37,8 +38,25 @@ adk-rust goal "all tests green" --until "cargo test" --resume   # autonomous, du
 adk-rust ultracode "add input validation"                       # parallel ultra-review
 ```
 
-See the [Coding Agent guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/coding-agent/cli.md)
-for `code` / `goal` / `ultracode`.
+See the [Coding Agent guide](../docs/official_docs/coding-agent/cli.md) for `code` / `goal` / `ultracode`.
+
+## Feature Flags
+
+| Feature | Default | Enables |
+|---------|---------|---------|
+| `gemini` | yes | The Gemini provider |
+| `audit` | yes | `adk-rust audit verify` and `audit keygen` (through `adk-auth`'s `signed-audit`) |
+| `openai`, `anthropic`, `deepseek`, `groq`, `ollama` | no | The other providers |
+| `all-providers` | no | Every provider |
+| `audit-sql` | no | `adk-rust audit export` from SQLite or PostgreSQL audit stores |
+| `graph-sqlite` | no | The SQLite checkpointer for `adk-rust graph` |
+| `gcp-deploy` | no | `adk-rust deploy agent-engine` |
+| `vertex-agent-registry` | no | `adk-rust registry` |
+| `vertex-skill-registry` | no | Skill Registry lookups in `adk-rust skills` |
+| `telemetry-otlp` | no | OTLP export for `TelemetryConfig::Otlp` |
+| `optimize` | no | The `Launcher` CLI's `optimize` subcommand: instruction optimization against an evaluation set |
+
+`cargo install adk-cli` builds the default features; add `--features all-providers` for every provider.
 
 ## Supported Providers
 
@@ -47,7 +65,7 @@ for `code` / `goal` / `ultracode`.
 | Gemini | `--provider gemini` | `gemini-3.7-flash` | `GOOGLE_API_KEY` / `GEMINI_API_KEY` |
 | OpenAI | `--provider openai` | `gpt-5.6-terra` | `OPENAI_API_KEY` |
 | Anthropic | `--provider anthropic` | `claude-sonnet-5` | `ANTHROPIC_API_KEY` |
-| DeepSeek | `--provider deepseek` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` |
+| DeepSeek | `--provider deepseek` | `deepseek-flash` | `DEEPSEEK_API_KEY` |
 | Groq | `--provider groq` | `openai/gpt-oss-120b` | `GROQ_API_KEY` |
 | Ollama | `--provider ollama` | `qwen3.5` | _(none, local)_ |
 
@@ -57,7 +75,7 @@ If no provider is configured, `adk-rust` launches an interactive setup:
 
 1. Choose a provider from the menu
 2. Enter your API key (skipped for Ollama)
-3. Provider and model are saved to `~/.config/adk-rust/config.json`
+3. Provider and model are saved to `adk-rust/config.json` in the platform config directory (`~/.config` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows)
 4. API keys are stored in your OS credential store (Keychain, Credential Manager, Secret Service)
 
 On subsequent runs, the saved config is used automatically. CLI flags always
@@ -65,12 +83,18 @@ take priority over environment variables, secure credential storage, and saved c
 
 ## Binary Commands
 
-```
+```text
 adk-rust              Interactive REPL (default, same as `chat`)
 adk-rust chat         Interactive REPL with an AI agent
 adk-rust serve        Start web server with an AI agent
+adk-rust code         Run the coding agent on a task in a workspace directory
+adk-rust goal         Work until a success-condition command exits 0
+adk-rust ultracode    Implement, then review with parallel specialist reviewers
 adk-rust skills       Skill tooling (list/validate/match)
-adk-rust deploy       External platform integration commands
+adk-rust graph        Graph checkpoint inspection (steps/replay/fork/resume)
+adk-rust audit        Signed audit log tools (verify/keygen; export with `audit-sql`)
+adk-rust deploy       Deployment commands
+adk-rust registry     Agent Registry registration and search (`vertex-agent-registry`)
 ```
 
 ### Global options (apply to `chat` and `serve`)
@@ -94,6 +118,14 @@ adk-rust deploy       External platform integration commands
 The server answers only loopback names and IP addresses, and allows no cross-origin browser
 access, unless `SecurityConfig` lists more hosts and origins.
 
+### `adk-rust audit` subcommands
+
+```bash
+adk-rust audit keygen audit.example.com --out audit             # writes audit.key and audit.vkey
+adk-rust audit verify audit.jsonl --key "$(cat audit.vkey)"      # exits 1 when the log does not verify
+adk-rust audit export --database-url sqlite://audit.db --log-id main --out audit.jsonl  # `audit-sql`
+```
+
 ### `adk-rust skills` subcommands
 
 ```bash
@@ -116,10 +148,10 @@ to specify the project root (defaults to `.`).
 
 ### `adk-rust deploy` subcommands
 
-These commands target the external `adk-platform` deployment product. In
-`adk-rust`, the deploy surface is kept as a client and manifest/bundling
-integration layer; the control plane and operator console live in the separate
-`adk-platform` repository.
+These commands are a client for an external deployment control plane: the manifest,
+bundling, and API calls live here, and the control plane runs separately. With the
+`gcp-deploy` feature, `adk-rust deploy agent-engine` deploys a container image as a Gemini
+Enterprise Agent Platform engine.
 
 ```bash
 adk-rust deploy login --endpoint http://127.0.0.1:8090 --token <bearer-token>
@@ -164,36 +196,45 @@ not the bearer token itself.
 For custom agents, `Launcher` gives any `Arc<dyn Agent>` a CLI with two modes:
 
 ```rust
-use adk_cli::Launcher;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> adk_core::Result<()> {
-    let agent = create_your_agent()?;
+use adk_cli::Launcher;
+use adk_core::{Agent, Memory};
+use adk_session::SessionService;
 
-    // Parses CLI args: default is chat, `serve --port N` for web
-    Launcher::new(Arc::new(agent))
+async fn launch(
+    agent: Arc<dyn Agent>,
+    memory: Arc<dyn Memory>,
+    sessions: Arc<dyn SessionService>,
+) -> adk_core::Result<()> {
+    // Parses CLI args: chat by default, `serve --port N` for the web server
+    Launcher::new(agent)
         .app_name("my_app")
-        .with_memory_service(my_memory)
-        .with_session_service(my_sessions)
+        .with_memory_service(memory)
+        .with_session_service(sessions)
         .run()
         .await
 }
 ```
 
-Or call modes directly without CLI parsing:
+Or call a mode directly without CLI parsing:
 
 ```rust
-// Console directly
-Launcher::new(Arc::new(agent))
-    .run_console_directly()
-    .await?;
+use std::sync::Arc;
 
-// Server directly
-Launcher::new(Arc::new(agent))
-    .run_serve_directly(8080)
-    .await?;
+use adk_cli::Launcher;
+use adk_core::Agent;
+
+async fn modes(agent: Arc<dyn Agent>) -> adk_core::Result<()> {
+    // Console
+    Launcher::new(agent.clone()).run_console_directly().await?;
+
+    // Server on 127.0.0.1:8080
+    Launcher::new(agent).run_serve_directly(8080).await
+}
 ```
+
+Serve mode listens on `127.0.0.1`; `with_bind_address` listens elsewhere, together with `with_security_config` listing the public host names (`SecurityConfig::allowed_hosts`) and browser origins.
 
 ### Builder methods
 
@@ -231,20 +272,31 @@ For production apps that need custom routes, middleware, or ownership of the
 serve loop, use `build_app()` instead of `run_serve_directly()`:
 
 ```rust
-use adk_cli::{Launcher, TelemetryConfig};
 use std::sync::Arc;
 
-let app = Launcher::new(Arc::new(agent))
-    .with_a2a_base_url("https://agent.example.com")
-    .with_telemetry(TelemetryConfig::None)
-    .build_app()?;
+use adk_cli::Launcher;
+use adk_cli::launcher::TelemetryConfig;
+use adk_core::Agent;
+use adk_server::SecurityConfig;
+use axum::{Router, routing::get};
 
-let app = app.merge(my_admin_routes());
-let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-axum::serve(listener, app).await?;
+async fn serve(agent: Arc<dyn Agent>) -> Result<(), Box<dyn std::error::Error>> {
+    let app = Launcher::new(agent)
+        .with_a2a_base_url("https://agent.example.com")
+        .with_security_config(SecurityConfig::default().with_allowed_hosts(["agent.example.com"]))
+        .with_telemetry(TelemetryConfig::None)
+        .build_app()?;
+
+    let app = app.merge(Router::new().route("/admin/ping", get(|| async { "pong" })));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
 ```
 
 ### Telemetry modes
+
+`TelemetryConfig`, `ThinkingDisplayMode`, and `StreamPrinter` live in `adk_cli::launcher`.
 
 | Variant | Description |
 |---------|-------------|
@@ -273,7 +325,7 @@ Resolution order (highest wins):
 1. CLI flags (`--provider`, `--api-key`, etc.)
 2. Environment variables (`GOOGLE_API_KEY`, `OPENAI_API_KEY`, etc.)
 3. OS credential store (saved during first-run setup)
-4. Saved config (`~/.config/adk-rust/config.json`) for provider/model only
+4. Saved config (`adk-rust/config.json`) for provider/model only
 5. Interactive setup (first run only)
 
 ## Provider-Specific Notes
@@ -291,6 +343,20 @@ Resolution order (highest wins):
 - [adk-skill](https://crates.io/crates/adk-skill) — skill discovery
 - [adk-deploy](https://crates.io/crates/adk-deploy) — deployment manifest and bundling
 
+## Changes in 3.0
+
+| Change | Migration |
+|--------|-----------|
+| `adk-rust serve`, `Launcher` serve mode, and `serve::run_serve` listen on `127.0.0.1` | `serve --host 0.0.0.0` or `Launcher::with_bind_address`, with allowed hosts and origins |
+| `adk-rust audit verify`, `audit keygen`, and `audit export` are new | — |
+| `StreamPrinter` escapes terminal control characters in model and tool output | — |
+
+See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
+
 ## License
 
 Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.

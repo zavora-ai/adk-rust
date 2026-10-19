@@ -14,21 +14,21 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use adk_cli::Launcher;
 //! use std::sync::Arc;
 //!
-//! #[tokio::main]
-//! async fn main() -> adk_core::Result<()> {
-//!     // let agent = create_your_agent()?;
-//!     // Launcher::new(Arc::new(agent)).run().await?;
-//!     Ok(())
+//! use adk_cli::Launcher;
+//! use adk_core::Agent;
+//!
+//! async fn launch(agent: Arc<dyn Agent>) -> adk_core::Result<()> {
+//!     // Chat by default; `serve --port 8080` starts the web server on 127.0.0.1
+//!     Launcher::new(agent).run().await
 //! }
 //! ```
 //!
 //! ## Modes
 //!
 //! - **Interactive**: rustyline REPL with history, streaming output, and think-block rendering
-//! - **Server**: HTTP server with web UI (`serve --port 8080`)
+//! - **Server**: HTTP server with web UI (`serve --port 8080`), listening on `127.0.0.1` by default
 
 pub mod console;
 pub mod launcher;

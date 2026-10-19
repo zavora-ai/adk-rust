@@ -6,11 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Command-line launcher for Rust Agent Development Kit (ADK-Rust) agents"
-repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
+repository.workspace = true
 documentation = "https://docs.rs/adk-cli"
 keywords = ["ai", "agent", "adk", "cli", "launcher"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lib]
 name = "adk_cli"
