@@ -14,6 +14,9 @@ keywords = ["ai", "anthropic", "claude", "llm", "adk"]
 categories = ["api-bindings", "asynchronous"]
 autoexamples = false
 
+[package.metadata.docs.rs]
+features = ["managed-agents", "files"]
+
 [dependencies]
 reqwest = { workspace = true }
 serde = { workspace = true }

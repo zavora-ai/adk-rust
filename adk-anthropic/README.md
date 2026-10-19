@@ -1,6 +1,10 @@
 # adk-anthropic
 
-Dedicated Anthropic API client for [ADK-Rust](https://github.com/zavora-ai/adk-rust). Provides the HTTP client, type system, SSE streaming, error handling, backoff logic, and token pricing for the full Anthropic API surface.
+Dedicated Anthropic API client for [ADK-Rust](https://github.com/zavora-ai/adk-rust): the HTTP client, type system, SSE streaming, error handling, backoff logic, and token pricing behind `adk_model::anthropic::AnthropicClient`.
+
+[![Crates.io](https://img.shields.io/crates/v/adk-anthropic.svg)](https://crates.io/crates/adk-anthropic)
+[![Documentation](https://docs.rs/adk-anthropic/badge.svg)](https://docs.rs/adk-anthropic)
+[![License](https://img.shields.io/crates/l/adk-anthropic.svg)](../LICENSE)
 
 ## Legal Disclaimer
 
@@ -14,21 +18,35 @@ This project is an **unofficial** community-maintained library. It is not affili
 - **Budget-based thinking** — `ThinkingConfig::enabled(budget)` for older models (rejected on Opus 4.8 / Opus 4.7)
 - **Effort parameter** — `OutputConfig::with_effort()` with `low`, `medium`, `high`, `xhigh`, `max` levels
 - **Structured outputs** — JSON schema via `OutputConfig` / `OutputFormat`
-- **Tool calling** — custom function tools, server tools (web search, bash, text editor, code execution, memory)
+- **Tool calling** — custom function tools, server tools (web search, web fetch, bash, text editor, code execution, memory); `WebSearchTool20260209` and `WebFetchTool20260209` declare the dynamic-filtering tool versions
 - **Prompt caching** — automatic (top-level `cache_control`) and explicit (block-level)
 - **Context management** — `ContextManagement` with tool result clearing and thinking block clearing (beta)
 - **Citations** — document-level citations with char, page, and content block locations
 - **Vision** — URL and base64 image analysis
 - **PDF processing** — URL, base64, and Files API PDF analysis with citations
 - **Token counting** — `/v1/messages/count_tokens` endpoint
-- **Fast mode** — `speed: "fast"` for Opus 4.6 (beta, waitlist)
+- **Fast mode** — `speed: "fast"` (`SpeedMode::Fast`, research preview)
 - **Request customization** — caller-selected beta headers, bearer auth, API-version overrides, and exact per-request headers
 - **Server-side fallback** — typed default or explicit safety-refusal routing with fallback-aware responses and SSE events
-- **Batches API** — async batch processing
-- **Files API** — upload, get, delete, list
+- **Batches API** — create, get, results, cancel, delete, list
+- **Files API** — upload, get, delete, list on `Anthropic`; `FilesClient` (`files` feature) adds `upload_file_from_path` and `download_file`, which returns files created by skills or the code execution tool
+- **Skills API** — create, get, update, delete, list
 - **Models API** — list and get model metadata with capabilities
+- **Forward compatibility** — a content block, delta, stream event, or stop reason newer than the client parses as an `Unknown` variant holding the raw value instead of failing the response
 - **Token pricing** — per-model cost calculation from `Usage` data
-- **Managed Agents** — full client for Claude Managed Agents (agents, environments, sessions, SSE streaming, custom tools, vaults, memory stores, dreams, webhooks, multiagent orchestration) — feature-gated behind `managed-agents`
+- **Managed Agents** — client for Claude Managed Agents (agents, environments, sessions, SSE streaming, custom tools, vaults, memory stores, dreams, webhooks, multiagent orchestration), behind the `managed-agents` feature
+
+## Installation
+
+```toml
+[dependencies]
+adk-anthropic = "3.0.0"
+```
+
+| Feature | Enables |
+|---------|---------|
+| `managed-agents` | The `managed_agents` module (`ManagedAgentsClient`, webhooks) |
+| `files` | The `files` module (`FilesClient`) |
 
 ## Supported Models
 
@@ -46,32 +64,42 @@ This project is an **unofficial** community-maintained library. It is not affili
 | Claude Sonnet 4.6 | `claude-sonnet-4-6` | Previous generation |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | Economy |
 
-Any model string not matching a known variant deserializes as `Model::Custom(String)`.
+`KnownModel` covers the Claude 4 family. The Claude 5 identifiers come from factories that
+return `Model::Custom`: `Model::claude_fable_5_1()`, `claude_opus_5_5()`, `claude_sonnet_5_5()`,
+`claude_haiku_5_5()`, `claude_opus_5()`, `claude_sonnet_5()`, and `claude_fable_5()`. Any model
+string that matches no known variant deserializes as `Model::Custom(String)`.
 
 ### Current Model Request Contracts
 
 Claude 5, Opus 4.8, and Opus 4.7 use stricter request contracts than older models:
 
-- **Adaptive thinking only** — `thinking: {type: "enabled", budget_tokens: N}` returns 400. Use `ThinkingConfig::adaptive()`.
-- **No custom sampling** — `temperature` and `top_p` parameters are rejected.
-- **New `xhigh` effort level** — sits between `high` and `max`. Recommended for coding and agentic workflows.
-- **Updated tokenizer** — same text may produce 1.0–1.35× more tokens (especially code).
+- **Adaptive thinking only** — `thinking: {type: "enabled", budget_tokens: N}` is rejected. Use `ThinkingConfig::adaptive()`.
+- **No custom sampling** — `temperature` and `top_p` are rejected.
+- **`xhigh` effort** — between `high` and `max`, available on Opus 4.7 and later.
+
+`adk_model::anthropic::AnthropicClient` checks the first two before sending a request to a Claude
+5 model (`model.anthropic.claude5_sampling_unsupported`,
+`model.anthropic.claude5_manual_thinking_unsupported`).
 
 ## Quick Start
 
 ```rust
+use adk_anthropic::pricing::{ModelPricing, estimate_cost};
 use adk_anthropic::{Anthropic, KnownModel, MessageCreateParams};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Anthropic::new(None)?; // reads ANTHROPIC_API_KEY
-    let params = MessageCreateParams::simple("Hello!", KnownModel::ClaudeSonnet46);
+    let params = MessageCreateParams::simple("Name one planet in a short sentence.", KnownModel::ClaudeSonnet46);
     let response = client.send(params).await?;
     for block in &response.content {
         if let Some(text) = block.as_text() {
             println!("{}", text.text);
         }
     }
+
+    let cost = estimate_cost(ModelPricing::SONNET_46, &response.usage);
+    println!("cost: ${:.6}", cost.total());
     Ok(())
 }
 ```
@@ -80,28 +108,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Request headers and server-side fallback
 
-`MessageCreateParams` remains source-compatible with 2.0. Use client methods
-for request-scoped beta selection or full header replacement:
+Client methods select betas for one request or replace every header:
 
 ```rust
 use adk_anthropic::{Anthropic, KnownModel, MessageCreateParams};
 
-# async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let client = Anthropic::new(None)?;
-let params = MessageCreateParams::simple("Hello", KnownModel::ClaudeSonnet46);
-let response = client
-    .send_with_betas(params, &["fine-grained-tool-streaming-2025-05-14"])
-    .await?;
-# let _ = response;
-# Ok(())
-# }
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Anthropic::new(None)?;
+    let params = MessageCreateParams::simple("Hello", KnownModel::ClaudeSonnet46);
+
+    // The headers `send` would use, including feature-derived `anthropic-beta` values.
+    let headers = client.message_headers_for_request(&params, false)?;
+    let response = client.send_with_headers(params, headers).await?;
+    println!("{:?}", response.stop_reason);
+    Ok(())
+}
 ```
 
-For OAuth or an Anthropic-compatible gateway, use
-`Anthropic::new_with_auth_token`; it sends `Authorization: Bearer ...` and
-omits `x-api-key`. `default_headers_for_request` plus `send_with_headers` or
-`stream_with_headers` provides exact replacement semantics when every header
-must be controlled by the caller.
+`send_with_betas` and `stream_with_betas` add beta names to one request. For OAuth or an
+Anthropic-compatible gateway, `Anthropic::new_with_auth_token` sends
+`Authorization: Bearer ...` and omits `x-api-key`. `default_headers_for_request` returns the
+client's default headers.
 
 Server fallback is limited to safety-classifier refusals. It does not retry
 rate limits, overloaded responses, or server errors. It is currently intended
@@ -110,18 +138,16 @@ for classifier-enabled models such as Claude Fable 5 and Claude Opus 5:
 ```rust
 use adk_anthropic::{Anthropic, MessageCreateParams, Model, ServerFallbackRequest};
 
-# async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let client = Anthropic::new(None)?;
-let params = MessageCreateParams::simple(
-    "Hello",
-    Model::Custom("claude-fable-5".to_string()),
-);
-let response = client
-    .send_with_server_fallbacks(ServerFallbackRequest::default_routing(params)?)
-    .await?;
-println!("fallback ran: {}", response.served_by_fallback());
-# Ok(())
-# }
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Anthropic::new(None)?;
+    let params = MessageCreateParams::simple("Hello", Model::claude_fable_5());
+    let response = client
+        .send_with_server_fallbacks(ServerFallbackRequest::default_routing(params)?)
+        .await?;
+    println!("fallback ran: {}", response.served_by_fallback());
+    Ok(())
+}
 ```
 
 ### Base URLs and internal gateways
@@ -139,13 +165,13 @@ logs a warning naming the host when the URL is accepted:
 ```rust
 use adk_anthropic::Anthropic;
 
-# fn example() -> Result<(), adk_anthropic::Error> {
-let client = Anthropic::new(None)?
-    .allow_insecure_http()
-    .with_base_url("http://10.60.1.20:8080/api/v1/llm/anthropic".to_string())?;
-# let _ = client;
-# Ok(())
-# }
+fn main() -> Result<(), adk_anthropic::Error> {
+    let client = Anthropic::new(None)?
+        .allow_insecure_http()
+        .with_base_url("http://10.60.1.20:8080/api/v1/llm/anthropic".to_string())?;
+    println!("{}", client.base_url());
+    Ok(())
+}
 ```
 
 ### Timeouts, stream errors, and request limits
@@ -167,13 +193,13 @@ use std::time::Duration;
 
 use adk_anthropic::Anthropic;
 
-# fn example() -> Result<(), adk_anthropic::Error> {
-let client = Anthropic::new(None)?
-    .with_timeout(Duration::from_secs(30))?
-    .with_stream_timeout(Some(Duration::from_secs(900)));
-# let _ = client;
-# Ok(())
-# }
+fn main() -> Result<(), adk_anthropic::Error> {
+    let client = Anthropic::new(None)?
+        .with_timeout(Duration::from_secs(30))?
+        .with_stream_timeout(Some(Duration::from_secs(900)));
+    println!("{:?}", client.timeout());
+    Ok(())
+}
 ```
 
 `Debug` output of `Anthropic`, `ManagedAgentsClient`, and `FilesClient` redacts
@@ -229,8 +255,8 @@ Pass the raw body and the `webhook-id`, `webhook-timestamp`, and `webhook-signat
 headers to `WebhookVerifier`:
 
 ```rust
+use adk_anthropic::HeaderMap;
 use adk_anthropic::managed_agents::{WebhookEvent, WebhookHeaders, WebhookVerifier};
-use reqwest::header::HeaderMap;
 
 fn handle(
     body: &str,
@@ -246,64 +272,12 @@ Verification accepts any of the space-separated `v1,<base64>` signatures and rej
 timestamps more than five minutes from the local clock in either direction
 (`with_tolerance` changes the window).
 
-**Hello World output:**
-```
-=== Managed Agents: Hello World ===
+## Pricing module
 
-✓ Client created
-✓ Agent created: agent_01SnYF9JNJR4c1FB1L8YPovY
-✓ Environment created: env_01Gdwp4bFCZgGbbnQJLCCVmo
-✓ Session created: sesn_01Da6YoDqrgLzkCRVg1DAGjK (status: Idle)
-✓ Stream opened
-
-→ Sent: "Hello! What is 2 + 2?"
-
-← Agent response:
-4! 😊 Is there anything else I can help you with?
-
-✓ Session idle (stop_reason: end_turn)
-```
-
-**Custom Tools output:**
-```
-→ Sent: "What's the weather like in San Francisco and Tokyo?"
-
-← Processing events:
-I'll check the weather in both cities at the same time!
-  🔧 Custom tool call: get_weather({"city":"San Francisco"})
-  📤 Sending result: 🌤️ Weather in San Francisco: 22°C, partly cloudy
-  🔧 Custom tool call: get_weather({"city":"Tokyo"})
-  📤 Sending result: 🌤️ Weather in Tokyo: 22°C, partly cloudy
-```
-
-**Multiagent output:**
-```
-✓ Researcher agent created
-✓ Writer agent created
-✓ Coordinator agent created
-
-→ Sent coordination task
-
-← Processing events:
-  ▶ Session running...
-  I'll dispatch the Researcher to gather key facts first...
-  [Researcher produces structured research]
-  [Writer crafts final article from research]
-
-── Session Threads ──
-  🧵 Content Coordinator — idle (root)
-  🧵 Researcher — idle
-  🧵 Writer — idle
-```
-
-## Pricing Module
-
-```rust
-use adk_anthropic::pricing::{ModelPricing, estimate_cost};
-
-let cost = estimate_cost(ModelPricing::SONNET_46, &response.usage);
-println!("Cost: ${:.6}", cost.total());
-```
+`pricing::estimate_cost(pricing, &usage)` prices a response's `Usage`, as in the Quick Start.
+`ModelPricing::for_model_id` resolves a model ID, including the Claude 5 and 5.5 identifiers, to
+its rates. Cache writes are split by TTL: the `cache_creation_input_tokens_1h` share is billed at
+the 1-hour rate and the rest at the 5-minute rate.
 
 ## Trademarks
 
@@ -326,7 +300,7 @@ The following components originate from claudius and form the foundation of `adk
 - **Cache control** (`cache_control.rs`) — cache breakpoint management utilities
 - **JSON schema** (`json_schema.rs`) — schema utilities
 
-We stripped claudius's agent framework, CLI tools, chat session management, and observability modules (all handled by other ADK crates), then extended the retained code with full March 2026 API parity: adaptive thinking, effort parameter, structured outputs, context management, fast mode, citations, Files API, Skills API, Models API with capabilities, token pricing, and updated model definitions.
+We stripped claudius's agent framework, CLI tools, chat session management, and observability modules (all handled by other ADK crates), then extended the retained code with adaptive thinking, effort parameter, structured outputs, context management, fast mode, citations, Files API, Skills API, Models API with capabilities, token pricing, and updated model definitions.
 
 ## Tool Search
 
@@ -335,19 +309,24 @@ We stripped claudius's agent framework, CLI tools, chat session management, and 
 ```rust
 use adk_anthropic::ToolSearchConfig;
 
-let config = ToolSearchConfig::new("^(search|fetch)_.*");
-assert!(config.matches("search_web").unwrap());
-assert!(!config.matches("delete_all").unwrap());
+fn main() {
+    let config = ToolSearchConfig::new("^(search|fetch)_.*");
+    assert!(config.matches("search_web").unwrap());
+    assert!(!config.matches("delete_all").unwrap());
+}
 ```
 
 When integrated with `AnthropicConfig` in `adk-model`, only tools matching the pattern are sent to the API:
 
 ```rust
-use adk_model::anthropic::AnthropicConfig;
 use adk_anthropic::ToolSearchConfig;
+use adk_model::anthropic::AnthropicConfig;
 
-let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-5")
-    .with_tool_search(ToolSearchConfig::new("^safe_.*"));
+fn main() {
+    let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-5")
+        .with_tool_search(ToolSearchConfig::new("^safe_.*"));
+    assert!(config.tool_search.is_some());
+}
 ```
 
 ## License

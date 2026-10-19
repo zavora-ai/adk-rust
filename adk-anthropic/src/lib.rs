@@ -3,9 +3,37 @@
 //! Dedicated Anthropic API client for ADK-Rust.
 //!
 //! This crate provides the HTTP client, type system, SSE streaming, error handling,
-//! and backoff logic for interacting with the Anthropic API. Agent framework,
-//! CLI tools, chat session management, and observability are handled by other
-//! ADK crates.
+//! backoff logic, and token pricing for the Anthropic API. It is the client behind
+//! `adk_model::anthropic::AnthropicClient`; agents, sessions, and observability live in
+//! other ADK crates.
+//!
+//! ## Quick start
+//!
+//! ```rust,no_run
+//! use adk_anthropic::{Anthropic, KnownModel, MessageCreateParams};
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), adk_anthropic::Error> {
+//! let client = Anthropic::new(None)?; // reads ANTHROPIC_API_KEY
+//! let params = MessageCreateParams::simple("Name one planet.", KnownModel::ClaudeSonnet46);
+//! let response = client.send(params).await?;
+//! for block in &response.content {
+//!     if let Some(text) = block.as_text() {
+//!         println!("{}", text.text);
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Claude 5 models are selected with factories such as [`Model::claude_sonnet_5`].
+//!
+//! ## Features
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `managed-agents` | The `managed_agents` module: Claude Managed Agents and webhook verification |
+//! | `files` | The `files` module: `FilesClient` for the Files API |
 
 mod accumulating_stream;
 mod backoff;
