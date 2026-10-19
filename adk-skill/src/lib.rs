@@ -1,27 +1,15 @@
-//! `adk-skill` is the engine for specification-driven agent skills in the Zenith ecosystem.
-//!
-//! It implements the `agentskills.io` standard, allowing developers to define agent personalities,
-//! capabilities, and tool permissions in structured Markdown files.
+//! `adk-skill` discovers, parses, indexes, and selects agent skills defined by the
+//! `agentskills.io` specification: Markdown files with YAML frontmatter under `.skills/` and
+//! `.claude/skills/`, plus convention files such as `AGENTS.md` and `CLAUDE.md`.
 //!
 //! # Key Features
-//! - **Discovery**: Recursively scans the workspace for `.skill.md` and `skill.md` files.
-//! - **Specification First**: Parses frontmatter for metadata, tool permissions, and external references.
-//! - **Dynamic Tooling**: Provides the metadata needed for agents to configure their own toolsets at runtime.
-//! - **Versioning & Hashing**: Content-based unique identifiers for reliable persona selection.
+//! - **Discovery**: Recursively scans `.skills/` and `.claude/skills/` for skills, and the
+//!   project tree for convention files.
+//! - **Specification First**: Parses frontmatter for metadata, tool permissions, and references.
+//! - **Selection**: Deterministic, weighted lexical scoring with tag filters and thresholds.
+//! - **Dynamic Tooling**: Binds a skill's `allowed-tools` through a `ToolRegistry`.
+//! - **Versioning & Hashing**: Content-based identifiers for reliable skill selection.
 //!
-//! # Example
-//! Skills are defined in Markdown with YAML frontmatter:
-//! ```markdown
-//! ---
-//! name: search-expert
-//! description: Expert in semantic and keyword search.
-//! allowed-tools:
-//!   - knowledge
-//!   - web_search
-//! ---
-//! Use tools to find information...
-//! ```
-
 #![doc = include_str!("../README.md")]
 
 mod coordinator;
