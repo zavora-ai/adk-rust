@@ -4,7 +4,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 
 [![Crates.io](https://img.shields.io/crates/v/adk-session.svg)](https://crates.io/crates/adk-session)
 [![Documentation](https://docs.rs/adk-session/badge.svg)](https://docs.rs/adk-session)
-[![License](https://img.shields.io/crates/l/adk-session.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-session.svg)](../LICENSE)
 
 ## Overview
 
@@ -42,39 +42,50 @@ adk-rust = { version = "3.0.0", features = ["sessions"] }
 ## Quick Start
 
 ```rust
-use adk_session::{InMemorySessionService, SessionService, CreateRequest, KEY_PREFIX_USER};
-use serde_json::json;
 use std::collections::HashMap;
 
-let service = InMemorySessionService::new();
+use adk_session::{CreateRequest, InMemorySessionService, KEY_PREFIX_USER, SessionService};
+use serde_json::json;
 
-let mut initial_state = HashMap::new();
-initial_state.insert(format!("{}name", KEY_PREFIX_USER), json!("Alice"));
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = InMemorySessionService::new();
 
-let session = service.create(CreateRequest {
-    app_name: "my_app".to_string(),
-    user_id: "user_123".to_string(),
-    session_id: None,
-    state: initial_state,
-}).await?;
+    let mut initial_state = HashMap::new();
+    initial_state.insert(format!("{KEY_PREFIX_USER}name"), json!("Alice"));
 
-let name = session.state().get("user:name");
+    let session = service
+        .create(CreateRequest {
+            app_name: "my_app".to_string(),
+            user_id: "user_123".to_string(),
+            session_id: None,
+            state: initial_state,
+        })
+        .await?;
+
+    assert_eq!(session.state().get("user:name"), Some(json!("Alice")));
+    Ok(())
+}
 ```
+
+`create` for an identity that already exists fails with `session.already_exists` (`Conflict`) and writes nothing.
 
 ## State Prefixes
 
 | Prefix | Purpose | Persistence |
 |--------|---------|-------------|
-| `user:` | User preferences | Across sessions |
-| `app:` | Application state | Application-wide |
-| `temp:` | Temporary data | Current turn only |
+| `user:` | User preferences | Shared by every session of the user |
+| `app:` | Application state | Shared by every session of the app |
+| `temp:` | Temporary data | Not persisted; the runner keeps it for the rest of the invocation |
+
+`get` and `list` read the `app:` and `user:` tiers at call time, so a value written through one session reaches the app's or user's other sessions.
 
 ## Feature Flags
 
 | Feature | Backend | Description |
 |---------|---------|-------------|
 | `sqlite` | SQLite | Single-node persistence via sqlx |
-| `database` | SQLite | Alias for `sqlite` (backward compat) |
+| `database` | SQLite | Alias for `sqlite` |
 | `postgres` | PostgreSQL | Production-grade relational persistence |
 | `redis` | Redis | Low-latency in-memory persistence via fred |
 | `mongodb` | MongoDB | Document-oriented persistence |
@@ -108,9 +119,12 @@ Engine Session API:
 ```rust
 use adk_session::{VertexAiSessionConfig, VertexAiSessionService};
 
-let config = VertexAiSessionConfig::new("my-project", "us-central1")
-    .with_reasoning_engine("1234567890");
-let service = VertexAiSessionService::new_with_adc(config)?;
+fn main() -> adk_core::Result<()> {
+    let config = VertexAiSessionConfig::new("my-project", "us-central1")
+        .with_reasoning_engine("1234567890");
+    let _service = VertexAiSessionService::new_with_adc(config)?;
+    Ok(())
+}
 ```
 
 Inside a deployed Vertex AI Agent Engine container,
@@ -224,10 +238,13 @@ migration:
 ```rust
 use adk_session::{VertexAiSessionConfig, VertexAiSessionService};
 
-let legacy_config = VertexAiSessionConfig::new("my-project", "us-central1")
-    .with_reasoning_engine("1234567890");
-let service = VertexAiSessionService::new_with_adc(legacy_config)?
-    .allow_unmarked_sessions_for_app("legacy-app");
+fn main() -> adk_core::Result<()> {
+    let legacy_config = VertexAiSessionConfig::new("my-project", "us-central1")
+        .with_reasoning_engine("1234567890");
+    let _service = VertexAiSessionService::new_with_adc(legacy_config)?
+        .allow_unmarked_sessions_for_app("legacy-app");
+    Ok(())
+}
 ```
 
 > **Important:** Unmarked sessions carry no app marker. Only enable this
@@ -268,11 +285,12 @@ payloads at rest using AES-256-GCM:
 ```rust
 use adk_session::{EncryptedSession, EncryptionKey, InMemorySessionService};
 
-let key = EncryptionKey::generate();
-let inner = InMemorySessionService::new();
-let service = EncryptedSession::new(inner, key, vec![]);
-
-// Use like any SessionService — encryption is transparent
+fn main() {
+    let key = EncryptionKey::generate();
+    let inner = InMemorySessionService::new();
+    // Use like any SessionService — encryption is transparent.
+    let _service = EncryptedSession::new(inner, key, vec![]);
+}
 ```
 
 | Data | Stored in the inner service as |
@@ -292,9 +310,13 @@ let service = EncryptedSession::new(inner, key, vec![]);
 Key rotation is supported by passing previous keys:
 
 ```rust
-let new_key = EncryptionKey::generate();
-let old_key = EncryptionKey::from_env("OLD_KEY")?;
-let service = EncryptedSession::new(inner, new_key, vec![old_key]);
+use adk_session::{EncryptedSession, EncryptionKey, InMemorySessionService};
+
+fn rotated() -> adk_core::Result<EncryptedSession<InMemorySessionService>> {
+    let new_key = EncryptionKey::generate();
+    let old_key = EncryptionKey::from_env("OLD_KEY")?;
+    Ok(EncryptedSession::new(InMemorySessionService::new(), new_key, vec![old_key]))
+}
 ```
 
 `get` re-encrypts state values still under a previous key and returns any failure.
@@ -313,17 +335,21 @@ All database backends (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned m
 ```rust
 use adk_session::SqliteSessionService;
 
-let service = SqliteSessionService::new("sqlite:sessions.db").await?;
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = SqliteSessionService::new("sqlite:sessions.db?mode=rwc").await?;
 
-// Run all pending migrations
-service.migrate().await?;
+    // Run all pending migrations
+    service.migrate().await?;
 
-// Check current schema version
-let version = service.schema_version().await?;
-println!("Schema version: {version}");
+    // Check the current schema version
+    let version = service.schema_version().await?;
+    println!("Schema version: {version}");
+    Ok(())
+}
 ```
 
-Each backend detects pre-existing tables (baseline detection) and registers them as already applied, so `migrate()` is safe to call on both fresh and existing databases.
+Each backend detects pre-existing tables (baseline detection) and registers them as already applied, so `migrate()` is safe to call on both fresh and existing databases. `schema_version()` returns 0 only when the registry table does not exist; a failed read is an error. PostgreSQL `migrate()` holds the advisory lock `PostgresSessionService::ADVISORY_LOCK_KEY` on one connection and closes that connection afterwards. The `migration::sqlite_runner` and `migration::pg_runner` runners take `&'static` migration steps and ASCII registry table names of at most 63 bytes.
 
 ## Durable Stores
 
@@ -353,10 +379,14 @@ taken once. Every type passes the `adk-core` conformance suites
 use adk_core::{SpendKey, SpendLimits, SpendPeriod};
 use adk_session::SqliteSpendLedger;
 
-let ledger = SqliteSpendLedger::new("sqlite://spend.db?mode=rwc")
-    .await?
-    .with_limits(SpendLimits::new().limit(SpendKey::org("my-app").per(SpendPeriod::Day), 50_000_000));
-ledger.migrate().await?;
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let ledger = SqliteSpendLedger::new("sqlite://spend.db?mode=rwc").await?.with_limits(
+        SpendLimits::new().limit(SpendKey::org("my-app").per(SpendPeriod::Day), 50_000_000),
+    );
+    ledger.migrate().await?;
+    Ok(())
+}
 ```
 
 ## Durable Runtime Stores
@@ -380,25 +410,67 @@ suites; see the
 
 ```rust
 use std::time::Duration;
+
 use adk_core::{DurableRunStore, NewRun, RunOutcome};
 use adk_session::PostgresRunStore;
 use serde_json::json;
 
-let runs = PostgresRunStore::new("postgres://localhost/app").await?;
-runs.migrate().await?;
-runs.enqueue(NewRun::new("default", "my-app", "user-1", "assistant", json!({"text": "hi"}))).await?;
-if let Some(claimed) = runs.claim("default", "worker-1", Duration::from_secs(30)).await? {
-    runs.finish(&claimed.record.run_id, claimed.epoch, RunOutcome::Completed(json!("done"))).await?;
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let runs = PostgresRunStore::new("postgres://localhost/app").await?;
+    runs.migrate().await?;
+    runs.enqueue(NewRun::new("default", "my-app", "user-1", "assistant", json!({"text": "hi"})))
+        .await?;
+    if let Some(claimed) = runs.claim("default", "worker-1", Duration::from_secs(30)).await? {
+        runs.finish(&claimed.record.run_id, claimed.epoch, RunOutcome::Completed(json!("done")))
+            .await?;
+    }
+    Ok(())
 }
 ```
 
-## Rename: DatabaseSessionService → SqliteSessionService
+## Rewind
 
-As of v0.4.0, `DatabaseSessionService` was renamed to `SqliteSessionService` to accurately reflect that it is a SQLite-only backend. The deprecated type alias was removed in v0.7.0. Update your imports:
+`rewind(&identity, event_id)` removes the events after `event_id`, and `rewind_steps(&identity, n)` removes the last `n`. Both address the session by its full `AdkIdentity` — app, user, and session — and rebuild the session-scoped state from the state the session was created with plus the remaining events' deltas; app and user state are shared with other sessions and are not rewound. The in-memory and SQLite backends and `EncryptedSession` implement rewind; every other backend returns `session.rewind.unsupported`.
 
 ```rust
-use adk_session::SqliteSessionService;
+use adk_core::{AdkIdentity, AppName, SessionId, UserId};
+use adk_session::{InMemorySessionService, SessionService};
+
+async fn undo_last_turn(service: &InMemorySessionService) -> adk_core::Result<()> {
+    let identity = AdkIdentity::new(
+        AppName::try_from("my_app")?,
+        UserId::try_from("user_123")?,
+        SessionId::try_from("session_456")?,
+    );
+    let _session = service.rewind_steps(&identity, 2).await?;
+    Ok(())
+}
 ```
+
+| Error | Category |
+|-------|----------|
+| `session.rewind.unsupported` | `Unsupported` |
+| `session.not_found` | `NotFound` |
+| `session.event_not_found` | `NotFound` |
+| `session.rewind.too_many_steps` | `InvalidInput` |
+
+## Changes in 3.0
+
+| Change | Migration |
+|--------|-----------|
+| `rewind` and `rewind_steps` take `&AdkIdentity` instead of a session ID, and keep the session's initial state | Build an `AdkIdentity` |
+| `create` for an existing identity fails with `session.already_exists` on every backend | Handle `Conflict` |
+| Appending to a missing session fails with `session.not_found` | Match the typed error |
+| Every method on every backend validates identifiers | — |
+| `get` and `list` read the current `app:` and `user:` tiers | — |
+| Concurrent appends keep every state delta; equal timestamps keep append order | — |
+| SQL backends use SQLx 0.9; `sqlx` and `pgvector` are no longer implicit features | Depend on SQLx 0.9 when sharing a pool; enable `sqlite` or `postgres` |
+| `sql_schema_version` and `schema_version()` return read failures as errors | — |
+| Migration runners take `&'static` steps | — |
+| Durable stores, durable runtime stores, and audit log stores on every backend | — |
+
+See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 
 ## Related Crates
 

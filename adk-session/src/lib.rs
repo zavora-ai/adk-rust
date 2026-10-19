@@ -1,6 +1,4 @@
 //! # adk-session
-#![allow(clippy::result_large_err)]
-#![deny(missing_docs)]
 //!
 //! Session management and state persistence for ADK agents.
 //!
@@ -9,20 +7,37 @@
 //! This crate provides session and state management:
 //!
 //! - [`InMemorySessionService`] - Simple in-memory session storage
-//! - `VertexAiSessionService` - Vertex AI Session API backend (`vertex-session` feature)
+//! - `SqliteSessionService`, `PostgresSessionService`, `RedisSessionService`,
+//!   `MongoSessionService`, `Neo4jSessionService`, `FirestoreSessionService`, and
+//!   `VertexAiSessionService` - database backends, each behind its feature
+//! - `EncryptedSession` - AES-256-GCM encryption over any backend (`encrypted-session` feature)
+//! - Durable stores for every backend: spend ledgers, action ledgers, approval stores, audit log
+//!   stores, and the lease, run, schedule, and governance state stores of the durable runtime
 //! - [`Session`] - Conversation session with state and events
 //! - [`State`] - Key-value state with typed prefixes
 //! - [`SessionService`] - Trait for custom session backends
 //!
 //! ## Quick Start
 //!
-//! ```rust,no_run
-//! use adk_session::InMemorySessionService;
+//! ```rust
+//! use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 //!
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> adk_core::Result<()> {
 //! let service = InMemorySessionService::new();
 //!
-//! // Sessions are created and managed by the Runner
-//! // State is accessed via the session
+//! // Create the session before a Runner runs against it.
+//! let session = service
+//!     .create(CreateRequest {
+//!         app_name: "my_app".into(),
+//!         user_id: "user".into(),
+//!         session_id: Some("session".into()),
+//!         state: Default::default(),
+//!     })
+//!     .await?;
+//! assert_eq!(session.id(), "session");
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## State Prefixes
@@ -31,9 +46,11 @@
 //!
 //! | Prefix | Constant | Purpose |
 //! |--------|----------|---------|
-//! | `user:` | [`KEY_PREFIX_USER`] | User preferences |
-//! | `app:` | [`KEY_PREFIX_APP`] | Application state |
-//! | `temp:` | [`KEY_PREFIX_TEMP`] | Temporary data |
+//! | `user:` | [`KEY_PREFIX_USER`] | Shared by every session of the user |
+//! | `app:` | [`KEY_PREFIX_APP`] | Shared by every session of the app |
+//! | `temp:` | [`KEY_PREFIX_TEMP`] | Not persisted |
+#![allow(clippy::result_large_err)]
+#![deny(missing_docs)]
 
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 /// SQL-backed approval stores for calls held for confirmation.
