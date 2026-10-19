@@ -109,6 +109,21 @@ async fn configured_hosts_are_answered() {
 }
 
 #[tokio::test]
+async fn both_allowed_hosts_setters_replace_the_list() {
+    let security = SecurityConfig::default().with_allowed_hosts(["old.example.com"]);
+    for config in [
+        config().with_security(security.clone().with_allowed_hosts(["agents.example.com"])),
+        config().with_security(security).with_allowed_hosts(["agents.example.com"]),
+    ] {
+        let app = create_app(config);
+        let response = get(&app, "/api/health", &[("host", "agents.example.com")]).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = get(&app, "/api/health", &[("host", "old.example.com")]).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+}
+
+#[tokio::test]
 async fn the_a2a_base_url_host_is_answered() {
     let app = create_app_with_a2a(config(), Some("https://agents.example.com"));
     let response =

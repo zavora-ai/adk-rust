@@ -103,22 +103,28 @@ impl SecurityConfig {
         }
     }
 
-    /// Adds host names the server answers; see [`allowed_hosts`](Self::allowed_hosts).
+    /// Sets the host names the server answers besides loopback names and IP addresses,
+    /// replacing any list set before; see [`allowed_hosts`](Self::allowed_hosts).
+    ///
+    /// [`ServerConfig::with_allowed_hosts`] sets the same list the same way.
     ///
     /// # Example
     ///
     /// ```rust
     /// use adk_server::SecurityConfig;
     ///
-    /// let security = SecurityConfig::default().with_allowed_hosts(["agents.example.com"]);
+    /// let security = SecurityConfig::default()
+    ///     .with_allowed_hosts(["staging.example.com"])
+    ///     .with_allowed_hosts(["agents.example.com", "api.example.com"]);
     /// assert!(security.allows_host("agents.example.com"));
+    /// assert!(!security.allows_host("staging.example.com"));
     /// ```
     pub fn with_allowed_hosts<I, S>(mut self, hosts: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.allowed_hosts.extend(hosts.into_iter().map(Into::into));
+        self.allowed_hosts = hosts.into_iter().map(Into::into).collect();
         self
     }
 
@@ -359,17 +365,24 @@ impl ServerConfig {
         self
     }
 
-    /// Sets the host names the server answers besides loopback names and IP addresses;
-    /// see [`SecurityConfig::allowed_hosts`].
+    /// Sets the host names the server answers besides loopback names and IP addresses,
+    /// replacing any list set before, including one in a [`SecurityConfig`] passed to
+    /// [`with_security`](Self::with_security); see [`SecurityConfig::allowed_hosts`].
+    ///
+    /// [`SecurityConfig::with_allowed_hosts`] sets the same list the same way.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let config = ServerConfig::new(loader, sessions)
-    ///     .with_allowed_hosts(vec!["agents.example.com".to_string()]);
+    ///     .with_allowed_hosts(["agents.example.com", "api.example.com"]);
     /// ```
-    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
-        self.security.allowed_hosts = hosts;
+    pub fn with_allowed_hosts<I, S>(mut self, hosts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.security = self.security.with_allowed_hosts(hosts);
         self
     }
 
@@ -552,6 +565,14 @@ mod tests {
 
         let any = SecurityConfig::default().with_allowed_hosts(["*"]);
         assert!(any.allows_host("anything.example"));
+    }
+
+    #[test]
+    fn allowed_hosts_setters_replace_the_list() {
+        let security = SecurityConfig::default()
+            .with_allowed_hosts(["old.example.com"])
+            .with_allowed_hosts(["agents.example.com"]);
+        assert_eq!(security.allowed_hosts, ["agents.example.com"]);
     }
 
     #[test]

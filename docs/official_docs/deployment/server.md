@@ -559,14 +559,16 @@ The defaults expose the server to this machine only. Each one is changed explici
 | Setting | Default | Change it with |
 |---------|---------|----------------|
 | Listen address (`Launcher`, `adk_cli::serve::run_serve`, `serve` command) | `127.0.0.1` | `Launcher::with_bind_address`, `serve --host 0.0.0.0` |
-| `Host` names answered | `localhost`, `*.localhost`, any IP address | `SecurityConfig::allowed_hosts` / `ServerConfig::with_allowed_hosts` |
+| `Host` names answered | `localhost`, `*.localhost`, any IP address | `SecurityConfig::allowed_hosts` / `SecurityConfig::with_allowed_hosts` / `ServerConfig::with_allowed_hosts` |
 | Cross-origin browser access (CORS) | none | `SecurityConfig::allowed_origins` / `ServerConfig::with_allowed_origins` |
 
 - **Host check**: a request whose `Host` names any other host is refused with `403`. A page on
   a DNS-rebinding domain reaches a loopback server as a same-origin request, so CORS never
   applies to it; the `Host` header still names the attacker's domain. The host of the A2A base
   URL and of `ServerConfig::backend_url` is answered automatically. Entries are exact names
-  (`agents.example.com`), a domain with its subdomains (`.example.com`), or `*`.
+  (`agents.example.com`), a domain with its subdomains (`.example.com`), or `*`. Both
+  `with_allowed_hosts` setters replace the list set before, so the last call names every host
+  answered besides the loopback names and IP addresses.
 - **Origin check**: a request whose `Origin` names another origin not in `allowed_origins` is
   refused with `403`, and preflights get no `Access-Control-Allow-Origin`. Entries are exact
   origins (`https://app.example.com`), an origin on any port (`http://localhost:*`), or `*`.
