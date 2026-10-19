@@ -1,9 +1,11 @@
 //! Groq provider implementation for ADK.
 //!
-//! This module provides support for Groq's ultra-fast LLM inference including:
-//! - LLaMA models (llama-3.3-70b-versatile, llama-3.1-8b-instant)
-//! - Mixtral (mixtral-8x7b-32768)
-//! - Gemma (gemma2-9b-it)
+//! This module provides support for Groq's ultra-fast LLM inference, with presets for
+//! Groq's production models:
+//! - `openai/gpt-oss-120b` ([`GroqConfig::gpt_oss_120b`], the default)
+//! - `openai/gpt-oss-20b` ([`GroqConfig::gpt_oss_20b`], faster and lower cost)
+//!
+//! Any other model Groq serves works through [`GroqConfig::new`].
 //!
 //! # Features
 //!
@@ -17,18 +19,13 @@
 //! ```rust,ignore
 //! use adk_model::groq::{GroqClient, GroqConfig};
 //!
-//! // LLaMA 3.3 70B
-//! let client = GroqClient::new(GroqConfig::llama70b(
+//! // GPT-OSS 120B, the production default
+//! let client = GroqClient::new(GroqConfig::gpt_oss_120b(
 //!     std::env::var("GROQ_API_KEY").unwrap()
 //! ))?;
 //!
-//! // Fast 8B model
-//! let fast = GroqClient::new(GroqConfig::llama8b(
-//!     std::env::var("GROQ_API_KEY").unwrap()
-//! ))?;
-//!
-//! // Mixtral
-//! let mixtral = GroqClient::new(GroqConfig::mixtral(
+//! // GPT-OSS 20B, faster and lower cost
+//! let fast = GroqClient::new(GroqConfig::gpt_oss_20b(
 //!     std::env::var("GROQ_API_KEY").unwrap()
 //! ))?;
 //! ```

@@ -25,7 +25,7 @@ const STREAM_ERROR: &str = "model.groq.stream_error";
 /// ```rust,ignore
 /// use adk_model::groq::{GroqClient, GroqConfig};
 ///
-/// let client = GroqClient::new(GroqConfig::llama70b(
+/// let client = GroqClient::new(GroqConfig::gpt_oss_120b(
 ///     std::env::var("GROQ_API_KEY").unwrap()
 /// ))?;
 /// ```
@@ -77,19 +77,11 @@ impl GroqClient {
         Ok(self)
     }
 
-    /// Create a client for llama-3.3-70b-versatile model.
+    /// Create a client for the legacy `llama-3.3-70b-versatile` model.
+    ///
+    /// See [`GroqConfig::llama70b`] for its availability.
     pub fn llama70b(api_key: impl Into<String>) -> Result<Self, AdkError> {
         Self::new(GroqConfig::llama70b(api_key))
-    }
-
-    /// Create a client for llama-3.1-8b-instant model.
-    pub fn llama8b(api_key: impl Into<String>) -> Result<Self, AdkError> {
-        Self::new(GroqConfig::llama8b(api_key))
-    }
-
-    /// Create a client for mixtral-8x7b-32768 model.
-    pub fn mixtral(api_key: impl Into<String>) -> Result<Self, AdkError> {
-        Self::new(GroqConfig::mixtral(api_key))
     }
 
     /// Set the retry configuration (builder pattern).

@@ -70,19 +70,19 @@ impl GroqConfig {
         Self::new(api_key, crate::catalog::GROQ_DEFAULT)
     }
 
-    /// Create a config for llama-3.1-8b-instant model (faster, smaller).
-    pub fn llama8b(api_key: impl Into<String>) -> Self {
-        Self::new(api_key, "llama-3.1-8b-instant")
-    }
-
-    /// Create a config for mixtral-8x7b-32768 model.
-    pub fn mixtral(api_key: impl Into<String>) -> Self {
-        Self::new(api_key, "mixtral-8x7b-32768")
-    }
-
-    /// Create a config for gemma2-9b-it model.
-    pub fn gemma(api_key: impl Into<String>) -> Self {
-        Self::new(api_key, "gemma2-9b-it")
+    /// Create a config for Groq's production `openai/gpt-oss-20b` model, the faster,
+    /// lower-cost choice.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::groq::GroqConfig;
+    ///
+    /// let config = GroqConfig::gpt_oss_20b("gsk-key");
+    /// assert_eq!(config.model, "openai/gpt-oss-20b");
+    /// ```
+    pub fn gpt_oss_20b(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "openai/gpt-oss-20b")
     }
 
     /// Enable reasoning mode.
@@ -106,5 +106,20 @@ impl GroqConfig {
     /// Get the effective base URL.
     pub fn effective_base_url(&self) -> &str {
         self.base_url.as_deref().unwrap_or(GROQ_API_BASE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GroqConfig;
+    use crate::catalog::{ModelLifecycle, lookup_model};
+
+    #[test]
+    fn presets_select_active_catalog_models() {
+        for config in [GroqConfig::gpt_oss_120b("gsk-key"), GroqConfig::gpt_oss_20b("gsk-key")] {
+            let entry = lookup_model("groq", &config.model)
+                .unwrap_or_else(|| panic!("{} is not in the catalog", config.model));
+            assert_eq!(entry.lifecycle, ModelLifecycle::Active, "{}", config.model);
+        }
     }
 }
