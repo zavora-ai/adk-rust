@@ -35,33 +35,39 @@ pub trait MemoryService: Send + Sync {
                          entries: Vec<MemoryEntry>) -> Result<()>;
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse>;
 
-    // Optional (default: "not implemented")
+    // Optional (default: an error naming the method)
     async fn delete_user(&self, app: &str, user: &str) -> Result<()>;          // GDPR
     async fn delete_session(&self, app: &str, user: &str, session: &str) -> Result<()>;
     async fn add_entry(&self, app: &str, user: &str, entry: MemoryEntry) -> Result<()>;
     async fn delete_entries(&self, app: &str, user: &str, query: &str) -> Result<u64>;
-    // …plus a health check
+    async fn list_recent(&self, app: &str, user: &str, limit: usize) -> Result<Vec<MemoryEntry>>;
+    // …plus health_check (default: Ok), supports_project_scoping (default: false),
+    // and the project-scoped methods below
 }
 ```
 
-- **`add_session`** ingests a completed conversation's worth of entries. A Runner
-  calls this for you when memory is attached.
+- **`add_session`** ingests a conversation's worth of entries. Nothing calls it for
+  you: call it from your application, for example when a conversation ends.
 - **`search`** is recall. Backends interpret the query differently — keyword,
   embedding similarity, or graph token-scoring — but the contract is the same.
+- **`list_recent`** lists a user's newest entries, global and project-scoped, with no
+  query — for "what does the agent remember?" views.
 
 ## `SearchRequest` / `SearchResponse`
 
 ```rust
-use adk_memory::SearchRequest;
+use adk_memory::{MemoryService, SearchRequest};
 
 let req = SearchRequest {
     app_name: "support".into(),
     user_id:  "alice".into(),
     query:    "contact preference".into(),
-    ..Default::default()      // top_k, project scoping, etc.
+    limit: Some(5),       // None = 10
+    min_score: None,      // drop matches scoring below this (0.0–1.0)
+    project_id: None,     // Some(id) = global + that project's entries
 };
 
-let resp = memory.search(req).await?;   // resp.entries: Vec<MemoryEntry>
+let resp = memory.search(req).await?;   // resp.memories: Vec<MemoryEntry>
 ```
 
 ## Session state vs. memory
@@ -90,7 +96,7 @@ memories. You can scope a third level — **project** — within a user:
   search** returns only global entries.
 
 ```rust
-use adk_memory::{MemoryServiceAdapter, InMemoryMemoryService};
+use adk_memory::{InMemoryMemoryService, MemoryService, MemoryServiceAdapter};
 use std::sync::Arc;
 
 let service = Arc::new(InMemoryMemoryService::new());
@@ -112,6 +118,8 @@ Project isolation is a backend capability, not something the trait can guarantee
 Ask before relying on it:
 
 ```rust
+use adk_memory::MemoryService;
+
 if service.supports_project_scoping() {
     service.add_entry_to_project("app", "user", "acme-project", entry).await?;
 } else {
@@ -128,6 +136,7 @@ if service.supports_project_scoping() {
 | `MongoMemoryService` | Yes |
 | `Neo4jMemoryService` | Yes |
 | `GraphMemoryService` | **No** — project methods return an error |
+| `VertexAiMemoryBankService` | **No** — project methods return an error |
 
 A backend without project support **fails** the call rather than silently writing or
 deleting globally. Widening the scope of a write would make data intended for one
@@ -143,6 +152,8 @@ embeddings) across all projects — the right-to-erasure primitive. Backends tha
 store durably implement it; call it from your account-deletion path.
 
 ```rust
+use adk_memory::MemoryService;
+
 memory.delete_user("support", "alice").await?;
 ```
 

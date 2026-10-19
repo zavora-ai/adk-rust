@@ -2,7 +2,7 @@
 
 All backends implement the same [`MemoryService`](concepts.md#the-memoryservice-trait)
 trait, so you choose one by enabling a feature flag and constructing it — your
-agent code doesn't change. There are six.
+agent code doesn't change.
 
 ## At a glance
 
@@ -10,13 +10,13 @@ agent code doesn't change. There are six.
 |---------|---------|-------------|--------|----------|
 | `InMemoryMemoryService` | *(default)* | Process only | Keyword | Development, tests, demos |
 | `SqliteMemoryService` | `sqlite-memory` | A file | Keyword | Single-node apps, local persistence |
-| `PostgresMemoryService` | `database-memory` | Postgres + `pgvector` | **Vector similarity** | Production semantic search |
+| `PostgresMemoryService` | `database-memory` | Postgres + `pgvector` | **Vector similarity** with an embedding provider; full-text (`tsvector`) without | Production semantic search |
 | `RedisMemoryService` | `redis-memory` | Redis (optional TTL) | Keyword | Fast, ephemeral-ish, shared cache |
-| `MongoMemoryService` | `mongodb-memory` | MongoDB | Keyword / vector | Existing Mongo infra |
-| `Neo4jMemoryService` | `neo4j-memory` | Neo4j | Graph | Existing Neo4j infra |
+| `MongoMemoryService` | `mongodb-memory` | MongoDB | Atlas Vector Search with an embedding provider; text search without | Existing Mongo infra |
+| `Neo4jMemoryService` | `neo4j-memory` | Neo4j | Vector index with an embedding provider; entries linked by `FOLLOWS` | Existing Neo4j infra |
+| `VertexAiMemoryBankService` | `vertex-memory` | Vertex AI Agent Engine Memory Bank | Memory Bank similarity retrieval | Gemini Enterprise Agent Platform deployments |
 
-(The bi-temporal **`GraphMemoryService`** is a seventh, covered on its own page —
-[Knowledge graph](knowledge-graph.md).)
+(**`GraphMemoryService`** is covered on its own page — [Knowledge graph](knowledge-graph.md).)
 
 ## InMemory — start here
 
@@ -62,15 +62,19 @@ lets you pick the index strategy.
 ```rust
 use adk_memory::{PostgresMemoryService, VectorIndexType};
 
-let memory = PostgresMemoryService::builder("postgres://localhost/app", embedding_provider)
+// embedding_provider: Arc<dyn EmbeddingProvider>
+let memory = PostgresMemoryService::builder("postgres://localhost/app", Some(embedding_provider))
     .vector_index(VectorIndexType::Hnsw { m: 32, ef_construction: 128 })  // or IvfFlat / None
     .build()
     .await?;
+memory.migrate().await?;
 ```
 
 `VectorIndexType::None` does exact (brute-force) search — fine for small sets;
-`Hnsw` (the default) and `IvfFlat` scale to large ones. Vector search needs an
-[embedding provider](#embeddings).
+`Hnsw` (the default, `m: 16, ef_construction: 64`) and `IvfFlat` scale to large ones.
+Vector search needs an [embedding provider](#embeddings); with `None` the service ranks
+entries by PostgreSQL full-text search (`plainto_tsquery`). Above 2000 embedding dimensions
+the index uses `halfvec`, since pgvector indexes `vector` only up to 2000.
 
 ## Redis, MongoDB, Neo4j
 
@@ -86,8 +90,22 @@ let memory = RedisMemoryService::new(RedisMemoryConfig {
 }).await?;
 ```
 
-`MongoMemoryService::new(...)` and `Neo4jMemoryService::new(...)` follow the same
-shape. All of them honor the `(app, user, project)` isolation from
+MongoDB and Neo4j take a connected client (from the `mongodb` and `neo4rs` crates, added to
+your own dependencies) and an optional embedding provider:
+
+```rust
+use adk_memory::{MongoMemoryService, Neo4jMemoryService};
+
+let client = mongodb::Client::with_uri_str("mongodb://localhost:27017").await?;
+let mongo = MongoMemoryService::new(client, "adk_memory", None)?;
+mongo.migrate().await?;
+
+let graph = neo4rs::Graph::new("bolt://localhost:7687", "neo4j", "password").await?;
+let neo4j = Neo4jMemoryService::new(graph, None)?;
+neo4j.migrate().await?;
+```
+
+All of them honor the `(app, user, project)` isolation from
 [Concepts](concepts.md#isolation-app-user-and-project).
 
 | Backend | Isolation detail |
@@ -104,6 +122,7 @@ text into vectors. Provide an `EmbeddingProvider`:
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+    fn dimensions(&self) -> usize;
 }
 ```
 
@@ -112,9 +131,9 @@ model you index with the one you query with.
 
 ## Migrations
 
-The SQL-backed services run **versioned, idempotent migrations** to create and
-upgrade their schema, so deploying a new version doesn't require manual DDL. Call
-the service's `migrate()` (or let construction handle it) on startup.
+The SQLite, PostgreSQL, MongoDB, Neo4j, and graph services run **versioned, idempotent
+migrations** to create and upgrade their schema, so deploying a new version doesn't require
+manual DDL. Construction does not migrate: call the service's `migrate()` on startup.
 
 ## Choosing
 

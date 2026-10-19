@@ -3,8 +3,9 @@
 `GraphMemoryService` is a different shape of memory: instead of a pile of text
 entries, it stores a **knowledge graph** of the user — entities, the facts
 ("observations") attached to them, and typed relations between them — and it
-tracks all of it **bi-temporally**. This is the backend behind the
-[Mindfulness-with-Mia example](../realtime/examples.md#realtime_voice-mindfulness-with-mia)
+keeps a validity interval on every fact, so superseded facts become history instead of
+being deleted. This is the backend behind the
+[Mindfulness-with-Mia example](../realtime/examples.md#realtime_voice--mindfulness-with-mia)
 and the [realtime memory page](../realtime/memory.md).
 
 It implements the same [`MemoryService`](concepts.md#the-memoryservice-trait)
@@ -22,35 +23,36 @@ exposes a richer graph API on top.
 
 - **`Entity`** — a named thing (a person, place, preference, topic) with a
   free-form `entity_type`.
-- **`Observation`** — one fact attached to an entity, with a stable `id` and a
+- **`Observation`** — one fact attached to an entity, with a stable `id` (`i64`) and a
   `valid_from` timestamp.
 - **`Relation`** — a typed edge between two entities (`source ──relation_type──▶ target`),
   e.g. `Alice ──works_at──▶ Acme`.
 
 There's also an **episodic** store (`kg_episodic`) that logs raw turns, separate
 from the curated graph — so you keep both the transcript and the distilled model.
+`add_session` (the `MemoryService` method) writes there; it extracts no facts.
 
-## Why bi-temporal
+## Validity intervals
 
-Every observation and relation is tracked along **two** time axes:
-
-- **valid time** — when the fact was true in the world (`valid_from` → `valid_to`).
-- **ingestion time** — when the system learned it.
+Every observation and relation carries `valid_from`, stamped when it is recorded, and
+`valid_to`, empty while the fact is current. The crate calls this a bi-temporal graph.
 
 When a fact changes, the old one isn't deleted — it's **invalidated** (its
-`valid_to` is set) and the new one is added. That means the graph can answer
-*"what is the user's current preference?"* without losing *"what it used to be."*
-Superseded facts stay in history instead of overwriting the present — which is
-exactly what you want for a memory you'll trust over months.
+`valid_to` is set) and the new one is added. Reads return only current facts, and the
+superseded ones stay in the database as history.
 
 ```rust
-kg.invalidate_observation(old_id).await?;   // mark a fact no longer valid
+kg.invalidate_observation(old_id).await?;   // mark a fact no longer valid (id: i64)
 kg.invalidate_relation(old_id).await?;      // mark an edge no longer valid
 ```
 
+`delete_entities(app, user, names)` removes entities outright, with their observations and
+relations.
+
 ## Creating one
 
-`graph-memory` is SQLite-backed, so it's a file (or in-memory for tests):
+`graph-memory` is SQLite-backed, so it's a file (or `sqlite::memory:` for tests); the file is
+created when missing:
 
 ```rust
 use adk_memory::GraphMemoryService;
@@ -65,6 +67,8 @@ let kg = Arc::new(kg);
 
 ```rust
 use adk_memory::{CreateEntityInput, CreateRelationInput};
+
+// kg: Arc<GraphMemoryService>
 
 kg.create_entities("coach", "alice", vec![CreateEntityInput {
     name: "Alice".into(),
@@ -81,7 +85,7 @@ kg.add_observations("coach", "alice", /* entity */ "Alice", vec!["timezone is CE
 ```
 
 Creating an entity is **upsert** — re-creating a known entity updates its type and
-timestamp rather than duplicating it.
+timestamp rather than duplicating it, and adds the new observations to its existing ones.
 
 ## Reading it back
 
@@ -92,10 +96,10 @@ Three recall shapes, on top of the trait's `search`:
 let hits = kg.search_nodes("coach", "alice", "what is she training for?", 5).await?;
 
 // 2. Fetch specific entities by name
-let nodes = kg.open_nodes("coach", "alice", &["Alice".into()]).await?;
+let nodes = kg.open_nodes("coach", "alice", vec!["Alice".into()]).await?;
 
-// 3. The whole graph (small graphs / debugging)
-let graph = kg.read_graph("coach", "alice").await?;
+// 3. The whole graph (small graphs / debugging): (Vec<Entity>, Vec<Relation>)
+let (entities, relations) = kg.read_graph("coach", "alice").await?;
 ```
 
 ### The profile card
@@ -109,7 +113,8 @@ let card = kg.profile_card("coach", "alice").await?;
 // → a short text block: "Alice (person): prefers morning sessions; goal: run a 10k…"
 ```
 
-Cap its size with a budget so the prompt stays small as the graph grows:
+Cap its size with a budget so the prompt stays small as the graph grows (the default is
+12 entities and 5 observations per entity):
 
 ```rust
 let kg = GraphMemoryService::new(url).await?
