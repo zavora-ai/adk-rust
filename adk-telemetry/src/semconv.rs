@@ -215,7 +215,7 @@ impl GenAiOperation {
 /// ```
 /// use adk_telemetry::semconv::{GenAiSpanBuilder, GenAiProvider, GenAiOperation};
 ///
-/// let span = GenAiSpanBuilder::new(GenAiProvider::Gemini, GenAiOperation::Chat, "gemini-2.5-flash")
+/// let span = GenAiSpanBuilder::new(GenAiProvider::Gemini, GenAiOperation::Chat, "gemini-3.7-flash")
 ///     .stream(true)
 ///     .temperature(0.7)
 ///     .max_tokens(4096)
@@ -359,7 +359,7 @@ impl GenAiSpanBuilder {
 /// use adk_telemetry::LlmUsage;
 ///
 /// // After receiving model response:
-/// GenAiResponseRecorder::record_response_model("gemini-2.5-flash-001");
+/// GenAiResponseRecorder::record_response_model("gemini-3.7-flash");
 /// GenAiResponseRecorder::record_finish_reasons(&["stop"]);
 /// GenAiResponseRecorder::record_usage(&LlmUsage {
 ///     input_tokens: 100,

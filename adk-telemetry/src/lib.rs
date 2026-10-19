@@ -4,8 +4,10 @@
 //!
 //! ## Features
 //! - Structured logging with `tracing`
-//! - OpenTelemetry integration for distributed tracing
-//! - OTLP export for observability backends (Jaeger, Datadog, etc.)
+//! - OpenTelemetry integration for distributed tracing (`otlp` feature)
+//! - OTLP export for observability backends (Jaeger, Datadog, etc.) (`otlp` feature)
+//! - In-process span retention for the server's debug endpoints ([`AdkSpanExporter`])
+//! - SQLite span export (`sqlite` feature) and Google Cloud export (`gcp` feature)
 //! - Automatic context propagation
 //! - OTel GenAI Semantic Conventions (v1.41.0) via `genai-semconv` feature (enabled by default)
 //!

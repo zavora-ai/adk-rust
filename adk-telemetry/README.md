@@ -4,17 +4,18 @@ OpenTelemetry integration for Rust Agent Development Kit (ADK-Rust) agent observ
 
 [![Crates.io](https://img.shields.io/crates/v/adk-telemetry.svg)](https://crates.io/crates/adk-telemetry)
 [![Documentation](https://docs.rs/adk-telemetry/badge.svg)](https://docs.rs/adk-telemetry)
-[![License](https://img.shields.io/crates/l/adk-telemetry.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-telemetry.svg)](../LICENSE)
 
 ## Overview
 
-`adk-telemetry` provides observability infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)), built on OpenTelemetry 0.32 and tracing-opentelemetry 0.33:
+`adk-telemetry` provides observability infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)), built on `tracing`, OpenTelemetry 0.32, and tracing-opentelemetry 0.33:
 
-- **Tracing** - Distributed tracing with OpenTelemetry 0.32
 - **Logging** - Structured logging with tracing-subscriber
-- **Metrics** - Performance metrics export via OTLP (tonic 0.12 / gRPC)
-- **Span Context** - Propagation across agent boundaries
-- **GenAI Semantic Conventions** (v0.8.2) - Full OTel GenAI semconv v1.41.0 compliance:
+- **Tracing** - OTLP trace export over gRPC (tonic 0.14) with the `otlp` feature
+- **Metrics** - OTLP metrics export with the `otlp` feature
+- **In-process spans** - `AdkSpanExporter` keeps recent spans for the server's debug endpoints
+- **SQLite and Google Cloud export** - behind the `sqlite` and `gcp` features
+- **GenAI Semantic Conventions** - OTel GenAI semconv v1.41.0 attributes:
   - `GenAiSpanBuilder` — fluent API for model call spans with `gen_ai.*` attributes
   - `GenAiResponseRecorder` — records response model, finish reasons, token usage
   - `GenAiProvider` / `GenAiOperation` enums for all supported providers
@@ -28,6 +29,15 @@ OpenTelemetry integration for Rust Agent Development Kit (ADK-Rust) agent observ
 [dependencies]
 adk-telemetry = "3.0.0"
 ```
+
+| Feature | Default | Enables |
+|---------|---------|---------|
+| `genai-semconv` | yes | The `semconv`, `config`, and `events` modules |
+| `otlp` | no | `init_with_otlp`, `build_otlp_layer`, and the OpenTelemetry re-exports (`global`, `Meter`) |
+| `metrics` | no | Alias that implies `otlp` |
+| `json` | no | JSON log formatting |
+| `sqlite` | no | `init_with_sqlite`, `SqliteSpanExporter`, `SqliteTraceReader` |
+| `gcp` | no | `init_with_gcp` and `init_json_logging` (implies `otlp` and `json`) |
 
 Or use the meta-crate:
 
@@ -68,7 +78,7 @@ RUST_LOG=adk_agent=trace,adk_model=debug cargo run
 
 ## OpenTelemetry Export
 
-Configure OTLP export for distributed tracing:
+Configure OTLP export for distributed tracing (`otlp` feature; `adk-rust` forwards it as `telemetry-otlp`):
 
 ```rust
 use adk_telemetry::init_with_otlp;
@@ -117,12 +127,15 @@ is one `spans` table with an `attributes` JSON column):
 ```rust
 use adk_telemetry::sqlite::SqliteTraceReader;
 
-let reader = SqliteTraceReader::open("traces.db")?;
-for session in reader.sessions()? {
-    println!("{}: {} spans", session.session_id, session.span_count);
-    for span in reader.session_trace(&session.session_id)? {
-        println!("  {} ({} ms)", span.span_name, span.duration_nanos() / 1_000_000);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let reader = SqliteTraceReader::open("traces.db")?;
+    for session in reader.sessions()? {
+        println!("{}: {} spans", session.session_id, session.span_count);
+        for span in reader.session_trace(&session.session_id)? {
+            println!("  {} ({} ms)", span.span_name, span.duration_nanos() / 1_000_000);
+        }
     }
+    Ok(())
 }
 ```
 
@@ -166,7 +179,8 @@ for the collector-sidecar fallback.
 | Function | Description |
 |----------|-------------|
 | `init_telemetry(service_name)` | Basic console logging |
-| `init_with_otlp(service_name, endpoint)` | OTLP export to collectors |
+| `init_with_otlp(service_name, endpoint)` | OTLP trace and metrics export to collectors (`otlp` feature) |
+| `build_otlp_layer(service_name, endpoint)` | The OTLP tracing layer, for a subscriber you assemble (`otlp` feature) |
 | `init_with_adk_exporter(service_name)` | ADK-style span exporter |
 | `init_with_sqlite(service_name, db_path)` | Direct SQLite span export (`sqlite` feature) |
 | `init_with_gcp(service_name)` | OTLP trace export to Google Cloud with ADC auth (`gcp` feature) |
@@ -186,6 +200,7 @@ Pre-configured spans for instrumenting ADK operations:
 | `llm_generate_span(provider, model, stream)` | LLM generation span with `gen_ai.usage.*` fields |
 | `tool_execute_span(tool_name)` | Tool execution span |
 | `callback_span(callback_type)` | Callback execution span |
+| `team_run_span`, `team_member_span`, `team_relationship_span` | Portable team spans (`team.*`) |
 | `record_llm_usage(&usage)` | Record token counts on the current span |
 
 ### Token Usage Tracking
@@ -193,19 +208,21 @@ Pre-configured spans for instrumenting ADK operations:
 `llm_generate_span` pre-declares OpenTelemetry GenAI semantic convention fields. After receiving a response, call `record_llm_usage` to populate them:
 
 ```rust
-use adk_telemetry::{llm_generate_span, record_llm_usage, LlmUsage};
+use adk_telemetry::{LlmUsage, llm_generate_span, record_llm_usage};
 
-let span = llm_generate_span("openai", "gpt-5-mini", true);
-let _enter = span.enter();
+fn main() {
+    let span = llm_generate_span("openai", "gpt-5.6-terra", true);
+    let _enter = span.enter();
 
-// After receiving the LLM response:
-record_llm_usage(&LlmUsage {
-    input_tokens: 100,
-    output_tokens: 50,
-    total_tokens: 150,
-    cache_read_tokens: Some(80),
-    ..Default::default()
-});
+    // After receiving the LLM response:
+    record_llm_usage(&LlmUsage {
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 150,
+        cache_read_tokens: Some(80),
+        ..Default::default()
+    });
+}
 ```
 
 Recorded fields: `gen_ai.usage.input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `thinking_tokens`, `audio_input_tokens`, `audio_output_tokens`.
@@ -215,26 +232,32 @@ Recorded fields: `gen_ai.usage.input_tokens`, `output_tokens`, `total_tokens`, `
 Convenience re-exports from `tracing`:
 
 ```rust
-use adk_telemetry::{info, debug, warn, error, trace, instrument, Span};
+#[allow(unused_imports)]
+use adk_telemetry::{Span, debug, error, info, instrument, trace, warn};
+
+fn main() {}
 ```
-
-## Features
-
-- Zero-config defaults with sensible logging
-- OpenTelemetry 0.32 compatible span export
-- OTLP export via `tonic 0.12` (gRPC), aligned with `adk-server`'s `hyper 1.x` / `http 1.x` stack
-- Direct SQLite span export with query API (`sqlite` feature) — no collector needed
-- Automatic context propagation
-- JSON or pretty-print log formats
 
 ### OpenTelemetry Dependency Versions
 
 | Crate | Version |
 |-------|---------|
-| `opentelemetry` | 0.31 |
-| `opentelemetry_sdk` | 0.31 |
-| `opentelemetry-otlp` | 0.31 |
-| `tracing-opentelemetry` | 0.32 |
+| `opentelemetry` | 0.32 |
+| `opentelemetry_sdk` | 0.32 |
+| `opentelemetry-otlp` | 0.32 |
+| `tracing-opentelemetry` | 0.33 |
+| `tonic` | 0.14 |
+
+## Changes in 3.0
+
+| Change | Migration |
+|--------|-----------|
+| `AdkSpanExporter` keeps at most `DEFAULT_MAX_SPANS` (10,000) spans | `with_max_spans` and `with_ttl` change the bound |
+| `shutdown_telemetry` flushes and shuts down every provider this crate built | — |
+| Child spans carry `adk.app_name` and `adk.user_id` from `agent.execute` | — |
+| Model and tool payloads stay out of spans and logs unless `RunConfig::record_payloads` is set | — |
+
+See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 
 ## Related Crates
 

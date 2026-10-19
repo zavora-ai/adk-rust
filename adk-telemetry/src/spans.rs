@@ -34,7 +34,7 @@ pub fn agent_run_span(agent_name: &str, invocation_id: &str) -> Span {
 /// # Example
 /// ```
 /// use adk_telemetry::model_call_span;
-/// let span = model_call_span("gemini-2.5-flash");
+/// let span = model_call_span("gemini-3.7-flash");
 /// let _enter = span.enter();
 /// // Model call code here
 /// ```
@@ -49,13 +49,13 @@ pub fn model_call_span(model_name: &str) -> Span {
 ///
 /// # Arguments
 /// * `provider` - Provider name (e.g., "gemini", "openai", "anthropic")
-/// * `model_name` - Model identifier (e.g., "gemini-2.5-flash", "gpt-5-mini")
+/// * `model_name` - Model identifier (e.g., "gemini-3.7-flash", "gpt-5.6-terra")
 /// * `stream` - Whether this is a streaming request
 ///
 /// # Example
 /// ```
 /// use adk_telemetry::llm_generate_span;
-/// let span = llm_generate_span("openai", "gpt-5-mini", true);
+/// let span = llm_generate_span("openai", "gpt-5.6-terra", true);
 /// let _enter = span.enter();
 /// // After response: adk_telemetry::record_llm_usage(&usage_metadata);
 /// ```
