@@ -4,7 +4,7 @@ Native Rust SDK for the ADK-Rust Enterprise Managed Agent Service.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-enterprise.svg)](https://crates.io/crates/adk-enterprise)
 [![Documentation](https://docs.rs/adk-enterprise/badge.svg)](https://docs.rs/adk-enterprise)
-[![License](https://img.shields.io/crates/l/adk-enterprise.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-enterprise.svg)](../LICENSE)
 
 ## Overview
 
@@ -62,12 +62,14 @@ adk-rust = { version = "3.0.0", features = ["enterprise-client"] }
 
 ## Quick Start
 
-```rust,ignore
-use adk_enterprise::{EnterpriseClient, CreateAgentParams, SessionEvent, ContentBlock};
+`EnterpriseClient::from_env()` reads the API key from `ADK_API_KEY`, or else `ADK_ENTERPRISE_KEY`.
+
+```rust,no_run
+use adk_enterprise::{ContentBlock, CreateAgentParams, EnterpriseClient, SessionEvent};
 use futures::StreamExt;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = EnterpriseClient::from_env()?;
 
     // Create an agent (any model — Gemini, OpenAI, Anthropic, etc.)
@@ -109,16 +111,17 @@ async fn main() -> anyhow::Result<()> {
 
 Handle tools that the agent invokes but you execute locally:
 
-```rust,ignore
+```rust,no_run
 use adk_enterprise::*;
 use futures::StreamExt;
 use serde_json::json;
 
+async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
 let client = EnterpriseClient::from_env()?;
 
 let agent = client.create_agent(CreateAgentParams {
     name: "Tool Agent".into(),
-    model: "gpt-4.1".into(),
+    model: "gpt-5.6-terra".into(),
     tools: vec![
         ToolConfig::builtin("bash"),
         ToolConfig::custom("get_weather", "Get weather for a city", json!({
@@ -141,12 +144,16 @@ while let Some(event) = stream.next().await {
                 "get_weather" => format!("22°C, sunny in {}", input["city"]),
                 _ => "unknown tool".into(),
             };
-            client.custom_tool_result(&session.id, &custom_tool_use_id, &result).await?;
+            client
+                .custom_tool_result(&session.id, &custom_tool_use_id, vec![ContentBlock::text(result)])
+                .await?;
         }
-        SessionEvent::Message { content, .. } => { /* print response */ }
+        SessionEvent::Message { .. } => { /* print the response */ }
         SessionEvent::StatusIdle { .. } => break,
         _ => {}
     }
+}
+Ok(())
 }
 ```
 
@@ -154,40 +161,52 @@ while let Some(event) = stream.next().await {
 
 Point at your own infrastructure — same API, identical behavior:
 
-```rust,ignore
-let client = EnterpriseClient::self_hosted(
-    "adk_live_your_key",
-    "https://your-server.internal/managed/v1",
-)?;
+```rust,no_run
+use adk_enterprise::EnterpriseClient;
 
-// Everything works identically — no code paths conditional on URL
-let agents = client.list_agents(None).await?;
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let client =
+        EnterpriseClient::self_hosted("adk_live_your_key", "https://your-server.internal/managed/v1")?;
+
+    // No code path depends on the URL
+    let _agents = client.list_agents(None).await?;
+    Ok(())
+}
 ```
 
 ## Provider Switching
 
 Same agent definition, any model:
 
-```rust,ignore
-use adk_enterprise::{ModelRef, Provider};
+```rust,no_run
+use adk_enterprise::{CreateAgentParams, EnterpriseClient, ModelRef, Provider};
 
-// Shorthand (provider inferred from name)
-let agent = client.create_agent(CreateAgentParams {
-    model: "gemini-3.7-flash".into(),
-    ..Default::default()
-}).await?;
+async fn run(client: &EnterpriseClient) -> Result<(), Box<dyn std::error::Error>> {
+    // Shorthand (provider inferred from name)
+    client
+        .create_agent(CreateAgentParams {
+            model: "gemini-3.7-flash".into(),
+            ..Default::default()
+        })
+        .await?;
 
-// Explicit provider
-let agent = client.create_agent(CreateAgentParams {
-    model: ModelRef::structured(Provider::Openai, "gpt-5.6-terra"),
-    ..Default::default()
-}).await?;
+    // Explicit provider
+    client
+        .create_agent(CreateAgentParams {
+            model: ModelRef::structured(Provider::Openai, "gpt-5.6-terra"),
+            ..Default::default()
+        })
+        .await?;
 
-// OpenAI-compatible endpoint (DeepSeek, Together, etc.)
-let agent = client.create_agent(CreateAgentParams {
-    model: ModelRef::compatible("deepseek-v4-flash", "https://api.deepseek.com"),
-    ..Default::default()
-}).await?;
+    // OpenAI-compatible endpoint (DeepSeek, Together, etc.)
+    client
+        .create_agent(CreateAgentParams {
+            model: ModelRef::compatible("deepseek-v4-flash", "https://api.deepseek.com"),
+            ..Default::default()
+        })
+        .await?;
+    Ok(())
+}
 ```
 
 ## API Surface
@@ -207,46 +226,61 @@ let agent = client.create_agent(CreateAgentParams {
 
 All methods return `Result<T, EnterpriseError>`. Error variants map directly to API responses:
 
-```rust,ignore
-match client.get_agent("agt_nonexistent").await {
-    Ok(agent) => println!("Found: {}", agent.name),
-    Err(EnterpriseError::NotFound { message }) => eprintln!("Not found: {message}"),
-    Err(EnterpriseError::Authentication { .. }) => eprintln!("Invalid API key"),
-    Err(EnterpriseError::RateLimit { retry_after, .. }) => {
-        eprintln!("Rate limited — retry after {retry_after:?}");
+```rust,no_run
+use adk_enterprise::{EnterpriseClient, EnterpriseError};
+
+async fn lookup(client: &EnterpriseClient) {
+    match client.get_agent("agt_nonexistent").await {
+        Ok(agent) => println!("Found: {}", agent.name),
+        Err(EnterpriseError::NotFound { message }) => eprintln!("Not found: {message}"),
+        Err(EnterpriseError::Authentication { .. }) => eprintln!("Invalid API key"),
+        Err(EnterpriseError::RateLimit { retry_after, .. }) => {
+            eprintln!("Rate limited — retry after {retry_after:?}");
+        }
+        Err(e) if e.is_retryable() => eprintln!("Transient (already retried): {e}"),
+        Err(e) => eprintln!("Permanent: {e}"),
     }
-    Err(e) if e.is_retryable() => eprintln!("Transient (already retried): {e}"),
-    Err(e) => eprintln!("Permanent: {e}"),
 }
 ```
 
 ## Configuration
 
-```rust,ignore
-use adk_enterprise::ClientConfig;
+```rust,no_run
 use std::time::Duration;
 
-let config = ClientConfig::new("adk_live_...")
-    .with_base_url("https://staging.enterprise.adk-rust.com/managed/v1")
-    .with_sse_timeout(Duration::from_secs(600))
-    .with_max_retries(5)
-    .with_retry_backoff(Duration::from_millis(500));
+use adk_enterprise::{ClientConfig, EnterpriseClient};
 
-let client = EnterpriseClient::with_config(config)?;
+fn client() -> Result<EnterpriseClient, adk_enterprise::EnterpriseError> {
+    let config = ClientConfig::new("adk_live_...")
+        .with_base_url("https://your-server.internal/managed/v1")
+        .with_sse_timeout(Duration::from_secs(600))
+        .with_max_retries(5)
+        .with_retry_backoff(Duration::from_millis(500));
+
+    EnterpriseClient::with_config(config)
+}
 ```
+
+The default base URL is `https://enterprise.adk-rust.com/managed/v1` (`config::DEFAULT_BASE_URL`).
 
 ## Module Structure
 
 ```text
 adk-enterprise/src/
-├── lib.rs           # Exports, crate docs
-├── client.rs        # EnterpriseClient struct + constructors
-├── config.rs        # ClientConfig builder
-├── error.rs         # EnterpriseError enum (CANON §5)
-├── retry.rs         # Exponential backoff + jitter
-├── idempotency.rs   # UUID v4 key generation
-├── response.rs      # HTTP response parsing + error mapping
-├── stream.rs        # SSE parser + auto-reconnect + EventStream
+├── lib.rs                 # Exports, crate docs
+├── client.rs              # EnterpriseClient struct + constructors
+├── agents.rs              # Agent methods
+├── client_environment.rs  # Environment methods
+├── client_sessions.rs     # Session methods
+├── client_events.rs       # Event and convenience methods
+├── client_vault.rs        # Vault and credential methods (beta)
+├── client_memory.rs       # Memory store methods (beta)
+├── config.rs              # ClientConfig builder
+├── error.rs               # EnterpriseError enum
+├── retry.rs               # Exponential backoff + jitter
+├── idempotency.rs         # UUID v4 key generation
+├── response.rs            # HTTP response parsing + error mapping
+├── stream.rs              # SSE parser + auto-reconnect + EventStream
 └── types/
     ├── agent.rs         # Agent, CreateAgentParams, UpdateAgentParams
     ├── environment.rs   # Environment, CreateEnvironmentParams
@@ -274,8 +308,8 @@ adk-enterprise/src/
 
 ## License
 
-Apache-2.0 — see [LICENSE](../LICENSE) for details.
+Apache-2.0
 
 ## Part of ADK-Rust
 
-This crate is part of the [ADK-Rust](https://github.com/zavora-ai/adk-rust) framework for building AI agents in Rust.
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.

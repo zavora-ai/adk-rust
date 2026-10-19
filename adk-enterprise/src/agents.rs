@@ -30,7 +30,7 @@ impl EnterpriseClient {
     /// let client = EnterpriseClient::new("adk_live_...")?;
     /// let agent = client.create_agent(CreateAgentParams {
     ///     name: "My Agent".into(),
-    ///     model: "gemini-2.5-flash".into(),
+    ///     model: "gemini-3.7-flash".into(),
     ///     ..Default::default()
     /// }).await?;
     /// println!("Created agent: {}", agent.id);

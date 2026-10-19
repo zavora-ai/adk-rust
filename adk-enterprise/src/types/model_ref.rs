@@ -1,13 +1,13 @@
 //! ModelRef — provider-neutral model reference.
 //!
-//! Supports shorthand string (e.g., `"gemini-2.5-flash"`) or a structured
+//! Supports shorthand string (e.g., `"gemini-3.7-flash"`) or a structured
 //! object with explicit provider, model config, and optional speed hint.
 
 use serde::{Deserialize, Serialize};
 
 /// A provider-neutral model reference.
 ///
-/// Supports shorthand string (e.g., `"gemini-2.5-flash"`) or a structured
+/// Supports shorthand string (e.g., `"gemini-3.7-flash"`) or a structured
 /// object with provider and model details.
 ///
 /// Uses `#[serde(untagged)]` so that a plain JSON string deserializes to
@@ -20,11 +20,11 @@ use serde::{Deserialize, Serialize};
 /// use adk_enterprise::ModelRef;
 ///
 /// // Shorthand from &str
-/// let m: ModelRef = "gemini-2.5-flash".into();
+/// let m: ModelRef = "gemini-3.7-flash".into();
 ///
 /// // Structured
 /// use adk_enterprise::Provider;
-/// let m = ModelRef::structured(Provider::Openai, "gpt-4.1");
+/// let m = ModelRef::structured(Provider::Openai, "gpt-5.6-terra");
 ///
 /// // Compatible endpoint
 /// let m = ModelRef::compatible("deepseek-chat", "https://api.deepseek.com");
@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ModelRef {
-    /// Shorthand model name (e.g., `"gemini-2.5-flash"`, `"gpt-4.1"`).
+    /// Shorthand model name (e.g., `"gemini-3.7-flash"`, `"gpt-5.6-terra"`).
     Shorthand(String),
     /// Structured model reference with provider details.
     Structured {
@@ -72,7 +72,7 @@ impl ModelRef {
     /// ```rust
     /// use adk_enterprise::{ModelRef, Provider};
     ///
-    /// let model_ref = ModelRef::structured(Provider::Openai, "gpt-4.1");
+    /// let model_ref = ModelRef::structured(Provider::Openai, "gpt-5.6-terra");
     /// ```
     pub fn structured(provider: Provider, model: impl Into<String>) -> Self {
         Self::Structured { provider, model: ModelConfig::Name(model.into()), speed: None }
@@ -87,7 +87,7 @@ impl ModelRef {
     ///
     /// let model_ref = ModelRef::structured_with_speed(
     ///     Provider::Gemini,
-    ///     "gemini-2.5-flash",
+    ///     "gemini-3.7-flash",
     ///     "fast",
     /// );
     /// ```
@@ -183,7 +183,7 @@ pub enum Provider {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ModelConfig {
-    /// Simple model name (e.g., `"gpt-4.1"`).
+    /// Simple model name (e.g., `"gpt-5.6-terra"`).
     Name(String),
     /// Compatible endpoint with custom base URL and optional API key.
     Compatible {

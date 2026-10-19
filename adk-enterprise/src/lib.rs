@@ -10,7 +10,7 @@
 //!
 //! - **Lightweight**: Zero dependency on `adk-model`, `adk-runner`, `adk-agent`, or any heavy
 //!   runtime crate — only HTTP + SSE.
-//! - **Wire-compatible**: Types serialize/deserialize to the CANON §3.4 wire shapes.
+//! - **Wire-compatible**: Types serialize and deserialize to the service's wire shapes.
 //! - **Ergonomic**: Convenience methods, builder patterns, typed events, minimal boilerplate.
 //! - **Resilient**: Auto-reconnect SSE, retry on transient errors, configurable timeouts.
 //!
@@ -24,7 +24,7 @@
 //!
 //! let agent = client.create_agent(CreateAgentParams {
 //!     name: "My Agent".into(),
-//!     model: "gemini-2.5-flash".into(),
+//!     model: "gemini-3.7-flash".into(),
 //!     ..Default::default()
 //! }).await?;
 //!
