@@ -154,7 +154,7 @@ CHOOSE_ONE = re.compile(
     r"|deepseek|groq|ollama|bedrock|azure-ai|postgres-session|redis-session"
     r"|mongodb-session|firestore-session|neo4j-session|sqlite-memory|database-memory"
     r"|redis-memory|mongodb-memory|neo4j-memory|auth-bridge|openai-realtime"
-    r"|vertex-live|livekit|openai-webrtc)$"
+    r"|gemini-live|vertex-live|livekit|openai-webrtc)$"
 )
 
 

@@ -481,11 +481,28 @@ while let Some(event) = session.next_event().await {
 
 | Feature | Dependencies | Use Case |
 |---------|-------------|----------|
+| `openai` | `async-openai` + `tokio-tungstenite` | OpenAI Realtime over WebSocket |
+| `gemini` | `adk-gemini` + `tokio-tungstenite` | Gemini Live over WebSocket |
 | `vertex-live` | `gemini` + `google-cloud-auth` | Vertex AI Live with ADC/service account auth |
 | `livekit` | `livekit` + `livekit-api` | LiveKit WebRTC bridge |
 | `openai-webrtc` | `openai` + `str0m` + `audiopus` | OpenAI WebRTC with Opus (requires cmake) |
 | `full` | `openai` + `gemini` + `vertex-live` + `livekit` | All transports except WebRTC |
 | `full-webrtc` | `full` + `openai-webrtc` | Everything (requires cmake) |
+
+Through the `adk-rust` umbrella crate, `realtime` links `adk-realtime` without a transport.
+Add one transport feature for each provider the application uses:
+
+| `adk-rust` feature | Forwards to |
+|--------------------|-------------|
+| `openai-realtime` | `adk-realtime/openai` |
+| `gemini-live` | `adk-realtime/gemini` |
+| `vertex-live` | `adk-realtime/vertex-live` |
+| `openai-webrtc` | `adk-realtime/openai-webrtc` (requires cmake) |
+| `livekit` | `adk-realtime/livekit` |
+
+```toml
+adk-rust = { version = "3.0.0", features = ["minimal", "gemini-live"] }
+```
 
 ## LiveKit WebRTC Bridge
 

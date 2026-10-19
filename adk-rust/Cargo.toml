@@ -200,7 +200,10 @@ auth-bridge = ["auth", "server", "adk-auth/auth-bridge"]
 sandbox-workspace = ["sandbox", "runner", "adk-sandbox/workspace", "adk-runner/sandbox-runner"]
 sandbox-docker = ["sandbox-workspace", "adk-sandbox/workspace-docker"]
 
-# Realtime transport features (forwarded to adk-realtime)
+# Realtime transport features (forwarded to adk-realtime). `realtime` alone links the crate
+# without a transport; each of these adds one.
+openai-realtime = ["realtime", "adk-realtime/openai"]
+gemini-live = ["realtime", "adk-realtime/gemini"]
 vertex-live = ["realtime", "adk-realtime/vertex-live"]
 livekit = ["realtime", "adk-realtime/livekit"]
 openai-webrtc = ["realtime", "adk-realtime/openai-webrtc"]
