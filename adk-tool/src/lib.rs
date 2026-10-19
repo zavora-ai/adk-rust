@@ -7,60 +7,72 @@
 //!
 //! This crate provides the tool infrastructure for ADK agents:
 //!
+//! - [`macro@tool`] - Turn an async function into a [`Tool`] whose arguments are
+//!   checked against the derived schema before it runs
 //! - [`FunctionTool`] - Create tools from async Rust functions
+//! - [`StatefulTool`] - Share `Arc<S>` state with a tool handler
 //! - [`AgentTool`] - Use agents as callable tools for composition
-//! - [`GoogleSearchTool`] - Web search via Gemini's grounding
+//! - [`GoogleSearchTool`] and the other [`builtin`] wrappers - Provider-hosted tools,
+//!   each declaring its [`ToolEffect`]
 //! - `McpToolset` - MCP tools, resources, prompts, completion, elicitation,
 //!   subscriptions, and negotiated tasks with the `mcp` feature
 //! - `McpServerManager` - Dynamic local MCP server registry, process lifecycle,
 //!   persistence, health monitoring, and bounded restart with the `mcp` feature
-//! - [`BasicToolset`] - Group multiple tools together
+//! - [`BasicToolset`], [`FilteredToolset`], [`MergedToolset`], [`PrefixedToolset`] -
+//!   Group, filter, combine, and namespace toolsets
+//! - [`ToolArgumentValidator`] - Check hand-written tools' arguments against a JSON Schema
 //! - [`ExitLoopTool`] - Control flow for loop agents
 //! - [`LoadArtifactsTool`] - Inject binary artifacts into context
 //!
 //! ## Quick Start
 //!
-//! ```rust,no_run
+//! ```rust
+//! use adk_core::{Result, ToolContext};
 //! use adk_tool::FunctionTool;
-//! use adk_core::{ToolContext, Result};
-//! use serde_json::{json, Value};
+//! use schemars::JsonSchema;
+//! use serde::Serialize;
+//! use serde_json::{Value, json};
 //! use std::sync::Arc;
 //!
-//! async fn get_weather(ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+//! #[derive(Serialize, JsonSchema)]
+//! struct WeatherParams {
+//!     /// The city to get weather for
+//!     city: String,
+//! }
+//!
+//! async fn get_weather(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
 //!     let city = args["city"].as_str().unwrap_or("Unknown");
 //!     Ok(json!({
 //!         "city": city,
-//!         "temperature": 72,
+//!         "temperature": 22,
 //!         "condition": "sunny"
 //!     }))
 //! }
 //!
-//! let tool = FunctionTool::new(
-//!     "get_weather",
-//!     "Get current weather for a city",
-//!     get_weather,
-//! );
+//! let tool = FunctionTool::new("get_weather", "Get current weather for a city", get_weather)
+//!     .with_parameters_schema::<WeatherParams>();
 //! ```
 //!
 //! ## MCP Integration
 //!
-//! Connect to MCP servers for external tools:
+//! Connect to MCP servers for external tools (requires the `mcp` feature):
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # #[cfg(feature = "mcp")]
+//! # async fn connect() -> Result<(), Box<dyn std::error::Error>> {
 //! use adk_tool::{
 //!     McpToolset,
 //!     mcp::rmcp::{ServiceExt, transport::TokioChildProcess},
 //! };
 //! use tokio::process::Command;
 //!
-//! let client = ().serve(TokioChildProcess::new(
-//!     Command::new("/opt/company/bin/workspace-mcp")
-//!         .arg("--stdio")
-//!         .arg("--root")
-//!         .arg("/srv/workspace")
-//! )?).await?;
+//! let mut command = Command::new("/opt/company/bin/workspace-mcp");
+//! command.arg("--stdio").arg("--root").arg("/srv/workspace");
+//! let client = ().serve(TokioChildProcess::new(command)?).await?;
 //!
 //! let toolset = McpToolset::new(client);
+//! # Ok(())
+//! # }
 //! ```
 
 #![deny(missing_docs)]
