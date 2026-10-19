@@ -11,7 +11,7 @@
 //! description: "A helpful assistant"
 //! model:
 //!   provider: gemini
-//!   model_id: gemini-2.0-flash
+//!   model_id: gemini-3.7-flash
 //! instructions: |
 //!   You are a helpful assistant.
 //! tools:
@@ -89,7 +89,7 @@ pub struct ModelConfig {
     /// LLM provider name (e.g., "gemini", "openai", "anthropic").
     pub provider: String,
 
-    /// Model identifier within the provider (e.g., "gemini-2.0-flash").
+    /// Model identifier within the provider (e.g., "gemini-3.7-flash").
     pub model_id: String,
 
     /// Optional sampling temperature.

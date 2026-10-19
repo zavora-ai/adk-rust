@@ -7,10 +7,10 @@
 //!
 //! | Method | Path | Handler | Auth |
 //! |--------|------|---------|------|
-//! | POST | `/api/agents` | [`create_agent`] | Required |
-//! | GET | `/api/agents` | [`list_agents`] | Required |
-//! | GET | `/api/agents/{name}` | [`get_agent`] | Required |
-//! | DELETE | `/api/agents/{name}` | [`delete_agent`] | Required |
+//! | POST | `/api/agents` | `create_agent` | Required |
+//! | GET | `/api/agents` | `list_agents` | Required |
+//! | GET | `/api/agents/{name}` | `get_agent` | Required |
+//! | DELETE | `/api/agents/{name}` | `delete_agent` | Required |
 //!
 //! All routes return JSON with appropriate HTTP status codes
 //! (201, 200, 204, 404, 409, 401).

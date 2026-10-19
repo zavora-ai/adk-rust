@@ -1,14 +1,14 @@
 //! Agent config loader for YAML definitions.
 //!
 //! Parses YAML files, validates schemas, resolves tool and sub-agent references,
-//! and produces live [`Agent`](adk_core::Agent) instances.
+//! and produces live [`Agent`] instances.
 //!
 //! # Overview
 //!
 //! The [`AgentConfigLoader`] reads YAML agent definition files, validates them
 //! against the schema defined in [`super::schema`], resolves tool references
-//! from a [`ToolRegistry`](adk_core::ToolRegistry), resolves sub-agent references
-//! from previously loaded agents, and constructs [`Agent`](adk_core::Agent)
+//! from a [`ToolRegistry`], resolves sub-agent references
+//! from previously loaded agents, and constructs [`Agent`]
 //! instances using [`LlmAgentBuilder`](adk_agent::LlmAgentBuilder).
 //!
 //! # Example

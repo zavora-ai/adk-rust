@@ -2,8 +2,8 @@
 //!
 //! Axum routes mapping HTTP methods and URL paths to [`RequestHandler`]
 //! operations. Streaming endpoints (`/message:stream`,
-//! `/tasks/{taskId}:subscribe`) return SSE streams with direct
-//! [`StreamResponse`] JSON (no JSON-RPC wrapper).
+//! `/tasks/{taskId}/subscribe`) return SSE streams of `StreamResponse`
+//! JSON (no JSON-RPC wrapper).
 //!
 //! Content-Type for requests and responses is `application/a2a+json`
 //! (also accepts `application/json` for backward compatibility).
