@@ -1,6 +1,6 @@
 //! Redis-backed memory service.
 //!
-//! Provides [`RedisMemoryService`], a [`MemoryService`](crate::MemoryService) implementation
+//! Provides [`RedisMemoryService`], a [`MemoryService`] implementation
 //! that stores memory entries in Redis with keyword-based search. Redis does not
 //! natively support vector similarity search, so this backend uses the same word-overlap
 //! matching and ranking as [`InMemoryMemoryService`](crate::InMemoryMemoryService).

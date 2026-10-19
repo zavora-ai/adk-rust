@@ -1,6 +1,6 @@
 //! MongoDB memory service backed by MongoDB Atlas Vector Search.
 //!
-//! Provides [`MongoMemoryService`], a [`MemoryService`](crate::MemoryService) implementation
+//! Provides [`MongoMemoryService`], a [`MemoryService`] implementation
 //! that stores memory entries in MongoDB with optional Atlas Vector Search for
 //! cosine similarity ranking. When no embedding provider is configured, falls back
 //! to MongoDB text search on the content field.

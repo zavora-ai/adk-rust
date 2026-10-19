@@ -1,6 +1,6 @@
 //! Neo4j memory service with graph-based contextual retrieval.
 //!
-//! Provides [`Neo4jMemoryService`], a [`MemoryService`](crate::MemoryService) implementation
+//! Provides [`Neo4jMemoryService`], a [`MemoryService`] implementation
 //! that stores memory entries as graph nodes with `FOLLOWS` relationships for
 //! temporal context enrichment beyond isolated vector matches.
 //!

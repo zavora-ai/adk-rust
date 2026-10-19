@@ -14,14 +14,38 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,no_run
-//! use adk_memory::InMemoryMemoryService;
+//! ```rust
+//! use adk_core::Content;
+//! use adk_memory::{InMemoryMemoryService, MemoryEntry, MemoryService, SearchRequest};
 //!
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> adk_core::Result<()> {
 //! let service = InMemoryMemoryService::new();
+//! let entry = MemoryEntry {
+//!     content: Content::new("user").with_text("Hometown: Nairobi."),
+//!     author: "user".to_string(),
+//!     timestamp: chrono::Utc::now(),
+//! };
+//! service.add_session("app", "user", "session", vec![entry]).await?;
 //!
-//! // Memory is automatically searched and injected
-//! // when configured via LlmAgentBuilder::include_memory()
+//! let found = service
+//!     .search(SearchRequest {
+//!         query: "hometown".into(),
+//!         user_id: "user".into(),
+//!         app_name: "app".into(),
+//!         limit: None,
+//!         min_score: None,
+//!         project_id: None,
+//!     })
+//!     .await?;
+//! assert_eq!(found.memories.len(), 1);
+//! # Ok(())
+//! # }
 //! ```
+//!
+//! The runner attaches a memory service to each invocation (`ToolContext::search_memory`);
+//! `adk-tool`'s `LoadMemoryTool` and `PreloadMemoryTool` (feature `memory-tools`) expose it
+//! to the model.
 //!
 //! ## Project-Scoped Memory
 //!
@@ -50,8 +74,10 @@
 //! ## Features
 //!
 //! - Per-user and per-project memory isolation
-//! - Semantic search queries
-//! - Six backends: InMemory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j
+//! - Keyword search, and vector search with an `EmbeddingProvider` on PostgreSQL, MongoDB,
+//!   and Neo4j
+//! - Backends: InMemory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j, Vertex AI Memory Bank,
+//!   and the SQLite knowledge graph `GraphMemoryService`
 //! - Versioned schema migrations
 //! - GDPR `delete_user` across all projects
 

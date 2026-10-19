@@ -433,7 +433,7 @@ CREATE INDEX IF NOT EXISTS idx_kg_epi ON kg_episodic(app_name, user_id);",
     /// Score entities against a free-text query, returning the best matches with
     /// their current relations. Only currently-valid facts are considered.
     ///
-    /// The query is split into content tokens (see [`tokenize`]); an entity
+    /// The query is split into content tokens (see `tokenize`); an entity
     /// scores per token found in its name (×3), type (×2), or observations (×1),
     /// so a multi-word recall query like "dietary notes and allergies" matches an
     /// entity whose facts mention "allergic" or "peanuts" — which a whole-string

@@ -1,6 +1,6 @@
 //! SQLite-backed memory service.
 //!
-//! Provides [`SqliteMemoryService`], a [`MemoryService`](crate::MemoryService) implementation
+//! Provides [`SqliteMemoryService`], a [`MemoryService`] implementation
 //! that stores memory entries in SQLite with keyword-based full-text search via FTS5.
 //!
 //! This is a lightweight alternative to [`PostgresMemoryService`](crate::PostgresMemoryService)

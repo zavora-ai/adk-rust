@@ -4,7 +4,7 @@ Semantic memory and search for Rust Agent Development Kit (ADK-Rust) agents.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-memory.svg)](https://crates.io/crates/adk-memory)
 [![Documentation](https://docs.rs/adk-memory/badge.svg)](https://docs.rs/adk-memory)
-[![License](https://img.shields.io/crates/l/adk-memory.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-memory.svg)](../LICENSE)
 
 ## Overview
 
@@ -17,10 +17,13 @@ Semantic memory and search for Rust Agent Development Kit (ADK-Rust) agents.
 - **Neo4jMemoryService** - Neo4j-backed persistence (`neo4j-memory` feature)
 - **RedisMemoryService** - Redis-backed persistence (`redis-memory` feature)
 - **VertexAiMemoryBankService** - Vertex AI Agent Engine Memory Bank (`vertex-memory` feature)
+- **GraphMemoryService** - Bi-temporal knowledge graph of entities, relations, and observations on SQLite (`graph-memory` feature)
 - **MemoryService** - Trait for custom storage backends
-- **Semantic Search** - Query memories by content similarity
+- **Search** - Keyword search on the in-memory, SQLite, and Redis backends; vector similarity with an `EmbeddingProvider` on PostgreSQL (pgvector, with a `tsvector` keyword fallback), MongoDB (Atlas Vector Search, with a text-search fallback), and Neo4j
 - **Project-Scoped Isolation** - Isolate memories by project within a user
-- **Schema Migrations** - Versioned, forward-only migrations for all database backends
+- **Schema Migrations** - Versioned, forward-only migrations for the SQL, MongoDB, and Neo4j backends
+
+Agents reach memory through the runner, which attaches a memory service to each invocation (`ToolContext::search_memory`), and through `adk-tool`'s `memory-tools` feature: `LoadMemoryTool`, and `PreloadMemoryTool`, which also converts into a `BeforeModelCallback` that injects memories at the start of a turn.
 
 ## Installation
 
@@ -39,35 +42,42 @@ adk-rust = { version = "3.0.0", features = ["memory"] }
 ## Quick Start
 
 ```rust
-use adk_memory::{InMemoryMemoryService, MemoryService, MemoryEntry, SearchRequest};
 use adk_core::Content;
+use adk_memory::{InMemoryMemoryService, MemoryEntry, MemoryService, SearchRequest};
 use chrono::Utc;
 
-let service = InMemoryMemoryService::new();
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = InMemoryMemoryService::new();
 
-let entries = vec![
-    MemoryEntry {
-        content: Content::new("user").with_text("User prefers dark mode"),
+    let entries = vec![MemoryEntry {
+        content: Content::new("user").with_text("The user prefers the dark theme."),
         author: "system".to_string(),
         timestamp: Utc::now(),
-    },
-];
+    }];
 
-service.add_session("my_app", "user_123", "session_456", entries).await?;
+    service.add_session("my_app", "user_123", "session_456", entries).await?;
 
-let response = service.search(SearchRequest {
-    query: "what theme does the user like?".to_string(),
-    user_id: "user_123".to_string(),
-    app_name: "my_app".to_string(),
-    limit: None,
-    min_score: None,
-    project_id: None, // None = global entries only
-}).await?;
+    let response = service
+        .search(SearchRequest {
+            query: "dark theme".to_string(),
+            user_id: "user_123".to_string(),
+            app_name: "my_app".to_string(),
+            limit: None,
+            min_score: None,
+            project_id: None, // None = global entries only
+        })
+        .await?;
 
-for memory in response.memories {
-    println!("Found: {:?}", memory.content);
+    assert_eq!(response.memories.len(), 1);
+    for memory in response.memories {
+        println!("Found: {:?}", memory.content);
+    }
+    Ok(())
 }
 ```
+
+The in-memory and Redis backends split text into runs of Unicode letters and digits, score each entry by the share of query words it contains (`min_score` filters on that score), and return the highest-scoring, then newest, entries.
 
 ## Project-Scoped Memory
 
@@ -81,83 +91,116 @@ Memories can be scoped to a project within a user. The isolation key is `(app_na
 ### Writing project-scoped entries
 
 ```rust
-use adk_memory::{InMemoryMemoryService, MemoryService, MemoryEntry};
 use adk_core::Content;
+use adk_memory::{InMemoryMemoryService, MemoryEntry, MemoryService};
 use chrono::Utc;
 
-let service = InMemoryMemoryService::new();
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = InMemoryMemoryService::new();
+    let entry = MemoryEntry {
+        content: Content::new("user").with_text("Launch is planned for March"),
+        author: "user".to_string(),
+        timestamp: Utc::now(),
+    };
 
-// Global entry (no project scope)
-service.add_session("app", "user", "sess-1", vec![entry]).await?;
+    // Global entry (no project scope)
+    service.add_session("app", "user", "sess-1", vec![entry.clone()]).await?;
 
-// Project-scoped entry
-service.add_session_to_project("app", "user", "sess-2", "my-project", vec![entry]).await?;
+    // Project-scoped entries
+    service
+        .add_session_to_project("app", "user", "sess-2", "my-project", vec![entry.clone()])
+        .await?;
 
-// Single entry to a project
-service.add_entry_to_project("app", "user", "my-project", entry).await?;
+    // Single entry to a project
+    service.add_entry_to_project("app", "user", "my-project", entry).await?;
+    Ok(())
+}
 ```
 
 ### Searching with project scope
 
 ```rust
-use adk_memory::SearchRequest;
+use adk_memory::{MemoryService, SearchRequest, SearchResponse};
 
-// Global-only search — returns only global entries
-let global = service.search(SearchRequest {
-    query: "topic".into(),
-    user_id: "user".into(),
-    app_name: "app".into(),
-    limit: None,
-    min_score: None,
-    project_id: None,
-}).await?;
+async fn search(service: &dyn MemoryService) -> adk_core::Result<(SearchResponse, SearchResponse)> {
+    // Global-only search — returns only global entries
+    let global = service
+        .search(SearchRequest {
+            query: "topic".into(),
+            user_id: "user".into(),
+            app_name: "app".into(),
+            limit: None,
+            min_score: None,
+            project_id: None,
+        })
+        .await?;
 
-// Project search — returns global + project entries
-let project = service.search(SearchRequest {
-    query: "topic".into(),
-    user_id: "user".into(),
-    app_name: "app".into(),
-    limit: None,
-    min_score: None,
-    project_id: Some("my-project".into()),
-}).await?;
+    // Project search — returns global + project entries
+    let project = service
+        .search(SearchRequest {
+            query: "topic".into(),
+            user_id: "user".into(),
+            app_name: "app".into(),
+            limit: None,
+            min_score: None,
+            project_id: Some("my-project".into()),
+        })
+        .await?;
+    Ok((global, project))
+}
 ```
 
 ### Project-scoped deletion
 
 ```rust
-// Delete entries matching a query within a project only
-service.delete_entries_in_project("app", "user", "my-project", "query").await?;
+use adk_memory::MemoryService;
 
-// Delete ALL entries for a project
-service.delete_project("app", "user", "my-project").await?;
+async fn delete(service: &dyn MemoryService) -> adk_core::Result<()> {
+    // Delete entries matching a query within a project only
+    service.delete_entries_in_project("app", "user", "my-project", "query").await?;
 
-// Global delete — only removes global entries
-service.delete_entries("app", "user", "query").await?;
+    // Delete ALL entries for a project
+    service.delete_project("app", "user", "my-project").await?;
 
-// GDPR delete_user — removes everything (global + all projects)
-service.delete_user("app", "user").await?;
+    // Global delete — only removes global entries
+    service.delete_entries("app", "user", "query").await?;
+
+    // GDPR delete_user — removes everything (global + all projects)
+    service.delete_user("app", "user").await?;
+    Ok(())
+}
 ```
 
 ### MemoryServiceAdapter with project scope
 
 ```rust
-use adk_memory::{InMemoryMemoryService, MemoryServiceAdapter};
-use adk_core::Memory;
 use std::sync::Arc;
 
-let service = Arc::new(InMemoryMemoryService::new());
+use adk_core::{Content, Memory, MemoryEntry};
+use adk_memory::{InMemoryMemoryService, MemoryServiceAdapter};
 
-// Adapter without project — operates on global entries
-let global_adapter = MemoryServiceAdapter::new(service.clone(), "app", "user");
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = Arc::new(InMemoryMemoryService::new());
 
-// Adapter with project — all operations scoped to the project
-let project_adapter = MemoryServiceAdapter::new(service.clone(), "app", "user")
-    .with_project_id("my-project");
+    // Adapter without project — operates on global entries
+    let global_adapter = MemoryServiceAdapter::new(service.clone(), "app", "user");
 
-// Core Memory trait methods for ad-hoc project access
-global_adapter.search_in_project("query", "other-project").await?;
-global_adapter.add_to_project(entry, "other-project").await?;
+    // Adapter with project — all operations scoped to the project
+    let _project_adapter =
+        MemoryServiceAdapter::new(service.clone(), "app", "user").with_project_id("my-project");
+
+    // Core Memory trait methods for ad-hoc project access
+    let entry = MemoryEntry {
+        content: Content::new("user").with_text("Budget approved"),
+        author: "user".to_string(),
+    };
+    global_adapter.add_to_project(entry, "other-project").await?;
+    let found = global_adapter.search_in_project("budget", "other-project").await?;
+    assert_eq!(found.len(), 1);
+    Ok(())
+}
 ```
 
 ### Project ID validation
@@ -165,9 +208,11 @@ global_adapter.add_to_project(entry, "other-project").await?;
 ```rust
 use adk_memory::validate_project_id;
 
-validate_project_id("my-project")?;  // Ok
-validate_project_id("")?;            // Err: must not be empty
-validate_project_id(&"x".repeat(257))?; // Err: exceeds 256 chars
+fn main() {
+    assert!(validate_project_id("my-project").is_ok());
+    assert!(validate_project_id("").is_err()); // must not be empty
+    assert!(validate_project_id(&"x".repeat(257)).is_err()); // longer than 256 bytes
+}
 ```
 
 ## Feature Flags
@@ -180,6 +225,8 @@ validate_project_id(&"x".repeat(257))?; // Err: exceeds 256 chars
 | `mongodb-memory` | MongoDB | Document-oriented persistence |
 | `neo4j-memory` | Neo4j | Graph database persistence |
 | `vertex-memory` | Vertex AI Memory Bank | Managed memory generation and retrieval on the Gemini Enterprise Agent Platform |
+| `graph-memory` | SQLite | `GraphMemoryService` knowledge graph (implies `sqlite-memory`) |
+| `embedding-trait` | — | The `EmbeddingProvider` trait without a vector backend |
 
 ```toml
 # SQLite
@@ -199,7 +246,7 @@ adk-memory = { version = "3.0.0", features = ["database-memory"] }
 
 ## Schema Migrations
 
-All database backends (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned migration system. Migrations are forward-only, idempotent, and tracked in a registry table.
+The SQLite, PostgreSQL, MongoDB, and Neo4j backends include a versioned migration system. Migrations are forward-only, idempotent, and tracked in a registry table. `schema_version()` returns 0 only when the registry table does not exist; a failed read is an error. PostgreSQL `migrate()` holds the advisory lock `PostgresMemoryService::ADVISORY_LOCK_KEY` on one connection.
 
 | Version | Description |
 |---------|-------------|
@@ -209,46 +256,51 @@ All database backends (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned m
 ```rust
 use adk_memory::SqliteMemoryService;
 
-let service = SqliteMemoryService::new("sqlite:memory.db").await?;
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = SqliteMemoryService::new("sqlite:memory.db?mode=rwc").await?;
 
-// Run all pending migrations (v1 + v2)
-service.migrate().await?;
+    // Run all pending migrations
+    service.migrate().await?;
 
-// Check current schema version
-let version = service.schema_version().await?;
-println!("Schema version: {version}");
+    // Check the current schema version
+    let version = service.schema_version().await?;
+    println!("Schema version: {version}");
+    Ok(())
+}
 ```
 
 ## MemoryService Trait
 
-```rust
-#[async_trait]
-pub trait MemoryService: Send + Sync {
-    // Core methods
-    async fn add_session(&self, app_name: &str, user_id: &str, session_id: &str, entries: Vec<MemoryEntry>) -> Result<()>;
-    async fn search(&self, req: SearchRequest) -> Result<SearchResponse>;
+| Method | Default |
+|--------|---------|
+| `add_session(app, user, session, entries)` | required |
+| `search(SearchRequest)` | required |
+| `delete_user`, `delete_session`, `add_entry`, `delete_entries`, `list_recent` | Return a "not implemented" error; backends override them |
+| `health_check()` | `Ok(())` |
+| `supports_project_scoping()` | `false` |
+| `add_session_to_project`, `add_entry_to_project`, `delete_entries_in_project`, `delete_project` | Return an error |
 
-    // Project-scoped methods (defaults delegate to non-project versions)
-    async fn add_session_to_project(&self, app_name: &str, user_id: &str, session_id: &str, project_id: &str, entries: Vec<MemoryEntry>) -> Result<()>;
-    async fn add_entry_to_project(&self, app_name: &str, user_id: &str, project_id: &str, entry: MemoryEntry) -> Result<()>;
-    async fn delete_entries_in_project(&self, app_name: &str, user_id: &str, project_id: &str, query: &str) -> Result<u64>;
-    async fn delete_project(&self, app_name: &str, user_id: &str, project_id: &str) -> Result<u64>;
-
-    // Lifecycle methods
-    async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()>;
-    async fn delete_session(&self, app_name: &str, user_id: &str, session_id: &str) -> Result<()>;
-    async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()>;
-    async fn delete_entries(&self, app_name: &str, user_id: &str, query: &str) -> Result<u64>;
-    async fn health_check(&self) -> Result<()>;
-}
-```
+The project methods refuse instead of falling back to global writes or deletes, which would cross the project boundary. Every backend in this crate except `VertexAiMemoryBankService` and `GraphMemoryService` implements them and returns `true` from `supports_project_scoping()`.
 
 ## Related Crates
 
 - [adk-rust](https://crates.io/crates/adk-rust) - Meta-crate with all components
 - [adk-core](https://crates.io/crates/adk-core) - Core `Memory` trait
-- [adk-runner](https://crates.io/crates/adk-runner) - Memory injection during execution
+- [adk-runner](https://crates.io/crates/adk-runner) - Attaches the memory service to each invocation
+- [adk-tool](https://crates.io/crates/adk-tool) - `LoadMemoryTool` and `PreloadMemoryTool` (`memory-tools` feature)
 - [adk-rag](https://crates.io/crates/adk-rag) - RAG pipeline with vector stores
+
+## Changes in 3.0
+
+| Change | Migration |
+|--------|-----------|
+| SQL backends use SQLx 0.9; `sqlx` and `pgvector` are no longer implicit features, and pgvector moves to 0.4.2 | Depend on SQLx 0.9 when sharing a pool; enable `sqlite-memory` or `database-memory` |
+| `schema_version()` returns read failures as errors | — |
+| Keyword search matches through punctuation and returns the best matches first | — |
+| PostgreSQL `migrate()` releases its advisory lock | — |
+
+See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 
 ## SQLx compatibility
 
