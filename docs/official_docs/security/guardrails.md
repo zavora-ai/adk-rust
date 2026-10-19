@@ -17,10 +17,10 @@ Guardrails validate and transform agent inputs and outputs to ensure safety, com
 ```toml
 [dependencies]
 adk-guardrail = "3.0.0"
-
-# For JSON schema validation
-adk-guardrail = { version = "3.0.0", features = ["schema"] }
 ```
+
+The `schema` feature, on by default, provides `SchemaValidator`; build with
+`default-features = false` to leave out the `jsonschema` dependency.
 
 ## Core Concepts
 
@@ -117,6 +117,14 @@ let filter = ContentFilter::on_topic("cooking", vec![
 let filter = ContentFilter::max_length(1000);
 ```
 
+| Constructor | Checks | Severity of a failure |
+|-------------|--------|-----------------------|
+| `harmful_content()` | Blocks `kill`, `murder`, `bomb`, `terrorist`, `malware`, `ransomware` | `Critical` |
+| `harmful_content_strict()` | The same list plus `hack` and `exploit` | `Critical` |
+| `blocked_keywords(keywords)` | Blocks each keyword, case-insensitively | `High` |
+| `on_topic(topic, keywords)` | Requires at least one keyword | `Medium` |
+| `max_length(max)` | Fails text longer than `max` bytes | `Medium` |
+
 ### Custom Content Filter
 
 ```rust
@@ -138,7 +146,7 @@ let filter = ContentFilter::new("custom_filter", config)?;
 Enforce JSON schema on agent outputs (requires `schema` feature):
 
 ```rust
-use adk_guardrail::SchemaValidator;
+use adk_guardrail::{SchemaValidator, Severity};
 use serde_json::json;
 
 let schema = json!({
@@ -158,6 +166,8 @@ let validator = SchemaValidator::new(&schema)?
 The validator extracts JSON from:
 - Raw JSON text
 - Markdown code blocks (` ```json ... ``` `)
+
+Content with no JSON fails with the validator's severity (`High` unless set).
 
 ## GuardrailSet
 
@@ -199,8 +209,11 @@ if result.passed {
 }
 ```
 
+A `Critical` failure from a guardrail whose `fail_fast()` is `true` makes `run` return
+`Err(GuardrailError::ValidationFailed { .. })` instead of a result.
+
 `GuardrailExecutor::enforce(&guardrails, &content, phase, preamble)` turns the result into a
-decision: the content to continue with and the low-severity warnings, or a
+decision: a `Screening` with the content to continue with and the low-severity warnings, or a
 `GuardrailError::Blocked` error. Agents screen through it.
 
 ### ExecutionResult
@@ -282,12 +295,18 @@ back to JSON when it still parses and wrapped as `{"result": "<text>"}` when it 
 
 ```rust
 use adk_agent::LlmAgentBuilder;
-use adk_guardrail::{GuardrailSet, ContentFilter, PiiRedactor};
+use adk_guardrail::{ContentFilter, GuardrailSet, PiiRedactor, SchemaValidator};
+use serde_json::json;
 
 let input_guardrails = GuardrailSet::new()
     .with(ContentFilter::harmful_content())
     .with(PiiRedactor::new());
 
+let output_schema = json!({
+    "type": "object",
+    "properties": { "answer": { "type": "string" } },
+    "required": ["answer"]
+});
 let output_guardrails = GuardrailSet::new()
     .with(SchemaValidator::new(&output_schema)?);
 
@@ -346,6 +365,7 @@ screening raises the same error.
 
 ```rust
 use adk_guardrail::OUTPUT_BLOCKED_CODE;
+use futures::StreamExt;
 
 match stream.next().await {
     Some(Err(error)) if error.code == OUTPUT_BLOCKED_CODE => {
@@ -356,11 +376,47 @@ match stream.next().await {
 }
 ```
 
-## Tool Result Guardrails
+## Tool Guardrails
 
 A `ToolGuardrail` screens a call's arguments before the tool runs (`validate_call`) and its
 result before the model and the session see it (`validate_result`). Both default to allowing,
-so a guardrail implements only the side it checks.
+so a guardrail implements only the side it checks. `applies_to(tool_name)` scopes a guardrail to
+some tools; the built-in guardrails set it with `on_tools(...)`. A `ToolGuardrailSet` runs its
+guardrails in order: revisions compose, and the first denial or withholding stops the set.
+
+### Screening calls
+
+`LlmAgentBuilder::tool_guardrails` runs `validate_call` on the governed path, after the
+`ToolPolicy` and before confirmation (see
+[Tool Authorization](tool-authorization.md#combining-mechanisms)):
+
+| `validate_call` returns | Effect |
+|-------------------------|--------|
+| `ToolGuardrailResult::Allow` | The call proceeds |
+| `ToolGuardrailResult::ReviseArgs { args, .. }` | The call proceeds with `args`, which the `ToolPolicy` checks again |
+| `ToolGuardrailResult::Deny { reason, severity }` | The tool does not run; the model receives `Tool '<name>' blocked by guardrail '<guardrail>' (<severity>): <reason>` |
+
+| Built-in | Denies |
+|----------|--------|
+| `DeniedArgumentPattern::new(name, regex, severity)?` | A call whose serialized arguments match `regex` |
+| `PathAllowList::new(name, arg_names, allowed_roots)` | A call whose path argument is not absolute, contains `..`, or resolves (symlinks included) outside every allowed root; also a call that omits one of `arg_names`, unless `allow_missing()` is set. Severity `Critical` unless `with_severity` changes it |
+
+Without `on_tools`, a `PathAllowList` applies to every tool, so a tool that takes no path
+argument is denied too; a tool not named in `on_tools` is not checked at all.
+
+```rust
+use adk_guardrail::{DeniedArgumentPattern, PathAllowList, Severity, ToolGuardrailSet};
+
+let tool_guardrails = ToolGuardrailSet::new()
+    .with(
+        PathAllowList::new("workspace", ["path", "source", "destination"], ["/srv/workspace"])
+            .on_tools(["read_file", "move_file"])
+            .allow_missing(),
+    )
+    .with(DeniedArgumentPattern::new("no-force-push", r"--force\b", Severity::High)?.on_tools(["run_command"]));
+```
+
+### Screening results
 
 | `validate_result` returns | What the model and the session see |
 |---------------------------|------------------------------------|
@@ -374,6 +430,8 @@ depth, so the result keeps its JSON shape; a failure above `Low` withholds the r
 ```rust
 use adk_agent::LlmAgentBuilder;
 use adk_guardrail::{ContentFilter, PiiRedactor, ResultTextGuardrail, ToolGuardrailSet};
+
+// lookup_order: Arc<dyn Tool>
 
 let tool_guardrails = ToolGuardrailSet::new()
     .with(ResultTextGuardrail::new(PiiRedactor::new()))
@@ -408,6 +466,8 @@ what the guardrails let through.
 | Pass | Saves the message unchanged, with `actions.input_screened` set |
 | Transform, such as PII redaction | Saves the transformed message, with the marker set; this run and every later run see only that form |
 | Block | Fails the run with the guardrail's error before anything is saved; no agent runs and no model sees the message |
+
+A tree with no input guardrails saves the message unchanged and without the marker.
 
 - **Agent tree.** Every agent in the tree screens the message: an `LlmAgent` or `CodeActAgent`
   applies its own input guardrails, then its sub-agents' (`Agent::screen_user_input`). A

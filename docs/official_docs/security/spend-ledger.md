@@ -87,7 +87,7 @@ it is sent and commits once it completes, through `adk_core::ModelCallScope`. Th
 runner's app name, the calling agent's `AgentId` (see [Agent Identity](agent-identity.md);
 `urn:adk:agent:{app}/{agent}` unless configured), and the vendor. The reservation precedes the response,
 so it names the vendor read from the model id (`gemini-*` is `gemini`, `claude-*` is
-`anthropic`, `gpt-*`, `o1`, `o3`, and `o4` are `openai`, `deepseek-*` is `deepseek`,
+`anthropic`, `gpt-*`, `chatgpt*`, `codex*`, `o1`, `o3`, and `o4` are `openai`, `deepseek-*` is `deepseek`,
 `grok-*` is `xai`, Mistral model families are `mistral`; unrecognized ids are `unknown`).
 The cost is committed under the provider the response reports in `LlmResponse::provider` —
 `bedrock` for a Claude model served by Amazon Bedrock, for example.

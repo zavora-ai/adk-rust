@@ -151,14 +151,20 @@ Outside the window the delegate is refused with `approval.delegation_inactive`.
 
 Enable the `approvals` feature of `adk-server` and mount the service:
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 use std::time::Duration;
 
-let app = ServerBuilder::new(config) // with a RequestContextExtractor
+use adk_core::{ApprovalService, StoreApprovalService};
+use adk_server::ServerBuilder;
+use adk_server::approvals::spawn_approval_ticker;
+
+// `config` is a ServerConfig with a RequestContextExtractor; `store` an Arc<dyn ApprovalStore>.
+let service: Arc<dyn ApprovalService> = Arc::new(StoreApprovalService::new(store));
+let app = ServerBuilder::new(config)
     .with_approval_service(service.clone())
     .build();
-let ticker = adk_server::approvals::spawn_approval_ticker(service, Duration::from_secs(30));
+let ticker = spawn_approval_ticker(service, Duration::from_secs(30));
 ```
 
 | Route | Effect |
@@ -187,8 +193,14 @@ exponential backoff and jitter in the background, dead-lettering after the last 
 egress policy that allows HTTPS to public addresses only (`with_delivery` changes it). See
 [Wake-ups and Webhooks](../core/wake-ups.md).
 
-```rust,ignore
-let notifier = WebhookApprovalNotifier::new("https://hooks.example.com/approvals", "whsec_...")?;
+```rust
+use std::sync::Arc;
+
+use adk_core::StoreApprovalService;
+use adk_server::approvals::WebhookApprovalNotifier;
+
+// The secret is base64, optionally prefixed with `whsec_`.
+let notifier = WebhookApprovalNotifier::new("https://hooks.example.com/approvals", &webhook_secret)?;
 let service = StoreApprovalService::new(store).with_notifier(Arc::new(notifier));
 ```
 

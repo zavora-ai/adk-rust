@@ -137,7 +137,7 @@ let policy = DeclarativePolicy::builder()
 | `OpenAIImageGenerationTool` | OpenAI Responses | `openai_image_generation` | `NonIdempotent` | `{"type": "image_generation", ...}` |
 | `OpenAIComputerUseTool`, `OpenAIShellTool`, `OpenAILocalShellTool`, `OpenAIApplyPatchTool` | OpenAI Responses | `openai_*` | `NonIdempotent` | The tool's `type` and settings |
 | `OpenAIMcpTool` | OpenAI Responses | the server label | `NonIdempotent` | `{"type": "mcp", "server_label": ..., ...}` |
-| `WebSearchTool` | Anthropic | `web_search` | `ReadOnly` | `{"type": "web_search_20250305", "max_uses": ..., "allowed_domains": [...], ...}` |
+| `WebSearchTool` | Anthropic | `web_search` | `ReadOnly` | `{"type": "web_search_20250305", "max_uses": ..., "allowed_domains": [...], ...}` (`web_search_20260209` with `with_dynamic_filtering()`) |
 
 Anthropic bash and text editor tools (`AnthropicBashTool*`, `AnthropicTextEditorTool*`) carry a
 provider-native declaration but run in the agent, so they are governed when called, like any
@@ -183,20 +183,28 @@ let agent = LlmAgentBuilder::new("assistant")
 ### How It Works
 
 1. The LLM decides to call `delete_file` with args `{"path": "/data/report.csv"}`
-2. The agent emits an `Event` with:
+2. The agent emits an `Event` whose `actions.tool_confirmation` is the
+   `ToolConfirmationRequest` — the call, the acting agent and the subject it acts for, and the
+   tool's origin:
    ```json
    {
      "actions": {
-       "toolConfirmation": {
+       "tool_confirmation": {
          "toolName": "delete_file",
          "functionCallId": "call_abc123",
-         "args": {"path": "/data/report.csv"}
+         "args": {"path": "/data/report.csv"},
+         "acting": {
+           "agent": {"id": "urn:adk:agent:file-manager/assistant"},
+           "onBehalfOf": {"kind": "human", "id": "user-1"}
+         },
+         "origin": {"source": "static", "declarationDigest": "sha256:…"}
        }
      }
    }
    ```
 3. The held call is answered with a confirmation-pending response —
-   `{"error": "Tool 'delete_file' requires confirmation", "status": "confirmation_pending"}` —
+   `{"error": "Tool 'delete_file' requires confirmation", "status": "confirmation_pending"}`,
+   with `: <reason>` after `confirmation` when a `ToolPolicy` required the approval —
    calls in the same turn that need no approval still run, and the agent stream ends
 4. Your UI shows the user: "The agent wants to delete `/data/report.csv`. Allow?"
 5. Run again with a decision for the call. Any decision source works: an approval keyed by
@@ -221,7 +229,9 @@ let stream = runner
 ```
 
 If denied, the tool is skipped and the LLM receives an error result —
-"Tool 'delete_file' execution denied by confirmation policy" — so it can adjust its approach.
+"Tool 'delete_file' execution denied by confirmation policy", or "Tool 'delete_file' was not
+run; the approver declined it: <message>" when the denial carries a message
+(`ToolApproval::deny().with_message(..)`) — so it can adjust its approach.
 
 The request's arguments are the final ones: plugin rewrites and guardrail revisions have
 already been applied, so the approver sees exactly what will execute. A rewrite that changes
@@ -376,6 +386,7 @@ asks it before resuming a call.
 
 ```rust
 use adk_core::{ApprovalScope, ApprovalStore, InMemoryApprovalStore, RunConfig, ToolApproval};
+use adk_runner::Runner;
 use std::sync::Arc;
 
 let store = Arc::new(InMemoryApprovalStore::new());
@@ -864,7 +875,8 @@ agent's own callbacks, in every agent the run reaches.
 For enterprise RBAC with role-based permissions. See [Access Control](access-control.md) for full documentation.
 
 ```rust
-use adk_auth::{AccessControl, Role, Permission, ToolExt};
+use adk_auth::{AccessControl, Permission, Role, ToolExt};
+use std::sync::Arc;
 
 let ac = AccessControl::builder()
     .role(Role::new("analyst")
@@ -968,6 +980,10 @@ same `RunConfig` decision semantics as a normal ADK run.
 These mechanisms compose naturally:
 
 ```rust
+use adk_agent::LlmAgentBuilder;
+use adk_auth::ToolExt;
+use std::sync::Arc;
+
 let agent = LlmAgentBuilder::new("secure-assistant")
     .model(model)
     // RBAC: deny unauthorized users entirely
@@ -1034,6 +1050,7 @@ reachable through `Runner::governance()`; share one control across runners with
 
 ```rust
 use adk_core::GovernanceControl;
+use adk_runner::Runner;
 
 let control = GovernanceControl::new();
 let runner = Runner::builder()

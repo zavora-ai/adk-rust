@@ -78,6 +78,7 @@ use adk_payments::guardrail::{
 };
 use adk_payments::tools::PaymentToolsetBuilder;
 
+// checkout_service: Arc<dyn MerchantCheckoutService>, transaction_store: Arc<dyn TransactionStore>
 let toolset = PaymentToolsetBuilder::new(checkout_service, transaction_store)
     .with_payment_policies(
         PaymentPolicySet::new()
@@ -147,13 +148,15 @@ confirmation flow. With `ap2-mcp`, the tool response includes the
 (`Ap2A2aMessage::extract_payment_mandate`); submitting the extracted mandate through the
 adapter applies the same governance.
 
-```rust,ignore
+```rust
 use adk_payments::auth::PaymentAuditor;
 use adk_payments::guardrail::{AmountThresholdGuardrail, PaymentPolicySet};
 use adk_payments::protocol::ap2::Ap2Adapter;
 use adk_payments::tools::PaymentToolsetBuilder;
 use std::sync::Arc;
 
+// The services, stores and verifiers are `Arc<dyn ...>` implementations of the
+// `adk_payments::kernel` and `adk_payments::protocol::ap2` traits.
 let adapter = Arc::new(
     Ap2Adapter::new(checkout_service, payment_service, transaction_store.clone(), evidence_store)
         .with_merchant_authorization_verifier(merchant_verifier)

@@ -4,7 +4,7 @@ Long-term semantic memory for AI agents using `adk-memory`.
 
 ## Overview
 
-The memory system provides persistent, searchable storage for agent conversations. Unlike session state (which is ephemeral), memory persists across sessions and enables agents to recall relevant context from past interactions.
+The memory system provides searchable storage that outlives a single session. Session state belongs to one conversation; memory is keyed by app and user (and optionally a project), so an agent can recall context from earlier conversations. This page covers the isolation and erasure guarantees; [Memory](../memory/index.md) covers backends and agent wiring in depth.
 
 ## Installation
 
@@ -33,7 +33,8 @@ let entry = MemoryEntry {
 
 ### MemoryService Trait
 
-The core trait for memory backends:
+The core trait for memory backends. Two methods are required; the others have defaults
+(an error for the write and delete methods a backend does not implement):
 
 ```rust
 #[async_trait]
@@ -49,6 +50,10 @@ pub trait MemoryService: Send + Sync {
 
     /// Search memories by query
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse>;
+
+    // Defaults provided: delete_user, delete_session, add_entry, delete_entries,
+    // list_recent, health_check, supports_project_scoping, add_session_to_project,
+    // add_entry_to_project, delete_entries_in_project, delete_project
 }
 ```
 
@@ -63,8 +68,8 @@ let request = SearchRequest {
     query: "user preferences".to_string(),
     user_id: "user-123".to_string(),
     app_name: "my_app".to_string(),
-    limit: None,
-    min_score: None,
+    limit: None,      // None = 10
+    min_score: None,  // None = no threshold
     project_id: None, // None = global only, Some("id") = global + project
 };
 ```
@@ -123,6 +128,8 @@ Memories are isolated by:
 - **project_id** (optional): Entries can be scoped to a project within a user
 
 ```rust
+use adk_memory::{MemoryService, SearchRequest};
+
 // User A's memories
 memory.add_session("app", "user-a", "sess-1", entries_a).await?;
 
@@ -148,6 +155,10 @@ Memories can be scoped to a project within a user. The isolation key becomes `(a
 - **Project entries** (`project_id = Some(id)`): visible only when searching within that specific project.
 - **Project search** (`project_id = Some(id)`): returns global entries + entries for that project.
 - **Global search** (`project_id = None`): returns only global entries.
+
+Project scoping is a backend capability: `supports_project_scoping()` reports it, and a
+backend without it (`GraphMemoryService`) fails the project methods instead of writing or
+deleting globally.
 
 ### Storing project-scoped entries
 
@@ -177,7 +188,7 @@ service.add_entry_to_project("app", "user-1", "my-project", entry).await?;
 ### Searching with project scope
 
 ```rust
-use adk_memory::SearchRequest;
+use adk_memory::{MemoryService, SearchRequest};
 
 // Global-only search — returns only global entries
 let global = service.search(SearchRequest {
@@ -203,6 +214,8 @@ let project = service.search(SearchRequest {
 ### Project-scoped deletion
 
 ```rust
+use adk_memory::MemoryService;
+
 // Delete entries matching a query within a project only
 service.delete_entries_in_project("app", "user-1", "my-project", "microservices").await?;
 
@@ -222,7 +235,7 @@ The `MemoryServiceAdapter` bridges `MemoryService` to `adk_core::Memory`. Use `w
 
 ```rust
 use adk_memory::{InMemoryMemoryService, MemoryServiceAdapter};
-use adk_core::Memory;
+use adk_core::{Content, Memory, MemoryEntry};
 use std::sync::Arc;
 
 let service = Arc::new(InMemoryMemoryService::new());
@@ -235,22 +248,27 @@ let project_adapter = MemoryServiceAdapter::new(service.clone(), "app", "user-1"
     .with_project_id("my-project");
 
 // Core Memory trait also supports ad-hoc project access
+// adk_core::MemoryEntry carries no timestamp; the adapter stamps the time it is added.
+let entry = MemoryEntry {
+    content: Content::new("user").with_text("Deadline is Friday"),
+    author: "user".to_string(),
+};
 global_adapter.search_in_project("query", "other-project").await?;
 global_adapter.add_to_project(entry, "other-project").await?;
 ```
 
 ### Project ID validation
 
-Project identifiers are validated on all write operations:
+Project identifiers are validated by the project-scoped write operations:
 - Must not be empty
-- Must not exceed 256 characters
+- Must not exceed 256 bytes
 
 ```rust
 use adk_memory::validate_project_id;
 
 validate_project_id("my-project")?;       // Ok
 validate_project_id("")?;                  // Err: must not be empty
-validate_project_id(&"x".repeat(257))?;   // Err: exceeds 256 chars
+validate_project_id(&"x".repeat(257))?;   // Err: exceeds 256 bytes
 ```
 
 ### Search semantics matrix
@@ -271,16 +289,22 @@ validate_project_id(&"x".repeat(257))?;   // Err: exceeds 256 chars
 
 ## Search Behavior
 
-The `InMemoryMemoryService` uses word-based matching:
+`InMemoryMemoryService` and `RedisMemoryService` use keyword matching:
 
-1. Query is tokenized into words (lowercase)
-2. Each memory's content is tokenized
-3. Memories with any matching words are returned
+| Step | Behaviour |
+|------|-----------|
+| Words | A word is a run of Unicode letters and digits, lowercased, so `Hometown: Nairobi.` matches `hometown` |
+| Match | An entry matches when it shares at least one word with the query |
+| Score | The share of the query's words the entry contains, from 0.0 to 1.0; `min_score` filters on it |
+| Order | Highest score first, then newest; `limit` (default 10) keeps the best |
 
 ```rust
 // Query: "rust programming"
-// Matches memories containing "rust" OR "programming"
+// "I like Rust programming" scores 1.0 and ranks above "Rust is fast" (0.5)
 ```
+
+`SqliteMemoryService` matches entries that contain every query word; `PostgresMemoryService`
+ranks by vector similarity. See [Memory Backends](../memory/backends.md).
 
 ## Custom Memory Backend
 
@@ -320,95 +344,71 @@ impl MemoryService for VectorMemoryService {
 
 ## Integration with Agents
 
-Memory integrates with `LlmAgentBuilder`:
+Agents reach memory in two ways:
+
+| Mechanism | Scope | Searches |
+|-----------|-------|----------|
+| `Runner::builder().memory_service(Arc<dyn adk_core::Memory>)` | The `MemoryServiceAdapter`'s fixed app and user (and project) | When a tool calls `ToolContext::search_memory` |
+| `LoadMemoryTool` / `PreloadMemoryTool` (`adk-tool`, `memory-tools` feature) | The app and user of each call's context | When the model calls the tool / before each model request |
 
 ```rust
-use adk_agent::LlmAgentBuilder;
-use adk_memory::InMemoryMemoryService;
+use adk_memory::{InMemoryMemoryService, MemoryServiceAdapter};
+use adk_runner::Runner;
 use std::sync::Arc;
 
-let memory = Arc::new(InMemoryMemoryService::new());
+let service = Arc::new(InMemoryMemoryService::new());
+// Bound to one app and user: every run of this runner searches user-123's memories.
+let memory = Arc::new(MemoryServiceAdapter::new(service.clone(), "my_app", "user-123"));
 
-let agent = LlmAgentBuilder::new("assistant")
-    .model(model)
-    .instruction("You are a helpful assistant with memory.")
-    .memory(memory)
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(agent)
+    .session_service(session_service)
+    .memory_service(memory)
     .build()?;
 ```
 
-When memory is configured:
-1. Before each turn, relevant memories are searched
-2. Matching memories are injected into the context
-3. After each session, conversation is stored as memories
+A `MemoryServiceAdapter` is bound to one user, so a runner that serves several users should
+give its agents the memory tools, which take the app and user from each call, rather than one
+runner-wide adapter. Nothing is written to memory automatically: call `add_session` (or
+`add_entry`) when a conversation holds something worth keeping. See
+[Memory in Agents](../memory/tools-and-agents.md).
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Agent Request                          │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Memory Search                            │
-│                                                             │
-│   SearchRequest { query, user_id, app_name, project_id }   │
-│                         │                                   │
-│                         ▼                                   │
-│   ┌─────────────────────────────────────────────────────┐  │
-│   │              MemoryService                          │  │
-│   │  ┌─────────┐ ┌──────────┐ ┌────────┐ ┌──────────┐  │  │
-│   │  │InMemory │ │ SQLite   │ │Postgres│ │  Redis   │  │  │
-│   │  │(dev)    │ │          │ │pgvector│ │          │  │  │
-│   │  └─────────┘ └──────────┘ └────────┘ └──────────┘  │  │
-│   │  ┌─────────┐ ┌──────────┐                           │  │
-│   │  │MongoDB  │ │  Neo4j   │                           │  │
-│   │  └─────────┘ └──────────┘                           │  │
-│   └─────────────────────────────────────────────────────┘  │
-│                         │                                   │
-│                         ▼                                   │
-│   SearchResponse { memories: Vec<MemoryEntry> }            │
-│   (filtered by project scope)                              │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Context Injection                              │
-│                                                             │
-│   Relevant memories added to agent context                 │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Agent Execution                          │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Memory Storage                            │
-│                                                             │
-│   Session conversation stored for future recall            │
-│   (global or project-scoped)                               │
-└─────────────────────────────────────────────────────────────┘
+Agent run ──► ToolContext::search_memory / LoadMemoryTool / PreloadMemoryTool
+                │
+                ▼
+         SearchRequest { query, user_id, app_name, project_id, limit, min_score }
+                │
+                ▼
+         MemoryService ─── InMemory · SQLite · PostgreSQL (pgvector) · Redis · MongoDB · Neo4j
+                │
+                ▼
+         SearchResponse { memories: Vec<MemoryEntry> }   (filtered by app, user, project)
+
+Your code ──► add_session / add_entry / add_session_to_project   (writes are explicit)
 ```
 
 ## Best Practices
 
 | Practice | Description |
 |----------|-------------|
-| **Use vector DB in production** | InMemory is for dev/test only |
+| **Use a durable backend in production** | InMemory is for dev/test only; it loses everything on exit |
 | **Scope by user** | Always include user_id for privacy |
 | **Limit results** | Cap returned memories to avoid context overflow |
-| **Clean old memories** | Implement TTL or archival for stale data |
+| **Clean old memories** | Use `delete_entries`, `delete_project`, or Redis `ttl` for stale data |
+| **Honour erasure requests** | Call `delete_user` from the account-deletion path; it removes global and project entries |
 | **Embed strategically** | Store summaries, not raw conversations |
 
 ## Comparison with Sessions
 
 | Feature | Session State | Memory |
 |---------|--------------|--------|
-| Persistence | Session lifetime | Permanent |
-| Scope | Single session | Cross-session |
-| Search | Key-value lookup | Semantic search |
+| Lifetime | One session (persisted by the session backend) | Across sessions, until deleted |
+| Scope | Single session (`app:` and `user:` keys are shared) | App and user, optionally a project |
+| Lookup | Key-value | Keyword or vector search |
 | Use case | Current context | Long-term recall |
 
 ---

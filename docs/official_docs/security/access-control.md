@@ -73,9 +73,11 @@ Enterprise-grade access control for AI agents using `adk-auth`.
 When a role has both allow and deny rules, **deny always wins**:
 
 ```rust
+use adk_auth::{Permission, Role};
+
 let role = Role::new("limited")
-    .allow(Permission::AllTools)      // Allow everything...
-    .deny(Permission::Tool("admin")); // ...except admin
+    .allow(Permission::AllTools)               // Allow everything...
+    .deny(Permission::Tool("admin".into()));   // ...except admin
 
 // Result: Can access any tool EXCEPT "admin"
 ```
@@ -85,25 +87,36 @@ let role = Role::new("limited")
 Users with multiple roles get the **union** of permissions, but deny rules from any role still apply:
 
 ```rust
+use adk_auth::{AccessControl, Permission, Role};
+
 let ac = AccessControl::builder()
-    .role(reader)    // allow: search
-    .role(writer)    // allow: write
+    .role(Role::new("reader").allow(Permission::tool("search")))
+    .role(Role::new("writer").allow(Permission::tool("write")))
     .assign("alice", "reader")
     .assign("alice", "writer")
     .build()?;
 
 // Alice can access both "search" AND "write"
+assert!(ac.check("alice", &Permission::tool("search")).is_ok());
+assert!(ac.check("alice", &Permission::tool("write")).is_ok());
 ```
+
+`build()` fails with `AuthError::RoleNotFound` when a user is assigned a role that was not added.
 
 ### 3. Explicit Over Implicit
 
 Permissions are explicit - no access is granted by default:
 
 ```rust
-let role = Role::new("empty");
-// This role grants NO permissions
+use adk_auth::{AccessControl, Permission, Role};
 
-ac.check("user", &Permission::Tool("anything")); // → Denied
+let ac = AccessControl::builder()
+    .role(Role::new("empty")) // This role grants NO permissions
+    .assign("user", "empty")
+    .build()?;
+
+assert!(ac.check("user", &Permission::tool("anything")).is_err()); // → Denied
+assert!(ac.check("unknown-user", &Permission::tool("anything")).is_err()); // no roles → Denied
 ```
 
 ### 4. Separation of Authentication and Authorization
@@ -112,14 +125,17 @@ ac.check("user", &Permission::Tool("anything")); // → Denied
 - **Authorization** (RBAC): Determines WHAT they can access
 
 ```rust
+use adk_auth::Permission;
+use adk_auth::sso::TokenValidator;
+
 // Authentication: validate JWT, extract claims
 let claims = provider.validate(token).await?;
 
 // Authorization: check specific permission
-ac.check(&claims.sub, &Permission::Tool("search"))?;
+ac.check(&claims.sub, &Permission::tool("search"))?;
 
 // Combined: SsoAccessControl does both
-sso.check_token(token, &permission).await?;
+sso.check_token(token, &Permission::tool("search")).await?;
 ```
 
 ## Installation
@@ -140,14 +156,19 @@ adk-auth = { version = "3.0.0", features = ["sso"] }
 pub enum Permission {
     Tool(String),     // Specific tool by name
     AllTools,         // Wildcard: all tools
-    Agent(String),    // Specific agent by name  
+    Agent(String),    // Specific agent by name
     AllAgents,        // Wildcard: all agents
 }
 ```
 
+`Permission::tool(name)` and `Permission::agent(name)` build the named variants from any
+`impl Into<String>`.
+
 ### Role
 
 ```rust
+use adk_auth::{Permission, Role};
+
 let analyst = Role::new("analyst")
     .allow(Permission::Tool("search".into()))
     .allow(Permission::Tool("summarize".into()))
@@ -157,6 +178,8 @@ let analyst = Role::new("analyst")
 ### AccessControl
 
 ```rust
+use adk_auth::{AccessControl, Permission};
+
 let ac = AccessControl::builder()
     .role(admin)
     .role(analyst)
@@ -170,10 +193,14 @@ ac.check("bob@company.com", &Permission::Tool("search".into()))?;
 
 ### ProtectedTool
 
-Wraps a tool with automatic permission checking:
+Wraps a tool with automatic permission checking. The check runs inside `execute()` against
+`Permission::Tool(<tool name>)` for the context's user; a denial fails the call with a tool
+error and the wrapped tool does not run.
 
 ```rust
 use adk_auth::ToolExt;
+use adk_core::Tool;
+use std::sync::Arc;
 
 let protected = my_tool.with_access_control(Arc::new(ac));
 
@@ -186,13 +213,19 @@ protected.execute(ctx, args).await?;
 Batch-protect multiple tools:
 
 ```rust
+use adk_auth::AuthMiddleware;
+
+// tools: Vec<Arc<dyn Tool>>
 let middleware = AuthMiddleware::new(ac);
 let protected_tools = middleware.protect_all(tools);
 ```
 
 ### ScopeGuard
 
-Use scopes for request-level authorization that comes from JWT claims or session state:
+Use scopes for request-level authorization that comes from JWT claims or session state. A
+tool declares the scopes it needs with `Tool::required_scopes()`; `ScopeGuard` refuses a call
+unless the resolver grants every one of them, and passes through a tool that declares none.
+`ContextScopeResolver` reads `ToolContext::user_scopes()`:
 
 ```rust
 use adk_auth::{ContextScopeResolver, ScopeGuard};
@@ -225,7 +258,7 @@ let protected = scoped.protect(rbac.protect(transfer_tool));
 | Azure AD | `AzureADProvider::new(tenant, client)` or `AzureADProvider::multi_tenant(client).with_allowed_tenants(["tenant-id"])` | login.microsoftonline.com |
 | Okta | `OktaProvider::new(domain, client)` | {domain}/oauth2/default |
 | Auth0 | `Auth0Provider::new(domain, audience)` | {domain}/ |
-| Generic | `OidcProvider::from_discovery(issuer, client)` | Any OIDC provider |
+| Generic | `OidcProvider::from_discovery(issuer, client).await` | Any OIDC provider |
 
 `AzureADProvider::multi_tenant()` accepts any tenant for the configured audience unless you explicitly restrict it with `with_allowed_tenants(...)`.
 
@@ -233,18 +266,21 @@ OIDC discovery and every JWKS refresh give up after 10 seconds (connect timeout 
 
 ### TokenClaims
 
-Claims extracted from validated JWTs:
+Claims extracted from validated JWTs (abridged):
 
 ```rust
 pub struct TokenClaims {
-    pub sub: String,              // Subject (user ID)
-    pub email: Option<String>,    // Email
-    pub name: Option<String>,     // Display name
-    pub groups: Vec<String>,      // IdP groups
-    pub roles: Vec<String>,       // IdP roles
-    pub hd: Option<String>,       // Google hosted domain
-    pub tid: Option<String>,      // Azure tenant ID
-    // ... more standard OIDC claims
+    pub sub: String,                  // Subject (user ID)
+    pub iss: String,                  // Issuer
+    pub email: Option<String>,        // Email
+    pub email_verified: Option<bool>, // Whether the IdP verified the email
+    pub name: Option<String>,         // Display name
+    pub groups: Vec<String>,          // IdP groups
+    pub roles: Vec<String>,           // IdP roles
+    pub hd: Option<String>,           // Google hosted domain
+    pub tid: Option<String>,          // Azure tenant ID
+    // ... aud, exp, iat, nbf, jti, given_name, family_name,
+    //     preferred_username, picture, and custom claims
 }
 ```
 
@@ -253,6 +289,8 @@ pub struct TokenClaims {
 Maps IdP groups to adk-auth roles:
 
 ```rust
+use adk_auth::sso::ClaimsMapper;
+
 let mapper = ClaimsMapper::builder()
     .map_group("AdminGroup", "admin")
     .map_group("Users", "viewer")
@@ -268,6 +306,9 @@ let mapper = ClaimsMapper::builder()
 Combines SSO validation with RBAC in one call:
 
 ```rust
+use adk_auth::Permission;
+use adk_auth::sso::{GoogleProvider, SsoAccessControl};
+
 let sso = SsoAccessControl::builder()
     .validator(GoogleProvider::new("client-id"))
     .mapper(mapper)
@@ -284,6 +325,8 @@ let claims = sso.check_token(token, &Permission::Tool("search".into())).await?;
 ### FileAuditSink
 
 ```rust
+use adk_auth::{AuthMiddleware, FileAuditSink};
+
 let audit = FileAuditSink::new("/var/log/adk/audit.jsonl")?;
 let middleware = AuthMiddleware::with_audit(ac, audit);
 ```
@@ -332,8 +375,9 @@ leave no broken link; record the newest line elsewhere to detect them.
 The chained file has one writer and a symmetric key. For logs that several replicas write,
 that a third party verifies with a public key, or that must detect truncation and rewrites,
 use the signed audit log (`signed-audit` feature): RFC 8785 records, an RFC 9162 Merkle tree,
-and Ed25519-signed checkpoints, stored in memory, SQLite, or PostgreSQL. `AuditLog` is itself
-an `AuditSink`. See [Audit Log](audit-log.md).
+and Ed25519-signed checkpoints, kept in any `AuditLogStore` — in memory, SQLite, PostgreSQL,
+Redis, MongoDB, Neo4j, or Firestore. `AuditLog` is itself an `AuditSink`. See
+[Audit Log](audit-log.md).
 
 | Sink | Integrity | Verifier needs | Writers |
 |------|-----------|----------------|---------|
@@ -357,24 +401,31 @@ existing table). See [Agent Identity](agent-identity.md).
 ### Custom Audit Sink
 
 ```rust
-use adk_auth::{AuditSink, AuditEvent, AuthError};
+use adk_auth::{AuditEvent, AuditSink, AuthError};
 use async_trait::async_trait;
 
-pub struct DatabaseAuditSink { /* ... */ }
+pub struct DatabaseAuditSink {
+    pool: sqlx::PgPool,
+}
 
 #[async_trait]
 impl AuditSink for DatabaseAuditSink {
     async fn log(&self, event: AuditEvent) -> Result<(), AuthError> {
-        // Insert into database
-        sqlx::query("INSERT INTO audit_log ...")
-            .bind(event.user)
-            .bind(event.resource)
+        sqlx::query("INSERT INTO audit_log (user_id, resource, event) VALUES ($1, $2, $3)")
+            .bind(&event.user)
+            .bind(&event.resource)
+            .bind(event.to_json().map_err(|e| AuthError::AuditError(e.to_string()))?)
             .execute(&self.pool)
-            .await?;
+            .await
+            .map_err(|e| AuthError::AuditError(e.to_string()))?;
         Ok(())
     }
 }
 ```
+
+`log_batch`, `query`, `purge_before`, and `flush` have defaults; override them when the backend
+supports them. `adk-auth` ships `PostgresAuditSink` (`postgres-audit` feature) and
+`OtlpAuditSink` (`otlp-audit` feature).
 
 ## Examples
 
@@ -395,7 +446,7 @@ cargo check -p adk-auth --features sso
 | **Rotate keys** | JWKS cache auto-refreshes every hour |
 | **Limit token lifetime** | Use short-lived access tokens |
 | **Restrict Azure tenants** | For multi-tenant Azure apps, configure `with_allowed_tenants(...)` |
-| **Verify email before identity mapping** | `user_id_from_email()` now falls back to `sub` when email is unverified |
+| **Verify email before identity mapping** | `user_id_from_email()` falls back to `sub` when the email is unverified |
 | **Plan for revocation** | Token revocation is not built in; enforce it in a custom validator if you need immediate cut-off |
 | **Cache expensive scope lookups** | If your `ScopeResolver` calls external systems, cache the result per request/session |
 
@@ -414,6 +465,35 @@ let extractor = JwtRequestContextExtractor::builder()
 ```
 
 The extractor validates the Bearer token, maps `user_id` with `ClaimsMapper`, and forwards JWT `scope` / `scp` claims into `RequestContext.scopes`.
+
+### What the extractor protects
+
+Configuring an extractor turns authentication on for every non-public route:
+
+| Routes | Behaviour with an extractor configured |
+|--------|----------------------------------------|
+| `/api/sessions/*`, `/api/apps/*`, artifacts, debug | 401 without a valid token |
+| `/api/ui/*` — bridge, notifications, resources | 401 without a valid token; the authenticated user replaces any user named in the request body |
+| `/api/run*` | 401 without a valid token; the authenticated user overrides the supplied user |
+| `POST /a2a`, `POST /a2a/stream` | 401 without a valid token |
+| `/health`, `GET /.well-known/agent-card.json`, `GET /.well-known/agent.json` | Public — peers fetch the agent card before they hold a credential |
+
+UI bridge state is keyed by `(app_name, user_id, session_id)` taken from the request
+body, so the authenticated user is substituted for the body value rather than
+trusted. A registered UI resource records the user that registered it; only that
+user can read or replace it, and a read of someone else's resource answers 404 so
+the URI's existence is not disclosed.
+
+With **no** extractor configured there is no authenticated identity to bind, so
+routes stay open and resources stay globally visible. Authentication is opt-in —
+configure an extractor for any deployment that is not a single trusted user.
+
+The A2A JSON-RPC routes carry the same layer as the session, artifact, and debug routes in
+both `create_app_with_a2a` and `ServerBuilder::build`. `A2aServer::builder()` binds
+`127.0.0.1:8080` by default; call `bind_addr` to expose it, and configure an extractor before
+you do. The generated `a2a-server` scaffold reads `BIND_HOST` to opt into a wider bind. See
+[Server](../deployment/server.md) for the loopback default, `allowed_origins`, and
+`allowed_hosts`.
 
 ## Secret Providers
 
@@ -517,44 +597,18 @@ cannot leak a value.
 > [`AuthorizingSecretService`](#per-tool-authorization) to get a per-tool boundary, and
 > still scope the cloud credentials themselves: one IAM identity per deployment with
 > access to only the secrets that deployment needs.
-> **Important:** the provider interface takes only a secret *name*. There is no
-> per-tool grant, namespace, or access audit at the ADK layer, so any tool holding a
-> context can request any name the backing credentials can read. Scope the cloud
-> credentials themselves — one IAM identity per deployment with access to only the
-> secrets that deployment needs — and treat provider-side audit logs as the record of
-> access.
-### What the extractor protects
-
-Configuring an extractor turns authentication on for every non-public route:
-
-| Routes | Behaviour with an extractor configured |
-|--------|----------------------------------------|
-| `/api/sessions/*`, `/api/apps/*`, artifacts, debug | 401 without a valid token |
-| `/api/ui/*` — bridge, notifications, resources | 401 without a valid token; the authenticated user replaces any user named in the request body |
-| `/api/run*` | 401 without a valid token; the authenticated user overrides the supplied user |
-| `/health` | Public |
-
-UI bridge state is keyed by `(app_name, user_id, session_id)` taken from the request
-body, so the authenticated user is substituted for the body value rather than
-trusted. A registered UI resource records the user that registered it; only that
-user can read or replace it, and a read of someone else's resource answers 404 so
-the URI's existence is not disclosed.
-
-With **no** extractor configured there is no authenticated identity to bind, so
-routes stay open and resources stay globally visible. Authentication is opt-in —
-configure an extractor for any deployment that is not a single trusted user.
 
 ## Error Handling
 
 ```rust
-use adk_auth::{AccessDenied, AuthError};
-use adk_auth::sso::TokenError;
+use adk_auth::{AccessDenied, Permission};
+use adk_auth::sso::{TokenError, TokenValidator};
 
 // RBAC errors
-match ac.check("user", &Permission::Tool("admin".into())) {
+match ac.check("user", &Permission::tool("admin")) {
     Ok(()) => { /* access granted */ }
     Err(AccessDenied { user, permission }) => {
-        eprintln!("Denied: {} cannot access {}", user, permission);
+        tracing::warn!(user = %user, permission = %permission, "access denied");
     }
 }
 
@@ -563,33 +617,15 @@ match provider.validate(token).await {
     Ok(claims) => { /* token valid */ }
     Err(TokenError::Expired) => { /* token expired */ }
     Err(TokenError::InvalidSignature) => { /* signature invalid */ }
-    Err(TokenError::InvalidIssuer { expected, actual }) => { /* wrong issuer */ }
+    Err(TokenError::ValidationError(reason)) => { /* wrong issuer or audience, among others */ }
     Err(e) => { /* other error */ }
 }
 ```
 
+`OidcProvider::from_discovery` fails with `TokenError::InvalidIssuer` when the discovery
+document names another issuer. `AuthError` and `TokenError` convert into `AdkError` with
+codes such as `auth.access_denied` (`Forbidden`) and `auth.token_expired` (`Unauthorized`).
 
 ---
 
 **Previous**: [← Evaluation](../evaluation/evaluation.md) | **Next**: [Tool Authorization →](tool-authorization.md)
-
-## A2A endpoints
-
-| Route | Authentication |
-|-------|----------------|
-| `GET /.well-known/agent-card.json`, `GET /.well-known/agent.json` | **public** — peers fetch the card before they hold a credential |
-| `POST /a2a` | required, when a `RequestContextExtractor` is configured |
-| `POST /a2a/stream` | required, when a `RequestContextExtractor` is configured |
-
-The JSON-RPC routes execute agent and tool work, so they carry the same layer as the session,
-artifact, and debug routers. With no extractor configured there is no credential to demand and
-the routes stay open, so adding the gate does not break an existing deployment.
-
-> **Important:** these routes were previously merged at the router root, outside the layer
-> applied to `/api`. A deployment that authenticated every other mutation surface still let any
-> client that could reach the port drive the agent and incur its cost. This applied to both
-> `create_app_with_a2a` and `ServerBuilder::build`.
-
-`A2aServer::builder()` binds `127.0.0.1:8080` by default. Call `bind_addr` to expose it, and
-configure an extractor before you do. The generated `a2a-server` scaffold follows the same rule
-and reads `BIND_HOST` to opt into a wider bind.

@@ -19,7 +19,7 @@ a backend changes one constructor and nothing else.
 |---------|---------|---------------|----------------|-----------------|-----------------|
 | In memory | `adk-core` | `InMemorySpendLedger` | `InMemoryActionLedger` | `InMemoryApprovalStore` | Every PR (`adk-core`); restart cases are not applicable |
 | SQLite | `sqlite` | `SqliteSpendLedger` | `SqliteActionLedger` | `SqliteApprovalStore` | Every PR (`adk-session`) |
-| PostgreSQL | `postgres` | `PostgresSpendLedger` | `PostgresActionLedger` | `PostgresApprovalStore` | Nightly, live server |
+| PostgreSQL | `postgres` | `PostgresSpendLedger` | `PostgresActionLedger` | `PostgresApprovalStore` | Every PR (`postgres` job) and nightly, live server |
 | Redis | `redis` | `RedisSpendLedger` | `RedisActionLedger` | `RedisApprovalStore` | Nightly, live server |
 | MongoDB | `mongodb` | `MongoSpendLedger` | `MongoActionLedger` | `MongoApprovalStore` | Nightly, live server |
 | Neo4j | `neo4j` | `Neo4jSpendLedger` | `Neo4jActionLedger` | `Neo4jApprovalStore` | Nightly, live server |
@@ -29,7 +29,11 @@ a backend changes one constructor and nothing else.
 |---------|---------|-----------------|-----------------|
 | In memory | `adk-core` | `InMemoryAuditLogStore` | Every PR (`adk-core`) |
 | SQLite | `sqlite` | `SqliteAuditLogStore` | Every PR (`adk-session`) |
-| PostgreSQL | `postgres` | `PostgresAuditLogStore` | Nightly, live server |
+| PostgreSQL | `postgres` | `PostgresAuditLogStore` | Every PR (`postgres` job) and nightly, live server |
+| Redis | `redis` | `RedisAuditLogStore` | Nightly, live server |
+| MongoDB | `mongodb` | `MongoAuditLogStore` | Nightly, live server |
+| Neo4j | `neo4j` | `Neo4jAuditLogStore` | Nightly, live server |
+| Firestore | `firestore` | `FirestoreAuditLogStore` | Nightly, emulator |
 
 Every durable type in `adk-session` follows one setup sequence:
 
