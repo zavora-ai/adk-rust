@@ -127,8 +127,44 @@ The runner runs a `PluginManager`'s callbacks at two levels:
 The runner adds the manager to `RunConfig::invocation_hooks` at the start of each run, so
 transfer targets and agents behind an `AgentTool` run the same callbacks. An agent runs
 them ahead of its own callbacks of the same kind; a plugin callback that returns a value
-short-circuits the agent's callbacks of that kind. `on_model_error` is not called by any
-agent, and the manager logs a warning when a plugin sets it.
+short-circuits the agent's callbacks of that kind. `LlmAgent` also reports a failed model
+call or response stream to `on_model_error`, and a response the plugin returns answers the
+turn.
+
+| Run callback | Guarantee |
+|--------------|-----------|
+| `on_event` | Sees every event the run yields: agent events, a `before_run` early exit, the answers a cancelled run gives its calls in flight, and a budget stop event |
+| `after_run` | Runs once for every run whose `before_run` ran, however it ends: an answer, an error, a cancellation, or a consumer that drops the stream |
+
+A consumer that drops the stream mid-run, such as a client that disconnects, does not leave
+the run half-finished: the runner answers each tool call still in flight outcome-unknown,
+persists and audits the answers, then runs `after_run`, on the current Tokio runtime. A
+durable run's attempt (`RunConfig::durable_run_id`) is the exception: its worker drops it when
+the lease is lost, and the dropped attempt writes nothing more — the worker that recovers the
+run answers the calls from the action ledger and runs `after_run` when the run ends.
+
+### Closing a Runner
+
+`Runner::close` releases what the runner's agents and plugins hold: it calls `Agent::close`
+on the root agent, which closes each agent's toolsets (`Toolset::close`) and its sub-agents,
+then runs every plugin's close hook. Call it once the application stops running the agent.
+
+```rust
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
+use std::sync::Arc;
+
+# async fn shutdown(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<()> {
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(agent)
+    .session_service(Arc::new(InMemorySessionService::new()))
+    .build()?;
+// ... serve requests ...
+runner.close().await;
+# Ok(())
+# }
+```
 
 ```rust
 use adk_core::{CallbackContext, Content};
@@ -501,9 +537,17 @@ if should_transfer {
 
 The Runner will:
 1. Detect the transfer request in the event
-2. Find the target agent in sub_agents
-3. Update session state with new active agent
+2. Check the target against the agents the requesting agent may transfer to
+3. Find the target agent in the agent tree
 4. Continue execution with the new agent
+
+Every transfer is checked, whether the model called `transfer_to_agent` or a tool set
+`transfer_to_agent` on its actions. An agent may transfer to its sub-agents, to its parent
+unless it sets `disallow_transfer_to_parent`, and to its parent's other sub-agents unless it
+sets `disallow_transfer_to_peers` (`Agent::allows_transfer_to_parent` and
+`Agent::allows_transfer_to_peers`). `Runner::allowed_transfer_targets` returns that list. A
+refused transfer is logged and control stays with the requesting agent; a composite root
+with `strict_transfer_policy` fails the run with `agent.transfer.target_forbidden` instead.
 
 ## Context Compaction
 

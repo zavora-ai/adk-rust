@@ -623,6 +623,21 @@ pub trait Toolset: Send + Sync {
     ) -> Result<()> {
         Ok(())
     }
+
+    /// Releases what the toolset holds open, such as a server connection or a subprocess.
+    ///
+    /// The agent that owns the toolset calls this from [`Agent::close`](crate::Agent::close),
+    /// which `adk_runner::Runner::close` reaches for every agent in its tree. Closing twice
+    /// must be harmless. The default does nothing.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// async fn close(&self) {
+    ///     self.connection.lock().await.take();
+    /// }
+    /// ```
+    async fn close(&self) {}
 }
 
 /// Controls how multiple tool calls from a single LLM response are dispatched.

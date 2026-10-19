@@ -80,9 +80,10 @@ let manager = PluginManager::new(vec![logging_plugin, cache_plugin]);
 | Callback | Description |
 |----------|-------------|
 | `on_user_message` | Called when user message received, can modify |
-| `on_event` | Called for each event, can modify |
+| `on_event` | Called for each event the run yields, can modify |
 | `before_run` | Called before run starts, can skip run |
-| `after_run` | Called after run completes (cleanup) |
+| `after_run` | Called once the run ends, however it ends — including a consumer that drops the stream (cleanup) |
+| `close_fn` | Called by `PluginManager::close`, which `Runner::close` runs |
 
 ### Agent Callbacks
 
@@ -97,7 +98,7 @@ let manager = PluginManager::new(vec![logging_plugin, cache_plugin]);
 |----------|-------------|
 | `before_model` | Called before LLM call, can modify request or skip |
 | `after_model` | Called after LLM call, can modify response |
-| `on_model_error` | Called on LLM error, can provide fallback |
+| `on_model_error` | Called when a model call or its stream fails; a returned response answers the turn |
 
 ### Tool Callbacks
 

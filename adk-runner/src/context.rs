@@ -6,7 +6,7 @@ use adk_core::{
 use adk_session::Session as AdkSession;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock, atomic::AtomicBool};
+use std::sync::{Arc, PoisonError, RwLock, atomic::AtomicBool};
 
 /// MutableSession wraps a session with shared mutable state.
 ///
@@ -14,6 +14,10 @@ use std::sync::{Arc, RwLock, atomic::AtomicBool};
 /// events are immediately visible to all agents sharing the same context.
 /// This is critical for SequentialAgent/LoopAgent patterns where downstream
 /// agents need to read state set by upstream agents via output_key.
+///
+/// A panic while another thread holds one of its locks poisons the lock. Every write is a
+/// single insert, push or assignment, so the data stays whole, and reads and writes go on
+/// using it rather than seeing an empty history or dropping events.
 pub struct MutableSession {
     /// The original session snapshot (for metadata like id, app_name, user_id)
     inner: Arc<dyn AdkSession>,
@@ -51,10 +55,7 @@ impl MutableSession {
             return;
         }
 
-        let Ok(mut state) = self.state.write() else {
-            tracing::error!("state RwLock poisoned in apply_state_delta — skipping delta");
-            return;
-        };
+        let mut state = self.state.write().unwrap_or_else(PoisonError::into_inner);
         // `temp:` keys stay for the rest of the invocation; the session service drops them
         // when it persists the event, so they never outlive it.
         for (key, value) in delta {
@@ -65,38 +66,26 @@ impl MutableSession {
     /// Append an event to the session's event list.
     /// This keeps the in-memory view consistent.
     pub fn append_event(&self, event: Event) {
-        let Ok(mut events) = self.events.write() else {
-            tracing::error!("events RwLock poisoned in append_event — event dropped");
-            return;
-        };
+        let mut events = self.events.write().unwrap_or_else(PoisonError::into_inner);
         events.push(event);
     }
 
     /// Get a snapshot of all events in the session.
     /// Used by the runner for compaction decisions.
     pub fn events_snapshot(&self) -> Vec<Event> {
-        let Ok(events) = self.events.read() else {
-            tracing::error!("events RwLock poisoned in events_snapshot — returning empty");
-            return Vec::new();
-        };
+        let events = self.events.read().unwrap_or_else(PoisonError::into_inner);
         events.clone()
     }
 
     /// Replace all events with a new list (used by intra-invocation compaction).
     pub fn replace_events(&self, new_events: Vec<Event>) {
-        let Ok(mut events) = self.events.write() else {
-            tracing::error!("events RwLock poisoned in replace_events — events unchanged");
-            return;
-        };
+        let mut events = self.events.write().unwrap_or_else(PoisonError::into_inner);
         *events = new_events;
     }
 
     /// Return the number of accumulated events without cloning the full list.
     pub fn events_len(&self) -> usize {
-        let Ok(events) = self.events.read() else {
-            tracing::error!("events RwLock poisoned in events_len — returning 0");
-            return 0;
-        };
+        let events = self.events.read().unwrap_or_else(PoisonError::into_inner);
         events.len()
     }
 
@@ -133,10 +122,7 @@ impl MutableSession {
         others: OtherAgents,
         branch: &str,
     ) -> Vec<adk_core::Content> {
-        let Ok(events) = self.events.read() else {
-            tracing::error!("events RwLock poisoned in conversation_history — returning empty");
-            return Vec::new();
-        };
+        let events = self.events.read().unwrap_or_else(PoisonError::into_inner);
         let mut history = Vec::new();
         let call_ids = adk_core::history::function_call_ids(&events);
 
@@ -486,10 +472,7 @@ impl adk_core::Session for MutableSession {
     }
 
     fn held_tool_calls(&self, agent_name: &str, branch: &str) -> Vec<adk_core::HeldToolCall> {
-        let Ok(events) = self.events.read() else {
-            tracing::error!("events RwLock poisoned in held_tool_calls — returning none");
-            return Vec::new();
-        };
+        let events = self.events.read().unwrap_or_else(PoisonError::into_inner);
         adk_core::held_tool_calls(&events, agent_name, branch)
     }
 
@@ -498,20 +481,14 @@ impl adk_core::Session for MutableSession {
         workflow: &str,
         branch: &str,
     ) -> Vec<adk_core::WorkflowPosition> {
-        let Ok(events) = self.events.read() else {
-            tracing::error!("events RwLock poisoned in workflow_resume_positions — returning none");
-            return Vec::new();
-        };
+        let events = self.events.read().unwrap_or_else(PoisonError::into_inner);
         adk_core::workflow_resume_positions(&events, workflow, branch)
     }
 }
 
 impl adk_core::State for MutableSession {
     fn get(&self, key: &str) -> Option<serde_json::Value> {
-        let Ok(state) = self.state.read() else {
-            tracing::error!("state RwLock poisoned in State::get — returning None");
-            return None;
-        };
+        let state = self.state.read().unwrap_or_else(PoisonError::into_inner);
         state.get(key).cloned()
     }
 
@@ -520,18 +497,12 @@ impl adk_core::State for MutableSession {
             tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
             return;
         }
-        let Ok(mut state) = self.state.write() else {
-            tracing::error!("state RwLock poisoned in State::set — value dropped");
-            return;
-        };
+        let mut state = self.state.write().unwrap_or_else(PoisonError::into_inner);
         state.insert(key, value);
     }
 
     fn all(&self) -> HashMap<String, serde_json::Value> {
-        let Ok(state) = self.state.read() else {
-            tracing::error!("state RwLock poisoned in State::all — returning empty");
-            return HashMap::new();
-        };
+        let state = self.state.read().unwrap_or_else(PoisonError::into_inner);
         state.clone()
     }
 }
@@ -905,5 +876,65 @@ impl InvocationContextTrait for InvocationContext {
             Some(service) => service.get_secret_for(request).await.map(Some),
             None => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod poisoned_lock_tests {
+    use super::*;
+    use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+
+    #[tokio::test]
+    async fn a_poisoned_lock_keeps_the_history_and_state() {
+        let service = InMemorySessionService::new();
+        let stored = service
+            .create(CreateRequest {
+                app_name: "app".to_string(),
+                user_id: "user".to_string(),
+                session_id: Some("session".to_string()),
+                state: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        let session = Arc::new(MutableSession::new(Arc::from(stored)));
+        let mut event = Event::new("inv-1");
+        event.author = "user".to_string();
+        event.llm_response.content = Some(Content::new("user").with_text("hello"));
+        session.append_event(event);
+        session.apply_state_delta(&HashMap::from([(
+            "topic".to_string(),
+            serde_json::json!("billing"),
+        )]));
+
+        // A thread that panics while it holds the write guards poisons both locks.
+        let holder = Arc::clone(&session);
+        let _ = std::thread::spawn(move || {
+            let _events = holder.events.write().unwrap();
+            let _state = holder.state.write().unwrap();
+            panic!("poison the session locks");
+        })
+        .join();
+        assert!(session.events.is_poisoned() && session.state.is_poisoned());
+
+        let history = adk_core::Session::conversation_history(session.as_ref());
+        let texts: Vec<_> = history
+            .iter()
+            .map(|content| {
+                (
+                    content.role.as_str(),
+                    content.parts.iter().filter_map(Part::text).collect::<String>(),
+                )
+            })
+            .collect();
+        assert_eq!(texts, [("user", "hello".to_string())]);
+        assert_eq!(
+            adk_core::State::get(session.as_ref(), "topic"),
+            Some(serde_json::json!("billing"))
+        );
+        let mut later = Event::new("inv-1");
+        later.author = "agent".to_string();
+        later.llm_response.content = Some(Content::new("model").with_text("hi"));
+        session.append_event(later);
+        assert_eq!(session.events_len(), 2, "a write after the panic is kept");
     }
 }

@@ -1895,6 +1895,23 @@ impl Agent for CodeActAgent {
         &self.sub_agents
     }
 
+    fn allows_transfer_to_parent(&self) -> bool {
+        !self.disallow_transfer_to_parent
+    }
+
+    fn allows_transfer_to_peers(&self) -> bool {
+        !self.disallow_transfer_to_peers
+    }
+
+    async fn close(&self) {
+        for toolset in &self.toolsets {
+            toolset.close().await;
+        }
+        for agent in &self.sub_agents {
+            agent.close().await;
+        }
+    }
+
     async fn screen_user_input(&self, content: &Content) -> adk_core::Result<Option<Content>> {
         let own = if self.input_guardrails.is_empty() {
             None

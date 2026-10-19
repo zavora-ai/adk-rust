@@ -300,6 +300,141 @@ impl Drop for ActiveRunCleanup {
         runs.remove(&self.run_id);
     }
 }
+
+/// The invocation context of a run that has started, shared by the run stream that builds it
+/// and the stage that finishes the run.
+#[derive(Clone, Default)]
+struct RunScope(Arc<std::sync::Mutex<Option<Arc<InvocationContext>>>>);
+
+impl RunScope {
+    fn set(&self, ctx: &Arc<InvocationContext>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(ctx));
+    }
+
+    fn take(&self) -> Option<Arc<InvocationContext>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    #[cfg(feature = "plugins")]
+    fn get(&self) -> Option<Arc<InvocationContext>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+/// Finishes a run once its plugins' `before_run` has run.
+///
+/// The run stream calls [`after_run`](Self::after_run) when the run ends. A stream that is
+/// dropped first — a client that disconnects — is finished on the current Tokio runtime
+/// instead: each tool call still in flight is answered outcome-unknown, persisted and
+/// audited, then `after_run` runs.
+///
+/// A durable run's attempt ([`RunConfig::durable_run_id`]) is the exception: the worker
+/// drops it when its lease is lost, and the worker that recovers the run answers its calls
+/// from the action ledger and finishes it, so the dropped attempt writes nothing more.
+struct RunFinish {
+    scope: RunScope,
+    #[cfg(feature = "plugins")]
+    plugins: Option<Arc<PluginManager>>,
+    session_service: Arc<dyn SessionService>,
+    identity: adk_core::AdkIdentity,
+    in_flight: InFlightCalls,
+    finished: bool,
+}
+
+impl RunFinish {
+    /// Passes `event` through the plugins' `on_event`, keeping it when a plugin fails.
+    async fn on_event(&self, event: Event) -> Event {
+        #[cfg(feature = "plugins")]
+        if let (Some(manager), Some(ctx)) = (self.plugins.as_ref(), self.scope.get()) {
+            return match manager
+                .run_on_event(ctx as Arc<dyn adk_core::InvocationContext>, event.clone())
+                .await
+            {
+                Ok(modified) => modified.unwrap_or(event),
+                Err(error) => {
+                    tracing::warn!(error = %error, "on_event failed for the run's final event; keeping the event");
+                    event
+                }
+            };
+        }
+        event
+    }
+
+    /// Runs the plugins' `after_run` for a run that started.
+    async fn after_run(&mut self) {
+        self.finished = true;
+        #[cfg(feature = "plugins")]
+        if let (Some(manager), Some(ctx)) = (self.plugins.as_ref(), self.scope.take()) {
+            manager.run_after_run(ctx as Arc<dyn adk_core::InvocationContext>).await;
+        }
+    }
+}
+
+impl Drop for RunFinish {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let Some(ctx) = self.scope.take() else { return };
+        if adk_core::InvocationContext::run_config(ctx.as_ref()).durable_run_id.is_some() {
+            tracing::debug!(
+                session.id = %self.identity.session_id,
+                "a durable attempt was dropped; the worker that recovers the run finishes it"
+            );
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(
+                session.id = %self.identity.session_id,
+                "no Tokio runtime to finish a dropped run on; after_run and in-flight answers are skipped"
+            );
+            return;
+        };
+        let mut in_flight = std::mem::take(&mut self.in_flight);
+        #[cfg(feature = "plugins")]
+        let plugins = self.plugins.take();
+        let session_service = Arc::clone(&self.session_service);
+        let identity = self.identity.clone();
+        runtime.spawn(async move {
+            let run_config = adk_core::InvocationContext::run_config(ctx.as_ref());
+            if let Some(trail) = &run_config.audit {
+                // The run is already over, so a failed write is logged by the trail.
+                let _ = in_flight
+                    .audit_calls(trail, run_config, &identity, "disconnected", |_| {
+                        adk_core::audit_log::AuditRecordOutcome::OutcomeUnknown
+                    })
+                    .await;
+            }
+            for event in in_flight.answer_interrupted() {
+                #[cfg(feature = "plugins")]
+                let event = match plugins.as_ref() {
+                    Some(manager) => match manager
+                        .run_on_event(ctx.clone() as Arc<dyn adk_core::InvocationContext>, event.clone())
+                        .await
+                    {
+                        Ok(modified) => modified.unwrap_or(event),
+                        Err(_) => event,
+                    },
+                    None => event,
+                };
+                ctx.mutable_session().append_event(event.clone());
+                if let Err(error) = session_service
+                    .append_event_for_identity(adk_session::AppendEventRequest {
+                        identity: identity.clone(),
+                        event,
+                    })
+                    .await
+                {
+                    tracing::error!(error = %error, "failed to persist the outcome of a tool call a dropped run left in flight");
+                }
+            }
+            #[cfg(feature = "plugins")]
+            if let Some(manager) = plugins {
+                manager.run_after_run(ctx as Arc<dyn adk_core::InvocationContext>).await;
+            }
+        });
+    }
+}
 use tracing::Instrument;
 
 /// Configuration for constructing a [`Runner`].
@@ -687,6 +822,31 @@ impl Runner {
         &self.governance
     }
 
+    /// Releases what the runner's agents and plugins hold: every agent's toolsets, through
+    /// [`Agent::close`] on the root agent, then the plugins' close hooks.
+    ///
+    /// Call it once the application stops running the agent; runs started afterwards use
+    /// toolsets that are closed.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let runner = Runner::builder()
+    ///     .app_name("support")
+    ///     .agent(agent)
+    ///     .session_service(sessions)
+    ///     .build()?;
+    /// // ... serve requests ...
+    /// runner.close().await;
+    /// ```
+    pub async fn close(&self) {
+        self.root_agent.close().await;
+        #[cfg(feature = "plugins")]
+        if let Some(manager) = &self.plugin_manager {
+            manager.close().await;
+        }
+    }
+
     /// Returns the runner's configured [`RunConfig`].
     ///
     /// Useful as a base to clone and adjust for [`Self::run_with_config`].
@@ -830,14 +990,20 @@ impl Runner {
         // dropped before it is ever polled. Moving the guard into the generator
         // keeps it alive exactly as long as the stream.
         let cleanup = ActiveRunCleanup { active_runs: active_runs.clone(), run_id };
-        let stop_session_service = self.session_service.clone();
-        let stop_identity = identity.clone();
         let stop_invocation_id = invocation_id.to_string();
         let stop_default_author = self.root_agent.name().to_string();
+        let run_scope = RunScope::default();
+        let mut finish = RunFinish {
+            scope: run_scope.clone(),
+            #[cfg(feature = "plugins")]
+            plugins: self.plugin_manager.clone(),
+            session_service: self.session_service.clone(),
+            identity: identity.clone(),
+            in_flight: InFlightCalls::default(),
+            finished: false,
+        };
 
         let s = stream! {
-            let _cleanup = cleanup;
-
             // A frozen runner refuses new work before touching the session.
             if let Err(error) = run_config.check_governance() {
                 yield Err(error);
@@ -1004,6 +1170,8 @@ impl Runner {
             }
 
             let mut ctx = Arc::new(invocation_ctx);
+            // From here on the run has started, so the finishing stage runs `after_run`.
+            run_scope.set(&ctx);
 
             #[cfg(feature = "plugins")]
             if let Some(manager) = plugin_manager.as_ref() {
@@ -1015,6 +1183,20 @@ impl Runner {
                         let mut early_event = adk_core::Event::new(ctx.invocation_id());
                         early_event.author = agent_to_run.name().to_string();
                         early_event.llm_response.content = Some(content);
+                        match manager
+                            .run_on_event(
+                                ctx.clone() as Arc<dyn adk_core::InvocationContext>,
+                                early_event.clone(),
+                            )
+                            .await
+                        {
+                            Ok(Some(modified)) => early_event = modified,
+                            Ok(None) => {}
+                            Err(e) => {
+                                yield Err(e);
+                                return;
+                            }
+                        }
 
                         ctx.mutable_session().append_event(early_event.clone());
                         if let Err(e) = session_service
@@ -1028,12 +1210,10 @@ impl Runner {
                         }
 
                         yield Ok(early_event);
-                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
                         return;
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
                         yield Err(e);
                         return;
                     }
@@ -1092,12 +1272,10 @@ impl Runner {
                             refreshed_ctx = refreshed_ctx.with_cancellation_token(token.clone());
                         }
                         ctx = Arc::new(refreshed_ctx);
+                        run_scope.set(&ctx);
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        if let Some(manager) = plugin_manager.as_ref() {
-                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                        }
                         yield Err(e);
                         return;
                     }
@@ -1111,10 +1289,6 @@ impl Runner {
                 match root_agent.screen_user_input(&effective_user_content).await {
                     Ok(screened) => screened,
                     Err(error) => {
-                        #[cfg(feature = "plugins")]
-                        if let Some(manager) = plugin_manager.as_ref() {
-                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                        }
                         yield Err(error);
                         return;
                     }
@@ -1129,6 +1303,7 @@ impl Runner {
                         || screened.parts != effective_user_content.parts =>
                 {
                     ctx = Arc::new(ctx.with_user_content(screened.clone()));
+                    run_scope.set(&ctx);
                     screened
                 }
                 Some(_) | None => effective_user_content,
@@ -1150,10 +1325,6 @@ impl Runner {
                     event: user_event,
                 })
                 .await {
-                #[cfg(feature = "plugins")]
-                if let Some(manager) = plugin_manager.as_ref() {
-                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                }
                 yield Err(e);
                 return;
             }
@@ -1257,6 +1428,7 @@ impl Runner {
                         refreshed_ctx = refreshed_ctx.with_cancellation_token(token.clone());
                     }
                     ctx = Arc::new(refreshed_ctx);
+                    run_scope.set(&ctx);
                 }
             }
 
@@ -1355,30 +1527,18 @@ impl Runner {
                             match agent_to_run.run(ctx.clone()).instrument(agent_span.clone()).await {
                                 Ok(s) => s,
                                 Err(retry_err) => {
-                                    #[cfg(feature = "plugins")]
-                                    if let Some(manager) = plugin_manager.as_ref() {
-                                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                                    }
                                     yield Err(retry_err);
                                     return;
                                 }
                             }
                         }
                         Err(compaction_err) => {
-                            #[cfg(feature = "plugins")]
-                            if let Some(manager) = plugin_manager.as_ref() {
-                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                            }
                             yield Err(compaction_err);
                             return;
                         }
                     }
                 }
                 Err(e) => {
-                    #[cfg(feature = "plugins")]
-                    if let Some(manager) = plugin_manager.as_ref() {
-                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                    }
                     yield Err(e);
                     return;
                 }
@@ -1432,7 +1592,6 @@ impl Runner {
                                 }
                                 Ok(None) => {}
                                 Err(e) => {
-                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
                                     yield Err(e);
                                     return;
                                 }
@@ -1449,12 +1608,8 @@ impl Runner {
 
                         // Check for transfer action
                         if let Some(target) = &event.actions.transfer_to_agent {
-                            let source = if event.author.is_empty() {
-                                agent_to_run.name()
-                            } else {
-                                &event.author
-                            };
-                            if let Some(allowed) = root_agent.transfer_targets_for(source)
+                            let source = Self::transfer_source(&root_agent, &event.author, agent_to_run.name());
+                            if let Some(allowed) = Self::allowed_transfer_targets(&root_agent, source)
                                 && !allowed.contains(target)
                             {
                                 if root_agent.strict_transfer_policy() {
@@ -1469,7 +1624,7 @@ impl Runner {
                                     ));
                                     return;
                                 }
-                                tracing::warn!(source, target, "handoff target rejected by root policy");
+                                tracing::warn!(source, target, allowed = ?allowed, "transfer refused: the agent may not hand off to this target");
                             } else {
                                 transfer_target = Some((source.to_string(), target.clone()));
                             }
@@ -1500,28 +1655,16 @@ impl Runner {
                                     event: event.clone(),
                                 })
                                 .await {
-                                #[cfg(feature = "plugins")]
-                                if let Some(manager) = plugin_manager.as_ref() {
-                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                                }
                                 yield Err(e);
                                 return;
                             }
                         yield Ok(event);
                         if let Err(exceeded) = budget_check {
-                            #[cfg(feature = "plugins")]
-                            if let Some(manager) = plugin_manager.as_ref() {
-                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                            }
                             yield Err(exceeded.into());
                             return;
                         }
                     }
                     Err(e) => {
-                        #[cfg(feature = "plugins")]
-                        if let Some(manager) = plugin_manager.as_ref() {
-                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                        }
                         yield Err(e);
                         return;
                     }
@@ -1680,10 +1823,6 @@ impl Runner {
                 let mut transfer_stream = match target_agent.run(transfer_ctx.clone()).await {
                     Ok(s) => s,
                     Err(e) => {
-                        #[cfg(feature = "plugins")]
-                        if let Some(manager) = plugin_manager.as_ref() {
-                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                        }
                         yield Err(e);
                         return;
                     }
@@ -1724,7 +1863,6 @@ impl Runner {
                                     }
                                     Ok(None) => {}
                                     Err(e) => {
-                                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
                                         yield Err(e);
                                         return;
                                     }
@@ -1739,12 +1877,8 @@ impl Runner {
 
                             // Capture further transfer requests
                             if let Some(target) = &event.actions.transfer_to_agent {
-                                let source = if event.author.is_empty() {
-                                    target_agent.name()
-                                } else {
-                                    &event.author
-                                };
-                                if let Some(allowed) = root_agent.transfer_targets_for(source)
+                                let source = Self::transfer_source(&root_agent, &event.author, target_agent.name());
+                                if let Some(allowed) = Self::allowed_transfer_targets(&root_agent, source)
                                     && !allowed.contains(target)
                                 {
                                     if root_agent.strict_transfer_policy() {
@@ -1759,7 +1893,7 @@ impl Runner {
                                         ));
                                         return;
                                     }
-                                    tracing::warn!(source, target, "handoff target rejected by root policy");
+                                    tracing::warn!(source, target, allowed = ?allowed, "transfer refused: the agent may not hand off to this target");
                                 } else {
                                     current_transfer_target =
                                         Some((source.to_string(), target.clone()));
@@ -1781,28 +1915,16 @@ impl Runner {
                                         event: event.clone(),
                                     })
                                     .await {
-                                    #[cfg(feature = "plugins")]
-                                    if let Some(manager) = plugin_manager.as_ref() {
-                                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                                    }
                                     yield Err(e);
                                     return;
                                 }
                             yield Ok(event);
                             if let Err(exceeded) = budget_check {
-                                #[cfg(feature = "plugins")]
-                                if let Some(manager) = plugin_manager.as_ref() {
-                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                                }
                                 yield Err(exceeded.into());
                                 return;
                             }
                         }
                         Err(e) => {
-                            #[cfg(feature = "plugins")]
-                            if let Some(manager) = plugin_manager.as_ref() {
-                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                            }
                             yield Err(e);
                             return;
                         }
@@ -1826,6 +1948,20 @@ impl Runner {
                         .await;
                 }
                 for event in in_flight.answer_interrupted() {
+                    #[cfg(feature = "plugins")]
+                    let event = match plugin_manager.as_ref() {
+                        Some(manager) => match manager
+                            .run_on_event(ctx.clone() as Arc<dyn adk_core::InvocationContext>, event.clone())
+                            .await
+                        {
+                            Ok(modified) => modified.unwrap_or(event),
+                            Err(error) => {
+                                tracing::warn!(error = %error, "on_event failed for an interrupted call's answer; keeping the answer");
+                                event
+                            }
+                        },
+                        None => event,
+                    };
                     ctx.mutable_session().append_event(event.clone());
                     if let Err(error) = session_service
                         .append_event_for_identity(adk_session::AppendEventRequest {
@@ -1837,10 +1973,6 @@ impl Runner {
                         tracing::error!(error = %error, "failed to persist the outcome of an interrupted tool call");
                     }
                     yield Ok(event);
-                }
-                #[cfg(feature = "plugins")]
-                if let Some(manager) = plugin_manager.as_ref() {
-                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
                 }
                 return;
             }
@@ -1941,45 +2073,57 @@ impl Runner {
                 }
             }
 
-            #[cfg(feature = "plugins")]
-            if let Some(manager) = plugin_manager.as_ref() {
-                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-            }
         };
 
-        // A run stopped by its budget ends with an event that explains why, persisted like
-        // any other, followed by the structured `ResourceExhausted` error.
+        // Every run ends here, however the run stream ends: a run stopped by its budget ends
+        // with an event that explains why, persisted like any other and followed by the
+        // structured `ResourceExhausted` error, and `after_run` runs once the run is over.
+        // Boxed before the finishing stream takes it, so polling that stream does not copy the
+        // whole run state onto the stack.
+        let inner: EventStream = Box::pin(s);
         let events = stream! {
             use futures::StreamExt;
-            let mut inner = Box::pin(s);
+            let _cleanup = cleanup;
+            let mut inner = inner;
             let mut author = stop_default_author;
+            let mut failure = None;
             while let Some(item) = inner.next().await {
                 match item {
                     Ok(event) => {
                         if !event.author.is_empty() && event.author != "user" {
                             author.clone_from(&event.author);
                         }
+                        finish.in_flight.observe(&event);
                         yield Ok(event);
                     }
                     Err(error) => {
-                        if let Some(stop_event) =
-                            adk_core::budget_exceeded_event(&stop_invocation_id, &author, &error)
-                        {
-                            if let Err(persist_error) = stop_session_service
-                                .append_event_for_identity(adk_session::AppendEventRequest {
-                                    identity: stop_identity.clone(),
-                                    event: stop_event.clone(),
-                                })
-                                .await
-                            {
-                                tracing::warn!(error = %persist_error, "failed to persist the budget stop event");
-                            }
-                            yield Ok(stop_event);
-                        }
-                        yield Err(error);
-                        return;
+                        failure = Some(error);
+                        break;
                     }
                 }
+            }
+            // The agent's streams are released before the run is finished.
+            drop(inner);
+            if let Some(error) = &failure
+                && let Some(stop_event) =
+                    adk_core::budget_exceeded_event(&stop_invocation_id, &author, error)
+            {
+                let stop_event = finish.on_event(stop_event).await;
+                if let Err(persist_error) = finish
+                    .session_service
+                    .append_event_for_identity(adk_session::AppendEventRequest {
+                        identity: finish.identity.clone(),
+                        event: stop_event.clone(),
+                    })
+                    .await
+                {
+                    tracing::warn!(error = %persist_error, "failed to persist the budget stop event");
+                }
+                yield Ok(stop_event);
+            }
+            finish.after_run().await;
+            if let Some(error) = failure {
+                yield Err(error);
             }
         };
 
@@ -2343,6 +2487,42 @@ impl Runner {
         }
 
         path_supports_transfer(root_agent, agent.name()).unwrap_or(true)
+    }
+
+    /// The agent a transfer request in an event comes from: the event's author when it is in
+    /// the tree, else the agent the runner is running.
+    fn transfer_source<'a>(root: &Arc<dyn Agent>, author: &'a str, running: &'a str) -> &'a str {
+        if !author.is_empty() && Self::find_agent(root, author).is_some() {
+            author
+        } else {
+            running
+        }
+    }
+
+    /// The agents `source` may hand control to, or `None` when `source` is not in the tree.
+    ///
+    /// A composite root with an explicit topology decides for its members. Otherwise an agent
+    /// may transfer to its sub-agents, to its parent unless
+    /// [`Agent::allows_transfer_to_parent`] says no, and to its parent's other sub-agents
+    /// unless [`Agent::allows_transfer_to_peers`] says no: the targets `LlmAgent` offers its
+    /// model. Every transfer is checked, whether a model or a tool requested it.
+    pub fn allowed_transfer_targets(root: &Arc<dyn Agent>, source: &str) -> Option<Vec<String>> {
+        if let Some(targets) = root.transfer_targets_for(source) {
+            return Some(targets);
+        }
+        let agent = Self::find_agent(root, source)?;
+        let mut targets: Vec<String> =
+            agent.sub_agents().iter().map(|sub| sub.name().to_string()).collect();
+        let (parent, peers) = Self::compute_transfer_context(root, source);
+        if let Some(parent) = parent
+            && agent.allows_transfer_to_parent()
+        {
+            targets.push(parent);
+        }
+        if agent.allows_transfer_to_peers() {
+            targets.extend(peers);
+        }
+        Some(targets)
     }
 
     /// Recursively search agent tree for agent with given name

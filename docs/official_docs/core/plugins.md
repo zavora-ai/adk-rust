@@ -233,6 +233,41 @@ async fn after_model(
 }
 ```
 
+### Model Fallback
+
+A `Plugin` registered with the runner's `PluginManager` can answer a model call that fails.
+`LlmAgent` calls `on_model_error` when the model call or its response stream fails, before
+it fails the turn, with the request the model was sent and the error message. A response the
+callback returns answers the turn in the failed call's place: its text is the answer and its
+tool calls run. A refusal by the run's budget or spend ledger is not reported.
+
+```rust
+use adk_core::{Llm, LlmResponse};
+use adk_plugin::{Plugin, PluginConfig, PluginManager};
+use futures::StreamExt;
+use std::sync::Arc;
+
+fn model_fallback(fallback: Arc<dyn Llm>) -> PluginManager {
+    PluginManager::new(vec![Plugin::new(PluginConfig {
+        name: "model-fallback".to_string(),
+        on_model_error: Some(Box::new(move |_ctx, mut request, error| {
+            let fallback = fallback.clone();
+            Box::pin(async move {
+                tracing::warn!(error = %error, "primary model failed; using the fallback");
+                request.model = fallback.name().to_string();
+                let mut responses = fallback.generate_content(request, false).await?;
+                let mut answer: Option<LlmResponse> = None;
+                while let Some(response) = responses.next().await {
+                    answer = Some(response?);
+                }
+                Ok(answer)
+            })
+        })),
+        ..Default::default()
+    })])
+}
+```
+
 ## Priority-Based Pipeline
 
 Plugins execute in priority order (lower numbers run first):

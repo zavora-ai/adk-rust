@@ -14,6 +14,10 @@ fn is_ident_body(c: char) -> bool {
 /// Returns `Some((start, end, content))` where start/end are byte offsets of the
 /// outer braces and content is the inner string (without braces).
 /// Returns `None` when no more placeholders exist.
+///
+/// A brace preceded by `$` or `\`, and a run of two or more braces, opens no placeholder,
+/// so shell and JavaScript `${x}`, an escaped `\{x}`, and `{{x}}` templates in code
+/// examples stay as written.
 fn find_next_placeholder(template: &str, from: usize) -> Option<(usize, usize, &str)> {
     let bytes = template.as_bytes();
     let len = bytes.len();
@@ -21,6 +25,13 @@ fn find_next_placeholder(template: &str, from: usize) -> Option<(usize, usize, &
 
     while i < len {
         if bytes[i] == b'{' {
+            let escaped = i > 0 && matches!(bytes[i - 1], b'$' | b'\\');
+            if escaped || bytes.get(i + 1) == Some(&b'{') {
+                while i < len && bytes[i] == b'{' {
+                    i += 1;
+                }
+                continue;
+            }
             let content_start = i + 1;
             if content_start >= len {
                 break;
@@ -159,6 +170,15 @@ async fn replace_match(ctx: &dyn InvocationContext, content: &str) -> Result<Str
 /// - `{artifact.file_name}` - Artifact content insertion
 /// - `{app:var}`, `{user:var}`, `{temp:var}` - Prefixed state variables
 ///
+/// Text that is not a placeholder stays exactly as written, so instructions can carry code:
+///
+/// | Text | Result |
+/// |------|--------|
+/// | `${HOME}` | `${HOME}` — a brace after `$` opens no placeholder |
+/// | `\{name}` | `\{name}` — a brace after `\` opens no placeholder |
+/// | `{{name}}` | `{{name}}` — doubled braces open no placeholder |
+/// | `{"key": 1}`, `{1}` | unchanged — the content is not a variable name |
+///
 /// # Examples
 ///
 /// ```ignore
@@ -257,6 +277,27 @@ mod tests {
         assert!(find_next_placeholder("{}", 0).is_none());
         // JSON-like content
         assert!(find_next_placeholder("{\"key\": \"value\"}", 0).is_none());
+    }
+
+    #[test]
+    fn dollar_and_backslash_braces_open_no_placeholder() {
+        assert!(find_next_placeholder("echo ${HOME}", 0).is_none());
+        assert!(find_next_placeholder("const s = `${name}`;", 0).is_none());
+        assert!(find_next_placeholder("Escaped: \\{name}", 0).is_none());
+        assert!(find_next_placeholder("${{name}}", 0).is_none());
+        let t = "${HOME} then {name}";
+        let (s, e, c) = find_next_placeholder(t, 0).unwrap();
+        assert_eq!((c, &t[s..e]), ("name", "{name}"));
+    }
+
+    #[test]
+    fn doubled_braces_open_no_placeholder() {
+        assert!(find_next_placeholder("Hello {{customer_name}}!", 0).is_none());
+        assert!(find_next_placeholder("{{{name}}}", 0).is_none());
+        assert!(find_next_placeholder("{{ name }}", 0).is_none());
+        let t = "{{literal}} and {topic?}";
+        let (s, e, c) = find_next_placeholder(t, 0).unwrap();
+        assert_eq!((c, &t[s..e]), ("topic?", "{topic?}"));
     }
 
     #[test]

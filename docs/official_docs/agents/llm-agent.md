@@ -246,6 +246,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 | `{var?}` | `{user_name?}` | Optional (empty if missing) |
 | `{artifact.file}` | `{artifact.resume.pdf}` | Artifact content |
 
+Text that is not a placeholder stays as written, so an instruction can quote code:
+
+| Text | Sent to the model |
+|------|-------------------|
+| `${HOME}`, `` `${name}` `` | Unchanged — a brace after `$` opens no placeholder |
+| `\{name}` | Unchanged — a brace after `\` opens no placeholder |
+| `{{name}}`, `{{ name }}` | Unchanged — doubled braces open no placeholder |
+| `{"key": 1}`, `{1}` | Unchanged — the content is not a variable name |
+
 **Output Example:**
 
 Template: `"You are helping {user_name}. Their role is {user_role}."`  
@@ -518,6 +527,12 @@ Save agent responses to session state:
 ```rust
 .output_key("summary")  // Response saved to state["summary"]
 ```
+
+`state["summary"]` holds the text of the agent's final answer: the last model turn, the one
+without tool calls. Text the model writes beside a tool call in an earlier turn is not
+included, and each run replaces the value. When a `before_agent` callback answers for the
+agent, its content is the answer stored. Structured output (`output_schema`) is stored as
+the JSON it validated as.
 
 ### Dynamic Instructions
 

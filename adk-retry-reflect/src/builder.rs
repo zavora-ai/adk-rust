@@ -146,8 +146,9 @@ impl RetryReflectPluginBuilder {
 
     /// Enable global failure tracking with the given circuit-breaker threshold.
     ///
-    /// When a tool exceeds this threshold across all invocations, it will be
-    /// circuit-broken and errors will propagate immediately.
+    /// When a tool fails this many times across all invocations without a success in
+    /// between, it is circuit-broken and its errors propagate immediately, until one of its
+    /// calls succeeds.
     pub fn enable_global_tracking(mut self, threshold: u32) -> Self {
         self.global_tracking = true;
         self.global_failure_threshold = threshold;

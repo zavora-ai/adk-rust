@@ -559,6 +559,31 @@ let parent = LlmAgentBuilder::new("parent")
 - Agent names must be unique within the hierarchy
 - Descriptions help the LLM decide which agent to transfer to
 
+### Transfer Restrictions
+
+`disallow_transfer_to_parent(true)` and `disallow_transfer_to_peers(true)` limit where an
+agent may hand control. The runner enforces them on every transfer the agent requests:
+
+| Requested by | Checked |
+|--------------|---------|
+| The model's `transfer_to_agent` call | The tool only offers allowed targets, and the runner checks again |
+| A tool that sets `transfer_to_agent` on its actions | The runner checks the target |
+| A custom agent's event | The runner checks the target |
+
+An agent may transfer to its sub-agents, to its parent unless it disallows that, and to its
+parent's other sub-agents unless it disallows that. The runner logs a refused transfer and
+keeps control with the requesting agent.
+
+```rust
+let specialist = LlmAgentBuilder::new("refunds")
+    .description("Handles refunds")
+    .model(model.clone())
+    .tool(escalate_tool) // its transfer to "parent" is refused
+    .disallow_transfer_to_parent(true)
+    .disallow_transfer_to_peers(true)
+    .build()?;
+```
+
 ## Writing Effective Transfer Instructions
 
 For successful agent transfers, provide clear instructions and descriptions:
@@ -874,6 +899,12 @@ let coordinator = LlmAgentBuilder::new("coordinator")
 AgentTool runs sub-agents in non-streaming mode (`StreamingMode::None`) internally, so the sub-agent accumulates its full response before returning it to the parent. This prevents issues where partial streaming chunks could produce empty results.
 
 This enables seamless data flow between parent and child agents when using the AgentTool pattern.
+
+`LlmAgent` runs each call to an agent-delegation tool (`AgentTool`, and any tool whose
+`is_agent_delegation()` is `true`) on a Tokio task of its own. Each level of nesting starts on
+a fresh stack, so agent tools nest to any depth within a runtime worker thread's 2 MiB stack.
+Dropping the run, or the call's timeout, aborts the task; a panic in it fails the call as
+`tool.panicked`, as it does for any tool.
 
 ## Running Multi-Agent Systems
 

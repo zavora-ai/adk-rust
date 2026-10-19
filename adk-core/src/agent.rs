@@ -236,6 +236,72 @@ pub trait Agent: Send + Sync {
         Ok(AgentTransferDecision::Allow)
     }
 
+    /// Whether this agent may hand control back to the agent that lists it as a sub-agent.
+    ///
+    /// The runner checks every transfer an agent's events request, whether its model or one
+    /// of its tools set [`EventActions::transfer_to_agent`](crate::EventActions), against the
+    /// agents it may transfer to: its sub-agents, its parent when this returns `true`, and
+    /// its parent's other sub-agents when
+    /// [`allows_transfer_to_peers`](Self::allows_transfer_to_peers) returns `true`. Defaults
+    /// to `true`.
+    fn allows_transfer_to_parent(&self) -> bool {
+        true
+    }
+
+    /// Whether this agent may hand control to the other sub-agents of its parent.
+    ///
+    /// See [`allows_transfer_to_parent`](Self::allows_transfer_to_parent). Defaults to `true`.
+    fn allows_transfer_to_peers(&self) -> bool {
+        true
+    }
+
+    /// Releases the resources this agent and its sub-agents hold, such as toolset
+    /// connections.
+    ///
+    /// `adk_runner::Runner::close` calls this on its root agent when the application shuts
+    /// down. The default closes each of [`sub_agents`](Self::sub_agents); an agent that owns
+    /// toolsets or plugins closes them, then its sub-agents.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Agent, EventStream, InvocationContext, Result};
+    /// use async_trait::async_trait;
+    /// use std::sync::Arc;
+    ///
+    /// struct Indexer {
+    ///     connection: tokio::sync::Mutex<Option<String>>,
+    /// }
+    ///
+    /// #[async_trait]
+    /// impl Agent for Indexer {
+    ///     fn name(&self) -> &str {
+    ///         "indexer"
+    ///     }
+    ///
+    ///     fn description(&self) -> &str {
+    ///         "indexes documents"
+    ///     }
+    ///
+    ///     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+    ///         &[]
+    ///     }
+    ///
+    ///     async fn close(&self) {
+    ///         self.connection.lock().await.take();
+    ///     }
+    ///
+    ///     async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+    ///         Ok(Box::pin(futures::stream::empty()))
+    ///     }
+    /// }
+    /// ```
+    async fn close(&self) {
+        for agent in self.sub_agents() {
+            agent.close().await;
+        }
+    }
+
     /// Screens a user message with the input guardrails of this agent and of every agent
     /// below it.
     ///

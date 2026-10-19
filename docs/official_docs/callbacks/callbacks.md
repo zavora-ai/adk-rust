@@ -17,6 +17,23 @@ ADK-Rust supports eight callback types that intercept different stages of agent 
 | `after_tool_full` | After tool execution (V2 rich) | Inspect/modify tool args and response directly |
 | `on_tool_error` | After tool failure (retries exhausted) | Fallback results, error recovery |
 
+Run-wide hooks (`InvocationHooks`, which a runner's `PluginManager` installs) add
+`on_model_error`: it runs when a model call or its response stream fails, and a response it
+returns answers the turn in the failed call's place. See [Plugins](../core/plugins.md).
+
+### When `after_agent` Runs
+
+| How the agent's turn ends | `after_agent` |
+|---------------------------|---------------|
+| The model answers | Runs |
+| A `before_agent` callback answers for the agent | Runs |
+| The agent transfers to another agent | Runs, before the target agent starts |
+| A tool result ends the turn (`skip_summarization`, `escalate`) | Runs |
+| The run is cancelled, the client disconnects, or a `ParallelAgent` sibling escalates | Runs on the Tokio runtime; content it returns is discarded, since nothing reads the stream |
+| A durable worker drops the attempt after losing its lease | Waits for the worker that resumes the run |
+| A tool call is held for confirmation | Waits for the run that resumes the call |
+| The agent fails with an error | Does not run |
+
 ## Callback Types
 
 ### Agent Callbacks

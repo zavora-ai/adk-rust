@@ -29,8 +29,11 @@ use crate::tracker::{GlobalRetryTracker, RetryTracker};
 /// # Architecture
 ///
 /// The plugin implements [`EnhancedPlugin`] from `adk-plugin` and uses:
-/// - A per-invocation [`RetryTracker`] (wrapped in `Arc<Mutex<...>>`) for failure counts
-/// - An optional [`GlobalRetryTracker`] for cross-invocation circuit-breaker patterns
+/// - A [`RetryTracker`] (wrapped in `Arc<Mutex<...>>`) that counts failures per invocation,
+///   so one plugin serves every user and session: the retry limits apply within each
+///   invocation, and a tool call that succeeds clears that tool's counts
+/// - An optional [`GlobalRetryTracker`] for cross-invocation circuit-breaker patterns, which
+///   counts each tool's failures since its last success
 ///
 /// # Example
 ///
@@ -73,9 +76,10 @@ impl RetryReflectPlugin {
         &self.config
     }
 
-    /// Reset per-invocation state (called between agent runs).
+    /// Clears the retry counts of every invocation.
     ///
-    /// Clears the per-invocation retry tracker. Does NOT reset the global tracker.
+    /// Counts are kept per invocation, so a run never needs this to start with a full
+    /// budget. Does NOT reset the global tracker.
     pub async fn reset(&self) {
         let mut tracker = self.tracker.lock().await;
         tracker.reset();
@@ -125,12 +129,17 @@ impl EnhancedPlugin for RetryReflectPlugin {
         ctx: Arc<dyn CallbackContext>,
         _plugin_ctx: &PluginContext,
     ) -> Result<AfterToolCallResult> {
-        // Step 1: Check if the result is an error
+        let tool_name = tool.name();
+        let invocation = ctx.invocation_id().to_string();
+
+        // Step 1: A success clears the tool's counts, so its next failure is reflected again.
         if !is_error_result(&result) {
+            self.tracker.lock().await.reset_tool(&invocation, tool_name);
+            if let Some(ref global_tracker) = self.global_tracker {
+                global_tracker.lock().await.record_success(tool_name);
+            }
             return Ok(AfterToolCallResult::Continue(result));
         }
-
-        let tool_name = tool.name();
 
         // A refusal or a possibly-applied side effect is never worth a retry suggestion.
         // The function response names only the error's category and code by default, so the
@@ -173,13 +182,11 @@ impl EnhancedPlugin for RetryReflectPlugin {
             args.to_string().hash(&mut hasher);
             hasher.finish()
         });
-        let tracker_key = format!("{tool_name}:{call_id}");
-
         let effective_limit = self.effective_limit(tool_name);
 
-        // Step 4: Check per-tool and global retry limits
+        // Step 4: Check per-tool and global retry limits, within this invocation
         let mut tracker = self.tracker.lock().await;
-        let current_count = tracker.get(&tracker_key);
+        let current_count = tracker.get(&invocation, tool_name, &call_id);
 
         if current_count >= effective_limit {
             // Retry limit exceeded — emit exhaustion event and propagate error
@@ -194,11 +201,11 @@ impl EnhancedPlugin for RetryReflectPlugin {
 
         // Check global limit
         if let Some(global_limit) = self.config.global_limit
-            && tracker.total() >= global_limit
+            && tracker.total(&invocation) >= global_limit
         {
             tracing::warn!(
                 tool_name = %tool_name,
-                total_attempts = tracker.total(),
+                total_attempts = tracker.total(&invocation),
                 error = %error_msg,
                 "retry_reflect.global_limit_exhausted"
             );
@@ -206,7 +213,7 @@ impl EnhancedPlugin for RetryReflectPlugin {
         }
 
         // Step 5: Increment failure counters
-        let attempt = tracker.increment(&tracker_key);
+        let attempt = tracker.increment(&invocation, tool_name, &call_id);
         drop(tracker); // Release lock before sleeping
 
         // Record in global tracker if enabled

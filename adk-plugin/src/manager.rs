@@ -33,8 +33,8 @@ impl Default for PluginManagerConfig {
 /// A `Runner` runs the run, user-message, and event callbacks itself, and installs the manager
 /// as an [`InvocationHooks`] on the run's `RunConfig`, so the agent, model, and tool callbacks run
 /// for every agent that honours [`RunConfig::invocation_hooks`](adk_core::RunConfig) — `LlmAgent`
-/// does, ahead of its own callbacks. `on_model_error` is not called by any agent, and a plugin
-/// that sets it is reported with a warning when the manager is built.
+/// does, ahead of its own callbacks, and reports a failed model call or response stream to
+/// `on_model_error` before it fails the turn.
 ///
 /// # Example
 ///
@@ -70,15 +70,6 @@ impl PluginManager {
 
     /// Create a new plugin manager with custom configuration.
     pub fn with_config(plugins: Vec<Plugin>, config: PluginManagerConfig) -> Self {
-        for plugin in &plugins {
-            if plugin.on_model_error().is_some() {
-                warn!(
-                    plugin = plugin.name(),
-                    "on_model_error is never called: no agent reports model errors to plugins, \
-                     so this callback will not run"
-                );
-            }
-        }
         Self { plugins, config }
     }
 
@@ -312,6 +303,9 @@ impl PluginManager {
     }
 
     /// Run on_model_error callbacks from all plugins.
+    ///
+    /// The first plugin that returns a response answers the failed model call; the rest are
+    /// not run.
     pub async fn run_on_model_error(
         &self,
         ctx: Arc<dyn CallbackContext>,
@@ -464,6 +458,15 @@ impl InvocationHooks for PluginManager {
         response: LlmResponse,
     ) -> Result<Option<LlmResponse>> {
         self.run_after_model(ctx, response).await
+    }
+
+    async fn on_model_error(
+        &self,
+        ctx: Arc<dyn CallbackContext>,
+        request: LlmRequest,
+        error: &adk_core::AdkError,
+    ) -> Result<Option<LlmResponse>> {
+        self.run_on_model_error(ctx, request, error.to_string()).await
     }
 
     async fn before_tool(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {

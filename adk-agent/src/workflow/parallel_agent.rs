@@ -12,7 +12,11 @@ use std::sync::Arc;
 use super::branch_context::{BranchContext, derive_sub_branch};
 use super::shared_state_context::SharedStateContext;
 
-/// Parallel agent executes sub-agents concurrently
+/// Parallel agent executes sub-agents concurrently.
+///
+/// Each sub-agent runs on its own branch. When one of them escalates
+/// ([`EventActions::escalate`](adk_core::EventActions)), the others are stopped where they are
+/// and the escalation reaches the enclosing workflow, so a `LoopAgent` around the fan-out ends.
 pub struct ParallelAgent {
     name: String,
     description: String,
@@ -292,11 +296,22 @@ impl Agent for ParallelAgent {
                                 WorkflowPosition::new(0, names[index].clone()),
                             );
                         }
+                        let escalates = event.actions.escalate;
                         yield Ok(event);
+                        if escalates {
+                            tracing::info!(
+                                agent.name = %agent_name,
+                                sub_agent.name = %names[index],
+                                "a branch escalated; stopping the other branches"
+                            );
+                            break;
+                        }
                     }
                     Err(e) => failures.push((index, e)),
                 }
             }
+            // An escalation ends the fan-out: the branches still running stop where they are.
+            drop(merged);
 
             // After all agents complete, propagate the first error if any
             if let Some((_, e)) = failures.into_iter().min_by_key(|(index, _)| *index) {

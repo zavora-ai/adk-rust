@@ -358,6 +358,61 @@ async fn a_hold_two_agent_tools_deep_reaches_the_outermost_caller() {
     assert!(confirmation_requests(&second).is_empty());
 }
 
+/// Guards the stack each level of agent-tool nesting costs: every `AgentTool` call runs its
+/// agent on a task of its own, so three levels fit the 2 MiB stack of a test thread, as they
+/// must on a runtime's worker threads.
+#[tokio::test]
+async fn a_hold_three_agent_tools_deep_reaches_the_outermost_caller() {
+    let (delete_file, deletions) = RecordingTool::new("delete_file");
+    let mut agent = LlmAgentBuilder::new("level3")
+        .description("deletes files")
+        .model(ScriptedModel::new(vec![
+            call("delete_file", json!({ "path": "c.txt" }), "level3-1"),
+            text_response("deleted c.txt"),
+        ]))
+        .tool(delete_file)
+        .require_tool_confirmation("delete_file")
+        .build()
+        .unwrap();
+    for (name, delegate) in [("level2", "level3"), ("level1", "level2")] {
+        agent = LlmAgentBuilder::new(name)
+            .description("delegates file work")
+            .model(ScriptedModel::new(vec![
+                call(delegate, json!({ "request": "delete c.txt" }), &format!("{name}-1")),
+                text_response("done"),
+            ]))
+            .tool(Arc::new(AgentTool::new(Arc::new(agent))))
+            .build()
+            .unwrap();
+    }
+    let root = LlmAgentBuilder::new("ops")
+        .model(ScriptedModel::new(vec![
+            call("level1", json!({ "request": "clean c.txt" }), "call-1"),
+            text_response("all done"),
+        ]))
+        .tool(Arc::new(AgentTool::new(Arc::new(agent))))
+        .build()
+        .unwrap();
+    let harness = harness(root, RunConfig::default()).await;
+
+    let first = harness.run(Some("tidy up"), None).await;
+    let request = confirmation_requests(&first).pop().expect("a request is surfaced");
+    assert_eq!(request.tool_name, "delete_file");
+    assert_eq!(request.function_call_id.as_deref(), Some("call-1"));
+    assert_eq!(
+        request.acting.as_ref().map(|acting| acting.agent.id.as_str()),
+        Some("urn:adk:agent:delegation/level3")
+    );
+
+    let call_id = request.function_call_id.clone().unwrap();
+    let decided = RunConfig::builder()
+        .tool_confirmation_decisions(HashMap::from([(call_id, ToolConfirmationDecision::Approve)]))
+        .build();
+    let second = harness.run(None, Some(decided)).await;
+    assert_eq!(*deletions.lock().unwrap(), vec![json!({ "path": "c.txt" })]);
+    assert!(confirmation_requests(&second).is_empty());
+}
+
 // --- What the delegate inherits ---
 
 #[tokio::test]

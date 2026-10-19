@@ -56,10 +56,8 @@ pub struct PluginConfig {
     pub before_model: Option<BeforeModelCallback>,
     /// Called after LLM call (can modify response)
     pub after_model: Option<AfterModelCallback>,
-    /// Called when LLM returns an error.
-    ///
-    /// No agent reports model errors to plugins yet, so this callback never runs;
-    /// [`PluginManager`](crate::PluginManager) logs a warning when a plugin sets it.
+    /// Called when a model call or its response stream fails, before the agent fails the
+    /// turn; a returned response answers the turn instead.
     pub on_model_error: Option<OnModelErrorCallback>,
 
     // Tool callbacks
@@ -445,14 +443,13 @@ impl PluginBuilder {
         self
     }
 
-    /// Set the callback invoked when an LLM call returns an error.
+    /// Set the callback invoked when a model call or its response stream fails.
     ///
-    /// No agent reports model errors to plugins yet, so this callback never runs;
-    /// [`PluginManager`](crate::PluginManager) logs a warning when a plugin sets it.
-    ///
-    /// The callback receives the original [`LlmRequest`](adk_core::LlmRequest) and the
-    /// error message. Return `Ok(Some(response))` to provide a fallback response, or
-    /// `Ok(None)` to propagate the error.
+    /// `LlmAgent` calls it before it fails the turn, with the [`LlmRequest`](adk_core::LlmRequest)
+    /// the model was sent and the error message. Return `Ok(Some(response))` to answer the
+    /// turn with a fallback response, which the agent processes as the model's response, or
+    /// `Ok(None)` to propagate the error. A refusal by the run's budget or spend ledger is not
+    /// reported.
     ///
     /// ```rust,ignore
     /// builder.on_model_error(Box::new(|ctx, request, error| {

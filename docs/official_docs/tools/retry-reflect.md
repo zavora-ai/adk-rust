@@ -86,22 +86,31 @@ let plugin = RetryReflectPlugin::builder()
 | `include_tools` | all | Only retry these tools (empty = all) |
 | `exclude_tools` | none | Never retry these tools |
 
+## Retry Counts
+
+One plugin instance serves every user and session of an agent. Retry counts are kept per
+invocation, keyed by tool and arguments, so one invocation's failures never use up another's
+budget:
+
+| Event | Effect |
+|-------|--------|
+| A tool call fails | Its tool-and-arguments count in this invocation rises by one; a reflection is added while the count is under `max_retries` and the invocation's total is under `global_limit` |
+| A tool call succeeds | That tool's counts in this invocation are cleared, so its next failure is reflected again |
+| More than 1,024 invocations are tracked | The oldest invocation's counts are forgotten |
+
 ## Circuit Breaker
 
-The circuit breaker prevents infinite retry loops when a tool is persistently failing:
+`enable_global_tracking(threshold)` adds a circuit breaker across invocations for a tool
+that keeps failing:
 
 ```
-Closed (normal) ─── failure count >= threshold ──→ Open (all calls fail fast)
-       ↑                                                    │
-       └──────── reset_ms elapsed, next call succeeds ──────┘
-                              (Half-Open)
+Closed (reflections) ─── threshold failures since the last success ──→ Open (errors pass through)
+       ↑                                                                     │
+       └──────────────────────── the tool succeeds once ─────────────────────┘
 ```
 
-When the circuit is open:
-- Tool calls fail immediately with a circuit-breaker error
-- No retries are attempted
-- After `circuit_breaker_reset_ms`, the next call is allowed through (half-open)
-- If it succeeds, the circuit closes; if it fails, the circuit stays open
+When the circuit is open, the tool's errors reach the model unchanged, with no reflection.
+The tool still runs, so the first call that succeeds closes the circuit.
 
 ## How Reflection Works
 

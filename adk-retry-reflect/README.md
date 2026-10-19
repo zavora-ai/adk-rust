@@ -39,9 +39,9 @@ let manager = EnhancedPluginManager::new(vec![Box::new(plugin)]);
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `max_retries` | 3 | Default max retries per tool |
+| `max_retries` | 3 | Default max retries per tool call, per invocation |
 | `per_tool_limit` | — | Per-tool retry limit overrides |
-| `global_limit` | None | Global retry limit across all tools |
+| `global_limit` | None | Retry limit across all tools in one invocation |
 | `backoff_fixed` | — | Fixed delay between retries |
 | `backoff_exponential` | — | Exponential backoff with base delay |
 | `max_backoff` | 30s | Maximum backoff duration ceiling |
@@ -49,7 +49,18 @@ let manager = EnhancedPluginManager::new(vec![Box::new(plugin)]);
 | `denylist` | — | Don't retry these tools |
 | `template` | Built-in | Custom reflection prompt template |
 | `priority` | 200 | Plugin execution priority |
-| `enable_global_tracking` | disabled | Circuit-breaker threshold |
+| `enable_global_tracking` | disabled | Circuit-breaker threshold: failures of one tool, across invocations, since its last success |
+
+## Retry Counts
+
+One plugin serves every user and session. Retry counts are kept per invocation, keyed by
+tool and arguments, so one invocation's failures never use up another's budget:
+
+| Event | Effect on the counts |
+|-------|----------------------|
+| A tool call fails | Its tool-and-arguments count in this invocation rises by one |
+| A tool call succeeds | That tool's counts in this invocation are cleared, and with global tracking its circuit closes |
+| More than 1,024 invocations are tracked | The oldest invocation's counts are forgotten |
 
 ## Template Placeholders
 

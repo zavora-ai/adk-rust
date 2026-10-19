@@ -176,6 +176,11 @@ others. Two consequences worth designing around:
   sub-agent in declaration order — not whichever failed first in wall-clock
   terms, which concurrency would make a race.
 
+- **An escalation ends the fan-out.** A branch whose event escalates
+  (`EventActions::escalate`, as `ExitLoopTool` sets) stops every other branch
+  where it is, and the escalation reaches the enclosing workflow, so a
+  `LoopAgent` around the `ParallelAgent` ends too.
+
 Dropping the event stream early tears down branches that are still in flight.
 
 ### When to Use

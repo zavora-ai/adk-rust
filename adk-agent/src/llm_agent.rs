@@ -1105,12 +1105,18 @@ impl LlmAgentBuilder {
     }
 
     /// Prevent this agent from transferring control back to its parent.
+    ///
+    /// The model is not offered the parent as a target, and the runner refuses a transfer to
+    /// the parent that a tool of this agent requests.
     pub fn disallow_transfer_to_parent(mut self, disallow: bool) -> Self {
         self.disallow_transfer_to_parent = disallow;
         self
     }
 
     /// Prevent this agent from transferring control to peer agents.
+    ///
+    /// The model is not offered its parent's other sub-agents as targets, and the runner
+    /// refuses a transfer to one of them that a tool of this agent requests.
     pub fn disallow_transfer_to_peers(mut self, disallow: bool) -> Self {
         self.disallow_transfer_to_peers = disallow;
         self
@@ -1124,9 +1130,12 @@ impl LlmAgentBuilder {
 
     /// Set a state key where the agent's final output will be stored.
     ///
-    /// The value is the concatenated text of the final model response. When an
-    /// `output_schema` is set, it is written only after the response passes schema
-    /// validation; a response that exhausts `output_max_retries` leaves the key unset.
+    /// The value is the concatenated text of the final model response: the last turn, the
+    /// one without tool calls. Text the model wrote beside a tool call in an earlier turn is
+    /// not included, and each run replaces the value. When a before-agent callback answers
+    /// for the agent, its content is stored instead. When an `output_schema` is set, it is
+    /// written only after the response passes schema validation; a response that exhausts
+    /// `output_max_retries` leaves the key unset.
     pub fn output_key(mut self, key: impl Into<String>) -> Self {
         self.output_key = Some(key.into());
         self
@@ -2817,7 +2826,11 @@ impl ToolExecutor<'_> {
                             self.ctx.run_config().trace_payload_max_bytes,
                         );
                         tracing::debug!(tool.name = %name, tool.args = %args_payload, attempt = attempt, "tool_call");
-                        let exec_future = tool_clone.execute(tool_ctx.clone(), final_args.clone());
+                        let exec_future = execute_tool(
+                            Arc::clone(&tool_clone),
+                            tool_ctx.clone(),
+                            final_args.clone(),
+                        );
                         let bounded = async {
                             match timeout {
                                 Some(limit) => tokio::time::timeout(limit, exec_future)
@@ -3211,6 +3224,27 @@ impl Agent for LlmAgent {
         &self.sub_agents
     }
 
+    fn allows_transfer_to_parent(&self) -> bool {
+        !self.disallow_transfer_to_parent
+    }
+
+    fn allows_transfer_to_peers(&self) -> bool {
+        !self.disallow_transfer_to_peers
+    }
+
+    async fn close(&self) {
+        for toolset in &self.toolsets {
+            toolset.close().await;
+        }
+        #[cfg(feature = "enhanced-plugins")]
+        if let Some(manager) = &self.enhanced_plugin_manager {
+            manager.close().await;
+        }
+        for agent in &self.sub_agents {
+            agent.close().await;
+        }
+    }
+
     fn capabilities(&self) -> adk_core::AgentCapabilities {
         adk_core::AgentCapabilities {
             runtime_tools: true,
@@ -3285,54 +3319,20 @@ impl Agent for LlmAgent {
         #[cfg(feature = "enhanced-plugins")]
         let enhanced_plugin_manager = self.enhanced_plugin_manager.clone();
         // Runner plugins and other run-wide hooks reach this agent through the run config.
-        let hook_callbacks = HookCallbacks::new(&ctx.run_config().invocation_hooks);
+        let mut hook_callbacks = HookCallbacks::new(&ctx.run_config().invocation_hooks);
+        // The before- and after-agent stages run around `body`, which runs the model and tools.
+        let hook_before_agent = std::mem::take(&mut hook_callbacks.before_agent);
+        let hook_after_agent = Arc::new(std::mem::take(&mut hook_callbacks.after_agent));
+        let stage_ctx = ctx.clone();
+        let stage_invocation_id = invocation_id.clone();
+        let stage_agent_name = agent_name.clone();
+        let stage_output_key = output_key.clone();
+        let structured_output = self.output_schema.is_some();
 
-        let s = stream! {
-            // ===== BEFORE AGENT CALLBACKS =====
-            // Execute before the agent starts running
-            // If any returns content, skip agent execution
-            for callback in hook_callbacks.before_agent.iter().chain(before_agent_callbacks.iter()) {
-                match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
-                    Ok(Some(content)) => {
-                        // Callback returned content - yield it and skip agent execution
-                        let mut early_event = Event::new(&invocation_id);
-                        early_event.author = agent_name.clone();
-                        early_event.llm_response.content = Some(content);
-                        yield Ok(early_event);
-
-                        // Skip rest of agent execution and go to after callbacks
-                        for after_callback in
-                            hook_callbacks.after_agent.iter().chain(after_agent_callbacks.iter())
-                        {
-                            match after_callback(ctx.clone() as Arc<dyn CallbackContext>).await {
-                                Ok(Some(after_content)) => {
-                                    let mut after_event = Event::new(&invocation_id);
-                                    after_event.author = agent_name.clone();
-                                    after_event.llm_response.content = Some(after_content);
-                                    yield Ok(after_event);
-                                    return;
-                                }
-                                Ok(None) => continue,
-                                Err(e) => {
-                                    yield Err(e);
-                                    return;
-                                }
-                            }
-                        }
-                        return;
-                    }
-                    Ok(None) => {
-                        // Continue to next callback
-                        continue;
-                    }
-                    Err(e) => {
-                        // Callback failed - propagate error
-                        yield Err(e);
-                        return;
-                    }
-                }
-            }
-
+        // Boxed where it is built, so the stage stream below holds a pointer: a body moved
+        // into it would put a copy of the whole body state on the stack of every poll, once
+        // per nested agent behind an `AgentTool`.
+        let body: adk_core::EventStream = Box::pin(stream! {
             // ===== MAIN AGENT EXECUTION =====
             let mut conversation_history = match prompt_config
                 .prepare_conversation(&ctx, &agent_name)
@@ -3764,6 +3764,9 @@ impl Agent for LlmAgent {
                         &agent_name,
                     );
                     let call_metered = call_scope.budget().is_some();
+                    // Kept for the run's `on_model_error` hooks, which see what the model was sent.
+                    let failed_request = (!ctx.run_config().invocation_hooks.is_empty())
+                        .then(|| request.clone());
                     // Always use streaming internally for LLM calls
                     let mut response_stream = match call_scope
                         .generate(model.as_ref(), request, true)
@@ -3782,8 +3785,22 @@ impl Agent for LlmAgent {
                                     "model call failed"
                                 )
                             });
-                            yield Err(error);
-                            return;
+                            // A hook's response, from a fallback model for example, answers
+                            // the turn in the failed call's place.
+                            match recover_model_error(&ctx, failed_request.as_ref(), &error).await {
+                                Ok(Some(response)) => {
+                                    Box::pin(futures::stream::iter([Ok(response)]))
+                                        as adk_core::LlmResponseStream
+                                }
+                                Ok(None) => {
+                                    yield Err(error);
+                                    return;
+                                }
+                                Err(hook_error) => {
+                                    yield Err(hook_error);
+                                    return;
+                                }
+                            }
                         }
                     };
 
@@ -3816,8 +3833,23 @@ impl Agent for LlmAgent {
                                         "model stream failed"
                                     )
                                 });
-                                yield Err(e);
-                                return;
+                                // A hook's response replaces the whole failed response, so
+                                // the deltas already received are dropped.
+                                match recover_model_error(&ctx, failed_request.as_ref(), &e).await {
+                                    Ok(Some(response)) => {
+                                        accumulated_content = None;
+                                        response_stream = Box::pin(futures::stream::iter([Ok(response)]));
+                                        continue;
+                                    }
+                                    Ok(None) => {
+                                        yield Err(e);
+                                        return;
+                                    }
+                                    Err(hook_error) => {
+                                        yield Err(hook_error);
+                                        return;
+                                    }
+                                }
                             }
                         };
                         // ===== AFTER MODEL CALLBACKS (per chunk) =====
@@ -4231,16 +4263,9 @@ impl Agent for LlmAgent {
                     if let Some(ref output_key) = output_key
                         && let Some(ref content) = accumulated_content
                     {
-                        let mut text_parts = String::new();
-                        for part in &content.parts {
-                            if let Part::Text { text } = part {
-                                text_parts.push_str(text);
-                            }
-                        }
                         // Structured output is stored as the JSON it validated as.
-                        if prompt_config.output_schema.is_some() {
-                            text_parts = strip_json_code_fence(&text_parts).to_string();
-                        }
+                        let text_parts =
+                            output_text(content, prompt_config.output_schema.is_some());
                         if !text_parts.is_empty() {
                             let mut state_event = Event::new(&invocation_id);
                             state_event.author = agent_name.clone();
@@ -4547,25 +4572,94 @@ impl Agent for LlmAgent {
                     // On next iteration, there won't be function calls, so we'll break naturally
                 }
             }
+        });
 
-            // ===== AFTER AGENT CALLBACKS =====
-            // Execute after the agent completes
-            for callback in hook_callbacks.after_agent.iter().chain(after_agent_callbacks.iter()) {
+        let s = stream! {
+            use futures::StreamExt;
+            let ctx = stage_ctx;
+            let invocation_id = stage_invocation_id;
+            let agent_name = stage_agent_name;
+
+            // ===== BEFORE AGENT CALLBACKS =====
+            // The first callback that returns content answers for the agent, which then skips
+            // its body and goes to the after-agent stage.
+            let mut answered = false;
+            for callback in hook_before_agent.iter().chain(before_agent_callbacks.iter()) {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
-                        // Callback returned content - yield it
+                        let mut early_event = Event::new(&invocation_id);
+                        early_event.author = agent_name.clone();
+                        // The callback's answer is the agent's output, so `output_key` keeps it.
+                        if let Some(key) = &stage_output_key {
+                            let text = output_text(&content, structured_output);
+                            if !text.is_empty() {
+                                early_event
+                                    .actions
+                                    .state_delta
+                                    .insert(key.clone(), serde_json::Value::String(text));
+                            }
+                        }
+                        early_event.llm_response.content = Some(content);
+                        yield Ok(early_event);
+                        answered = true;
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                }
+            }
+
+            if !answered {
+                // A body that is dropped before it finishes — the run cancelled, the client
+                // gone, a parallel sibling escalated — still runs the after-agent stage. A
+                // durable attempt dropped by its worker is resumed by the worker that
+                // recovers the run, which runs the stage then.
+                let mut on_drop = AfterAgentOnDrop::armed(
+                    Arc::clone(&hook_after_agent),
+                    Arc::clone(&after_agent_callbacks),
+                    ctx.clone() as Arc<dyn CallbackContext>,
+                );
+                if ctx.run_config().durable_run_id.is_some() {
+                    on_drop.disarm();
+                }
+                let mut body = body;
+                let mut finished = true;
+                while let Some(item) = body.next().await {
+                    // A failed agent has not completed, and a held call resumes the agent in a
+                    // later run, which runs the stage then.
+                    let pauses = match &item {
+                        Err(_) => true,
+                        Ok(event) => event.actions.tool_confirmation.is_some(),
+                    };
+                    if pauses {
+                        finished = false;
+                        on_drop.disarm();
+                    }
+                    yield item;
+                }
+                on_drop.disarm();
+                if !finished {
+                    return;
+                }
+            }
+
+            // ===== AFTER AGENT CALLBACKS =====
+            // Runs on every other exit: an answer, a transfer, a turn-ending tool result, and
+            // a cancellation the agent observed. The first callback that returns content wins.
+            for callback in hook_after_agent.iter().chain(after_agent_callbacks.iter()) {
+                match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
                         let mut after_event = Event::new(&invocation_id);
                         after_event.author = agent_name.clone();
                         after_event.llm_response.content = Some(content);
                         yield Ok(after_event);
-                        break; // First callback that returns content wins
+                        break;
                     }
-                    Ok(None) => {
-                        // Continue to next callback
-                        continue;
-                    }
+                    Ok(None) => {}
                     Err(e) => {
-                        // Callback failed - propagate error
                         yield Err(e);
                         return;
                     }
@@ -4575,6 +4669,146 @@ impl Agent for LlmAgent {
 
         Ok(Box::pin(s))
     }
+}
+
+/// Runs an agent's after-agent callbacks when its stream is dropped before the agent
+/// finishes, on the current Tokio runtime.
+///
+/// Nothing reads the stream any more, so content a callback returns is discarded.
+struct AfterAgentOnDrop {
+    hooks: Arc<Vec<AfterAgentCallback>>,
+    callbacks: Arc<Vec<AfterAgentCallback>>,
+    ctx: Arc<dyn CallbackContext>,
+    armed: bool,
+}
+
+impl AfterAgentOnDrop {
+    fn armed(
+        hooks: Arc<Vec<AfterAgentCallback>>,
+        callbacks: Arc<Vec<AfterAgentCallback>>,
+        ctx: Arc<dyn CallbackContext>,
+    ) -> Self {
+        Self { hooks, callbacks, ctx, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for AfterAgentOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(
+                agent.name = %self.ctx.agent_name(),
+                "no Tokio runtime to run after-agent callbacks on; they are skipped"
+            );
+            return;
+        };
+        let (hooks, callbacks, ctx) =
+            (Arc::clone(&self.hooks), Arc::clone(&self.callbacks), Arc::clone(&self.ctx));
+        runtime.spawn(async move {
+            for callback in hooks.iter().chain(callbacks.iter()) {
+                match callback(ctx.clone()).await {
+                    Ok(Some(_)) => break,
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            agent.name = %ctx.agent_name(),
+                            error.code = %error.code,
+                            "after-agent callback failed after the agent stopped"
+                        );
+                        break;
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// Runs one tool call. An agent-delegation tool, such as an `AgentTool`, runs on a Tokio task
+/// of its own.
+///
+/// A delegate's agent is polled from inside this agent's tool call, and its own delegates from
+/// inside its tool calls, so without a task boundary every level of delegation stacks another
+/// agent's frames on one thread's stack — several hundred KiB per level in debug builds,
+/// enough for three levels to overflow a 2 MiB worker thread. The task is aborted when this
+/// call is dropped, by cancellation or a timeout, and a panic in it resumes here.
+async fn execute_tool(
+    tool: Arc<dyn Tool>,
+    ctx: Arc<dyn ToolContext>,
+    args: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let runtime = tokio::runtime::Handle::try_current().ok().filter(|_| tool.is_agent_delegation());
+    let Some(runtime) = runtime else {
+        return tool.execute(ctx, args).await;
+    };
+    let call = async move { tool.execute(ctx, args).await };
+    let mut task = AbortOnDrop(runtime.spawn(call.in_current_span()));
+    match (&mut task.0).await {
+        Ok(result) => result,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(_) => Err(adk_core::AdkError::new(
+            adk_core::ErrorComponent::Tool,
+            adk_core::ErrorCategory::Cancelled,
+            "tool.cancelled",
+            "the delegated call's task was cancelled before it finished",
+        )),
+    }
+}
+
+/// Aborts a spawned task when it is dropped unfinished.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// The text `output_key` stores for `content`: its text parts, and for structured output
+/// the JSON inside a surrounding code fence.
+fn output_text(content: &Content, structured: bool) -> String {
+    let text: String = content.parts.iter().filter_map(Part::text).collect();
+    if structured { strip_json_code_fence(&text).to_string() } else { text }
+}
+
+/// Whether `error` is the run's own budget or spend ledger refusing a model call, which no
+/// fallback may answer.
+fn is_run_limit_refusal(error: &adk_core::AdkError) -> bool {
+    error.component == adk_core::ErrorComponent::Guardrail
+        || (error.component == adk_core::ErrorComponent::Agent
+            && error.category == adk_core::ErrorCategory::ResourceExhausted)
+}
+
+/// Asks the run's hooks for a response to a failed model call; the first response wins.
+///
+/// # Errors
+///
+/// Returns the error of a hook that fails.
+async fn recover_model_error(
+    ctx: &Arc<dyn InvocationContext>,
+    request: Option<&LlmRequest>,
+    error: &adk_core::AdkError,
+) -> Result<Option<LlmResponse>> {
+    let Some(request) = request else {
+        return Ok(None);
+    };
+    if is_run_limit_refusal(error) {
+        return Ok(None);
+    }
+    for hook in &ctx.run_config().invocation_hooks {
+        if let Some(response) = hook
+            .on_model_error(ctx.clone() as Arc<dyn CallbackContext>, request.clone(), error)
+            .await?
+        {
+            return Ok(Some(response));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]

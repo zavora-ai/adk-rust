@@ -200,6 +200,22 @@ pub trait InvocationHooks: std::fmt::Debug + Send + Sync {
         Ok(None)
     }
 
+    /// Runs when a model call fails, or its response stream fails, before the agent reports
+    /// the error. `request` is the request the model was sent.
+    ///
+    /// `Some(response)` answers the turn instead, as a model-fallback plugin does: the agent
+    /// processes it as the model's response, so its tool calls run and its text is the
+    /// answer. A refusal by the run's own budget or spend ledger is not a model failure and
+    /// does not reach this hook.
+    async fn on_model_error(
+        &self,
+        _ctx: Arc<dyn CallbackContext>,
+        _request: LlmRequest,
+        _error: &crate::AdkError,
+    ) -> Result<Option<LlmResponse>> {
+        Ok(None)
+    }
+
     /// Runs before each tool call. `ctx.tool_name()` and `ctx.tool_input()` describe the call.
     ///
     /// `Some(content)` skips the tool and reports `content` as its result.

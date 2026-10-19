@@ -115,12 +115,25 @@ Runner automatically handles agent-to-agent transfers:
 
 Validated composite roots can provide an exact per-member transfer allowlist
 through the `Agent` policy hooks. Runner validates every handoff against that
-list and reports undeclared targets or depth overflow as errors. Ordinary agent
-trees return no explicit policy and retain legacy parent/peer discovery.
+list and reports undeclared targets or depth overflow as errors. In an ordinary
+agent tree, Runner checks every handoff — from a model's `transfer_to_agent`
+call, a tool's actions, or a custom agent's event — against the source agent's
+sub-agents, its parent unless `Agent::allows_transfer_to_parent` says no, and
+its parent's other sub-agents unless `Agent::allows_transfer_to_peers` says no
+(`Runner::allowed_transfer_targets`); a refused handoff is logged and control
+stays with the source.
 After allowlist and depth validation, Runner awaits `Agent::govern_transfer`
 before executing the target. The default allows the transfer, preserving
 existing behavior; portable teams and other composite roots can deny it with an
 auditable reason. Denials surface as `agent.transfer.denied`.
+
+## Run Lifecycle
+
+| Stage | Guarantee |
+|-------|-----------|
+| Plugin `on_event` | Sees every event the run yields, including a `before_run` early exit, a cancelled run's answers to its calls in flight, and a budget stop event |
+| Plugin `after_run` | Runs once for every run whose `before_run` ran, however it ends — including a consumer that drops the stream, whose calls in flight are answered outcome-unknown first. A durable attempt its worker drops writes nothing; the recovering worker finishes the run |
+| `Runner::close` | Closes every agent's toolsets through `Agent::close`, then the plugins |
 
 ## Run Budgets
 
