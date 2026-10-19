@@ -4,7 +4,7 @@ Binary artifact storage for Rust Agent Development Kit (ADK-Rust) agents.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-artifact.svg)](https://crates.io/crates/adk-artifact)
 [![Documentation](https://docs.rs/adk-artifact/badge.svg)](https://docs.rs/adk-artifact)
-[![License](https://img.shields.io/crates/l/adk-artifact.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-artifact.svg)](../LICENSE)
 
 ## Overview
 
@@ -40,7 +40,7 @@ adk-rust = { version = "3.0.0", features = ["minimal", "gcs-artifacts"] }
 use adk_artifact::GcsArtifactService;
 
 fn main() -> adk_core::Result<()> {
-    let service = GcsArtifactService::new_with_adc("my-artifact-bucket")?;
+    let _service = GcsArtifactService::new_with_adc("my-artifact-bucket")?;
     Ok(())
 }
 ```
@@ -62,34 +62,40 @@ adk-rust = { version = "3.0.0", features = ["artifacts"] }
 ## Quick Start
 
 ```rust
-use adk_artifact::{InMemoryArtifactService, ArtifactService, SaveRequest, LoadRequest};
+use adk_artifact::{ArtifactService, InMemoryArtifactService, LoadRequest, SaveRequest};
 use adk_core::Part;
 
-let service = InMemoryArtifactService::new();
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = InMemoryArtifactService::new();
+    let pdf_bytes = b"%PDF-1.7".to_vec();
 
-// Save an artifact (version auto-increments from 1)
-let resp = service.save(SaveRequest {
-    app_name: "my_app".to_string(),
-    user_id: "user_123".to_string(),
-    session_id: "session_456".to_string(),
-    file_name: "report.pdf".to_string(),
-    part: Part::InlineData {
-        mime_type: "application/pdf".to_string(),
-        data: pdf_bytes,
-    },
-    version: None,
-}).await?;
+    // Save an artifact (version auto-increments from 1)
+    let saved = service
+        .save(SaveRequest {
+            app_name: "my_app".to_string(),
+            user_id: "user_123".to_string(),
+            session_id: "session_456".to_string(),
+            file_name: "report.pdf".to_string(),
+            part: Part::inline_data("application/pdf", pdf_bytes),
+            version: None,
+        })
+        .await?;
+    assert_eq!(saved.version, 1);
 
-println!("Saved as version {}", resp.version); // 1
-
-// Load the latest version
-let resp = service.load(LoadRequest {
-    app_name: "my_app".to_string(),
-    user_id: "user_123".to_string(),
-    session_id: "session_456".to_string(),
-    file_name: "report.pdf".to_string(),
-    version: None, // None = latest
-}).await?;
+    // Load the latest version
+    let loaded = service
+        .load(LoadRequest {
+            app_name: "my_app".to_string(),
+            user_id: "user_123".to_string(),
+            session_id: "session_456".to_string(),
+            file_name: "report.pdf".to_string(),
+            version: None, // None = latest
+        })
+        .await?;
+    assert_eq!(loaded.part.mime_type(), Some("application/pdf"));
+    Ok(())
+}
 ```
 
 ## Storage Backends
@@ -101,14 +107,16 @@ Stores artifacts in a thread-safe `HashMap` behind `RwLock`. Data is lost when t
 ```rust
 use adk_artifact::InMemoryArtifactService;
 
-let service = InMemoryArtifactService::new();
+fn main() {
+    let _service = InMemoryArtifactService::new();
+}
 ```
 
 ### FileArtifactService
 
 Persists artifacts to the local filesystem. Each version is stored as a JSON-serialized file under a directory hierarchy:
 
-```
+```text
 <base_dir>/<app_name>/<user_id>/<session_id>/<name>/v1.json
                                                     v2.json
 <base_dir>/<app_name>/<user_id>/user/<name>/v1.json        (user: names)
@@ -119,7 +127,10 @@ Persists artifacts to the local filesystem. Each version is stored as a JSON-ser
 ```rust
 use adk_artifact::FileArtifactService;
 
-let service = FileArtifactService::new("/var/data/artifacts")?;
+fn main() -> adk_core::Result<()> {
+    let _service = FileArtifactService::new("/var/data/artifacts")?;
+    Ok(())
+}
 ```
 
 `FileArtifactService` includes a `health_check()` method that verifies the base directory is writable.
@@ -142,31 +153,54 @@ All backends implement the full `ArtifactService` trait:
 Every artifact supports multiple versions. When saving with `version: None`, the version auto-increments starting from 1. You can also write to an explicit version that does not exist yet:
 
 ```rust
-// Auto-increment: first save → v1, second save → v2
-service.save(SaveRequest { version: None, ..req }).await?;
-service.save(SaveRequest { version: None, ..req }).await?;
+use adk_artifact::{ArtifactService, InMemoryArtifactService, SaveRequest, VersionsRequest};
+use adk_core::{ErrorCategory, Part};
 
-// Explicit version
-service.save(SaveRequest { version: Some(42), ..req }).await?;
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = InMemoryArtifactService::new();
+    let req = SaveRequest {
+        app_name: "app".into(),
+        user_id: "user".into(),
+        session_id: "sess".into(),
+        file_name: "report.pdf".into(),
+        part: Part::text_part("draft"),
+        version: None,
+    };
 
-// List all versions (returned in descending order)
-let resp = service.versions(VersionsRequest {
-    app_name: "app".into(),
-    user_id: "user".into(),
-    session_id: "sess".into(),
-    file_name: "report.pdf".into(),
-}).await?;
-// resp.versions == [42, 2, 1]
+    // Auto-increment: first save → v1, second save → v2
+    service.save(req.clone()).await?;
+    service.save(req.clone()).await?;
+
+    // Explicit version that does not exist yet
+    service.save(SaveRequest { version: Some(42), ..req.clone() }).await?;
+
+    // An existing version is never replaced
+    let err = service.save(SaveRequest { version: Some(2), ..req }).await.unwrap_err();
+    assert_eq!(err.category, ErrorCategory::Conflict);
+
+    // List all versions (descending)
+    let resp = service
+        .versions(VersionsRequest {
+            app_name: "app".into(),
+            user_id: "user".into(),
+            session_id: "sess".into(),
+            file_name: "report.pdf".into(),
+        })
+        .await?;
+    assert_eq!(resp.versions, vec![42, 2, 1]);
+    Ok(())
+}
 ```
 
 Every backend keeps the same contract:
 
 | Rule | Behaviour |
 |------|-----------|
-| **Versions are immutable** | A save never replaces a stored version; an explicit existing version fails with `ErrorCategory::Conflict`. |
+| **Versions are immutable** | A save never replaces a stored version; an explicit existing version fails with `ErrorCategory::Conflict` (`artifact.version_exists`). |
 | **Concurrent saves each get a version** | Simultaneous saves without a version return distinct versions, and all are stored. |
 | **Distinct names are distinct artifacts** | No two file names share storage. |
-| **`user` is not a session id** | It names the user scope; every operation rejects it with `ErrorCategory::InvalidInput`. |
+| **`user` is not a session id** | It names the user scope; every operation rejects it with `ErrorCategory::InvalidInput` (`artifact.reserved_session_id`). |
 
 ## Scoping
 
@@ -177,26 +211,47 @@ Artifacts are scoped by three dimensions: `app_name`, `user_id`, and `session_id
 Prefix a filename with `user:` to make it accessible across all sessions for that user:
 
 ```rust
-// Save from session A
-service.save(SaveRequest {
-    session_id: "session_A".into(),
-    file_name: "user:profile.png".into(),
-    ..req
-}).await?;
+use adk_artifact::{ArtifactService, InMemoryArtifactService, ListRequest, LoadRequest, SaveRequest};
+use adk_core::Part;
 
-// Load from session B — same artifact
-service.load(LoadRequest {
-    session_id: "session_B".into(),
-    file_name: "user:profile.png".into(),
-    ..req
-}).await?;
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = InMemoryArtifactService::new();
 
-// list() from any session returns user-scoped artifacts too
-let resp = service.list(ListRequest {
-    session_id: "session_B".into(),
-    ..list_req
-}).await?;
-// resp.file_names includes "user:profile.png"
+    // Save from session A
+    service
+        .save(SaveRequest {
+            app_name: "app".into(),
+            user_id: "user_123".into(),
+            session_id: "session_A".into(),
+            file_name: "user:profile.png".into(),
+            part: Part::inline_data("image/png", vec![0x89, 0x50, 0x4E, 0x47]),
+            version: None,
+        })
+        .await?;
+
+    // Load from session B — same artifact
+    service
+        .load(LoadRequest {
+            app_name: "app".into(),
+            user_id: "user_123".into(),
+            session_id: "session_B".into(),
+            file_name: "user:profile.png".into(),
+            version: None,
+        })
+        .await?;
+
+    // list() from any session returns user-scoped artifacts too
+    let resp = service
+        .list(ListRequest {
+            app_name: "app".into(),
+            user_id: "user_123".into(),
+            session_id: "session_B".into(),
+        })
+        .await?;
+    assert!(resp.file_names.contains(&"user:profile.png".to_string()));
+    Ok(())
+}
 ```
 
 Internally, user-scoped artifacts are stored under the reserved session segment `user` (`USER_SCOPE_SESSION_ID`) in every backend, so they're visible regardless of which session ID is used. Because the segment is reserved, every backend rejects `user` as a session id.
@@ -204,22 +259,23 @@ Internally, user-scoped artifacts are stored under the reserved session segment 
 ## Deleting Artifacts
 
 ```rust
-use adk_artifact::DeleteRequest;
+use adk_artifact::{ArtifactService, DeleteRequest};
 
-// Delete a specific version
-service.delete(DeleteRequest {
-    app_name: "app".into(),
-    user_id: "user".into(),
-    session_id: "sess".into(),
-    file_name: "report.pdf".into(),
-    version: Some(1),
-}).await?;
+async fn delete(service: &dyn ArtifactService) -> adk_core::Result<()> {
+    let one_version = DeleteRequest {
+        app_name: "app".into(),
+        user_id: "user".into(),
+        session_id: "sess".into(),
+        file_name: "report.pdf".into(),
+        version: Some(1),
+    };
+    // Delete a specific version
+    service.delete(one_version.clone()).await?;
 
-// Delete all versions
-service.delete(DeleteRequest {
-    version: None,
-    ..del_req
-}).await?;
+    // Delete all versions
+    service.delete(DeleteRequest { version: None, ..one_version }).await?;
+    Ok(())
+}
 ```
 
 Deleting a non-existent artifact or version is a no-op (no error returned).
@@ -229,55 +285,73 @@ Deleting a non-existent artifact or version is a no-op (no error returned).
 `ScopedArtifacts` wraps an `ArtifactService` and implements the simpler `adk_core::Artifacts` trait by automatically injecting `app_name`, `user_id`, and `session_id` into every request. This is the interface agents use at runtime.
 
 ```rust
-use adk_artifact::{ScopedArtifacts, InMemoryArtifactService};
-use adk_core::{Artifacts, Part};
 use std::sync::Arc;
 
-let service = Arc::new(InMemoryArtifactService::new());
-let artifacts = ScopedArtifacts::new(
-    service,
-    "my_app".to_string(),
-    "user_123".to_string(),
-    "session_456".to_string(),
-);
+use adk_artifact::{InMemoryArtifactService, ScopedArtifacts};
+use adk_core::{Artifacts, Part};
 
-// Simple three-method API
-let version = artifacts.save("chart.png", &part).await?;
-let loaded = artifacts.load("chart.png").await?;
-let files = artifacts.list().await?;
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let service = Arc::new(InMemoryArtifactService::new());
+    let artifacts = ScopedArtifacts::new(
+        service,
+        "my_app".to_string(),
+        "user_123".to_string(),
+        "session_456".to_string(),
+    );
+
+    // Three-method API
+    let part = Part::inline_data("image/png", vec![0x89, 0x50, 0x4E, 0x47]);
+    let version = artifacts.save("chart.png", &part).await?;
+    let _loaded = artifacts.load("chart.png").await?;
+    let files = artifacts.list().await?;
+    assert_eq!((version, files), (1, vec!["chart.png".to_string()]));
+    Ok(())
+}
 ```
 
 ## File Name Validation
 
-Both backends validate artifact filenames to prevent path traversal attacks. The following are rejected with an `AdkError::Artifact` error:
+Every backend validates artifact file names to prevent path traversal:
 
-- Empty names
-- Names containing `/` or `\`
-- Names equal to `.` or `..`
-- Names containing `..` anywhere
+| Backend | Rejected names |
+|---------|----------------|
+| `InMemoryArtifactService`, `FileArtifactService` | Empty; containing `/` or `\`; equal to `.` or `..`; containing `..` anywhere |
+| `GcsArtifactService` | Empty; starting or ending with `/`; containing `\`; with an empty, `.`, or `..` path component |
 
-```rust
-// These all return Err:
-service.save(SaveRequest { file_name: "".into(), .. }).await;           // empty
-service.save(SaveRequest { file_name: "../etc/passwd".into(), .. }).await; // traversal
-service.save(SaveRequest { file_name: "foo/bar.txt".into(), .. }).await;  // path separator
-```
+`FileArtifactService` also rejects an app name, user id, or session id that is empty or contains a separator or traversal pattern.
 
 ## Use with LoadArtifactsTool
 
 Artifacts integrate with agents via `LoadArtifactsTool` from `adk-tool`:
 
 ```rust
+use std::sync::Arc;
+
+use adk_agent::{LlmAgent, LlmAgentBuilder};
+use adk_core::{Llm, Result};
 use adk_tool::LoadArtifactsTool;
 
-let tool = LoadArtifactsTool::new();
-
-let agent = LlmAgentBuilder::new("assistant")
-    .tool(Arc::new(tool))
-    .build()?;
+fn assistant(model: Arc<dyn Llm>) -> Result<LlmAgent> {
+    LlmAgentBuilder::new("assistant")
+        .model(model)
+        .tool(Arc::new(LoadArtifactsTool::new()))
+        .build()
+}
 ```
 
 The LLM can then call this tool to load artifacts by name into the conversation.
+
+## Changes in 3.0
+
+| Change | Migration |
+|--------|-----------|
+| A save naming an existing version fails with `artifact.version_exists` (`Conflict`) on every backend | Save with `version: None` to append |
+| The session id `user` (`USER_SCOPE_SESSION_ID`) is rejected with `artifact.reserved_session_id` | Use another session id; artifacts saved earlier under session `user` are no longer reachable |
+| `FileArtifactService` encodes names injectively and stores user-scoped artifacts under `{app}/{user}/user/` | Tools reading the directory tree directly need the new paths; the earlier layout stays readable |
+| Concurrent saves each keep their own version; file writes are crash-safe | — |
+
+See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 
 ## Related Crates
 
