@@ -6,11 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Core traits and types for Rust Agent Development Kit (ADK-Rust) agents, tools, sessions, and events"
-repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
+repository.workspace = true
 documentation = "https://docs.rs/adk-core"
-keywords = ["ai", "agent", "adk", "llm", "gemini"]
+keywords = ["ai", "agent", "adk", "llm", "tools"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 async-trait = { workspace = true }

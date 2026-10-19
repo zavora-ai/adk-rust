@@ -15,7 +15,7 @@ pub type LlmResponseStream = Pin<Box<dyn Stream<Item = Result<LlmResponse>> + Se
 /// and produce a stream of responses for a given request.
 #[async_trait]
 pub trait Llm: Send + Sync {
-    /// Returns the model identifier (e.g., "gemini-2.5-flash").
+    /// Returns the model identifier (e.g., "gemini-3.7-flash").
     fn name(&self) -> &str;
     /// Generates content from the given request, optionally streaming.
     async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream>;

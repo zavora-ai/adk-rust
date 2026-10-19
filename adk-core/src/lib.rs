@@ -1,8 +1,6 @@
 //! # adk-core
 //!
 //! Core traits and types for ADK agents, tools, sessions, and events.
-#![allow(clippy::result_large_err)]
-#![deny(missing_docs)]
 //!
 //! ## Overview
 //!
@@ -10,6 +8,7 @@
 //!
 //! - [`Agent`] - The fundamental trait for all agents
 //! - [`Tool`] / [`Toolset`] - For extending agents with custom capabilities
+//! - [`Llm`] - The interface every model provider implements
 //! - [`Session`] / [`State`] - For managing conversation context
 //! - [`Event`] - For streaming agent responses
 //! - [`AdkError`] / [`Result`] - Unified error handling
@@ -17,57 +16,94 @@
 //! - [`ToolConfirmationPolicy`] / [`ToolConfirmationRequest`] - Human-in-the-loop tool authorization
 //! - [`ToolPolicy`] / [`DeclarativePolicy`] / [`authorize_tool_call`] - The governed tool execution path
 //! - [`GovernanceControl`] - Organisation-wide kill switch
+//! - [`RunBudget`] / [`SpendLedger`] / [`ActionLedger`] - Run limits, spend caps, and at-most-once tool calls
 //! - [`AgentId`] / [`AgentPrincipal`] / [`ActingContext`] / [`ActingConfig`] - Agent identity
 //! - [`LeaseStore`] / [`DurableRunStore`] / [`ScheduleStore`] / [`GovernanceStateStore`] -
 //!   Durable runtime contracts: fenced leases, the run queue, schedules, and freeze state
 //!
-//! ## What's New in 0.6.0
+//! ## Feature Flags
 //!
-//! - **`SharedState`**: Concurrent key-value store with `set_shared`, `get_shared`, and
-//!   `wait_for_key` (timeout-based blocking) for cross-agent coordination in `ParallelAgent`.
-//! - **`shared_state()` on `CallbackContext`**: Default method returning `None` — tools and
-//!   callbacks can access `SharedState` when running inside a `ParallelAgent` with shared state enabled.
-//! - **`ToolConfirmationPolicy`**: Built-in HITL mechanism — `Never`, `Always`, or `PerTool`
-//!   policies that pause execution and emit `ToolConfirmationRequest` events for user approval.
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `rustls` | [`ensure_crypto_provider`] installs the `aws-lc-rs` rustls provider |
+//! | `conformance` | The `conformance` module: suites for durable store backends |
+//! | `cron` | Cron schedules in IANA time zones |
+//! | `webhooks` | The `webhook` module: Standard Webhooks signing and verification |
+//! | `webhook-delivery` | The `webhook_delivery` module: signed outbound delivery |
 //!
 //! ## Quick Start
 //!
-//! ```rust,no_run
-//! use adk_core::{Agent, Tool, Event, Result};
+//! ```rust
 //! use std::sync::Arc;
 //!
-//! // All agents implement the Agent trait
-//! // All tools implement the Tool trait
-//! // Events are streamed as the agent executes
+//! use adk_core::{Result, Tool, ToolContext, ToolEffect};
+//! use async_trait::async_trait;
+//! use serde_json::{Value, json};
+//!
+//! struct Echo;
+//!
+//! #[async_trait]
+//! impl Tool for Echo {
+//!     fn name(&self) -> &str {
+//!         "echo"
+//!     }
+//!
+//!     fn description(&self) -> &str {
+//!         "Returns its arguments"
+//!     }
+//!
+//!     fn effect(&self) -> ToolEffect {
+//!         ToolEffect::ReadOnly
+//!     }
+//!
+//!     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+//!         Ok(json!({ "echo": args }))
+//!     }
+//! }
+//!
+//! assert_eq!(Echo.effect(), ToolEffect::ReadOnly);
 //! ```
 //!
 //! ## Core Traits
 //!
 //! ### Agent
 //!
-//! The [`Agent`] trait defines the interface for all agents:
+//! The [`Agent`] trait defines the interface for all agents. `name`, `description`, `sub_agents`,
+//! and `run` are required; `description` returns `&str`, and a leaf agent returns `&[]` from
+//! `sub_agents`.
 //!
-//! ```rust,ignore
+//! ```rust
+//! use std::sync::Arc;
+//!
+//! use adk_core::{Agent, EventStream, InvocationContext, Result};
+//! use async_trait::async_trait;
+//!
+//! struct Silent;
+//!
 //! #[async_trait]
-//! pub trait Agent: Send + Sync {
-//!     fn name(&self) -> &str;
-//!     fn description(&self) -> Option<&str>;
-//!     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream>;
+//! impl Agent for Silent {
+//!     fn name(&self) -> &str {
+//!         "silent"
+//!     }
+//!
+//!     fn description(&self) -> &str {
+//!         "Produces no events"
+//!     }
+//!
+//!     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+//!         &[]
+//!     }
+//!
+//!     async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+//!         Ok(Box::pin(futures::stream::empty()))
+//!     }
 //! }
 //! ```
 //!
 //! ### Tool
 //!
-//! The [`Tool`] trait defines custom capabilities:
-//!
-//! ```rust,ignore
-//! #[async_trait]
-//! pub trait Tool: Send + Sync {
-//!     fn name(&self) -> &str;
-//!     fn description(&self) -> &str;
-//!     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
-//! }
-//! ```
+//! The [`Tool`] trait defines custom capabilities. [`Tool::effect`] declares whether a call is
+//! read-only, idempotent, or non-idempotent, which governs retries and the action ledger.
 //!
 //! ## State Management
 //!
@@ -75,7 +111,9 @@
 //!
 //! - `user:` - User preferences (persists across sessions)
 //! - `app:` - Application state (application-wide)
-//! - `temp:` - Temporary data (cleared each turn)
+//! - `temp:` - Visible for the rest of the invocation; session services do not persist it
+#![allow(clippy::result_large_err)]
+#![deny(missing_docs)]
 
 /// How a run's agents act: the identity model, the run-level acting configuration,
 /// delegation, and subject delegation policies.
