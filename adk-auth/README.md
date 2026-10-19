@@ -4,15 +4,17 @@ Access control and authentication for Rust Agent Development Kit (ADK-Rust).
 
 [![Crates.io](https://img.shields.io/crates/v/adk-auth.svg)](https://crates.io/crates/adk-auth)
 [![Documentation](https://docs.rs/adk-auth/badge.svg)](https://docs.rs/adk-auth)
-[![License](https://img.shields.io/crates/l/adk-auth.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-auth.svg)](../LICENSE)
 
 ## Overview
 
-`adk-auth` provides enterprise-grade access control for AI agents:
+`adk-auth` provides access control for AI agents:
 
 - Declarative scope-based security — tools declare required scopes, framework enforces automatically
 - Role-based access control — define roles with allow/deny permissions, deny takes precedence
-- Audit logging — log all access attempts to JSONL files
+- Audit logging — every access decision to a JSONL file, PostgreSQL, OTLP, or a signed Merkle-tree log
+- Credential brokers — audience-bound tokens for an agent's outbound calls
+- Secret providers — AWS Secrets Manager, Azure Key Vault, and GCP Secret Manager
 - SSO/OAuth — JWT validation with Google, Azure AD, Okta, Auth0, and generic OIDC providers
 - Auth bridge — flow authenticated identity from HTTP requests into agent execution via `adk-server`
 
@@ -41,41 +43,50 @@ Core RBAC, scope-based security, and audit logging are always available with no 
 | `sso` | JWT/OIDC providers (Google, Azure AD, Okta, Auth0, generic OIDC) |
 | `auth-bridge` | `JwtRequestContextExtractor` for `adk-server` identity flow (implies `sso`) |
 | `token-exchange` | `TokenExchangeBroker`: RFC 8693 token exchange of the agent's credential for resource-scoped tokens |
+| `signed-audit` | `signed_audit::AuditLog`: the signed, Merkle-hashed audit log, and `signed_audit::verify` |
+| `postgres-audit` | `PostgresAuditSink` |
+| `otlp-audit` | `OtlpAuditSink` |
+| `aws-secrets` | `secrets::AwsSecretProvider` (AWS Secrets Manager) |
+| `azure-keyvault` | `secrets::AzureSecretProvider` (Azure Key Vault) |
+| `gcp-secrets` | `secrets::GcpSecretProvider` (GCP Secret Manager) |
 
 ## Declarative Scope-Based Security
 
 Tools declare what scopes they need. The framework enforces before execution — no imperative checks in your handlers:
 
 ```rust
+use std::sync::Arc;
+
+use adk_auth::{ContextScopeResolver, InMemoryAuditSink, ScopeGuard, ScopeToolExt};
+use adk_core::{Result, Tool, ToolContext};
 use adk_tool::FunctionTool;
-use adk_auth::{ScopeGuard, ContextScopeResolver, StaticScopeResolver};
+use serde_json::{Value, json};
 
-// Tool declares its required scopes
-let transfer = FunctionTool::new("transfer", "Transfer funds", handler)
-    .with_scopes(&["finance:write", "verified"]);
+async fn transfer_funds(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    Ok(json!({ "transferred": args["amount"] }))
+}
 
-// ScopeGuard enforces automatically
-let guard = ScopeGuard::new(ContextScopeResolver);
-let protected = guard.protect(transfer);
+fn protect(tools: Vec<Arc<dyn Tool>>) {
+    // The tool declares its required scopes
+    let transfer = FunctionTool::new("transfer", "Transfer funds", transfer_funds)
+        .with_scopes(&["finance:write", "verified"]);
 
-// Or wrap all tools at once
-let protected_tools = guard.protect_all(tools);
-```
+    // ScopeGuard enforces them before execute()
+    let guard = ScopeGuard::new(ContextScopeResolver);
+    let _protected = guard.protect(transfer);
 
-With audit logging:
+    // Or wrap every tool at once
+    let _protected_tools = guard.protect_all(tools);
 
-```rust
-let guard = ScopeGuard::with_audit(ContextScopeResolver, audit_sink);
-let protected = guard.protect(transfer);
-// All scope checks (allowed + denied) are logged
-```
+    // With an audit sink, every check (allowed and denied) is recorded
+    let audited = ScopeGuard::with_audit(ContextScopeResolver, InMemoryAuditSink::new());
+    let _audited_tool = audited
+        .protect(FunctionTool::new("transfer", "Transfer funds", transfer_funds));
 
-You can also use the extension trait for inline wrapping:
-
-```rust
-use adk_auth::ScopeToolExt;
-
-let protected = my_tool.with_scope_guard(ContextScopeResolver);
+    // Or wrap inline with the extension trait
+    let _inline = FunctionTool::new("transfer", "Transfer funds", transfer_funds)
+        .with_scope_guard(ContextScopeResolver);
+}
 ```
 
 Pluggable resolvers:
@@ -91,25 +102,30 @@ For resolvers that call external services, cache the resolved scopes at the requ
 ## Role-Based Access Control
 
 ```rust
-use adk_auth::{Permission, Role, AccessControl, AuthMiddleware};
+use std::sync::Arc;
 
-// Define roles
-let admin = Role::new("admin").allow(Permission::AllTools);
-let user = Role::new("user")
-    .allow(Permission::Tool("search".into()))
-    .deny(Permission::Tool("code_exec".into()));
+use adk_auth::{AccessControl, AuthMiddleware, Permission, Role};
+use adk_core::Tool;
 
-// Build access control
-let ac = AccessControl::builder()
-    .role(admin)
-    .role(user)
-    .assign("alice@example.com", "admin")
-    .assign("bob@example.com", "user")
-    .build()?;
+fn rbac(tools: Vec<Arc<dyn Tool>>) -> Result<Vec<Arc<dyn Tool>>, adk_auth::AuthError> {
+    // Define roles
+    let admin = Role::new("admin").allow(Permission::AllTools);
+    let user = Role::new("user")
+        .allow(Permission::Tool("search".into()))
+        .deny(Permission::Tool("code_exec".into()));
 
-// Protect tools
-let middleware = AuthMiddleware::new(ac);
-let protected_tools = middleware.protect_all(tools);
+    // Build access control
+    let ac = AccessControl::builder()
+        .role(admin)
+        .role(user)
+        .assign("alice@example.com", "admin")
+        .assign("bob@example.com", "user")
+        .build()?;
+
+    // Protect tools
+    let middleware = AuthMiddleware::new(ac);
+    Ok(middleware.protect_all(tools))
+}
 ```
 
 Deny always takes precedence over allow, regardless of role assignment order. If a user has both an `editor` role (allow all tools) and a `restricted` role (deny `code_exec`), `code_exec` is denied.
@@ -117,9 +133,14 @@ Deny always takes precedence over allow, regardless of role assignment order. If
 You can also use the extension trait:
 
 ```rust
-use adk_auth::ToolExt;
+use std::sync::Arc;
 
-let protected = my_tool.with_access_control(Arc::new(ac));
+use adk_auth::{AccessControl, ToolExt};
+use adk_core::Tool;
+
+fn protect_one(tool: impl Tool + 'static, ac: AccessControl) -> impl Tool {
+    tool.with_access_control(Arc::new(ac))
+}
 ```
 
 ## Combining RBAC + Scopes
@@ -127,13 +148,14 @@ let protected = my_tool.with_access_control(Arc::new(ac));
 Use RBAC for coarse tool/agent entitlement and scopes for request-level constraints:
 
 ```rust
-use std::sync::Arc;
-use adk_auth::{AuthMiddleware, ContextScopeResolver, ScopeGuard};
+use adk_auth::{AccessControl, AuthMiddleware, ContextScopeResolver, ScopeGuard};
+use adk_core::Tool;
 
-let rbac = AuthMiddleware::new(ac);
-let scoped = ScopeGuard::new(ContextScopeResolver);
-
-let protected = scoped.protect(rbac.protect(transfer_tool));
+fn layered(ac: AccessControl, transfer_tool: impl Tool + 'static) -> impl Tool {
+    let rbac = AuthMiddleware::new(ac);
+    let scoped = ScopeGuard::new(ContextScopeResolver);
+    scoped.protect(rbac.protect(transfer_tool))
+}
 ```
 
 ## SSO Integration
@@ -141,28 +163,32 @@ let protected = scoped.protect(rbac.protect(transfer_tool));
 Enable with `features = ["sso"]`:
 
 ```rust
-use adk_auth::sso::{GoogleProvider, ClaimsMapper, SsoAccessControl};
+use adk_auth::sso::{ClaimsMapper, GoogleProvider, SsoAccessControl};
+use adk_auth::{AccessControl, Permission};
 
-// Create provider
-let provider = GoogleProvider::new("your-client-id");
+async fn check(ac: AccessControl, token: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Create a provider
+    let provider = GoogleProvider::new("your-client-id");
 
-// Map IdP groups to roles
-let mapper = ClaimsMapper::builder()
-    .map_group("AdminGroup", "admin")
-    .default_role("viewer")
-    .user_id_from_email()
-    .build();
+    // Map IdP groups to roles
+    let mapper = ClaimsMapper::builder()
+        .map_group("AdminGroup", "admin")
+        .default_role("viewer")
+        .user_id_from_email()
+        .build();
 
-// Combined SSO + RBAC
-let sso = SsoAccessControl::builder()
-    .validator(provider)
-    .mapper(mapper)
-    .access_control(ac)
-    .build()?;
+    // Combined SSO + RBAC
+    let sso = SsoAccessControl::builder()
+        .validator(provider)
+        .mapper(mapper)
+        .access_control(ac)
+        .build()?;
 
-// Validate token and check permission
-let claims = sso.check_token(token, &Permission::Tool("search".into())).await?;
-println!("User: {}", claims.user_id());
+    // Validate the token and check a permission
+    let claims = sso.check_token(token, &Permission::Tool("search".into())).await?;
+    println!("User: {}", claims.user_id());
+    Ok(())
+}
 ```
 
 ### User ID Claim Selection
@@ -201,11 +227,15 @@ Enable with `features = ["auth-bridge"]` to validate Bearer tokens directly into
 use adk_auth::auth_bridge::JwtRequestContextExtractor;
 use adk_auth::sso::{ClaimsMapper, GoogleProvider};
 
-let extractor = JwtRequestContextExtractor::builder()
-    .validator(GoogleProvider::new("your-client-id"))
-    .mapper(ClaimsMapper::builder().user_id_from_email().build())
-    .build()?;
+fn extractor() -> Result<JwtRequestContextExtractor, Box<dyn std::error::Error>> {
+    Ok(JwtRequestContextExtractor::builder()
+        .validator(GoogleProvider::new("your-client-id"))
+        .mapper(ClaimsMapper::builder().user_id_from_email().build())
+        .build()?)
+}
 ```
+
+Pass it to `ServerConfig::with_request_context(Arc::new(extractor))`.
 
 The extractor maps:
 
@@ -216,15 +246,18 @@ The extractor maps:
 ## Audit Logging
 
 ```rust
-use adk_auth::FileAuditSink;
+use adk_auth::{AccessControl, AuthMiddleware, FileAuditSink};
 
-let audit = FileAuditSink::new("/var/log/adk/audit.jsonl")?;
-let middleware = AuthMiddleware::with_audit(ac, audit);
+fn audited(ac: AccessControl) -> std::io::Result<AuthMiddleware> {
+    let audit = FileAuditSink::new("/var/log/adk/audit.jsonl")?;
+    Ok(AuthMiddleware::with_audit(ac, audit))
+}
 ```
 
-Output:
+Each line is one `AuditEvent`; optional fields such as `session_id`, `agent_id`, and `on_behalf_of` appear when set:
+
 ```json
-{"timestamp":"2025-01-01T10:30:00Z","user":"bob","event_type":"tool_access","resource":"search","outcome":"allowed"}
+{"timestamp":"2026-10-01T10:30:00Z","user":"bob","event_type":"tool_access","resource":"search","outcome":"allowed","agent_id":"urn:adk:agent:ops/assistant"}
 ```
 
 Implement the `AuditSink` trait for custom destinations (database, external service, etc.).
@@ -263,6 +296,20 @@ the requested resource (RFC 8707); `ScopedToken::authorize_for` refuses any othe
 | `TokenExchangeBroker` | `token-exchange` | RFC 8693 exchange of the `IdentitySource` credential; optional RFC 7009 revocation |
 
 See [Agent Identity](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/agent-identity.md).
+
+## Changes in 3.0
+
+| Change | Migration |
+|--------|-----------|
+| A guarded tool whose audit sink fails is refused with `auth.audit_failed` (`AuditFailureMode::Block`) | `with_audit_failure_mode(AuditFailureMode::Warn)` keeps running when the sink is down |
+| `AuditEvent` gains `agent_id` and `on_behalf_of` | Set them in struct literals |
+| `AuditFailureMode` moves to `adk_core::audit_log` and is re-exported here | — |
+| Signed audit log, credential brokers, and token exchange are new | — |
+| `PostgresAuditSink` writes `agent_id` and `on_behalf_of` columns | Call `migrate()` once before the first write; until then inserts fail and guarded tools are refused |
+| `PostgresAuditSink` uses SQLx 0.9 | See SQLx compatibility below |
+| HTTP requests to IdPs and token endpoints have connect and request timeouts | — |
+
+See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 
 ## Error Types
 

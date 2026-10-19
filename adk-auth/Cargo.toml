@@ -6,11 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Access control and authentication for Rust Agent Development Kit (ADK-Rust)"
-repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
+repository.workspace = true
 documentation = "https://docs.rs/adk-auth"
 keywords = ["ai", "agent", "adk", "auth", "security"]
 categories = ["authentication", "api-bindings"]
 readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 default = []

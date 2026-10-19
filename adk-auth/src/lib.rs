@@ -4,13 +4,15 @@
 //!
 //! ## Overview
 //!
-//! This crate provides enterprise-grade access control:
+//! This crate provides access control for agents and tools:
 //!
 //! - [`Permission`] - Tool and agent permissions
 //! - [`Role`] - Role with allow/deny rules
 //! - [`AccessControl`] - Permission checking
+//! - [`AuthMiddleware`] / [`ProtectedTool`] - Role-based tool protection
 //! - [`ScopeGuard`] - Declarative scope-based tool authorization
-//! - [`AuditSink`] - Audit logging trait
+//! - [`AuditSink`] - Audit logging trait; [`FileAuditSink`] writes JSONL
+//! - [`SecretCredentialBroker`] - Audience-bound tokens for an agent's outbound calls
 //!
 //! ## Features
 //!
@@ -21,13 +23,15 @@
 //! - `gcp-secrets` - Enable GCP Secret Manager provider
 //! - `postgres-audit` - PostgreSQL audit sink
 //! - `otlp-audit` - OpenTelemetry audit sink
-//! - `signed-audit` - Signed, Merkle-hashed audit log ([`signed_audit`])
+//! - `signed-audit` - Signed, Merkle-hashed audit log (`signed_audit`)
+//! - `token-exchange` - RFC 8693 token exchange broker (`TokenExchangeBroker`)
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
-//! use adk_auth::{Permission, Role, AccessControl};
+//! ```rust
+//! use adk_auth::{AccessControl, Permission, Role};
 //!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let admin = Role::new("admin")
 //!     .allow(Permission::AllTools)
 //!     .allow(Permission::AllAgents);
@@ -43,6 +47,9 @@
 //!     .build()?;
 //!
 //! ac.check("alice@example.com", &Permission::AllTools)?;
+//! assert!(ac.check("bob@example.com", &Permission::AllTools).is_err());
+//! # Ok(())
+//! # }
 //! ```
 
 mod access_control;
