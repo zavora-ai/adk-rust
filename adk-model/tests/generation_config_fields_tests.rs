@@ -53,6 +53,7 @@ mod ollama {
             presence_penalty: Some(0.25),
             frequency_penalty: Some(0.5),
             top_logprobs: Some(2),
+            max_output_tokens: Some(64),
             ..Default::default()
         }
     }
@@ -97,11 +98,35 @@ mod ollama {
                 "stop": ["END"],
                 "seed": 1_u64 << 40,
                 "presence_penalty": 0.25,
-                "frequency_penalty": 0.5
+                "frequency_penalty": 0.5,
+                "num_predict": 64
             })
         );
         assert_eq!((&body["logprobs"], &body["top_logprobs"]), (&json!(true), &json!(2)));
         assert_eq!(final_logprobs(&responses), json!({"content": [hi, bang]}));
+    }
+
+    #[tokio::test]
+    async fn a_response_cut_at_the_token_cap_finishes_with_max_tokens() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "model": "m", "created_at": "2026-10-19T00:00:00Z",
+                "message": {"role": "assistant", "content": "Once upon a"}, "done": true,
+                "done_reason": "length", "prompt_eval_count": 5, "eval_count": 3
+            })))
+            .mount(&server)
+            .await;
+        let model = OllamaModel::new(OllamaConfig::with_host(server.uri(), "m")).unwrap();
+        let config = GenerateContentConfig { max_output_tokens: Some(3), ..Default::default() };
+
+        let responses = generate(&model, config, false).await.unwrap();
+
+        assert_eq!(sent_body(&server).await["options"]["num_predict"], json!(3));
+        assert_eq!(
+            responses.last().and_then(|response| response.finish_reason),
+            Some(adk_core::FinishReason::MaxTokens)
+        );
     }
 
     #[tokio::test]

@@ -88,6 +88,16 @@ pub fn usage(line: &Value) -> Option<UsageMetadata> {
     })
 }
 
+/// Maps a final line's `done_reason`: `length` is the `num_predict` cap, and a line without one
+/// stopped naturally.
+fn finish_reason(line: &Value) -> FinishReason {
+    match line.get("done_reason").and_then(Value::as_str) {
+        None | Some("stop") => FinishReason::Stop,
+        Some("length") => FinishReason::MaxTokens,
+        Some(_) => FinishReason::Other,
+    }
+}
+
 /// Convert Ollama ChatMessageResponse to ADK LlmResponse.
 ///
 /// `line` is the same `/api/chat` line as received; a final line's usage is read from it with
@@ -138,8 +148,7 @@ pub fn chat_response_to_llm_response(
     let content =
         if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) };
 
-    // Determine finish reason
-    let finish_reason = if response.done { Some(FinishReason::Stop) } else { None };
+    let finish_reason = response.done.then(|| finish_reason(line));
 
     // Not `response.final_data`: `ollama-rs` keeps the metrics only when all six are present.
     let usage_metadata = if response.done { usage(line) } else { None };
@@ -240,6 +249,32 @@ mod tests {
         let message = content_to_chat_message(&content).expect("message should be created");
         assert!(message.content.contains("text/csv"));
         assert!(message.content.contains("https://example.com/data.csv"));
+    }
+
+    #[test]
+    fn final_response_maps_done_reason() {
+        let finish = |done_reason: Option<&str>| {
+            let mut line = serde_json::json!({
+                "model": "qwen3",
+                "created_at": "2026-10-17T00:00:00Z",
+                "message": {"role": "assistant", "content": "partial answer"},
+                "done": true
+            });
+            if let Some(reason) = done_reason {
+                line["done_reason"] = serde_json::json!(reason);
+            }
+            let response: ChatMessageResponse = serde_json::from_value(line.clone()).unwrap();
+            chat_response_to_llm_response(&response, &line, false, &HashSet::new()).finish_reason
+        };
+        assert_eq!(
+            [None, Some("stop"), Some("length"), Some("unload")].map(finish),
+            [
+                Some(FinishReason::Stop),
+                Some(FinishReason::Stop),
+                Some(FinishReason::MaxTokens),
+                Some(FinishReason::Other),
+            ]
+        );
     }
 
     #[test]

@@ -529,7 +529,7 @@ async fn main() -> anyhow::Result<()> {
 | Model | Config |
 |-------|--------|
 | `openai/gpt-oss-120b` (default) | `GroqConfig::gpt_oss_120b(key)` |
-| `openai/gpt-oss-20b` | `GroqConfig::new(key, "openai/gpt-oss-20b")` |
+| `openai/gpt-oss-20b` (faster, lower cost) | `GroqConfig::gpt_oss_20b(key)` |
 | Any model Groq serves | `GroqConfig::new(key, model)` |
 
 ---
@@ -838,7 +838,9 @@ state is not written, and no tool from the turn runs.
   after the response finished, such as a cut-off usage trailer, is ignored.
 - **Unknown finish reasons** map to `FinishReason::Other`, not `Stop`, on the Chat Completions,
   Azure OpenAI, Groq, and OpenRouter clients and on `DeepSeekClient` and `AzureAIClient`,
-  streamed or not. `OllamaModel` finishes a complete response with `FinishReason::Stop`.
+  streamed or not. `OllamaModel` maps the final line's `done_reason`: `stop` to
+  `FinishReason::Stop`, `length` (the `max_output_tokens` cap, sent as `options.num_predict`)
+  to `FinishReason::MaxTokens`, and any other value to `FinishReason::Other`.
 - **Reasoning in the final chunk**: `reasoning_content` or `reasoning` sent in the chunk that
   carries `finish_reason` is emitted as a `Part::Thinking` delta before the final text or tool
   calls.

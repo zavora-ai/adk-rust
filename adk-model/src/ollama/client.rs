@@ -120,6 +120,9 @@ impl OllamaModel {
             if !cfg.stop_sequences.is_empty() {
                 options = options.stop(cfg.stop_sequences.clone());
             }
+            if let Some(max_output_tokens) = cfg.max_output_tokens {
+                options = options.num_predict(max_output_tokens);
+            }
         }
 
         options
