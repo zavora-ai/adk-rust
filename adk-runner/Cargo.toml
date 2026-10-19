@@ -6,11 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Agent execution runtime for Rust Agent Development Kit (ADK-Rust) agents"
-repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
+repository.workspace = true
 documentation = "https://docs.rs/adk-runner"
 keywords = ["ai", "agent", "adk", "runtime", "executor"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+
+[package.metadata.docs.rs]
+features = ["context-compaction", "sandbox-runner"]
 
 [dependencies]
 adk-core.workspace = true
