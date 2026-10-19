@@ -9,9 +9,12 @@ homepage.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-guardrail"
 readme = "README.md"
-description = "Guardrails framework for ADK agents - input/output validation, content filtering, PII redaction"
+description = "Guardrails for ADK-Rust agents: input, output, and tool-call validation, content filtering, PII redaction"
 keywords = ["ai", "agents", "guardrails", "safety", "validation"]
 categories = ["development-tools", "asynchronous"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 adk-core.workspace = true

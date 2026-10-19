@@ -24,16 +24,16 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
-//! use adk_guardrail::{GuardrailSet, ContentFilter, PiiRedactor};
+//! ```rust
+//! use adk_guardrail::{ContentFilter, GuardrailSet, PiiRedactor};
 //!
 //! let input_guardrails = GuardrailSet::new()
 //!     .with(ContentFilter::harmful_content())
 //!     .with(PiiRedactor::new());
+//! assert_eq!(input_guardrails.guardrails().len(), 2);
 //!
-//! let agent = LlmAgentBuilder::new("assistant")
-//!     .input_guardrails(input_guardrails)
-//!     .build()?;
+//! // With adk-agent's `guardrails` feature:
+//! // LlmAgentBuilder::new("assistant").model(model).input_guardrails(input_guardrails)
 //! ```
 
 //! ## Tool Guardrails
@@ -55,6 +55,7 @@
 //! );
 //!
 //! let agent = LlmAgentBuilder::new("ops")
+//!     .model(model)
 //!     .tool_guardrails(tool_guardrails)
 //!     .build()?;
 //! ```
