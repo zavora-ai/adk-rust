@@ -3,7 +3,13 @@
 
 //! Protocol-neutral agentic commerce and payment orchestration for ADK-Rust.
 //!
-//! The initial crate scaffold tracks these protocol baselines:
+//! One canonical commerce kernel ([`kernel`]) and durable transaction journal
+//! ([`journal`]) sit behind the ACP and AP2 adapters ([`protocol`]). Agent-facing
+//! payment tools ([`tools`]) are scope-guarded and run checkouts and payments through
+//! payment policies, a spend ledger, and an optional audit trail ([`guardrail`],
+//! [`auth`]). Raw payment artifacts are kept as evidence, not transcript text.
+//!
+//! The crate tracks these protocol baselines:
 //! - ACP stable `2026-01-30`
 //! - ACP experimental extensions as an unreleased compatibility channel
 //! - AP2 `v0.1-alpha` as of `2026-03-22`

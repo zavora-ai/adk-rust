@@ -2,6 +2,10 @@
 
 Protocol-neutral agentic commerce and payment orchestration for ADK-Rust.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-payments.svg)](https://crates.io/crates/adk-payments)
+[![Documentation](https://docs.rs/adk-payments/badge.svg)](https://docs.rs/adk-payments)
+[![License](https://img.shields.io/crates/l/adk-payments.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
+
 `adk-payments` gives you one canonical commerce kernel and durable transaction
 journal that can sit behind multiple protocol adapters. It is built for cases
 where an agent needs to create, update, authorize, complete, and follow up on
@@ -44,7 +48,8 @@ The crate combines:
 | `ap2-a2a` | Additive | AP2 A2A-oriented helpers and AgentCard metadata |
 | `ap2-mcp` | Additive | AP2 MCP-safe continuation, intervention, and receipt views |
 
-ACP stable is the conservative production baseline. AP2 support tracks the
+No feature is enabled by default; `acp-experimental` implies `acp`, and `ap2-a2a` and `ap2-mcp`
+imply `ap2`. ACP stable is the conservative production baseline. AP2 support tracks the
 current alpha research draft. The experimental ACP surface is intentionally
 feature-gated because the wire format is still moving.
 
@@ -54,17 +59,25 @@ Choose only the features you need:
 
 ```toml
 [dependencies]
-adk-payments = { version = "3.0.0", features = ["acp"] }
+adk-payments = { version = "3.0", features = ["acp"] }
 ```
 
 ```toml
 [dependencies]
-adk-payments = { version = "3.0.0", features = ["ap2", "ap2-a2a", "ap2-mcp"] }
+adk-payments = { version = "3.0", features = ["ap2", "ap2-a2a", "ap2-mcp"] }
 ```
 
 ```toml
 [dependencies]
-adk-payments = { version = "3.0.0", features = ["acp", "acp-experimental", "ap2"] }
+adk-payments = { version = "3.0", features = ["acp", "acp-experimental", "ap2"] }
+```
+
+Or use the meta-crate, where the `payments` feature (included in `enterprise`) re-exports the
+crate with its default features; enable the protocol features on `adk-payments` itself:
+
+```toml
+[dependencies]
+adk-rust = { version = "3.0", features = ["payments"] }
 ```
 
 ## Core Concepts
@@ -116,37 +129,53 @@ Canonical commerce kernel traits
 
 ### 1. Expose ACP Checkout Routes
 
-```rust,ignore
+Requires the `acp` feature. `build()` returns an `axum::Router` to serve.
+
+```rust
+use adk_core::identity::AdkIdentity;
+use adk_payments::domain::{
+    CommerceActor, CommerceActorRole, CommerceMode, MerchantRef, ProtocolExtensions,
+};
+use adk_payments::kernel::{DelegatedPaymentService, MerchantCheckoutService};
+use adk_payments::protocol::acp::{
+    AcpContextTemplate, AcpRouterBuilder, AcpVerificationConfig, DetachedSignatureVerifier,
+};
 use std::sync::Arc;
 
-use adk_payments::domain::{CommerceActor, CommerceActorRole, CommerceMode, MerchantRef, ProtocolExtensions};
-use adk_payments::protocol::acp::{AcpContextTemplate, AcpRouterBuilder, AcpVerificationConfig};
-
-let router = AcpRouterBuilder::new(AcpContextTemplate {
-    session_identity: Some(identity),
-    actor: CommerceActor {
-        actor_id: "shopper-agent".to_string(),
-        role: CommerceActorRole::AgentSurface,
-        display_name: Some("shopper".to_string()),
-        tenant_id: Some("tenant-1".to_string()),
-        extensions: ProtocolExtensions::default(),
-    },
-    merchant_of_record: MerchantRef {
-        merchant_id: "merchant-123".to_string(),
-        legal_name: "Merchant Example LLC".to_string(),
-        display_name: Some("Merchant Example".to_string()),
-        statement_descriptor: Some("MERCHANT*EXAMPLE".to_string()),
-        country_code: Some("US".to_string()),
-        website: Some("https://merchant.example".to_string()),
-        extensions: ProtocolExtensions::default(),
-    },
-    payment_processor: None,
-    mode: CommerceMode::HumanPresent,
-})
-.with_merchant_checkout_service(checkout_service)
-.with_delegated_payment_service(delegated_payment_service)
-.with_verification(AcpVerificationConfig::strict().with_signature_verifier(signature_verifier))
-.build()?;
+fn acp_routes(
+    identity: AdkIdentity,
+    checkout_service: Arc<dyn MerchantCheckoutService>,
+    delegated_payment_service: Arc<dyn DelegatedPaymentService>,
+    signature_verifier: Arc<dyn DetachedSignatureVerifier>,
+) -> adk_core::Result<()> {
+    let router = AcpRouterBuilder::new(AcpContextTemplate {
+        session_identity: Some(identity),
+        actor: CommerceActor {
+            actor_id: "shopper-agent".to_string(),
+            role: CommerceActorRole::AgentSurface,
+            display_name: Some("shopper".to_string()),
+            tenant_id: Some("tenant-1".to_string()),
+            extensions: ProtocolExtensions::default(),
+        },
+        merchant_of_record: MerchantRef {
+            merchant_id: "merchant-123".to_string(),
+            legal_name: "Merchant Example LLC".to_string(),
+            display_name: Some("Merchant Example".to_string()),
+            statement_descriptor: Some("MERCHANT*EXAMPLE".to_string()),
+            country_code: Some("US".to_string()),
+            website: Some("https://merchant.example".to_string()),
+            extensions: ProtocolExtensions::default(),
+        },
+        payment_processor: None,
+        mode: CommerceMode::HumanPresent,
+    })
+    .with_merchant_checkout_service(checkout_service)
+    .with_delegated_payment_service(delegated_payment_service)
+    .with_verification(AcpVerificationConfig::strict().with_signature_verifier(signature_verifier))
+    .build()?;
+    let _ = router; // serve with axum
+    Ok(())
+}
 ```
 
 Use this route surface when you want HTTP endpoints for checkout session create,
@@ -159,22 +188,47 @@ development, `AcpVerificationConfig::permissive()` enforces only `API-Version`.
 
 ### 2. Handle AP2 Mandate Flows
 
-```rust,ignore
-use adk_payments::protocol::ap2::Ap2Adapter;
+Requires the `ap2` feature.
 
-let adapter = Ap2Adapter::new(
-    checkout_service,
-    payment_execution_service,
-    transaction_store,
-    evidence_store,
-)
-.with_merchant_authorization_verifier(merchant_signature_verifier)
-.with_user_authorization_verifier(user_authorization_verifier)
-.with_intervention_service(intervention_service);
+```rust
+use adk_payments::kernel::{
+    CommerceContext, EvidenceStore, InterventionService, MerchantCheckoutService,
+    PaymentExecutionService, TransactionStore,
+};
+use adk_payments::protocol::ap2::{
+    Ap2Adapter, CartMandate, MerchantAuthorizationVerifier, PaymentMandate, PaymentReceipt,
+    UserAuthorizationVerifier,
+};
+use std::sync::Arc;
 
-let record = adapter.submit_cart_mandate(context, cart_mandate).await?;
-let payment = adapter.submit_payment_mandate(context, payment_mandate).await?;
-let final_record = adapter.apply_payment_receipt(context, payment_receipt).await?;
+/// The services and verifiers are your commerce backend's implementations.
+fn ap2_adapter(
+    checkout_service: Arc<dyn MerchantCheckoutService>,
+    payment_execution_service: Arc<dyn PaymentExecutionService>,
+    transaction_store: Arc<dyn TransactionStore>,
+    evidence_store: Arc<dyn EvidenceStore>,
+    merchant_signature_verifier: Arc<dyn MerchantAuthorizationVerifier>,
+    user_authorization_verifier: Arc<dyn UserAuthorizationVerifier>,
+    intervention_service: Arc<dyn InterventionService>,
+) -> Ap2Adapter {
+    Ap2Adapter::new(checkout_service, payment_execution_service, transaction_store, evidence_store)
+        .with_merchant_authorization_verifier(merchant_signature_verifier)
+        .with_user_authorization_verifier(user_authorization_verifier)
+        .with_intervention_service(intervention_service)
+}
+
+async fn pay(
+    adapter: &Ap2Adapter,
+    context: CommerceContext,
+    cart_mandate: CartMandate,
+    payment_mandate: PaymentMandate,
+    payment_receipt: PaymentReceipt,
+) -> adk_core::Result<()> {
+    let record = adapter.submit_cart_mandate(context.clone(), cart_mandate).await?;
+    let payment = adapter.submit_payment_mandate(context.clone(), payment_mandate).await?;
+    let final_record = adapter.apply_payment_receipt(context, payment_receipt).await?;
+    Ok(())
+}
 ```
 
 Use AP2 when your flow is mandate-based and multiple specialized actors
@@ -215,17 +269,28 @@ AP2 money movement runs under the same governance as a governed ACP checkout:
 | Payment mandate | Consumed only after governance allows it; the backend receives an `idempotency_key` extension field |
 | Human-not-present payment without user authorization | Requires a verified intent authorization |
 
-```rust,ignore
+```rust
+use adk_auth::AuditSink;
+use adk_core::SpendLedger;
 use adk_payments::auth::PaymentAuditor;
 use adk_payments::guardrail::{AmountThresholdGuardrail, PaymentPolicySet};
+use adk_payments::protocol::ap2::Ap2Adapter;
+use std::sync::Arc;
 
-let adapter = adapter
-    .with_payment_policies(
-        PaymentPolicySet::new()
-            .with(AmountThresholdGuardrail::new(Some(5_000), Some(50_000)).with_currency("USD", 2)),
-    )
-    .with_spend_ledger(spend_ledger)
-    .with_payment_auditor(PaymentAuditor::new(audit_sink));
+fn govern(
+    adapter: Ap2Adapter,
+    spend_ledger: Arc<dyn SpendLedger>,
+    audit_sink: Arc<dyn AuditSink>,
+) -> Ap2Adapter {
+    adapter
+        .with_payment_policies(
+            PaymentPolicySet::new().with(
+                AmountThresholdGuardrail::new(Some(5_000), Some(50_000)).with_currency("USD", 2),
+            ),
+        )
+        .with_spend_ledger(spend_ledger)
+        .with_payment_auditor(PaymentAuditor::new(audit_sink))
+}
 ```
 
 `submit_payment_mandate` attributes a payment to the session's app and the acting
@@ -235,14 +300,23 @@ fails with `payments.policy.approval_required` and its mandate stays unconsumed.
 
 ### 3. Register Agent-Facing Payment Tools
 
-```rust,ignore
+```rust
+use adk_core::Tool;
+use adk_payments::kernel::{InterventionService, MerchantCheckoutService, TransactionStore};
 use adk_payments::tools::PaymentToolsetBuilder;
+use std::sync::Arc;
 
-let toolset = PaymentToolsetBuilder::new(checkout_service, transaction_store)
-    .with_intervention_service(intervention_service)
-    .build();
+fn payment_tools(
+    checkout_service: Arc<dyn MerchantCheckoutService>,
+    transaction_store: Arc<dyn TransactionStore>,
+    intervention_service: Arc<dyn InterventionService>,
+) -> Vec<Arc<dyn Tool>> {
+    let toolset = PaymentToolsetBuilder::new(checkout_service, transaction_store)
+        .with_intervention_service(intervention_service)
+        .build();
 
-let tools = toolset.tools();
+    toolset.tools()
+}
 ```
 
 These tools return masked transaction summaries only. Raw card data, signatures,
@@ -253,8 +327,9 @@ fails unless the caller holds the scope the tool declares (`payments:checkout:cr
 `payments:checkout:complete`, and so on). The default guard reads
 `ToolContext::user_scopes()`, which the server's auth bridge fills from the request;
 `with_scope_guard` supplies a different resolver or an audit sink. Each call records
-the calling agent as the acting `CommerceActor` and binds the transaction to the
-caller's session identity.
+the calling agent as the acting `CommerceActor`, whose `actor_id` is the agent's `AgentId`
+(`urn:adk:agent:{app}/{agent}` unless configured), and binds the transaction to the
+caller's session identity. Agent-scoped `SpendLimits` key on the same id.
 
 `payments_checkout_create` and `payments_checkout_complete` declare
 `ToolEffect::NonIdempotent`, so an agent never retries them, and every checkout tool
@@ -268,9 +343,12 @@ evaluates the policies passed to `with_payment_policies` on every call. A denial
 refuses the checkout, an escalation goes through the run's tool confirmation flow, and
 `SpendLimitGuardrail` reserves each completed checkout against the spend ledger
 (`with_spend_ledger` or `RunConfig::spend_ledger`), failing closed when the ledger is
-unreachable. Wrap the backend handed to the ACP adapter in a `GovernedCheckoutService`
-to govern ACP protocol traffic too; the AP2 adapter governs its own checkouts and
-payment mandates.
+unreachable. `GovernedCheckoutService::with_auditor` records each decision with a
+`PaymentAuditor` before the backend is reached. Wrap the backend handed to the ACP adapter in
+a `GovernedCheckoutService` to govern ACP protocol traffic too; the AP2 adapter governs its own
+checkouts and payment mandates. A custom `PaymentPolicy` is an `#[async_trait]` whose
+`evaluate` receives a context carrying the operation, the paying app and agent, and the spend
+ledger.
 
 With the `ap2` feature, `with_ap2_adapter` adds `payments_ap2_payment_submit`
 (`payments:payment:execute`), which submits an AP2 payment mandate through the adapter
@@ -316,12 +394,12 @@ cargo test -p adk-payments --features acp-experimental --test acp_experimental_i
 
 Use these as the starting point for real implementations:
 
-- `adk-payments/tests/acp_integration_tests.rs`
-- `adk-payments/tests/ap2_integration_tests.rs`
-- `adk-payments/tests/ap2_governance_tests.rs`
-- `adk-payments/tests/cross_protocol_correlation_tests.rs`
-- `examples/payments/`
-- `docs/official_docs/security/payments.md`
+- [`adk-payments/tests/acp_integration_tests.rs`](https://github.com/zavora-ai/adk-rust/blob/main/adk-payments/tests/acp_integration_tests.rs)
+- [`adk-payments/tests/ap2_integration_tests.rs`](https://github.com/zavora-ai/adk-rust/blob/main/adk-payments/tests/ap2_integration_tests.rs)
+- [`adk-payments/tests/ap2_governance_tests.rs`](https://github.com/zavora-ai/adk-rust/blob/main/adk-payments/tests/ap2_governance_tests.rs)
+- [`adk-payments/tests/cross_protocol_correlation_tests.rs`](https://github.com/zavora-ai/adk-rust/blob/main/adk-payments/tests/cross_protocol_correlation_tests.rs)
+- [`examples/payments/`](https://github.com/zavora-ai/adk-rust/tree/main/examples/payments)
+- [`docs/official_docs/security/payments.md`](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/payments.md)
 
 ## Related Modules
 
@@ -332,3 +410,11 @@ Use these as the starting point for real implementations:
 - `protocol::ap2` - AP2 adapter, verification, A2A, and MCP surfaces
 - `tools` - agent-facing checkout, status, and intervention tools
 - `server` - ACP router re-exports and AP2 integration notes
+
+## License
+
+Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.
