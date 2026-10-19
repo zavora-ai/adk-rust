@@ -1,5 +1,8 @@
 # Sharing SQLx pools with ADK-Rust 3.0
 
+This guide covers the move from SQLx 0.8, used by ADK-Rust 2.x, to SQLx 0.9, used by ADK-Rust 3.0.
+It is part of the [2.x → 3.0 migration](2.x-to-3.0.md).
+
 ADK-Rust 3.0 database backends use SQLx 0.9. SQLx 0.8 and 0.9 types are distinct
 Rust types, so an application that passes its own pool into an ADK constructor must
 depend on SQLx 0.9. An application that lets ADK open its connections from a URL
