@@ -155,7 +155,11 @@ A summary replaces history only when it is complete and smaller:
 - The runner keeps the history when a summarizer's event is not smaller, by the token estimate,
   than the events it would replace, for session and intra-invocation compaction alike.
 - `SummarisationCompaction` keeps the events when its summary is empty or not smaller, and fails
-  with `model.summary_incomplete` on an incomplete summary.
+  with `model.summary_incomplete` on an incomplete summary or a failed stream.
+- For a failed stream, `model.summary_incomplete` keeps the stream error's category, retry hint,
+  and details (provider, upstream status), records its code in
+  `details.metadata["cause_code"]`, and has it as its `source()`, so a rate-limited or timed-out
+  summary call stays retryable.
 
 ## Calls Held for Confirmation
 

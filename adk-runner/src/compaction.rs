@@ -196,7 +196,10 @@ impl CompactionStrategy for TruncationCompaction {
 /// keeps what tools returned. The split never separates a function response from its call
 /// ([`adk_core::history::balanced_cut`]). The events stay as they are when the summary is
 /// empty or not smaller than they are; a stream error, or a model that stops for any reason
-/// but `Stop`, fails the compaction with `model.summary_incomplete`.
+/// but `Stop`, fails the compaction with `model.summary_incomplete`. For a stream error that
+/// error keeps the stream error's category, retry hint, and details, records its code as
+/// `details.metadata["cause_code"]`, and has it as its
+/// [`source`](std::error::Error::source).
 ///
 /// The summary call goes through [`adk_core::generate_metered`], so when the
 /// runner compacts a session it counts against the run's budget and spend
@@ -267,7 +270,23 @@ impl CompactionStrategy for SummarisationCompaction {
         let mut summary_content = String::new();
         let mut finish_reason = None;
         while let Some(response) = stream.next().await {
-            let response = response?;
+            let response = response.map_err(|cause| {
+                let mut details = (*cause.details).clone();
+                details.metadata.insert("cause_code".to_string(), cause.code.into());
+                AdkError::new(
+                    ErrorComponent::Model,
+                    cause.category,
+                    "model.summary_incomplete",
+                    format!(
+                        "the summarization model failed before finishing its summary ({}); \
+                         summarise fewer turns or retry",
+                        cause.message
+                    ),
+                )
+                .with_retry(cause.retry.clone())
+                .with_details(details)
+                .with_source(cause)
+            })?;
             if let Some(content) = &response.content {
                 for part in &content.parts {
                     if let adk_core::Part::Text { text } = part {
@@ -833,6 +852,50 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, "model.summary_incomplete");
+    }
+
+    struct FailingSummary;
+
+    #[async_trait]
+    impl Llm for FailingSummary {
+        fn name(&self) -> &str {
+            "summary"
+        }
+
+        async fn generate_content(
+            &self,
+            _request: adk_core::LlmRequest,
+            _stream: bool,
+        ) -> adk_core::Result<adk_core::LlmResponseStream> {
+            let partial = adk_core::LlmResponse {
+                content: Some(Content::new("model").with_text("Summary: the cust")),
+                partial: true,
+                ..Default::default()
+            };
+            let stalled = AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Timeout,
+                "model.openai_compat.request",
+                "the response stopped arriving",
+            )
+            .with_provider("openai");
+            Ok(Box::pin(futures::stream::iter(vec![Ok(partial), Err(stalled)])))
+        }
+    }
+
+    #[tokio::test]
+    async fn summarisation_fails_with_the_cause_when_the_stream_fails() {
+        let error =
+            SummarisationCompaction { model: Arc::new(FailingSummary), turns_to_summarise: 3 }
+                .compact(make_events(6), 4096)
+                .await
+                .unwrap_err();
+        assert_eq!(error.code, "model.summary_incomplete");
+        assert_eq!(error.category, ErrorCategory::Timeout);
+        assert!(error.is_retryable());
+        assert_eq!(error.details.provider.as_deref(), Some("openai"));
+        assert_eq!(error.details.metadata["cause_code"], "model.openai_compat.request");
+        assert!(std::error::Error::source(&error).is_some());
     }
 
     #[test]

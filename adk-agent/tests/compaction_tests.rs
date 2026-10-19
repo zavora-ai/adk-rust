@@ -370,5 +370,32 @@ async fn a_stream_error_fails_the_summary() {
             .then_error(adk_core::AdkError::model("stream reset"))],
     ));
     let error = LlmEventSummarizer::new(llm).summarize_events(&window()).await.unwrap_err();
-    assert_eq!(error.message, "stream reset");
+    assert_eq!(error.code, "model.summary_incomplete");
+    assert_eq!(error.category, adk_core::ErrorCategory::Internal);
+    assert_eq!(error.details.metadata["cause_code"], "model.legacy");
+    assert!(error.message.contains("stream reset"), "{}", error.message);
+    let cause = std::error::Error::source(&error).expect("the stream error is the source");
+    assert!(cause.to_string().contains("stream reset"));
+}
+
+#[tokio::test]
+async fn a_retryable_stream_error_stays_retryable() {
+    let cause = adk_core::AdkError::new(
+        adk_core::ErrorComponent::Model,
+        adk_core::ErrorCategory::RateLimited,
+        "model.openai.rate_limited",
+        "rate limited",
+    )
+    .with_provider("openai")
+    .with_upstream_status(429);
+    let llm = Arc::new(adk_model::ScriptedLlm::new(
+        "summarizer",
+        [adk_model::ScriptedResponse::text("Summary.").then_error(cause)],
+    ));
+    let error = LlmEventSummarizer::new(llm).summarize_events(&window()).await.unwrap_err();
+    assert_eq!(error.code, "model.summary_incomplete");
+    assert!(error.is_retryable());
+    assert_eq!(error.details.provider.as_deref(), Some("openai"));
+    assert_eq!(error.details.upstream_status_code, Some(429));
+    assert_eq!(error.details.metadata["cause_code"], "model.openai.rate_limited");
 }

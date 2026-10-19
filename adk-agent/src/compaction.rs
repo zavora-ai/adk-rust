@@ -33,9 +33,11 @@ The summary should be concise and capture the essence of the interaction.\n\n\
 ///
 /// A summary replaces history only when it is complete and smaller. A stream error fails
 /// the summary, and so does a model that stops for any reason but `Stop` (for example
-/// `MaxTokens`), with `model.summary_incomplete`. An empty summary, or one at least as long
-/// as the rendered window it would replace, returns `Ok(None)`, so the runner keeps the
-/// history as it is.
+/// `MaxTokens`), with `model.summary_incomplete`. For a stream error that error keeps the
+/// stream error's category, retry hint, and details, records its code as
+/// `details.metadata["cause_code"]`, and has it as its [`source`](std::error::Error::source).
+/// An empty summary, or one at least as long as the rendered window it would replace, returns
+/// `Ok(None)`, so the runner keeps the history as it is.
 ///
 /// The summary call goes through [`adk_core::generate_metered`], so when the
 /// runner compacts a session it counts against the run's budget and spend
@@ -113,7 +115,23 @@ impl BaseEventsSummarizer for LlmEventSummarizer {
         let mut finish_reason = None;
         // Drained to the end so the call's usage, which may follow the content, is metered.
         while let Some(chunk) = response_stream.next().await {
-            let chunk = chunk?;
+            let chunk = chunk.map_err(|cause| {
+                let mut details = (*cause.details).clone();
+                details.metadata.insert("cause_code".to_string(), cause.code.into());
+                AdkError::new(
+                    ErrorComponent::Model,
+                    cause.category,
+                    "model.summary_incomplete",
+                    format!(
+                        "the summarizer model failed before finishing its summary ({}); the \
+                         history is kept as it is",
+                        cause.message
+                    ),
+                )
+                .with_retry(cause.retry.clone())
+                .with_details(details)
+                .with_source(cause)
+            })?;
             for part in chunk.content.iter().flat_map(|content| content.parts.iter()) {
                 if let Part::Text { text } = part {
                     summary_text.push_str(text);
