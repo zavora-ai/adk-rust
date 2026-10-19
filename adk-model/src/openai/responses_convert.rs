@@ -632,6 +632,17 @@ pub fn from_response(response: &Response) -> LlmResponse {
     from_projection(&Projection::from(response))
 }
 
+/// A background response that is still queued or running: its `response_id` and `status` in
+/// `provider_metadata["openai"]`, no content, and the turn left open for polling.
+pub(super) fn from_pending_projection(response: &Projection) -> LlmResponse {
+    LlmResponse {
+        provider_metadata: projection_metadata(response),
+        partial: false,
+        turn_complete: false,
+        ..Default::default()
+    }
+}
+
 pub(super) fn from_projection(response: &Projection) -> LlmResponse {
     let terminal_error = super::responses_client::wire::validate(response).err();
     let content = if terminal_error.is_none() { output_parts(&response.output) } else { None };

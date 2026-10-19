@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(DEFAULT_POLL_INTERVAL_SECS);
 
     // Create the Responses API client
-    let config = OpenAIResponsesConfig::new(&api_key, "gpt-4.1-nano");
+    let config = OpenAIResponsesConfig::new(&api_key, "gpt-5.6-terra");
     let client = OpenAIResponsesClient::new(config)?;
 
     // Build a request with background: true via extensions
@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let request = LlmRequest {
-        model: "gpt-4.1-nano".to_string(),
+        model: "gpt-5.6-terra".to_string(),
         contents: vec![Content::new("user").with_text(
             "Write a short paragraph about the benefits of asynchronous programming.",
         )],

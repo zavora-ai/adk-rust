@@ -619,7 +619,40 @@ cargo run --manifest-path examples/gemini_ws_outcomes/Cargo.toml
 
 A request with `"background": true` in its `openai` extension is submitted with
 `background: true`; a model whose ID contains `deep-research` (`o3-deep-research`,
-`o4-mini-deep-research`) always is. The client polls and cancels a background response by ID:
+`o4-mini-deep-research`) always is. A non-streaming background submission returns as soon as
+the API accepts it: the response carries `response_id` and `status` (`queued` or
+`in_progress`) in `provider_metadata["openai"]`, no content, and `turn_complete: false`. A
+submission the API has already finished is converted like any other response. A foreground
+request, and any streamed request, still fails with `model.openai_responses.invalid_terminal`
+or `model.openai_responses.unfinished_stream` when it ends without a terminal status.
+
+```rust
+use adk_core::{Content, GenerateContentConfig, Llm, LlmRequest};
+use adk_model::openai::OpenAIResponsesClient;
+use futures::StreamExt;
+
+async fn submit(client: &OpenAIResponsesClient, text: &str) -> anyhow::Result<String> {
+    let mut config = GenerateContentConfig::default();
+    config.extensions.insert("openai".into(), serde_json::json!({ "background": true }));
+    let mut request = LlmRequest::new(client.name(), vec![Content::new("user").with_text(text)]);
+    request.config = Some(config);
+
+    let submitted = client
+        .generate_content(request, false)
+        .await?
+        .next()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no response"))??;
+    submitted
+        .provider_metadata
+        .as_ref()
+        .and_then(|metadata| metadata["openai"]["response_id"].as_str())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("no response id"))
+}
+```
+
+The client polls and cancels a background response by ID:
 
 ```rust
 use adk_model::openai::OpenAIResponsesClient;

@@ -1042,6 +1042,7 @@ impl Llm for OpenAIResponsesClient {
             // Non-streaming path
             let client = self.client.clone();
             let retry_config = self.retry_config.clone();
+            let background = create_request.background == Some(true);
 
             let response_stream = try_stream! {
                 let response = execute_with_retry(
@@ -1062,11 +1063,17 @@ impl Llm for OpenAIResponsesClient {
                 )
                 .await?;
 
-                let projected = wire::response(response.clone(), &response, parse::Layer::ResponseBody)?;
-                let mut adk_response = responses_convert::from_projection(&projected);
-                adk_response.turn_complete = true;
-                adk_response.partial = false;
-                yield adk_response;
+                // Only a background submission may come back before the generation finishes.
+                let projected = if background {
+                    wire::background_response(response.clone(), &response, parse::Layer::ResponseBody)?
+                } else {
+                    wire::response(response.clone(), &response, parse::Layer::ResponseBody)?
+                };
+                if wire::is_pending(&projected.status) {
+                    yield responses_convert::from_pending_projection(&projected);
+                } else {
+                    yield responses_convert::from_projection(&projected);
+                }
             };
 
             Ok(crate::usage_tracking::with_priced_usage_tracking(

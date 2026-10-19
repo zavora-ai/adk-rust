@@ -168,6 +168,36 @@ pub(in crate::openai) fn response(
     Ok(projected)
 }
 
+/// Projects the body of a `background: true` submission, which the API answers before the
+/// generation finishes.
+///
+/// A `queued` or `in_progress` body is returned unvalidated, apart from its identity, so the
+/// caller can poll it with [`super::OpenAIResponsesClient::poll_response`]; any other status
+/// is validated as a terminal response by [`response`].
+pub(in crate::openai) fn background_response(
+    value: Value,
+    body: &Value,
+    layer: parse::Layer,
+) -> Result<Response, AdkError> {
+    let header: Header = decode(value.clone(), body, layer)?;
+    if !is_pending(&header.status) {
+        return response(value, body, layer);
+    }
+    let projected: Response = decode(value, body, layer)?;
+    if projected.id.is_empty() {
+        return Err(invalid("invalid_identity", "OpenAI Responses identity is empty"));
+    }
+    Ok(projected)
+}
+
+/// Whether `status` means a background generation has not finished yet.
+pub(in crate::openai) fn is_pending(status: &Status) -> bool {
+    match status {
+        Status::Queued | Status::InProgress => true,
+        Status::Completed | Status::Failed | Status::Cancelled | Status::Incomplete => false,
+    }
+}
+
 pub(in crate::openai) fn finalized_call(item: &OutputItem) -> Option<&str> {
     match item {
         OutputItem::FunctionCall(call)

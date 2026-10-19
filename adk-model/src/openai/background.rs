@@ -4,6 +4,11 @@
 //! with `background: true`. Deep research models (`o3-deep-research`,
 //! `o4-mini-deep-research`) automatically enable background mode since they
 //! require asynchronous execution.
+//!
+//! A non-streaming background submission returns while the response is still
+//! `queued` or `in_progress`: the yielded `LlmResponse` carries `response_id` and
+//! `status` in `provider_metadata["openai"]` and no content. Pass the ID to
+//! [`OpenAIResponsesClient::poll_response`] until the status is terminal.
 
 use super::responses_client::{OpenAIResponsesClient, map_openai_error};
 use super::responses_convert;
