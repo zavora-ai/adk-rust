@@ -252,8 +252,8 @@ fn governed(config: ServerConfig) -> axum::Router {
 |----------|--------|-------------|
 | `/.well-known/agent-card.json` | GET | Agent card (public) |
 | `/.well-known/agent.json` | GET | Agent card at the earlier path (public) |
-| `/a2a` | POST | JSON-RPC: `message/send`, `message/stream`, `tasks/get`, `tasks/cancel` (authenticated) |
-| `/a2a/stream` | POST | JSON-RPC streaming (authenticated) |
+| `/a2a` | POST | JSON-RPC: `message/send`, `tasks/get`, `tasks/cancel` (authenticated) |
+| `/a2a/stream` | POST | JSON-RPC streaming: `message/stream`, `message/send` (authenticated) |
 
 With an auth bridge, A2A routes use the authenticated identity as the session user and the owner of every task they create, so `tasks/get` and `tasks/cancel` cannot reach another caller's task. Model thinking is never sent to a peer.
 
