@@ -226,7 +226,7 @@ fn build_model(provider: Provider) -> anyhow::Result<(BoxedModel, &'static str)>
             // Half-cascade live model calls tools reliably and accepts video
             // frames; affective dialogue needs a native-audio model instead.
             let default_model = if affective_dialog() {
-                "models/gemini-2.5-flash-native-audio-preview-12-2025"
+                "models/gemini-2.5-flash-native-audio-latest"
             } else {
                 "models/gemini-3.1-flash-live-preview"
             };

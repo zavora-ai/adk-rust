@@ -356,7 +356,7 @@ fn build_model(provider: Provider) -> anyhow::Result<(BoxedModel, &'static str)>
             // 404s here). We default to the half-cascade live model, which calls
             // tools far more reliably than the native-audio model — important for
             // this tool-using agent. For the most natural voice (but weaker tool
-            // use), set GEMINI_REALTIME_MODEL=models/gemini-2.5-flash-native-audio-preview-12-2025.
+            // use), set GEMINI_REALTIME_MODEL=models/gemini-2.5-flash-native-audio-latest.
             let model_id = std::env::var("GEMINI_REALTIME_MODEL")
                 .unwrap_or_else(|_| "models/gemini-3.1-flash-live-preview".to_string());
             let model: BoxedModel =

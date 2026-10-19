@@ -103,7 +103,7 @@ configures its capture/playback contexts accordingly.
 | `OPENAI_API_KEY` | For OpenAI | OpenAI API key |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | For Gemini | Google AI Studio key |
 | `OPENAI_REALTIME_MODEL` | No | OpenAI model ID (default: `gpt-realtime`; `gpt-realtime-2` for the reasoning model) |
-| `GEMINI_REALTIME_MODEL` | No | Gemini model ID (default: `models/gemini-3.1-flash-live-preview`, which calls tools reliably; `models/gemini-2.5-flash-native-audio-preview-12-2025` for the most natural voice) |
+| `GEMINI_REALTIME_MODEL` | No | Gemini model ID (default: `models/gemini-3.1-flash-live-preview`, which calls tools reliably; `models/gemini-2.5-flash-native-audio-latest` for the most natural voice) |
 | `MIA_MEMORY_DB` | No | Knowledge-graph SQLite path (default: `mia_memory.db`) |
 | `PORT` | No | Server port (default: `3033`) |
 | `RUST_LOG` | No | Log level (default: `info`) |
