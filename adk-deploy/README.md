@@ -86,6 +86,7 @@ required = true
 
 [env]
 LOG_LEVEL = "info"
+OPENAI_API_KEY = { secretRef = "OPENAI_API_KEY" }
 
 [telemetry]
 otlpEndpoint = "https://otel.example.com:4317"

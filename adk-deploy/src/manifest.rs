@@ -387,11 +387,27 @@ pub struct SecretRef {
     pub required: bool,
 }
 
+/// An `[env]` entry: a literal value, or a reference to a declared secret.
+///
+/// A reference is written `{ secretRef = "KEY" }`, in the camelCase of the rest of the
+/// manifest; `{ secret_ref = "KEY" }` is accepted for manifests written before.
+///
+/// # Example
+///
+/// ```
+/// use adk_deploy::EnvVarSpec;
+///
+/// let spec: EnvVarSpec = serde_json::from_str(r#"{ "secretRef": "OPENAI_API_KEY" }"#).unwrap();
+/// assert_eq!(spec, EnvVarSpec::SecretRef { secret_ref: "OPENAI_API_KEY".to_string() });
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum EnvVarSpec {
     Plain(String),
-    SecretRef { secret_ref: String },
+    SecretRef {
+        #[serde(rename = "secretRef", alias = "secret_ref")]
+        secret_ref: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -778,6 +794,31 @@ mod tests {
         InteractionConfig, ManualInteractionConfig, RealtimeConfig, ServiceBinding, ServiceKind,
         TriggerInteractionConfig, TriggerKind,
     };
+
+    #[test]
+    fn env_secret_refs_parse_in_camel_case_and_snake_case() {
+        let env: std::collections::BTreeMap<String, EnvVarSpec> = toml::from_str(
+            r#"
+            CAMEL = { secretRef = "OPENAI_API_KEY" }
+            SNAKE = { secret_ref = "OPENAI_API_KEY" }
+            PLAIN = "info"
+            "#,
+        )
+        .unwrap();
+        let secret = EnvVarSpec::SecretRef { secret_ref: "OPENAI_API_KEY".to_string() };
+        assert_eq!(
+            env.into_iter().collect::<Vec<_>>(),
+            vec![
+                ("CAMEL".to_string(), secret.clone()),
+                ("PLAIN".to_string(), EnvVarSpec::Plain("info".to_string())),
+                ("SNAKE".to_string(), secret.clone()),
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(&secret).unwrap(),
+            serde_json::json!({ "secretRef": "OPENAI_API_KEY" })
+        );
+    }
 
     #[test]
     fn rejects_undeclared_secret_refs_in_env() {
