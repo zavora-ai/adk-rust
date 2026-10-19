@@ -6,11 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Managed agent runtime for ADK-Rust — durable, resumable, provider-neutral agent execution"
-repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
+repository.workspace = true
 documentation = "https://docs.rs/adk-managed"
 readme = "README.md"
 keywords = ["ai", "agents", "managed", "runtime", "durable"]
-categories = ["science", "asynchronous"]
+categories = ["asynchronous", "development-tools"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 adk-core.workspace = true

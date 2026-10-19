@@ -50,7 +50,7 @@ pub type ResolverResult<T> = std::result::Result<T, ResolverError>;
 /// use adk_managed::types::ModelRef;
 ///
 /// let resolver = DefaultModelResolver::new();
-/// let model_ref = ModelRef::Shorthand("gemini-2.5-flash".to_string());
+/// let model_ref = ModelRef::Shorthand("gemini-3.7-flash".to_string());
 /// let llm = resolver.resolve(&model_ref).await?;
 /// ```
 #[async_trait]

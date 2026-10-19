@@ -10,7 +10,7 @@ checkpointing, event replay, durable runs, and a supervised session loop.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-managed.svg)](https://crates.io/crates/adk-managed)
 [![Documentation](https://docs.rs/adk-managed/badge.svg)](https://docs.rs/adk-managed)
-[![License](https://img.shields.io/crates/l/adk-managed.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-managed.svg)](../LICENSE)
 
 ## Overview
 
@@ -33,7 +33,7 @@ This is the execution engine inside a managed agent service. It is a **library**
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│                Platform Layer (ep-* crates)                  │
+│              Platform layer (the hosting service)            │
 │    HTTP Routes │ Auth │ Billing │ Multi-tenancy              │
 └──────────────────────────┬──────────────────────────────────┘
                            │ Rust trait calls (in-process)
@@ -79,13 +79,14 @@ adk-rust = { version = "3.0.0", features = ["managed-runtime"] }
 
 ### Minimal Example
 
-```rust,ignore
+```rust
 use std::sync::Arc;
+
 use adk_managed::{
     DefaultManagedAgentRuntime, ManagedAgentRuntime, ManagedOwner, ModelResolver,
     ScriptedLlm, ScriptedTurn,
     resolver::ResolverResult,
-    types::{ContentBlock, ManagedAgentDef, ModelRef, UserEvent},
+    types::{ContentBlock, ManagedAgentDef, ModelRef, SessionEvent, UserEvent},
 };
 use adk_session::InMemorySessionService;
 use async_trait::async_trait;
@@ -132,6 +133,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 6. Collect events: status.running → agent.message → status.idle
     while let Some(event) = stream.next().await {
         println!("{event:?}");
+        if matches!(event, SessionEvent::StatusIdle { .. }) {
+            break;
+        }
     }
     Ok(())
 }
@@ -160,11 +164,16 @@ The central async trait defining the full agent lifecycle:
 
 Declarative agent definition with a builder API:
 
-```rust,ignore
-let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.7-flash".into()))
-    .with_system("You are a helpful assistant.")
-    .with_description("Research agent with web search")
-    .with_tools(vec![ToolConfig::WebSearch {}]);
+```rust
+use adk_managed::types::{ManagedAgentDef, ModelRef, ToolConfig};
+
+fn main() {
+    let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.7-flash".into()))
+        .with_system("You are a helpful assistant.")
+        .with_description("Research agent with web search")
+        .with_tools(vec![ToolConfig::WebSearch {}]);
+    assert_eq!(def.name, "my-agent");
+}
 ```
 
 ### SessionEvent (Agent → Client)
@@ -196,23 +205,36 @@ Provider-neutral event stream with monotonic `seq`:
 
 Provider-neutral model reference:
 
-```rust,ignore
-// Shorthand (provider inferred from name prefix)
-ModelRef::Shorthand("gemini-3.7-flash".into()) // → Gemini
-ModelRef::Shorthand("gpt-5.6-terra".into())    // → OpenAI
-ModelRef::Shorthand("claude-sonnet-5".into())  // → Anthropic
+```rust
+use adk_managed::types::{ModelConfig, ModelRef, Provider};
 
-// Structured (explicit provider)
-ModelRef::Structured {
-    provider: Provider::OpenaiCompatible,
-    model: ModelConfig::Compatible {
-        model: "deepseek-v4-flash".into(),
-        base_url: "https://api.deepseek.com/v1".into(),
-        api_key: "sk-...".into(),
-    },
-    speed: None,
+fn main() {
+    // Shorthand: the provider is inferred from the name prefix
+    let _gemini = ModelRef::Shorthand("gemini-3.7-flash".into()); // → Gemini
+    let _openai = ModelRef::Shorthand("gpt-5.6-terra".into()); // → OpenAI
+    let _anthropic = ModelRef::Shorthand("claude-sonnet-4-6".into()); // → Anthropic
+
+    // Structured: an explicit provider
+    let _compatible = ModelRef::Structured {
+        provider: Provider::OpenaiCompatible,
+        model: ModelConfig::Compatible {
+            model: "deepseek-v4-flash".into(),
+            base_url: "https://api.deepseek.com/v1".into(),
+            api_key: "sk-...".into(),
+        },
+        speed: None,
+    };
 }
 ```
+
+| Shorthand prefix | Provider |
+|------------------|----------|
+| `gemini` | Gemini |
+| `gpt` | OpenAI |
+| `claude` | Anthropic |
+| `llama`, `mistral`, `deepseek` | Ollama |
+
+Any other shorthand fails with `ResolverError::UnknownProvider`; use the structured form.
 
 ### SessionStatus
 
@@ -239,15 +261,35 @@ Queued → Running → Idle (per turn) → Running (next turn)
 backend) are the durable state stores; the run and approval stores ship for SQLite,
 PostgreSQL, Redis, MongoDB, Neo4j, and Firestore in `adk-session`.
 
-```rust,ignore
-let runtime = DefaultManagedAgentRuntime::new(resolver, sessions.clone())
-    .with_stores(ManagedStores::new(
-        Arc::new(SessionServiceStateStore::new(sessions, Durability::CrashDurable)),
-        run_store,
-        approval_store,
-    ))
-    .with_durable_config(DurableConfig::default().with_pending_expiry(Some(Duration::from_secs(600))));
-runtime.recover().await?; // host stored sessions that have a run in progress
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_core::{ApprovalStore, DurableRunStore};
+use adk_managed::{
+    DefaultManagedAgentRuntime, DurableConfig, Durability, ManagedStores, ModelResolver,
+    SessionServiceStateStore,
+};
+use adk_session::SessionService;
+
+async fn durable_runtime(
+    resolver: Arc<dyn ModelResolver>,
+    sessions: Arc<dyn SessionService>,
+    run_store: Arc<dyn DurableRunStore>,
+    approval_store: Arc<dyn ApprovalStore>,
+) -> Result<DefaultManagedAgentRuntime, Box<dyn std::error::Error>> {
+    let runtime = DefaultManagedAgentRuntime::new(resolver, sessions.clone())
+        .with_stores(ManagedStores::new(
+            Arc::new(SessionServiceStateStore::new(sessions, Durability::CrashDurable)),
+            run_store,
+            approval_store,
+        ))
+        .with_durable_config(
+            DurableConfig::default().with_pending_expiry(Some(Duration::from_secs(600))),
+        );
+    runtime.recover().await?; // host stored sessions that have a run in progress
+    Ok(runtime)
+}
 ```
 
 When the model calls a custom tool, the turn emits `agent.custom_tool_use` and ends with
@@ -260,9 +302,17 @@ in place of the call's pending response. Confirmations work the same way through
 
 ### Event Replay (SSE Reconnection)
 
-```rust,ignore
-// Reconnect from seq 42 — replays events 43, 44, ... then live tail
-let stream = runtime.stream_events(&session, Some(42)).await?;
+```rust
+use adk_managed::{DefaultManagedAgentRuntime, ManagedAgentRuntime, SessionHandle};
+
+async fn reconnect(
+    runtime: &DefaultManagedAgentRuntime,
+    session: &SessionHandle,
+) -> Result<(), adk_managed::types::RuntimeError> {
+    // Reconnect from seq 42 — replays events 43, 44, ... then the live tail
+    let _stream = runtime.stream_events(session, Some(42)).await?;
+    Ok(())
+}
 ```
 
 ### Provider Parity
@@ -273,11 +323,12 @@ An identical `ManagedAgentDef` run against all five providers produces byte-iden
 
 `ScriptedLlm` is a deterministic LLM test double that exercises the full runtime pipeline. Only the provider API call is replaced. It is `adk_model::ScriptedLlm`, re-exported: each model call gets the next scripted turn, `requests()` returns what the runtime sent on every call, and a call past the last turn fails with `model.scripted.exhausted`:
 
-```rust,ignore
-use adk_managed::testing::{ScriptedLlm, ScriptedTurn, ScriptedToolCall};
+```rust
+use adk_managed::testing::{ScriptedLlm, ScriptedToolCall, ScriptedTurn};
 use serde_json::json;
 
-let llm = ScriptedLlm::new("test", vec![
+fn main() {
+let _llm = ScriptedLlm::new("test", vec![
     ScriptedTurn {
         text: Some("I'll search for that.".into()),
         tool_calls: vec![ScriptedToolCall {
@@ -291,6 +342,7 @@ let llm = ScriptedLlm::new("test", vec![
         tool_calls: vec![],
     },
 ]);
+}
 ```
 
 This is NOT a mock — it implements the real `Llm` trait and exercises the full runtime (durable runs, checkpoints, replay, event mapping). Per-commit gate, $0 cost.
@@ -318,7 +370,7 @@ cargo test -p adk-managed --test fixture_conformance_tests
 
 ## Module Structure
 
-```
+```text
 adk-managed/src/
 ├── lib.rs                  # Feature gate, exports
 ├── runtime.rs              # ManagedAgentRuntime trait
@@ -366,6 +418,18 @@ cargo run --manifest-path examples/managed_runtime_hello/Cargo.toml
 
 Runs fixture F-1 end-to-end with `ScriptedLlm` (no API key required). Platform teams can clone this to smoke-test integration.
 
+## Changes in 3.0
+
+| Change | Migration |
+|--------|-----------|
+| Every turn runs under a `DurableRunStore` run; custom tool calls and confirmations end the turn with `requires_action` and park the run | Answer with `user.custom_tool_result` or `user.tool_confirmation` |
+| `ToolParkingLot` and the `parking` module are removed; `SessionLoop::new` no longer takes a parking lot | — |
+| `ManagedSessionState` gains `record`, `pending`, and `durable_run_id` | Build it with `ManagedSessionState::new` |
+| `ScriptedLlm` is `adk_model::ScriptedLlm`; a call past the last turn fails with `model.scripted.exhausted`; `requests()` and `remaining()` replace `turns_consumed()` and `total_turns()` | — |
+| `ManagedStores`, `DurableConfig`, `SessionServiceStateStore`, and provider features for `DefaultModelResolver` are new | — |
+
+See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
+
 ## Stability
 
 > **EXPERIMENTAL** — This crate is additive and feature-gated behind `managed-runtime` on the umbrella crate. It does not affect existing `Runner`/`LlmAgent` APIs when disabled. The API surface may change in future releases.
@@ -376,4 +440,4 @@ Apache-2.0
 
 ## Part of ADK-Rust
 
-This crate is part of the [ADK-Rust](https://github.com/zavora-ai/adk-rust) framework for building AI agents in Rust.
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Provider-neutral model reference.
 ///
 /// Supports two forms:
-/// - **Shorthand**: a plain string like `"gemini-2.5-flash"` or `"gpt-4.1"`
+/// - **Shorthand**: a plain string like `"gemini-3.7-flash"` or `"gpt-5.6-terra"`
 /// - **Structured**: an explicit provider + model config + optional speed hint
 ///
 /// # Examples
@@ -17,20 +17,20 @@ use serde::{Deserialize, Serialize};
 /// use adk_managed::types::ModelRef;
 ///
 /// // Shorthand form
-/// let json = serde_json::json!("gemini-2.5-flash");
+/// let json = serde_json::json!("gemini-3.7-flash");
 /// let model_ref: ModelRef = serde_json::from_value(json).unwrap();
 ///
 /// // Structured form
 /// let json = serde_json::json!({
 ///     "provider": "openai",
-///     "model": "gpt-4.1"
+///     "model": "gpt-5.6-terra"
 /// });
 /// let model_ref: ModelRef = serde_json::from_value(json).unwrap();
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ModelRef {
-    /// A plain model name string (e.g. `"gemini-2.5-flash"`).
+    /// A plain model name string (e.g. `"gemini-3.7-flash"`).
     Shorthand(String),
     /// A structured model reference with explicit provider.
     Structured {
@@ -70,7 +70,7 @@ pub enum Provider {
 /// use adk_managed::types::ModelConfig;
 ///
 /// // Simple name
-/// let json = serde_json::json!("gpt-4.1");
+/// let json = serde_json::json!("gpt-5.6-terra");
 /// let config: ModelConfig = serde_json::from_value(json).unwrap();
 ///
 /// // Compatible endpoint

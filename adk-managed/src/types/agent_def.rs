@@ -24,7 +24,7 @@ use super::{McpServerConfig, ModelRef, PermissionPolicy, SkillRef, ToolConfig};
 /// // Deserialize from JSON (recommended for external callers)
 /// let json = serde_json::json!({
 ///     "name": "my-assistant",
-///     "model": "gemini-2.5-flash",
+///     "model": "gemini-3.7-flash",
 ///     "system": "You are a helpful assistant."
 /// });
 /// let def: ManagedAgentDef = serde_json::from_value(json).unwrap();
@@ -74,7 +74,7 @@ impl ManagedAgentDef {
     /// ```rust
     /// use adk_managed::types::{ManagedAgentDef, ModelRef};
     ///
-    /// let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-2.5-flash".to_string()))
+    /// let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.7-flash".to_string()))
     ///     .with_system("You are a helpful assistant.");
     /// ```
     pub fn new(name: impl Into<String>, model: ModelRef) -> Self {
