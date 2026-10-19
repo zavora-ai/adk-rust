@@ -4,14 +4,15 @@ As an ADK agent runs, it accumulates context — user messages, tool responses, 
 
 ## How It Works
 
-Context compaction uses a sliding window to periodically summarize older conversation events within a session. When the number of completed invocations reaches the configured interval, the summarizer compresses older events into a single summary event.
+Context compaction periodically summarizes older conversation events within a session. After an invocation completes, the runner counts the session's user messages; each time the count is a multiple of `compaction_interval`, the summarizer compresses every event before the most recent `overlap_size` invocations into one summary event.
 
 ```
-Invocations 1-3: [event1, event2, event3] → Summarized into "Summary A"
-Invocations 4-6: [Summary A, event3, event4, event5, event6] → Summarized into "Summary B"
+compaction_interval 3, overlap_size 1
+After invocation 3: [inv 1, inv 2]                  → Summary A; inv 3 kept as is
+After invocation 6: [Summary A, inv 3, inv 4, inv 5] → Summary B; inv 6 kept as is
 ```
 
-The `overlap_size` parameter controls how many events from the previous window carry over into the next summary, preserving continuity.
+`overlap_size` is the number of most recent invocations left out of the summary, so the model sees them verbatim beside it; the next compaction folds them into its summary. With `overlap_size: 0` the whole history is summarized; with fewer invocations than `overlap_size`, compaction is skipped.
 
 ### What the Summarizer Reads
 
@@ -41,35 +42,30 @@ Add compaction to your runner configuration:
 
 ```rust
 use adk_agent::LlmEventSummarizer;
-use adk_runner::{Runner, RunnerConfig, EventsCompactionConfig};
+use adk_runner::{EventsCompactionConfig, Runner};
 use std::sync::Arc;
 
 // Use any LLM for summarization (a fast, cheap model works well)
-let summarizer_llm = Arc::new(my_model);
 let summarizer = Arc::new(LlmEventSummarizer::new(summarizer_llm));
 
-let runner = Runner::new(RunnerConfig {
-    app_name: "my_app".to_string(),
-    agent: root_agent,
-    session_service: sessions,
-    artifact_service: None,
-    memory_service: None,
-    plugin_manager: None,
-    run_config: None,
-    compaction_config: Some(EventsCompactionConfig {
-        compaction_interval: 3,  // Compact every 3 invocations
-        overlap_size: 1,         // Keep 1 prior invocation for context
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(root_agent)
+    .session_service(sessions)
+    .compaction_config(EventsCompactionConfig {
+        compaction_interval: 3, // Compact every 3 invocations
+        overlap_size: 1,        // Keep the latest invocation out of the summary
         summarizer,
-    }),
-})?;
+    })
+    .build()?;
 ```
 
 ## Configuration Parameters
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `compaction_interval` | `u32` | Number of completed invocations that triggers compaction |
-| `overlap_size` | `u32` | Events from the previous window included in the next summary |
+| `compaction_interval` | `u32` | Compaction runs when the session's user-message count is a multiple of this |
+| `overlap_size` | `u32` | Most recent invocations left out of the summary; `0` summarizes everything |
 | `summarizer` | `Arc<dyn BaseEventsSummarizer>` | The summarization strategy |
 
 ## Custom Summarizer
@@ -77,6 +73,8 @@ let runner = Runner::new(RunnerConfig {
 You can customize the summarization prompt:
 
 ```rust
+use adk_agent::LlmEventSummarizer;
+
 let summarizer = LlmEventSummarizer::new(llm)
     .with_prompt_template(
         "Summarize this conversation focusing on action items \
@@ -104,7 +102,7 @@ impl BaseEventsSummarizer for MySummarizer {
 
 ## How Compaction Affects History
 
-When `conversation_history()` is called on a session with compaction events:
+When `conversation_history()` (`adk_core::Session`) is called on a session with compaction events:
 
 1. The most recent compaction event is found
 2. Its summary replaces all events up to the compaction boundary
@@ -120,12 +118,12 @@ With `compaction_interval: 3` and `overlap_size: 1`:
 |------------|--------|--------|
 | 1 | user→agent | — |
 | 2 | user→agent | — |
-| 3 | user→agent | Compact events 1-3 into Summary A |
+| 3 | user→agent | Compact invocations 1-2 into Summary A |
 | 4 | user→agent | — |
 | 5 | user→agent | — |
-| 6 | user→agent | Compact events 3-6 (overlap=1) into Summary B |
+| 6 | user→agent | Compact Summary A and invocations 3-5 into Summary B |
 
-After invocation 6, the agent sees: `[Summary B, event 6 overlap events, event 7+]`
+After invocation 6, the agent sees: `[Summary B, invocation 6, invocation 7+]`
 
 ## Function Calls and Their Responses
 
@@ -184,6 +182,7 @@ uncompacted; deny it to release them.
 ## Notes
 
 - Compaction failure is non-fatal — the runner logs a warning and continues
-- Compaction runs after the invocation stream completes, not during
+- Compaction runs after the invocation's events have streamed, before the run's stream ends
+- The summarizer's model call is metered against the run's budget and spend ledger (`ModelCallScope`)
 - The compaction event is persisted to the session service for durability
 - Use a fast, inexpensive model for summarization (e.g., `gemini-3.5-flash-lite`)

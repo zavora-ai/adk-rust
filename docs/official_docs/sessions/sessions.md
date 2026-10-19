@@ -47,7 +47,7 @@ The `SessionService` trait defines operations for managing sessions:
 
 ```rust
 use adk_session::{CreateRequest, GetRequest, ListRequest, DeleteRequest, Event, Session};
-use adk_core::Result;
+use adk_core::{AdkIdentity, Result};
 use async_trait::async_trait;
 
 #[async_trait]
@@ -196,6 +196,8 @@ use adk_session::ListRequest;
 let request = ListRequest {
     app_name: "my_app".to_string(),
     user_id: "user_123".to_string(),
+    limit: Some(20), // None returns every session
+    offset: None,    // Sessions to skip, for paging
 };
 ```
 
@@ -572,7 +574,7 @@ async fn main() -> anyhow::Result<()> {
 
 Stores sessions in MongoDB. Supports both standalone and replica-set deployments out of the box.
 
-On startup, `MongoSessionService::new()` auto-detects whether the connected MongoDB instance is part of a replica set by issuing a `hello` command. If a replica set (or sharded cluster) is detected, all multi-document writes use transactions for atomicity. On standalone deployments, operations execute sequentially without transactions — the upsert-based writes are idempotent, so partial failures leave state recoverable.
+On startup, `MongoSessionService::new()` issues a `hello` command and enables transactions when the reply names a replica set (`setName`). Multi-document writes then run in one transaction; otherwise they execute one after another without a transaction.
 
 ```rust
 use adk_session::{MongoSessionService, SessionService, CreateRequest};
@@ -615,13 +617,11 @@ async fn main() -> anyhow::Result<()> {
 
 #### MongoDB deployment modes
 
-| Deployment | Transactions | Behavior |
-|------------|-------------|----------|
-| Standalone | No | Sequential upserts, idempotent writes |
-| Replica Set | Yes | Multi-document ACID transactions |
-| Sharded Cluster | Yes | Multi-document ACID transactions |
-
-The `retryWrites=false` connection string parameter is no longer required for standalone deployments. The service handles this transparently.
+| Deployment | `hello` reply | Transactions | Behavior |
+|------------|---------------|--------------|----------|
+| Standalone | No `setName` | No | Sequential writes |
+| Replica set | `setName` | Yes | Multi-document transactions |
+| Sharded cluster (`mongos`) | No `setName` | No | Sequential writes |
 
 #### MongoDB collections
 
@@ -780,7 +780,7 @@ A new session never inherits events left under its path. App names, user IDs, an
 
 ## Schema Migrations
 
-All database-backed session services (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned, forward-only migration system. Migrations are tracked in a `_schema_migrations` registry table.
+All database-backed session services (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned, forward-only migration system. Applied versions are recorded in the `_adk_session_migrations` table (SQLite, PostgreSQL) or collection (MongoDB), or as `_AdkSessionMigration` nodes (Neo4j).
 
 | Backend | Version 2 |
 |---------|-----------|
@@ -799,7 +799,10 @@ adk-session = { version = "3.0.0", features = ["encrypted-session"] }
 #### Basic Usage
 
 ```rust
-use adk_session::{EncryptedSession, EncryptionKey, InMemorySessionService};
+use adk_session::{
+    CreateRequest, EncryptedSession, EncryptionKey, InMemorySessionService, SessionService,
+};
+use std::collections::HashMap;
 
 // Generate a random 256-bit key
 let key = EncryptionKey::generate();
@@ -812,7 +815,14 @@ let inner = InMemorySessionService::new();
 let service = EncryptedSession::new(inner, key, vec![]);
 
 // Use exactly like any other SessionService — encryption is transparent
-let session = service.create(CreateRequest { /* ... */ }).await?;
+let session = service
+    .create(CreateRequest {
+        app_name: "my_app".to_string(),
+        user_id: "user_123".to_string(),
+        session_id: None,
+        state: HashMap::new(),
+    })
+    .await?;
 ```
 
 Each value is serialized to JSON, encrypted with a random 96-bit nonce, and stored as an `adk-enc:v1:` envelope (base64 of `[nonce || ciphertext]`). Decryption happens transparently on `create`, `get`, and `list`.
@@ -833,6 +843,8 @@ Each value is serialized to JSON, encrypted with a random 96-bit nonce, and stor
 Pass previous keys to support reading data encrypted with older keys:
 
 ```rust
+use adk_session::{EncryptedSession, EncryptionKey};
+
 let new_key = EncryptionKey::generate();
 let old_key = EncryptionKey::from_env("OLD_SESSION_KEY")?;
 
@@ -860,6 +872,8 @@ let service = EncryptedSession::new(InMemorySessionService::new(), key, vec![])
 #### Key Management
 
 ```rust
+use adk_session::EncryptionKey;
+
 // Generate random key
 let key = EncryptionKey::generate();
 
@@ -905,8 +919,8 @@ On PostgreSQL only tables in the connection's current schema (`current_schema()`
 
 - **Forward-only**: Migrations are applied in order and never rolled back
 - **Idempotent**: Running `migrate()` multiple times is safe
-- **Checksummed**: Each migration is tracked with a SHA-256 checksum to detect tampering
-- **Atomic**: PostgreSQL migrations use advisory locks to prevent concurrent execution
+- **Transactional**: Each SQL step runs in its own transaction and is recorded with its version, description, and time
+- **Serialized**: PostgreSQL `migrate()` holds an advisory lock (`PostgresSessionService::ADVISORY_LOCK_KEY`) on one connection for the whole run, so instances starting together do not race
 
 ## Session Lifecycle
 
@@ -970,6 +984,10 @@ let event = Event::new("invocation_123");
 service.append_event(session.id(), event).await?;
 ```
 
+On `InMemorySessionService`, a bare session ID that more than one app or user holds fails
+with `session.ambiguous_id`; `append_event_for_identity` (see
+[Typed Session Identity](#typed-session-identity)) names the session unambiguously.
+
 ### 4. Listing
 
 List all sessions for a user:
@@ -980,6 +998,8 @@ use adk_session::ListRequest;
 let sessions = service.list(ListRequest {
     app_name: "my_app".to_string(),
     user_id: "user_123".to_string(),
+    limit: None,
+    offset: None,
 }).await?;
 
 for session in sessions {
@@ -1008,16 +1028,16 @@ service.delete(DeleteRequest {
 
 Sessions are typically managed by the `Runner` when executing agents. The Runner:
 
-1. Creates or retrieves a session
-2. Passes session context to the agent
+1. Retrieves the session; a run for a session that does not exist fails with `session.not_found`, so create it first (see [Get or Create](#get-or-create))
+2. Screens and saves the user message, then passes the session context to the agent
 3. Appends events as the conversation progresses
 4. Updates session state based on agent actions
 
 ```rust
 use adk_rust::prelude::*;
 use adk_rust::{SessionId, UserId};
-use adk_runner::{Runner, RunnerConfig};
-use adk_session::InMemorySessionService;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -1032,16 +1052,21 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     let session_service = Arc::new(InMemorySessionService::new());
+    session_service
+        .create(CreateRequest {
+            app_name: "my_app".to_string(),
+            user_id: "user_123".to_string(),
+            session_id: Some("session_abc".to_string()),
+            state: HashMap::new(),
+        })
+        .await?;
 
     // Create runner with session service
-    let runner = Runner::new(RunnerConfig {
-        app_name: "my_app".to_string(),
-        agent: Arc::new(agent),
-        session_service,
-        artifact_service: None,
-        memory_service: None,
-        run_config: None,
-    })?;
+    let runner = Runner::builder()
+        .app_name("my_app")
+        .agent(Arc::new(agent))
+        .session_service(session_service)
+        .build()?;
 
     // Run with user and session IDs
     let user_content = Content::new("user").with_text("Hello!");
@@ -1087,7 +1112,7 @@ service.delete_for_identity(&identity).await?;
 
 All session backends (in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex) support the typed identity path. The legacy `append_event(&str, ...)` method remains available for backward compatibility, except on `EncryptedSession`, which binds ciphertext to the full identity and requires `append_event_for_identity()`.
 
-For new code, prefer `append_event_for_identity()` and the other typed identity helpers. The legacy `append_event(&str, ...)` path is retained only for migration and is the first legacy identity API intended for future deprecation once internal callers have fully moved to `AdkIdentity`.
+For new code, prefer `append_event_for_identity()` and the other typed identity helpers.
 
 ### Multi-Tenant Safety
 
@@ -1143,7 +1168,7 @@ pub trait Events: Send + Sync {
     /// Get event at index
     fn at(&self, index: usize) -> Option<&Event>;
     
-    /// Check if empty
+    /// Check if empty (default: `len() == 0`)
     fn is_empty(&self) -> bool;
 }
 ```
@@ -1216,6 +1241,8 @@ async fn main() -> anyhow::Result<()> {
     let sessions = service.list(ListRequest {
         app_name: "demo".to_string(),
         user_id: "alice".to_string(),
+        limit: None,
+        offset: None,
     }).await?;
     
     println!("Total sessions: {}", sessions.len());

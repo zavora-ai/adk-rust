@@ -310,19 +310,28 @@ State values can be injected into agent instructions using `{key}` syntax:
 use adk_rust::prelude::*;
 use std::sync::Arc;
 
+let model = GeminiModel::new(&std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
 let agent = LlmAgentBuilder::new("personalized_assistant")
-    .instruction("You are helping {user:name} with {topic}. Their preferred language is {user:language}.")
+    .instruction("You are helping {user:name} with {topic}. Their preferred language is {user:language?}.")
     .model(Arc::new(model))
     .build()?;
 ```
 
-When the agent runs, `{user:name}`, `{topic}`, and `{user:language}` are replaced with values from session state.
+When the agent runs, `{user:name}`, `{topic}`, and `{user:language?}` are replaced with values from session state.
+
+| Placeholder | When the key is missing |
+|-------------|-------------------------|
+| `{key}`, `{app:key}`, `{user:key}`, `{temp:key}` | The run fails with an error |
+| `{key?}` | Replaced with an empty string |
+| `{artifact.file_name}` | Replaced with the artifact's text; fails when it cannot be loaded |
+
+`${name}`, `\{name}`, `{{name}}`, and braces whose content is not a variable name stay as written.
 
 ## Best Practices
 
 ### 1. Use Appropriate Scopes
 
-```rust
+```text
 // ✅ Good: User preferences in user scope
 "user:theme"
 "user:timezone"
@@ -341,7 +350,7 @@ When the agent runs, `{user:name}`, `{topic}`, and `{user:language}` are replace
 
 ### 2. Use Temporary State for Intermediate Data
 
-```rust
+```text
 // ✅ Good: Intermediate results in temp scope
 "temp:search_results"
 "temp:current_step"
@@ -352,7 +361,7 @@ When the agent runs, `{user:name}`, `{topic}`, and `{user:language}` are replace
 
 ### 3. Keep State Keys Consistent
 
-```rust
+```text
 // ✅ Good: Consistent naming convention
 "user:preferences.theme"
 "user:preferences.language"
