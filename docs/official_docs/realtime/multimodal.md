@@ -1,21 +1,23 @@
 # Multimodal: Video Input
 
-A realtime agent can **see**. Alongside the audio stream, you can push image
-frames from a camera (or screen) to the model, so the user can *show* the agent
-something — a damaged product for a return, an error on a screen, a document —
-instead of describing it.
+Alongside the audio stream, a realtime session takes image frames from a camera or screen,
+so the user can show the agent something — a damaged product for a return, an error on a
+screen, a document — instead of describing it.
 
 ## The API
 
 One method on the runner, mirroring `send_audio`:
 
 ```rust
-runner.send_video_frame("image/jpeg", &base64_jpeg).await?;
+use adk_realtime::integration::IntegratedRealtimeRunner;
+
+async fn send_frame(runner: &IntegratedRealtimeRunner, base64_jpeg: &str) -> adk_realtime::Result<()> {
+    runner.send_video_frame("image/jpeg", base64_jpeg).await
+}
 ```
 
-It's also available on the lower-level `RealtimeRunner` and on `RealtimeSession`
-directly. The default trait implementation is a **no-op**, so providers/models
-that don't accept visual input simply ignore frames.
+It is also available on `RealtimeRunner` and on `RealtimeSession`. The trait's default
+implementation does nothing, so a session that does not accept visual input ignores frames.
 
 ## How each provider handles frames
 
@@ -24,14 +26,11 @@ send frames:
 
 | Provider | Mechanism | Cadence |
 |----------|-----------|---------|
-| **Gemini Live** | Continuous `realtimeInput` media chunks | Stream them — ~1–2 fps is natural |
-| **OpenAI Realtime** | An `input_image` part on a conversation item | Snapshots — throttle to ~1 every few seconds |
+| **Gemini Live** | A `realtimeInput.video` message per frame | A stream of frames, like audio |
+| **OpenAI Realtime** | A conversation item with an `input_image` part per frame | Snapshots |
 
-Gemini is built for **continuous video**: frames flow like audio and the model
-reasons over the moving picture. OpenAI's realtime vision is **image-in-context**:
-each frame becomes a conversation item, so sending many per second floods the
-context and costs more. Send OpenAI a frame when it's useful (e.g. the user said
-"look at this"), not every tick.
+On OpenAI each frame becomes a conversation item that stays in the context, so the examples
+send a frame every 2.5 seconds there and every 0.7 seconds to Gemini.
 
 The example UIs encode this:
 
@@ -59,16 +58,10 @@ setInterval(() => {
 }, intervalMs);
 ```
 
-On the server, forward to the model:
-
-```rust
-ClientMsg::VideoFrame { mime, data } => {
-    let _ = runner.send_video_frame(&mime, &data).await;  // non-fatal on error
-}
-```
-
-Keep frames modest (640×480, JPEG quality ~0.6) — vision doesn't need full
-resolution, and smaller frames mean lower latency and cost.
+On the server, the bridge forwards each `video_frame` message to `send_video_frame` and
+treats a failed send as non-fatal (see [Building web apps](building-web-apps.md#server-the-axum-bridge)).
+The examples send 640×480 JPEG frames at quality 0.6; smaller frames cost less to send and to
+process.
 
 ## Prompting for vision
 
@@ -82,9 +75,8 @@ and use it to help resolve the issue.
 
 ## Try it
 
-The [`customer_service`](examples.md#customer_service) example has a camera panel:
+The [`customer_service`](examples.md#customer_service--aria) example has a camera panel:
 start the camera, hold up an object, and say *"I want to return this — can you
-see it?"*. It works best on Gemini (continuous video); on OpenAI the agent reasons
-over the periodic snapshots.
+see it?"*. On OpenAI the agent sees the periodic snapshots.
 
 Next: [Affective dialogue →](affective-dialogue.md)

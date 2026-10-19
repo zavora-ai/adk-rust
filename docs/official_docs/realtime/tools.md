@@ -1,31 +1,36 @@
 # Tools in Realtime Sessions
 
-The defining feature of a realtime *agent* (vs. a voice bot) is that it can take
-**real actions** mid-conversation: look something up, process a refund, hand off
-to a human — and then speak the result. Tools run **server-side**, so your
-business logic and credentials never touch the client.
+A realtime agent can take actions mid-conversation — look something up, process a refund,
+hand off to a human — and then speak the result. Tools run server-side, so business logic
+and credentials stay off the client.
 
 ## How a tool turn flows
 
 1. The model decides it needs a tool and emits `FunctionCallDone { name, arguments, call_id }`.
-2. `RealtimeRunner` looks up the handler for `name` and runs it.
+2. `RealtimeRunner` looks up the handler for `name`, checks the call against the
+   [governed path](#the-governed-path), and runs it.
 3. The handler's JSON result is sent back to the model as the tool output.
 4. The runner triggers **one** follow-up response; the model speaks the answer,
    grounded in the result.
 
-You never call `create_response()` for this — the runner handles the round-trip
-when `auto_respond_tools` is on (the default).
+The runner handles the round-trip when `auto_respond_tools` is on (the default), so no
+`create_response()` call is needed.
 
 ## Native tools: `ToolDefinition` + `FnToolHandler`
 
-The lightweight path. A `ToolDefinition` is the JSON schema the model sees; an
-`FnToolHandler` is a synchronous closure that runs when it's called.
+A `ToolDefinition` is the JSON schema the model sees; an `FnToolHandler` wraps a synchronous
+closure that runs when it is called. A handler that awaits implements the async
+`ToolHandler` trait instead.
 
 ```rust
-use adk_realtime::config::ToolDefinition;
+use adk_realtime::config::{RealtimeConfig, ToolDefinition};
 use adk_realtime::events::ToolCall;
+use adk_realtime::integration::IntegratedRealtimeRunner;
+use adk_realtime::model::BoxedModel;
 use adk_realtime::runner::FnToolHandler;
+use adk_session::SessionService;
 use serde_json::json;
+use std::sync::Arc;
 
 fn process_refund_def() -> ToolDefinition {
     ToolDefinition {
@@ -51,75 +56,93 @@ fn process_refund_tool()
                    "message": format!("Refund approved for {order}.") }))
     })
 }
+
+// Register it on the builder with `.tool(definition, handler)`.
+fn build(
+    model: BoxedModel,
+    config: RealtimeConfig,
+    sessions: Arc<dyn SessionService>,
+    session_id: &str,
+) -> adk_realtime::Result<IntegratedRealtimeRunner> {
+    IntegratedRealtimeRunner::builder()
+        .model(model)
+        .config(config)
+        .identity("support", "customer", session_id)
+        .session_service(sessions)
+        .tool(process_refund_def(), process_refund_tool())
+        .build()
+}
 ```
 
-Register it on the builder with `.tool(definition, handler)`:
+The handler's `serde_json::Value` is what the model sees, so include a human-readable
+`message` the agent can paraphrase. Two tools registered under one name fail `build` with a
+configuration error.
 
-```rust
-let runner = IntegratedRealtimeRunner::builder()
-    .model(model)
-    .config(config)
-    .identity("support", "customer", &session_id)
-    .session_service(sessions)
-    .tool(process_refund_def(), process_refund_tool())
-    .tool(connect_to_human_def(), connect_to_human_tool())
-    .build()?;
-```
-
-The handler returns a `serde_json::Value`; whatever you return is what the model
-sees, so include a human-readable `message` the agent can paraphrase.
-
-> Handlers run **server-side and synchronously** within the event loop. Keep them
-> quick; for slow work, return a "started" status and follow up out of band.
+> Handlers share the runner's task: a handler that blocks the thread stalls the session
+> (see [Tool concurrency](#tool-concurrency)).
 
 ## Bridged tools: any `adk_core::Tool`
 
-If you already have `adk-core` tools (your own `FunctionTool`s, or `adk-tool`
-built-ins like the knowledge-graph `remember`/`relate`), attach them with
-`.adk_tool(...)` — no rewrite. The integration layer wraps each one in a
-`ToolHandler` and synthesizes a `ToolContext` scoped to the session's
-`(app_name, user_id, session_id)`:
+`adk-core` tools (your own `FunctionTool`s, or `adk-tool` built-ins such as the
+knowledge-graph `remember` and `relate`) attach with `.adk_tool(...)`. The integration layer
+registers each tool's name, description, and parameter schema with the provider and runs it
+with a `RealtimeToolContext` that carries the session's `app_name`, `user_id`, and
+`session_id`, the call ID, and `search_memory` over the runner's memory service. It has no
+artifact service, secrets, or user scopes.
 
 ```rust
-use adk_tool::{RememberTool, RelateTool};
+use adk_memory::GraphMemoryService;
+use adk_realtime::config::RealtimeConfig;
+use adk_realtime::integration::IntegratedRealtimeRunner;
+use adk_realtime::model::BoxedModel;
+use adk_tool::{RelateTool, RememberTool};
+use std::sync::Arc;
 
-let runner = IntegratedRealtimeRunner::builder()
-    .model(model).config(config).identity("app", "user", &sid)
-    .memory_service(kg.clone())
-    .adk_tool(Arc::new(RememberTool::new(kg.clone())))   // adk_core::Tool
-    .adk_tool(Arc::new(RelateTool::new(kg)))
-    .tool(get_weather_def(), get_weather())              // native handler — mix freely
-    .build()?;
+async fn build(
+    model: BoxedModel,
+    config: RealtimeConfig,
+    session_id: &str,
+) -> anyhow::Result<IntegratedRealtimeRunner> {
+    let kg = Arc::new(GraphMemoryService::new("sqlite:memory.db").await?);
+    kg.migrate().await?;
+    Ok(IntegratedRealtimeRunner::builder()
+        .model(model)
+        .config(config)
+        .identity("app", "user", session_id)
+        .memory_service(kg.clone())
+        .adk_tool(Arc::new(RememberTool::new(kg.clone()))) // adk_core::Tool
+        .adk_tool(Arc::new(RelateTool::new(kg)))
+        .build()?)
+}
 ```
 
-This is how the agent curates its own [memory](memory.md). The bridge serves
-**locally-executed, context-independent** tools well; tools that need rich agent
-state are better written as native `FnToolHandler`s.
+This is how the agent curates its own [memory](memory.md). `RememberTool` and `RelateTool`
+need `adk-tool`'s `graph-memory-tools` feature.
 
 ## Parallel tool calls
 
-A model can request several tools in **one** response (e.g. "what's the weather
-and the time in London?"). ADK-Rust handles this correctly: it sends each tool's
-output as it completes, then issues **exactly one** `response.create` once the
-dispatch response finishes.
-
-This matters because the naïve approach — firing a response per tool — hits
-OpenAI's *"conversation already has an active response in progress"* error and
-stalls the session. The runner avoids it by separating "send tool output"
-(`send_tool_output`) from "trigger the response" (`respond_after_tools`, called
-once on the dispatch `ResponseDone`). You get this for free; just be aware when
-**reading** events that a tool turn spans two responses
-(see [Architecture](architecture.md#tool-turns-span-two-responses)).
+A model can request several tools in one response (for example, "what's the weather and
+the time in London?"). The runner sends each tool's output as it completes, then issues one
+`response.create` once the dispatch response has finished. A response per tool would fail
+on OpenAI with "conversation already has an active response in progress", so sending tool
+output (`send_tool_output`) and triggering the response (`respond_after_tools`) are separate
+steps. When reading events, a tool turn spans two responses (see
+[Architecture](architecture.md#tool-turns-span-two-responses)).
 
 ## Reading tool events in a UI
 
-To surface tool activity (e.g. a "Processing refund…" chip), watch for
+To surface tool activity (for example a "Processing refund…" chip), watch for
 `FunctionCallDone`:
 
 ```rust
-ServerEvent::FunctionCallDone { name, arguments, .. } => {
-    // `arguments` is a JSON string of the call args
-    ui_show_tool_activity(&name, &arguments);
+use adk_realtime::events::ServerEvent;
+
+fn tool_activity(event: &ServerEvent) -> Option<String> {
+    match event {
+        // `arguments` is the call's arguments as a JSON string.
+        ServerEvent::FunctionCallDone { name, arguments, .. } => Some(format!("{name}({arguments})")),
+        _ => None,
+    }
 }
 ```
 
@@ -128,12 +151,9 @@ result is folded into the follow-up response.
 
 ## See it work
 
-The [`customer_service`](examples.md#customer_service) example wires
+The [`customer_service`](examples.md#customer_service--aria) example wires
 `process_refund` and `connect_to_human`; the [`realtime_tools`](examples.md#realtime_tools)
-example is a headless probe that exercises single-tool, parallel-tool, and
-calculator turns on both providers.
-
-Next: [Multimodal →](multimodal.md)
+example is a headless OpenAI probe with weather, calculator, and time tools.
 
 ## Which tools are governed
 
@@ -144,10 +164,8 @@ Next: [Multimodal →](multimodal.md)
 | `adk_tool(...)` — an ADK `Tool` | The integration policy pipeline | Configured plugins, then the governed path on the rewritten arguments, transcript recording, tool-event persistence |
 | A native realtime handler | `RealtimeRunner` dispatch | The governed path, when `tool_governance` is set |
 
-An ADK tool previously reached the provider through a `ToolBridgeAdapter`, which creates a
-context and calls `Tool::execute` with no plugins, callbacks, or confirmation. A tool governed
-in the standard agent loop therefore ran ungoverned in realtime. The native-handler bypass is
-now the explicit exception rather than the default for everything.
+`ToolBridgeAdapter` remains available for wrapping an ADK `Tool` as a native handler; a tool
+wrapped that way is dispatched like any native handler.
 
 ### Plugin failures fail closed
 
@@ -157,9 +175,8 @@ If the `before_tool_call` pipeline returns an error, the tool is **refused**:
 { "error": "tool guarded was refused: its before-tool plugin pipeline failed with tool.internal (tool.legacy). Execution is refused rather than proceeding without policy." }
 ```
 
-> **Important:** this path previously logged the plugin error as non-fatal and then executed
-> the tool. Authorization, redaction, and policy live in before-tool plugins, so a broken guard
-> became no guard.
+Authorization, redaction, and policy live in before-tool plugins, so a broken guard refuses
+the call instead of letting it run unguarded.
 
 If the `after_tool_call` pipeline returns an error, the tool has already run, but its result
 is **withheld**, since result redaction and screening live in after-tool plugins. The model
@@ -191,19 +208,22 @@ call's final arguments.
 ```rust
 use adk_core::{ApprovalScope, DeclarativePolicy, RunConfig};
 use adk_realtime::RealtimeRunner;
+use adk_realtime::model::BoxedModel;
 use std::sync::Arc;
 use std::time::Duration;
 
-let runner = RealtimeRunner::builder()
-    .model(model)
-    .tool_governance(
-        RunConfig::builder()
-            .tool_policy(Arc::new(DeclarativePolicy::builder().allow("get_weather").build()))
-            .build(),
-        ApprovalScope::new("voice", "user-1", "call-42"),
-    )
-    .tool_timeout(Duration::from_secs(30))
-    .build()?;
+fn build(model: BoxedModel) -> adk_realtime::Result<RealtimeRunner> {
+    RealtimeRunner::builder()
+        .model(model)
+        .tool_governance(
+            RunConfig::builder()
+                .tool_policy(Arc::new(DeclarativePolicy::builder().allow("get_weather").build()))
+                .build(),
+            ApprovalScope::new("voice", "user-1", "call-42"),
+        )
+        .tool_timeout(Duration::from_secs(30))
+        .build()
+}
 ```
 
 | Situation | What the provider receives |
@@ -244,17 +264,21 @@ runtime fails closed. `adk-guardrail`'s `ToolGuardrailSet` is a screen, so the t
 guardrails `LlmAgent` runs through `tool_guardrails` apply here unchanged:
 
 ```rust
+use adk_core::Tool;
 use adk_guardrail::{PiiRedactor, ResultTextGuardrail, ToolGuardrailSet};
 use adk_realtime::RealtimeAgent;
+use adk_realtime::model::BoxedModel;
 use std::sync::Arc;
 
-let agent = RealtimeAgent::builder("voice")
-    .model(model)
-    .tool(lookup_order)
-    .tool_result_screen(Arc::new(
-        ToolGuardrailSet::new().with(ResultTextGuardrail::new(PiiRedactor::new())),
-    ))
-    .build()?;
+fn build(model: BoxedModel, lookup_order: Arc<dyn Tool>) -> adk_core::Result<RealtimeAgent> {
+    RealtimeAgent::builder("voice")
+        .model(model)
+        .tool(lookup_order)
+        .tool_result_screen(Arc::new(
+            ToolGuardrailSet::new().with(ResultTextGuardrail::new(PiiRedactor::new())),
+        ))
+        .build()
+}
 ```
 
 A hand-written screen implements `ToolResultScreen::screen_result(tool_name, args, result)`,
@@ -284,10 +308,6 @@ A callback's `Content` is converted to the JSON result the provider expects: a
 `FunctionResponse` part contributes its payload, anything else contributes its text under a
 `result` key.
 
-> **Important:** before this contract was honoured, a before-callback's decision was computed
-> and discarded, so the tool ran regardless — a gate that reported a denial without enforcing
-> one. After-callback results, including errors, were dropped.
-
 ## Realtime tool context
 
 A tool invoked from `RealtimeAgent` sees the same capabilities it sees under a `Runner`:
@@ -300,10 +320,9 @@ A tool invoked from `RealtimeAgent` sees the same capabilities it sees under a `
 | `search_memory(query)` | The parent's memory service |
 | Identity (`app_name`, `user_id`, `session_id`, `branch`) | The parent invocation context |
 
-> **Note:** these previously fell through to the trait defaults — an empty scope list, `None`
-> for secrets, and `None` for shared state — so a scope- or secret-checking tool behaved
-> differently in realtime than under a Runner, and could not tell an unauthenticated caller
-> from a context that simply failed to pass scopes through.
+A tool bridged through `IntegratedRealtimeRunner` runs with a `RealtimeToolContext` instead
+(see [Bridged tools](#bridged-tools-any-adk_coretool)).
+
 ## Tool concurrency
 
 `RunnerConfig::max_concurrent_tools` (default 4) bounds how many tool handlers run at
@@ -311,27 +330,31 @@ once. When a response dispatches several calls, the runner queues each on its ev
 and admits it to execution as a permit frees:
 
 ```rust
-use adk_realtime::{RealtimeRunner, RunnerConfig};
+use adk_realtime::RealtimeRunner;
+use adk_realtime::model::BoxedModel;
+use adk_realtime::runner::RunnerConfig;
 
-let runner = RealtimeRunner::builder()
-    .model(model)
-    .runner_config(RunnerConfig {
-        auto_execute_tools: true,
-        auto_respond_tools: true,
-        max_concurrent_tools: 3,
-    })
-    .build()?;
+fn build(model: BoxedModel) -> adk_realtime::Result<RealtimeRunner> {
+    RealtimeRunner::builder()
+        .model(model)
+        .runner_config(RunnerConfig {
+            auto_execute_tools: true,
+            auto_respond_tools: true,
+            max_concurrent_tools: 3,
+        })
+        .build()
+}
 ```
 
-Two properties follow, and both are covered by tests:
+Two properties follow:
 
 - **Event intake continues during tool execution.** Audio deltas, transcripts, and
-  interruptions are handled while tools run. A handler that waits on something arriving
-  later in the session no longer deadlocks the session.
+  interruptions are handled while tools run, so a handler that waits on something arriving
+  later in the session does not deadlock it.
 - **One follow-up response, after the last output.** When tool output is sent
   automatically, the model is owed a single `create_response`. It is issued once both the
   dispatching response has closed and every dispatched tool has reported — in either
-  order, since a response can now close while tools are still running.
+  order, since a response can close while tools are still running.
 
 > **Important:** the bound governs concurrency, not parallelism. Handlers share the
 > runner's task, so a handler that blocks the thread — synchronous file or network I/O,
@@ -343,7 +366,8 @@ The runner does not reconnect automatically. On transport loss it lets dispatche
 finish, calls `EventHandler::on_disconnect`, and returns from `run`:
 
 ```rust
-use adk_realtime::{EventHandler, Result};
+use adk_realtime::Result;
+use adk_realtime::runner::EventHandler;
 
 struct Reconnecting;
 
@@ -356,7 +380,13 @@ impl EventHandler for Reconnecting {
 }
 ```
 
+Register it with `RealtimeRunner::builder().event_handler(Reconnecting)`. A caller that pulls
+events with `next_event` does not get `on_disconnect`; once `next_event` returns `None`,
+`RealtimeRunner::disconnect_reason()` reports why the provider ended the stream.
+
 Reconnection stays with the caller because it requires deciding what context to replay
 and, on Gemini, whether a stored resumption token is still valid. The `on_disconnect` hook
 exists so transport loss can be told apart from a graceful `close` — `run` returns
 `Ok(())` for both.
+
+Next: [Multimodal →](multimodal.md)

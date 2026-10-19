@@ -3,12 +3,10 @@
 Build agents that **talk, listen, see, and act** in real time — over a live,
 low-latency connection to OpenAI's Realtime API or Google's Gemini Live API.
 
-A realtime agent isn't a request/response chatbot. It holds an open session: the
-user's microphone streams up continuously, the model streams **audio + a live
-transcript** back, it detects when the user starts and stops speaking, it can be
-**interrupted mid-sentence** (barge-in), it can **see** frames from a camera, and
-it can **call your tools** and speak the result — all without ever ending the
-"call."
+A realtime agent holds an open session: the user's microphone streams up continuously,
+the model streams audio and a live transcript back, detects when the user starts and stops
+speaking, can be interrupted mid-sentence (barge-in), can see frames from a camera, and can
+call your tools and speak the result, all within one connection.
 
 > **New to ADK-Rust?** Read the [Introduction](../introduction.md) and
 > [Quickstart](../quickstart.md) first. This section assumes you know what an
@@ -19,8 +17,8 @@ it can **call your tools** and speak the result — all without ever ending the
 | Capability | What it means | Page |
 |------------|---------------|------|
 | **Voice conversations** | Bidirectional PCM16 audio with VAD and barge-in | [Architecture](architecture.md) |
-| **Two providers, one API** | OpenAI Realtime (GA) or Gemini Live, swappable per session | [Providers](providers.md) |
-| **Server-side tools** | The model calls `process_refund(...)`; your Rust runs it and the model speaks the result | [Tools](tools.md) |
+| **Two providers, one API** | OpenAI Realtime or Gemini Live, swappable per session | [Providers](providers.md) |
+| **Server-side tools** | The model calls `process_refund(...)`; your Rust runs it under the run's tool policy and the model speaks the result | [Tools](tools.md) |
 | **Multimodal vision** | Stream camera frames — the agent sees what the user shows it | [Multimodal](multimodal.md) |
 | **Affective dialogue** | The agent reads the user's emotional tone and adapts (Gemini native-audio) | [Affective dialogue](affective-dialogue.md) |
 | **Long-horizon memory** | A knowledge graph the agent reads at session start and curates as it learns | [Memory](memory.md) |
@@ -50,7 +48,7 @@ There are two layers, and most applications use the top one:
 - **`IntegratedRealtimeRunner`** wraps the runner and connects it to the rest of
   ADK — `SessionService` (transcript persistence), `MemoryService` (recall +
   storage), `EnhancedPluginManager` (hooks), and a bridge that lets any
-  `adk-core` `Tool` run in a realtime session. **This is what the examples use.**
+  `adk-core` `Tool` run in a realtime session. The web examples use it.
 
 (There is also a higher-level [`RealtimeAgent`](../agents/realtime-agents.md) for
 simple voice-only agents, and direct transports — WebRTC, LiveKit, Vertex AI
@@ -59,8 +57,11 @@ Live — documented there.)
 ## Install
 
 ```toml
-# Voice + tools + the integration layer (recommended)
+[dependencies]
 adk-realtime = { version = "3.0.0", features = ["openai", "gemini", "integration"] }
+adk-session = "3.0.0"
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
 ```
 
 | Feature | Adds |
@@ -68,13 +69,17 @@ adk-realtime = { version = "3.0.0", features = ["openai", "gemini", "integration
 | `openai` | OpenAI Realtime (WebSocket) |
 | `gemini` | Gemini Live (WebSocket) |
 | `integration` | `IntegratedRealtimeRunner` — sessions, memory, plugins, tool bridge |
-| `openai-webrtc` | OpenAI over WebRTC (needs `cmake`) |
-| `vertex-live` | Gemini via Vertex AI Live (OAuth2 / ADC) |
+| `openai-webrtc` | OpenAI over WebRTC (implies `openai`; needs `cmake`) |
+| `vertex-live` | Gemini via Vertex AI Live (OAuth2 / ADC; implies `gemini`) |
 | `livekit` | LiveKit WebRTC bridge |
+| `heygen-avatar`, `did-avatar` | Video avatar providers |
+| `full` | `openai`, `gemini`, `vertex-live`, and `livekit` |
+| `full-webrtc` | `full` and `openai-webrtc` |
+| `record-payloads` | Bounded raw provider frames in diagnostics (see [Providers](providers.md#diagnostics-and-payload-privacy)) |
 
-## 60-second quick start
+## Quick start
 
-A headless voice turn: connect, ask by text, and pump the streamed reply.
+A headless turn: connect, ask by text, and pump the streamed reply.
 
 ```rust
 use adk_realtime::config::{RealtimeConfig, VadConfig};
@@ -85,52 +90,58 @@ use adk_realtime::openai::OpenAIRealtimeModel;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use std::sync::Arc;
 
-# async fn run() -> anyhow::Result<()> {
-let model: BoxedModel = Arc::new(OpenAIRealtimeModel::new(
-    std::env::var("OPENAI_API_KEY")?,
-    "gpt-realtime-2.1",
-));
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let model: BoxedModel = Arc::new(OpenAIRealtimeModel::new(
+        std::env::var("OPENAI_API_KEY")?,
+        "gpt-realtime-2.1",
+    ));
 
-let config = RealtimeConfig::default()
-    .with_instruction("You are a friendly assistant. Keep replies short.")
-    .with_voice("marin")
-    .with_audio_only()
-    .with_vad(VadConfig::server_vad())   // model decides turn boundaries
-    .with_transcription();               // emit a text transcript too
+    let config = RealtimeConfig::default()
+        .with_instruction("You are a friendly assistant. Keep replies short.")
+        .with_voice("marin")
+        .with_audio_only()
+        .with_vad(VadConfig::server_vad()) // the provider decides turn boundaries
+        .with_transcription(); // also transcribe the user's audio
 
-let sessions = Arc::new(InMemorySessionService::new());
-sessions.create(CreateRequest {
-    app_name: "demo".into(), user_id: "u1".into(),
-    session_id: Some("s1".into()), state: Default::default(),
-}).await?;
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "demo".into(),
+            user_id: "u1".into(),
+            session_id: Some("s1".into()),
+            state: Default::default(),
+        })
+        .await?;
 
-let runner = IntegratedRealtimeRunner::builder()
-    .model(model)
-    .config(config)
-    .identity("demo", "u1", "s1")
-    .session_service(sessions)
-    .integration_config(IntegrationConfig::default())
-    .build()?;
+    let runner = IntegratedRealtimeRunner::builder()
+        .model(model)
+        .config(config)
+        .identity("demo", "u1", "s1")
+        .session_service(sessions)
+        .integration_config(IntegrationConfig::default())
+        .build()?;
 
-runner.connect().await?;
-runner.send_text("Say hello in one short sentence.").await?;
-runner.create_response().await?;       // text input needs an explicit trigger
+    runner.connect().await?;
+    runner.send_text("Say hello in one short sentence.").await?;
+    runner.create_response().await?; // text input needs an explicit trigger
 
-while let Some(event) = runner.next_event().await {
-    match event? {
-        ServerEvent::TranscriptDelta { delta, .. } => print!("{delta}"),
-        ServerEvent::AudioDelta { .. } => { /* PCM16 to play */ }
-        ServerEvent::ResponseDone { .. } => break,
-        _ => {}
+    while let Some(event) = runner.next_event().await {
+        match event? {
+            ServerEvent::TranscriptDelta { delta, .. } => print!("{delta}"),
+            ServerEvent::AudioDelta { .. } => { /* PCM16 to play */ }
+            ServerEvent::ResponseDone { .. } => break,
+            _ => {}
+        }
     }
+    runner.close().await?;
+    Ok(())
 }
-runner.close().await?;
-# Ok(()) }
 ```
 
-In a real app you stream microphone audio with `runner.send_audio(base64_pcm16)`
-instead of `send_text`, and server VAD drives responses automatically — no
-`create_response()` needed. See [Building web apps](building-web-apps.md).
+In an application you stream microphone audio with `runner.send_audio(base64_pcm16)`
+instead of `send_text`, and server VAD starts each response, so no `create_response()` is
+needed. See [Building web apps](building-web-apps.md).
 
 ## Where to go next
 

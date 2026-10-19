@@ -1,77 +1,61 @@
 # Affective Dialogue
 
-**Affective dialogue** makes the agent emotion-aware: it picks up the user's tone
-from their voice — frustration, excitement, hesitation — and adapts its own
-delivery to match. A frustrated customer hears a calmer, more careful agent; a
-happy one hears warmth back. It's the difference between a script and a
-conversation.
+**Affective dialogue** makes a Gemini Live native-audio model emotion-aware: it picks up the
+user's tone of voice — frustration, excitement, hesitation — and adapts its own delivery.
 
 ## Enabling it
 
 One builder call on `RealtimeConfig`:
 
 ```rust
-let config = RealtimeConfig::default()
-    .with_instruction("You are a warm, empathetic support agent.")
-    .with_voice("Kore")
-    .with_audio_only()
-    .with_vad(VadConfig::server_vad())
-    .with_transcription()
-    .with_affective_dialog(true);   // ← emotion-aware responses
+use adk_realtime::config::{RealtimeConfig, VadConfig};
+
+fn config() -> RealtimeConfig {
+    RealtimeConfig::default()
+        .with_instruction("You are a warm, empathetic support agent.")
+        .with_voice("Kore")
+        .with_audio_only()
+        .with_vad(VadConfig::server_vad())
+        .with_transcription()
+        .with_affective_dialog(true) // emotion-aware responses
+}
 ```
 
-## Requirements (read this)
+`with_affective_dialog(true)` sets `RealtimeConfig::affective_dialog`, and the Gemini setup
+sends `enableAffectiveDialog: true` inside `generationConfig`.
 
-Affective dialogue is a **Gemini-only** feature with two hard requirements:
+## Requirements
 
-1. **A native-audio model.** It is **not** supported on the half-cascade
-   `gemini-3.1-flash-live-preview`. Use a native-audio model such as
-   `models/gemini-live-2.5-flash-native-audio`.
-2. **The `v1alpha` endpoint.** The crate's `GeminiLiveBackend::studio(...)`
-   already connects over `v1alpha`, so this is handled for you.
+| Requirement | Detail |
+|-------------|--------|
+| A Gemini Live native-audio model | On AI Studio, `models/gemini-2.5-flash-native-audio-preview-12-2025` (the catalog lists it as deprecated); only native-audio models honor the setting, and the half-cascade `models/gemini-3.1-flash-live-preview` is not one |
+| The `v1alpha` endpoint | `GeminiLiveBackend::studio(...)` connects to it |
 
-If you set `with_affective_dialog(true)` on a model that doesn't support it, the
-Gemini setup is rejected with *"Unknown name enableAffectiveDialog"* and the
-session closes. So switch the model when you enable it:
+On OpenAI the setting is ignored, so it can be set for every provider. Choose the model with
+it:
 
 ```rust
-let (default_model, voice) = if affective {
-    ("models/gemini-live-2.5-flash-native-audio", "Kore")
-} else {
-    ("models/gemini-3.1-flash-live-preview", "Kore")
-};
+use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};
+use adk_realtime::model::BoxedModel;
+use std::sync::Arc;
+
+fn gemini_model(api_key: String, affective: bool) -> BoxedModel {
+    let model_id = if affective {
+        "models/gemini-2.5-flash-native-audio-preview-12-2025"
+    } else {
+        "models/gemini-3.1-flash-live-preview"
+    };
+    Arc::new(GeminiRealtimeModel::new(GeminiLiveBackend::studio(api_key), model_id))
+}
 ```
 
-On OpenAI (and on non-native Gemini models) `with_affective_dialog(true)` is a
-**no-op** — harmless, just ignored — so it's safe to set unconditionally and let
-the provider decide.
+## In the examples
 
-## The trade-off
+The [`customer_service`](examples.md#customer_service--aria) example makes it opt-in:
+`CS_AFFECTIVE=1` switches Gemini to the native-audio model and turns the flag on; otherwise
+it keeps `models/gemini-3.1-flash-live-preview`, which the example uses for its tools.
 
-Native-audio models give the most natural, expressive voice and the affect
-adaptation, but they **call tools less reliably** than the half-cascade model.
-So it's a genuine choice:
-
-- **Tool-heavy agent** (refunds, lookups, actions) → half-cascade
-  (`gemini-3.1-flash-live-preview`), no affective dialogue.
-- **Empathy-first agent** (support de-escalation, companionship, coaching) →
-  native-audio + affective dialogue.
-
-The [`customer_service`](examples.md#customer_service) example makes it opt-in for
-exactly this reason: `CS_AFFECTIVE=1` switches Gemini to the native-audio model
-and turns the flag on; otherwise it keeps the tool-reliable model.
-
-## Under the hood
-
-`with_affective_dialog(true)` sets `RealtimeConfig.affective_dialog`, and the
-Gemini setup emits `enableAffectiveDialog: true` **inside `generationConfig`**
-(not at the setup top level — the v1alpha endpoint rejects it there). You don't
-need to know this to use it, but it's why the model + endpoint requirements are
-strict.
-
-> **Empathy without the flag.** Even on OpenAI or the half-cascade model, a
-> well-written instruction ("notice the user's emotional state and acknowledge it
-> sincerely") produces meaningfully empathetic behavior. Affective dialogue adds
-> true *acoustic* tone-matching on top of that, on Gemini native-audio.
+An instruction that asks the model to notice and acknowledge the user's emotional state
+works on every model; affective dialogue adds tone-matching from the audio itself.
 
 Next: [Memory →](memory.md)

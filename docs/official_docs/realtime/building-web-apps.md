@@ -3,7 +3,7 @@
 This is the practical guide to putting a realtime agent in a browser: the
 **server-side bridge** pattern, the WebSocket protocol, and the Web Audio code
 that captures the mic and plays the agent gaplessly. Every web example in this
-section is built exactly this way; the [`customer_service`](examples.md#customer_service)
+section is built exactly this way; the [`customer_service`](examples.md#customer_service--aria)
 server is the reference implementation.
 
 ## Why a server-side bridge
@@ -50,94 +50,201 @@ Server → browser:
 | `response_done` | — | Turn finished |
 | `error` | `message` | Show the error |
 
-This is a thin, app-defined mapping over `ServerEvent` — see
-[`server_event_to_client_json`](#mapping-server-events) below.
+This is an application-defined mapping over `ServerEvent` — see
+`server_event_to_client_json` below.
 
 ## Server: the Axum bridge
 
-The handler builds an `IntegratedRealtimeRunner`, connects, sends `ready`, then
-runs two concurrent loops — **outbound** (realtime events → browser) and
-**inbound** (browser → session) — joined with `tokio::select!`.
+The handler builds an `IntegratedRealtimeRunner`, connects, sends `ready`, then runs two
+concurrent loops — outbound (realtime events → browser) and inbound (browser → session) —
+joined with `tokio::select!`. Besides `adk-realtime` (`openai`, `gemini`, `integration`), it
+uses `axum` (`ws` feature), `base64`, `futures`, `serde`, `serde_json`, `tracing`, and
+`uuid`:
 
 ```rust
+use adk_realtime::config::{RealtimeConfig, VadConfig};
+use adk_realtime::events::ServerEvent;
+use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};
+use adk_realtime::integration::IntegratedRealtimeRunner;
+use adk_realtime::model::BoxedModel;
+use adk_realtime::openai::OpenAIRealtimeModel;
+use axum::extract::ws::{Message, WebSocket};
+use base64::Engine;
+use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
+use serde_json::json;
+use std::sync::Arc;
+
+#[derive(Clone, Copy)]
+enum Provider {
+    OpenAI,
+    Gemini,
+}
+
+impl Provider {
+    fn name(self) -> &'static str {
+        match self {
+            Provider::OpenAI => "openai",
+            Provider::Gemini => "gemini",
+        }
+    }
+
+    /// (input, output) sample rates in Hz.
+    fn audio_rates(self) -> (u32, u32) {
+        match self {
+            Provider::OpenAI => (24_000, 24_000),
+            Provider::Gemini => (16_000, 24_000),
+        }
+    }
+}
+
+/// Messages the browser sends up the WebSocket.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ClientMsg {
+    InputAudio { audio: String },
+    VideoFrame { mime: String, data: String },
+    Text { text: String },
+    Hangup,
+}
+
+fn build_runner(provider: Provider, session_id: &str) -> anyhow::Result<IntegratedRealtimeRunner> {
+    let (model, voice): (BoxedModel, &str) = match provider {
+        Provider::OpenAI => (
+            Arc::new(OpenAIRealtimeModel::new(std::env::var("OPENAI_API_KEY")?, "gpt-realtime-2.1")),
+            "marin",
+        ),
+        Provider::Gemini => (
+            Arc::new(GeminiRealtimeModel::new(
+                GeminiLiveBackend::studio(std::env::var("GEMINI_API_KEY")?),
+                "models/gemini-3.1-flash-live-preview",
+            )),
+            "Kore",
+        ),
+    };
+    let config = RealtimeConfig::default()
+        .with_instruction("You are a helpful voice assistant.")
+        .with_voice(voice)
+        .with_audio_only()
+        .with_vad(VadConfig::server_vad())
+        .with_transcription();
+    Ok(IntegratedRealtimeRunner::builder()
+        .model(model)
+        .config(config)
+        .identity("web", "browser-user", session_id)
+        .build()?)
+}
+
 async fn handle_ws(socket: WebSocket, provider: Provider) {
     let session_id = uuid::Uuid::new_v4().to_string();
     let (mut sender, mut receiver) = socket.split();
 
-    let runner = Arc::new(build_runner(provider, &session_id).await.unwrap());
-    runner.connect().await.unwrap();
+    let runner = match build_runner(provider, &session_id) {
+        Ok(runner) => Arc::new(runner),
+        Err(error) => {
+            tracing::warn!(error = %error, "realtime runner not built");
+            return;
+        }
+    };
+    if let Err(error) = runner.connect().await {
+        let message = json!({"type": "error", "message": format!("connect failed: {error}")});
+        sender.send(Message::Text(message.to_string().into())).await.ok();
+        return;
+    }
 
-    // Negotiate audio rates to the browser BEFORE any audio flows.
+    // Negotiate audio rates with the browser before any audio flows.
     let (input_rate, output_rate) = provider.audio_rates();
-    sender.send(Message::Text(json!({
+    let ready = json!({
         "type": "ready", "provider": provider.name(),
         "input_rate": input_rate, "output_rate": output_rate,
-    }).to_string().into())).await.ok();
+    });
+    sender.send(Message::Text(ready.to_string().into())).await.ok();
 
     // Outbound: realtime events → browser.
     let out_runner = runner.clone();
     let outbound = async move {
         while let Some(event) = out_runner.next_event().await {
-            if let Ok(ev) = event {
-                if let Some(payload) = server_event_to_client_json(ev) {
-                    if sender.send(Message::Text(payload.to_string().into())).await.is_err() { break; }
-                }
+            let payload = match event {
+                Ok(event) => server_event_to_client_json(event),
+                Err(error) => Some(json!({"type": "error", "message": error.to_string()})),
+            };
+            if let Some(payload) = payload
+                && sender.send(Message::Text(payload.to_string().into())).await.is_err()
+            {
+                break;
             }
         }
     };
 
-    // Inbound: browser mic/camera/text → session.
+    // Inbound: browser microphone, camera, and text → session.
     let in_runner = runner.clone();
     let inbound = async move {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
             match serde_json::from_str::<ClientMsg>(&text) {
-                Ok(ClientMsg::InputAudio { audio }) => { in_runner.send_audio(&audio).await.ok(); }
-                Ok(ClientMsg::VideoFrame { mime, data }) => { in_runner.send_video_frame(&mime, &data).await.ok(); }
+                Ok(ClientMsg::InputAudio { audio }) => {
+                    in_runner.send_audio(&audio).await.ok();
+                }
+                Ok(ClientMsg::VideoFrame { mime, data }) => {
+                    // A dropped frame does not end the call.
+                    in_runner.send_video_frame(&mime, &data).await.ok();
+                }
                 Ok(ClientMsg::Text { text }) => {
-                    if in_runner.send_text(&text).await.is_ok() { in_runner.create_response().await.ok(); }
+                    if in_runner.send_text(&text).await.is_ok() {
+                        in_runner.create_response().await.ok();
+                    }
                 }
                 Ok(ClientMsg::Hangup) => break,
-                _ => {}
+                Err(_) => {}
             }
         }
     };
 
-    tokio::select! { _ = outbound => {}, _ = inbound => {} }
+    tokio::select! {
+        _ = outbound => {}
+        _ = inbound => {}
+    }
     runner.close().await.ok();
 }
-```
 
-Note the two input asymmetries you must get right:
-
-- **Text needs `create_response()`** — there's no VAD to trigger a reply (see
-  [Architecture: turn lifecycle](architecture.md#the-turn-lifecycle)). Audio
-  under server VAD does not.
-- **Video errors are non-fatal** — log and continue; a dropped frame shouldn't
-  kill the call.
-
-### Mapping server events
-
-The outbound loop converts each provider-agnostic `ServerEvent` into the compact
-client JSON above, returning `None` for events the UI ignores:
-
-```rust
+/// Converts a provider-agnostic `ServerEvent` into the client JSON above, or `None` for
+/// events the UI does not render.
 fn server_event_to_client_json(event: ServerEvent) -> Option<serde_json::Value> {
     match event {
-        ServerEvent::AudioDelta { delta, .. } =>
-            Some(json!({ "type": "audio", "audio": BASE64.encode(&delta) })),
-        ServerEvent::TranscriptDelta { delta, .. } =>
-            Some(json!({ "type": "agent_transcript", "delta": delta })),
-        ServerEvent::InputTranscriptDelta { delta, .. } =>
-            Some(json!({ "type": "user_transcript_delta", "delta": delta })),
+        ServerEvent::AudioDelta { delta, .. } => Some(json!({
+            "type": "audio",
+            "audio": base64::engine::general_purpose::STANDARD.encode(&delta),
+        })),
+        ServerEvent::TranscriptDelta { delta, .. } => {
+            Some(json!({ "type": "agent_transcript", "delta": delta }))
+        }
+        ServerEvent::InputTranscriptDelta { delta, .. } => {
+            Some(json!({ "type": "user_transcript_delta", "delta": delta }))
+        }
+        ServerEvent::InputTranscriptCompleted { transcript, .. } => {
+            Some(json!({ "type": "user_transcript", "text": transcript }))
+        }
         ServerEvent::SpeechStarted { .. } => Some(json!({ "type": "user_speaking" })),
-        ServerEvent::FunctionCallDone { name, arguments, .. } =>
-            Some(json!({ "type": "tool", "name": name, "args": arguments })),
+        ServerEvent::SpeechStopped { .. } => Some(json!({ "type": "user_stopped" })),
+        ServerEvent::FunctionCallDone { name, arguments, .. } => {
+            Some(json!({ "type": "tool", "name": name, "args": arguments }))
+        }
         ServerEvent::ResponseDone { .. } => Some(json!({ "type": "response_done" })),
         ServerEvent::Error { error, .. } => Some(json!({ "type": "error", "message": error.message })),
-        _ => None,   // ServerEvent is #[non_exhaustive]
+        // `ServerEvent` is `#[non_exhaustive]`.
+        _ => None,
     }
 }
 ```
+
+Mount `handle_ws` behind an Axum `WebSocketUpgrade` route such as `/ws?provider=openai`;
+`examples/customer_service/src/server.rs` is the complete server.
+
+Note the two input asymmetries:
+
+- **Text needs `create_response()`** — there is no VAD to trigger a reply (see
+  [Architecture: turn lifecycle](architecture.md#the-turn-lifecycle)). Audio under server VAD
+  does not.
+- **Video errors are non-fatal** — a dropped frame does not end the call.
 
 ## Browser: capturing the mic as PCM16
 

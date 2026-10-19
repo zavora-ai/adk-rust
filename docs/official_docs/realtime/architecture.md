@@ -1,8 +1,7 @@
 # Realtime Architecture
 
-This page explains how a realtime session actually works in ADK-Rust — the
-layers, the event loop, the audio pipeline, and the turn lifecycle. Understanding
-this makes the rest of the section (tools, multimodal, memory) obvious.
+This page explains how a realtime session works in ADK-Rust: the layers, the event loop,
+the audio pipeline, and the turn lifecycle.
 
 ## The four layers
 
@@ -11,7 +10,7 @@ this makes the rest of the section (tools, multimodal, memory) obvious.
 │ IntegratedRealtimeRunner   (feature: integration)             │
 │  • SessionService  → persists each completed turn             │
 │  • MemoryService   → profile-card injection + turn storage    │
-│  • EnhancedPluginManager → before/after-tool hooks            │
+│  • EnhancedPluginManager → before/after-tool hooks           │
 │  • ADK-tool bridge → run any `adk_core::Tool` in a session    │
 └───────────────┬──────────────────────────────────────────────┘
                 │ wraps
@@ -42,18 +41,16 @@ WebSocket and returns a **`RealtimeSession`** — the object that actually speak
 the provider's wire protocol. You rarely touch the session directly; the runner
 owns it. Its surface is small and provider-agnostic:
 
-```rust
-trait RealtimeSession {
-    async fn send_audio_base64(&self, audio: &str) -> Result<()>;
-    async fn send_text(&self, text: &str) -> Result<()>;
-    async fn send_video_frame(&self, mime: &str, data_b64: &str) -> Result<()>;
-    async fn send_tool_output(&self, response: ToolResponse) -> Result<()>;
-    async fn create_response(&self) -> Result<()>;
-    async fn next_event(&self) -> Option<Result<ServerEvent>>;
-    async fn close(&self) -> Result<()>;
-    // …commit/clear audio, interrupt, mutate_context
-}
-```
+| Method | Purpose |
+|--------|---------|
+| `send_audio(&AudioChunk)`, `send_audio_base64(&str)` | Microphone audio |
+| `send_text(&str)` | Typed input |
+| `send_video_frame(mime_type, data_base64)` | A camera or screen frame; the default implementation ignores it |
+| `send_tool_response(ToolResponse)`, `send_tool_output(ToolResponse)` | A tool result |
+| `commit_audio`, `clear_audio`, `create_response`, `interrupt` | Turn control |
+| `next_event`, `events` | The `ServerEvent` stream |
+| `mutate_context(RealtimeConfig)` | Change the configuration mid-session: applied in place on OpenAI (`ContextMutationOutcome::Applied`); Gemini returns `RequiresResumption` |
+| `close` | End the session |
 
 Each provider implements this differently under the hood (OpenAI's
 `input_audio_buffer.append` vs Gemini's `realtimeInput`), but the runner above
@@ -67,13 +64,19 @@ sends the result back (see [Tools](tools.md)). It exposes the session's verbs
 plus tool registration:
 
 ```rust
-runner.connect().await?;
-runner.send_audio(pcm16_base64).await?;     // mic frames
-runner.send_text("…").await?;               // typed input
-runner.send_video_frame("image/jpeg", b64).await?;
-runner.create_response().await?;            // trigger a response to text input
-let ev = runner.next_event().await;         // pull the next ServerEvent
-runner.close().await?;
+use adk_realtime::RealtimeRunner;
+
+async fn session(runner: &RealtimeRunner, pcm16_base64: &str, jpeg_base64: &str) -> adk_realtime::Result<()> {
+    runner.connect().await?;
+    runner.send_audio(pcm16_base64).await?; // microphone audio
+    runner.send_video_frame("image/jpeg", jpeg_base64).await?;
+    runner.send_text("What do you see?").await?; // typed input
+    runner.create_response().await?; // text input needs an explicit trigger
+    while let Some(event) = runner.next_event().await {
+        let _event = event?; // the next ServerEvent
+    }
+    runner.close().await
+}
 ```
 
 ### `IntegratedRealtimeRunner`
@@ -89,31 +92,56 @@ The application layer. It wraps a `RealtimeRunner` and, as events flow, wires in
   `adk_core::Tool` (e.g. `adk-tool`'s built-ins) run in a realtime session via a
   synthesized `ToolContext` scoped to the session identity.
 
-You build it with a typed builder:
+You build it with a builder:
 
 ```rust
-let runner = IntegratedRealtimeRunner::builder()
-    .model(model)
-    .config(config)
-    .identity("app", "user", "session-id")   // required
-    .session_service(sessions)                // optional
-    .memory_service(memory)                   // optional
-    .integration_config(IntegrationConfig::default())
-    .tool(weather_def(), weather_handler())   // native realtime ToolHandler
-    .adk_tool(Arc::new(remember_tool))        // bridged adk_core::Tool
-    .build()?;
-```
+use adk_core::Tool;
+use adk_memory::MemoryService;
+use adk_realtime::config::{RealtimeConfig, ToolDefinition};
+use adk_realtime::events::ToolCall;
+use adk_realtime::integration::{IntegratedRealtimeRunner, IntegrationConfig};
+use adk_realtime::model::BoxedModel;
+use adk_realtime::runner::FnToolHandler;
+use adk_session::SessionService;
+use serde_json::json;
+use std::sync::Arc;
 
-`IntegrationConfig` controls the automatic behaviors:
-
-```rust
-IntegrationConfig {
-    persist_transcripts: true,    // append turns to the session
-    store_to_memory: true,        // memory_service.add_session per turn
-    inject_memory_context: true,  // query memory at connect
-    max_memory_injection: 10,
+fn build(
+    model: BoxedModel,
+    config: RealtimeConfig,
+    sessions: Arc<dyn SessionService>,
+    memory: Arc<dyn MemoryService>,
+    remember_tool: Arc<dyn Tool>,
+) -> adk_realtime::Result<IntegratedRealtimeRunner> {
+    let weather = ToolDefinition {
+        name: "get_weather".into(),
+        description: Some("Current weather for a city.".into()),
+        parameters: Some(json!({"type": "object", "properties": {"city": {"type": "string"}}})),
+    };
+    IntegratedRealtimeRunner::builder()
+        .model(model)
+        .config(config)
+        .identity("app", "user", "session-id") // required
+        .session_service(sessions) // optional
+        .memory_service(memory) // optional
+        .integration_config(IntegrationConfig::default())
+        // A native realtime `ToolHandler`.
+        .tool(weather, FnToolHandler::new(|_call: &ToolCall| Ok(json!({"forecast": "sunny"}))))
+        // A bridged `adk_core::Tool`.
+        .adk_tool(remember_tool)
+        .build()
 }
 ```
+
+`IntegrationConfig` controls the automatic behaviours; these are its defaults:
+
+| Field | Default | Effect |
+|-------|---------|--------|
+| `persist_transcripts` | `true` | Append each completed turn to the session |
+| `store_to_memory` | `true` | `memory_service.add_session` per turn |
+| `inject_memory_context` | `true` | Query memory at connect |
+| `max_memory_injection` | `10` | Recalled entries carried into the instruction |
+| `max_history_injection` | `20` | Prior turns carried into the instruction (see [Memory](memory.md#what-is-carried-into-a-resumed-session)) |
 
 ## The server-side bridge (web apps)
 
@@ -198,7 +226,7 @@ typically render:
 | `InputTranscriptDelta { delta, .. }` | Live transcript of the **user's** speech (streamed) |
 | `InputTranscriptCompleted { transcript, .. }` | Final user transcript (OpenAI sends one) |
 | `SpeechStarted` / `SpeechStopped` | VAD detected the user starting/stopping |
-| `FunctionCallDone { name, arguments, call_id, .. }` | The model wants a tool |
+| `FunctionCallDone { name, arguments, call_id, .. }` | The model wants a tool (`arguments` is a JSON string) |
 | `ResponseDone { .. }` | A response finished |
 | `TextDelta { delta, .. }` | Non-spoken text (e.g. Gemini "thinking") — usually not shown |
 | `Error { error, .. }` | Provider error |
