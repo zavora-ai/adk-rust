@@ -673,69 +673,18 @@ struct AddonInfo {
     features: Vec<&'static str>,
 }
 
+/// Every capability addon, as the registry `cargo adk new` composes from defines it.
 fn get_builtin_addons() -> Vec<AddonInfo> {
-    vec![
-        AddonInfo {
-            name: "telemetry",
-            description: "OpenTelemetry tracing integration with console exporter",
-            priority: 10,
-            features: vec!["telemetry"],
-        },
-        AddonInfo {
-            name: "auth",
-            description: "Authentication middleware with API key and JWT support",
-            priority: 20,
-            features: vec!["auth"],
-        },
-        AddonInfo {
-            name: "sessions",
-            description: "Session management with configurable backend",
-            priority: 30,
-            features: vec!["sessions"],
-        },
-        AddonInfo {
-            name: "memory",
-            description: "Semantic memory integration with in-memory backend",
-            priority: 40,
-            features: vec!["memory"],
-        },
-        AddonInfo {
-            name: "mcp",
-            description: "MCP tool integration with example server connection",
-            priority: 50,
-            features: vec!["tools", "mcp"],
-        },
-        AddonInfo {
-            name: "guardrails",
-            description: "Input and output guardrail hooks with validation logic",
-            priority: 60,
-            features: vec!["guardrail"],
-        },
-        AddonInfo {
-            name: "eval",
-            description: "Evaluation harness with example test cases",
-            priority: 70,
-            features: vec!["eval"],
-        },
-        AddonInfo {
-            name: "browser",
-            description: "Browser automation tool integration",
-            priority: 80,
-            features: vec!["browser"],
-        },
-        AddonInfo {
-            name: "server",
-            description: "Axum HTTP server with health check and agent endpoints",
-            priority: 90,
-            features: vec!["server"],
-        },
-        AddonInfo {
-            name: "docker",
-            description: "Multi-stage Dockerfile (distroless), static musl variant, and .dockerignore",
-            priority: 100,
-            features: vec![],
-        },
-    ]
+    TemplateRegistry::builtin()
+        .capability_addons
+        .into_iter()
+        .map(|addon| AddonInfo {
+            name: addon.name,
+            description: addon.description,
+            priority: addon.init_priority,
+            features: addon.required_features,
+        })
+        .collect()
 }
 
 fn print_addons(json: bool) {
@@ -1475,16 +1424,10 @@ fn print_templates(template_dir: Option<&Path>) {
     println!("\n  Other:");
     println!("    {:<14} Anthropic Managed Agents session with SSE streaming", "managed-agents");
 
-    println!("\n  Addons (composable with any template):");
-    println!("    --addon {:<12} OpenTelemetry tracing", "telemetry");
-    println!("    --addon {:<12} API key and JWT authentication", "auth");
-    println!("    --addon {:<12} Session state management", "sessions");
-    println!("    --addon {:<12} Semantic memory and RAG", "memory");
-    println!("    --addon {:<12} MCP tool integration", "mcp");
-    println!("    --addon {:<12} Input/output validation", "guardrails");
-    println!("    --addon {:<12} Evaluation framework", "eval");
-    println!("    --addon {:<12} Browser automation", "browser");
-    println!("    --addon {:<12} HTTP server with A2A", "server");
+    println!("\n  Addons (composable with any compatible template):");
+    for addon in &registry.capability_addons {
+        println!("    --addon {:<12} {}", addon.name, addon.description);
+    }
 
     println!("\nUsage:");
     println!("  cargo adk new my-agent --template llm");
@@ -2452,6 +2395,15 @@ mod tests {
             !cargo_toml.contains("0.4") && !cargo_toml.contains("standard"),
             "template should not use stale versions or the heavy standard preset"
         );
+    }
+
+    #[test]
+    fn the_addon_listing_names_every_registered_addon() {
+        let listed: Vec<&str> = get_builtin_addons().iter().map(|addon| addon.name).collect();
+        let registered: Vec<&str> =
+            TemplateRegistry::builtin().capability_addons.iter().map(|addon| addon.name).collect();
+        assert_eq!(listed, registered);
+        assert!(listed.contains(&"docker"));
     }
 
     #[test]

@@ -11,6 +11,10 @@ use crate::codegen::ADK_VERSION;
 use crate::pattern::EnterprisePattern;
 use crate::template::{AgentCodeFragments, AgentTemplate, FileFragment, TemplateCategory};
 
+/// Templates that build their own model instead of the provider's text model, each with the
+/// one provider whose API key it uses.
+pub const OWN_MODEL_TEMPLATES: &[(&str, &str)] = &[("realtime", "gemini")];
+
 /// Central registry of all available templates, addons, and patterns.
 #[derive(Debug, Clone)]
 pub struct TemplateRegistry {
@@ -318,7 +322,7 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
         },
         AgentTemplate {
             name: "graph",
-            description: "Graph-based workflow with checkpoints and durable execution",
+            description: "Graph workflow with an agent node and per-step checkpoints",
             category: TemplateCategory::AgentType,
             default_provider: "gemini",
             required_features: vec!["minimal", "graph"],
@@ -326,35 +330,110 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             additional_deps: vec![],
             code_fragments: AgentCodeFragments {
                 imports: vec!["use std::sync::Arc;", "use adk_rust::graph::*;"],
-                agent_construction: r#"// Graph-based workflow with checkpoints
-    // See adk-graph documentation for full API
-    let agent = LlmAgentBuilder::new("{name}")
-        .description("A graph-based workflow agent")
-        .instruction("You orchestrate a multi-step workflow.")
-        .model(Arc::new(model))
-        .build()?;
-    let agent: Arc<dyn Agent> = Arc::new(agent);"#,
+                agent_construction: r#"let assistant: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("assistant")
+            .description("Answers the user")
+            .instruction("You are a helpful assistant. Reply to the last user message.")
+            .model(Arc::new(model))
+            .build()?,
+    );
+
+    // The assistant reads the whole conversation from the graph state.
+    let assistant = AgentNode::new(assistant).with_input_mapper(|state| {
+        let transcript = state
+            .get("messages")
+            .and_then(|messages| messages.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|message| {
+                let role = message.get("role")?.as_str()?;
+                let content = message.get("content")?.as_str()?;
+                Some(format!("{role}: {content}"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Content::new("user").with_text(transcript)
+    });
+
+    // START -> assistant -> END. `messages` appends, and the checkpointer saves the state
+    // after every step on the session's thread, so each turn continues the conversation.
+    // Use a durable checkpointer (feature `graph-sqlite`, `graph-postgres`, ...) to keep
+    // it across restarts.
+    let agent: Arc<dyn Agent> = Arc::new(
+        GraphAgent::builder("{name}")
+            .description("A checkpointed graph workflow")
+            .state_schema(StateSchema::builder().channel("input").list_channel("messages").build())
+            .node(assistant)
+            .edge(START, "assistant")
+            .edge("assistant", END)
+            .checkpointer(MemoryCheckpointer::new())
+            // The agent node streams its answer as it runs; the final state adds nothing.
+            .output_mapper(|_| Vec::new())
+            .build()?,
+    );"#,
                 additional_files: vec![],
             },
         },
         AgentTemplate {
             name: "realtime",
-            description: "Real-time bidirectional audio/video streaming agent",
+            description: "Gemini Live voice agent: type a message, get a spoken answer and its transcript",
             category: TemplateCategory::AgentType,
             default_provider: "gemini",
-            required_features: vec!["minimal", "realtime"],
-            incompatible_addons: vec![],
-            additional_deps: vec![],
+            required_features: vec!["minimal"],
+            // The template runs its own session loop; there is no text agent to serve.
+            incompatible_addons: vec!["server"],
+            additional_deps: vec![DependencySpec {
+                crate_name: "adk-realtime",
+                version: ADK_VERSION,
+                features: vec!["gemini"],
+            }],
             code_fragments: AgentCodeFragments {
-                imports: vec!["use std::sync::Arc;", "use adk_rust::realtime::*;"],
-                agent_construction: r#"// Real-time voice agent with bidirectional audio
-    // See adk-realtime documentation for full API
-    let agent = LlmAgentBuilder::new("{name}")
-        .description("A real-time voice assistant")
-        .instruction("You are a voice assistant. Respond naturally and concisely.")
-        .model(Arc::new(model))
-        .build()?;
-    let agent: Arc<dyn Agent> = Arc::new(agent);"#,
+                imports: vec![
+                    "use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};",
+                    "use adk_realtime::{RealtimeConfig, RealtimeModel, ServerEvent};",
+                    "use std::io::Write;",
+                    "use tokio::io::{AsyncBufReadExt, BufReader};",
+                ],
+                agent_construction: r#"// One Gemini Live session holds the whole conversation: each line you type is
+    // sent as text, and the answer streams back as 24 kHz PCM16 audio with a transcript.
+    let model: Arc<dyn RealtimeModel> = Arc::new(GeminiRealtimeModel::new(
+        GeminiLiveBackend::studio(api_key),
+        "models/gemini-3.1-flash-live-preview",
+    ));
+    let config = RealtimeConfig::default()
+        .with_instruction("You are a voice assistant. Respond naturally and concisely.");
+    let session = model.connect(config).await?;
+    println!("{name} is connected to Gemini Live. Type a message; an empty line quits.");
+
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    loop {
+        print!("\nYou > ");
+        std::io::stdout().flush()?;
+        let Some(line) = lines.next_line().await? else { break };
+        let line = line.trim();
+        if line.is_empty() {
+            break;
+        }
+        session.send_text(line).await?;
+        session.create_response().await?;
+
+        print!("Agent > ");
+        let mut audio_bytes = 0;
+        while let Some(event) = session.next_event().await {
+            match event? {
+                ServerEvent::TranscriptDelta { delta, .. } | ServerEvent::TextDelta { delta, .. } => {
+                    print!("{delta}");
+                    std::io::stdout().flush()?;
+                }
+                ServerEvent::AudioDelta { delta, .. } => audio_bytes += delta.len(),
+                ServerEvent::Error { error, .. } => anyhow::bail!("realtime error: {}", error.message),
+                ServerEvent::ResponseDone { .. } => break,
+                _ => {}
+            }
+        }
+        println!("\n({audio_bytes} bytes of audio)");
+    }
+    session.close().await?;"#,
                 additional_files: vec![],
             },
         },

@@ -8,7 +8,7 @@
 
 use crate::composition::{CompositionManifest, GeneratedFile};
 use crate::provider::get_provider_config;
-use crate::registry::TemplateRegistry;
+use crate::registry::{OWN_MODEL_TEMPLATES, TemplateRegistry};
 
 /// Current ADK-Rust version, read from this crate's own version at compile time.
 pub const ADK_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -221,7 +221,7 @@ pub fn generate_main_rs_with_registry(
     // When nothing serves (no server addon, template doesn't start its own
     // server), run the agent in the interactive console so `cargo run` does
     // something useful out of the box.
-    const SELF_SERVING_TEMPLATES: &[&str] = &["api", "agent-engine"];
+    const SELF_SERVING_TEMPLATES: &[&str] = &["api", "agent-engine", "realtime"];
     let has_server_addon = manifest.addons.iter().any(|a| a == "server");
     let interactive =
         !has_server_addon && !SELF_SERVING_TEMPLATES.contains(&manifest.template_name.as_str());
@@ -233,17 +233,23 @@ pub fn generate_main_rs_with_registry(
 
     // Build model initialization (includes api_key loading from env)
     // If model_override is set, replace the default model in the init code
+    let own_model =
+        OWN_MODEL_TEMPLATES.iter().any(|(name, _)| *name == manifest.template_name.as_str());
     let model_init = if let Some(pc) = provider_config {
         let init_code = if let Some(ref model_id) = manifest.model_override {
             pc.model_init_code.replace(pc.default_model, model_id)
         } else {
             pc.model_init_code.to_string()
         };
-        if pc.requires_api_key {
-            format!(
-                "    let api_key = std::env::var(\"{}\")\n        .map_err(|_| anyhow::anyhow!(\"{} is not set — copy .env.example to .env and add your key\"))?;\n    let model = {};",
-                pc.env_var, pc.env_var, init_code
-            )
+        let api_key = format!(
+            "    let api_key = std::env::var(\"{}\")\n        .map_err(|_| anyhow::anyhow!(\"{} is not set — copy .env.example to .env and add your key\"))?;",
+            pc.env_var, pc.env_var
+        );
+        // A template that builds its own model needs only the key.
+        if own_model {
+            api_key
+        } else if pc.requires_api_key {
+            format!("{api_key}\n    let model = {init_code};")
         } else {
             format!("    let model = {};", init_code)
         }
@@ -575,6 +581,39 @@ mod tests {
             main_rs.contains(r#"std::env::var("PORT").unwrap_or_else(|_| "8080".to_string())"#),
             "Server addon MUST use std::env::var(\"PORT\").unwrap_or_else(|_| \"8080\".to_string())"
         );
+    }
+
+    #[test]
+    fn graph_template_builds_a_checkpointed_graph_agent() {
+        let manifest = resolve_composition(&registry(), "graph", &[], "gemini").unwrap();
+        let main_rs = generate_main_rs(&manifest, "my-graph");
+
+        for expected in [
+            "GraphAgent::builder(\"my-graph\")",
+            "AgentNode::new(assistant)",
+            ".list_channel(\"messages\")",
+            ".checkpointer(MemoryCheckpointer::new())",
+            "Launcher::new(agent).run().await?;",
+        ] {
+            assert!(main_rs.contains(expected), "missing `{expected}` in:\n{main_rs}");
+        }
+    }
+
+    #[test]
+    fn realtime_template_runs_a_gemini_live_session() {
+        let manifest = resolve_composition(&registry(), "realtime", &[], "gemini").unwrap();
+        let main_rs = generate_main_rs(&manifest, "my-voice");
+        let toml = generate_cargo_toml(&manifest, "my-voice");
+
+        assert!(main_rs.contains("let api_key = std::env::var(\"GOOGLE_API_KEY\")"));
+        assert!(main_rs.contains("GeminiRealtimeModel::new("));
+        assert!(main_rs.contains("session.send_text(line).await?;"));
+        // The Live session is the model, and the template drives it itself.
+        assert!(!main_rs.contains("let model = adk_rust::model::GeminiModel"), "{main_rs}");
+        assert!(!main_rs.contains("Launcher"), "{main_rs}");
+        assert!(toml.contains(&format!(
+            "adk-realtime = {{ version = \"{ADK_VERSION}\", features = [\"gemini\"] }}"
+        )));
     }
 
     #[test]

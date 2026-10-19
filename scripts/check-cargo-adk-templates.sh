@@ -27,6 +27,8 @@ templates=(
   "api:gemini"
   "api:openai"
   "openai:"
+  "graph:gemini"
+  "realtime:"
   "a2a:gemini"
   "tools:gemini:telemetry,sessions"
   "llm:gemini:server,sessions"
@@ -69,6 +71,8 @@ adk-telemetry = { path = "$ROOT/adk-telemetry" }
 adk-gemini = { path = "$ROOT/adk-gemini" }
 adk-anthropic = { path = "$ROOT/adk-anthropic" }
 adk-rust-macros = { path = "$ROOT/adk-rust-macros" }
+adk-graph = { path = "$ROOT/adk-graph" }
+adk-realtime = { path = "$ROOT/adk-realtime" }
 PATCH
 
     CARGO_TARGET_DIR="$CHECK_TARGET_DIR" cargo check --manifest-path "$name/Cargo.toml"

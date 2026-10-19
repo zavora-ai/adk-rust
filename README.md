@@ -289,8 +289,8 @@ cargo run
 | `parallel` | Parallel execution with result aggregation |
 | `loop` | Iterates until a condition is met |
 | `conditional` | Routes based on LLM decisions |
-| `graph` | Graph workflow with checkpoints and durable execution |
-| `realtime` | Bidirectional audio and video streaming |
+| `graph` | Graph workflow with an agent node and per-step checkpoints |
+| `realtime` | Gemini Live voice agent with transcripts |
 | `rag` | Vector search over a knowledge base |
 | `api` | REST server exposing the agent over HTTP |
 | `agent-engine` | Gemini Enterprise Agent Engine BYOC container and Terraform deployment |

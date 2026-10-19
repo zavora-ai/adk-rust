@@ -51,8 +51,8 @@ The built-in registry currently contains 13 templates.
 | `parallel` | Concurrent specialists with aggregated results | Independent work can run at the same time |
 | `loop` | Repeated execution until a condition is met | A reviewer, repair, or refinement cycle needs a bounded loop |
 | `conditional` | Decision-based routing between agents | Different requests need different specialists or paths |
-| `graph` | A branching workflow with checkpoints | Work must resume, branch, join, or survive process failure |
-| `realtime` | Bidirectional audio and video handling | The product needs a live voice or multimodal conversation |
+| `graph` | A `GraphAgent` with an agent node and a checkpointer that carries the conversation between turns | Work must resume, branch, join, or survive process failure |
+| `realtime` | A Gemini Live session: typed text in, a spoken answer and its transcript out (`--provider gemini` only) | The product needs a live voice conversation |
 | `custom` | A manual implementation of the `Agent` trait | The execution contract cannot be expressed by a built-in agent |
 | `agent-engine` | A Gemini Enterprise Agent Engine BYOC container with `Dockerfile` and `deploy/terraform/` | The agent deploys to Agent Runtime as a prebuilt container |
 

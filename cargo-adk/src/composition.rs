@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::provider::get_provider_config;
-use crate::registry::TemplateRegistry;
+use crate::registry::{OWN_MODEL_TEMPLATES, TemplateRegistry};
 
 /// A resolved dependency to include in the generated `Cargo.toml`.
 #[derive(Debug, Clone)]
@@ -65,9 +65,21 @@ pub enum CompositionError {
     /// The requested addon name was not found in the registry.
     UnknownAddon(String),
     /// An addon is incompatible with the selected template.
-    IncompatibleAddon { addon: String, template: String, reason: String },
+    IncompatibleAddon {
+        addon: String,
+        template: String,
+        reason: String,
+    },
     /// Two selected addons conflict with each other.
-    ConflictingAddons { addon_a: String, addon_b: String },
+    ConflictingAddons {
+        addon_a: String,
+        addon_b: String,
+    },
+    UnsupportedProvider {
+        template: String,
+        provider: String,
+        supported: String,
+    },
 }
 
 impl fmt::Display for CompositionError {
@@ -84,6 +96,12 @@ impl fmt::Display for CompositionError {
             }
             CompositionError::ConflictingAddons { addon_a, addon_b } => {
                 write!(f, "addons '{addon_a}' and '{addon_b}' cannot be used together")
+            }
+            CompositionError::UnsupportedProvider { template, provider, supported } => {
+                write!(
+                    f,
+                    "template '{template}' does not support provider '{provider}'; use --provider {supported}"
+                )
             }
         }
     }
@@ -152,6 +170,17 @@ pub fn resolve_composition(
             "unknown provider '{provider}'. Check supported providers"
         ))
     })?;
+
+    if let Some((_, supported)) =
+        OWN_MODEL_TEMPLATES.iter().find(|(name, _)| *name == resolved_template.name)
+        && provider_config.name != *supported
+    {
+        return Err(CompositionError::UnsupportedProvider {
+            template: resolved_template.name.to_string(),
+            provider: provider.to_string(),
+            supported: supported.to_string(),
+        });
+    }
 
     // 3. Resolve and validate each addon
     let mut resolved_addons = Vec::with_capacity(addons.len());
@@ -327,6 +356,20 @@ mod tests {
         assert!(manifest.feature_set.contains("openai"));
         assert!(manifest.feature_set.contains("telemetry"));
         assert!(manifest.feature_set.contains("sessions"));
+    }
+
+    #[test]
+    fn realtime_template_rejects_other_providers() {
+        let error = resolve_composition(&registry(), "realtime", &[], "openai").unwrap_err();
+        assert_eq!(
+            error,
+            CompositionError::UnsupportedProvider {
+                template: "realtime".to_string(),
+                provider: "openai".to_string(),
+                supported: "gemini".to_string(),
+            }
+        );
+        assert!(resolve_composition(&registry(), "realtime", &[], "gemini").is_ok());
     }
 
     #[test]
