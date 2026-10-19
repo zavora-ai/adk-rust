@@ -9,6 +9,7 @@ description = "Benchmarking framework for ADK-Rust agent performance measurement
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-bench"
 readme = "README.md"
+homepage.workspace = true
 keywords = ["ai", "agent", "benchmark", "performance", "adk"]
 categories = ["development-tools::profiling"]
 

@@ -1,79 +1,52 @@
 # adk-bench
 
-A comprehensive benchmarking framework for ADK-Rust that measures framework-level runtime performance using real LLM APIs and supports cross-framework comparison.
+Benchmarking framework for ADK-Rust: measures framework-level runtime overhead against real LLM
+APIs and compares ADK-Rust with other agent frameworks through a subprocess protocol.
 
-## Results
+[![Crates.io](https://img.shields.io/crates/v/adk-bench.svg)](https://crates.io/crates/adk-bench)
+[![Documentation](https://docs.rs/adk-bench/badge.svg)](https://docs.rs/adk-bench)
+[![License](https://img.shields.io/crates/l/adk-bench.svg)](../LICENSE)
 
-### Framework Comparison: simple_tool_call
+## How it works
 
-The historical results below used `gemini-2.5-flash` with identical prompts and
-deterministic sampling. New runs default to the current economy model,
-`gemini-3.5-flash-lite`; do not compare results across model generations as a
-framework regression.
-
-| Framework | Cold Start | Agent Loop Overhead (mean) | Agent Loop Overhead (P95) | Peak RSS |
-|-----------|-----------|---------------------------|--------------------------|----------|
-| **ADK-Rust** | **109 ms** | **568 μs** | **615 μs** | ~15 MB |
-| Gemini Python SDK | 501 ms | 253 μs | 334 μs | 69.7 MB |
-| LangGraph | 502 ms | 1,228 ms | 1,228 ms | 92.7 MB |
-
-### Full ADK-Rust Suite (3 runs, 1 warmup)
-
-| Workload | Cold Start (mean) | Loop Overhead (mean) | Loop Overhead (P95) | CV |
-|----------|------------------|---------------------|--------------------|----|
-| simple_tool_call | 117 ms | 368 μs | 475 μs | 20.6% |
-| multi_step_reasoning | 129 ms | 38.6 ms | 56.4 ms | 41.3% |
-| parallel_tool_invocation | 117 ms | 159.6 ms | 215.5 ms | 29.2% |
-
-> **Note:** Multi-step and parallel workloads include simulated tool latency (10-25ms per tool call) in the overhead measurement. The simple_tool_call workload best isolates pure framework overhead.
-
-### Key Takeaways
-
-- **4.6× faster cold start** — Rust binary startup vs Python interpreter (109ms vs 501ms)
-- **Sub-millisecond framework overhead** — ADK-Rust adds ~568μs per agent turn beyond LLM latency
-- **4–6× lower memory** — ~15MB RSS vs 70-93MB for Python frameworks
-- **Deterministic measurement** — temperature=0, fixed seed, structured output for reproducibility
-
-## How It Works
-
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
-│ cargo adk bench                                                  │
+│ cargo adk bench                                                 │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  BenchRunner                                                      │
-│  ├── Warm-up phase (iterations discarded)                        │
-│  ├── Measurement phase                                           │
-│  │   ├── InstrumentedLlm → Real API (temp=0, seed=42)          │
-│  │   ├── Record: request_sent → response_complete                │
-│  │   └── Overhead = total_turn - llm_round_trip                  │
-│  ├── Concurrency sweep (1, 2, 4, 8, 16, 32, 64)                │
-│  ├── Memory sampling (RSS via platform APIs)                     │
-│  └── Regression detection (baseline compare)                     │
-│                                                                   │
-│  ExternalRunner (EBP Protocol)                                    │
+│  BenchRunner                                                    │
+│  ├── Warm-up phase (iterations discarded)                       │
+│  ├── Measurement phase                                          │
+│  │   ├── InstrumentedLlm → real API (temperature 0, seed 42)    │
+│  │   ├── Record: request_sent → response_complete               │
+│  │   └── Overhead = total turn time − LLM round trip            │
+│  ├── Concurrency sweep (1, 2, 4, 8, 16, 32, 64)                 │
+│  └── Regression detection (baseline compare)                    │
+│                                                                 │
+│  ExternalRunner (External Benchmark Protocol)                   │
 │  ├── Spawn subprocess with BENCH_START_EPOCH_NS                  │
-│  ├── Pass workload JSON as last arg                              │
-│  ├── Parse EBP JSON from stdout                                  │
-│  └── Compute cold_start from external clock                      │
-│                                                                   │
+│  ├── Pass the workload JSON path as the last argument           │
+│  ├── Parse one EBP JSON object from stdout                      │
+│  └── Kill the subprocess when it exceeds the timeout            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Metrics Collected
+### Metrics
 
-| Metric | Description |
-|--------|-------------|
-| **Cold Start** | Process launch → first LLM API call |
-| **Agent Loop Overhead** | Per-turn framework processing time (total turn minus LLM round-trip) |
-| **Concurrent Throughput** | Agents completed per second at N concurrency |
-| **Memory Footprint** | Peak RSS via `/proc/self/statm` (Linux) or `mach_task_basic_info` (macOS) |
-| **Tool Invocation Latency** | Deserialization + schema validation + execution dispatch |
-| **Token Overhead** | Framework-injected tokens beyond user content |
+| Metric | Source | Description |
+|--------|--------|-------------|
+| Cold start | `BenchRunner` | Run start (model creation) to the first LLM request; for external frameworks, process spawn to the first LLM call |
+| Agent loop overhead | `BenchRunner` | Per-turn framework time: total turn time minus the LLM round trip |
+| Concurrent throughput | `BenchRunner` with `--sweep` or `--concurrency` | Agents completed per second at each concurrency level |
+| Peak RSS, token overhead | External harnesses (EBP) | Reported by the harness in its JSON output |
+
+`memory::current_rss_bytes` and `memory::spawn_memory_sampler` read the RSS from
+`/proc/self/statm` on Linux and `mach_task_basic_info` on macOS.
 
 ## Usage
 
-### Basic Run
+`cargo adk bench` (from `cargo-adk`) drives this crate.
+
+### Basic run
 
 ```bash
 # Run all built-in workloads with default settings
@@ -83,99 +56,111 @@ cargo adk bench --confirm-cost
 cargo adk bench --workload simple_tool_call --runs 2 --warmup 1 --confirm-cost
 ```
 
-### Cost Control
+### Cost control
 
 ```bash
-# See estimated cost without making API calls
+# See the estimated cost without making API calls
 cargo adk bench --dry-run
 
 # Set a hard cost limit
 cargo adk bench --max-cost-usd 5.00 --confirm-cost
-
-# Minimal run for quick validation
-cargo adk bench --workload simple_tool_call --runs 1 --warmup 0 --confirm-cost
 ```
 
-### Framework Comparison
+### Framework comparison
 
 ```bash
-# Compare ADK-Rust against Python frameworks
 cargo adk bench --workload simple_tool_call --runs 3 \
   --external-config adk-bench/harnesses/external-frameworks.json \
   --format markdown --confirm-cost
 ```
 
-### Concurrency Sweep
+### Concurrency sweep
 
 ```bash
-# Test throughput at multiple concurrency levels
 cargo adk bench --workload simple_tool_call --sweep --runs 3 --confirm-cost
 ```
 
-### Regression Detection (CI)
+### Regression detection (CI)
 
 ```bash
 # Save a baseline
 cargo adk bench --save-baseline --confirm-cost
 
-# Check for regressions (exit code 2 if regressed)
+# Check for regressions (exit code 2 when a metric regressed)
 cargo adk bench --check-regression --tolerance 0.10 --confirm-cost
 ```
 
-### Output Formats
+### Output formats
 
 ```bash
-# JSON (machine-readable, all raw metrics)
-cargo adk bench --format json --output results.json --confirm-cost
-
-# Markdown (README-ready comparison table)
-cargo adk bench --format markdown --confirm-cost
-
-# Table (terminal display, default)
-cargo adk bench --format table --confirm-cost
+cargo adk bench --format json --output results.json --confirm-cost   # all raw metrics
+cargo adk bench --format markdown --confirm-cost                      # comparison table
+cargo adk bench --format table --confirm-cost                         # terminal display (default)
 ```
 
-## CLI Reference
+## CLI reference
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model` | `gemini-3.5-flash-lite` | LLM model identifier |
+| `--model` | `gemini-3.7-flash` | LLM model identifier |
 | `--runs` | `5` | Measurement iterations per workload |
 | `--warmup` | `3` | Warm-up iterations (discarded) |
 | `--concurrency` | `1` | Agent concurrency level |
-| `--workload` | all built-in | Specific workload name or file path |
-| `--format` | `table` | Output format: `table`, `json`, `markdown` |
-| `--output` | stdout | Write results to file |
-| `--sweep` | off | Test concurrency levels 1,2,4,8,16,32,64 |
+| `--workload` | all built-in | Workload name or file path |
+| `--format` | `table` | `table`, `json`, or `markdown` |
+| `--output` | stdout | Write results to a file |
+| `--sweep` | off | Test concurrency levels 1, 2, 4, 8, 16, 32, 64 |
 | `--save-baseline` | off | Persist results for regression comparison |
-| `--check-regression` | off | Compare against saved baseline |
-| `--tolerance` | `0.10` | Max allowed degradation (10%) |
-| `--dry-run` | off | Show estimated cost, execute nothing |
-| `--max-cost-usd` | none | Abort if estimated cost exceeds limit |
-| `--confirm-cost` | off | Auto-confirm when cost > $1.00 |
-| `--external-config` | none | Path to external framework config JSON |
-| `--external-timeout` | `300` | Timeout (seconds) for external runners |
-| `--suite` | none | Task quality suite: `tau2` or `bfcl` |
-| `--experimental` | off | Enable experimental workloads |
+| `--check-regression` | off | Compare against the saved baseline |
+| `--tolerance` | `0.10` | Maximum allowed degradation (10%) |
+| `--dry-run` | off | Show the estimated cost and execute nothing |
+| `--max-cost-usd` | none | Abort when the estimated cost exceeds the limit |
+| `--confirm-cost` | off | Skip the interactive confirmation when the cost exceeds $1.00 |
+| `--external-config` | none | Path to an external framework config JSON |
+| `--external-timeout` | `300` | Timeout in seconds for external runners |
+| `--experimental` | off | Include experimental workloads |
 
-## Built-in Workloads
+`BenchConfig::default()`, used when the library is called directly, selects
+`gemini-3.5-flash-lite`.
 
-| Workload | Description | Expected Turns | Tools |
-|----------|-------------|---------------|-------|
+## Built-in workloads
+
+| Workload | Description | Expected turns | Tools |
+|----------|-------------|----------------|-------|
 | `simple_tool_call` | Single tool invocation (weather lookup) | 2 | 1 |
 | `multi_step_reasoning` | Sequential tool chain (search → details → shipping) | 4 | 3 |
-| `parallel_tool_invocation` | Concurrent tool calls (stock price + news + rating) | 2 | 3 |
-| `multi_agent_delegation`* | Coordinator delegates to specialist agents | 5 | 2 |
+| `parallel_tool_invocation` | Concurrent tool calls (stock price, news, rating) | 2 | 3 |
+| `multi_agent_delegation` | Coordinator delegates to specialist agents; needs `--experimental` | 5 | 2 |
 
-*Requires `--experimental` flag.
+## Library use
+
+```rust
+use adk_bench::{BenchConfig, BenchRunner};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = BenchConfig {
+        workload: Some("simple_tool_call".to_string()),
+        runs: 1,
+        warmup: 0,
+        ..BenchConfig::default()
+    };
+    let results = BenchRunner::new(config).run().await?;
+    for result in &results {
+        println!("{}: overhead mean {} µs", result.workload_name, result.agent_loop_overhead.mean_us);
+    }
+    Ok(())
+}
+```
 
 ## External Benchmark Protocol (EBP)
 
-Competitor frameworks are benchmarked via subprocess. Each harness receives:
-- `BENCH_START_EPOCH_NS` environment variable (monotonic nanoseconds at spawn)
-- Workload JSON file path as the last CLI argument
+Other frameworks are benchmarked as subprocesses. Each harness receives:
 
-And must output exactly one JSON object on stdout:
+- the `BENCH_START_EPOCH_NS` environment variable (nanosecond timestamp at spawn)
+- the workload JSON file path as the last command-line argument
+
+and prints exactly one JSON object on stdout:
 
 ```json
 {
@@ -201,13 +186,17 @@ And must output exactly one JSON object on stdout:
 }
 ```
 
-### Writing a Harness
+A harness that runs past `--external-timeout` is killed and reported as
+`BenchError::ExternalTimeout`.
 
-See `harnesses/` for reference implementations:
-- `bench_gemini_sdk.py` — Raw Google Gemini Python SDK (no framework)
-- `bench_langgraph.py` — LangGraph ReAct agent
+### Writing a harness
 
-Configure them in `harnesses/external-frameworks.json`:
+`harnesses/` has reference implementations:
+
+- `bench_gemini_sdk.py` — the Google Gemini Python SDK without a framework
+- `bench_langgraph.py` — a LangGraph ReAct agent
+
+Configure harnesses in a JSON file:
 
 ```json
 {
@@ -223,71 +212,38 @@ Configure them in `harnesses/external-frameworks.json`:
 }
 ```
 
-## Architecture
+## Design principles
 
-```
-adk-bench/
-├── src/
-│   ├── lib.rs                  # Public exports
-│   ├── config.rs               # BenchConfig, CLI flag mapping
-│   ├── runner.rs               # BenchRunner orchestrator
-│   ├── workload.rs             # Workload schema, built-in workloads
-│   ├── metrics.rs              # DurationStats, BenchmarkResult, MetricCollector
-│   ├── memory.rs               # Platform-specific RSS sampling
-│   ├── instrumented_llm.rs     # InstrumentedLlm wrapper (temp=0, timing capture)
-│   ├── external.rs             # ExternalRunner, EBP protocol
-│   ├── formatter.rs            # JSON/table/markdown output
-│   ├── error.rs                # BenchError enum
-│   └── adapters/
-│       ├── mod.rs              # TaskQualityAdapter trait
-│       ├── tau2.rs             # τ²-bench adapter (feature: tau2)
-│       └── bfcl.rs             # BFCL adapter (feature: bfcl)
-├── harnesses/
-│   ├── bench_gemini_sdk.py     # Gemini Python SDK EBP harness
-│   ├── bench_langgraph.py      # LangGraph EBP harness
-│   ├── external-frameworks.json
-│   └── simple_tool_call.json   # Workload file for external harnesses
-└── tests/
-```
-
-## Feature Flags
-
-| Feature | Description |
-|---------|-------------|
-| `tau2` | τ²-bench task quality adapter |
-| `bfcl` | Berkeley Function Calling Leaderboard adapter |
-
-## Design Principles
-
-- **Real LLM calls** — No mocks. Deterministic config (temperature=0, top_p=1.0, seed=42) for reproducibility.
-- **Overhead isolation** — `InstrumentedLlm` captures per-call timing; framework overhead = total_turn - llm_round_trip.
-- **Apples-to-apples comparison** — All frameworks get the same workload, same model, same BENCH_START_EPOCH_NS clock source.
-- **Cost awareness** — `--dry-run`, `--max-cost-usd`, `--confirm-cost` prevent surprise bills.
-- **CI-ready** — `--check-regression` exits with code 2 on regressions, integrates with any CI system.
-- **Platform-specific memory** — Linux `/proc/self/statm` (authoritative), macOS `mach_task_basic_info` (informational).
+- **Real LLM calls** — no mocks; `InstrumentedLlm` sends temperature 0, `top_p` 1.0, and seed 42.
+- **Overhead isolation** — `InstrumentedLlm` records per-call timing; framework overhead is the
+  total turn time minus the LLM round trip.
+- **Same inputs** — every framework gets the same workload, model, and `BENCH_START_EPOCH_NS`
+  clock source.
+- **Cost awareness** — `--dry-run`, `--max-cost-usd`, and `--confirm-cost`.
+- **CI** — `--check-regression` exits with code 2 on a regression.
 
 ## Environment
 
-Requires `GOOGLE_API_KEY` for Gemini models. Set it before running:
+Gemini models need `GOOGLE_API_KEY`:
 
 ```bash
 export GOOGLE_API_KEY="your-api-key"
 ```
 
-For external Python harnesses, ensure dependencies are installed:
+The Python harnesses need their dependencies:
 
 ```bash
 pip install google-generativeai langgraph langchain-google-genai langchain-core
 ```
 
-## Measurement Notes
+## Measurement notes
 
-- **Cold start** is measured from process spawn (or `BENCH_START_EPOCH_NS`) to the first `generate_content` call timestamp.
-- **Agent loop overhead** is computed per-turn by subtracting the LLM round-trip from total turn wall-clock time.
-- **CV > 20% warning** is emitted when overhead measurements are unstable — increase `--runs` or reduce system load.
-- **Linux is authoritative** for published cross-framework memory comparisons due to consistent `/proc/self/statm` RSS reporting.
-- Results measured on Apple M-series, macOS, June 2026. Your numbers will vary by hardware and network.
+- **CV warning** — a coefficient of variation above 20% is reported as unstable; increase
+  `--runs` or reduce system load.
+- **Memory** — Linux `/proc/self/statm` is the reference for published cross-framework memory
+  comparisons; macOS figures are informational.
+- Results vary by hardware, network, and model; compare runs only within one model generation.
 
 ## License
 
-Apache 2.0
+Apache-2.0
