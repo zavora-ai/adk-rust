@@ -204,12 +204,19 @@ impl Evaluator {
         let embedding = self.embedding_scorer.is_some();
         #[cfg(not(feature = "embedding"))]
         let embedding = false;
+        if !self.config.criteria.custom.is_empty() {
+            tracing::warn!(
+                eval.custom_criteria = self.config.criteria.custom.len(),
+                "custom criteria are not scored by the evaluator"
+            );
+        }
         if self.config.criteria.has_criteria() || self.structured_judge.is_some() || embedding {
             return Ok(());
         }
         Err(crate::error::EvalError::ConfigError(
             "no evaluation criteria are configured, so no case can pass or fail; set a \
-             threshold in EvaluationCriteria or attach a structured judge"
+             threshold in EvaluationCriteria (custom criteria are not scored by the \
+             evaluator) or attach a structured judge"
                 .to_string(),
         ))
     }
@@ -1500,18 +1507,28 @@ mod tests {
             .unwrap_err();
         assert!(config_error(error).contains("no evaluation criteria are configured"));
 
-        // Custom criteria are not scored by the evaluator, so they cannot pass a case.
+        // Custom criteria are not scored by the evaluator, so alone they are no criteria.
+        let tone = crate::criteria::CustomCriterion {
+            name: "tone".to_string(),
+            description: "friendly".to_string(),
+            threshold: 0.5,
+            config: Value::Null,
+        };
         let custom = Evaluator::new(criteria(EvaluationCriteria {
-            custom: vec![crate::criteria::CustomCriterion {
-                name: "tone".to_string(),
-                description: "friendly".to_string(),
-                threshold: 0.5,
-                config: Value::Null,
-            }],
+            custom: vec![tone.clone()],
             ..Default::default()
         }));
-        let result = custom.evaluate_case(echo_agent(), &case(vec![turn("hi", "hi")])).await;
-        assert!(!result.unwrap().passed);
+        let error =
+            custom.evaluate_case(echo_agent(), &case(vec![turn("hi", "hi")])).await.unwrap_err();
+        assert!(config_error(error).contains("no evaluation criteria are configured"));
+
+        // Beside a scored criterion they are carried and the case is scored by the other.
+        let mixed = Evaluator::new(criteria(EvaluationCriteria {
+            custom: vec![tone],
+            ..exact_similarity().criteria
+        }));
+        let result = mixed.evaluate_case(echo_agent(), &case(vec![turn("hi", "hi")])).await;
+        assert!(result.unwrap().passed);
     }
 
     #[tokio::test]

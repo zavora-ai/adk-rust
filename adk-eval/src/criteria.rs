@@ -53,7 +53,11 @@ pub struct EvaluationCriteria {
     #[serde(default)]
     pub hallucination_score: Option<f64>,
 
-    /// Custom criteria for extensibility
+    /// Criteria your own code scores; carried with the configuration for it.
+    ///
+    /// [`Evaluator`](crate::Evaluator) does not score them, so they do not count toward
+    /// [`has_criteria`](Self::has_criteria): a configuration with only custom criteria is
+    /// rejected like an empty one.
     #[serde(default)]
     pub custom: Vec<CustomCriterion>,
 }
@@ -106,7 +110,29 @@ impl EvaluationCriteria {
         self
     }
 
-    /// Check if any criteria are defined
+    /// Whether any criterion [`Evaluator`](crate::Evaluator) scores has a threshold.
+    ///
+    /// [`custom`](Self::custom) criteria are not counted, since the evaluator does not score
+    /// them.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_eval::EvaluationCriteria;
+    /// use adk_eval::criteria::CustomCriterion;
+    ///
+    /// let custom_only = EvaluationCriteria {
+    ///     custom: vec![CustomCriterion {
+    ///         name: "tone".to_string(),
+    ///         description: "The reply is friendly".to_string(),
+    ///         threshold: 0.8,
+    ///         config: serde_json::Value::Null,
+    ///     }],
+    ///     ..Default::default()
+    /// };
+    /// assert!(!custom_only.has_criteria());
+    /// assert!(custom_only.with_response_similarity(0.8).has_criteria());
+    /// ```
     pub fn has_criteria(&self) -> bool {
         self.tool_trajectory_score.is_some()
             || self.response_similarity.is_some()
@@ -114,7 +140,6 @@ impl EvaluationCriteria {
             || self.rubric_quality_score.is_some()
             || self.safety_score.is_some()
             || self.hallucination_score.is_some()
-            || !self.custom.is_empty()
     }
 }
 
@@ -329,6 +354,20 @@ mod tests {
     #[test]
     fn test_default_criteria() {
         let criteria = EvaluationCriteria::default();
+        assert!(!criteria.has_criteria());
+    }
+
+    #[test]
+    fn custom_criteria_alone_are_not_criteria() {
+        let criteria = EvaluationCriteria {
+            custom: vec![CustomCriterion {
+                name: "tone".to_string(),
+                description: "friendly".to_string(),
+                threshold: 0.5,
+                config: serde_json::Value::Null,
+            }],
+            ..Default::default()
+        };
         assert!(!criteria.has_criteria());
     }
 }

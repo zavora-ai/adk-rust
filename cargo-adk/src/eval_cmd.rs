@@ -245,14 +245,14 @@ fn load_criteria(path: Option<&Path>) -> Result<EvaluationCriteria, String> {
             EvaluationCriteria::default().with_tool_trajectory(1.0).with_response_similarity(0.8)
         }
     };
-    if !criteria.has_criteria() {
-        return Err("the criteria set no thresholds, so every case would pass unchecked; set at \
-                    least one, such as \"response_similarity\": 0.8"
-            .to_string());
-    }
     if !criteria.custom.is_empty() {
         return Err("custom criteria are not evaluated by adk_eval::Evaluator, so cargo adk eval \
                     cannot check them; remove \"custom\" from the criteria file"
+            .to_string());
+    }
+    if !criteria.has_criteria() {
+        return Err("the criteria set no thresholds, so every case would pass unchecked; set at \
+                    least one, such as \"response_similarity\": 0.8"
             .to_string());
     }
     Ok(criteria)

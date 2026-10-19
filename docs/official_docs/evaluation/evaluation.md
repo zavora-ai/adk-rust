@@ -247,7 +247,7 @@ A case passes only when at least one criterion was evaluated and none failed. In
 |-------|--------|
 | A test file with no `eval_cases` | `evaluate_test_file` / `evaluate_file` return `EvalError::ConfigError` |
 | A case with no `conversation` turns | `evaluate_case` returns `EvalError::ConfigError`; in a test file the case fails with an `execution` failure |
-| An evaluator with no criteria (no threshold set and no structured or embedding scorer) | `evaluate_case` and `evaluate_test_file` return `EvalError::ConfigError` before the agent runs |
+| An evaluator with no criteria (no threshold set and no structured or embedding scorer; `EvaluationCriteria::custom` entries do not count, since the evaluator does not score them) | `evaluate_case` and `evaluate_test_file` return `EvalError::ConfigError` before the agent runs |
 | Criteria that apply to no turn, such as `semantic_match_score` with no expected responses | the case fails with a `not_evaluated` failure |
 | A directory with no `*.test.json` file | `evaluate_directory` returns `EvalError::ConfigError` |
 | A report without results | `EvaluationReport::all_passed()` returns `false` |
