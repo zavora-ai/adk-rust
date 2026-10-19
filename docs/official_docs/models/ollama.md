@@ -1,62 +1,25 @@
 # Ollama (Local Models)
 
-Run LLMs locally with complete privacy - no API keys, no internet, no costs.
+`OllamaModel` runs agents on models served by a local [Ollama](https://ollama.com) server. It
+needs no API key, and local models cost zero in the [pricing catalog](./providers.md#usage-attribution-and-cost).
 
-## Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Ollama Local Setup                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│   Your Machine                                                      │
-│   ┌─────────────────────────────────────────────────────────────┐  │
-│   │                                                             │  │
-│   │   ┌──────────────┐      ┌──────────────┐                   │  │
-│   │   │  ADK-Rust    │ ───▶ │   Ollama     │                   │  │
-│   │   │  Agent       │      │   Server     │                   │  │
-│   │   └──────────────┘      └──────┬───────┘                   │  │
-│   │                                │                            │  │
-│   │                         ┌──────▼───────┐                   │  │
-│   │                         │  Local LLM   │                   │  │
-│   │                         │  (llama3.2)  │                   │  │
-│   │                         └──────────────┘                   │  │
-│   │                                                             │  │
-│   └─────────────────────────────────────────────────────────────┘  │
-│                                                                     │
-│   🔒 100% Private - Data never leaves your machine                 │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-## Why Ollama?
-
-| Benefit | Description |
-|---------|-------------|
-| 🆓 **Free** | No API costs, ever |
-| 🔒 **Private** | Data stays on your machine |
-| 📴 **Offline** | Works without internet |
-| 🎛️ **Control** | Choose any model, customize settings |
-| ⚡ **Fast** | No network latency |
+| Item | Value |
+|------|-------|
+| Client | `OllamaModel`, configured with `OllamaConfig` |
+| Feature | `ollama` on `adk-model` or `adk-rust` |
+| Server | `http://localhost:11434` by default |
+| Endpoint | `POST /api/chat`, streamed or not |
+| Catalog default | `qwen3.5` (`adk_model::catalog::OLLAMA_DEFAULT`) |
 
 ---
 
 ## Step 1: Install Ollama
 
-### macOS
-```bash
-brew install ollama
-```
-
-### Linux
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-```
-
-### Windows
-Download from [ollama.com](https://ollama.com)
-
----
+| Platform | Install |
+|----------|---------|
+| macOS | `brew install ollama` |
+| Linux | `curl -fsSL https://ollama.com/install.sh \| sh` |
+| Windows | Download from [ollama.com](https://ollama.com) |
 
 ## Step 2: Start the Server
 
@@ -64,82 +27,59 @@ Download from [ollama.com](https://ollama.com)
 ollama serve
 ```
 
-You should see:
-```
-Couldn't find '/Users/you/.ollama/id_ed25519'. Generating new private key.
-Your new public key is: ssh-ed25519 AAAA...
-time=2024-01-05T12:00:00.000Z level=INFO source=server.go msg="Listening on 127.0.0.1:11434"
-```
-
----
+The server listens on `127.0.0.1:11434`.
 
 ## Step 3: Pull a Model
 
-In a new terminal:
-
 ```bash
-# Recommended starter model (3B parameters, fast)
-ollama pull llama3.2:3b
-
-# Other popular models
-ollama pull qwen3.6:35b-a3b   # Latest Qwen — 73.4% SWE-bench, MoE 35B/3B active
-ollama pull qwen3.5            # Strong multilingual and coding
-ollama pull qwen3-coder:30b    # Code-focused with tool calling
-ollama pull mistral:7b        # Good for code
-ollama pull deepseek-r1:14b   # Reasoning model
-ollama pull devstral:24b      # Optimized for coding
-ollama pull gemma3:9b         # Google's efficient model
-ollama pull codellama:13b     # Code generation
+ollama pull qwen3.5
 ```
 
----
+| Model tag | Capabilities in the Ollama library |
+|-----------|------------------------------------|
+| `qwen3.5` | Tools, thinking, vision |
+| `qwen3.6:35b-a3b` | Tools, thinking, vision |
+| `qwen3-coder:30b` | Tools |
+| `gemma4` | Tools, thinking, vision, audio |
+| `llama3.2:3b` | Tools |
+| `llama3.1:8b` | Tools |
+| `llama3.3:70b` | Tools |
+| `qwen2.5:7b` | Tools |
+| `mistral:7b` | Tools |
+| `mistral-nemo:12b` | Tools |
+| `devstral:24b` | Tools |
+| `deepseek-r1:14b`, `deepseek-r1:32b` | Tools, thinking |
+| `gemma3:12b` | Vision |
+| `codellama:13b` | — |
+
+An agent with tools needs a model whose library page lists tools. Thinking output arrives as
+`Part::Thinking`.
 
 ## Step 4: Add to Your Project
 
 ```toml
 [dependencies]
-adk-model = { version = "3.0.0", features = ["ollama"] }
+adk-rust = { version = "3.0.0", features = ["ollama"] }
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+# For the tool-calling sample:
+adk-tool = "3.0.0"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 ```
 
----
-
-## Step 5: Use in Code
+## Step 5: Run an Agent
 
 ```rust
-use adk_model::ollama::{OllamaModel, OllamaConfig};
-use adk_agent::LlmAgentBuilder;
-use std::sync::Arc;
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // No API key needed!
-    let model = OllamaModel::new(OllamaConfig::new("llama3.2"))?;
-
-    let agent = LlmAgentBuilder::new("local_assistant")
-        .instruction("You are a helpful assistant running locally.")
-        .model(Arc::new(model))
-        .build()?;
-
-    // Use the agent...
-    Ok(())
-}
-```
-
----
-
-## Complete Working Example
-
-```rust
-use adk_rust::prelude::*;
 use adk_rust::Launcher;
+use adk_rust::prelude::*;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
-    
-    // No API key needed!
-    let model = OllamaModel::new(OllamaConfig::new("llama3.2"))?;
+    // No API key needed.
+    let model = OllamaModel::new(OllamaConfig::new("qwen3.5"))?;
 
     let agent = LlmAgentBuilder::new("ollama_assistant")
         .description("Ollama-powered local assistant")
@@ -147,149 +87,113 @@ async fn main() -> anyhow::Result<()> {
         .model(Arc::new(model))
         .build()?;
 
-    // Run interactive session
+    // Reads each message from stdin and streams the answer; `exit` quits.
     Launcher::new(Arc::new(agent)).run().await?;
-    
     Ok(())
 }
 ```
 
-### Cargo.toml
-
-```toml
-[dependencies]
-adk-rust = { version = "3.0.0", features = ["ollama"] }
-tokio = { version = "1", features = ["full"] }
-dotenvy = "0.15"
-anyhow = "1.0"
-```
-
 ---
 
-## Configuration Options
+## Configuration
+
+`OllamaConfig` has public fields; `OllamaConfig::with_host(host, model)` sets the server URL:
 
 ```rust
-use adk_model::ollama::{OllamaModel, OllamaConfig};
+use adk_model::ollama::{OllamaConfig, OllamaModel};
 
-let config = OllamaConfig::new("llama3.2")
-    .with_base_url("http://localhost:11434")  // Custom server URL
-    .with_temperature(0.7)                     // Creativity (0.0-1.0)
-    .with_max_tokens(2048);                    // Max response length
-
-let model = OllamaModel::new(config)?;
+fn build() -> adk_core::Result<OllamaModel> {
+    let mut config = OllamaConfig::with_host("http://gpu-box:11434", "qwen3.5");
+    config.temperature = Some(0.7);
+    config.num_ctx = Some(32_768); // context window
+    OllamaModel::new(config)
+}
 ```
 
----
+| Field | Default | Sent as |
+|-------|---------|---------|
+| `host` | `http://localhost:11434` | — |
+| `model` | `qwen3.5` | `model` |
+| `num_ctx` | Model default | `options.num_ctx` |
+| `temperature`, `top_p`, `top_k` | Model default | `options` |
 
-## Recommended Models
-
-| Model | Size | RAM Needed | Best For |
-|-------|------|------------|----------|
-| `llama3.2:3b` | 3B | 4GB | Fast, general purpose |
-| `llama3.1:8b` | 8B | 8GB | Popular balanced model |
-| `qwen3.6:35b-a3b` | 35B (3B active) | 24GB | **Best agentic coding** — 73.4% SWE-bench |
-| `qwen3.5` | varies | varies | Strong multilingual and coding |
-| `qwen3-coder:30b` | 30B | 19GB | Code-focused with tool calling |
-| `qwen2.5:7b` | 7B | 8GB | Good tool calling, lightweight |
-| `mistral:7b` | 7B | 8GB | Code and reasoning |
-| `mistral-nemo:12b` | 12B | 12GB | Enhanced Mistral (128K context) |
-| `deepseek-r1:14b` | 14B | 16GB | Distilled reasoning |
-| `deepseek-r1:32b` | 32B | 32GB | Larger reasoning model |
-| `gemma3:9b` | 9B | 10GB | Google's efficient open model |
-| `devstral:24b` | 24B | 24GB | Optimized for coding |
-| `codellama:13b` | 13B | 16GB | Code generation |
-| `llama3.3:70b` | 70B | 48GB | Highest quality |
-
-### Choosing a Model
-
-- **Limited RAM (8GB)?** → `llama3.2:3b`
-- **Best agentic coding?** → `qwen3.6:35b-a3b` (24GB, MoE — only 3B active)
-- **Need tool calling?** → `qwen3.5` or `qwen3-coder:30b`
-- **Writing code?** → `devstral:24b` or `qwen3-coder:30b`
-- **Need reasoning?** → `deepseek-r1:14b` or `deepseek-r1:32b`
-- **Best quality?** → `llama3.3:70b` (needs 48GB+ RAM)
+A request's `GenerateContentConfig` overrides `temperature`, `top_p`, and `top_k`, and sends
+`stop_sequences`, `seed`, and both penalties in `options`, `top_logprobs` as `logprobs` and
+`top_logprobs` (tokens in `provider_metadata["logprobs"]`), and `response_schema` as
+`format`. `max_output_tokens` is not sent.
+`OllamaModel::with_timeouts` sets the connect and idle timeouts (30 seconds and 10 minutes by
+default); a model that takes longer than the idle timeout to load needs a longer one. A stall
+fails with `ErrorCategory::Timeout`: `model.ollama.timeout` before the response headers,
+`model.ollama.incomplete_stream` mid-stream.
 
 ---
 
-## Tool Calling with Ollama
-
-Ollama supports function calling with compatible models:
+## Tool Calling
 
 ```rust
-use adk_model::ollama::{OllamaModel, OllamaConfig};
-use adk_agent::LlmAgentBuilder;
+use adk_rust::prelude::*;
 use adk_tool::FunctionTool;
+use schemars::JsonSchema;
+use serde::Serialize;
 use std::sync::Arc;
 
-// qwen2.5 has excellent tool calling support
-let model = OllamaModel::new(OllamaConfig::new("qwen2.5:7b"))?;
+#[derive(Serialize, JsonSchema)]
+struct WeatherArgs {
+    location: String,
+}
 
-let weather_tool = Arc::new(FunctionTool::new(
-    "get_weather",
-    "Get weather for a location",
-    |_ctx, args| async move {
-        let location = args.get("location").and_then(|v| v.as_str()).unwrap_or("unknown");
-        Ok(serde_json::json!({
-            "location": location,
-            "temperature": "72°F",
-            "condition": "Sunny"
-        }))
-    },
-));
+fn build() -> anyhow::Result<LlmAgent> {
+    let model = OllamaModel::new(OllamaConfig::new("qwen3.5"))?;
 
-let agent = LlmAgentBuilder::new("weather_assistant")
-    .instruction("Help users check the weather.")
-    .model(Arc::new(model))
-    .tool(weather_tool)
-    .build()?;
+    let weather_tool = Arc::new(FunctionTool::new(
+        "get_weather",
+        "Get weather for a location",
+        |_ctx, args| async move {
+            let location = args.get("location").and_then(|v| v.as_str()).unwrap_or("unknown");
+            Ok(serde_json::json!({
+                "location": location,
+                "temperature": "72°F",
+                "condition": "Sunny"
+            }))
+        },
+    )
+    .with_parameters_schema::<WeatherArgs>());
+
+    Ok(LlmAgentBuilder::new("weather_assistant")
+        .instruction("Help users check the weather.")
+        .model(Arc::new(model))
+        .tool(weather_tool)
+        .build()?)
+}
 ```
 
-> **Note**: Tool calling uses non-streaming mode for reliability with local models.
+| Behaviour | Rule |
+|-----------|------|
+| Streaming | Tool calls stream as partial responses, so a streamed tool-call turn is saved as one event |
+| Calls without IDs | Ollama sends calls without IDs; the agent assigns each an `adk-call-` ID and leaves it out of the next request |
+| Calls written as text | Tool-call markup a model writes into its text (the Qwen/Hermes, Llama, Mistral Nemo, DeepSeek, DeepSeek-V3, Gemma 4, and action-tag formats) becomes a call when it names a declared tool, streamed or not |
+| Tool images | Images a tool returns are sent in a user message after the tool messages |
 
 ---
 
-## Example Output
+## Usage
 
-```
-👤 User: Hello! What can you do?
-
-🤖 Ollama (llama3.2): Hello! I'm a local AI assistant running on your 
-machine. I can help with:
-- Answering questions
-- Writing and editing text
-- Explaining concepts
-- Basic coding help
-
-All completely private - nothing leaves your computer!
-```
+The final `/api/chat` line's counts become `UsageMetadata`. Ollama leaves out a metric that is
+zero, such as `prompt_eval_count` when the whole prompt came from its cache; a missing count
+reads as zero, `eval_count` is still reported, and `UsageMetadata::provider_usage` holds the
+metric fields the line carried.
 
 ---
 
 ## Troubleshooting
 
-### "Connection refused"
-```bash
-# Make sure Ollama is running
-ollama serve
-```
-
-### "Model not found"
-```bash
-# Pull the model first
-ollama pull llama3.2
-```
-
-### Slow responses
-- Use a smaller model (`llama3.2` instead of `llama3.1:70b`)
-- Close other applications to free RAM
-- Consider GPU acceleration if available
-
-### Check available models
-```bash
-ollama list
-```
-
-### "stream ended before the response finished" or "reported an error during generation"
+| Symptom | Fix |
+|---------|-----|
+| Connection refused | Start the server with `ollama serve` |
+| Model not found | Pull the model first: `ollama pull qwen3.5`; `ollama list` shows the pulled models |
+| Slow responses | Use a smaller model, or a machine with a GPU |
+| `stream ended before the response finished` | See below |
+| `reported an error during generation` | See below |
 
 A streamed response is complete only when Ollama sends a line with `"done": true`. A stream
 that ends without one fails with `model.ollama.incomplete_stream` (retryable), and an
@@ -300,19 +204,20 @@ out-of-memory or crashed runner. See
 
 ---
 
-## Running Examples
+## Example
+
+`examples/ollama_qwen` checks thinking traces and tool calling on a local Qwen model (`OLLAMA_MODEL`, default `qwen3.5`):
 
 ```bash
-cargo check -p adk-rust --no-default-features --features ollama
+ollama pull qwen3.5
+cargo run --manifest-path examples/ollama_qwen/Cargo.toml
 ```
-
-Run `ollama serve` and pull the model before starting an agent that uses this provider.
 
 ---
 
 ## Related
 
-- [Model Providers](./providers.md) - Cloud-based LLM providers
+- [Model Providers](./providers.md) - Cloud LLM providers
 - [Local Models (mistral.rs)](./mistralrs.md) - Native Rust inference
 
 ---

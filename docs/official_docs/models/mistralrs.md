@@ -6,23 +6,23 @@ Run LLMs locally with native Rust inference - no external servers, no API keys.
 
 ## What is mistral.rs?
 
-[mistral.rs](https://github.com/EricLBuehler/mistral.rs) is a high-performance Rust inference engine that runs LLMs directly on your hardware. ADK-Rust integrates it through the `adk-mistralrs` crate, pinned to **v0.8.0** with **Gemma 4** support.
+[mistral.rs](https://github.com/EricLBuehler/mistral.rs) is a Rust inference engine that runs LLMs on your own hardware. ADK-Rust integrates it through the `adk-mistralrs` crate, which depends on `mistralrs` 0.8.
 
-> **Key highlights**:
-> - 🦀 **Native Rust** - No Python, no external servers
-> - 🔒 **Fully offline** - No API keys or internet required
-> - ⚡ **Hardware acceleration** - CUDA, Metal (3.1 bfloat16), CPU optimizations
-> - 📦 **Quantization** - ISQ, MXFP4, GGUF, UQFF for running large models on limited hardware
-> - 🔧 **LoRA adapters** - Fine-tuned model support with hot-swapping
-> - 👁️ **Multimodal** - Vision, audio, and video understanding (Gemma 4, Qwen 3 VL)
-> - 🎤 **Speech** - Voxtral real-time speech recognition
-> - 🎯 **Multi-model** - Serve multiple models from one instance
+| Capability | Types |
+|------------|-------|
+| Text models as an `Llm` | `MistralRsModel` |
+| In-situ quantization (ISQ) and PagedAttention | `MistralRsConfig::builder().isq(...)`, `.paged_attention(true)` |
+| LoRA and X-LoRA adapters, swapped at runtime | `MistralRsAdapterModel`, `AdapterConfig` |
+| Vision models | `MistralRsVisionModel` |
+| Several models behind one `Llm` | `MistralRsMultiModel` |
+| Speech generation, image generation, embeddings | `MistralRsSpeechModel`, `MistralRsDiffusionModel`, `MistralRsEmbeddingModel` |
+| CPU, CUDA, and Metal | CPU by default; `cuda` and `metal` features |
 
 ---
 
 ## Step 1: Add Dependencies
 
-`adk-mistralrs` is published to crates.io as a workspace member. Add it as a standard dependency:
+`adk-mistralrs` is published to crates.io:
 
 ```toml
 [package]
@@ -36,6 +36,7 @@ adk-agent = "3.0.0"
 adk-rust = "3.0.0"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1.0"
+image = "0.25" # only for the vision example
 ```
 
 For hardware acceleration, add feature flags:
@@ -85,10 +86,8 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-**What happens**:
-1. First run downloads the model from HuggingFace (~2-8GB depending on model)
-2. Model is cached locally in `~/.cache/huggingface/`
-3. Subsequent runs load from cache instantly
+The first run downloads the model from the Hugging Face Hub into the local Hugging Face cache;
+later runs load it from the cache.
 
 ---
 
@@ -126,14 +125,8 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-**Quantization levels**:
-
-| Level | Memory Reduction | Quality | Best For |
-|-------|-----------------|---------|----------|
-| `Q4_0` | ~75% | Good | Limited RAM (8GB) |
-| `Q4_1` | ~70% | Better | Balanced |
-| `Q8_0` | ~50% | High | Quality-focused |
-| `Q8_1` | ~50% | Highest | Best quality |
+`QuantizationLevel` has `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, and the K-quants
+`Q2K`, `Q3K`, `Q4K`, `Q5K`, and `Q6K`; fewer bits use less memory at some cost in quality.
 
 ---
 
@@ -171,9 +164,15 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-**Hot-swap adapters at runtime**:
+Swap the active adapter at runtime without reloading the base model:
+
 ```rust
-model.swap_adapter("another-adapter").await?;
+use adk_mistralrs::MistralRsAdapterModel;
+
+async fn swap(model: &MistralRsAdapterModel) -> anyhow::Result<()> {
+    model.swap_adapter("another-adapter").await?;
+    Ok(())
+}
 ```
 
 ---
@@ -197,7 +196,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Analyze an image
     let image = image::open("photo.jpg")?;
-    let response = model.generate_with_image("Describe this image.", vec![image]).await?;
+    let description = model.generate_with_image("Describe this image.", vec![image]).await?;
+    println!("{description}");
 
     Ok(())
 }
@@ -231,8 +231,8 @@ async fn main() -> anyhow::Result<()> {
     multi.set_default("phi").await?;
     println!("Available models: {:?}", multi.model_names().await);
 
-    // Route to specific model
-    // multi.generate_with_model(Some("gemma"), request, false).await?;
+    // `multi.generate_with_model(Some("gemma"), request, false)` routes one request;
+    // as an `Llm`, the multi-model serves the default.
 
     Ok(())
 }
@@ -242,38 +242,35 @@ async fn main() -> anyhow::Result<()> {
 
 ## Model Sources
 
-### HuggingFace Hub (Default)
-
 ```rust
-ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct")
-```
+use adk_mistralrs::ModelSource;
 
-### Local Directory
-
-```rust
-ModelSource::local("/path/to/model")
-```
-
-### Pre-Quantized GGUF
-
-```rust
-ModelSource::gguf("/path/to/model.Q4_K_M.gguf")
+fn sources() -> [ModelSource; 4] {
+    [
+        // Hugging Face Hub (downloaded on first use)
+        ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"),
+        // A local model directory
+        ModelSource::local("/path/to/model"),
+        // A pre-quantized GGUF file
+        ModelSource::gguf("/path/to/model.Q4_K_M.gguf"),
+        // A UQFF file
+        ModelSource::uqff("/path/to/model.uqff"),
+    ]
+}
 ```
 
 ---
 
-## Recommended Models
+## Models
 
-| Model | Size | RAM Needed | Best For |
-|-------|------|------------|----------|
-| **`google/gemma-4-4b-it`** | **4B** | **8GB** | **Gemma 4 — multimodal (text, image, audio, video), Apache 2.0** |
-| **`google/gemma-4-12b-it`** | **12B** | **24GB** | **Gemma 4 — high-quality multimodal reasoning** |
-| `microsoft/Phi-3.5-mini-instruct` | 3.8B | 8GB | Fast, general purpose |
-| `microsoft/Phi-3.5-vision-instruct` | 4.2B | 10GB | Vision + text |
-| `Qwen/Qwen3-4B` | 4B | 8GB | Multilingual, coding, reasoning |
-| `Qwen/Qwen3.5-7B-Instruct` | 7B | 16GB | Latest Qwen with strong reasoning |
-| `google/gemma-2-2b-it` | 2B | 4GB | Lightweight |
-| `mistralai/Mistral-7B-Instruct-v0.3` | 7B | 16GB | High quality |
+Any model ID the mistral.rs 0.8 engine supports can be loaded. The examples on this page use:
+
+| Model | Use |
+|-------|-----|
+| `microsoft/Phi-3.5-mini-instruct` | Text |
+| `microsoft/Phi-3.5-vision-instruct` | Vision and text |
+| `google/gemma-2-2b-it` | Text |
+| `meta-llama/Llama-3.2-3B-Instruct` | Text, base for LoRA adapters |
 
 ---
 
@@ -285,7 +282,7 @@ ModelSource::gguf("/path/to/model.Q4_K_M.gguf")
 adk-mistralrs = { version = "3.0.0", features = ["metal"] }
 ```
 
-Metal acceleration is automatic on M1/M2/M3 Macs.
+`metal` builds mistral.rs with Metal support for Apple Silicon.
 
 ### NVIDIA GPU
 
@@ -293,7 +290,8 @@ Metal acceleration is automatic on M1/M2/M3 Macs.
 adk-mistralrs = { version = "3.0.0", features = ["cuda"] }
 ```
 
-Requires CUDA toolkit 11.8+.
+`cuda` needs the CUDA toolkit installed. `flash-attn`, `cudnn`, `nccl`, `mkl`, and
+`accelerate` are also available.
 
 ### CPU Only
 
@@ -312,21 +310,11 @@ cargo build -p adk-mistralrs --features metal
 
 ## Troubleshooting
 
-**Out of Memory**
-```rust
-// Enable quantization
-.isq(QuantizationLevel::Q4_0)
-// Enable paged attention
-.paged_attention(true)
-```
-
-**Slow First Load**
-- First run downloads the model (~2-8GB)
-- Subsequent runs use cached model
-
-**Model Not Found**
-- Check HuggingFace model ID is correct
-- Ensure internet connection for first download
+| Symptom | Fix |
+|---------|-----|
+| Out of memory | Quantize with `.isq(QuantizationLevel::Q4_0)` and enable `.paged_attention(true)` on the config builder |
+| Slow first load | The first run downloads the model; later runs load it from the cache |
+| Model not found | Check the Hugging Face model ID, and the network connection for the first download |
 
 ---
 

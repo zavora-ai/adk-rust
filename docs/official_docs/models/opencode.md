@@ -64,7 +64,12 @@ Completions on Zen.
   different API, and base URLs with whitespace, credentials, a query, or a fragment.
 - Chat Completions replays returned thinking through `reasoning_content` for tool continuations.
 - Redirects are not followed, so credentials are only sent to the configured host.
-- Use `LlmRequest.config` for sampling and output limits.
+- Use `LlmRequest.config` for sampling and output limits; each route checks the generation
+  config fields like its client (see [Generation Config Fields](./providers.md#generation-config-fields)).
+- Chat Completions routes follow the [stream termination](./providers.md#stream-termination)
+  rules of `OpenAICompatible`.
+- Responses are attributed to provider `opencode` (Zen) or `opencode-go` (Go) and carry no
+  cost from the pricing catalog.
 
 ## Example
 

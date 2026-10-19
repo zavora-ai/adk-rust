@@ -6,34 +6,13 @@ ADK-Rust provides a dedicated client for OpenAI's [Responses API](https://platfo
 
 ## Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                  OpenAI Responses API Client                        │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│   Endpoint:  POST /v1/responses                                     │
-│   Client:    OpenAIResponsesClient                                  │
-│   Config:    OpenAIResponsesConfig                                  │
-│   Feature:   openai                                                 │
-│                                                                     │
-│   Capabilities:                                                     │
-│   • Streaming and non-streaming                                     │
-│   • Reasoning summaries                                             │
-│   • Tool / function calling                                         │
-│   • Multi-turn via previous_response_id                             │
-│   • Built-in tools (web search, file search, code interpreter)      │
-│   • System instructions                                             │
-│   • Model-aware sampling controls and max_output_tokens             │
-│   • Automatic retry with exponential backoff                        │
-│                                                                     │
-│   vs Chat Completions (OpenAIClient):                               │
-│   • Stateful conversations (server-side context)                    │
-│   • Native reasoning summaries                                      │
-│   • Built-in tool hosting                                           │
-│   • Simpler multi-turn (no manual message history)                  │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+| Item | Value |
+|------|-------|
+| Endpoint | `POST /v1/responses` |
+| Client | `OpenAIResponsesClient` (implements `Llm`) |
+| Config | `OpenAIResponsesConfig` |
+| Feature | `openai` on `adk-model` or `adk-rust`; `openai-ws` adds the WebSocket transport |
+| Capabilities | Streaming and non-streaming, reasoning summaries, function tools, OpenAI-hosted tools, `previous_response_id` continuation, structured output through `text.format`, background polling and cancellation |
 
 ## When to Use Which Client
 
@@ -42,12 +21,14 @@ ADK-Rust provides a dedicated client for OpenAI's [Responses API](https://platfo
 | Endpoint | `/v1/chat/completions` | `/v1/responses` |
 | Models | Chat-compatible models | Current GPT and reasoning models |
 | Reasoning summaries | Not available | Native support |
-| Built-in tools | Not available | Web search, file search, code interpreter |
-| Server-side state | Manual message history | `previous_response_id` |
-| Structured output | `response_format` | `text.format` (planned) |
-| Maturity | Stable, widely adopted | Newer, recommended by OpenAI |
+| Built-in tools | Not available | Web search, file search, code interpreter, and the other hosted tools |
+| Server-side state | Session history | Session history, or `previous_response_id` |
+| Structured output | `response_format` | `text.format` |
+| Reasoning effort `max` | Rejected | Supported |
 
-Use `OpenAIResponsesClient` when you need reasoning models with summaries, built-in tools, or want to use OpenAI's latest API. Use `OpenAIClient` for backward compatibility with existing Chat Completions workflows.
+Use `OpenAIResponsesClient` for reasoning summaries, hosted tools, server-side state, or
+reasoning effort `max`. `OpenAIClient` already sends tool-carrying requests for GPT-5.6 and
+later through the Responses API.
 
 ---
 
@@ -56,7 +37,14 @@ Use `OpenAIResponsesClient` when you need reasoning models with summaries, built
 ```toml
 [dependencies]
 adk-rust = { version = "3.0.0", features = ["openai"] }
+adk-model = { version = "3.0.0", features = ["openai"] }
 adk-tool = "3.0.0"
+anyhow = "1"
+dotenvy = "0.15"
+schemars = "1"   # tool parameter schemas
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
 ```
 
 Or with `adk-model` directly:
@@ -131,6 +119,10 @@ async fn main() -> anyhow::Result<()> {
 
     while let Some(event) = stream.next().await {
         let event = event?;
+        // Streamed deltas arrive as partial events; the final event carries the whole answer.
+        if event.llm_response.partial {
+            continue;
+        }
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
                 if let Some(text) = part.text() {
@@ -153,18 +145,23 @@ async fn main() -> anyhow::Result<()> {
 ```rust
 use adk_model::openai::OpenAIResponsesConfig;
 
-// Minimal — just API key and model
-let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-luna");
-
-// With organization and project
-let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
-    .with_organization("org-...")
-    .with_project("proj-...");
-
-// Custom base URL (for proxies or compatible APIs)
-let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
-    .with_base_url("https://my-proxy.example.com/v1");
+fn configs() -> [OpenAIResponsesConfig; 3] {
+    [
+        // API key and model.
+        OpenAIResponsesConfig::new("sk-...", "gpt-5.6-luna"),
+        // With organization and project.
+        OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
+            .with_organization("org-...")
+            .with_project("proj-..."),
+        // Custom base URL, for proxies or compatible APIs.
+        OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
+            .with_base_url("https://my-proxy.example.com/v1"),
+    ]
+}
 ```
+
+`with_service_tier`, `with_prompt_cache_retention`, and `with_open_responses_mode` (for
+Open Responses servers) are also available.
 
 ### Reasoning Models
 
@@ -172,17 +169,14 @@ For GPT-5.6 reasoning models, configure reasoning effort and summary:
 
 ```rust
 use adk_model::openai::{
-    OpenAIReasoningEffort, OpenAIResponsesClient,
-    OpenAIResponsesConfig, ReasoningSummary,
+    OpenAIReasoningEffort, OpenAIResponsesClient, OpenAIResponsesConfig, ReasoningSummary,
 };
 
-let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
-    .with_reasoning_summary(ReasoningSummary::Detailed);
-
-let model = OpenAIResponsesClient::new_with_reasoning_effort(
-    config,
-    OpenAIReasoningEffort::Max,
-)?;
+fn build() -> Result<OpenAIResponsesClient, adk_core::AdkError> {
+    let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
+        .with_reasoning_summary(ReasoningSummary::Detailed);
+    OpenAIResponsesClient::new_with_reasoning_effort(config, OpenAIReasoningEffort::Max)
+}
 ```
 
 | Reasoning Effort | Description |
@@ -195,8 +189,7 @@ let model = OpenAIResponsesClient::new_with_reasoning_effort(
 | `XHigh` | Extra-high reasoning effort |
 | `Max` | Maximum reasoning on supported models |
 
-GPT-5.6 supports `None`, `Low`, `Medium`, `High`, `XHigh`, and `Max` through the
-Responses API. Chat Completions supports up to `XHigh`.
+Availability depends on the model. `OpenAIClient` (Chat Completions) rejects `Max`.
 
 | Reasoning Summary | Description |
 |------------------|-------------|
@@ -212,16 +205,17 @@ as an assistant message.
 ### Retry Configuration
 
 ```rust
+use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
 use adk_model::retry::RetryConfig;
 
-let client = OpenAIResponsesClient::new(config)?
-    .with_retry_config(RetryConfig {
-        max_retries: 3,
-        ..Default::default()
-    });
+fn build(config: OpenAIResponsesConfig) -> Result<OpenAIResponsesClient, adk_core::AdkError> {
+    Ok(OpenAIResponsesClient::new(config)?.with_retry_config(RetryConfig::default().with_max_retries(5)))
+}
 ```
 
-Retries are automatic for rate limits (429), server errors (500/502/503/504), and network failures.
+Retries cover timeouts (408), rate limits (429), server errors (500, 502, 503, 504, 529), and
+network failures, waiting at most `RetryConfig::max_delay` (5 seconds by default) or the
+`Retry-After` delay up to that bound.
 `RetryConfig` is the only retry policy: the client does not add async-openai's own retry
 layer, so `RetryConfig::disabled()` sends each request once.
 
@@ -236,13 +230,15 @@ use std::sync::Arc;
 
 use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig, RequestAdapter};
 
-let adapter: RequestAdapter = Arc::new(|body, headers| {
-    body["metadata"] = serde_json::json!({"application": "support-bot"});
-    headers.insert("x-request-source", "support-bot".parse().expect("valid header"));
-    Ok(())
-});
-let client = OpenAIResponsesClient::new(OpenAIResponsesConfig::new(api_key, "gpt-5"))?
-    .with_request_adapter(adapter);
+fn build(api_key: String) -> Result<OpenAIResponsesClient, adk_core::AdkError> {
+    let adapter: RequestAdapter = Arc::new(|body, headers| {
+        body["metadata"] = serde_json::json!({"application": "support-bot"});
+        headers.insert("x-request-source", "support-bot".parse().expect("valid header"));
+        Ok(())
+    });
+    Ok(OpenAIResponsesClient::new(OpenAIResponsesConfig::new(api_key, "gpt-5.6-terra"))?
+        .with_request_adapter(adapter))
+}
 ```
 
 The client does not follow HTTP redirects on generation requests.
@@ -257,13 +253,15 @@ use std::sync::Arc;
 
 use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig, ResponseObserver};
 
-let observer: ResponseObserver = Arc::new(|headers| {
-    if let Some(remaining) = headers.get("x-ratelimit-remaining-requests") {
-        tracing::debug!(remaining = ?remaining, "responses rate limit");
-    }
-});
-let client = OpenAIResponsesClient::new(OpenAIResponsesConfig::new(api_key, "gpt-5"))?
-    .with_response_observer(observer);
+fn build(api_key: String) -> Result<OpenAIResponsesClient, adk_core::AdkError> {
+    let observer: ResponseObserver = Arc::new(|headers| {
+        if let Some(remaining) = headers.get("x-ratelimit-remaining-requests") {
+            tracing::debug!(remaining = ?remaining, "responses rate limit");
+        }
+    });
+    Ok(OpenAIResponsesClient::new(OpenAIResponsesConfig::new(api_key, "gpt-5.6-terra"))?
+        .with_response_observer(observer))
+}
 ```
 
 | Behaviour | Detail |
@@ -277,15 +275,15 @@ let client = OpenAIResponsesClient::new(OpenAIResponsesConfig::new(api_key, "gpt
 
 ## Available Models
 
-| Model | Type | Description |
-|-------|------|-------------|
-| `gpt-5.6-terra` | Reasoning | Balanced default for production agents |
-| `gpt-5.6-sol` | Reasoning | Flagship reasoning and coding |
-| `gpt-5.6-luna` | Reasoning | Cost-efficient, high-volume workloads |
-| `gpt-5.6` | Reasoning | Flagship alias |
-| `gpt-5` | Reasoning | Previous-generation compatibility |
-| `gpt-4.1` family | Chat | Compatibility and explicit sampling controls |
-| `o3` / `o4-mini` | Reasoning | Previous-generation reasoning compatibility |
+| Model | Catalog role |
+|-------|--------------|
+| `gpt-5.6-terra` | Default, balanced |
+| `gpt-5.6-sol` | Flagship |
+| `gpt-5.6-luna` | Economy |
+| `gpt-5.6` | Flagship |
+
+The client sends any other model ID as given, such as `gpt-4.1-nano` or `o4-mini` in
+`examples/openai_responses`.
 
 ---
 
@@ -293,13 +291,23 @@ let client = OpenAIResponsesClient::new(OpenAIResponsesConfig::new(api_key, "gpt
 
 ### Tool Calling
 
-Function tools work the same way as with `OpenAIClient` — define tools on the agent and the runner handles the tool call loop:
+Function tools work the same way as with `OpenAIClient` — define tools on the agent and the
+runner handles the tool call loop. Give each tool a parameter schema
+(`with_parameters_schema`), or the model has no parameters to fill:
 
 ```rust
-use adk_rust::prelude::*;
 use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
+use adk_rust::prelude::*;
 use adk_tool::FunctionTool;
+use schemars::JsonSchema;
+use serde::Serialize;
 use std::sync::Arc;
+
+#[derive(Serialize, JsonSchema)]
+struct WeatherArgs {
+    /// City name, such as "Paris".
+    city: String,
+}
 
 async fn get_weather(
     _ctx: Arc<dyn ToolContext>,
@@ -313,36 +321,41 @@ async fn get_weather(
     }))
 }
 
-let weather_tool = FunctionTool::new(
-    "get_weather",
-    "Get current weather for a city. Requires a 'city' string parameter.",
-    get_weather,
-);
+fn build(api_key: &str) -> anyhow::Result<LlmAgent> {
+    let weather_tool = FunctionTool::new("get_weather", "Get current weather for a city.", get_weather)
+        .with_parameters_schema::<WeatherArgs>();
+    let model = OpenAIResponsesClient::new(OpenAIResponsesConfig::new(api_key, "gpt-5.6-terra"))?;
 
-let config = OpenAIResponsesConfig::new(&api_key, "gpt-5.6-terra");
-let model = Arc::new(OpenAIResponsesClient::new(config)?);
-
-let agent = LlmAgentBuilder::new("weather_agent")
-    .instruction("Use the get_weather tool to answer weather questions.")
-    .model(model)
-    .tool(Arc::new(weather_tool))
-    .build()?;
+    Ok(LlmAgentBuilder::new("weather_agent")
+        .instruction("Use the get_weather tool to answer weather questions.")
+        .model(Arc::new(model))
+        .tool(Arc::new(weather_tool))
+        .build()?)
+}
 ```
+
+Converted function declarations are sent with `strict: false`, so optional parameters stay
+optional. An agent's `output_schema` is sent as a strict `text.format` `json_schema`.
 
 ### Multi-Turn Conversations
 
 The Runner automatically manages conversation history through sessions. Each turn's context is preserved:
 
 ```rust
-// Turn 1
-let msg1 = Content::new("user").with_text("My name is Alice.");
-let mut stream = runner.run(uid.clone(), sid.clone(), msg1).await?;
-// ... consume stream ...
+use adk_rust::futures::StreamExt;
+use adk_rust::prelude::*;
+use adk_rust::{SessionId, UserId};
 
-// Turn 2 — the model remembers the previous turn
-let msg2 = Content::new("user").with_text("What is my name?");
-let mut stream = runner.run(uid.clone(), sid.clone(), msg2).await?;
-// Response: "Your name is Alice."
+async fn two_turns(runner: &Runner, uid: UserId, sid: SessionId) -> anyhow::Result<()> {
+    for text in ["My name is Alice.", "What is my name?"] {
+        let message = Content::new("user").with_text(text);
+        let mut stream = runner.run(uid.clone(), sid.clone(), message).await?;
+        while let Some(event) = stream.next().await {
+            event?;
+        }
+    }
+    Ok(())
+}
 ```
 
 ### Per-Request Reasoning Override
@@ -350,79 +363,86 @@ let mut stream = runner.run(uid.clone(), sid.clone(), msg2).await?;
 Override reasoning settings per-request using LlmRequest extensions:
 
 ```rust
+use adk_rust::GenerateContentConfig;
 use adk_rust::prelude::*;
+use std::sync::Arc;
 
-let agent = LlmAgentBuilder::new("flexible_reasoner")
-    .model(model)
-    .generate_content_config(GenerateContentConfig {
-        extensions: {
-            let mut ext = std::collections::HashMap::new();
-            ext.insert("openai".to_string(), serde_json::json!({
-                "reasoning": {
-                    "effort": "high",
-                    "summary": "detailed"
-                }
-            }));
-            ext
-        },
-        ..Default::default()
-    })
-    .build()?;
+fn build(model: Arc<dyn Llm>) -> anyhow::Result<LlmAgent> {
+    let mut config = GenerateContentConfig::default();
+    config.extensions.insert(
+        "openai".to_string(),
+        serde_json::json!({ "reasoning": { "effort": "high", "summary": "detailed" } }),
+    );
+    Ok(LlmAgentBuilder::new("flexible_reasoner")
+        .model(model)
+        .generate_content_config(config)
+        .build()?)
+}
 ```
+
+The `openai` extension also takes `previous_response_id`, `include`, `max_tool_calls`,
+`background`, `conversation_id`, `prompt_id`, `prompt_cache_retention`, `service_tier`, and
+`built_in_tools`.
 
 ### Built-In Tools
 
 The Responses API supports OpenAI-hosted tools. Prefer the typed wrappers from `adk-tool`:
 
 ```rust
+use adk_rust::prelude::*;
 use adk_tool::OpenAIWebSearchTool;
 use std::sync::Arc;
 
-let agent = LlmAgentBuilder::new("researcher")
-    .model(model)
-    .tool(Arc::new(OpenAIWebSearchTool::new().preview()))
-    .build()?;
+fn build(model: Arc<dyn Llm>) -> anyhow::Result<LlmAgent> {
+    Ok(LlmAgentBuilder::new("researcher")
+        .model(model)
+        .tool(Arc::new(OpenAIWebSearchTool::new()))
+        .build()?)
+}
 ```
 
-Available wrappers include `OpenAIWebSearchTool`, `OpenAIFileSearchTool`, `OpenAICodeInterpreterTool`, `OpenAIImageGenerationTool`, `OpenAIComputerUseTool`, `OpenAIMcpTool`, `OpenAILocalShellTool`, `OpenAIShellTool`, and `OpenAIApplyPatchTool`.
+The wrappers are `OpenAIWebSearchTool` (`.preview()` selects `web_search_preview`),
+`OpenAIFileSearchTool`, `OpenAICodeInterpreterTool`, `OpenAIImageGenerationTool`,
+`OpenAIComputerUseTool`, `OpenAIMcpTool`, `OpenAILocalShellTool`, `OpenAIShellTool`, and
+`OpenAIApplyPatchTool`. A run with a `ToolPolicy` or a tool-call budget evaluates them before
+each request and leaves out the ones it denies; see
+[Tool Authorization](../security/tool-authorization.md).
 
 ### Previous Response ID
 
 For server-side conversation state (bypassing local session history), pass `previous_response_id`:
 
 ```rust
-let agent = LlmAgentBuilder::new("stateful")
-    .model(model)
-    .generate_content_config(GenerateContentConfig {
-        extensions: {
-            let mut ext = std::collections::HashMap::new();
-            ext.insert("openai".to_string(), serde_json::json!({
-                "previous_response_id": "resp_abc123"
-            }));
-            ext
-        },
-        ..Default::default()
-    })
-    .build()?;
+use adk_rust::GenerateContentConfig;
+use adk_rust::prelude::*;
+use std::sync::Arc;
+
+fn build(model: Arc<dyn Llm>) -> anyhow::Result<LlmAgent> {
+    let mut config = GenerateContentConfig::default();
+    config
+        .extensions
+        .insert("openai".to_string(), serde_json::json!({ "previous_response_id": "resp_abc123" }));
+    Ok(LlmAgentBuilder::new("stateful").model(model).generate_content_config(config).build()?)
+}
 ```
 
 ---
 
 ## Streaming Behavior
 
-The Responses API client streams text and reasoning deltas in real-time:
+| Output | How it arrives |
+|--------|----------------|
+| Text | `Part::Text` deltas with `partial: true`; text that arrives only in a done event or the terminal response is added once |
+| Reasoning summaries and raw reasoning (`response.reasoning_text.*`) | `Part::Thinking` deltas |
+| Refusals | The response text, streamed or not |
+| Function calls | In the final response, from the terminal event or, when the terminal response leaves them out, from the `response.output_item.done` events |
+| Final response | `turn_complete: true`, usage, and finish reason |
+| Unknown event types | Skipped; a known event with missing fields fails the turn |
 
-- Text deltas arrive as `Part::Text` with `partial: true`
-- Reasoning summary deltas arrive as `Part::Thinking` with `partial: true`
-- Function calls are emitted from the final `ResponseCompleted` event with correct names and arguments
-- The final event has `turn_complete: true` with usage metadata and finish reason
-
-This means you see text appearing token-by-token while the model generates, and function calls arrive as complete objects ready for execution.
-
-When the model emits commentary (phase-tagged progress messages), the deltas arrive as
-`Part::ServerToolCall` messages with `"phase": "commentary"`, and the final response sets
-`provider_metadata.content_complete` to `true`: it carries the complete output, so replace
-the earlier deltas with it.
+When the stream needed correcting, carried hosted tools, or held commentary (phase-tagged
+progress messages, sent as `Part::ServerToolCall` messages with `"phase": "commentary"`), the
+final response sets `provider_metadata.content_complete` to `true`: it carries the complete
+output, so replace the earlier deltas with it. Requests with hosted tools stream like any other.
 
 ---
 
@@ -431,15 +451,16 @@ the earlier deltas with it.
 Every response includes provider metadata with the `response_id`:
 
 ```rust
-if let Some(meta) = &response.provider_metadata {
-    let response_id = meta["openai"]["response_id"].as_str();
-    // Use for previous_response_id, logging, debugging
+use adk_core::LlmResponse;
+
+fn response_id(response: &LlmResponse) -> Option<&str> {
+    response.provider_metadata.as_ref()?["openai"]["response_id"].as_str()
 }
 ```
 
-Additional metadata may include:
-- `encrypted_content` — from reasoning models (for context preservation)
-- `built_in_tool_outputs` — results from web search, file search, code interpreter
+The `openai` object also carries `status`, `service_tier` when the response names one,
+`encrypted_content` from reasoning items, `built_in_tool_outputs`, and `logprobs` when the
+request set `top_logprobs`.
 
 ---
 
@@ -462,7 +483,19 @@ HTTP errors carry the upstream status in `details.upstream_status_code` and an
 identifier-like `x-request-id` in `details.request_id`. A `Retry-After` header, in
 seconds or as an HTTP-date, sets the retry delay, capped at `RetryConfig::max_delay`.
 An error body that is not a JSON error object is quoted, up to 512 bytes, in the message.
-A stream event type the client does not recognize is skipped rather than ending the turn.
+`details.metadata["provider_error_code"]` holds the error object's identifier-like `code`, then
+its `type`, then its `status`. A request whose response headers or body stall past the idle
+timeout fails with `ErrorCategory::Timeout` (`model.openai_responses.request`), and a stalled
+stream with `model.openai_responses.stream`, also `Timeout`.
+
+A body or stream event that does not decode fails with `model.openai_responses.parse` and the
+message `OpenAI Responses API parse error`; `details.metadata["openai_responses_parse"]`
+describes the failure by layer (`stream_setup`, `stream_event`, `response_body`), serde
+category, line, and column, without quoting the response.
+
+The generation config fields the API has no place for (`stop_sequences`, `seed`,
+`frequency_penalty`, `presence_penalty`) fail with `model.unsupported_config` before the
+request is sent; see [Generation Config Fields](./providers.md#generation-config-fields).
 
 ### Failed and unfinished responses
 
@@ -474,7 +507,8 @@ and non-streaming mode alike:
 | `failed` status, `response.failed`, or an `error` event | `model.openai_responses.response_failed` | From the provider code, below |
 | `cancelled` status or `response.cancelled` | `model.openai_responses.cancelled` | `Cancelled` |
 | `incomplete` for a reason other than `max_output_tokens` or `content_filter` | `model.openai_responses.incomplete` | `Internal` |
-| Stream ends without a terminal event | `model.openai_responses.unfinished_stream` | `Internal` |
+| Stream ends without a terminal event | `model.openai_responses.unfinished_stream` | `Unavailable` (retryable) |
+| Terminal response that lacks a tool call the stream announced | `model.openai_responses.unfinished_stream` | `Internal` |
 | Unfinished, duplicate, or unnamed tool call | `model.openai_responses.invalid_terminal` or `invalid_identity` | `Internal` |
 
 A failure whose code is one of OpenAI's documented `response.error.code` values keeps it
@@ -491,11 +525,16 @@ Any other code, and every provider message, is dropped: a compatible provider's 
 text can echo request content.
 
 ```rust
-match runner.run(uid, sid, message).await {
-    Ok(stream) => { /* process stream */ }
-    Err(e) if e.is_retryable() => { /* retry logic */ }
-    Err(e) if e.is_unauthorized() => { /* check API key */ }
-    Err(e) => { /* handle other errors */ }
+use adk_core::AdkError;
+
+fn describe(error: &AdkError) -> &'static str {
+    if error.is_retryable() {
+        "transient: send again"
+    } else if error.is_unauthorized() {
+        "check the API key"
+    } else {
+        "fix the request"
+    }
 }
 ```
 
@@ -578,60 +617,70 @@ cargo run --manifest-path examples/gemini_ws_outcomes/Cargo.toml
 
 ## Background Mode & Cancellation
 
-For long-running requests, submit with `background: true` and poll for completion:
+A request with `"background": true` in its `openai` extension is submitted with
+`background: true`; a model whose ID contains `deep-research` (`o3-deep-research`,
+`o4-mini-deep-research`) always is. The client polls and cancels a background response by ID:
 
 ```rust
-use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
+use adk_model::openai::OpenAIResponsesClient;
 
-let client = OpenAIResponsesClient::new(config)?;
+async fn wait(client: &OpenAIResponsesClient, response_id: &str) -> anyhow::Result<()> {
+    loop {
+        let response = client.poll_response(response_id).await?;
+        let status = response
+            .provider_metadata
+            .as_ref()
+            .and_then(|metadata| metadata["openai"]["status"].as_str())
+            .unwrap_or_default()
+            .to_string();
+        if status != "queued" && status != "in_progress" {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
 
-// Submit with background: true via extensions
-let mut gen_config = GenerateContentConfig::default();
-gen_config.extensions.insert("openai".into(), serde_json::json!({ "background": true }));
-
-// ... send request, extract response_id from provider_metadata ...
-
-// Poll until terminal status
-let response = client.poll_response("resp_abc123").await?;
-// Check provider_metadata["openai"]["status"]: "completed", "in_progress", "failed", "cancelled"
-
-// Cancel a running background response
-let cancelled = client.cancel_response("resp_abc123").await?;
+async fn stop(client: &OpenAIResponsesClient, response_id: &str) -> anyhow::Result<()> {
+    client.cancel_response(response_id).await?;
+    Ok(())
+}
 ```
 
-Deep research models (`o3-deep-research`, `o4-mini-deep-research`) automatically enable background mode without explicit `background: true`.
+| Method | Request | Returns |
+|--------|---------|---------|
+| `poll_response` | `GET /responses/{id}` | A completed or incomplete response converted like any other; for `queued` and `in_progress`, a response with `response_id` and `status` in `provider_metadata["openai"]` and no content; for `failed`, `error_code` and `error_message` set |
+| `cancel_response` | `POST /responses/{id}/cancel` | A response with `status: "cancelled"` in `provider_metadata`; an error when the response is not a background response or already finished |
 
 ---
 
 ## Example
 
-A complete 7-scenario example is available at `examples/openai_responses/`:
+`examples/openai_responses` runs seven scenarios:
 
 ```bash
 export OPENAI_API_KEY=sk-...
 cargo run --manifest-path examples/openai_responses/Cargo.toml
 ```
 
-Scenarios covered:
-1. Basic non-streaming chat
-2. Basic streaming chat
-3. Reasoning model with summary (`o4-mini` compatibility path)
-4. Tool calling with function tools
-5. Multi-turn conversation
-6. System instructions
-7. Temperature and generation config (`gpt-4.1-nano` compatibility path)
+| Scenario | Model |
+|----------|-------|
+| 1. Non-streaming chat | `gpt-4.1-nano` |
+| 2. Streaming chat | `gpt-4.1-nano` |
+| 3. Reasoning with a summary | `o4-mini` |
+| 4. Function tool calling | `gpt-4.1-nano` |
+| 5. Multi-turn conversation | `gpt-4.1-nano` |
+| 6. System instruction | `gpt-4.1-nano` |
+| 7. Temperature and `top_p` | `gpt-4.1-nano` |
 
 ### Additional Examples
 
-Six standalone example crates demonstrate specific Responses API features:
-
 | Example | Run Command | Feature |
 |---------|-------------|---------|
-| WebSocket transport | `cargo run --manifest-path examples/openai_ws_minimal/Cargo.toml` | Low-latency persistent connection |
-| Background mode | `cargo run --manifest-path examples/openai_background/Cargo.toml` | Submit & poll workflow |
+| WebSocket transport | `cargo run --manifest-path examples/openai_ws_minimal/Cargo.toml` | Persistent connection |
+| Background mode | `cargo run --manifest-path examples/openai_background/Cargo.toml` | Submit and poll |
 | Conversations API | `cargo run --manifest-path examples/openai_conversations/Cargo.toml` | Server-managed multi-turn |
-| Built-in tools | `cargo run --manifest-path examples/openai_builtin_tools/Cargo.toml` | Image gen, web search |
-| Deep research | `cargo run --manifest-path examples/openai_deep_research/Cargo.toml` | Auto-background research |
+| Built-in tools | `cargo run --manifest-path examples/openai_builtin_tools/Cargo.toml` | Image generation, web search |
+| Deep research | `cargo run --manifest-path examples/openai_deep_research/Cargo.toml` | Background research |
 | Open Responses | `cargo run --manifest-path examples/openai_open_responses/Cargo.toml` | Provider-agnostic endpoints |
 
 ---
