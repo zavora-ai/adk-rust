@@ -89,12 +89,16 @@
 4 adk-agent guardrails
 # Two individually green PRs broke the ambient build in combination.
 4 adk-agent ambient
+# The workspace build gives adk-model only gemini, openai and anthropic, so no required check
+# ran the Ollama, Groq, DeepSeek, Bedrock or Azure AI tests: a stale Ollama usage test sat
+# failing on main.
+4 adk-model all-providers
 4 adk-model openrouter
 # OpenCode Go and Zen routing over the OpenAI, Anthropic and Gemini clients.
 4 adk-model opencode
 4 adk-skill vertex-skill-registry
 
-# Shard 5 — adk-realtime, adk-session, adk-memory, adk-eval, adk-deploy.
+# Shard 5 — adk-realtime, adk-session, adk-memory, adk-eval, adk-deploy, adk-bench.
 5 adk-realtime integration
 # The OpenAI realtime session and its WebSocket transport: compiled by the nightly `full`
 # build but never tested anywhere else.
@@ -112,6 +116,8 @@
 # The graph memory backend over sqlx: default workspace builds never compile it.
 5 adk-memory graph-memory
 5 adk-eval vertex-eval
+# The tau2-bench and BFCL adapters: nothing in the workspace enables either feature.
+5 adk-bench tau2,bfcl
 # Agent Engine deployment client: golden DTO and mock contract tests.
 5 adk-deploy gcp
 

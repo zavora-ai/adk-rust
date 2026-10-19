@@ -50,13 +50,21 @@ fn request(model: &str) -> LlmRequest {
     request
 }
 
-/// The turn's completed responses: the stream must succeed end to end.
-async fn generate(model: &dyn Llm, model_id: &str, stream: bool) -> Vec<LlmResponse> {
+/// Every response of the turn, partial ones included: the stream must succeed end to end.
+async fn responses(model: &dyn Llm, model_id: &str, stream: bool) -> Vec<LlmResponse> {
     let items: Vec<Result<LlmResponse, AdkError>> =
         model.generate_content(request(model_id), stream).await.unwrap().collect().await;
     items
         .into_iter()
         .map(|item| item.unwrap_or_else(|error| panic!("turn failed (stream: {stream}): {error}")))
+        .collect()
+}
+
+/// The turn's completed responses.
+async fn generate(model: &dyn Llm, model_id: &str, stream: bool) -> Vec<LlmResponse> {
+    responses(model, model_id, stream)
+        .await
+        .into_iter()
         .filter(|response| !response.partial)
         .collect()
 }
@@ -495,10 +503,16 @@ mod ollama {
         json!({"total_duration": 1200, "eval_count": 6, "eval_duration": 900})
     }
 
+    /// A streamed tool call arrives partial, as part of the turn the `done` line ends, and
+    /// `LlmAgent` folds it into that turn's content; so a streamed turn keeps every response.
     async fn turn(body: Body, stream: bool) -> Vec<LlmResponse> {
         let server = serve(body).await;
         let model = OllamaModel::new(OllamaConfig::with_host(server.uri(), "qwen3")).unwrap();
-        generate(&model, "qwen3", stream).await
+        if stream {
+            responses(&model, "qwen3", true).await
+        } else {
+            generate(&model, "qwen3", false).await
+        }
     }
 
     #[tokio::test]
