@@ -8,9 +8,14 @@ authors.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-audio"
 readme = "README.md"
+homepage.workspace = true
 description = "Audio intelligence and pipeline orchestration for ADK-Rust agents"
 keywords = ["adk", "audio", "tts", "stt", "speech"]
 categories = ["multimedia::audio", "asynchronous"]
+
+[package.metadata.docs.rs]
+# kokoro needs a system espeak-ng and desktop-audio needs ALSA headers, so both are left out.
+features = ["tts", "stt", "music", "fx", "mlx", "onnx", "chatterbox", "whisper-onnx", "distil-whisper", "moonshine", "qwen3-tts", "livekit"]
 
 [dependencies]
 # Core (always included)

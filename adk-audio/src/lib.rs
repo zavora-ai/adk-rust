@@ -2,31 +2,41 @@
 //!
 //! Audio intelligence and pipeline orchestration for ADK-Rust agents.
 //!
-//! Provides unified traits for Text-to-Speech (TTS), Speech-to-Text (STT),
-//! music generation, audio FX/DSP processing, and Voice Activity Detection (VAD),
-//! with a composable pipeline system for building voice agent loops, podcast
-//! production, transcription, and generative soundscapes.
+//! Provides traits for text-to-speech (TTS), speech-to-text (STT), music generation, audio
+//! DSP, and voice activity detection (VAD), cloud TTS and STT providers, local ONNX and Candle
+//! models, and a pipeline system for voice agents, transcription, and audio processing.
 //!
 //! ## Features
 //!
-//! - `tts` (default) — Cloud TTS providers (ElevenLabs, OpenAI, Gemini, Cartesia)
-//! - `stt` (default) — Cloud STT providers (Whisper API, Deepgram, AssemblyAI, Gemini)
-//! - `music` — Music generation providers
-//! - `fx` — DSP processors (normalizer, resampler, noise, compressor)
-//! - `vad` — Voice Activity Detection
-//! - `mlx` — Local inference model loading (tokenizers + HF Hub, cross-platform)
-//! - `onnx` — ONNX Runtime local inference (cross-platform)
-//! - `livekit` — adk-realtime bridge
-//! - `all` — All features (safe for any platform and CI)
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `tts` (default) | Cloud TTS: ElevenLabs, OpenAI, Gemini, Cartesia |
+//! | `stt` (default) | Cloud STT: OpenAI Whisper API, Deepgram, AssemblyAI, Gemini |
+//! | `fx` | DSP processors: normalizer, resampler, noise suppressor, compressor, trimmer, pitch shifter |
+//! | `mlx` | Local model loading with tokenizers and Hugging Face Hub |
+//! | `onnx` | ONNX Runtime local inference; `kokoro`, `chatterbox`, `whisper-onnx`, `distil-whisper`, and `moonshine` add models |
+//! | `qwen3-tts` | Qwen3-TTS on Candle |
+//! | `livekit` | `RealtimeBridge` to `adk-realtime` |
+//! | `desktop-audio` | Microphone capture, speaker playback, and VAD turn-taking |
+//! | `all` | Every feature except `desktop-audio` |
 //!
-//! ## Quick Start
+//! `VadProcessor` and `MusicProvider` are traits without a bundled implementation.
 //!
-//! ```rust,ignore
-//! use adk_audio::{AudioPipelineBuilder, AudioFrame};
+//! ## Example
 //!
-//! let handle = AudioPipelineBuilder::new()
-//!     .tts(my_tts_provider)
-//!     .build_tts()?;
+//! ```rust
+//! use adk_audio::{AudioFormat, AudioFrame, SentenceChunker, decode, encode};
+//!
+//! # fn main() -> adk_audio::AudioResult<()> {
+//! let frame = AudioFrame::silence(16_000, 1, 250);
+//! let wav = encode(&frame, AudioFormat::Wav)?;
+//! assert_eq!(decode(&wav, AudioFormat::Wav)?.duration_ms, 250);
+//!
+//! // Sentence boundaries for streaming TTS.
+//! let mut chunker = SentenceChunker::new();
+//! assert_eq!(chunker.push("Hello world. How are "), vec!["Hello world."]);
+//! # Ok(())
+//! # }
 //! ```
 
 pub mod codec;
