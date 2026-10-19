@@ -6,6 +6,12 @@ Visual development environment for building AI agents with drag-and-drop.
 
 ADK Studio provides a low-code interface for designing, testing, and deploying AI agents built with ADK-Rust. Create complex multi-agent workflows visually, then compile them to production Rust code.
 
+> **Note:** ADK Studio is developed in its own repository,
+> [zavora-ai/adk-studio](https://github.com/zavora-ai/adk-studio). The current release,
+> `adk-studio` 1.0.1, is built on the ADK-Rust 1.0 crates, and the projects it generates depend
+> on ADK-Rust 1.0.0 by default. This page describes that release; the Studio repository's
+> README is the reference for it.
+
 ![ADK Studio Main Interface](images/01_main_interface.png)
 
 ## Installation
@@ -13,10 +19,12 @@ ADK Studio provides a low-code interface for designing, testing, and deploying A
 ```bash
 # Install from crates.io (self-contained binary)
 cargo install adk-studio
-
-# Or build from source
-cargo build --release -p adk-studio
 ```
+
+To build from source, clone `zavora-ai/adk-studio` next to an `adk-rust` checkout
+(`../adk-rust`) and run `cargo build --release -p adk-studio` in it. Source builds need Node.js
+and npm, since the build compiles the embedded UI; set `ADK_STUDIO_SKIP_UI_BUILD=1` when
+`ui/dist` is already present.
 
 ## Quick Start
 
@@ -34,7 +42,7 @@ open http://localhost:3000
 |--------|-------------|---------|
 | `--port`, `-p` | Server port | 3000 |
 | `--host`, `-h` | Bind address | 127.0.0.1 |
-| `--dir`, `-d` | Projects directory | `~/.local/share/adk-studio/projects` |
+| `--dir`, `-d` | Projects directory | `adk-studio/projects` in the user data directory (`~/.local/share` on Linux, `~/Library/Application Support` on macOS) |
 | `--static`, `-s` | Override static files directory | (embedded) |
 
 ```bash
@@ -68,7 +76,7 @@ The left sidebar contains the **Agent Palette** with available agent types:
 - **Loop** - Iterate until exit condition
 - **Router** - Route to sub-agents based on input
 
-Below the agent palette, the **Action Node Palette** provides 14 non-LLM programmatic nodes for deterministic operations (HTTP requests, database queries, branching, loops, etc.). See the [Action Nodes Guide](action-nodes.md) for details.
+Below the agent palette, the **Action Node Palette** provides non-LLM programmatic nodes for deterministic operations (HTTP requests, database queries, branching, loops, etc.). See the [Action Nodes Guide](action-nodes.md) for details.
 
 Click on **LLM Agent** to add it to the canvas.
 
@@ -132,7 +140,7 @@ You can copy this code or use **Compile** to generate a complete Rust project.
 
 ### Action Nodes
 
-14 non-LLM programmatic nodes for deterministic workflow operations. See the [Action Nodes Guide](action-nodes.md) for full details.
+Non-LLM programmatic nodes for deterministic workflow operations; the project schema defines 14 node types. See the [Action Nodes Guide](action-nodes.md) for full details.
 
 ![Action Nodes Workflow](images/08_action_nodes_workflow.png)
 
@@ -146,7 +154,7 @@ You can copy this code or use **Compile** to generate a complete Rust project.
 | **Loop** 🔄 | Iterate over arrays or repeat operations |
 | **Merge** 🔗 | Combine multiple branches back into single flow |
 | **Wait** ⏱️ | Pause workflow for duration or condition |
-| **Code** 💻 | Execute custom JavaScript in sandboxed runtime |
+| **Code** 💻 | Execute authored Rust in a sandbox, or JavaScript transforms through embedded `boa_engine` |
 | **Database** 🗄️ | Database operations (PostgreSQL, MySQL, SQLite, MongoDB, Redis) |
 | **Email** 📧 | Send via SMTP or monitor via IMAP |
 | **Notification** 🔔 | Send to Slack, Discord, Teams, or webhooks |
@@ -163,7 +171,7 @@ Workflows start with a Trigger node. See the [Triggers Guide](triggers.md) for f
 |---------|-------------|
 | **Manual** | User-initiated via chat input |
 | **Webhook** | HTTP endpoint with optional auth |
-| **Schedule** | Cron-based timing with timezone |
+| **Schedule** | Cron-based timing |
 | **Event** | External system events with JSONPath filtering |
 
 ### Tool Types
@@ -205,7 +213,7 @@ Action nodes compile to production Rust code alongside LLM agents. Dependencies 
 | **HTTP** | `reqwest` | Async HTTP requests with auth, headers, body, JSONPath extraction |
 | **Database** | `sqlx` / `mongodb` / `redis` | Connection pools, parameterized queries, Redis commands |
 | **Email** | `lettre` / `imap` | SMTP send with TLS/auth/CC/BCC; IMAP monitoring with search filters |
-| **Code** | `boa_engine` | Embedded JavaScript execution with graph state as `input` object |
+| **Code** | `adk-code` | Rust sandbox execution; JavaScript transforms through `boa_engine`; container-backed Python and Node.js |
 | **Set** | native | Variable assignment (literal, expression, secret) |
 | **Transform** | native | Map, filter, sort, reduce, flatten, group, pick, merge, template |
 | **Merge** | native | Branch combination (waitAll, waitAny, append) |
@@ -241,7 +249,7 @@ All action nodes support `{{variable}}` interpolation and receive predecessor no
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
 │  │   Routes    │  │   Codegen   │  │   Storage           │ │
 │  │  /api/*     │  │  Rust code  │  │  Projects           │ │
-│  │  /chat      │  │  generation │  │  File-based         │ │
+│  │             │  │  generation │  │  File-based         │ │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -250,62 +258,42 @@ All action nodes support `{{variable}}` interpolation and receive predecessor no
 │                   Generated Rust Project                    │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │  Cargo.toml + src/main.rs                           │   │
-│  │  Uses: adk-rust, adk-agent, adk-model, etc.        │   │
+│  │  Uses: adk-agent, adk-core, adk-model, adk-graph   │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## API Endpoints
 
-### Projects
+The 1.0.1 server mounts its API under `/api`:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/projects` | GET | List all projects |
-| `/api/projects` | POST | Create new project |
-| `/api/projects/:id` | GET | Get project details |
-| `/api/projects/:id` | PUT | Update project |
-| `/api/projects/:id` | DELETE | Delete project |
-
-### Code Generation
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/projects/:id/codegen` | POST | Generate Rust code |
-| `/api/projects/:id/build` | POST | Compile project |
-| `/api/projects/:id/run` | POST | Run built executable |
-
-### Chat
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/chat` | POST | Send message (SSE stream) |
-
-### Triggers
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
+| `/api/projects` | GET, POST | List or create projects |
+| `/api/projects/:id` | GET, PUT, DELETE | Project CRUD |
+| `/api/projects/:id/compile` | GET | Generate the Rust project |
+| `/api/projects/:id/build` | POST | Compile the project |
+| `/api/projects/:id/build-stream` | GET | Compile the project, streaming the output |
+| `/api/projects/:id/run` | POST | Run the built executable |
+| `/api/projects/:id/stream` | GET | SSE stream for chat |
 | `/api/projects/:id/webhook/*path` | POST, GET | Webhook trigger (async) |
-| `/api/projects/:id/webhook-exec/*path` | POST | Webhook trigger (sync, waits for result) |
-| `/api/projects/:id/webhook-events` | GET | SSE stream for webhook notifications |
+| `/api/projects/:id/webhook-exec/*path` | POST | Webhook trigger (sync, waits for the result) |
+| `/api/projects/:id/webhook-events` | GET | SSE stream of webhook notifications |
 | `/api/projects/:id/events` | POST | Event trigger |
-| `/api/sessions/:id/resume` | POST | Resume interrupted workflow (HITL) |
+| `/api/sessions/:id/resume` | POST | Resume an interrupted workflow (HITL) |
 
 ## Environment Variables
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `GOOGLE_API_KEY` | Gemini API key | For Gemini models |
-| `GEMINI_API_KEY` | Gemini API key (alternative) | For Gemini models |
-| `OPENAI_API_KEY` | OpenAI API key | For OpenAI models |
-| `ANTHROPIC_API_KEY` | Anthropic API key | For Claude models |
-| `DEEPSEEK_API_KEY` | DeepSeek API key | For DeepSeek models |
-| `GROQ_API_KEY` | Groq API key | For Groq models |
-| `OLLAMA_HOST` | Ollama server URL (default: `http://localhost:11434`) | For Ollama models |
-| `ADK_DEV_MODE` | Use local workspace deps | No |
-| `RUST_LOG` | Log level | No (default: info) |
+| Variable | Description |
+|----------|-------------|
+| `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Gemini API key, for Gemini models |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, ... | The API key of each other provider the project uses |
+| `OLLAMA_HOST` | Ollama server URL, for Ollama models |
+| `ADK_DEV_MODE` | Generate projects against local workspace dependencies |
+| `RUST_LOG` | Log level (default `info`) |
 
-> **Note**: You only need the API key for the provider(s) your agents use. ADK Studio auto-detects the provider from the model name and generates the correct code.
+You only need the API key for the provider(s) your agents use. Studio detects the provider from
+each agent's model name. Keys can also be stored per project from the UI.
 
 ## Generated Code Structure
 
@@ -316,95 +304,27 @@ my-project/
     └── main.rs
 ```
 
-The generated code adapts to the provider(s) used in your project. ADK Studio detects the provider from each agent's model name and generates the correct imports, API key resolution, and model constructors.
+The generated code adapts to the provider(s) used in your project: Studio detects the provider
+from each agent's model name and generates the matching imports, API key resolution, model
+constructors, and `adk-model` features. Workflows with action nodes are generated on `adk-graph`,
+and the crates the nodes need (`reqwest`, `sqlx`, `mongodb`, `redis`, `lettre`, `imap`, ...) are
+added to `Cargo.toml`.
 
-Example generated `main.rs` (Gemini):
-
-```rust
-use adk_model::gemini::GeminiModel;
-// ...
-
-let gemini_api_key = std::env::var("GOOGLE_API_KEY")
-    .or_else(|_| std::env::var("GEMINI_API_KEY"))
-    .expect("GOOGLE_API_KEY or GEMINI_API_KEY must be set");
-
-let model = Arc::new(GeminiModel::new(&gemini_api_key, "gemini-3.7-flash")?);
-```
-
-Example with OpenAI:
-
-```rust
-use adk_model::openai::{OpenAIClient, OpenAIConfig};
-// ...
-
-let openai_api_key = std::env::var("OPENAI_API_KEY")
-    .expect("OPENAI_API_KEY must be set");
-
-let model = Arc::new(OpenAIClient::new(OpenAIConfig::new(&openai_api_key, "gpt-5.6-terra"))?);
-```
-
-Example with Ollama (local, no API key):
-
-```rust
-use adk_model::ollama::{OllamaModel, OllamaConfig};
-// ...
-
-let model = Arc::new(OllamaModel::new(OllamaConfig::new("llama3.2"))?);
-```
-
-The generated `Cargo.toml` automatically includes the correct `adk-model` feature flags:
-
-```toml
-# Only Gemini
-adk-model = { version = "3.0.0", default-features = false, features = ["gemini"] }
-
-# Mixed providers (e.g., Gemini + Anthropic)
-adk-model = { version = "3.0.0", default-features = false, features = ["gemini", "anthropic"] }
-
-# Ollama only (no API key needed)
-adk-model = { version = "3.0.0", default-features = false, features = ["ollama"] }
-```
-
-### Generated Code with Action Nodes
-
-When your workflow includes action nodes, the generated code uses `adk-graph` for workflow orchestration with `FunctionNode` closures:
-
-```rust
-use adk_graph::prelude::*;
-
-// HTTP action node → reqwest call
-let http_node = FunctionNode::new("fetch_data", |ctx| async move {
-    let client = reqwest::Client::new();
-    let resp = client.get("https://api.example.com/data")
-        .bearer_auth(&ctx.get("API_TOKEN").unwrap_or_default())
-        .send().await
-        .map_err(|e| GraphError::NodeExecutionFailed {
-            node: "fetch_data".into(),
-            message: e.to_string(),
-        })?;
-    let body: serde_json::Value = resp.json().await?;
-    Ok(NodeOutput::new().with_update("apiData", body))
-});
-
-// Code action node → boa_engine JS execution
-let code_node = FunctionNode::new("process", |ctx| async move {
-    let mut js_ctx = boa_engine::Context::default();
-    // Graph state injected as global `input` object
-    // User code executed in thread-isolated sandbox
-    Ok(NodeOutput::new().with_update("result", output))
-});
-```
-
-Auto-detected dependencies are added to the generated `Cargo.toml` (reqwest, sqlx, mongodb, redis, lettre, imap, boa_engine).
+Generated projects depend on the ADK-Rust 1.0.0 crates. To build one against ADK-Rust 3.0, change
+the `adk-*` versions in its `Cargo.toml` and resolve the
+[1.0 → 2.0](../migration/1.0-to-2.0.md) and [2.x → 3.0](../migration/2.x-to-3.0.md) changes in
+the generated code.
 
 ## Templates
 
-Studio includes pre-built templates:
+Studio includes curated workflow templates:
 
-- **Basic Assistant** - Simple LLM agent
-- **Research Agent** - Agent with Google Search
-- **Support Router** - Multi-agent routing
-- **Code Assistant** - Agent with code tools
+- **Simple Chat** - Basic conversational agent
+- **Research Pipeline** - Sequential researcher → summarizer
+- **Content Refiner** - Loop agent for iterative improvement
+- **Support Router** - Route requests to specialized agents
+- **Email Sentiment Analysis** - Analyze emails and update a spreadsheet (action nodes)
+- **API Data Pipeline** - Fetch, transform, and store data (action nodes)
 
 ## Team Collaboration: Repo-Local Projects
 

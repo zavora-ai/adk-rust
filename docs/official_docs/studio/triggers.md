@@ -1,6 +1,11 @@
 # Triggers
 
-Triggers define how workflows start in ADK Studio. Every workflow begins with a Trigger node that determines the entry point — whether from user input, an HTTP webhook, a cron schedule, or an external event.
+Triggers define how workflows start in [ADK Studio](studio.md). Every workflow begins with a Trigger node that determines the entry point — whether from user input, an HTTP webhook, a cron schedule, or an external event.
+
+> **Note:** This page describes `adk-studio` 1.0.1, which is developed in
+> [zavora-ai/adk-studio](https://github.com/zavora-ai/adk-studio) and built on the ADK-Rust 1.0
+> crates. The endpoints below are served by the Studio server (port 3000 by default) while you
+> develop a workflow.
 
 ![Trigger Properties Panel](images/09_trigger_properties.png)
 
@@ -40,7 +45,7 @@ Expose an HTTP endpoint that starts the workflow when called. Useful for integra
 |----------|------|-------------|
 | `path` | string | URL path (e.g., `/my-webhook`) |
 | `method` | GET, POST | HTTP method to accept |
-| `auth` | none, bearer, api_key | Authentication requirement |
+| `auth` | none, bearer, api_key | Header the request must carry |
 
 ### Endpoints
 
@@ -57,7 +62,9 @@ GET webhooks also work:
 GET /api/projects/:id/webhook/my-path?message=Hello
 ```
 
-### Authentication
+### Authentication headers
+
+With `auth` set, a request must carry the matching header.
 
 **Bearer token:**
 ```bash
@@ -96,7 +103,7 @@ Run workflows on a recurring schedule using cron expressions.
 | Property | Type | Description |
 |----------|------|-------------|
 | `cron` | string | 5-field cron expression |
-| `timezone` | string | IANA timezone (e.g., `America/New_York`) |
+| `timezone` | string | IANA timezone name stored with the trigger (e.g., `America/New_York`) |
 | `defaultPrompt` | string? | Input text sent when schedule fires |
 
 ### Cron Syntax
