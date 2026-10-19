@@ -35,7 +35,7 @@ use tokio::time::timeout;
 use tracing_subscriber::EnvFilter;
 
 const SERVE_FLAG: &str = "--serve-acp";
-const DEFAULT_MODEL: &str = "gpt-6-luna";
+const DEFAULT_MODEL: &str = "gpt-5.6-terra";
 const WORKSPACE_VAR: &str = "ACP_E2E_WORKSPACE";
 const ENV_PROBE_VAR: &str = "ACP_E2E_ENV_PROBE";
 const MARKER_FILE: &str = "marker.txt";
@@ -202,7 +202,8 @@ async fn main() -> anyhow::Result<()> {
             runner.run_str("user", "live", Content::new("user").with_text(request)).await?;
         while let Some(event) = events.next().await {
             let event = event?;
-            if event.author != "coordinator" {
+            // The complete event repeats the text its partial chunks streamed.
+            if event.author != "coordinator" || event.llm_response.partial {
                 continue;
             }
             if let Some(content) = event.content() {

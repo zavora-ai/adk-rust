@@ -7,6 +7,9 @@
 //! The URL is interpolated from workflow state, so every request, and every
 //! redirect it follows, is checked against an [`HttpActionPolicy`]. Logs and
 //! errors show the URL without its query string or credentials.
+//!
+//! The same policy governs the notification node's webhook and the RSS node's
+//! feed URL.
 
 use std::collections::HashMap;
 
@@ -16,7 +19,7 @@ use serde_json::{Value, json};
 use crate::error::{GraphError, Result};
 use crate::node::{NodeContext, NodeOutput};
 
-/// Which URLs an HTTP action node may request.
+/// Which URLs the HTTP, notification, and RSS action nodes may request.
 ///
 /// | Setting | Default |
 /// |---------|---------|
@@ -94,11 +97,12 @@ impl HttpActionPolicy {
     }
 
     /// Explains why `url` is not permitted, if it is not.
-    fn check(&self, url: &reqwest::Url) -> std::result::Result<(), String> {
+    pub(crate) fn check(&self, url: &reqwest::Url) -> std::result::Result<(), String> {
         let scheme = url.scheme();
         if !self.allowed_schemes.iter().any(|allowed| allowed == scheme) {
             return Err(format!(
-                "URL scheme '{scheme}' is not permitted for HTTP nodes; permitted schemes: {}",
+                "URL scheme '{scheme}' is not permitted by the HTTP action policy; permitted \
+                 schemes: {}",
                 self.allowed_schemes.join(", ")
             ));
         }
@@ -112,10 +116,18 @@ impl HttpActionPolicy {
             Ok(())
         } else {
             Err(format!(
-                "host '{host}' is not in the HTTP node allowlist; add it with \
+                "host '{host}' is not in the HTTP action policy allowlist; add it with \
                  `HttpActionPolicy::allow_hosts`"
             ))
         }
+    }
+
+    /// A client whose redirects are checked against this policy.
+    pub(crate) fn client(&self) -> std::result::Result<reqwest::Client, String> {
+        reqwest::Client::builder()
+            .redirect(self.redirect_policy())
+            .build()
+            .map_err(|e| format!("failed to build the HTTP client: {e}"))
     }
 
     /// A redirect policy that re-applies [`Self::check`] to every hop.
@@ -138,7 +150,7 @@ impl HttpActionPolicy {
 }
 
 /// The URL as it may be logged: no credentials, query string, or fragment.
-fn redact_url(url: &reqwest::Url) -> String {
+pub(crate) fn redact_url(url: &reqwest::Url) -> String {
     let mut shown = url.clone();
     // Both fail only for URLs that cannot carry credentials, which have none.
     let _ = shown.set_username("");
@@ -193,10 +205,7 @@ pub async fn execute_http_with_policy(
     tracing::debug!(node = %node_id, url = %shown_url, method = ?config.method, "executing HTTP node");
 
     // Build request
-    let client = reqwest::Client::builder()
-        .redirect(policy.redirect_policy())
-        .build()
-        .map_err(|e| fail(format!("failed to build the HTTP client: {e}")))?;
+    let client = policy.client().map_err(fail)?;
     let mut request = match config.method {
         HttpMethod::Get => client.get(url),
         HttpMethod::Post => client.post(url),

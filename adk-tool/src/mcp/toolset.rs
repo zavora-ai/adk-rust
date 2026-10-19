@@ -409,6 +409,38 @@ fn mcp_tool_effect(annotations: Option<&ToolAnnotations>) -> ToolEffect {
     }
 }
 
+/// Most UTF-8 bytes of an `isError` result's text passed to the model.
+const MAX_SERVER_ERROR_BYTES: usize = 8 * 1024;
+
+/// The function response for a call the server answered with `isError: true`.
+///
+/// An `isError` result is the tool's own output, written for the model so it can correct
+/// the call, so its text is passed through as `{"error": text}` rather than failing the
+/// call: a failed call reaches the model only as its error code. Transport and protocol
+/// failures stay errors. The text is cut to [`MAX_SERVER_ERROR_BYTES`] at a character
+/// boundary.
+fn server_error_response(tool_name: &str, result: &rmcp::model::CallToolResult) -> Value {
+    let text: Vec<&str> = result
+        .content
+        .iter()
+        .filter_map(|content| content.as_text())
+        .map(|t| t.text.as_str())
+        .collect();
+    let mut detail = if !text.is_empty() {
+        text.join("\n")
+    } else if let Some(structured) = &result.structured_content {
+        // Structured-only errors carry their detail outside the text blocks.
+        structured.to_string()
+    } else {
+        format!("MCP tool '{tool_name}' reported an error without a message")
+    };
+    if detail.len() > MAX_SERVER_ERROR_BYTES {
+        detail.truncate(detail.floor_char_boundary(MAX_SERVER_ERROR_BYTES));
+        detail.push_str(" [truncated]");
+    }
+    json!({ "error": detail })
+}
+
 /// Preserve every MCP content block in ADK's multimodal tool-result envelope.
 /// `FunctionResponseData::from_tool_result` consumes this shape in the agent loop.
 fn call_tool_result_to_adk_value(
@@ -710,19 +742,40 @@ where
         self
     }
 
-    /// Enable negotiated MCP task support for long-running operations.
+    /// Enable MCP task support (SEP-2663) for long-running operations.
     ///
-    /// A tool declared with required task support always uses the task flow.
-    /// A tool declaring optional task support uses it when this configuration
-    /// is enabled and the server negotiated `tasks.requests.tools.call`.
+    /// Tools no longer declare task support: every call is one `tools/call`, and the
+    /// server decides per call whether to answer with a task. When it does, this toolset
+    /// polls `tasks/get` at the server's `pollIntervalMs` (else `config`'s interval) until the
+    /// task completes, reading the result inlined in the status response, and answers
+    /// in-task input requests through the connection's handler.
+    ///
+    /// Tasks need all three sides: this configuration, a client that declares the
+    /// `io.modelcontextprotocol/tasks` extension
+    /// ([`AdkClientHandler::with_tasks`](crate::mcp::AdkClientHandler::with_tasks); a plain
+    /// `()` client never does), and a server that declares the tasks capability. A task
+    /// returned while any of them is missing is cancelled, and the call fails with the reason.
+    /// Every tool of the toolset reports
+    /// [`is_long_running`](adk_core::Tool::is_long_running) when tasks are enabled and
+    /// negotiated.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let toolset = McpToolset::new(client)
-    ///     .with_task_support(McpTaskConfig::enabled()
-    ///         .poll_interval(Duration::from_secs(2))
-    ///         .timeout(Duration::from_secs(300)));
+    /// ```rust
+    /// use std::time::Duration;
+    ///
+    /// use adk_tool::mcp::{AdkClientHandler, McpTaskConfig, McpToolset};
+    /// use rmcp::service::RunningService;
+    ///
+    /// fn tasks_toolset(
+    ///     client: RunningService<rmcp::RoleClient, AdkClientHandler>,
+    /// ) -> McpToolset<AdkClientHandler> {
+    ///     McpToolset::new(client).with_task_support(
+    ///         McpTaskConfig::enabled()
+    ///             .poll_interval(Duration::from_secs(2))
+    ///             .timeout(Duration::from_secs(300)),
+    ///     )
+    /// }
     /// ```
     pub fn with_task_support(mut self, config: McpTaskConfig) -> Self {
         self.task_config = config;
@@ -1908,17 +1961,8 @@ where
         };
 
         if result.is_error.unwrap_or(false) {
-            let detail = match result.content.iter().find_map(|content| content.as_text()) {
-                Some(text) => text.text.clone(),
-                // Structured-only errors carry their detail outside the text blocks.
-                None => call_tool_result_to_adk_value(&result)
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|error| error),
-            };
-            return Err(AdkError::tool(format!(
-                "MCP tool '{}' execution failed: {detail}",
-                self.name
-            )));
+            debug!(tool = self.name, "MCP server answered the call with isError");
+            return Ok(server_error_response(&self.name, &result));
         }
 
         call_tool_result_to_adk_value(&result).map_err(|error| {
@@ -2171,12 +2215,8 @@ where
                             ))
                         })?;
                     if call_result.is_error == Some(true) {
-                        return Err(TaskError::TaskFailed {
-                            task_id,
-                            error: call_tool_result_to_adk_value(&call_result)
-                                .map(|value| value.to_string())
-                                .unwrap_or_else(|error| error),
-                        });
+                        debug!(task_id, "MCP task completed with an isError result");
+                        return Ok(server_error_response(&self.name, &call_result));
                     }
                     return call_tool_result_to_adk_value(&call_result)
                         .map_err(TaskError::PollFailed);
@@ -2589,6 +2629,43 @@ mod tests {
     }
 
     #[test]
+    fn an_is_error_result_keeps_its_text_for_the_model() {
+        let result = rmcp::model::CallToolResult::error(vec![
+            ContentBlock::text("order IDs look like ORD-1234"),
+            ContentBlock::text("retry with ORD-7781"),
+        ]);
+        assert_eq!(
+            server_error_response("lookup", &result),
+            json!({ "error": "order IDs look like ORD-1234\nretry with ORD-7781" })
+        );
+
+        let mut structured = rmcp::model::CallToolResult::error(vec![]);
+        structured.structured_content = Some(json!({ "field": "order_id" }));
+        assert_eq!(
+            server_error_response("lookup", &structured),
+            json!({ "error": "{\"field\":\"order_id\"}" })
+        );
+
+        let empty = rmcp::model::CallToolResult::error(vec![]);
+        assert_eq!(
+            server_error_response("lookup", &empty),
+            json!({ "error": "MCP tool 'lookup' reported an error without a message" })
+        );
+    }
+
+    #[test]
+    fn an_is_error_text_over_the_limit_is_cut_at_a_character_boundary() {
+        let result = rmcp::model::CallToolResult::error(vec![ContentBlock::text(
+            "é".repeat(MAX_SERVER_ERROR_BYTES),
+        )]);
+        let response = server_error_response("lookup", &result);
+        let text = response["error"].as_str().unwrap();
+        let kept = text.strip_suffix(" [truncated]").expect("a truncation marker");
+        assert!(kept.len() <= MAX_SERVER_ERROR_BYTES);
+        assert!(kept.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
     fn a_successful_result_without_content_is_an_empty_output() {
         let result = rmcp::model::CallToolResult::success(vec![]);
         assert_eq!(call_tool_result_to_adk_value(&result), Ok(json!({ "output": "" })));
@@ -2746,6 +2823,59 @@ mod tests {
             )])
             .into())
         }
+    }
+
+    /// Answers every call with `isError` and guidance for the model.
+    #[derive(Clone)]
+    struct Refusing;
+
+    impl rmcp::ServerHandler for Refusing {
+        fn get_info(&self) -> rmcp::model::InitializeResult {
+            rmcp::model::InitializeResult::new(
+                rmcp::model::ServerCapabilities::builder().enable_tools().build(),
+            )
+        }
+
+        async fn list_tools(
+            &self,
+            _params: Option<rmcp::model::PaginatedRequestParams>,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> std::result::Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+            Ok(rmcp::model::ListToolsResult::with_all_items(vec![rmcp::model::Tool::new(
+                "lookup",
+                "Looks up an order.",
+                small_schema(),
+            )]))
+        }
+
+        async fn call_tool(
+            &self,
+            _params: CallToolRequestParams,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> std::result::Result<CallToolResponse, rmcp::ErrorData> {
+            Ok(rmcp::model::CallToolResult::error(vec![ContentBlock::text(
+                "order 7781 moved; call lookup with id MIG-7781",
+            )])
+            .into())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_server_is_error_result_is_the_tools_response() {
+        use rmcp::ServiceExt;
+
+        let (server_io, client_io) = tokio::io::duplex(4096);
+        tokio::spawn(async move {
+            if let Ok(running) = Refusing.serve(server_io).await {
+                let _ = running.waiting().await;
+            }
+        });
+        let toolset = McpToolset::new(().serve(client_io).await.unwrap()).with_name("orders");
+        let ctx = Arc::new(crate::SimpleToolContext::new("is-error-test"));
+        let tools = toolset.tools(ctx.clone()).await.unwrap();
+
+        let response = tools[0].execute(ctx, json!({ "id": "7781" })).await.unwrap();
+        assert_eq!(response, json!({ "error": "order 7781 moved; call lookup with id MIG-7781" }));
     }
 
     #[tokio::test]

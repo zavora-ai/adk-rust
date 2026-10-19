@@ -6,34 +6,71 @@
 //!
 //! Note: The `feed-rs` crate is not yet a dependency, so we do manual
 //! XML string parsing for basic RSS and Atom feed structures.
+//!
+//! The feed URL is interpolated from workflow state, so the request and every
+//! redirect it follows are checked against the executor's [`HttpActionPolicy`].
 
 use std::collections::HashSet;
 
 use adk_action::{RssNodeConfig, interpolate_variables};
 use serde_json::{Value, json};
 
+use super::http::{HttpActionPolicy, redact_url};
 use crate::error::{GraphError, Result};
 use crate::node::{NodeContext, NodeOutput};
 
-/// Execute an RSS action node.
+/// Execute an RSS action node under the default [`HttpActionPolicy`].
+///
+/// # Errors
+///
+/// See [`execute_rss_with_policy`].
 pub async fn execute_rss(config: &RssNodeConfig, ctx: &NodeContext) -> Result<NodeOutput> {
+    execute_rss_with_policy(config, ctx, &HttpActionPolicy::default()).await
+}
+
+/// Execute an RSS action node under `policy`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_graph::action::http::HttpActionPolicy;
+/// use adk_graph::action::rss::execute_rss_with_policy;
+///
+/// let policy = HttpActionPolicy::new().allow_hosts(["feeds.example.com"]);
+/// let output = execute_rss_with_policy(&config, &ctx, &policy).await?;
+/// ```
+///
+/// # Errors
+///
+/// Returns [`GraphError::NodeExecutionFailed`] when the interpolated feed URL is not a valid
+/// absolute URL, the policy refuses it or a redirect, the request fails, or the feed answers
+/// with a non-success status.
+pub async fn execute_rss_with_policy(
+    config: &RssNodeConfig,
+    ctx: &NodeContext,
+    policy: &HttpActionPolicy,
+) -> Result<NodeOutput> {
     let node_id = &config.standard.id;
     let output_key = &config.standard.mapping.output_key;
     let state = &ctx.state;
+    let fail = |message: String| GraphError::NodeExecutionFailed { node: node_id.clone(), message };
 
     // Interpolate feed URL
     let feed_url = interpolate_variables(&config.feed_url, state);
-    tracing::debug!(node = %node_id, feed_url = %feed_url, "fetching RSS feed");
+    let url = reqwest::Url::parse(&feed_url)
+        .map_err(|e| fail(format!("RSS feed URL is not a valid absolute URL: {e}")))?;
+    policy.check(&url).map_err(fail)?;
+    let shown_url = redact_url(&url);
+    tracing::debug!(node = %node_id, feed.url = %shown_url, "fetching RSS feed");
 
     // Fetch the feed
-    let client = reqwest::Client::new();
-    let response =
-        client.get(&feed_url).header("User-Agent", "adk-graph-rss/1.0").send().await.map_err(
-            |e| GraphError::NodeExecutionFailed {
-                node: node_id.clone(),
-                message: format!("failed to fetch feed: {e}"),
-            },
-        )?;
+    let client = policy.client().map_err(fail)?;
+    let response = client
+        .get(url)
+        .header("User-Agent", "adk-graph-rss/1.0")
+        .send()
+        .await
+        .map_err(|e| fail(format!("failed to fetch feed {shown_url}: {}", e.without_url())))?;
 
     if !response.status().is_success() {
         return Err(GraphError::NodeExecutionFailed {

@@ -25,7 +25,7 @@ cp .env.example .env
 cargo run
 ```
 
-`OPENAI_MODEL` selects the model for both agents and defaults to `gpt-6-luna`. A passing run
+`OPENAI_MODEL` selects the model for both agents and defaults to `gpt-5.6-terra`. A passing run
 ends with `all checks passed`; any failed check exits non-zero with the reason.
 
 ## Phases

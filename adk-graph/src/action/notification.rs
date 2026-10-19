@@ -3,21 +3,57 @@
 //! Sends notifications to Slack, Discord, Teams, or generic webhooks
 //! by POSTing channel-specific JSON payloads to the configured webhook URL.
 //! Uses `reqwest` (shared with the HTTP node via the `action-http` feature).
+//!
+//! The webhook URL is interpolated from workflow state, so the request and every
+//! redirect it follows are checked against the executor's [`HttpActionPolicy`].
+//! A Slack, Discord, or Teams webhook URL is itself a credential, so logs and
+//! errors name only its host.
 
 use adk_action::{NotificationChannel, NotificationNodeConfig, interpolate_variables};
 use serde_json::{Value, json};
 
+use super::http::HttpActionPolicy;
 use crate::error::{GraphError, Result};
 use crate::node::{NodeContext, NodeOutput};
 
-/// Execute a Notification action node.
+/// Execute a Notification action node under the default [`HttpActionPolicy`].
+///
+/// # Errors
+///
+/// See [`execute_notification_with_policy`].
 pub async fn execute_notification(
     config: &NotificationNodeConfig,
     ctx: &NodeContext,
 ) -> Result<NodeOutput> {
+    execute_notification_with_policy(config, ctx, &HttpActionPolicy::default()).await
+}
+
+/// Execute a Notification action node under `policy`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_graph::action::http::HttpActionPolicy;
+/// use adk_graph::action::notification::execute_notification_with_policy;
+///
+/// let policy = HttpActionPolicy::new().allow_schemes(["https"]).allow_hosts(["hooks.slack.com"]);
+/// let output = execute_notification_with_policy(&config, &ctx, &policy).await?;
+/// ```
+///
+/// # Errors
+///
+/// Returns [`GraphError::NodeExecutionFailed`] when the interpolated webhook URL is not a
+/// valid absolute URL, the policy refuses it or a redirect, the request fails, or the
+/// webhook answers with a non-success status.
+pub async fn execute_notification_with_policy(
+    config: &NotificationNodeConfig,
+    ctx: &NodeContext,
+    policy: &HttpActionPolicy,
+) -> Result<NodeOutput> {
     let node_id = &config.standard.id;
     let output_key = &config.standard.mapping.output_key;
     let state = &ctx.state;
+    let fail = |message: String| GraphError::NodeExecutionFailed { node: node_id.clone(), message };
 
     // Interpolate the message text
     let message_text = interpolate_variables(&config.message.text, state);
@@ -25,28 +61,28 @@ pub async fn execute_notification(
     // Build channel-specific payload
     let payload = build_payload(config, &message_text);
 
+    // The raw value is never echoed: the webhook URL is a secret.
+    let webhook_url = reqwest::Url::parse(&interpolate_variables(&config.webhook_url, state))
+        .map_err(|e| fail(format!("notification webhook URL is not a valid absolute URL: {e}")))?;
+    policy.check(&webhook_url).map_err(fail)?;
+    let host = webhook_url.host_str().unwrap_or_default().to_string();
+
     tracing::debug!(
         node = %node_id,
         channel = ?config.notification_channel,
-        webhook_url = %config.webhook_url,
+        webhook.host = %host,
         "sending notification"
     );
 
-    // Interpolate webhook URL
-    let webhook_url = interpolate_variables(&config.webhook_url, state);
-
     // POST the payload
-    let client = reqwest::Client::new();
+    let client = policy.client().map_err(fail)?;
     let response = client
-        .post(&webhook_url)
+        .post(webhook_url)
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
         .await
-        .map_err(|e| GraphError::NodeExecutionFailed {
-            node: node_id.clone(),
-            message: format!("notification request failed: {e}"),
-        })?;
+        .map_err(|e| fail(format!("notification request to {host} failed: {}", e.without_url())))?;
 
     let status = response.status().as_u16();
     let success = response.status().is_success();

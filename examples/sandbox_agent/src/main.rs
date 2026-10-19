@@ -8,13 +8,15 @@
 //! - Allows read access to system paths (Python interpreter, libraries)
 //! - Allows read-write access to a temp directory for script output
 //! - Denies network access
-//! - Allows process spawning (Python interpreter needs it)
+//! - Allows process spawning, so the generated code may start subprocesses
 //!
 //! ## Platform Support
 //!
-//! - **macOS**: Seatbelt (`sandbox-exec`) — "allow default, deny dangerous" strategy
+//! - **macOS**: Seatbelt (`sandbox-exec`) — a deny-by-default profile: the system runtime
+//!   and the policy's paths are readable, only its read-write paths are writable
 //! - **Linux**: bubblewrap (`bwrap`) — namespace-based filesystem isolation
-//! - **Windows**: AppContainer — token-based ACL restrictions
+//! - **Windows**: the AppContainer enforcer is not implemented and reports itself
+//!   unavailable, so the example falls back to unsandboxed execution
 //! - **Other**: Falls back to unsandboxed execution with a warning
 //!
 //! ## Prerequisites
@@ -22,7 +24,6 @@
 //! - `GOOGLE_API_KEY` environment variable set
 //! - macOS: built-in (Seatbelt)
 //! - Linux: `apt install bubblewrap` or `dnf install bubblewrap`
-//! - Windows: Windows 8+ (AppContainer)
 //!
 //! ## Run
 //!
@@ -317,7 +318,7 @@ async fn main() -> anyhow::Result<()> {
 
     let policy = builder
         .allow_read_write(work_dir.to_str().unwrap())
-        // Python needs to exec the interpreter
+        // Lets the generated code start subprocesses; the interpreter starts without it
         .allow_process_spawn()
         // Deny network access — code cannot fetch URLs
         // (allow_network() is NOT called, so network is denied by default)
@@ -328,7 +329,7 @@ async fn main() -> anyhow::Result<()> {
     } else if cfg!(target_os = "linux") {
         "Linux (bubblewrap)"
     } else if cfg!(target_os = "windows") {
-        "Windows (AppContainer)"
+        "Windows (AppContainer, not implemented)"
     } else {
         "unknown"
     };
@@ -336,7 +337,7 @@ async fn main() -> anyhow::Result<()> {
     println!("  Platform:          {platform}");
     println!("  Allowed paths (rw): {}", work_dir.display());
     println!("  Network access:     DENIED");
-    println!("  Process spawning:   Allowed (Python interpreter needs it)");
+    println!("  Process spawning:   Allowed (generated code may start subprocesses)");
 
     // -----------------------------------------------------------------------
     // 3. Get the platform enforcer and probe it
@@ -354,7 +355,7 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("  Install bubblewrap: apt install bubblewrap (Debian/Ubuntu)");
                 eprintln!("                      dnf install bubblewrap (Fedora/RHEL)");
             } else if cfg!(target_os = "windows") {
-                eprintln!("  AppContainer requires Windows 8 or later.");
+                eprintln!("  The Windows AppContainer enforcer is not implemented.");
             } else {
                 eprintln!("  macOS Seatbelt should be available on macOS 10.5+.");
             }
@@ -532,14 +533,14 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Fallback for non-macOS platforms
+// Fallback for platforms without an enforcer
 // ---------------------------------------------------------------------------
 
-/// Runs the agent without sandbox enforcement (for demonstration on
-/// platforms where Seatbelt is not available).
+/// Runs the agent without sandbox enforcement, for platforms without an enforcer:
+/// Windows, or Linux without bubblewrap.
 async fn run_agent_unsandboxed(api_key: &str) -> anyhow::Result<()> {
     banner("Running Without Sandbox (Fallback)");
-    println!("  Note: On non-macOS platforms, the sandbox enforcer is not available.");
+    println!("  Note: no sandbox enforcer is available on this host.");
     println!("  This fallback demonstrates the agent without OS-level restrictions.\n");
 
     let backend = Arc::new(ProcessBackend::default());

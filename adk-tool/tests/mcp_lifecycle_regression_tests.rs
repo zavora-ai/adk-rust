@@ -765,8 +765,10 @@ async fn structured_only_tool_errors_keep_their_detail() {
         .await
         .unwrap();
     let toolset = McpToolset::new(client);
-    let error = toolset.call_tool_value("fail", Default::default()).await.unwrap_err().to_string();
-    assert!(error.contains("E_QUOTA"), "{error}");
+    // An `isError` result is the tool's answer to the model, so its detail is the response.
+    let response = toolset.call_tool_value("fail", Default::default()).await.unwrap();
+    let error = response["error"].as_str().expect("the server's error detail");
+    assert!(error.contains("E_QUOTA"), "{response}");
 }
 
 /// Holds an elicitation open until the test releases it.

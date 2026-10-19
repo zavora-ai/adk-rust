@@ -6,25 +6,29 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust
+//! use std::sync::Arc;
+//!
+//! use adk_agent::{LlmAgent, LlmAgentBuilder};
+//! use adk_core::Llm;
 //! use adk_tool::AgentTool;
-//! use adk_agent::LlmAgentBuilder;
 //!
-//! // Create a specialized agent
-//! let math_agent = LlmAgentBuilder::new("math_expert")
-//!     .description("Solves mathematical problems")
-//!     .instruction("You are a math expert. Solve problems step by step.")
-//!     .model(model.clone())
-//!     .build()?;
+//! fn coordinator(model: Arc<dyn Llm>) -> adk_core::Result<LlmAgent> {
+//!     // Create a specialized agent
+//!     let math_agent = LlmAgentBuilder::new("math_expert")
+//!         .description("Solves mathematical problems")
+//!         .instruction("You are a math expert. Solve problems step by step.")
+//!         .model(model.clone())
+//!         .build()?;
 //!
-//! // Wrap it as a tool
-//! let math_tool = AgentTool::new(Arc::new(math_agent));
-//!
-//! // Use in coordinator agent
-//! let coordinator = LlmAgentBuilder::new("coordinator")
-//!     .instruction("Help users by delegating to specialists")
-//!     .tools(vec![Arc::new(math_tool)])
-//!     .build()?;
+//!     // Wrap it as a tool and give it to a coordinator agent
+//!     let math_tool = AgentTool::new(Arc::new(math_agent));
+//!     LlmAgentBuilder::new("coordinator")
+//!         .instruction("Help users by delegating to specialists")
+//!         .model(model)
+//!         .tool(Arc::new(math_tool))
+//!         .build()
+//! }
 //! ```
 
 use adk_core::{
@@ -87,6 +91,7 @@ struct AgentToolRuntimeConfig {
     state_merge_exempt_keys: Arc<HashSet<String>>,
     artifact_prefixes: Option<Arc<Vec<String>>>,
     principal: Option<adk_core::AgentPrincipal>,
+    expose_error_messages: bool,
 }
 
 impl Default for AgentToolRuntimeConfig {
@@ -108,6 +113,7 @@ impl Default for AgentToolRuntimeConfig {
             state_merge_exempt_keys: Arc::new(HashSet::new()),
             artifact_prefixes: None,
             principal: None,
+            expose_error_messages: false,
         }
     }
 }
@@ -398,6 +404,37 @@ impl AgentTool {
         self
     }
 
+    /// Set whether a delegate's error message is included in the result it fails with.
+    ///
+    /// By default ([`AgentToolFailureMode::ReturnErrorObject`]) a failed delegation returns
+    /// `{"error": "agent execution failed: <component>.<category> (<code>)", "agent": ...}`
+    /// ([`AdkError::redacted`](adk_core::AdkError::redacted)), because the message can quote
+    /// credentials, internal hosts, or upstream bodies, and the result is sent to the calling
+    /// agent's model provider and stored in its session. An error with code
+    /// [`TOOL_INVALID_ARGUMENTS_CODE`](adk_core::TOOL_INVALID_ARGUMENTS_CODE) keeps its message.
+    /// This matches `LlmAgentBuilder::expose_tool_error_messages`. In
+    /// [`AgentToolFailureMode::Propagate`] the calling agent applies its own setting.
+    ///
+    /// Enable this only when every error the delegate can fail with is safe to send to the
+    /// provider.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_core::Agent;
+    /// use adk_tool::AgentTool;
+    ///
+    /// fn billing_tool(billing_agent: Arc<dyn Agent>) -> AgentTool {
+    ///     AgentTool::new(billing_agent).expose_error_messages(true)
+    /// }
+    /// ```
+    pub fn expose_error_messages(mut self, expose: bool) -> Self {
+        self.runtime.expose_error_messages = expose;
+        self
+    }
+
     /// Set whether delegated failures should be propagated as tool errors.
     pub fn propagate_failures(self, propagate: bool) -> Self {
         self.failure_mode(if propagate {
@@ -648,7 +685,14 @@ impl AgentTool {
             }
         };
 
-        if let Some(event) = events.iter().rev().find(|event| event.is_final_response()) {
+        // An `output_key` write or another state-only event follows the answer, so only
+        // events that carry content are read.
+        let carries_content = |event: &&Event| {
+            event.llm_response.content.as_ref().is_some_and(|content| !content.parts.is_empty())
+        };
+        if let Some(event) =
+            events.iter().rev().filter(carries_content).find(|event| event.is_final_response())
+        {
             let text: String = event
                 .llm_response
                 .content
@@ -671,7 +715,7 @@ impl AgentTool {
             }
         }
 
-        if let Some(last_event) = events.last() {
+        if let Some(last_event) = events.iter().rev().find(carries_content) {
             if let Some(text) = last_event
                 .llm_response
                 .content
@@ -1034,7 +1078,11 @@ impl Tool for AgentTool {
                             }
                         }
                         Err(error) => {
-                            adk_telemetry::error!("Error in sub-agent execution: {error}");
+                            // The message can quote credentials or upstream bodies.
+                            adk_telemetry::error!(
+                                error = %error.diagnostics(),
+                                "sub-agent execution failed"
+                            );
                             return Err(error);
                         }
                     }
@@ -1188,10 +1236,21 @@ impl Tool for AgentTool {
                 Ok(response)
             }
             Err(error) => match self.runtime.failure_mode {
-                AgentToolFailureMode::ReturnErrorObject => Ok(json!({
-                    "error": format!("agent execution failed: {error}"),
-                    "agent": self.agent.name()
-                })),
+                // The result goes to the caller's model provider and session, so the delegate's
+                // message stays out of it unless exposed, as `LlmAgent` treats tool errors.
+                AgentToolFailureMode::ReturnErrorObject => {
+                    let failure = if self.runtime.expose_error_messages
+                        || error.code == adk_core::TOOL_INVALID_ARGUMENTS_CODE
+                    {
+                        error.to_string()
+                    } else {
+                        error.redacted()
+                    };
+                    Ok(json!({
+                        "error": format!("agent execution failed: {failure}"),
+                        "agent": self.agent.name()
+                    }))
+                }
                 // The delegate's error keeps its category and code, so the caller can tell a
                 // timeout or rate limit from an internal failure.
                 AgentToolFailureMode::Propagate => {
@@ -2173,6 +2232,22 @@ mod tests {
             .execute(Arc::new(TestToolContext::new()), json!({"request": "fail"}))
             .await
             .unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "error": format!(
+                    "agent execution failed: {}",
+                    adk_core::AdkError::agent("planned failure").redacted()
+                ),
+                "agent": "failing",
+            })
+        );
+
+        let exposed = AgentTool::new(Arc::new(FailingAgent)).expose_error_messages(true);
+        let value = exposed
+            .execute(Arc::new(TestToolContext::new()), json!({"request": "fail"}))
+            .await
+            .unwrap();
         assert!(value["error"].as_str().unwrap().contains("planned failure"));
 
         let strict = AgentTool::new(Arc::new(FailingAgent)).propagate_failures(true);
@@ -2474,6 +2549,27 @@ mod tests {
                 .collect(),
         });
         event
+    }
+
+    #[test]
+    fn the_answer_is_read_past_a_trailing_state_only_event() {
+        let mut answer = Event::new("inv");
+        answer.llm_response.content = Some(Content::new("model").with_text("Nairobi"));
+        // The `output_key` write `LlmAgent` emits after its answer.
+        let mut state = Event::new("inv");
+        state.actions.state_delta.insert("capital".to_string(), json!("Nairobi"));
+
+        assert_eq!(
+            AgentTool::extract_response(&[answer.clone(), state.clone()]),
+            json!({ "response": "Nairobi" })
+        );
+
+        let mut partial = answer;
+        partial.llm_response.partial = true;
+        assert_eq!(
+            AgentTool::extract_response(&[partial, state]),
+            json!({ "response": "Nairobi" })
+        );
     }
 
     #[test]

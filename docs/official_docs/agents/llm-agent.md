@@ -830,6 +830,8 @@ so by default the model sees an error's component, category, and code
   idempotency key.
 - **Errors the model should read**: a tool returns `Ok(json!({"error": "..."}))` for a failure
   whose text is meant for the model, or an `on_tool_error` callback supplies that text.
+  `McpToolset` does this for an MCP result with `isError: true`, whose text the server wrote
+  for the model.
 
 After-tool callbacks can inspect structured `ToolOutcome` metadata via `CallbackContext::tool_outcome()`:
 

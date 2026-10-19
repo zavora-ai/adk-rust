@@ -253,6 +253,41 @@ async fn python_runs_under_the_deny_default_profile() {
     assert!(result.stdout.contains("cwd_listable"), "{result:?}");
 }
 
+/// `/usr/bin/python3` is an Xcode shim that cannot run under the profile, so the backend runs
+/// the interpreter behind it. Skips when no Xcode or Command Line Tools Python is installed.
+#[tokio::test]
+async fn python_found_through_the_xcode_shim_runs_under_the_deny_default_profile() {
+    if !seatbelt_available() {
+        return;
+    }
+    let xcode_python = std::process::Command::new("/usr/bin/xcrun")
+        .args(["--find", "python3"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !Path::new("/usr/bin/python3").exists() || !xcode_python {
+        eprintln!("no Xcode python3 on this host, skipping");
+        return;
+    }
+    let backend = ProcessBackend::with_sandbox(
+        ProcessConfig::default(),
+        Box::new(MacOsEnforcer::new()),
+        SandboxPolicyBuilder::new().env("PATH", "/usr/bin:/bin").build(),
+    );
+    let result = backend
+        .execute(ExecRequest {
+            language: Language::Python,
+            code: "print(1 + 1)".to_string(),
+            stdin: None,
+            timeout: Duration::from_secs(60),
+            memory_limit_mb: None,
+            env: HashMap::new(),
+        })
+        .await
+        .expect("python runs");
+
+    assert_eq!((result.exit_code, result.stdout.trim()), (0, "2"), "{result:?}");
+}
+
 /// Compiling and running Rust needs the toolchain granted explicitly, as any program
 /// installed outside the system runtime does.
 #[tokio::test]

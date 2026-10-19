@@ -1,0 +1,30 @@
+[package]
+name = "release-tool-fixes"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Checks for the second set of 3.0 docs-audit fixes: RagTool results, MCP isError text, AgentTool error redaction, action-node HTTP policy, Seatbelt interpreters, tool-progress truncation, MCP OAuth error codes, and ACP graceful shutdown"
+
+[workspace]
+
+[dependencies]
+adk-acp = { path = "../../adk-acp", features = ["server"] }
+adk-action = { path = "../../adk-action" }
+adk-agent = { path = "../../adk-agent" }
+adk-core = { path = "../../adk-core" }
+adk-graph = { path = "../../adk-graph", features = ["action-http", "action-rss"] }
+adk-model = { path = "../../adk-model", default-features = false, features = ["gemini", "openai"] }
+adk-rag = { path = "../../adk-rag", features = ["gemini"] }
+adk-runner = { path = "../../adk-runner" }
+adk-sandbox = { path = "../../adk-sandbox", features = ["process", "sandbox-native"] }
+adk-session = { path = "../../adk-session" }
+adk-tool = { path = "../../adk-tool", features = ["mcp", "http-transport"] }
+anyhow = "1.0"
+async-trait = "0.1"
+axum = "0.8"
+dotenvy = "0.15"
+futures = "0.3"
+rmcp = { version = "3.1", features = ["client", "server", "transport-child-process"] }
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

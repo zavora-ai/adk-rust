@@ -1,9 +1,10 @@
 //! Action nodes take paths and URLs from workflow state, which is untrusted.
 //!
 //! A file node used the interpolated path as given, so `../` or an absolute
-//! path reached any file the process could. An HTTP node requested any URL the
-//! state produced. Both are now confined, and a node whose backend does not
-//! exist says it is not implemented rather than pointing at a feature flag.
+//! path reached any file the process could. The HTTP, notification, and RSS
+//! nodes requested any URL the state produced. All are now confined, and a node
+//! whose backend does not exist says it is not implemented rather than pointing
+//! at a feature flag.
 
 #![cfg(feature = "action")]
 
@@ -130,6 +131,159 @@ async fn a_file_url_is_rejected_by_an_http_node() {
     let message = failure(&executor, state).await;
 
     assert!(message.contains("scheme 'file' is not permitted"), "{message}");
+}
+
+/// A local HTTP server standing in for an internal service.
+///
+/// It answers `GET /redirect` with a redirect to `localhost` on the same port, and every
+/// other request with an empty `200`, counting the requests it answers that way.
+#[cfg(feature = "action-http")]
+struct Internal {
+    base: String,
+    served: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(feature = "action-http")]
+impl Internal {
+    async fn start() -> Self {
+        use std::sync::atomic::Ordering;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let served = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = served.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = vec![0u8; 4096];
+                let read = stream.read(&mut request).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&request[..read]).to_string();
+                let response = if head.starts_with("GET /redirect ") {
+                    format!(
+                        "HTTP/1.1 302 Found\r\nLocation: http://localhost:{port}/feed\r\n\
+                         Content-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                } else {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        Self { base: format!("http://127.0.0.1:{port}"), served }
+    }
+
+    fn served(&self) -> usize {
+        self.served.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[cfg(feature = "action-http")]
+fn notification_node(url: &str) -> ActionNodeConfig {
+    use adk_action::{NotificationChannel, NotificationMessage, NotificationNodeConfig};
+
+    ActionNodeConfig::Notification(NotificationNodeConfig {
+        standard: standard("notify"),
+        notification_channel: NotificationChannel::Slack,
+        webhook_url: url.to_string(),
+        message: NotificationMessage {
+            text: "deployed".to_string(),
+            format: None,
+            username: None,
+            icon_url: None,
+            channel: None,
+        },
+    })
+}
+
+#[cfg(feature = "action-http")]
+#[tokio::test]
+async fn a_notification_webhook_outside_the_host_allowlist_is_never_requested() {
+    use adk_graph::action::http::HttpActionPolicy;
+
+    let internal = Internal::start().await;
+    let executor = ActionNodeExecutor::new(notification_node("{{hook}}"))
+        .with_http_policy(HttpActionPolicy::new().allow_hosts(["hooks.slack.com"]));
+    let state = State::from([(
+        "hook".to_string(),
+        json!(format!("{}/services/T0/B0/webhook-secret", internal.base)),
+    )]);
+
+    let message = failure(&executor, state).await;
+
+    assert!(message.contains("not in the HTTP action policy allowlist"), "{message}");
+    assert!(!message.contains("webhook-secret"), "the webhook URL is a secret: {message}");
+    assert_eq!(internal.served(), 0);
+}
+
+#[cfg(feature = "action-http")]
+#[tokio::test]
+async fn a_notification_webhook_with_a_refused_scheme_is_never_requested() {
+    use adk_graph::action::http::HttpActionPolicy;
+
+    let internal = Internal::start().await;
+    let executor = ActionNodeExecutor::new(notification_node(&format!("{}/hook", internal.base)))
+        .with_http_policy(HttpActionPolicy::new().allow_schemes(["https"]));
+
+    let message = failure(&executor, State::new()).await;
+
+    assert!(message.contains("scheme 'http' is not permitted"), "{message}");
+    assert_eq!(internal.served(), 0);
+}
+
+#[cfg(feature = "action-http")]
+#[tokio::test]
+async fn a_notification_webhook_the_policy_permits_is_sent() {
+    use adk_graph::action::http::HttpActionPolicy;
+
+    let internal = Internal::start().await;
+    let executor = ActionNodeExecutor::new(notification_node(&format!("{}/hook", internal.base)))
+        .with_http_policy(HttpActionPolicy::new().allow_hosts(["127.0.0.1"]));
+    let ctx = NodeContext::new(State::new(), ExecutionConfig::new("confinement"), 0);
+
+    executor.execute(&ctx).await.expect("a permitted webhook is sent");
+
+    assert_eq!(internal.served(), 1);
+}
+
+#[cfg(feature = "action-rss")]
+fn rss_node(url: &str) -> ActionNodeConfig {
+    ActionNodeConfig::Rss(adk_action::RssNodeConfig {
+        standard: standard("feed"),
+        feed_url: url.to_string(),
+        filter: None,
+        seen_tracking: None,
+    })
+}
+
+#[cfg(feature = "action-rss")]
+#[tokio::test]
+async fn an_rss_feed_outside_the_host_allowlist_is_never_requested() {
+    use adk_graph::action::http::HttpActionPolicy;
+
+    let internal = Internal::start().await;
+    let executor = ActionNodeExecutor::new(rss_node(&format!("{}/feed", internal.base)))
+        .with_http_policy(HttpActionPolicy::new().allow_hosts(["feeds.example.com"]));
+
+    let message = failure(&executor, State::new()).await;
+
+    assert!(message.contains("not in the HTTP action policy allowlist"), "{message}");
+    assert_eq!(internal.served(), 0);
+}
+
+#[cfg(feature = "action-rss")]
+#[tokio::test]
+async fn an_rss_redirect_to_an_unlisted_host_is_not_followed() {
+    use adk_graph::action::http::HttpActionPolicy;
+
+    let internal = Internal::start().await;
+    let executor = ActionNodeExecutor::new(rss_node(&format!("{}/redirect", internal.base)))
+        .with_http_policy(HttpActionPolicy::new().allow_hosts(["127.0.0.1"]));
+
+    let message = failure(&executor, State::new()).await;
+
+    assert!(message.contains("failed to fetch feed"), "{message}");
+    assert_eq!(internal.served(), 0, "the redirect target was requested");
 }
 
 #[tokio::test]

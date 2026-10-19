@@ -162,3 +162,32 @@ async fn an_access_token_is_refreshed_before_it_expires() {
     assert_eq!(mock.tokens_for("tools/list"), vec!["token-2"]);
     assert_eq!(mock.rejections.load(Ordering::SeqCst), 0, "the refresh waited for a 401");
 }
+
+#[tokio::test]
+async fn a_rejected_client_credential_fails_connect_with_the_oauth_code() {
+    use adk_tool::AutoDeclineElicitationHandler;
+
+    let app = Router::new()
+        .route("/token", post(|| async { (StatusCode::UNAUTHORIZED, "invalid_client") }))
+        .route("/mcp", post(|| async { StatusCode::INTERNAL_SERVER_ERROR }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let builder = || {
+        let oauth = OAuth2Config::new("client", format!("{base}/token")).with_secret("secret");
+        McpHttpClientBuilder::new(format!("{base}/mcp")).with_auth(McpAuth::oauth2(oauth))
+    };
+
+    let plain = builder().connect().await.err().expect("the token endpoint refused");
+    let elicitation = builder()
+        .with_elicitation_handler(Arc::new(AutoDeclineElicitationHandler))
+        .connect_with_elicitation()
+        .await
+        .err()
+        .expect("the token endpoint refused");
+
+    for error in [plain, elicitation] {
+        assert_eq!(error.code, "mcp.oauth.token_fetch", "{error}");
+        assert!(error.is_unauthorized(), "{error}");
+    }
+}

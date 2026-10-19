@@ -147,7 +147,7 @@ async fn main() -> anyhow::Result<()> {
     println!("╚══════════════════════════════════════════════════════════════╝\n");
 
     // ── Create the model ─────────────────────────────────────────────────────
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
     println!("✓ Model: {}\n", model.name());
 
     // ── Configure the Retry & Reflect plugin ─────────────────────────────────

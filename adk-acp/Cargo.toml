@@ -14,7 +14,7 @@ categories = ["development-tools", "asynchronous"]
 
 [features]
 default = []
-server = ["dep:adk-runner", "dep:adk-session", "dep:adk-tool", "dep:rmcp", "dep:tokio-util", "dep:uuid", "dep:async-stream"]
+server = ["dep:adk-runner", "dep:adk-session", "dep:adk-tool", "dep:rmcp", "dep:tokio-util", "dep:uuid", "dep:async-stream", "dep:blocking"]
 
 [dependencies]
 adk-core = { workspace = true }
@@ -40,6 +40,8 @@ rmcp = { version = "3.1", features = ["client", "transport-child-process"], opti
 tokio-util = { version = "0.7", features = ["rt"], optional = true }
 uuid = { workspace = true, optional = true }
 async-stream = { workspace = true, optional = true }
+# Unblocked stdin and stdout for the server transport, as the SDK's own `Stdio` uses them.
+blocking = { version = "1.6", optional = true }
 
 [dev-dependencies]
 # Internal dev-deps are path-only (no version) so cargo strips them from the

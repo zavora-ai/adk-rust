@@ -27,7 +27,7 @@ An LLM-agent-driven example that demonstrates the OS sandbox profiles feature wi
 | Read access | System paths (platform-specific: `/usr`, `/lib`, `C:\Windows`, etc.) |
 | Read-write access | Temporary work directory (`$TMPDIR/adk_sandbox_agent_work`) |
 | Network access | **Denied** |
-| Process spawning | **Allowed** (Python interpreter needs it) |
+| Process spawning | **Allowed**, so the generated code may start subprocesses |
 | Environment | `PATH` set to platform-appropriate interpreter paths |
 
 ## Prerequisites

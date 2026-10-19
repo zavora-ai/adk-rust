@@ -770,9 +770,10 @@ Paths and URLs come from workflow state, so both are confined:
 - **File** nodes stay inside the allowed roots — the working directory unless
   `with_file_roots` names others. A `..` component, or a path that resolves outside
   every root through a symbolic link, fails the node.
-- **HTTP** nodes accept only the schemes, hosts, and redirect count an
-  `HttpActionPolicy` permits (`with_http_policy`). The default allows `https` and
-  `http` to any host and up to 5 redirects, each re-checked. Logs omit the query string.
+- **HTTP**, **notification**, and **RSS** nodes accept only the schemes, hosts, and
+  redirect count an `HttpActionPolicy` permits (`with_http_policy`). The default allows
+  `https` and `http` to any host and up to 5 redirects, each re-checked. Logs omit the
+  query string, and the notification webhook URL is logged by host only.
 
 ## SQLx compatibility
 

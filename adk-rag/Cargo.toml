@@ -44,6 +44,7 @@ surrealdb = { version = "3.0.1", features = ["kv-mem", "kv-rocksdb"], optional =
 surrealdb-types = { version = "3.0.1", optional = true }
 
 [dev-dependencies]
+adk-tool = { path = "../adk-tool" }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 axum = "0.8"
 proptest = "1.6"

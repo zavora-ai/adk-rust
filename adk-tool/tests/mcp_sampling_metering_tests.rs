@@ -235,9 +235,11 @@ async fn sampling_over_the_run_budget_is_refused_before_the_model_is_called() {
     drop(tracker.begin_model_call("main-model").unwrap());
     let config = RunConfig { budget_tracker: Some(tracker.clone()), ..RunConfig::default() };
 
-    let error = call(&tool, Some(config)).await.expect_err("the sampled call is refused");
+    // The server reports the refused sampling request as an `isError` result.
+    let value = call(&tool, Some(config)).await.expect("the server answers");
+    let error = value["error"].as_str().expect("the server's error text");
 
-    assert!(error.to_string().contains("budget"), "{error}");
+    assert!(error.contains("budget"), "{error}");
     assert_eq!(calls.load(Ordering::SeqCst), 0, "a refused call is never sent");
     assert_eq!(tracker.usage().model_calls, 1);
     assert_eq!(tracker.check().map_err(|e| e.limit()), Ok(()));
@@ -257,9 +259,10 @@ async fn sampling_over_the_spend_cap_is_refused() {
     ));
     let config = RunConfig::builder().spend_ledger(ledger.clone()).build();
 
-    let error = call(&tool, Some(config)).await.expect_err("the hold exceeds the cap");
+    let value = call(&tool, Some(config)).await.expect("the server answers");
+    let error = value["error"].as_str().expect("the server's error text");
 
-    assert!(error.to_string().contains("spend"), "{error}");
+    assert!(error.contains("spend"), "{error}");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(ledger.spent(&SpendKey::org("acme"), SpendPeriod::Lifetime).await.unwrap(), 0);
 }

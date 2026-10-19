@@ -152,10 +152,12 @@ async fn stream_turn(runner: &Runner, session_id: &str, prompt: &str) -> Result<
     while let Some(event) = stream.next().await {
         let event = event?;
         let event = text_deltas.push(&event);
+        // A streamed function call arrives in a partial chunk and again in the complete event.
+        let partial = event.llm_response.partial;
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
                 match part {
-                    Part::FunctionCall { name, args, .. } => {
+                    Part::FunctionCall { name, args, .. } if !partial => {
                         flush_text(&mut pending);
                         println!("  🔧 {name}({})", first_line(&args.to_string()));
                     }

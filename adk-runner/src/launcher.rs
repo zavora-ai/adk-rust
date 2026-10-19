@@ -153,6 +153,9 @@ impl Launcher {
                 match event {
                     Ok(evt) => {
                         let evt = text_deltas.push(&evt);
+                        // A streamed function call arrives in a partial chunk and again in
+                        // the complete event, so only the complete one is printed.
+                        let partial = evt.llm_response.partial;
                         if let Some(content) = evt.content() {
                             for part in &content.parts {
                                 match part {
@@ -164,7 +167,7 @@ impl Launcher {
                                         print!("\n[thinking] {thinking}");
                                         io::stdout().flush().ok();
                                     }
-                                    Part::FunctionCall { name, args, .. } => {
+                                    Part::FunctionCall { name, args, .. } if !partial => {
                                         print!("\n[tool] {name}({args})");
                                         io::stdout().flush().ok();
                                     }

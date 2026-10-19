@@ -196,7 +196,9 @@ A harness that runs past `--external-timeout` is killed and reported as
 - `bench_gemini_sdk.py` — the Google Gemini Python SDK without a framework
 - `bench_langgraph.py` — a LangGraph ReAct agent
 
-Configure harnesses in a JSON file:
+Configure harnesses in a JSON file, as `harnesses/external-frameworks.json` does. A relative
+script path or `workingDir` resolves against the directory `cargo adk bench` runs in; the
+bundled file expects the repository root:
 
 ```json
 {

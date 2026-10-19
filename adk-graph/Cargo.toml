@@ -90,7 +90,7 @@ full = ["sqlite", "action-full"]
 adk-graph = { path = ".", features = ["conformance"] }
 # Internal dev-deps are path-only (no version) so cargo strips them from the
 # published manifest — they can never block or reorder a crates.io publish.
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util", "net", "io-util"] }
 proptest = "1.5"
 adk-action = { path = "../adk-action" }
 # For `SimpleToolContext` when testing a graph exposed as a tool.

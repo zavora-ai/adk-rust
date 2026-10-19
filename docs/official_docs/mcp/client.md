@@ -106,7 +106,9 @@ the same name still fails the turn. Use `PrefixedToolset`, or
 
 A tool call's result reaches the model as `{"output": ...}`; a call that
 succeeds with no content is `{"output": ""}`, not a failure. A result with
-`isError: true` is a tool error, whose text `LlmAgent` keeps out of the model
+`isError: true` reaches the model as `{"error": "<server text>"}` (at most 8 KiB),
+because the server wrote that text for the model to act on. A transport, protocol,
+or task failure is a tool error, whose message `LlmAgent` keeps out of the model
 request by default. See [what the model receives](../tools/mcp-tools.md#connect-one-local-server).
 
 ```rust
@@ -457,8 +459,9 @@ token:
 
 A request rejected with 401 never ran, so it is resent even for tools whose
 calls are not otherwise replayed after a connection failure. A token that cannot
-be fetched at connect time fails `connect()`, so bad credentials surface before
-the first tool call.
+be fetched at connect time fails `connect()` and `connect_with_elicitation()` with
+code `mcp.oauth.token_fetch` and `ErrorCategory::Unauthorized`, so bad credentials
+surface before the first tool call and can be told apart from an unreachable server.
 
 Reconnects follow `RefreshConfig` (`with_refresh_config`): three attempts, one
 second apart, by default.

@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
     let api_key =
         std::env::var("GOOGLE_API_KEY").expect("GOOGLE_API_KEY must be set in .env or environment");
-    let model = GeminiModel::new(api_key, "gemini-2.5-flash")?;
+    let model = GeminiModel::new(api_key, "gemini-3.5-flash-lite")?;
 
     // The host-authored trust boundary: one writable mount, one environment
     // variable, the clock, and one host function. Everything else — other

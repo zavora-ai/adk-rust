@@ -409,3 +409,80 @@ async fn dropped_partial_forwarded_events_are_marked_once() {
     assert!(forwarded < FORWARDED_EVENTS, "the stall must have dropped partial events");
     assert_eq!(markers, 1, "the drop is reported by one marker");
 }
+
+// ── Truncation under a full queue ─────────────────────────────────────
+
+/// Progress chunks a tool's worker task emits per run; more than the queue holds.
+const WORKER_CHUNKS: usize = 1_000;
+
+/// A tool whose worker task streams progress while the tool waits for it, as a shell tool
+/// forwards a child's output.
+struct StreamingWorkerTool;
+
+#[async_trait]
+impl Tool for StreamingWorkerTool {
+    fn name(&self) -> &str {
+        "streaming_worker"
+    }
+
+    fn description(&self) -> &str {
+        "streams progress from a worker task"
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({ "type": "object", "properties": {} }))
+    }
+
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        let reporter = ctx.clone();
+        let worker = tokio::spawn(async move {
+            for line in 0..WORKER_CHUNKS {
+                reporter.emit_progress("stdout", &format!("line {line}\n")).await;
+            }
+        });
+        let _ = worker.await;
+        Ok(json!({ "ok": true }))
+    }
+}
+
+/// The marker is what tells a client that stalled while the queue was full that output is
+/// missing, so it must reach that client.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_truncation_marker_reaches_a_client_that_stalled_on_a_full_queue() {
+    let model = Arc::new(SequencedModel::new(vec![
+        SequencedModel::call("streaming_worker", "call-1"),
+        SequencedModel::text("finished"),
+    ]));
+    let agent = LlmAgentBuilder::new("test-agent")
+        .model(model)
+        .tool(Arc::new(StreamingWorkerTool))
+        .build()
+        .unwrap();
+
+    let mut stream = agent.run(context()).await.unwrap();
+    let mut forwarded = 0;
+    let mut markers = 0;
+    while let Some(result) = stream.next().await {
+        let event = result.expect("the run must not fail");
+        if event.tool_progress_stream().is_none() {
+            continue;
+        }
+        let is_marker = event
+            .llm_response
+            .content
+            .iter()
+            .flat_map(|content| &content.parts)
+            .any(|part| matches!(part, Part::Text { text } if text == TRUNCATION_MARKER));
+        if is_marker {
+            markers += 1;
+            continue;
+        }
+        forwarded += 1;
+        if forwarded == 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+    }
+
+    assert!(forwarded < WORKER_CHUNKS, "the stall must have dropped progress");
+    assert_eq!(markers, 1, "the dropped progress is reported by one marker");
+}

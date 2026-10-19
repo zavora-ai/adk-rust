@@ -2,8 +2,8 @@
 //!
 //! This module defines [`BenchConfig`], the top-level configuration struct
 //! that maps CLI parameters to structured settings for the [`BenchRunner`](crate::BenchRunner).
-//! It also defines supporting types like [`OutputFormat`], [`TaskSuite`],
-//! and [`ExternalFrameworkConfig`].
+//! It also defines supporting types like [`OutputFormat`] and
+//! [`ExternalFrameworkConfig`].
 
 use std::path::PathBuf;
 
@@ -74,9 +74,6 @@ pub struct BenchConfig {
     /// Memory sampling interval in milliseconds.
     pub memory_sample_interval_ms: u64,
 
-    /// Task quality suite to run (tau2, bfcl).
-    pub suite: Option<TaskSuite>,
-
     /// Baseline file path for regression detection.
     pub baseline_path: PathBuf,
 
@@ -125,7 +122,6 @@ impl Default for BenchConfig {
             external_timeout_secs: 300,
             concurrency_sweep: None,
             memory_sample_interval_ms: 100,
-            suite: None,
             baseline_path: PathBuf::from(".bench-baseline.json"),
             dry_run: false,
             max_cost_usd: None,
@@ -145,16 +141,6 @@ pub enum OutputFormat {
     Table,
     /// Markdown table suitable for README inclusion.
     Markdown,
-}
-
-/// Task quality benchmark suite selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TaskSuite {
-    /// τ²-bench task quality scenarios.
-    Tau2,
-    /// Berkeley Function Calling Leaderboard dataset.
-    Bfcl,
 }
 
 /// Configuration for an external framework comparison target.

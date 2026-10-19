@@ -34,8 +34,8 @@
 
 use adk_artifact::ArtifactService;
 use adk_core::{
-    Agent, CacheCapable, Content, ContextCacheConfig, EventsCompactionConfig, Memory, Part, Result,
-    RunConfig, SessionId, StreamingMode, UserId,
+    Agent, CacheCapable, Content, ContextCacheConfig, Event, EventsCompactionConfig, Memory, Part,
+    Result, RunConfig, SessionId, StreamingMode, UserId,
 };
 use adk_runner::Runner;
 use adk_server::{
@@ -453,11 +453,7 @@ impl Launcher {
                                             let _ = io::stdout().flush();
                                         }
 
-                                        if let Some(content) = &evt.llm_response.content {
-                                            for part in &content.parts {
-                                                printer.handle_part(part);
-                                            }
-                                        }
+                                        printer.handle_event(&evt);
                                     }
                                     Err(e) => {
                                         // The message is shown here, escaped; the log line
@@ -755,6 +751,33 @@ impl<W: Write> StreamPrinter<W> {
     fn emit(&mut self, text: &str) {
         let _ = self.out.write_all(terminal_safe(text).as_bytes());
         let _ = self.out.flush();
+    }
+
+    /// Render every part of `event`.
+    ///
+    /// A streamed function call arrives in a partial chunk and again in the complete event,
+    /// so a function call is rendered from the complete event only.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::launcher::{StreamPrinter, ThinkingDisplayMode};
+    /// use adk_core::{Content, Event, Part};
+    ///
+    /// let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, Vec::new());
+    /// let mut event = Event::new("invocation");
+    /// event.set_content(Content::new("model").with_text("hello"));
+    /// printer.handle_event(&event);
+    /// printer.finish();
+    /// ```
+    pub fn handle_event(&mut self, event: &Event) {
+        let Some(content) = &event.llm_response.content else { return };
+        for part in &content.parts {
+            if event.llm_response.partial && matches!(part, Part::FunctionCall { .. }) {
+                continue;
+            }
+            self.handle_part(part);
+        }
     }
 
     /// Process a single response part, rendering it to the printer's writer.
@@ -1066,6 +1089,29 @@ mod tests {
         printer.handle_text_chunk("<think></think>after");
         assert!(!printer.in_think_block);
         assert!(printer.think_buffer.is_empty());
+    }
+
+    #[test]
+    fn a_streamed_tool_call_is_printed_once() {
+        let call = Part::FunctionCall {
+            name: "get_weather".into(),
+            args: serde_json::json!({"city": "Paris"}),
+            id: Some("call-1".into()),
+            thought_signature: None,
+        };
+        let mut chunk = Event::new("invocation");
+        chunk.llm_response.partial = true;
+        chunk.set_content(Content { role: "model".into(), parts: vec![call.clone()] });
+        let mut complete = chunk.clone();
+        complete.llm_response.partial = false;
+
+        let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, Vec::new());
+        printer.handle_event(&chunk);
+        printer.handle_event(&complete);
+        printer.finish();
+
+        let printed = String::from_utf8(printer.out).unwrap();
+        assert_eq!(printed.matches("[tool-call] get_weather").count(), 1, "{printed}");
     }
 
     #[test]

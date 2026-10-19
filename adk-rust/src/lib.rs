@@ -693,6 +693,42 @@ pub mod computer_use {
     pub use adk_computer_use::*;
 }
 
+/// Agent Client Protocol: external ACP agents as tools, and ADK agents as ACP agents.
+///
+/// - [`AcpAgentTool`](acp::AcpAgentTool) - An external ACP agent (Claude Code, Codex,
+///   Kiro CLI) as a tool
+/// - [`AcpSession`](acp::AcpSession) - A persistent session with an external ACP agent
+/// - [`agent_client_protocol`](acp::agent_client_protocol) - The official ACP SDK
+///
+/// Exposing an ADK agent over ACP needs `adk-acp`'s `server` feature.
+///
+/// Available with feature: `acp`
+///
+/// # Example
+///
+/// ```rust
+/// use adk_rust::acp::AcpAgentTool;
+///
+/// let reviewer = AcpAgentTool::new("claude-code --acp")
+///     .name("code_reviewer")
+///     .description("Reviews a change and reports problems");
+/// ```
+#[cfg(feature = "acp")]
+#[cfg_attr(docsrs, doc(cfg(feature = "acp")))]
+pub mod acp {
+    pub use adk_acp::*;
+}
+
+/// Agentic Web Protocol: discovery, capability manifests, trust, consent, and events for
+/// agent-facing websites.
+///
+/// Available with feature: `awp`
+#[cfg(feature = "awp")]
+#[cfg_attr(docsrs, doc(cfg(feature = "awp")))]
+pub mod awp {
+    pub use adk_awp::*;
+}
+
 /// Code execution substrate (experimental — `full` preset).
 ///
 /// First-class code execution for agents, Studio, and generated projects:
@@ -749,7 +785,7 @@ pub use adk_runner::Launcher;
 
 /// Full-featured CLI launcher with console and serve modes.
 ///
-/// Requires the `cli` feature (included in `standard` tier).
+/// Requires the `cli` feature, which no tier includes; add it to any preset.
 /// Provides `--serve` mode, `rustyline` history, and `clap` CLI parsing.
 #[cfg(feature = "cli")]
 #[cfg_attr(docsrs, doc(cfg(feature = "cli")))]

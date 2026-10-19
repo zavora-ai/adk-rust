@@ -650,6 +650,7 @@ examples, such as a custom embedder and multi-collection search.
 | `ingest(collection, &document)` | Chunk, embed, and store one document; returns its chunks |
 | `ingest_batch(collection, &documents)` | The same for several documents |
 | `query(collection, text)` | Embed, search, rerank, and drop results below `similarity_threshold` |
+| `query_with_top_k(collection, text, top_k)` | The same with a result count of its own |
 
 ### RagTool
 
@@ -659,6 +660,10 @@ arguments are a required `query` and optional `collection` and `top_k`:
 ```json
 { "query": "pricing info", "collection": "faq", "top_k": 5 }
 ```
+
+The tool returns the results best first, each as
+`{"id", "document_id", "text", "metadata", "score"}`. Embedding vectors are left out, and a
+`top_k` override is reranked and filtered like any other query.
 
 ## SQLx compatibility
 

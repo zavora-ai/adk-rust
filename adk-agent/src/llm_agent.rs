@@ -1748,6 +1748,18 @@ const FORWARDED_EVENTS_STREAM: &str = "events";
 /// events were dropped.
 const FORWARDED_EVENTS_DROPPED_MARKER: &str = "[adk: forwarded events dropped]";
 
+/// Markers that found the progress queue full, delivered by the dispatch loop after the
+/// queued events.
+type ProgressOverflow = Arc<std::sync::Mutex<Vec<Event>>>;
+
+/// Queues `marker`, keeping it in `overflow` when the queue is full: a marker reports a
+/// backlog, so the full queue is exactly when it must not be dropped.
+fn send_marker(tx: &tokio::sync::mpsc::Sender<Event>, overflow: &ProgressOverflow, marker: Event) {
+    if let Err(tokio::sync::mpsc::error::TrySendError::Full(marker)) = tx.try_send(marker) {
+        overflow.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(marker);
+    }
+}
+
 /// Truncates `text` to at most `max_bytes`, never splitting a character.
 fn truncate_on_char_boundary(text: &str, max_bytes: usize) -> &str {
     if text.len() <= max_bytes {
@@ -1768,6 +1780,8 @@ struct AgentToolContext {
     tool_name: Option<String>,
     actions: Mutex<EventActions>,
     progress_tx: Option<tokio::sync::mpsc::Sender<Event>>,
+    /// Where a marker goes when the progress queue is full.
+    progress_overflow: ProgressOverflow,
     /// Progress bytes forwarded so far for this call.
     progress_bytes: std::sync::atomic::AtomicUsize,
     /// Set once the truncation marker has been emitted, so it is emitted once.
@@ -1792,7 +1806,7 @@ impl Drop for AgentToolContext {
         if !*self.events_drop_marked.get_mut()
             && let Some(tx) = &self.progress_tx
         {
-            let _ = tx.try_send(self.events_dropped_marker());
+            send_marker(tx, &self.progress_overflow, self.events_dropped_marker());
         }
     }
 }
@@ -1805,6 +1819,7 @@ impl AgentToolContext {
             tool_name: None,
             actions: Mutex::new(EventActions::default()),
             progress_tx: None,
+            progress_overflow: ProgressOverflow::default(),
             progress_bytes: std::sync::atomic::AtomicUsize::new(0),
             progress_truncated: std::sync::atomic::AtomicBool::new(false),
             events_dropped: std::sync::atomic::AtomicUsize::new(0),
@@ -1820,8 +1835,13 @@ impl AgentToolContext {
 
     /// Attach a progress sink so [`ToolContext::emit_progress`] forwards chunks
     /// as partial [`Event`]s onto the agent's `EventStream`.
-    fn with_progress(mut self, tx: tokio::sync::mpsc::Sender<Event>) -> Self {
+    fn with_progress(
+        mut self,
+        tx: tokio::sync::mpsc::Sender<Event>,
+        overflow: ProgressOverflow,
+    ) -> Self {
         self.progress_tx = Some(tx);
+        self.progress_overflow = overflow;
         self
     }
 
@@ -1925,7 +1945,7 @@ impl AgentToolContext {
             stream,
             TOOL_PROGRESS_TRUNCATION_MARKER,
         );
-        let _ = tx.try_send(marker);
+        send_marker(tx, &self.progress_overflow, marker);
     }
 
     fn actions_guard(&self) -> std::sync::MutexGuard<'_, EventActions> {
@@ -2329,6 +2349,7 @@ struct ToolExecutor<'a> {
     invocation_id: &'a str,
     concurrency_manager: &'a adk_core::ToolConcurrencyManager,
     progress_tx: tokio::sync::mpsc::Sender<Event>,
+    progress_overflow: ProgressOverflow,
     tool_timeout: std::time::Duration,
     expose_tool_error_messages: bool,
     /// Set when an approval fails, so calls still waiting for theirs stop waiting.
@@ -2730,7 +2751,10 @@ impl ToolExecutor<'_> {
                     Arc::new(
                         AgentToolContext::new(self.ctx.clone(), function_call_id.clone())
                             .with_tool_name(tool.name())
-                            .with_progress(self.progress_tx.clone()),
+                            .with_progress(
+                                self.progress_tx.clone(),
+                                self.progress_overflow.clone(),
+                            ),
                     )
                 };
                 let mut tool_ctx = attempt_context();
@@ -3431,6 +3455,7 @@ impl Agent for LlmAgent {
                     adk_core::ToolConcurrencyManager::new(&ctx.run_config().tool_concurrency);
                 let (progress_tx, mut progress_rx) =
                     tokio::sync::mpsc::channel::<Event>(TOOL_PROGRESS_CAPACITY);
+                let progress_overflow = ProgressOverflow::default();
                 let executor = ToolExecutor {
                     ctx: ctx.clone(),
                     agent_name: &agent_name,
@@ -3449,6 +3474,7 @@ impl Agent for LlmAgent {
                     invocation_id: &invocation_id,
                     concurrency_manager: &concurrency_manager,
                     progress_tx,
+                    progress_overflow: progress_overflow.clone(),
                     tool_timeout,
                     expose_tool_error_messages,
                     approval_failed: tokio::sync::watch::channel(false).0,
@@ -3469,6 +3495,12 @@ impl Agent for LlmAgent {
                     };
                     while let Ok(progress_event) = progress_rx.try_recv() {
                         yield Ok(progress_event);
+                    }
+                    let markers = std::mem::take(
+                        &mut *progress_overflow.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+                    );
+                    for marker in markers {
+                        yield Ok(marker);
                     }
                     match results {
                         Ok(results) => results,
@@ -4447,6 +4479,7 @@ impl Agent for LlmAgent {
                     // it concurrently and yields progress events to the client.
                     let (progress_tx, mut progress_rx) =
                         tokio::sync::mpsc::channel::<Event>(TOOL_PROGRESS_CAPACITY);
+                    let progress_overflow = ProgressOverflow::default();
 
                     let executor = ToolExecutor {
                         ctx: ctx.clone(),
@@ -4466,6 +4499,7 @@ impl Agent for LlmAgent {
                         invocation_id: &invocation_id,
                         concurrency_manager: &concurrency_manager,
                         progress_tx: progress_tx.clone(),
+                        progress_overflow: progress_overflow.clone(),
                         tool_timeout,
                         expose_tool_error_messages,
                         approval_failed: tokio::sync::watch::channel(false).0,
@@ -4505,6 +4539,15 @@ impl Agent for LlmAgent {
                         // Flush any progress chunks buffered between the last poll and completion.
                         while let Ok(progress_event) = progress_rx.try_recv() {
                             yield Ok(progress_event);
+                        }
+                        // Then the markers that found the queue full.
+                        let markers = std::mem::take(
+                            &mut *progress_overflow
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                        );
+                        for marker in markers {
+                            yield Ok(marker);
                         }
                         match results {
                             Ok(results) => results,

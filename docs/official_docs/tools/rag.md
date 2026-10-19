@@ -105,7 +105,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
    chunker's own sizes decide chunking
 2. `MockEmbedder` converts each chunk into a 64-dimensional vector
 3. `InMemoryVectorStore` stores the vectors and searches by cosine similarity
-4. `query()` embeds the question, finds the closest chunks, and returns them ranked by score
+4. `query()` embeds the question, finds the closest chunks, and returns them ranked by score;
+   `query_with_top_k()` does the same with a result count of its own
 
 ---
 
@@ -166,8 +167,9 @@ This example also depends on `adk-agent`, `adk-model` (`gemini`), `adk-runner`, 
 | `RagTool` | Value |
 |-----------|-------|
 | Name | `rag_search` |
-| Parameters | `query` (required), `collection` (defaults to the collection given to `RagTool::new`), `top_k` (overrides the configured value) |
-| Returns | An array of `{"chunk": {...}, "score": ...}` results, best first |
+| Parameters | `query` (required), `collection` (defaults to the collection given to `RagTool::new`), `top_k` (overrides the configured value; the reranker and similarity threshold still apply) |
+| Returns | An array of `{"id", "document_id", "text", "metadata", "score"}` results, best first; embedding vectors are not included |
+| Invalid arguments | A missing `query` or a `top_k` that is not a positive integer fails the call with `tool.invalid_arguments`, whose message the model receives |
 | Effect | `ToolEffect::NonIdempotent` (the default), so a default-deny `DeclarativePolicy` must allow it by name |
 
 When a user asks "What's your return policy?", the agent:

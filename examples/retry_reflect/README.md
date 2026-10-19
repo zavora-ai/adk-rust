@@ -86,7 +86,7 @@ cargo run
 ║  Retry & Reflect Demo — ADK-Rust Sprint 2                   ║
 ╚══════════════════════════════════════════════════════════════╝
 
-✓ Model: gemini-2.5-flash
+✓ Model: gemini-3.7-flash
 
 ── Configuring RetryReflectPlugin ────────────────────────────────
   • Max retries: 3

@@ -49,14 +49,17 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
+//! ```rust
+//! use adk_code::{RustExecutor, RustExecutorConfig};
+//! use adk_sandbox::ProcessBackend;
 //! use adk_tool::{
 //!     CodeTool, FrontendCodeTool, JavaScriptCodeTool, MontyPythonCodeTool, PythonCodeTool,
 //! };
 //! use std::sync::Arc;
 //!
-//! // Rust code execution (recommended)
-//! let rust_tool = Arc::new(CodeTool::new());
+//! // Rust code execution (recommended): compiles and runs through a sandbox backend
+//! let backend = Arc::new(ProcessBackend::default());
+//! let rust_tool = Arc::new(CodeTool::new(RustExecutor::new(backend, RustExecutorConfig::default())));
 //!
 //! // Frontend specialist (placeholder until container backend ships)
 //! let frontend_tool = Arc::new(FrontendCodeTool::react());

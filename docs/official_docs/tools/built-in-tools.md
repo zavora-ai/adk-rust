@@ -196,10 +196,15 @@ The delegate's run config is built from the caller's field by field:
 
 | Outcome | `ReturnErrorObject` (default) | `Propagate` |
 |---------|-------------------------------|-------------|
-| The sub-agent fails | `{"error": "agent execution failed: <error>", "agent": "<name>"}` result, which quotes the sub-agent's error message | The sub-agent's error, with its category and code; `LlmAgent` sends the model only those, not the message |
+| The sub-agent fails | `{"error": "agent execution failed: <component>.<category> (<code>)", "agent": "<name>"}` result, without the sub-agent's error message unless the tool sets `expose_error_messages(true)` | The sub-agent's error, with its category and code; `LlmAgent` sends the model only those, not the message |
 | A write breaks the state merge policy | `{"error": "...", "agent": "...", "code": "tool.agent.state_policy_violation"}` result | A `tool.agent.state_policy_violation` error |
 | The delegation runs past `timeout` | `Timeout` tool error | `Timeout` tool error |
 | The sub-agent holds a call for confirmation | The call is held by the parent | The call is held by the parent |
+
+The sub-agent's error message can quote credentials, internal hosts, or upstream response
+bodies, and the result is sent to the calling agent's model provider and stored in its session,
+so `ReturnErrorObject` redacts it as `LlmAgent` redacts tool errors. An error with code
+`tool.invalid_arguments` keeps its message.
 
 A timeout is a failed call in both modes, so `on_tool_error`, the circuit breaker, retries and
 the action ledger see it. The calling agent enforces the limit itself and reports

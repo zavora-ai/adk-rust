@@ -11,7 +11,9 @@ use agent_client_protocol::schema::v1::{
     PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SetSessionConfigOptionRequest,
     SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse,
 };
-use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Responder, Stdio};
+use agent_client_protocol::{
+    Agent, ByteStreams, Client, ConnectTo, ConnectionTo, Error, Responder,
+};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -28,6 +30,7 @@ pub struct StdioTransport {
     capabilities: AgentCapabilities,
     agent_name: String,
     agent_title: String,
+    shutdown_timeout: std::time::Duration,
 }
 
 impl StdioTransport {
@@ -38,6 +41,7 @@ impl StdioTransport {
             capabilities: CapabilitiesBuilder::build(config),
             agent_name: config.agent_name.clone(),
             agent_title: config.agent_description.clone(),
+            shutdown_timeout: config.shutdown_timeout,
         }
     }
 }
@@ -50,27 +54,101 @@ impl Transport for StdioTransport {
         shutdown: CancellationToken,
     ) -> Result<(), AcpServerError> {
         info!(agent = %self.agent_name, "official ACP v1 stdio transport started");
-        let connection = serve_connection(
+        // `ByteStreams` flushes its output when the connection finishes, which the SDK's
+        // `Stdio` does not, so answers sent during a graceful shutdown reach the client
+        // before the process exits.
+        let stdio = ByteStreams::new(
+            blocking::Unblock::new(std::io::stdout()),
+            blocking::Unblock::new(std::io::stdin()),
+        );
+        serve_until_shutdown(
             handler,
             self.capabilities.clone(),
             self.agent_name.clone(),
             self.agent_title.clone(),
-            Stdio::new(),
-        );
+            stdio,
+            shutdown,
+            self.shutdown_timeout,
+        )
+        .await
+    }
+}
 
-        tokio::select! {
-            result = connection => result.map_err(|error| AcpServerError::Transport(error.to_string())),
-            _ = shutdown.cancelled() => Ok(()),
+/// How long the last answers may take to reach a client after a graceful shutdown drained
+/// the running prompts, should the client stop reading.
+const SHUTDOWN_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Serves the connection until the client closes it or `shutdown` fires.
+///
+/// After shutdown the connection stays open while running prompts finish, so their answers
+/// reach the client, for at most `shutdown_timeout`; the prompts still running then are
+/// cancelled, and the connection closes once its output is written. New sessions and
+/// prompts are refused from the moment shutdown fires.
+pub(crate) async fn serve_until_shutdown<C>(
+    handler: Arc<AcpSessionHandler>,
+    capabilities: AgentCapabilities,
+    name: String,
+    title: String,
+    component: C,
+    shutdown: CancellationToken,
+    shutdown_timeout: std::time::Duration,
+) -> Result<(), AcpServerError>
+where
+    C: ConnectTo<Agent> + 'static,
+{
+    let drained = {
+        let (handler, shutdown) = (handler.clone(), shutdown.clone());
+        async move {
+            shutdown.cancelled().await;
+            handler.drain_sessions(shutdown_timeout).await;
+        }
+    };
+    let connection = serve_connection_until(handler, capabilities, name, title, component, drained);
+    let deadline = async {
+        shutdown.cancelled().await;
+        tokio::time::sleep(shutdown_timeout + SHUTDOWN_FLUSH_GRACE).await;
+    };
+    tokio::select! {
+        result = connection => result.map_err(|error| AcpServerError::Transport(error.to_string())),
+        () = deadline => {
+            warn!("the ACP client did not take the final answers before shutdown completed");
+            Ok(())
         }
     }
 }
 
+/// Serves the connection until the client closes it.
+#[cfg(test)]
 pub(crate) async fn serve_connection<C>(
     handler: Arc<AcpSessionHandler>,
     initialize_capabilities: AgentCapabilities,
     initialize_name: String,
     initialize_title: String,
     component: C,
+) -> Result<(), Error>
+where
+    C: ConnectTo<Agent> + 'static,
+{
+    serve_connection_until(
+        handler,
+        initialize_capabilities,
+        initialize_name,
+        initialize_title,
+        component,
+        std::future::pending(),
+    )
+    .await
+}
+
+/// Serves the connection until the client closes it or `stop` completes, then closes it
+/// once the answers already given are written.
+async fn serve_connection_until<C>(
+    handler: Arc<AcpSessionHandler>,
+    initialize_capabilities: AgentCapabilities,
+    initialize_name: String,
+    initialize_title: String,
+    component: C,
+    stop: impl std::future::Future<Output = ()>,
 ) -> Result<(), Error>
 where
     C: ConnectTo<Agent> + 'static,
@@ -152,6 +230,8 @@ where
                     let cancellation = responder.cancellation();
                     let spawned_connection = connection.clone();
                     connection.spawn(async move {
+                        // Held until the answer is queued, so a shutdown drain waits for it.
+                        let _running = handler.running_prompt();
                         let session_id = request.session_id.clone();
                         let cancellation_handler = handler.clone();
                         let work = handler.handle_prompt(request, spawned_connection);
@@ -390,7 +470,13 @@ where
             },
             agent_client_protocol::on_receive_request!(),
         )
-        .connect_to(component)
+        .connect_with(component, async move |connection: ConnectionTo<Client>| {
+            tokio::select! {
+                () = connection.incoming_closed() => {}
+                () = stop => {}
+            }
+            Ok(())
+        })
         .await
 }
 
@@ -2217,6 +2303,129 @@ mod tests {
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), server)
             .await
             .expect("server did not return after stdin EOF")
+            .expect("server task");
+        assert!(result.is_ok(), "got {result:?}");
+    }
+
+    /// Answers after `delay`, and signals when a prompt starts.
+    struct SlowAgent {
+        started: Arc<Notify>,
+        delay: std::time::Duration,
+    }
+
+    #[async_trait]
+    impl AdkAgent for SlowAgent {
+        fn name(&self) -> &str {
+            "slow-agent"
+        }
+
+        fn description(&self) -> &str {
+            "Answers after a pause"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn AdkAgent>] {
+            &[]
+        }
+
+        async fn run(&self, ctx: Arc<dyn InvocationContext>) -> AdkResult<EventStream> {
+            self.started.notify_one();
+            let (delay, invocation) = (self.delay, ctx.invocation_id().to_string());
+            Ok(Box::pin(futures::stream::once(async move {
+                tokio::time::sleep(delay).await;
+                let mut event = Event::new(&invocation);
+                event.set_content(Content::new("model").with_text("slow answer"));
+                Ok(event)
+            })))
+        }
+    }
+
+    /// Serves one raw connection under `serve_until_shutdown`, with an open session and a
+    /// prompt (id 3) the agent has started.
+    async fn prompt_then_shut_down(
+        agent: Arc<dyn AdkAgent>,
+        started: &Notify,
+        shutdown_timeout: std::time::Duration,
+    ) -> (
+        futures::channel::mpsc::UnboundedSender<std::io::Result<String>>,
+        futures::channel::mpsc::UnboundedReceiver<String>,
+        tokio::task::JoinHandle<Result<(), AcpServerError>>,
+    ) {
+        use futures::SinkExt as _;
+        let (_, session_service) = mock_agent_and_session();
+        let config = AcpServerConfigBuilder::new()
+            .agent(agent)
+            .session_service(session_service)
+            .agent_name("raw-agent")
+            .build()
+            .expect("valid config");
+        let capabilities = CapabilitiesBuilder::build(&config);
+        let shutdown = CancellationToken::new();
+        let handler = Arc::new(AcpSessionHandler::new(&config, shutdown.clone()).expect("handler"));
+        let (in_tx, in_rx) = futures::channel::mpsc::unbounded::<std::io::Result<String>>();
+        let (out_tx, mut out) = futures::channel::mpsc::unbounded::<String>();
+        let lines = agent_client_protocol::Lines::new(
+            out_tx.sink_map_err(|error| std::io::Error::other(error.to_string())),
+            in_rx,
+        );
+        let server = tokio::spawn(serve_until_shutdown(
+            handler,
+            capabilities,
+            "raw-agent".into(),
+            String::new(),
+            lines,
+            shutdown.clone(),
+            shutdown_timeout,
+        ));
+
+        let cwd = std::env::current_dir().expect("cwd").display().to_string();
+        let [init, new] = open_session_lines(&cwd);
+        in_tx.unbounded_send(Ok(init)).expect("send");
+        response_to(&mut out, 1).await;
+        in_tx.unbounded_send(Ok(new)).expect("send");
+        let session_id = response_to(&mut out, 2).await["result"]["sessionId"].clone();
+        in_tx
+            .unbounded_send(Ok(serde_json::json!({"jsonrpc": "2.0", "id": 3,
+                "method": "session/prompt",
+                "params": {"sessionId": session_id,
+                    "prompt": [{"type": "text", "text": "hi"}]}})
+            .to_string()))
+            .expect("send");
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .expect("prompt did not start");
+        shutdown.cancel();
+        (in_tx, out, server)
+    }
+
+    #[tokio::test]
+    async fn a_prompt_running_at_shutdown_is_answered_within_the_shutdown_timeout() {
+        let started = Arc::new(Notify::new());
+        let agent = Arc::new(SlowAgent {
+            started: started.clone(),
+            delay: std::time::Duration::from_millis(300),
+        });
+        let (_in_tx, mut out, server) =
+            prompt_then_shut_down(agent, &started, std::time::Duration::from_secs(5)).await;
+
+        let response = response_to(&mut out, 3).await;
+        assert_eq!(response["result"]["stopReason"], "end_turn", "got {response}");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("server did not stop after the prompt finished")
+            .expect("server task");
+        assert!(result.is_ok(), "got {result:?}");
+    }
+
+    #[tokio::test]
+    async fn a_prompt_still_running_at_the_shutdown_timeout_is_cut_off() {
+        let started = Arc::new(Notify::new());
+        let agent: Arc<dyn AdkAgent> = Arc::new(PendingAgent { started: started.clone() });
+        let (_in_tx, _out, server) =
+            prompt_then_shut_down(agent, &started, std::time::Duration::from_millis(100)).await;
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .expect("server did not stop at the shutdown timeout")
             .expect("server task");
         assert!(result.is_ok(), "got {result:?}");
     }

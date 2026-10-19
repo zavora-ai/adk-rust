@@ -31,6 +31,9 @@ Two things about the process backend worth knowing:
   (`sandbox-exec` or `bwrap`) is resolved that way; the program inside it is found
   through the child's `PATH`, which comes from the policy's or the request's `env`.
   Set `ProcessConfig::python_path` and `node_path` to absolute paths to avoid the lookup.
+  On macOS, a program that resolves to an Xcode shim in `/usr/bin` (`python3`, `git`,
+  `clang`) is replaced by the tool `xcrun --find` names, and the active developer
+  directory (`xcode-select --print-path`) is granted read-only for that execution.
 - **Compilation runs through the same boundary as execution.** Compilation is not
   inert: `include_str!` reads files and procedural macros run arbitrary code before the
   produced binary exists, so the compile runs with the enforcer wrapper, the timeout,
@@ -112,10 +115,13 @@ let result = backend.execute(request).await?;
 assert_eq!(result.stdout.trim(), "2");
 ```
 
-> **Note:** On macOS, `/usr/bin/python3` is a shim that loads the active Xcode or Command
-> Line Tools, which the Seatbelt profile does not grant; the call then exits with an
-> `xcrun` error. Put a standalone interpreter first on the policy's `PATH` (Homebrew's
-> `/opt/homebrew/bin` is granted), or `allow_read` the developer directory.
+> **Note:** On macOS, `/usr/bin/python3` is a shim that runs the Python of the active Xcode
+> or Command Line Tools through `libxcrun`, which cannot run under Seatbelt. When the
+> program resolves to such a shim, `ProcessBackend` runs the interpreter behind it
+> directly and grants read-only access to the developer directory, which holds Apple's
+> toolchain and no user data. A shim invoked from inside a script (`sh -c "python3 …"`)
+> is not resolved this way; put a standalone interpreter first on the policy's `PATH`
+> (Homebrew's `/opt/homebrew/bin` is granted), or `allow_read` the developer directory.
 
 Under an enforcer each execution runs in a fresh scratch directory that holds its source
 file and compiler output. It is the working directory and is granted read-write in

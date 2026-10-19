@@ -50,8 +50,8 @@ adk-rust = { version = "3.0.0", features = ["action"] }
 | `code` | `rust`: stores `code` parsed as JSON, or the interpolated text; it does not compile or run Rust. `javascript` and `typescript` are rejected |
 | `database` | Not implemented; rejected |
 | `email` | Not implemented; rejected |
-| `notification` | Posts a Slack, Discord, Teams, or generic webhook payload (`action-http`) |
-| `rss` | Reads and parses a feed (`action-rss`) |
+| `notification` | Posts a Slack, Discord, Teams, or generic webhook payload (`action-http`) under an `HttpActionPolicy` |
+| `rss` | Reads and parses a feed (`action-rss`) under an `HttpActionPolicy` |
 | `file` | Reads, writes, deletes, or lists local files inside the allowed roots; a read parses `json`, `csv`, or text |
 
 ## Availability Is Checked When the Graph Is Built
@@ -97,7 +97,8 @@ unless `with_file_roots` names others:
 Listing does not follow or report symbolic links. Reported paths are the resolved
 absolute paths.
 
-**HTTP nodes** check the URL, and every redirect, against an `HttpActionPolicy`:
+**HTTP, notification, and RSS nodes** check the URL, and every redirect, against the
+executor's `HttpActionPolicy`:
 
 | Setting | Default | Builder |
 |---------|---------|---------|
@@ -105,8 +106,8 @@ absolute paths.
 | Hosts | Any | `allow_hosts` — exact names or `*.example.com` |
 | Redirects | Up to 5, each re-checked | `max_redirects`; `0` follows none |
 
-Logs and errors show the URL without its query string or credentials. The policy applies
-to HTTP nodes; Notification and RSS nodes send their requests without it.
+Logs and errors show the URL without its query string or credentials. A notification
+node's webhook URL is itself a credential, so its logs and errors name only the host.
 
 ```rust,ignore
 use adk_graph::action::ActionNodeExecutor;

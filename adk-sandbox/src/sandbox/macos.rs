@@ -28,7 +28,9 @@
 //! Home directories, `/tmp`, `/private/var/folders`, and the rest of the host are not
 //! readable unless the policy names them. Programs installed outside the system runtime —
 //! a rustup toolchain, a pyenv interpreter, Xcode — need their directories allowed
-//! explicitly.
+//! explicitly. The exception is a program that [`ProcessBackend`](crate::ProcessBackend)
+//! starts through an Xcode shim in `/usr/bin`, such as `python3`: it runs the tool behind
+//! the shim and grants the active developer directory read-only for that execution.
 //!
 //! Every path is interpolated as an escaped SBPL string literal, so a path containing `"`,
 //! `\`, or control characters cannot terminate the literal and inject profile directives.

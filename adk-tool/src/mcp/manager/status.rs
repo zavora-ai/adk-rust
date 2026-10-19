@@ -8,15 +8,18 @@ use serde::{Deserialize, Serialize};
 /// Current lifecycle state of a managed MCP server.
 ///
 /// Transitions:
-/// - `Stopped` → `Running` (on successful start)
-/// - `Stopped` → `FailedToStart` (on start failure)
+/// - `Stopped`, `Crashed`, `FailedToStart`, or `Restarting` → `Starting` (a start begins; the
+///   process is spawned and the MCP handshake runs in this state)
+/// - `Starting` → `Running` (the handshake completed)
+/// - `Starting` → `FailedToStart` (spawn or handshake failure, or the startup timeout)
+/// - `Starting` → `Stopped` (stopped while it was starting)
 /// - `Running` → `Stopped` (on manual stop or shutdown)
-/// - `Running` → `Crashed` (on health check failure or unexpected exit)
-/// - `Running` → `Restarting` (during restart)
-/// - `Crashed` → `Restarting` (on auto-restart)
-/// - `Restarting` → `Running` (on successful restart)
-/// - `Restarting` → `FailedToStart` (on restart failure)
-/// - `Disabled` (set at construction, no transitions out unless re-configured)
+/// - `Running` → `Crashed` (the health check found the connection closed)
+/// - `Running` → `Restarting` (on `restart_server`)
+/// - `Crashed` or `FailedToStart` → `Restarting` (on auto-restart, after the backoff)
+/// - `Crashed` → `FailedToStart` (the restart policy's attempts are exhausted)
+/// - any → `Disabled` (on `disable_server`, or a start of a server configured `disabled`);
+///   `Disabled` → `Stopped` (on `enable_server`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ServerStatus {
     /// The server process has been spawned and its MCP handshake is in progress.

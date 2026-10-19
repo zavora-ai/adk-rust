@@ -703,7 +703,8 @@ caps what it will hold and forward rather than growing without limit:
 | Bytes per tool call | 1 MiB | The call forwards no more progress |
 
 When a call stops forwarding progress, the agent sends one progress event on the same stream
-with the text `[adk: tool progress truncated]`, if the queue has room for it. A slow consumer
+with the text `[adk: tool progress truncated]`. When the queue is full, the marker is held and
+delivered after the queued progress events, before the tool's result. A slow consumer
 therefore slows the tool briefly but can never stall it indefinitely or exhaust memory.
 
 These limits apply only to *progress*. A tool's final result is not affected, so

@@ -273,10 +273,6 @@ enum AdkCommand {
         #[arg(long, default_value = "3")]
         warmup: usize,
 
-        /// Task quality suite to run ("tau2" or "bfcl")
-        #[arg(long)]
-        suite: Option<String>,
-
         /// Enable concurrency sweep mode (tests levels 1,2,4,8,16,32,64)
         #[arg(long)]
         sweep: bool,
@@ -525,7 +521,6 @@ fn main() {
             check_regression,
             tolerance,
             warmup,
-            suite,
             sweep,
             external_config,
             external_timeout,
@@ -563,7 +558,6 @@ fn main() {
                 check_regression,
                 tolerance,
                 warmup,
-                suite,
                 sweep,
                 external_config,
                 external_timeout,
@@ -1179,7 +1173,6 @@ async fn run_bench(
     check_regression: bool,
     tolerance: f64,
     warmup: usize,
-    suite: Option<String>,
     sweep: bool,
     external_config: Option<PathBuf>,
     external_timeout: u64,
@@ -1198,13 +1191,6 @@ async fn run_bench(
         "json" => OutputFormat::Json,
         "markdown" => OutputFormat::Markdown,
         _ => OutputFormat::Table,
-    };
-
-    // Parse suite
-    let task_suite = match suite.as_deref() {
-        Some("tau2") => Some(adk_bench::TaskSuite::Tau2),
-        Some("bfcl") => Some(adk_bench::TaskSuite::Bfcl),
-        _ => None,
     };
 
     // Load external framework configs if provided
@@ -1238,7 +1224,6 @@ async fn run_bench(
         external_frameworks,
         external_timeout_secs: external_timeout,
         concurrency_sweep,
-        suite: task_suite,
         dry_run,
         max_cost_usd,
         confirm_cost,
@@ -2449,6 +2434,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bench_accepts_no_task_quality_suite() {
+        // The τ²-bench and BFCL adapters do not run a model, so no flag selects them.
+        let parsed = Cargo::try_parse_from(["cargo", "adk", "bench", "--suite", "tau2"]);
+        assert!(parsed.is_err(), "`--suite` must not be accepted");
+        assert!(Cargo::try_parse_from(["cargo", "adk", "bench", "--dry-run"]).is_ok());
+    }
 
     fn assert_current_template(cargo_toml: &str) {
         assert!(

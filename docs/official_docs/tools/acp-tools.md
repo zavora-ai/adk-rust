@@ -22,7 +22,8 @@ adk-acp = "3.0.0"                                       # client
 # adk-acp = { version = "3.0.0", features = ["server"] } # also expose an agent
 ```
 
-`adk-rust` does not re-export `adk_acp`, so depend on `adk-acp` directly.
+`adk-rust` re-exports `adk_acp` as `adk_rust::acp` with its `acp` feature, which does not
+enable the `server` feature; depend on `adk-acp` directly to expose an agent.
 
 ## Read this section
 

@@ -46,7 +46,7 @@ export GOOGLE_API_KEY=your-key-here
 cargo run --manifest-path examples/multimodal_function_response/Cargo.toml
 ```
 
-Requires a Gemini 3 model (default: `gemini-3-flash-preview`). Override with `GEMINI_MODEL`.
+Requires a Gemini 3 model (default: `gemini-3.5-flash-lite`). Override with `GEMINI_MODEL`.
 
 ## Key APIs
 

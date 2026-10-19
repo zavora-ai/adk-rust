@@ -51,7 +51,7 @@ pub struct ActionNodeExecutor {
     config: ActionNodeConfig,
     /// Directories a file node may touch; empty means the working directory.
     file_roots: Vec<std::path::PathBuf>,
-    /// URLs an HTTP node may request.
+    /// URLs the HTTP, notification, and RSS nodes may request.
     #[cfg(feature = "action-http")]
     http_policy: http::HttpActionPolicy,
 }
@@ -59,9 +59,9 @@ pub struct ActionNodeExecutor {
 impl ActionNodeExecutor {
     /// Create a new executor wrapping the given action node config.
     ///
-    /// A file node is confined to the current working directory and an HTTP
-    /// node to `https`/`http` URLs; see [`Self::with_file_roots`] and
-    /// `with_http_policy`.
+    /// A file node is confined to the current working directory, and the HTTP,
+    /// notification, and RSS nodes to `https`/`http` URLs; see
+    /// [`Self::with_file_roots`] and `with_http_policy`.
     pub fn new(config: ActionNodeConfig) -> Self {
         Self {
             config,
@@ -94,7 +94,8 @@ impl ActionNodeExecutor {
         self
     }
 
-    /// Sets which URLs an HTTP node may request, and how redirects are followed.
+    /// Sets which URLs the HTTP, notification, and RSS nodes may request, and how
+    /// redirects are followed.
     ///
     /// # Example
     ///
@@ -220,7 +221,9 @@ impl ActionNodeExecutor {
             }),
 
             #[cfg(feature = "action-http")]
-            ActionNodeConfig::Notification(c) => notification::execute_notification(c, ctx).await,
+            ActionNodeConfig::Notification(c) => {
+                notification::execute_notification_with_policy(c, ctx, &self.http_policy).await
+            }
             #[cfg(not(feature = "action-http"))]
             ActionNodeConfig::Notification(_) => Err(GraphError::NodeExecutionFailed {
                 node: self.config.standard().id.clone(),
@@ -228,7 +231,9 @@ impl ActionNodeExecutor {
             }),
 
             #[cfg(feature = "action-rss")]
-            ActionNodeConfig::Rss(c) => rss::execute_rss(c, ctx).await,
+            ActionNodeConfig::Rss(c) => {
+                rss::execute_rss_with_policy(c, ctx, &self.http_policy).await
+            }
             #[cfg(not(feature = "action-rss"))]
             ActionNodeConfig::Rss(_) => Err(GraphError::NodeExecutionFailed {
                 node: self.config.standard().id.clone(),

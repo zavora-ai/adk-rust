@@ -125,7 +125,8 @@ A tool result reaches the model in this shape:
 | `structuredContent` | `{"output": <structured>}`, plus `"text": [...]` when text blocks are present |
 | No content at all | `{"output": ""}` — the call succeeded, so it is not reported as a failure |
 | Images, audio, or embedded resources | The JSON above as `response`, with the binary parts as [multimodal function response](function-tools.md#multimodal-function-responses) parts |
-| `isError: true` | A tool error. `LlmAgent` sends the model `tool '{name}' failed: tool.internal (tool.legacy)`, not the server's text, unless the agent sets `expose_tool_error_messages(true)` |
+| `isError: true` | `{"error": "<text blocks joined by newlines>"}`, or the `structuredContent` JSON when there is no text, cut to 8 KiB. The server wrote this text for the model so it can correct the call, so it is the tool's response rather than a tool error, and `on_tool_error` does not run |
+| A transport, protocol, or task failure | A tool error. `LlmAgent` sends the model `tool '{name}' failed: <component>.<category> (<code>)`, not the error message, unless the agent sets `expose_tool_error_messages(true)` |
 
 ## Use the protocol beyond tools
 

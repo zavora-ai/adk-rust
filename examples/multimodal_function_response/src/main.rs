@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 const APP_NAME: &str = "multimodal-fn-response-example";
-const DEFAULT_MODEL: &str = "gemini-3-flash-preview";
+const DEFAULT_MODEL: &str = "gemini-3.5-flash-lite";
 
 fn load_dotenv() {
     let mut dir = std::env::current_dir().ok();
@@ -202,6 +202,10 @@ async fn run_scenario(
 
     while let Some(event) = stream.next().await {
         let event = event?;
+        // The complete event repeats what the partial chunks streamed.
+        if event.llm_response.partial {
+            continue;
+        }
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
                 match part {

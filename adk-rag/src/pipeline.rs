@@ -183,6 +183,35 @@ impl RagPipeline {
     ///
     /// Returns [`RagError::PipelineError`] if embedding or search fails.
     pub async fn query(&self, collection: &str, query: &str) -> Result<Vec<SearchResult>> {
+        self.query_with_top_k(collection, query, self.config.top_k).await
+    }
+
+    /// Query the pipeline as [`query`](Self::query) does, retrieving `top_k` results instead
+    /// of the configured number.
+    ///
+    /// The reranker and the similarity threshold apply as they do to [`query`](Self::query).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let results = pipeline.query_with_top_k("docs", "refund window", 3).await?;
+    /// assert!(results.len() <= 3);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RagError::ConfigError`] if `top_k` is 0, and [`RagError::PipelineError`] if
+    /// embedding, search, or reranking fails.
+    pub async fn query_with_top_k(
+        &self,
+        collection: &str,
+        query: &str,
+        top_k: usize,
+    ) -> Result<Vec<SearchResult>> {
+        if top_k == 0 {
+            return Err(RagError::ConfigError("top_k must be greater than 0".to_string()));
+        }
+
         // 1. Embed the query
         let query_embedding = self.embedding_provider.embed(query).await.map_err(|e| {
             error!(error = %e, "embedding failed during query");
@@ -190,11 +219,8 @@ impl RagPipeline {
         })?;
 
         // 2. Search the vector store
-        let results = self
-            .vector_store
-            .search(collection, &query_embedding, self.config.top_k)
-            .await
-            .map_err(|e| {
+        let results =
+            self.vector_store.search(collection, &query_embedding, top_k).await.map_err(|e| {
                 error!(collection, error = %e, "vector store search failed");
                 RagError::PipelineError(format!("search failed in collection '{collection}': {e}"))
             })?;
@@ -358,5 +384,20 @@ mod tests {
 
         let stored = store.search("docs", &[1.0, 0.0], 10).await.expect("search");
         assert!(stored.is_empty(), "no chunk may be stored without its embedding: {stored:?}");
+    }
+
+    #[tokio::test]
+    async fn query_with_top_k_rejects_zero() {
+        let pipeline = RagPipeline::builder()
+            .config(RagConfig::default())
+            .embedding_provider(Arc::new(ShortEmbedder))
+            .vector_store(Arc::new(InMemoryVectorStore::new()))
+            .chunker(Arc::new(FixedSizeChunker::try_new(4, 0).expect("valid sizes")))
+            .build()
+            .expect("build pipeline");
+        pipeline.create_collection("docs").await.expect("create collection");
+
+        let err = pipeline.query_with_top_k("docs", "query", 0).await.expect_err("zero top_k");
+        assert!(matches!(err, RagError::ConfigError(_)), "unexpected error: {err}");
     }
 }

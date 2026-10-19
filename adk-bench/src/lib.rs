@@ -50,7 +50,7 @@ pub mod adapters;
 pub use adapters::{CaseResult, TaskQualityAdapter, TaskQualityResult};
 
 // Public re-exports
-pub use config::{BenchConfig, ExternalFrameworkConfig, OutputFormat, TaskSuite};
+pub use config::{BenchConfig, ExternalFrameworkConfig, OutputFormat};
 pub use error::{BenchError, Result};
 pub use external::{
     ExternalConfigFile, ExternalDurationStats, ExternalMetricsOutput, ExternalRunner,

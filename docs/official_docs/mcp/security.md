@@ -117,8 +117,12 @@ Redact environment variables, authorization headers, API keys, elicitation
 answers, and sensitive tool arguments. Record server ID, tool name, task ID,
 status, timing, approval, and a bounded result summary instead.
 
-A failed MCP call — a transport error or a result with `isError: true` — is a
-tool error. `LlmAgent` sends the model only its component, category, and code,
-so server-supplied error text does not reach the model provider or the session
-unless the agent sets `expose_tool_error_messages(true)`. See
-[Error Handling](../tools/function-tools.md#error-handling).
+The two kinds of MCP failure reach the model differently:
+
+| Failure | What the model receives |
+|---------|-------------------------|
+| A result with `isError: true` | `{"error": "<server text>"}`, cut to 8 KiB. The server wrote the text for the model, as it does a successful result, so it is treated as tool output |
+| A transport, protocol, or task failure, or an ADK-side error | Only the error's component, category, and code, unless the agent sets `expose_tool_error_messages(true)`. These messages can quote endpoints, credentials, or upstream bodies |
+
+Treat `isError` text like any other result from that server: a server you do not
+trust can put anything in it. See [Error Handling](../tools/function-tools.md#error-handling).

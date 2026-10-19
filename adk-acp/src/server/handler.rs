@@ -80,6 +80,24 @@ pub struct AcpSessionHandler {
     sessions: Arc<Mutex<HashMap<String, SessionState>>>,
     shutdown_token: CancellationToken,
     session_controls: Option<Arc<dyn SessionControls>>,
+    /// Prompts running now, which shutdown waits for.
+    running_prompts: tokio::sync::watch::Sender<usize>,
+}
+
+/// Counts one prompt as running until it is dropped, however the prompt ends.
+pub(crate) struct RunningPrompt<'a>(&'a tokio::sync::watch::Sender<usize>);
+
+impl<'a> RunningPrompt<'a> {
+    fn start(running: &'a tokio::sync::watch::Sender<usize>) -> Self {
+        running.send_modify(|count| *count += 1);
+        Self(running)
+    }
+}
+
+impl Drop for RunningPrompt<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|count| *count = count.saturating_sub(1));
+    }
 }
 
 impl AcpSessionHandler {
@@ -97,6 +115,7 @@ impl AcpSessionHandler {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             shutdown_token,
             session_controls: config.session_controls.clone(),
+            running_prompts: tokio::sync::watch::channel(0).0,
         })
     }
 
@@ -540,6 +559,7 @@ impl AcpSessionHandler {
             state.execution_token = Some(token.clone());
             (token, state.mcp.toolsets.clone())
         };
+        let _running = RunningPrompt::start(&self.running_prompts);
 
         let result = self
             .execute_prompt(&request, connection, cancellation_token.clone(), runtime_toolsets)
@@ -1010,13 +1030,31 @@ impl AcpSessionHandler {
             .map_err(|e| AcpServerError::Internal(format!("failed to persist session state: {e}")))
     }
 
+    /// Counts a prompt as running, for [`drain_sessions`](Self::drain_sessions), until the
+    /// guard is dropped. A transport holds one until the prompt's answer is sent, so a drain
+    /// does not end between the prompt finishing and its answer going out.
+    pub(crate) fn running_prompt(&self) -> RunningPrompt<'_> {
+        RunningPrompt::start(&self.running_prompts)
+    }
+
     /// Number of active sessions on the connection.
     pub async fn active_session_count(&self) -> usize {
         self.sessions.lock().await.len()
     }
 
-    /// Cancel active work and release all connection-scoped session state.
-    pub async fn drain_sessions(&self, _timeout: std::time::Duration) {
+    /// Wait up to `timeout` for running prompts to finish, then cancel the rest and release
+    /// all connection-scoped session state.
+    ///
+    /// The connection must still be served while this waits, so the prompts' answers reach
+    /// the client; [`StdioTransport`](super::StdioTransport) does so after shutdown.
+    pub async fn drain_sessions(&self, timeout: std::time::Duration) {
+        let mut running = self.running_prompts.subscribe();
+        if tokio::time::timeout(timeout, running.wait_for(|count| *count == 0)).await.is_err() {
+            warn!(
+                shutdown.timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+                "ACP prompts still running at the shutdown timeout are cancelled"
+            );
+        }
         let mut sessions = self.sessions.lock().await;
         for state in sessions.values() {
             if let Some(token) = &state.execution_token {

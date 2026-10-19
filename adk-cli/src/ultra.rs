@@ -274,10 +274,14 @@ async fn run_agent(
     while let Some(event) = stream.next().await {
         let event = event?;
         let event = text_deltas.push(&event);
+        // A streamed function call arrives in a partial chunk and again in the complete event.
+        let partial = event.llm_response.partial;
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
                 match part {
-                    Part::FunctionCall { name, .. } if show_tools => println!("       🔧 {name}"),
+                    Part::FunctionCall { name, .. } if show_tools && !partial => {
+                        println!("       🔧 {name}")
+                    }
                     Part::Text { text: t } if !t.is_empty() => text.push_str(t),
                     _ => {}
                 }

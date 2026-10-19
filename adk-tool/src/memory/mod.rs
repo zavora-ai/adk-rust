@@ -13,7 +13,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! adk-tool = { version = "0.8", features = ["memory-tools"] }
+//! adk-tool = { version = "3.0.0", features = ["memory-tools"] }
 //! ```
 //!
 //! # Example

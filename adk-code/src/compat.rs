@@ -1,41 +1,34 @@
-//! Migration compatibility guide.
+//! Choosing between the two code-execution layers.
 //!
-//! This module documents the migration path from the legacy `adk-code` types
-//! to the new `adk-sandbox` + redesigned `adk-code` types.
+//! Code execution has two layers. Both are supported; neither is deprecated.
 //!
-//! ## Migration Guide
-//!
-//! | Old Type (deprecated) | New Type | Crate |
-//! |----------------------|----------|-------|
-//! | [`CodeExecutor`](crate::CodeExecutor) | [`SandboxBackend`](adk_sandbox::SandboxBackend) | `adk-sandbox` |
-//! | [`ExecutionRequest`](crate::ExecutionRequest) | [`ExecRequest`](adk_sandbox::ExecRequest) | `adk-sandbox` |
-//! | [`ExecutionResult`](crate::ExecutionResult) | [`ExecResult`](adk_sandbox::ExecResult) | `adk-sandbox` |
-//! | [`RustSandboxExecutor`](crate::RustSandboxExecutor) | [`RustExecutor`](crate::RustExecutor) | `adk-code` |
-//! | [`RustSandboxConfig`](crate::RustSandboxConfig) | [`RustExecutorConfig`](crate::RustExecutorConfig) | `adk-code` |
-//! | `RustCodeTool` (adk-tool) | [`CodeTool`](crate::CodeTool) | `adk-code` |
+//! | Layer | Backend trait | Request and result | Built on it |
+//! |-------|---------------|--------------------|-------------|
+//! | `adk-sandbox` | [`SandboxBackend`](adk_sandbox::SandboxBackend) | [`ExecRequest`](adk_sandbox::ExecRequest), [`ExecResult`](adk_sandbox::ExecResult) | [`RustExecutor`](crate::RustExecutor), [`CodeTool`](crate::CodeTool), `adk_sandbox::SandboxTool` |
+//! | `adk-code` | [`CodeExecutor`](crate::CodeExecutor) | [`ExecutionRequest`](crate::ExecutionRequest), [`ExecutionResult`](crate::ExecutionResult), with a [`SandboxPolicy`](crate::SandboxPolicy) | [`RustSandboxExecutor`](crate::RustSandboxExecutor), [`ContainerCommandExecutor`](crate::ContainerCommandExecutor), the embedded JavaScript and Monty executors, and `adk-tool`'s `PythonCodeTool` and `JavaScriptCodeTool` |
 //!
 //! ## Key API Differences
 //!
-//! ### `CodeExecutor` → `SandboxBackend`
+//! ### `SandboxBackend` and `CodeExecutor`
 //!
-//! The old `CodeExecutor` trait had lifecycle methods (`start`, `stop`, `restart`,
-//! `is_running`) and a complex `ExecutionRequest` with `SandboxPolicy`. The new
-//! `SandboxBackend` trait is minimal: `execute(ExecRequest) -> Result<ExecResult, SandboxError>`.
+//! `CodeExecutor` has lifecycle methods (`start`, `stop`, `restart`, `is_running`), reports
+//! [`BackendCapabilities`](crate::BackendCapabilities), and takes an `ExecutionRequest` whose
+//! `SandboxPolicy` it validates against them. `SandboxBackend` is minimal:
+//! `execute(ExecRequest) -> Result<ExecResult, SandboxError>`, with isolation coming from
+//! the backend, such as a `ProcessBackend` under an OS enforcer.
 //!
-//! ### `ExecutionRequest` → `ExecRequest`
+//! ### `ExecutionRequest` and `ExecRequest`
 //!
-//! The old `ExecutionRequest` had `payload` (enum with `Source` and `GuestModule`),
-//! `sandbox` (policy struct), `identity`, and `argv`. The new `ExecRequest` is flat:
-//! `language`, `code`, `stdin`, `timeout`, `memory_limit_mb`, `env`.
+//! `ExecutionRequest` has `payload` (an enum with `Source` and `GuestModule`), `sandbox`
+//! (the policy), `identity`, and `argv`. `ExecRequest` is flat: `language`, `code`,
+//! `stdin`, `timeout`, `memory_limit_mb`, `env`.
 //!
-//! ### `RustSandboxExecutor` → `RustExecutor`
+//! ### `RustSandboxExecutor` and `RustExecutor`
 //!
-//! The old executor embedded isolation logic. The new `RustExecutor` delegates
-//! execution to a `SandboxBackend`, separating compilation from isolation.
-//! Constructor changes from `RustSandboxExecutor::default()` to
-//! `RustExecutor::new(backend, config)`.
+//! `RustSandboxExecutor` compiles and runs Rust as host processes. `RustExecutor` delegates
+//! execution to a `SandboxBackend`, separating compilation from isolation; construct it
+//! with `RustExecutor::new(backend, config)`.
 //!
-//! ## Timeline
+//! ## Removed
 //!
-//! - **v0.5.0**: Old types deprecated with `#[deprecated]` attributes
-//! - **v0.6.0**: Old types removed
+//! `adk-tool`'s `RustCodeTool` was removed; [`CodeTool`](crate::CodeTool) replaces it.

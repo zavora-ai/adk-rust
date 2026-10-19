@@ -32,6 +32,11 @@ let handle = AcpServer::run(config).await?;
 handle.wait().await?;
 ```
 
+`AcpServerHandle::shutdown()` stops new sessions and prompts at once. Prompts already
+running keep the connection open and send their answers for up to `shutdown_timeout`;
+those still running then are cancelled, and the connection closes once the answers
+already given are written. `wait()` returns when the server has stopped.
+
 The server uses the official SDK `Agent` builder and stdio transport. Protocol
 traffic is the only data written to stdout; configure tracing and diagnostics
 to use stderr.
@@ -43,7 +48,7 @@ to use stderr.
 | `agent_description` | Empty; reported as the implementation title when set |
 | `user_id` | `"acp-client"`, the ADK user that owns every session |
 | `max_sessions` | 16; `build()` fails on 0 |
-| `shutdown_timeout` | 30 seconds; `build()` fails on 0 |
+| `shutdown_timeout` | 30 seconds; `build()` fails on 0. How long `AcpServerHandle::shutdown()` lets running prompts finish |
 | `session_controls` | None; see [Session modes](#session-modes-configuration-options-and-fork) |
 | `transport` | `TransportConfig::Stdio`, the only transport |
 

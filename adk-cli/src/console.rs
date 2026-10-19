@@ -67,11 +67,7 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
                     match event {
                         Ok(evt) => {
                             let evt = text_deltas.push(&evt);
-                            if let Some(content) = &evt.llm_response.content {
-                                for part in &content.parts {
-                                    printer.handle_part(part);
-                                }
-                            }
+                            printer.handle_event(&evt);
                         }
                         Err(e) => {
                             eprintln!("\nError: {}", terminal_safe(&e.to_string()));

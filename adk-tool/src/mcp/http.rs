@@ -244,15 +244,15 @@ struct HttpElicitationConnectionFactory {
 
 #[cfg(feature = "http-transport")]
 impl HttpElicitationConnectionFactory {
+    /// Opens one connection. A transport error keeps its code, such as
+    /// `mcp.oauth.token_fetch` when the OAuth token cannot be fetched.
     async fn connect_once(
         &self,
-    ) -> std::result::Result<
-        rmcp::service::RunningService<rmcp::RoleClient, super::elicitation::AdkClientHandler>,
-        String,
-    > {
+    ) -> Result<rmcp::service::RunningService<rmcp::RoleClient, super::elicitation::AdkClientHandler>>
+    {
         use rmcp::ServiceExt;
 
-        let transport = self.builder.build_transport().await.map_err(|error| error.to_string())?;
+        let transport = self.builder.build_transport().await?;
         let mut handler = super::elicitation::AdkClientHandler::new(self.handler.clone());
         if let Some(resource_handler) = &self.resource_notification_handler {
             handler = handler.with_resource_notification_handler(Arc::clone(resource_handler));
@@ -260,7 +260,7 @@ impl HttpElicitationConnectionFactory {
         handler
             .serve(transport)
             .await
-            .map_err(|error| format!("failed to connect to MCP server: {error}"))
+            .map_err(|error| AdkError::tool(format!("failed to connect to MCP server: {error}")))
     }
 }
 
@@ -275,21 +275,21 @@ impl super::ConnectionFactory<super::elicitation::AdkClientHandler>
         rmcp::service::RunningService<rmcp::RoleClient, super::elicitation::AdkClientHandler>,
         String,
     > {
-        self.connect_once().await
+        self.connect_once().await.map_err(|error| error.to_string())
     }
 }
 
 #[cfg(feature = "http-transport")]
 impl HttpConnectionFactory {
-    async fn connect_once(
-        &self,
-    ) -> std::result::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>, String> {
+    /// Opens one connection. A transport error keeps its code, such as
+    /// `mcp.oauth.token_fetch` when the OAuth token cannot be fetched.
+    async fn connect_once(&self) -> Result<rmcp::service::RunningService<rmcp::RoleClient, ()>> {
         use rmcp::ServiceExt;
 
-        let transport = self.builder.build_transport().await.map_err(|error| error.to_string())?;
+        let transport = self.builder.build_transport().await?;
         ().serve(transport)
             .await
-            .map_err(|error| format!("failed to connect to MCP server: {error}"))
+            .map_err(|error| AdkError::tool(format!("failed to connect to MCP server: {error}")))
     }
 }
 
@@ -299,7 +299,7 @@ impl super::ConnectionFactory<()> for HttpConnectionFactory {
     async fn create_connection(
         &self,
     ) -> std::result::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>, String> {
-        self.connect_once().await
+        self.connect_once().await.map_err(|error| error.to_string())
     }
 }
 
@@ -568,10 +568,7 @@ impl McpHttpClientBuilder {
     pub async fn connect(self) -> Result<super::McpToolset<()>> {
         self.check_brokered().await?;
         let factory = Arc::new(HttpConnectionFactory { builder: self.clone() });
-        let client = factory
-            .connect_once()
-            .await
-            .map_err(|error| AdkError::tool(format!("Failed to connect to MCP server: {error}")))?;
+        let client = factory.connect_once().await?;
 
         Ok(super::McpToolset::new(client).with_connection_factory(factory))
     }
@@ -622,7 +619,7 @@ impl McpHttpClientBuilder {
             handler,
             resource_notification_handler,
         });
-        let client = factory.connect_once().await.map_err(AdkError::tool)?;
+        let client = factory.connect_once().await?;
 
         Ok(super::McpToolset::new(client).with_connection_factory(factory))
     }
