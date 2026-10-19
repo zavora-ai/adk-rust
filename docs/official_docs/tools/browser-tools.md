@@ -1,6 +1,6 @@
 # Browser Tools
 
-The `adk-browser` crate provides 46 comprehensive browser automation tools (45 enabled by default) that enable AI agents to interact with web pages. Built on the WebDriver protocol (Selenium), it works with any WebDriver-compatible browser.
+The `adk-browser` crate provides 46 browser automation tools, 44 of them in a default `BrowserToolset`, that enable AI agents to interact with web pages. Built on the WebDriver protocol (Selenium), it works with any WebDriver-compatible browser.
 
 ## Overview
 
@@ -102,6 +102,17 @@ let toolset = BrowserToolset::new(browser)
 let tools = toolset.all_tools();
 ```
 
+Or start from a profile, or a helper that returns a fixed set:
+
+| Constructor | Tools |
+|-------------|-------|
+| `BrowserToolset::with_profile(browser, BrowserProfile::Minimal)` | 19: navigation, interaction, extraction, wait, screenshot |
+| `BrowserProfile::FormFilling` | 19: the same categories, for form-filling agents |
+| `BrowserProfile::Scraping` | 13: navigation, extraction, screenshot, scroll, hover, alert handling |
+| `BrowserProfile::Full` | 44: every tool except `browser_evaluate_js` and `browser_file_upload` |
+| `minimal_browser_tools(browser)` | 6 |
+| `readonly_browser_tools(browser)` | 7 |
+
 ## Security Defaults
 
 Five defaults limit what a model can reach through the browser:
@@ -111,7 +122,7 @@ Five defaults limit what a model can reach through the browser:
 | `browser_evaluate_js` is excluded from every toolset and profile | It runs model-written JavaScript in the page, with the page's cookies and session | `.with_evaluate_js(true)` or `.with_js(true)` |
 | `browser_file_upload` is excluded from every toolset and profile | It hands a local file to the page, and the model chooses the path | `.with_file_upload([roots])` — uploads only existing files inside `roots`, after resolving symlinks |
 | `browser_navigate`, `browser_new_tab`, and `browser_new_window` accept only `http` and `https` | `file:` reads the host filesystem, `javascript:` and `data:` run script, and `chrome:` reaches browser settings | `.with_allowed_schemes([...])` |
-| The same tools refuse loopback, private, link-local, and cloud metadata addresses, and check the page they and `browser_back`, `browser_forward`, and `browser_refresh` end on after redirects | A page on `localhost` or `169.254.169.254` reaches services the operator never exposed, such as a metadata endpoint holding credentials | `.with_private_network_access(true)` |
+| The same tools refuse loopback, private, link-local, shared (`100.64.0.0/10`), unique-local IPv6, and cloud metadata addresses, and the host names `localhost`, `*.localhost`, and `metadata.google.internal`; they and `browser_back`, `browser_forward`, and `browser_refresh` also check the page they end on after redirects | A page on `localhost` or `169.254.169.254` reaches services the operator never exposed, such as a metadata endpoint holding credentials | `.with_private_network_access(true)` |
 | The same tools refuse host names that do not resolve on the agent host | The agent cannot tell where such a name leads, and the browser may resolve it to a private address | `.with_unresolved_hosts(true)` |
 
 ```rust
@@ -126,8 +137,8 @@ let toolset = BrowserToolset::new(browser)
 
 A refused URL fails with `URL scheme '<scheme>' is not allowed`, `points at a private
 network address`, or `does not resolve on the agent host` before the browser is touched.
-Host names are resolved, and one that resolves to a private address, or does not resolve
-at all, is refused.
+Host names are resolved, with a 5-second limit, and one that resolves to a private
+address, or does not resolve at all, is refused.
 
 After a navigation, the page the browser ends on is checked the same way, so a public page
 that redirects to `169.254.169.254` fails the call and the page is replaced with
@@ -163,7 +174,7 @@ let agent = LlmAgentBuilder::new("web_agent")
 
 Browser sessions auto-start and auto-recover from stale WebDriver connections, so `browser.start()` is optional. A host that manages the browser itself sets `BrowserConfig::require_explicit_start(true)`: tools then return an error until the host calls `start()`, and again after the session is lost.
 
-## Available Tools (46 Total, 45 by Default)
+## Available Tools (46 Total, 44 by Default)
 
 ### Navigation (4 tools)
 
@@ -321,6 +332,10 @@ let agent = builder.build()?;
 ## Example: Form Automation
 
 ```rust
+use adk_browser::{BrowserProfile, BrowserToolset};
+
+let toolset = BrowserToolset::with_profile(browser.clone(), BrowserProfile::FormFilling);
+
 let agent = LlmAgentBuilder::new("form_filler")
     .model(model)
     .instruction(r#"
@@ -331,6 +346,7 @@ let agent = LlmAgentBuilder::new("form_filler")
         4. Use browser_select for dropdowns
         5. Use browser_click to submit
     "#)
+    .toolset(Arc::new(toolset))
     .build()?;
 ```
 
@@ -361,27 +377,11 @@ Works with any WebDriver-compatible server:
 
 ## Error Handling
 
-Browser tools return structured errors:
-
-```rust
-match result {
-    Ok(value) => println!("Success: {:?}", value),
-    Err(e) => {
-        match e {
-            BrowserError::ElementNotFound(selector) => {
-                println!("Could not find element: {}", selector);
-            }
-            BrowserError::Timeout(duration) => {
-                println!("Operation timed out after {:?}", duration);
-            }
-            BrowserError::SessionClosed => {
-                println!("Browser session was closed");
-            }
-            _ => println!("Browser error: {}", e),
-        }
-    }
-}
-```
+A browser tool that fails — an element that is not found, a timeout, a lost session, a
+refused URL — returns an `AdkError` with the tool component. `LlmAgent` sends the model the
+error's category and code rather than its message, unless the agent is built with
+`expose_tool_error_messages(true)`; an `on_tool_error` callback receives the full message.
+See [Error Handling](function-tools.md#error-handling).
 
 ## Examples
 

@@ -16,11 +16,12 @@ The flow is:
 
 This means your agent can answer questions about product docs, company policies, codebases, or any text you feed it.
 
-> **Key highlights**:
-> - 📄 **Ingest any text** — product docs, markdown, code, policies
-> - 🔍 **Semantic search** — find relevant content by meaning, not just keywords
-> - 🤖 **Agentic retrieval** — the agent decides when to search via `RagTool`
-> - 🔌 **Pluggable backends** — swap embedding providers and vector stores without changing code
+| Capability | How |
+|------------|-----|
+| Ingest any text | Product docs, markdown, code, policies, split by a chunker |
+| Semantic search | Matches by embedding similarity, not keywords |
+| Agentic retrieval | The agent decides when to search through `RagTool` |
+| Pluggable backends | Embedding providers and vector stores are traits |
 
 ---
 
@@ -100,7 +101,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 **How it works**:
-1. `FixedSizeChunker` splits the document into 256-byte chunks with 50-byte overlap
+1. `FixedSizeChunker` splits the document into 256-byte chunks with 50-byte overlap — the
+   chunker's own sizes decide chunking
 2. `MockEmbedder` converts each chunk into a 64-dimensional vector
 3. `InMemoryVectorStore` stores the vectors and searches by cosine similarity
 4. `query()` embeds the question, finds the closest chunks, and returns them ranked by score
@@ -153,10 +155,20 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     // The agent now calls rag_search automatically when it needs knowledge base info
-    adk_cli::console::run_console(Arc::new(agent), "app".into(), "user1".into()).await?;
+    adk_runner::Launcher::new(Arc::new(agent)).run().await?;
     Ok(())
 }
 ```
+
+This example also depends on `adk-agent`, `adk-model` (`gemini`), `adk-runner`, `tokio`, and
+`anyhow`.
+
+| `RagTool` | Value |
+|-----------|-------|
+| Name | `rag_search` |
+| Parameters | `query` (required), `collection` (defaults to the collection given to `RagTool::new`), `top_k` (overrides the configured value) |
+| Returns | An array of `{"chunk": {...}, "score": ...}` results, best first |
+| Effect | `ToolEffect::NonIdempotent` (the default), so a default-deny `DeclarativePolicy` must allow it by name |
 
 When a user asks "What's your return policy?", the agent:
 1. Decides it needs to search the knowledge base
@@ -222,10 +234,12 @@ let config = RagConfig::builder()
 
 | Parameter | What it controls | Guidance |
 |-----------|-----------------|----------|
-| `chunk_size` | Max bytes of UTF-8 per chunk | 200–500 for most use cases. Smaller = more precise, larger = more context |
-| `chunk_overlap` | Bytes shared by adjacent chunks | 10–20% of chunk_size prevents losing info at boundaries |
-| `top_k` | Number of results returned | More results = more context for the LLM but higher token usage |
+| `chunk_size` | Validated only (must be greater than 0) | The pipeline chunks with its chunker, so set the sizes on the chunker |
+| `chunk_overlap` | Validated only (must be smaller than `chunk_size`) | As above |
+| `top_k` | Number of results returned (must be greater than 0) | More results = more context for the LLM but higher token usage |
 | `similarity_threshold` | Minimum score to include | 0.0 returns everything; 0.3–0.7 filters weak matches |
+
+`build()` returns `RagError::ConfigError` when a rule above is broken.
 
 ---
 
@@ -233,17 +247,20 @@ let config = RagConfig::builder()
 
 | Provider | Feature flag | Model | Requires |
 |----------|-------------|-------|----------|
-| `GeminiEmbeddingProvider` | `gemini` | gemini-embedding-2 | `GOOGLE_API_KEY` |
-| `OpenAIEmbeddingProvider` | `openai` | text-embedding-3-small | `OPENAI_API_KEY` |
+| `GeminiEmbeddingProvider` | `gemini` | `gemini-embedding-2` (3072 dimensions) | An API key |
+| `OpenAIEmbeddingProvider` | `openai` | `text-embedding-3-small` (1536 dimensions) | An API key, or `OPENAI_API_KEY` with `from_env()` |
 
 ```rust
 // Gemini
 use adk_rag::GeminiEmbeddingProvider;
-let embedder = GeminiEmbeddingProvider::new(&api_key)?;
+let embedder = GeminiEmbeddingProvider::new(&api_key)?
+    .with_output_dimensionality(768);
 
 // OpenAI
 use adk_rag::OpenAIEmbeddingProvider;
-let embedder = OpenAIEmbeddingProvider::new(&api_key, "text-embedding-3-small");
+let embedder = OpenAIEmbeddingProvider::new(&api_key)?
+    .with_model("text-embedding-3-large")
+    .with_dimensions(1024);
 ```
 
 You can also implement `EmbeddingProvider` for any custom embedding service.
@@ -258,6 +275,8 @@ You can also implement `EmbeddingProvider` for any custom embedding service.
 | `QdrantVectorStore` | `qdrant` | Production with dedicated vector DB |
 | `LanceDBVectorStore` | `lancedb` | Embedded vector DB (no server needed) |
 | `PgVectorStore` | `pgvector` | When you already use PostgreSQL |
+| `SurrealVectorStore` | `surrealdb` | SurrealDB in memory, on RocksDB, or remote |
+| `AgentRetrievalStore` | `agent-retrieval` | Vertex AI Vector Search 2.0, with hybrid search |
 
 ```rust
 // In-memory (no setup needed)
@@ -266,12 +285,23 @@ let store = InMemoryVectorStore::new();
 
 // Qdrant (requires running Qdrant server)
 use adk_rag::QdrantVectorStore;
-let store = QdrantVectorStore::new("http://localhost:6334").await?;
+let store = QdrantVectorStore::new("http://localhost:6334")?;
 
 // pgvector (requires PostgreSQL with pgvector extension)
 use adk_rag::PgVectorStore;
 let store = PgVectorStore::new("postgres://user:pass@localhost/db").await?;
+
+// LanceDB (a local directory)
+use adk_rag::LanceDBVectorStore;
+let store = LanceDBVectorStore::new("./lancedb").await?;
+
+// SurrealDB (embedded, in memory)
+use adk_rag::SurrealVectorStore;
+let store = SurrealVectorStore::in_memory().await?;
 ```
+
+The `vertex-rag` feature adds `VertexRagEngineClient` and `VertexAiRagRetrievalTool`, which
+retrieve from a Vertex AI RAG Engine corpus instead of a local pipeline.
 
 > **Note:** `PgVectorStore` stores each collection in the table `rag_<name>`. A
 > collection name must be 1 to 59 bytes of ASCII lowercase letters, digits and
@@ -364,9 +394,12 @@ Only pull the dependencies you need:
 | `gemini` | `GeminiEmbeddingProvider` | `adk-gemini` |
 | `openai` | `OpenAIEmbeddingProvider` | `reqwest` |
 | `qdrant` | `QdrantVectorStore` | `qdrant-client` |
-| `lancedb` | `LanceDBVectorStore` | `lancedb`, `arrow` |
+| `lancedb` | `LanceDBVectorStore` | `lancedb` |
 | `pgvector` | `PgVectorStore` | `sqlx` |
-| `full` | All of the above | all |
+| `surrealdb` | `SurrealVectorStore` | `surrealdb` |
+| `agent-retrieval` | `AgentRetrievalStore` | `adk-gcp`, Google Cloud auth |
+| `vertex-rag` | `VertexRagEngineClient`, `VertexAiRagRetrievalTool` | `adk-gcp`, Google Cloud auth |
+| `full` | `gemini`, `openai`, `qdrant`, `lancedb`, `pgvector`, `surrealdb` | all of those |
 
 ```toml
 # Just core
@@ -415,7 +448,7 @@ cargo run
 | Practice | Why |
 |----------|-----|
 | Use `RecursiveChunker` as default | Produces natural chunk boundaries |
-| Keep chunks 200–500 chars | Balances precision and context |
+| Keep chunks 200–500 bytes | Balances precision and context |
 | Use real embeddings in production | Mock embedders are for testing only |
 | Set `similarity_threshold` > 0 | Filters out irrelevant noise |
 | Separate collections by domain | Improves precision and lets agents target searches |
