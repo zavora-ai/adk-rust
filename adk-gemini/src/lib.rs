@@ -2,34 +2,56 @@
 
 //! # adk-gemini
 //!
-//! A Rust client library for Google's Gemini API (Studio + Vertex AI),
-//! supporting current model generations such as Gemini 2.5 and 3.x.
+//! A Rust client for the Google Gemini API, on Google AI Studio and Vertex AI. It is the client
+//! behind `adk_model::GeminiModel`.
 //!
-//! ## Crate Organization
+//! ## Quick start
 //!
-//! This crate is organized into domain-specific modules that align with the Gemini API's
-//! capabilities:
-//!
-//! - **`generation`** - Content generation, including text, images, and audio
-//! - **`embedding`** - Text embedding generation for semantic analysis
-//! - **`batch`** - Batch processing for multiple requests
-//! - **`files`** - File upload and management
-//! - **`cache`** - Content caching for reusable contexts
-//! - **`safety`** - Content moderation and safety settings
-//! - **`tools`** - Function calling and tool integration
-//! - **`models`** - Core primitive types shared across modules
-//! - **`prelude`** - Convenient re-exports of commonly used types
-//!
-//! ## Quick Start
-//!
-//! For most use cases, import from the prelude:
-//!
-//! ```rust
+//! ```rust,no_run
 //! use adk_gemini::prelude::*;
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let client = Gemini::new(std::env::var("GEMINI_API_KEY")?)?;
+//!
+//! let response = client
+//!     .generate_content()
+//!     .with_user_message("Name one planet in a short sentence.")
+//!     .execute()
+//!     .await?;
+//! println!("{}", response.text());
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! For more specialized types, import them directly from the crate root or their
-//! respective modules.
+//! [`Gemini::new`] uses `gemini-3.7-flash`; [`Gemini::with_model`] takes any [`Model`].
+//!
+//! ## Crate organization
+//!
+//! | Module | Contents |
+//! |--------|----------|
+//! | [`generation`] | Content generation, including text, images, and audio |
+//! | [`embedding`] | Embeddings |
+//! | [`batch`] | Batch processing |
+//! | [`files`] | File upload and management |
+//! | [`cache`] | Context caching |
+//! | [`safety`] | Safety settings and ratings |
+//! | [`tools`] | Function declarations and built-in tools |
+//! | [`backend`] | The [`backend::GeminiBackend`] trait and the AI Studio and Vertex AI backends |
+//! | [`model_info`] | Model discovery |
+//! | [`pricing`] | Token cost estimation |
+//! | [`schema_adapter`] | Function-declaration schema normalization |
+//! | `interactions` | The Interactions API (Beta), behind the `interactions` feature |
+//! | [`prelude`] | Re-exports of commonly used types |
+//!
+//! ## Features
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `studio` (default) | Marker only; the AI Studio backend is always compiled |
+//! | `vertex` | Vertex AI constructors such as `Gemini::with_google_cloud_adc` |
+//! | `interactions` | The Interactions API module and client methods |
+//! | `backtrace` | `snafu`'s `backtraces-impl-backtrace-crate` feature |
 
 /// Backend abstraction for Gemini API providers (AI Studio REST vs Vertex AI).
 pub mod backend;

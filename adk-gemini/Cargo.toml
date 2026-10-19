@@ -22,6 +22,11 @@ keywords = [
 categories = ["api-bindings"]
 license = "Apache-2.0"
 repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
+authors.workspace = true
+
+[package.metadata.docs.rs]
+features = ["vertex", "interactions"]
 
 [features]
 default = ["studio"]
