@@ -8,15 +8,15 @@ Guarantee that Gemini traffic reaches only Vertex AI (`{location}-aiplatform.goo
 
 | Flag | Status | Notes |
 |------|--------|-------|
-| `GOOGLE_GENAI_USE_ENTERPRISE` | Current | Takes precedence when both are set |
+| `GOOGLE_GENAI_USE_ENTERPRISE` | Current | When set and non-empty it alone decides, so `false` here overrides a truthy `GOOGLE_GENAI_USE_VERTEXAI` |
 | `GOOGLE_GENAI_USE_VERTEXAI` | Deprecated | Still honored for adk-python parity; no deprecation warning is emitted |
 
 | Vertex flag | `gemini-vertex` feature | Result |
 |-------------|-------------------------|--------|
-| Truthy | Compiled | Vertex AI via Application Default Credentials (`GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`) |
-| Truthy, project or location missing | Compiled | Error naming the missing variable — no Studio fallback |
-| Truthy | Not compiled | `GeminiModel::from_env` errors; `provider_from_env` emits a `tracing` warning and falls through to API-key detection, which may select Studio |
-| Not truthy | — | Gemini API (Studio) via `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
+| Truthy | Compiled | Vertex AI via Application Default Credentials (`GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`); `provider_from_env` uses the default Gemini model |
+| Truthy, project or location missing | Compiled | Error `model.gemini.vertex_env_incomplete` naming the missing variable — no Studio fallback |
+| Truthy | Not compiled | `GeminiModel::from_env` fails with `model.gemini.vertex_feature_missing`; `provider_from_env` emits a `tracing` warning and falls through to API-key detection, which may select Studio |
+| Not truthy | — | `GeminiModel::from_env`: Gemini API (Studio) via `GOOGLE_API_KEY` or `GEMINI_API_KEY`. `provider_from_env`: `ANTHROPIC_API_KEY`, then `OPENAI_API_KEY`, then `GOOGLE_API_KEY` |
 
 > **Important:** the flags take precedence over every API key, including `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in `provider_from_env`. A stray API key cannot divert a Vertex-pinned deployment to Studio.
 
@@ -111,7 +111,7 @@ A Vertex-only deployment must treat this warning as a deployment error: it means
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Error naming `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` | Flag truthy, Vertex target incomplete | Set both variables |
-| Error naming the `gemini-vertex` feature | Flag truthy, feature not compiled | Add `gemini-vertex` (or `gemini-agent-platform`) to the `adk-rust` features |
+| `model.gemini.vertex_env_incomplete`, naming `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` | Flag truthy, Vertex target incomplete | Set both variables |
+| `model.gemini.vertex_feature_missing` | Flag truthy, feature not compiled | Add `gemini-vertex` (or `gemini-agent-platform`) to the `adk-rust` features |
 | The guard-rail warning appears | `provider_from_env` fell back to API keys | Rebuild with `gemini-vertex`; remove Studio API keys from the environment |
 | Authentication errors at request time | ADC not configured | Run `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` |

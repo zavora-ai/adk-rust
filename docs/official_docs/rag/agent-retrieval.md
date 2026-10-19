@@ -1,6 +1,6 @@
 # Agent Retrieval Vector Store
 
-Agent Retrieval (formerly Vector Search 2.0) is Google's managed vector database on the Gemini Enterprise Agent Platform, generally available at `vectorsearch.googleapis.com`. The `agent-retrieval` feature of `adk-rag` implements the [`VectorStore`] trait against it, so it slots into the existing RAG pipeline exactly like the pgvector, Qdrant, LanceDB, and SurrealDB backends.
+Agent Retrieval (formerly Vector Search 2.0) is Google's managed vector database on the Gemini Enterprise Agent Platform, served at `vectorsearch.googleapis.com`. The `agent-retrieval` feature of `adk-rag` implements the [`VectorStore`] trait against it, so it slots into the existing RAG pipeline exactly like the pgvector, Qdrant, LanceDB, and SurrealDB backends.
 
 ```toml
 [dependencies]
@@ -63,7 +63,7 @@ let results = store
 
 - **Regions:** Agent Retrieval is regional; supported regions include `us-central1`, `us-east4`, `us-west1`, `europe-north1`, `europe-west2`, `europe-west4`, `asia-east1`, `asia-northeast1`, and `asia-southeast1`.
 - **CMEK:** standalone Agent Retrieval supports customer-managed encryption keys via the collection's `encryptionSpec` (immutable at creation). Pre-provision CMEK collections with platform tooling and use `with_existing_collections_only(true)`.
-- **Vector Search 1.0 is deliberately not implemented.** Its index/endpoint infrastructure model fits the `VectorStore` trait poorly, and Google positions Agent Retrieval as its successor.
+- **Vector Search 1.0** (index and index-endpoint resources) is not implemented.
 - **Quotas:** batch writes are capped at 1000 objects per request and are atomic; the store chunks larger upserts automatically.
 
 ## Testing

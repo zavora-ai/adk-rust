@@ -9,57 +9,49 @@ The artifact system in ADK-Rust consists of:
 - **Part**: The core data representation that can hold text or binary data with MIME types
 - **ArtifactService**: The trait defining artifact storage operations
 - **InMemoryArtifactService**: An in-memory implementation for development and testing
+- **FileArtifactService** and **GcsArtifactService** (feature `gcs`): durable implementations
 - **ScopedArtifacts**: A wrapper that simplifies artifact operations by automatically handling session context
 
 Artifacts are scoped by application, user, and session, providing isolation and organization. Files can be session-scoped (default) or user-scoped (using the `user:` prefix).
 
 ## Part Representation
 
-The `Part` enum represents data that can be stored as artifacts:
+An artifact is one `adk_core::Part`. Two variants carry artifact data:
 
-```rust
-pub enum Part {
-    Text { text: String },
-    InlineData { mime_type: String, data: Vec<u8> },
-    FunctionCall { name: String, args: serde_json::Value },
-    FunctionResponse { name: String, response: serde_json::Value },
-}
-```
+| Variant | Use | Build with |
+|---------|-----|------------|
+| `Part::Text { text }` | Text data | `Part::text_part("...")` |
+| `Part::InlineData { mime_type, data, uri, annotations }` | Binary data with a MIME type | `Part::inline_data("image/png", bytes)` |
 
-For artifacts, you'll primarily use:
-- `Part::Text` for text data
-- `Part::InlineData` for binary data with MIME types
+`Part::inline_data` panics when `data` exceeds `MAX_INLINE_DATA_SIZE` (10 MB); build the
+variant directly to avoid the check. Match it with `Part::InlineData { mime_type, data, .. }`.
 
 ## Basic Usage
 
-The simplest way to work with artifacts is through the `Artifacts` trait, which is available on agent contexts:
+The simplest way to work with artifacts is through the `Artifacts` trait, which tool and callback
+contexts expose when the runner has an artifact service
+(`Runner::builder().artifact_service(...)`):
 
 ```rust
-use adk_rust::prelude::*;
+use adk_core::{AdkError, Part, Result, ToolContext};
+use serde_json::{Value, json};
 
-// In an agent tool or callback
-async fn save_report(ctx: &ToolContext) -> Result<Value> {
-    let artifacts = ctx.artifacts();
-    
+// In a tool
+async fn save_report(ctx: &dyn ToolContext) -> Result<Value> {
+    let artifacts = ctx.artifacts().ok_or_else(|| AdkError::artifact("no artifact service"))?;
+
     // Save text data
-    let version = artifacts.save(
-        "report.txt",
-        &Part::Text { text: "Report content".to_string() }
-    ).await?;
-    
+    let version = artifacts.save("report.txt", &Part::text_part("Report content")).await?;
+
     // Save binary data
     let image_data = vec![0xFF, 0xD8, 0xFF]; // JPEG header
-    artifacts.save(
-        "chart.jpg",
-        &Part::InlineData {
-            mime_type: "image/jpeg".to_string(),
-            data: image_data,
-        }
-    ).await?;
-    
+    artifacts.save("chart.jpg", &Part::inline_data("image/jpeg", image_data)).await?;
+
     Ok(json!({ "saved": true, "version": version }))
 }
 ```
+
+`artifacts()` returns `None` when no artifact service is configured.
 
 ## ArtifactService Trait
 
@@ -73,28 +65,29 @@ pub trait ArtifactService: Send + Sync {
     async fn delete(&self, req: DeleteRequest) -> Result<()>;
     async fn list(&self, req: ListRequest) -> Result<ListResponse>;
     async fn versions(&self, req: VersionsRequest) -> Result<VersionsResponse>;
+    async fn health_check(&self) -> Result<()> { Ok(()) }
 }
 ```
+
+File names are logical keys: an empty name, `/`, `\`, and `..` are refused.
 
 ### Save Operation
 
 Save an artifact with automatic or explicit versioning:
 
 ```rust
-use adk_artifact::{InMemoryArtifactService, SaveRequest};
+use adk_artifact::{ArtifactService, InMemoryArtifactService, SaveRequest};
 use adk_core::Part;
 
 let service = InMemoryArtifactService::new();
+let pdf_bytes = std::fs::read("document.pdf")?;
 
 let response = service.save(SaveRequest {
     app_name: "my_app".to_string(),
     user_id: "user_123".to_string(),
     session_id: "session_456".to_string(),
     file_name: "document.pdf".to_string(),
-    part: Part::InlineData {
-        mime_type: "application/pdf".to_string(),
-        data: pdf_bytes,
-    },
+    part: Part::inline_data("application/pdf", pdf_bytes),
     version: None, // Auto-increment version
 }).await?;
 
@@ -106,7 +99,8 @@ println!("Saved as version: {}", response.version);
 Load the latest version or a specific version:
 
 ```rust
-use adk_artifact::LoadRequest;
+use adk_artifact::{ArtifactService, LoadRequest};
+use adk_core::Part;
 
 // Load latest version
 let response = service.load(LoadRequest {
@@ -126,11 +120,8 @@ let response = service.load(LoadRequest {
     version: Some(2), // Load version 2
 }).await?;
 
-match response.part {
-    Part::InlineData { mime_type, data } => {
-        println!("Loaded {} bytes of {}", data.len(), mime_type);
-    }
-    _ => {}
+if let Part::InlineData { mime_type, data, .. } = &response.part {
+    println!("Loaded {} bytes of {}", data.len(), mime_type);
 }
 ```
 
@@ -139,7 +130,7 @@ match response.part {
 List all artifacts in a session:
 
 ```rust
-use adk_artifact::ListRequest;
+use adk_artifact::{ArtifactService, ListRequest};
 
 let response = service.list(ListRequest {
     app_name: "my_app".to_string(),
@@ -157,7 +148,7 @@ for file_name in response.file_names {
 Delete a specific version or all versions:
 
 ```rust
-use adk_artifact::DeleteRequest;
+use adk_artifact::{ArtifactService, DeleteRequest};
 
 // Delete specific version
 service.delete(DeleteRequest {
@@ -183,7 +174,7 @@ service.delete(DeleteRequest {
 List all versions of an artifact:
 
 ```rust
-use adk_artifact::VersionsRequest;
+use adk_artifact::{ArtifactService, VersionsRequest};
 
 let response = service.versions(VersionsRequest {
     app_name: "my_app".to_string(),
@@ -195,6 +186,9 @@ let response = service.versions(VersionsRequest {
 println!("Available versions: {:?}", response.versions);
 // Output: [3, 2, 1] (sorted newest first)
 ```
+
+`load` of a missing artifact or version, and `versions` of a missing artifact, fail with an
+error.
 
 ## Versioning
 
@@ -214,37 +208,41 @@ Every backend keeps the same versioning contract:
 | **Distinct names are distinct artifacts** | No two file names share storage, so `a:b` and `a__b` are different artifacts. |
 
 ```rust
+use adk_artifact::{ArtifactService, InMemoryArtifactService, LoadRequest, SaveRequest};
+use adk_core::{ErrorCategory, Part};
+
+let service = InMemoryArtifactService::new();
+let save = |text: &str, version: Option<i64>| SaveRequest {
+    app_name: "my_app".to_string(),
+    user_id: "user_123".to_string(),
+    session_id: "session_456".to_string(),
+    file_name: "data.json".to_string(),
+    part: Part::text_part(text),
+    version,
+};
+let load = |version: Option<i64>| LoadRequest {
+    app_name: "my_app".to_string(),
+    user_id: "user_123".to_string(),
+    session_id: "session_456".to_string(),
+    file_name: "data.json".to_string(),
+    version,
+};
+
 // First save - becomes version 1
-let v1 = service.save(SaveRequest {
-    file_name: "data.json".to_string(),
-    part: Part::Text { text: "v1 data".to_string() },
-    version: None,
-    // ... other fields
-}).await?;
-assert_eq!(v1.version, 1);
-
+assert_eq!(service.save(save("v1 data", None)).await?.version, 1);
 // Second save - becomes version 2
-let v2 = service.save(SaveRequest {
-    file_name: "data.json".to_string(),
-    part: Part::Text { text: "v2 data".to_string() },
-    version: None,
-    // ... other fields
-}).await?;
-assert_eq!(v2.version, 2);
+assert_eq!(service.save(save("v2 data", None)).await?.version, 2);
 
-// Load latest (version 2)
-let latest = service.load(LoadRequest {
-    file_name: "data.json".to_string(),
-    version: None,
-    // ... other fields
-}).await?;
+// Load latest (version 2) and a specific version
+let latest = service.load(load(None)).await?;
+let old = service.load(load(Some(1))).await?;
+assert_eq!(latest.part.text(), Some("v2 data"));
+assert_eq!(old.part.text(), Some("v1 data"));
 
-// Load specific version
-let old = service.load(LoadRequest {
-    file_name: "data.json".to_string(),
-    version: Some(1),
-    // ... other fields
-}).await?;
+// A stored version is never replaced
+let error = service.save(save("overwrite", Some(1))).await.unwrap_err();
+assert_eq!(error.category, ErrorCategory::Conflict);
+assert_eq!(error.code, "artifact.version_exists");
 ```
 
 ## Namespace Scoping
@@ -256,19 +254,22 @@ Artifacts can be scoped at two levels:
 By default, artifacts are scoped to a specific session. Each session has its own isolated artifact namespace:
 
 ```rust
-// Session 1
-service.save(SaveRequest {
-    session_id: "session_1".to_string(),
-    file_name: "notes.txt".to_string(),
-    // ... other fields
-}).await?;
+use adk_artifact::{ArtifactService, SaveRequest};
+use adk_core::Part;
 
-// Session 2 - different artifact with same name
-service.save(SaveRequest {
-    session_id: "session_2".to_string(),
+let in_session = |session_id: &str| SaveRequest {
+    app_name: "my_app".to_string(),
+    user_id: "user_123".to_string(),
+    session_id: session_id.to_string(),
     file_name: "notes.txt".to_string(),
-    // ... other fields
-}).await?;
+    part: Part::text_part("notes"),
+    version: None,
+};
+
+// Session 1
+service.save(in_session("session_1")).await?;
+// Session 2 - different artifact with same name
+service.save(in_session("session_2")).await?;
 
 // These are two separate artifacts
 ```
@@ -278,18 +279,26 @@ service.save(SaveRequest {
 Artifacts with the `user:` prefix are shared across all sessions for a user:
 
 ```rust
+use adk_artifact::{ArtifactService, LoadRequest, SaveRequest};
+use adk_core::Part;
+
 // Save in session 1
 service.save(SaveRequest {
+    app_name: "my_app".to_string(),
+    user_id: "user_123".to_string(),
     session_id: "session_1".to_string(),
     file_name: "user:profile.jpg".to_string(), // user: prefix
-    // ... other fields
+    part: Part::inline_data("image/jpeg", jpeg_bytes),
+    version: None,
 }).await?;
 
 // Load in session 2 - same artifact
 let profile = service.load(LoadRequest {
+    app_name: "my_app".to_string(),
+    user_id: "user_123".to_string(),
     session_id: "session_2".to_string(),
     file_name: "user:profile.jpg".to_string(),
-    // ... other fields
+    version: None,
 }).await?;
 ```
 
@@ -309,16 +318,18 @@ The `InMemoryArtifactService` provides an in-memory implementation suitable for 
 
 ```rust
 use adk_artifact::InMemoryArtifactService;
+use adk_runner::Runner;
 use std::sync::Arc;
 
 let service = Arc::new(InMemoryArtifactService::new());
 
-// Use with agents
-let agent = LlmAgentBuilder::new("my_agent")
-    .model(model)
+// Tools and callbacks of every run reach it through `ctx.artifacts()`
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(agent)
+    .session_service(session_service)
+    .artifact_service(service)
     .build()?;
-
-// The service can be passed to runners or used directly
 ```
 
 **Note**: Data is not persisted to disk. For durable storage, use `FileArtifactService` or `GcsArtifactService` (feature `gcs`), or implement a custom `ArtifactService`.
@@ -332,7 +343,7 @@ let agent = LlmAgentBuilder::new("my_agent")
 | Session | `{app_name}/{user_id}/{session_id}/{name}/v{version}.json` |
 | User (`user:` names) | `{app_name}/{user_id}/user/{name}/v{version}.json` |
 
-- **Names** — `{name}` is the artifact name with `%`, `:`, the other characters Windows forbids in file names (`<>"|?*` and control characters), and the second `_` of every `__` written as `%XX` escapes. The encoding is injective, so no two names share a directory.
+- **Names** — `{name}` is the whole artifact name, a `user:` prefix included (`user%3Aprofile.txt`), with `%`, `:`, the other characters Windows forbids in file names (`<>"|?*` and control characters), and the second `_` of every `__` written as `%XX` escapes. The encoding is injective, so no two names share a directory.
 - **Crash safety** — a save writes the version to a temporary file (`.save-*.tmp`), flushes it to disk, and links it into place without replacing an existing file. A crash mid-save leaves the earlier versions intact; the leftover temporary file is ignored. On filesystems without hard links (FAT, exFAT) the version file is created exclusively and written in place instead.
 - **Earlier layout** — artifacts written by releases that stored `:` as `__` and kept user-scoped artifacts under `_user_scoped_` are still loaded, listed, versioned, and deleted. New versions of them go to the current layout and continue their numbering. A name saved under the earlier layout with `:` or `__` is found under both spellings, as it was before.
 
@@ -368,7 +379,8 @@ async fn main() -> adk_core::Result<()> {
 The `ScopedArtifacts` wrapper simplifies artifact operations by automatically injecting session context:
 
 ```rust
-use adk_artifact::{ScopedArtifacts, InMemoryArtifactService};
+use adk_artifact::{InMemoryArtifactService, ScopedArtifacts};
+use adk_core::{Artifacts, Part};
 use std::sync::Arc;
 
 let service = Arc::new(InMemoryArtifactService::new());
@@ -381,9 +393,7 @@ let artifacts = ScopedArtifacts::new(
 );
 
 // Simple API - no need to specify app/user/session
-let version = artifacts.save("file.txt", &Part::Text {
-    text: "content".to_string()
-}).await?;
+let version = artifacts.save("file.txt", &Part::text_part("content")).await?;
 
 let part = artifacts.load("file.txt").await?;
 let files = artifacts.list().await?;
@@ -400,12 +410,14 @@ When you want an LLM to analyze an image stored as an artifact, you need to use 
 **Why not use a tool?** Tool responses in LLM APIs are JSON text. If a tool returns image data (even base64-encoded), the model sees it as text, not as an actual image. For true multimodal analysis, the image must be included as a `Part::InlineData` in the conversation content.
 
 ```rust
-use adk_rust::prelude::*;
-use adk_rust::artifact::{ArtifactService, InMemoryArtifactService, SaveRequest, LoadRequest};
+use adk_agent::LlmAgentBuilder;
+use adk_artifact::{ArtifactService, InMemoryArtifactService, LoadRequest, SaveRequest};
+use adk_core::{BeforeModelResult, Part};
+use adk_model::GeminiModel;
 use std::sync::Arc;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
     let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
 
@@ -418,10 +430,7 @@ async fn main() -> Result<()> {
         user_id: "user".to_string(),
         session_id: "init".to_string(),
         file_name: "user:photo.png".to_string(),  // user-scoped for cross-session access
-        part: Part::InlineData {
-            data: image_bytes,
-            mime_type: "image/png".to_string(),
-        },
+        part: Part::inline_data("image/png", image_bytes),
         version: None,
     }).await?;
 
@@ -445,10 +454,10 @@ async fn main() -> Result<()> {
                     version: None,
                 }).await {
                     // Inject image into the last user content
-                    if let Some(last_content) = request.contents.last_mut() {
-                        if last_content.role == "user" {
-                            last_content.parts.push(response.part);
-                        }
+                    if let Some(last_content) = request.contents.last_mut()
+                        && last_content.role == "user"
+                    {
+                        last_content.parts.push(response.part);
                     }
                 }
 
@@ -474,64 +483,36 @@ async fn main() -> Result<()> {
 Gemini models can process PDF documents natively using the same BeforeModel callback pattern. PDFs are injected with MIME type `application/pdf`:
 
 ```rust
-// Save PDF as artifact
+use adk_artifact::{ArtifactService, SaveRequest};
+use adk_core::Part;
+
+// Save PDF as artifact, then load and inject it with the same callback as the image
 artifact_service.save(SaveRequest {
-    app_name: "my_app".to_string(),
+    app_name: "image_app".to_string(),
     user_id: "user".to_string(),
     session_id: "init".to_string(),
     file_name: "user:document.pdf".to_string(),
-    part: Part::InlineData {
-        data: pdf_bytes,
-        mime_type: "application/pdf".to_string(),
-    },
+    part: Part::inline_data("application/pdf", pdf_bytes),
     version: None,
 }).await?;
-
-// Use BeforeModel callback to inject PDF (same pattern as images)
-.before_model_callback(Box::new(move |_ctx, mut request| {
-    let service = callback_service.clone();
-    Box::pin(async move {
-        if let Ok(response) = service.load(LoadRequest {
-            file_name: "user:document.pdf".to_string(),
-            // ... other fields
-        }).await {
-            if let Some(last_content) = request.contents.last_mut() {
-                if last_content.role == "user" {
-                    last_content.parts.push(response.part);
-                }
-            }
-        }
-        Ok(BeforeModelResult::Continue(request))
-    })
-}))
 ```
 
-**Gemini PDF capabilities:**
-- Extract and analyze text content
-- Answer questions about documents
-- Summarize sections or entire documents
-- Process up to ~1000 pages
-- OCR support for scanned documents
-
-See `examples/artifacts/chat_pdf.rs` for a complete working example.
+A PDF reaches the model as an inline `application/pdf` part, which Gemini reads as a document.
+`examples/artifacts_eval_memory` drives artifact saves and loads through tools on a live model.
 
 ### Storing Generated Images
 
 ```rust
-async fn generate_and_save_image(ctx: &ToolContext) -> Result<Value> {
-    let artifacts = ctx.artifacts();
-    
-    // Generate image (pseudo-code)
-    let image_bytes = generate_image().await?;
-    
-    let version = artifacts.save(
-        "generated_image.png",
-        &Part::InlineData {
-            mime_type: "image/png".to_string(),
-            data: image_bytes,
-        }
-    ).await?;
-    
+use adk_core::{AdkError, Part, Result, ToolContext};
+use serde_json::{Value, json};
+
+async fn generate_and_save_image(ctx: &dyn ToolContext, image_bytes: Vec<u8>) -> Result<Value> {
+    let artifacts = ctx.artifacts().ok_or_else(|| AdkError::artifact("no artifact service"))?;
+
+    let version = artifacts
+        .save("generated_image.png", &Part::inline_data("image/png", image_bytes))
+        .await?;
+
     Ok(json!({
         "message": "Image saved",
         "file": "generated_image.png",
@@ -543,22 +524,22 @@ async fn generate_and_save_image(ctx: &ToolContext) -> Result<Value> {
 ### Loading and Processing Documents
 
 ```rust
-async fn process_document(ctx: &ToolContext, filename: &str) -> Result<Value> {
-    let artifacts = ctx.artifacts();
-    
+use adk_core::{AdkError, Part, Result, ToolContext};
+use serde_json::{Value, json};
+
+async fn process_document(ctx: &dyn ToolContext, filename: &str) -> Result<Value> {
+    let artifacts = ctx.artifacts().ok_or_else(|| AdkError::artifact("no artifact service"))?;
+
     // Load the document
-    let part = artifacts.load(filename).await?;
-    
-    match part {
-        Part::InlineData { mime_type, data } => {
+    match artifacts.load(filename).await? {
+        Part::InlineData { mime_type, data, .. } => {
             // Process based on MIME type
-            let result = match mime_type.as_str() {
-                "application/pdf" => process_pdf(&data)?,
-                "image/jpeg" | "image/png" => process_image(&data)?,
+            let kind = match mime_type.as_str() {
+                "application/pdf" => "document",
+                "image/jpeg" | "image/png" => "image",
                 _ => return Err(AdkError::artifact("Unsupported type")),
             };
-            
-            Ok(json!({ "result": result }))
+            Ok(json!({ "kind": kind, "bytes": data.len() }))
         }
         _ => Err(AdkError::artifact("Expected binary data")),
     }
@@ -568,23 +549,20 @@ async fn process_document(ctx: &ToolContext, filename: &str) -> Result<Value> {
 ### Version History
 
 ```rust
-async fn show_history(ctx: &ToolContext, filename: &str) -> Result<Value> {
-    let artifacts = ctx.artifacts();
-    
+use adk_core::{AdkError, Result, ToolContext};
+use serde_json::{Value, json};
+
+async fn show_history(ctx: &dyn ToolContext, filename: &str) -> Result<Value> {
+    let artifacts = ctx.artifacts().ok_or_else(|| AdkError::artifact("no artifact service"))?;
+
     // Get all files
     let files = artifacts.list().await?;
-    
-    if !files.contains(&filename.to_string()) {
+    if !files.iter().any(|name| name == filename) {
         return Ok(json!({ "error": "File not found" }));
     }
-    
-    // Note: versions() is not available on the simple Artifacts trait
-    // You would need access to the underlying ArtifactService
-    
-    Ok(json!({
-        "file": filename,
-        "exists": true
-    }))
+
+    // versions() is not on the simple Artifacts trait; use the ArtifactService directly.
+    Ok(json!({ "file": filename, "exists": true }))
 }
 ```
 
