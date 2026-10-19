@@ -21,7 +21,7 @@ This document provides comprehensive guidelines for developers contributing to A
 - **Rust**: 1.95.0 or higher (edition 2024, check with `rustc --version`)
 - **Cargo**: Latest stable
 - **Git**: For version control
-- **sccache** (recommended): Compilation cache that cuts rebuild times by ~70%
+- **sccache** (recommended): Compilation cache that cuts rebuild times substantially; set `RUSTC_WRAPPER=sccache`
 
 ### Setting Up Your Environment
 
@@ -33,23 +33,18 @@ cd adk-rust
 # Option A: Nix/devenv (reproducible — identical on Linux, macOS, CI)
 devenv shell
 
-# Option B: Setup script (installs sccache, cmake, etc.)
-./scripts/setup-dev.sh
+# Option B: Setup script (checks the toolchain, cargo-nextest, protoc, NASM, cmake, lefthook)
+./scripts/setup-dev.sh            # Linux, macOS
+./scripts/setup-dev.sh --check    # report without changing anything
+./scripts/setup-dev.ps1           # Windows
 
 # Option C: Manual
 cargo build
 
-# Install cargo-nextest (parallel test runner, ~10x faster)
-curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C ${CARGO_HOME:-~/.cargo}/bin
-
-# Run all tests
+# Quality gates (run all three before every commit)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
-
-# Check for lints
-cargo clippy --all-targets --all-features
-
-# Format code
-cargo fmt --all
 ```
 
 ### Environment Variables
@@ -69,15 +64,15 @@ export ANTHROPIC_API_KEY="your-api-key"
 
 ## Project Structure
 
-ADK-Rust is organized as a Cargo workspace with multiple crates:
+ADK-Rust is organized as a Cargo workspace of `adk-*` crates. The main ones:
 
 ```
 adk-rust/
 ├── adk-core/       # Foundational traits and types (Agent, Tool, Llm, Event)
 ├── adk-telemetry/  # OpenTelemetry integration
-├── adk-model/      # LLM providers (Gemini, OpenAI, Anthropic)
+├── adk-model/      # LLM providers (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, ...)
 ├── adk-tool/       # Tool system (FunctionTool, MCP, AgentTool)
-├── adk-session/    # Session management (in-memory, SQLite)
+├── adk-session/    # Session management (in-memory, SQLite, PostgreSQL, Redis, MongoDB, ...)
 ├── adk-artifact/   # Binary artifact storage
 ├── adk-memory/     # Long-term memory with search
 ├── adk-agent/      # Agent implementations (LlmAgent, workflow agents)
@@ -89,29 +84,17 @@ adk-rust/
 ├── adk-browser/    # Browser automation tools
 ├── adk-eval/       # Agent evaluation framework
 ├── adk-rust/       # Umbrella crate (re-exports all)
-└── examples/       # Working examples
+└── examples/       # Standalone example crates
 ```
+
+`AGENTS.md` in the repository root lists every crate.
 
 ### Crate Dependencies
 
-Crates must be published in dependency order:
-
-1. `adk-core` (no internal deps)
-2. `adk-telemetry`
-3. `adk-model`
-4. `adk-tool`
-5. `adk-session`
-6. `adk-artifact`
-7. `adk-memory`
-8. `adk-agent`
-9. `adk-runner`
-10. `adk-server`
-11. `adk-cli`
-12. `adk-realtime`
-13. `adk-graph`
-14. `adk-browser`
-15. `adk-eval`
-16. `adk-rust` (umbrella)
+Crates are published in dependency order. `cargo xtask publish` (run by `./publish.sh`)
+computes the order from the workspace graph, and `scripts/check-publish-order.sh` checks that it
+can be satisfied. `adk-core` has no internal dependencies; `adk-rust`, the umbrella crate, is
+published last.
 
 ## Code Style
 
@@ -170,15 +153,20 @@ use super::utils;
 All code must pass clippy with no warnings:
 
 ```bash
-cargo clippy --all-targets --all-features
+cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+A default workspace build compiles no feature-gated module; check a feature-gated change with its
+feature, for example `cargo clippy -p adk-agent --features codeact --all-targets -- -D warnings`.
 
 Address clippy warnings rather than suppressing them. If suppression is necessary, document why:
 
 ```rust
+// A builder needs every parameter; grouping them would hurt usability.
 #[allow(clippy::too_many_arguments)]
-// Builder pattern requires many parameters; refactoring would hurt usability
-fn complex_builder(...) { }
+fn complex_builder(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8) -> u8 {
+    a + b + c + d + e + f + g + h
+}
 ```
 
 ## Error Handling
@@ -217,10 +205,16 @@ pub async fn my_function() -> Result<String> {
 | `Model` | LLM provider calls, response parsing |
 | `Tool` | Tool execution, parameter validation |
 | `Session` | Session persistence, state management |
+| `Artifact` | Artifact storage |
 | `Memory` | Memory/RAG operations |
 | `Graph` | Graph workflow execution |
-| `Auth` | Authentication, authorization |
+| `Realtime` | Realtime audio and video sessions |
+| `Code` | Code execution |
 | `Server` | HTTP server, configuration |
+| `Auth` | Authentication, authorization |
+| `Guardrail` | Input and output guardrails |
+| `Eval` | Evaluation |
+| `Deploy` | Deployment clients |
 
 `ErrorCategory` classifies what went wrong:
 
@@ -360,7 +354,7 @@ let data = std::fs::read_to_string(path)
     ).with_source(e))?;
 
 // Good: for quick migration
-let data = serde_json::from_str(&raw)
+let data: serde_json::Value = serde_json::from_str(&raw)
     .map_err(|e| AdkError::session(format!("JSON parse failed: {e}")))?;
 ```
 
@@ -483,9 +477,8 @@ pub trait MyTrait: Send + Sync {
 Use `EventStream` for streaming responses:
 
 ```rust
-use adk_core::EventStream;
+use adk_core::{Event, EventStream};
 use async_stream::stream;
-use futures::Stream;
 
 fn create_stream() -> EventStream {
     let s = stream! {
@@ -552,6 +545,10 @@ pub fn add(a: i32, b: i32) -> i32 {
     a + b
 }
 
+pub async fn async_function() -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,7 +572,7 @@ Place in `tests/` directory:
 
 ```rust
 // tests/integration_test.rs
-use adk_core::*;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 
 #[tokio::test]
 async fn test_full_workflow() {
@@ -583,7 +580,15 @@ async fn test_full_workflow() {
     let service = InMemorySessionService::new();
 
     // Execute
-    let session = service.create(request).await.unwrap();
+    let session = service
+        .create(CreateRequest {
+            app_name: "app".to_string(),
+            user_id: "user".to_string(),
+            session_id: Some("test-session".to_string()),
+            state: Default::default(),
+        })
+        .await
+        .unwrap();
 
     // Assert
     assert_eq!(session.id(), "test-session");
@@ -600,7 +605,12 @@ on what the agent sent:
 use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
+use adk_core::{Content, Part};
 use adk_model::{ScriptedLlm, ScriptedResponse};
+use adk_runner::Runner;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use adk_tool::FunctionTool;
+use futures::StreamExt;
 use serde_json::json;
 
 #[tokio::test]
@@ -614,15 +624,54 @@ async fn test_agent_with_scripted_model() {
             ScriptedResponse::text("It is sunny in Nairobi."),
         ],
     ));
+    let get_weather = FunctionTool::new("get_weather", "Weather for a city", |_ctx, args| async move {
+        Ok(json!({ "city": args["city"], "condition": "sunny" }))
+    });
 
     let agent = LlmAgentBuilder::new("test")
         .model(llm.clone())
-        .tool(Arc::new(GetWeather))
+        .tool(Arc::new(get_weather))
+        .build()
+        .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "test_app".to_string(),
+            user_id: "user".to_string(),
+            session_id: Some("session-1".to_string()),
+            state: Default::default(),
+        })
+        .await
+        .unwrap();
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(Arc::new(agent))
+        .session_service(sessions)
         .build()
         .unwrap();
 
-    // Run the agent through a Runner, then assert on the requests:
-    // llm.requests()[1] carries the get_weather function response.
+    let mut events = runner
+        .run_str("user", "session-1", Content::new("user").with_text("Weather in Nairobi?"))
+        .await
+        .unwrap();
+    let mut answer = String::new();
+    while let Some(event) = events.next().await {
+        if let Some(content) = event.unwrap().content() {
+            for part in &content.parts {
+                if let Part::Text { text } = part {
+                    answer.push_str(text);
+                }
+            }
+        }
+    }
+
+    assert_eq!(answer, "It is sunny in Nairobi.");
+    // The second request carries the get_weather function response.
+    let requests = llm.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].contents.iter().flat_map(|c| &c.parts).any(|part| {
+        matches!(part, Part::FunctionResponse { function_response, .. } if function_response.name == "get_weather")
+    }));
 }
 ```
 
@@ -722,8 +771,11 @@ Each crate should have a `README.md` with:
 Ensure doc examples compile:
 
 ```bash
-cargo test --doc --all
+cargo test --workspace --doc
 ```
+
+Cargo snippets and feature names in `README.md` files and `docs/official_docs/` are checked by
+`scripts/check-doc-examples.sh` and `scripts/check-doc-versions.sh`.
 
 ## Pull Request Process
 
@@ -736,17 +788,19 @@ cargo test --doc --all
 
 2. **Run clippy**:
    ```bash
-   cargo clippy --all-targets --all-features
+   cargo clippy --workspace --all-targets -- -D warnings
    ```
 
 3. **Format code**:
    ```bash
-   cargo fmt --all
+   cargo fmt --all -- --check
    ```
 
 4. **Update documentation** if adding/changing public API
 
 5. **Add tests** for new functionality
+
+6. **Add a changelog fragment** under `changelog.d/` for user-facing changes
 
 ### PR Guidelines
 
@@ -770,7 +824,7 @@ test: add integration tests for A2A protocol
 
 ## Project Scaffolding
 
-Use `cargo adk new` with the [Composable Template System](composable-templates.md) to scaffold new projects. The built-in registry provides 12 templates, 9 add-ons, and 5 enterprise patterns:
+Use `cargo adk new` with the [Composable Template System](composable-templates.md) to scaffold new projects. The built-in registry provides 13 templates, 10 add-ons, and 5 enterprise patterns:
 
 ```bash
 # Basic agent (default)
@@ -779,11 +833,11 @@ cargo adk new my-agent
 # Agent with tools and Docker support
 cargo adk new my-agent --template tools --addon docker
 
-# A2A protocol agent with CI and telemetry
-cargo adk new my-agent --template a2a --addon ci --addon telemetry
+# A2A protocol agent with telemetry
+cargo adk new my-agent --template a2a --addon telemetry
 
-# Graph workflow with enterprise observability
-cargo adk new my-agent --template graph --addon telemetry --addon docker --addon ci
+# Graph workflow with telemetry and a container build
+cargo adk new my-agent --template graph --addon telemetry --addon docker
 ```
 
 The `--addon` flag is composable — combine any base template with any number of addons. See the [Composable Templates](composable-templates.md) documentation for the full list of templates, addons, and enterprise patterns.
@@ -795,13 +849,13 @@ The `--addon` flag is composable — combine any base template with any number o
 1. **Create the tool**:
 
 ```rust
-use adk_core::{Tool, ToolContext, Result};
+use std::sync::Arc;
+
+use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::Value;
 
-pub struct MyTool {
-    // fields
-}
+pub struct MyTool;
 
 #[async_trait]
 impl Tool for MyTool {
@@ -823,9 +877,18 @@ impl Tool for MyTool {
         }))
     }
 
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let input = args["input"].as_str().unwrap_or_default();
         Ok(serde_json::json!({ "result": input }))
+    }
+
+    // Read-only and concurrency-safe tools can run in parallel with other tool calls.
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        true
     }
 }
 ```
@@ -835,7 +898,7 @@ impl Tool for MyTool {
 ```rust
 let agent = LlmAgentBuilder::new("agent")
     .model(model)
-    .tool(Arc::new(MyTool::new()))
+    .tool(Arc::new(MyTool))
     .build()?;
 ```
 
@@ -852,7 +915,8 @@ pub use client::MyModelClient;
 2. **Implement the Llm trait**:
 
 ```rust
-use adk_core::{Llm, LlmRequest, LlmResponse, LlmResponseStream, Result};
+use adk_core::{Content, Llm, LlmRequest, LlmResponse, LlmResponseStream, Result};
+use async_trait::async_trait;
 
 pub struct MyModelClient {
     api_key: String,
@@ -866,13 +930,19 @@ impl Llm for MyModelClient {
 
     async fn generate_content(
         &self,
-        request: LlmRequest,
-        stream: bool,
+        _request: LlmRequest,
+        _stream: bool,
     ) -> Result<LlmResponseStream> {
-        // Implementation
+        // Call the provider with `self.api_key` and map its reply into `LlmResponse`s.
+        let _ = &self.api_key;
+        let response = LlmResponse::new(Content::new("model").with_text("hello"));
+        Ok(Box::pin(futures::stream::iter([Ok(response)])))
     }
 }
 ```
+
+Override `schema_adapter()` when the provider needs provider-specific tool schema
+normalization.
 
 3. **Add feature flag** in `adk-model/Cargo.toml`:
 
@@ -896,7 +966,9 @@ pub use mymodel::MyModelClient;
 
 ```rust
 // adk-agent/src/my_agent.rs
-use adk_core::{Agent, EventStream, InvocationContext, Result};
+use std::sync::Arc;
+
+use adk_core::{Agent, Content, Event, EventStream, InvocationContext, Result};
 use async_trait::async_trait;
 
 pub struct MyAgent {
@@ -913,8 +985,16 @@ impl Agent for MyAgent {
         "My custom agent"
     }
 
+    // Required: leaf agents return an empty slice.
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
-        // Implementation
+        let mut event = Event::new(ctx.invocation_id());
+        event.author = self.name.clone();
+        event.llm_response.content = Some(Content::new("model").with_text("done"));
+        Ok(Box::pin(futures::stream::iter([Ok(event)])))
     }
 }
 ```
@@ -930,7 +1010,7 @@ pub use my_agent::MyAgent;
 
 1. **Enable tracing**:
    ```rust
-   adk_telemetry::init_telemetry();
+   adk_telemetry::init_telemetry("my-agent")?;
    ```
 
 2. **Inspect events**:

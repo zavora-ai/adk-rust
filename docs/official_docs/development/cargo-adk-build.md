@@ -4,7 +4,7 @@
 
 The `cargo adk build` command compiles your ADK-Rust agent project without deploying it. This gives you a fast way to verify that your agent compiles correctly — catching dependency issues, type errors, and configuration problems — before committing to a full deployment cycle.
 
-Use `cargo adk build` as part of your local development workflow and CI pipelines to validate changes early, without needing platform credentials or network access.
+Use `cargo adk build` as part of your local development workflow and CI pipelines to validate changes early, without platform credentials or a connection to the ADK platform.
 
 ## Command Syntax
 
@@ -12,7 +12,7 @@ Use `cargo adk build` as part of your local development workflow and CI pipeline
 cargo adk build [OPTIONS]
 ```
 
-The command wraps `cargo build --release` by default, targeting your agent project. On success, it reports the build profile, target directory, and binary size.
+The command runs `cargo build --release` by default (`cargo build` with `--debug`), targeting your agent project. On success, it reports the build profile, the target directory, and the size of each executable in it. The target directory reported is `target/<profile>` next to the manifest; a `CARGO_TARGET_DIR` or workspace target directory is not reflected.
 
 ## Flags and Options
 
@@ -41,18 +41,18 @@ cargo adk build --manifest-path /path/to/my-agent/Cargo.toml
 | Aspect | `cargo adk build` | `cargo adk deploy` |
 |--------|-------------------|-------------------|
 | **Purpose** | Compile and verify | Compile, bundle, and push to platform |
-| **Network required** | No | Yes (platform server) |
-| **Authentication** | None | Token required (`--token` or `ADK_DEPLOY_TOKEN`) |
+| **Platform server** | Not contacted | Required (`--server`, default `http://127.0.0.1:8090`) |
+| **Authentication** | None | `--token` or `ADK_DEPLOY_TOKEN`, cached credentials, or an ephemeral login |
 | **Output** | Local binary in `target/` | Deployment bundle uploaded to platform |
-| **Build profile** | Release (or debug with `--debug`) | Always release |
-| **Secrets handling** | None | Uploads secrets from `.env` |
+| **Build profile** | Release (or debug with `--debug`) | Always release (`--skip-build` uses the existing binary) |
+| **Secrets handling** | None | Uploads the secrets `adk-deploy.toml` declares, read from `.env` |
 | **Manifest required** | Only `Cargo.toml` | `Cargo.toml` + `adk-deploy.toml` |
 | **Use case** | Local dev, CI checks | Production deployment |
 
 ### When to use each
 
 - **`cargo adk build`** — Use during development to verify compilation, in CI pipelines as a gate before merge, or to check that dependency updates don't break your agent.
-- **`cargo adk deploy`** — Use when you're ready to ship your agent to the ADK platform. Deploy includes a build step internally (skippable with `--skip-build`).
+- **`cargo adk deploy`** — Use when you're ready to ship your agent to the ADK platform. Deploy includes a build step internally (skippable with `--skip-build`). `--dry-run` validates without pushing, but still authenticates against the platform server.
 
 ## Usage Examples
 
@@ -60,8 +60,8 @@ cargo adk build --manifest-path /path/to/my-agent/Cargo.toml
 
 ```bash
 $ cargo adk build
-   Compiling adk-core v0.9.2
-   Compiling adk-agent v0.9.2
+   Compiling adk-core v3.0.0
+   Compiling adk-agent v3.0.0
    Compiling my-agent v0.1.0 (/home/user/my-agent)
     Finished `release` profile [optimized] target(s) in 42.3s
 ✅ Build successful
@@ -131,23 +131,26 @@ Error: failed to run cargo build: No such file or directory (os error 2)
 cargo adk build --manifest-path ./my-agent/Cargo.toml
 ```
 
-### Feature flag conflicts
+### Unknown feature flags
 
-**Symptom:** Build fails due to incompatible feature combinations.
+**Symptom:** Build fails because a dependency does not have a requested feature.
 
 ```
-error: the package `my-agent` depends on `adk-realtime`, with features:
-       `openai-webrtc` but `openai-webrtc` is not a feature of `adk-realtime`
+error: failed to select a version for `adk-rust`.
+    ... required by package `my-agent v0.1.0 (/home/user/my-agent)`
+versions that meet the requirements `^3.0.0` are: 3.0.0
+
+package `my-agent` depends on `adk-rust` with feature `webrtc` but `adk-rust` does not have that feature.
 ```
 
-**Resolution:** Check that your feature flags match the available features for the ADK version you're using. Run `cargo doc -p adk-realtime --open` to see available features, or consult the [crate documentation](https://docs.rs/adk-realtime).
+**Resolution:** Check that your feature flags match the available features for the ADK version you're using. Cargo lists the available features after the error; the umbrella crate's features are described in the [crate documentation](https://docs.rs/adk-rust).
 
 ### Outdated lock file
 
 **Symptom:** Version resolution errors after upgrading ADK crates.
 
 ```
-error: failed to select a version for the requirement `adk-core = "^0.9.2"`
+error: failed to select a version for the requirement `adk-core = "^3.0.0"`
 ```
 
 **Resolution:** Update your lock file:
