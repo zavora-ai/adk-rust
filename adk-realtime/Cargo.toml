@@ -19,7 +19,9 @@ features = ["full", "heygen-avatar", "did-avatar", "integration"]
 
 [dependencies]
 # Core ADK dependencies
-adk-core.workspace = true
+# `rustls` makes `ensure_crypto_provider()` install aws-lc-rs before a connect builds TLS:
+# the `gemini` feature compiles in both rustls providers, so rustls cannot pick one.
+adk-core = { workspace = true, features = ["rustls"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["sync", "net", "time", "rt", "macros"] }

@@ -129,7 +129,6 @@ Gaps that remain open after the fixes in #848–#877: from the October 2026 revi
 | Gemini Live setup ignores generic config fields such as output caps and tool choice | Map `max_response_output_tokens` and `tool_choice`; add safety and thinking fields | parity review |
 | No `audioStreamEnd`, and the input sample rate is hard-coded to 16 kHz | Add `audio_stream_end`; take the rate from `AudioChunk.format` | parity review |
 | Transparent session resumption is not modelled | Add a `transparent` flag | parity review |
-| An `adk-realtime`-only build panics on Gemini Live connect with no process-level rustls `CryptoProvider` | Make `ensure_crypto_provider()` effective without `adk-core`'s `rustls` feature, or install the provider in `adk-realtime` | parity review |
 
 ### Gemini and Interactions
 

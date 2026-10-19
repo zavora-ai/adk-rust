@@ -178,6 +178,7 @@ async fn shutdown_writer(
 impl OpenAIRealtimeSession {
     /// Connect to OpenAI Realtime API.
     pub async fn connect(url: &str, api_key: &str, config: RealtimeConfig) -> Result<Self> {
+        adk_core::ensure_crypto_provider();
         // Parse URL and build request with auth header
         let uri: Uri =
             url.parse().map_err(|e| RealtimeError::connection(format!("Invalid URL: {}", e)))?;

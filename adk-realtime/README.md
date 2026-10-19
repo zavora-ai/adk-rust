@@ -136,7 +136,6 @@ share a name.
 
 ```toml
 adk-realtime = { version = "3.0.0", features = ["gemini"] }
-adk-core = { version = "3.0.0", features = ["rustls"] }
 ```
 
 ```rust
@@ -145,7 +144,6 @@ use adk_realtime::{RealtimeConfig, RealtimeModel};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    adk_core::ensure_crypto_provider();
     let backend = GeminiLiveBackend::studio(std::env::var("GOOGLE_API_KEY")?);
     let model = GeminiRealtimeModel::new(backend, "models/gemini-3.1-flash-live-preview");
 
@@ -155,16 +153,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The `gemini` feature compiles in more than one rustls crypto provider, so the program installs
-`aws-lc-rs` with `adk_core::ensure_crypto_provider()` (`adk-core` feature `rustls`) before it
-connects; without a process-level provider the connection panics.
+The `gemini` feature compiles in more than one rustls crypto provider, so `connect` installs
+`aws-lc-rs` as the process-level provider through `adk_core::ensure_crypto_provider()`; a
+provider the application installed first is kept.
 Gemini Live takes 16 kHz mono PCM16 input and returns 24 kHz mono PCM16 output.
 
 ### Vertex AI Live
 
 ```toml
 adk-realtime = { version = "3.0.0", features = ["vertex-live"] }
-adk-core = { version = "3.0.0", features = ["rustls"] }
 ```
 
 ```rust
@@ -173,7 +170,6 @@ use adk_realtime::{RealtimeConfig, RealtimeModel};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    adk_core::ensure_crypto_provider();
     // Application Default Credentials, for example from `gcloud auth application-default login`.
     let backend = GeminiLiveBackend::vertex_adc(std::env::var("GOOGLE_CLOUD_PROJECT")?, "us-central1")?;
     let model = GeminiRealtimeModel::new(backend, "gemini-live-2.5-flash-native-audio");

@@ -514,6 +514,7 @@ impl GeminiRealtimeSession {
         config: RealtimeConfig,
         schema_dialect: adk_gemini::GeminiSchemaDialect,
     ) -> Result<Self> {
+        adk_core::ensure_crypto_provider();
         let ws_stream = match &backend {
             GeminiLiveBackend::Studio { api_key } => {
                 let url = format!(
