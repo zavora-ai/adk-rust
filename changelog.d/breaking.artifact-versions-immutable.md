@@ -8,8 +8,9 @@
   listing. Artifacts saved earlier under the session id `user` are no longer reachable.
 - **`FileArtifactService` writes a new on-disk layout** (`adk-artifact`): artifact names
   are encoded injectively (`%`, `:`, the other characters Windows forbids in file names,
-  and the second `_` of every `__` become `%XX` escapes) and user-scoped artifacts live
-  under `{app}/{user}/user/` instead of `_user_scoped_`. Artifacts in the earlier layout
+  and the second `_` of every `__` become `%XX` escapes), so `a:b` and `a__b` no longer
+  share a directory and load each other's versions, and user-scoped artifacts live under
+  `{app}/{user}/user/` instead of `_user_scoped_`. Artifacts in the earlier layout
   are still loaded, listed, versioned, and deleted, and new versions of them continue
   their numbering in the new layout. Tools that read the directory tree directly need
   the new paths.

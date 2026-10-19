@@ -7,5 +7,7 @@
     `SessionLoop::with_pause_controls` no longer take a parking lot.
   - `ManagedCustomTool::execute` answers with a confirmation-pending response and ends the
     agent's turn instead of returning `pending_client_execution`.
-  - `ManagedSessionState` gains `record`, `pending`, and `durable_run_id`; build it with
-    `ManagedSessionState::new`.
+  - `ManagedSessionState` gains `record`, `pending`, and `durable_run_id`, so struct
+    literals must set them; `ManagedSessionState::new(events, run_state)` sets the defaults.
+  - `DefaultModelResolver` is no longer a unit struct; build it with
+    `DefaultModelResolver::new()` or `DefaultModelResolver::default()`.

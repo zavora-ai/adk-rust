@@ -11,9 +11,10 @@
   `SqliteAuditLogStore`, and `PostgresAuditLogStore`, proven by
   `audit_log_store_conformance_tests!`. `append` is a compare-and-swap on the log size
   (`audit_log.seq_conflict`), conflicting checkpoints are refused
-  (`audit_log.checkpoint_conflict`), and `prune` drops record bodies but keeps hashes.
+  (`audit_log.checkpoint_conflict`), `prune` drops record bodies but keeps hashes, and
+  `logs` lists log ids in byte order on every backend.
 - **`verify` and `adk-rust audit`** (`adk-auth`, `adk-cli`): `signed_audit::verify` reports
   flipped bytes, deleted, reordered, or truncated records, forks, untrusted signatures, and
-  rotations that are not dual-signed. `adk-rust audit verify` and `audit keygen` (feature `audit`,
-  on by default) and `audit export` (feature `audit-sql`) expose it on the command line;
-  a build without `audit` drops the subcommands and the `adk-auth` dependency.
+  rotations that are not dual-signed. `adk-rust audit verify` and `audit keygen` (feature
+  `audit`, on by default) and `audit export` (feature `audit-sql`) expose it on the command
+  line; a build without `audit` drops the subcommands and the `adk-auth` dependency.

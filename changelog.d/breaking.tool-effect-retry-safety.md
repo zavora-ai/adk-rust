@@ -3,11 +3,12 @@
   effect had happened, so a payment could be charged once per retry. `LlmAgent` and
   `CodeActAgent` now retry only a tool whose new `Tool::effect()` is `ReadOnly` or
   `Idempotent`, and only after a retryable error (`AdkError::is_retryable()`) or a
-  timeout. A tool that declares nothing is `NonIdempotent` and runs once; declare
-  `ToolEffect::Idempotent` to keep retrying it. The delay doubles per retry up to the new
-  `RetryBudget::max_delay`, with jitter, and each attempt gets a fresh tool context so a
-  retried attempt's state delta and escalation are discarded. A `RetryBudget` struct
-  literal must add `max_delay`; `RetryBudget::new` sets it.
+  timeout. `Tool::effect()` defaults to `ReadOnly` when `is_read_only()` is true and to
+  `NonIdempotent` otherwise, so such a tool runs once; declare `ToolEffect::Idempotent` to
+  keep retrying it. The delay doubles per retry up to the new `RetryBudget::max_delay`
+  (`RetryBudget::DEFAULT_MAX_DELAY`, 30 seconds), with jitter, and each attempt gets a fresh
+  tool context so a retried attempt's state delta and escalation are discarded. A
+  `RetryBudget` struct literal must add `max_delay`; `RetryBudget::new` sets it.
 - **`AgentTool` delegations ignore the parent's `tool_timeout`** (`adk-core`,
   `adk-agent`, `adk-tool`): a delegation was cut at the parent's five-minute default
   regardless of its own configuration. The new `Tool::timeout_override()` replaces the

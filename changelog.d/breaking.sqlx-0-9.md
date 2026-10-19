@@ -6,12 +6,12 @@
   `sslmode=verify-full` to verify it. Replace removed combined runtime/TLS flags in
   application manifests. Memory's pgvector integration moves to 0.4.2. See
   `docs/official_docs/migration/sqlx-0.9.md`.
-- **Migration registry identifiers** (`adk-session`, `adk-memory`): public SQL
-  migration runners require ASCII table names of at most 63 bytes, starting with a
-  letter or underscore, followed by letters, digits or underscores. Descriptions
-  are bound parameters and may contain apostrophes. Migration SQL bodies remain
-  trusted executable input. Existing database schemas are unchanged.
-- **No implicit `sqlx` and `pgvector` features** (`adk-session`, `adk-memory`): the
-  optional dependencies are enabled only through `sqlite`, `postgres`,
-  `sqlite-memory` and `database-memory`. Enable those instead of `sqlx` or
-  `pgvector`.
+- **Migration registry identifiers are validated** (`adk-session`, `adk-memory`): the
+  public SQL migration runners refuse a registry table name that is not an ASCII
+  identifier of at most 63 bytes, starting with a letter or underscore and followed by
+  letters, digits or underscores. Step descriptions are bound as parameters, so they
+  may contain apostrophes.
+- **No implicit `sqlx` and `pgvector` features** (`adk-session`, `adk-memory`,
+  `adk-graph`): the optional dependencies are enabled only through `sqlite` and
+  `postgres` (`adk-session`, `adk-graph`) and `sqlite-memory`, `graph-memory` and
+  `database-memory` (`adk-memory`). Enable those instead of `sqlx` or `pgvector`.

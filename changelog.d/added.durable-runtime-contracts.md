@@ -8,5 +8,3 @@
   `schedule_store_conformance_tests!`, `governance_state_store_conformance_tests!`).
   `schedule::plan_fires` applies `MissedFirePolicy`, and each fire time enqueues a run keyed
   `schedule:{id}:{fire_time}`; cron specs in IANA time zones need the new `cron` feature.
-- **Agent identity types** (`adk-core`): the `principal` module adds `AgentId`, `SubjectKind`,
-  `SubjectRef`, `AgentPrincipal`, and `ActingContext`.

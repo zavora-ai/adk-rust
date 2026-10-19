@@ -1,7 +1,8 @@
-- **Managed Agents webhooks use Standard Webhooks** (`adk-anthropic`): `verify_webhook`
-  takes `WebhookHeaders` (`webhook-id`, `webhook-timestamp`, `webhook-signature`) instead
-  of one signature string, and verifies the base64 `v1` HMAC-SHA256 over
-  `{id}.{timestamp}.{body}` against any of the header's space-separated signatures, with a
-  five-minute tolerance in both directions. `WebhookVerifier` sets the tolerance and
+- **Managed Agents webhooks use Standard Webhooks** (`adk-anthropic`): `verify_webhook` takes
+  `WebhookHeaders` (`webhook-id`, `webhook-timestamp`, `webhook-signature`) instead of one
+  signature string, and verifies the base64 `v1` HMAC-SHA256 over `{id}.{timestamp}.{body}`
+  against any of the header's space-separated signatures, with a five-minute tolerance in both
+  directions (`DEFAULT_WEBHOOK_TOLERANCE`). `WebhookVerifier` sets the tolerance and
   `WebhookHeaders::from_header_map` reads the headers. The previous scheme matched no real
-  delivery. `WebhookVerifyError` gains `MissingHeader` and `TimestampInFuture`.
+  delivery. `WebhookVerifyError` gains `MissingHeader` and `TimestampInFuture`, so an exhaustive
+  `match` on it needs both arms.

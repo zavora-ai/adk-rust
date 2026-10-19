@@ -5,4 +5,6 @@
   connection was free, so an idle pooled connection kept the lock and a second instance
   calling `migrate()` blocked until the first process exited. The new
   `migration::{pg_runner, sqlite_runner}::run_sql_migrations_on_connection` runs a
-  migration on a single connection.
+  migration on a single connection, and the now-public
+  `PostgresSessionService::ADVISORY_LOCK_KEY` and `PostgresMemoryService::ADVISORY_LOCK_KEY`
+  name the lock key, so operators can find it in `pg_locks`.

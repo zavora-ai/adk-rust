@@ -9,10 +9,13 @@
   in SQL (`state || delta`), SQLite reads and writes state inside `BEGIN IMMEDIATE`
   transactions, MongoDB merges with an `$mergeObjects` update pipeline, and Firestore
   merges inside its commit transaction. Redis writes only the delta's fields to the app
-  and user hashes and replaces the session state through a compare-and-set Lua script,
-  so the server must allow `EVAL`. Concurrent appends previously overwrote each other's
-  keys, and on SQLite failed with `database is locked`. A `null` delta value is stored as
-  `null` on every backend.
+  and user hashes and replaces the session state through a compare-and-set Lua script.
+  Neo4j stores each state key as its own node property,
+  written with `SET n += $delta` inside the append transaction; tiers that earlier releases
+  stored as one JSON object are still read, and a key written since overrides the same key
+  in that object. Concurrent appends previously overwrote each other's keys, and on SQLite
+  failed with `database is locked`. A `null` delta value is stored as `null` on every
+  backend.
 - **PostgreSQL baseline detection is limited to the current schema** (`adk-session`,
   `adk-memory`): `migrate()` counts a `sessions` or `memory_entries` table only in
   `current_schema()`. A table of that name in another schema of the same database was

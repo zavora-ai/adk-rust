@@ -5,6 +5,7 @@
   reads `ToolContext::user_scopes()`; `with_scope_guard` supplies another resolver or an
   audit sink.
 - **Payment tools report the caller's identity** (`adk-payments`): each tool records the
-  calling agent as the acting `CommerceActor` and passes the caller's session identity to
-  the commerce kernel, instead of the fixed actor `agent-tool` and no session. Status
-  lookups are bound to the caller's session.
+  acting agent's id (`urn:adk:agent:{app}/{agent}` unless configured) as the
+  `CommerceActor` and passes the caller's session identity to the commerce kernel, instead
+  of the fixed actor `agent-tool` and no session. Status lookups and intervention
+  continuations are bound to the caller's session.

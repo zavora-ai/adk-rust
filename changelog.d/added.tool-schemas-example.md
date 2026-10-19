@@ -1,4 +1,4 @@
-- **`tool_schemas` example** (`examples/tool_schemas`): `LlmAgent` + `Runner` with a
+- **`tool_schemas` example** (`examples/tool_schemas`): `LlmAgent` and `Runner` with a
   `#[tool]` tool against a scripted OpenAI-compatible server, a scripted Gemini server, and
   live OpenAI and Gemini, asserting that unknown and out-of-range arguments are rejected with
   an error the model corrects and the corrected call runs once, that Gemini receives the
