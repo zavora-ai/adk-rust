@@ -1,10 +1,7 @@
 //! # adk-mistralrs
 //!
-//! Native [mistral.rs](https://github.com/EricLBuehler/mistral.rs) integration for ADK-Rust,
-//! providing blazingly fast local LLM inference without external dependencies.
-//!
-//! This crate is published to [crates.io](https://crates.io/crates/adk-mistralrs) as a
-//! workspace member. GPU features (`cuda`, `metal`) are opt-in.
+//! Native [mistral.rs](https://github.com/EricLBuehler/mistral.rs) integration for ADK-Rust:
+//! local LLM inference inside the process, without a separate server.
 //!
 //! ```toml
 //! [dependencies]
@@ -13,147 +10,80 @@
 //!
 //! ## Features
 //!
-//! - **Native Rust Integration**: Direct embedding of mistral.rs, no daemon required
-//! - **ISQ (In-Situ Quantization)**: Quantize models on-the-fly at load time
-//! - **PagedAttention**: Memory-efficient attention for longer contexts
-//! - **Multi-Device Support**: CPU, CUDA, Metal acceleration
-//! - **Tool Calling**: Full function calling support via ADK interface
-//! - **LoRA/X-LoRA Adapters**: Fine-tuned model support with hot-swapping
-//! - **Vision Models**: Multimodal inference with image understanding
-//! - **Speech Models**: Text-to-speech synthesis with multi-speaker support
-//! - **Diffusion Models**: Image generation with FLUX models
-//! - **Embedding Models**: Semantic embeddings for RAG and search
-//! - **Multi-Model Serving**: Load and route to multiple models
-//! - **MCP Integration**: Connect to MCP servers for external tools
+//! - **In-process inference**: mistral.rs runs inside the application
+//! - **ISQ (in-situ quantization)**: quantize weights while loading
+//! - **PagedAttention**: memory-efficient attention for long contexts
+//! - **Devices**: CPU, CUDA, and Metal, with layer ranges split across GPUs
+//! - **Tool calling** through the ADK [`Llm`] interface
+//! - **LoRA and X-LoRA adapters** with runtime swapping
+//! - **Vision, speech, image generation, and embedding models**
+//! - **Multi-model serving** with routing by name
+//! - **MCP client** for external tools
 //!
-//! ## Quick Start
+//! ## Quick start
 //!
-//! ```rust,ignore
-//! use adk_mistralrs::{MistralRsModel, MistralRsConfig, ModelSource};
-//! use adk_core::Llm;
+//! ```rust,no_run
+//! use adk_core::{Content, Llm, LlmRequest};
+//! use adk_mistralrs::MistralRsModel;
+//! use futures::StreamExt;
 //!
-//! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
-//!     // Load a model from HuggingFace
-//!     let model = MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct").await?;
-//!
-//!     // Use with ADK agents
-//!     let agent = LlmAgent::builder()
-//!         .name("assistant")
-//!         .model(model)
-//!         .instruction("You are a helpful assistant.")
-//!         .build();
-//!
-//!     Ok(())
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let model = MistralRsModel::from_hf("Qwen/Qwen3-4B").await?;
+//! let request = LlmRequest::new(
+//!     "Qwen/Qwen3-4B",
+//!     vec![Content::new("user").with_text("Name one planet.")],
+//! );
+//! let mut responses = model.generate_content(request, false).await?;
+//! while let Some(response) = responses.next().await {
+//!     if let Some(content) = response?.content {
+//!         for part in &content.parts {
+//!             if let Some(text) = part.text() {
+//!                 print!("{text}");
+//!             }
+//!         }
+//!     }
 //! }
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! ## ISQ Quantization Example
+//! ## ISQ quantization
 //!
-//! Reduce memory usage by quantizing models on-the-fly:
+//! ```rust,no_run
+//! use adk_mistralrs::{MistralRsConfig, MistralRsModel, ModelSource, QuantizationLevel};
 //!
-//! ```rust,ignore
-//! use adk_mistralrs::{MistralRsModel, MistralRsConfig, ModelSource, QuantizationLevel};
-//!
+//! # #[tokio::main]
+//! # async fn main() -> adk_mistralrs::Result<()> {
 //! let config = MistralRsConfig::builder()
-//!     .model_source(ModelSource::huggingface("mistralai/Mistral-7B-v0.1"))
-//!     .isq(QuantizationLevel::Q4K)  // 4-bit quantization
-//!     .paged_attention(true)        // Memory-efficient attention
+//!     .model_source(ModelSource::huggingface("Qwen/Qwen3-4B"))
+//!     .isq(QuantizationLevel::Q4K)
+//!     .paged_attention(true)
 //!     .build();
-//!
 //! let model = MistralRsModel::new(config).await?;
+//! # let _ = model;
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! ## LoRA Adapter Example
+//! ## Module overview
 //!
-//! Load and hot-swap fine-tuned adapters:
+//! - [`MistralRsModel`] — text models implementing the ADK [`Llm`] trait
+//! - [`MistralRsConfig`], [`ModelSource`], [`QuantizationLevel`] — configuration
+//! - [`MistralRsAdapterModel`] — LoRA and X-LoRA adapters
+//! - [`MistralRsVisionModel`] — vision models
+//! - [`MistralRsEmbeddingModel`] — embedding models
+//! - [`MistralRsSpeechModel`] — speech synthesis
+//! - [`MistralRsDiffusionModel`] — image generation
+//! - [`MistralRsMultiModel`] — multi-model serving
+//! - [`McpClientConfig`] — MCP client configuration
+//! - [`convert`] — conversions between ADK and mistral.rs types
+//! - [`MistralRsError`] — errors
 //!
-//! ```rust,ignore
-//! use adk_mistralrs::{MistralRsAdapterModel, AdapterConfig, MistralRsConfig, ModelSource};
+//! ## Feature flags
 //!
-//! let config = MistralRsConfig::builder()
-//!     .model_source(ModelSource::huggingface("meta-llama/Llama-2-7b-hf"))
-//!     .adapter(AdapterConfig::lora("username/my-lora-adapter"))
-//!     .build();
-//!
-//! let model = MistralRsAdapterModel::new(config).await?;
-//!
-//! // List available adapters
-//! println!("Adapters: {:?}", model.available_adapters());
-//!
-//! // Swap adapters at runtime
-//! model.swap_adapter("another-adapter").await?;
-//! ```
-//!
-//! ## Vision Model Example
-//!
-//! Process images with vision-language models:
-//!
-//! ```rust,ignore
-//! use adk_mistralrs::MistralRsVisionModel;
-//!
-//! let model = MistralRsVisionModel::from_hf("microsoft/Phi-3.5-vision-instruct").await?;
-//!
-//! let image = image::open("photo.jpg")?;
-//! let response = model.generate_with_image(
-//!     "Describe this image in detail.",
-//!     vec![image],
-//! ).await?;
-//! ```
-//!
-//! ## Multi-Model Serving Example
-//!
-//! Load multiple models and route requests:
-//!
-//! ```rust,ignore
-//! use adk_mistralrs::{MistralRsMultiModel, MistralRsConfig, ModelSource};
-//!
-//! let mut multi = MistralRsMultiModel::new();
-//!
-//! // Add models
-//! multi.add_model("phi", MistralRsConfig::builder()
-//!     .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
-//!     .build()
-//! ).await?;
-//!
-//! multi.add_model("llama", MistralRsConfig::builder()
-//!     .model_source(ModelSource::huggingface("meta-llama/Llama-3.2-3B-Instruct"))
-//!     .build()
-//! ).await?;
-//!
-//! // Route requests by model name
-//! let response = multi.generate_with_model(Some("llama"), request, false).await?;
-//! ```
-//!
-//! ## Module Overview
-//!
-//! - `client` - Main [`MistralRsModel`] implementing the ADK [`Llm`] trait
-//! - `config` - Configuration types: [`MistralRsConfig`], [`ModelSource`], [`QuantizationLevel`]
-//! - `adapter` - LoRA/X-LoRA adapter support via [`MistralRsAdapterModel`]
-//! - `vision` - Vision model support via [`MistralRsVisionModel`]
-//! - `embedding` - Embedding model support via [`MistralRsEmbeddingModel`]
-//! - `speech` - Speech synthesis via [`MistralRsSpeechModel`]
-//! - `diffusion` - Image generation via [`MistralRsDiffusionModel`]
-//! - `multimodel` - Multi-model serving via [`MistralRsMultiModel`]
-//! - `mcp` - MCP client configuration via [`McpClientConfig`]
-//! - `convert` - Type conversion utilities between ADK and mistral.rs
-//! - `error` - Error types via [`MistralRsError`]
-//!
-//! ## Feature Flags
-//!
-//! Enable hardware acceleration with feature flags:
-//!
-//! ```toml
-//! [dependencies]
-//! adk-mistralrs = { version = "3.0.0", features = ["cuda"] }
-//! ```
-//!
-//! Available features:
-//! - `cuda` - NVIDIA CUDA acceleration
-//! - `metal` - Apple Metal acceleration (macOS)
-//! - `mkl` - Intel MKL acceleration
-//! - `accelerate` - Apple Accelerate framework
-//! - `flash-attn` - Flash Attention (requires CUDA)
+//! The default build runs on the CPU. `metal`, `accelerate`, `cuda`, `cudnn`, `flash-attn`,
+//! `nccl`, `mkl`, and `ring` pass through to mistral.rs; `reqwest` adds image loading from URLs.
 
 mod adapter;
 mod client;

@@ -5,12 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "mistral.rs integration for ADK-Rust - native local LLM inference with Gemma 4, Qwen 3.5, Voxtral, and 50+ model architectures"
+description = "mistral.rs integration for ADK-Rust: in-process local LLM inference with Gemma 4, Qwen 3.5, Voxtral, Llama 4, and more"
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/adk-mistralrs"
 readme = "README.md"
 keywords = ["ai", "agent", "adk", "llm", "local-inference"]
 categories = ["api-bindings", "asynchronous"]
-publish = true  # Now publishable! mistralrs is on crates.io as of v0.8.0
+
+[package.metadata.docs.rs]
+# GPU features need toolkits docs.rs does not have, so the docs build for the CPU.
+features = ["reqwest"]
 
 [dependencies]
 # ADK core dependencies
@@ -39,8 +44,6 @@ uuid = { version = "1.0", features = ["v4"] }
 base64 = "0.22"
 
 # mistral.rs - native Rust LLM inference engine
-# Published on crates.io since v0.8.0 (April 2026)
-# Supports: Gemma 4, Qwen 3.5, Voxtral, 50+ architectures, agentic runtime
 mistralrs = "0.8"
 
 # Optional HTTP client for URL image loading
