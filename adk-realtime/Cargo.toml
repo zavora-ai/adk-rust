@@ -11,6 +11,11 @@ documentation = "https://docs.rs/adk-realtime"
 keywords = ["adk", "ai", "realtime", "voice", "audio"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+# openai-webrtc builds the Opus C library with cmake and is left out.
+features = ["full", "heygen-avatar", "did-avatar", "integration"]
 
 [dependencies]
 # Core ADK dependencies

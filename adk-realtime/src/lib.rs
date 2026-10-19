@@ -1,20 +1,14 @@
 //! # adk-realtime
-#![allow(clippy::result_large_err)]
 //!
-//! Real-time bidirectional audio/video streaming for ADK agents.
+//! Real-time bidirectional audio streaming for ADK agents.
 //!
-//! This crate provides a unified interface for building voice-enabled AI agents
-//! using real-time streaming APIs from various providers (OpenAI, Gemini, etc.).
-//!
-//! ## Architecture
-//!
-//! `adk-realtime` follows the same pattern as OpenAI's Agents SDK, providing both
-//! a low-level session interface and a high-level `RealtimeAgent` that implements
-//! the standard ADK `Agent` trait.
+//! The crate offers a low-level session API ([`RealtimeModel`], [`RealtimeSession`]), an event
+//! loop with tool dispatch ([`RealtimeRunner`]), and [`RealtimeAgent`], which implements
+//! `adk_core::Agent` so a voice agent runs under the standard ADK runner.
 //!
 //! ```text
 //!                     ┌─────────────────────────────────────────┐
-//!                     │              Agent Trait                │
+//!                     │              Agent trait                │
 //!                     │  (name, description, run, sub_agents)   │
 //!                     └────────────────┬────────────────────────┘
 //!                                      │
@@ -26,57 +20,75 @@
 //!     └─────────────────┘    └───────────────────┘   └───────────────────┘
 //! ```
 //!
-//! ## Features
+//! ## Providers
 //!
-//! - **RealtimeAgent**: Implements `adk_core::Agent` with callbacks, tools, instructions
-//! - **Multiple Providers**: OpenAI Realtime API and Gemini Live API support
-//! - **Audio Streaming**: Bidirectional audio with various formats (PCM16, G711)
-//! - **Voice Activity Detection**: Server-side VAD for natural conversations
-//! - **Tool Calling**: Real-time function execution during voice sessions
+//! | Feature | Provider |
+//! |---------|----------|
+//! | `openai` | OpenAI Realtime API over WebSocket |
+//! | `openai-webrtc` | OpenAI Realtime API over WebRTC with Opus |
+//! | `gemini` | Gemini Live API |
+//! | `vertex-live` | Vertex AI Live API with Application Default Credentials |
+//! | `livekit` | LiveKit WebRTC bridge |
+//! | `heygen-avatar`, `did-avatar` | Video avatar providers |
+//! | `integration` | `IntegratedRealtimeRunner` with sessions, memory, and plugins |
 //!
-//! ## Example - Using RealtimeAgent (Recommended)
+//! No provider is enabled by default. Every tool call goes through
+//! `adk_core::authorize_tool_call`: the kill switch, the `ToolPolicy`, and confirmation.
 //!
-//! ```rust,ignore
-//! use adk_realtime::{RealtimeAgent, openai::OpenAIRealtimeModel};
-//! use adk_runner::Runner;
+//! ## Example: low-level session
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1");
-//!
-//!     let agent = RealtimeAgent::builder("voice_assistant")
-//!         .model(Arc::new(model))
-//!         .instruction("You are a helpful voice assistant.")
-//!         .voice("alloy")
-//!         .server_vad()
-//!         .tool(Arc::new(weather_tool))
-//!         .build()?;
-//!
-//!     // Use with standard ADK runner
-//!     let runner = Runner::new(Arc::new(agent));
-//!     runner.run(session, content).await?;
-//!
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ## Example - Using Low-Level Session API
-//!
-//! ```rust,ignore
-//! use adk_realtime::{RealtimeModel, RealtimeConfig, ServerEvent};
+//! ```rust,no_run
+//! # #[cfg(feature = "openai")]
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use adk_realtime::openai::OpenAIRealtimeModel;
+//! use adk_realtime::{RealtimeConfig, RealtimeModel, ServerEvent};
 //!
-//! let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1");
+//! let model = OpenAIRealtimeModel::new(std::env::var("OPENAI_API_KEY")?, "gpt-realtime-2.1");
+//! let config = RealtimeConfig::default()
+//!     .with_instruction("Answer in one sentence.")
+//!     .with_modalities(vec!["text".to_string()]);
+//!
 //! let session = model.connect(config).await?;
-//!
+//! session.send_text("Name one planet.").await?;
+//! session.create_response().await?;
 //! while let Some(event) = session.next_event().await {
 //!     match event? {
-//!         ServerEvent::AudioDelta { delta, .. } => { /* play audio */ }
-//!         ServerEvent::TextDelta { delta, .. } => println!("{}", delta),
+//!         ServerEvent::TextDelta { delta, .. } => print!("{delta}"),
+//!         ServerEvent::ResponseDone { .. } => break,
 //!         _ => {}
 //!     }
 //! }
+//! # Ok(())
+//! # }
+//! # #[cfg(not(feature = "openai"))]
+//! # fn main() {}
 //! ```
+//!
+//! ## Example: RealtimeAgent
+//!
+//! ```rust,no_run
+//! # #[cfg(feature = "openai")]
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use adk_realtime::RealtimeAgent;
+//! use adk_realtime::openai::OpenAIRealtimeModel;
+//! use std::sync::Arc;
+//!
+//! let model = Arc::new(OpenAIRealtimeModel::new("sk-...", "gpt-realtime-2.1"));
+//! let agent = RealtimeAgent::builder("voice_assistant")
+//!     .model(model)
+//!     .instruction("You are a helpful voice assistant.")
+//!     .voice("alloy")
+//!     .server_vad()
+//!     .build()?;
+//! # let _ = agent;
+//! # Ok(())
+//! # }
+//! # #[cfg(not(feature = "openai"))]
+//! # fn main() {}
+//! ```
+
+#![allow(clippy::result_large_err)]
 
 pub mod agent;
 pub mod audio;

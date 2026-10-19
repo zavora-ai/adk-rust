@@ -4,88 +4,116 @@ Real-time bidirectional audio streaming for Rust Agent Development Kit (ADK-Rust
 
 [![Crates.io](https://img.shields.io/crates/v/adk-realtime.svg)](https://crates.io/crates/adk-realtime)
 [![Documentation](https://docs.rs/adk-realtime/badge.svg)](https://docs.rs/adk-realtime)
-[![License](https://img.shields.io/crates/l/adk-realtime.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-realtime.svg)](../LICENSE)
 
 ## Overview
 
-`adk-realtime` provides a unified interface for building voice-enabled AI agents using real-time streaming APIs. It follows the **OpenAI Agents SDK pattern** with a separate, decoupled implementation that integrates seamlessly with the ADK agent ecosystem.
+`adk-realtime` connects voice agents to real-time streaming APIs. It offers a low-level session
+API (`RealtimeModel`, `RealtimeSession`), an event loop with tool dispatch (`RealtimeRunner`), and
+`RealtimeAgent`, which implements `adk_core::Agent` so a voice agent runs under the standard ADK
+runner.
 
 ## Features
 
-- **RealtimeAgent** — Implements `adk_core::Agent` with full callback/tool/instruction support
-- **Multiple Providers** — OpenAI Realtime API, Gemini Live API, Vertex AI Live API
-- **Multiple Transports** — WebSocket, WebRTC (OpenAI), LiveKit bridge
-- **Audio Streaming** — Bidirectional audio with PCM16, G711, Opus formats
-- **Voice Activity Detection** — Server-side VAD for natural conversation flow
-- **Tool Calling** — Real-time function/tool execution during voice conversations
-- **Agent Handoff** — Transfer between agents using `sub_agents`
-- **Context Mutation** — Swap instructions and tools mid-session without dropping the call (OpenAI: in-place update, Gemini: session resumption)
-- **Zero-Allocation LiveKit Audio** — `bytemuck` zero-copy PCM path for LiveKit output
-- **Interruption Detection** — `Manual` or `Automatic` VAD-based interruption handling
-- **Feature Flags** — Pay only for what you use; all transports are opt-in
+- **RealtimeAgent** — implements `adk_core::Agent` with instructions, tools, sub-agent handoff,
+  and agent and tool callbacks
+- **Providers** — OpenAI Realtime API, Gemini Live API, Vertex AI Live API
+- **Transports** — WebSocket, WebRTC (OpenAI), and a LiveKit bridge
+- **Audio** — PCM16 and G.711 (µ-law, A-law) encodings; Opus on the WebRTC transport
+- **Voice activity detection** — server-side VAD, and `Manual` or `Automatic` interruption handling
+- **Governed tool calls** — every tool call goes through `adk_core::authorize_tool_call`: the kill
+  switch, the `ToolPolicy`, and confirmation
+- **Context mutation** — swap instructions and tools mid-session (OpenAI: in-place update; Gemini:
+  session resumption)
+- **Video avatars** — HeyGen and D-ID providers (`heygen-avatar`, `did-avatar`)
+- **Opt-in dependencies** — no provider or transport is compiled by default
 
 ## Architecture
 
-```
+```text
               ┌─────────────────────────────────────────┐
-              │              Agent Trait                 │
-              │  (name, description, run, sub_agents)    │
+              │              Agent trait                │
+              │  (name, description, run, sub_agents)   │
               └────────────────┬────────────────────────┘
                                │
        ┌───────────────────────┼───────────────────────┐
        │                       │                       │
 ┌──────▼──────┐      ┌─────────▼─────────┐   ┌─────────▼─────────┐
 │  LlmAgent   │      │  RealtimeAgent    │   │  SequentialAgent  │
-│ (text-based) │      │  (voice-based)    │   │   (workflow)      │
+│ (text-based)│      │  (voice-based)    │   │   (workflow)      │
 └─────────────┘      └───────────────────┘   └───────────────────┘
-```
 
-### Transport Layer
-
-```
 ┌──────────────────────────────────────────────────────────────┐
-│                    RealtimeSession trait                      │
+│                    RealtimeSession trait                     │
 ├──────────────┬──────────────┬──────────────┬─────────────────┤
 │ OpenAI WS    │ OpenAI WebRTC│ Gemini Live  │ Vertex AI Live  │
 │ (openai)     │ (openai-     │ (gemini)     │ (vertex-live)   │
 │              │  webrtc)     │              │                 │
 └──────────────┴──────────────┴──────────────┴─────────────────┘
-
-┌──────────────────────────────────────────────────────────────┐
-│              LiveKit WebRTC Bridge (livekit)                  │
-│  LiveKitEventHandler · bridge_input · bridge_gemini_input    │
-└──────────────────────────────────────────────────────────────┘
 ```
 
-## Supported Providers & Transports
+## Providers and transports
 
-| Provider | Model | Transport | Feature Flag | Description |
-|----------|-------|-----------|--------------|-------------|
-| OpenAI | `gpt-realtime-2.1` | WebSocket | `openai` | Current production realtime model |
-| OpenAI | `gpt-realtime-2.1` | WebRTC | `openai-webrtc` | Browser-grade transport with Opus codec |
-| Google | `gemini-3.1-flash-live-preview` | WebSocket | `gemini` | Gemini Live API |
-| Google | Gemini via Vertex AI | WebSocket + OAuth2 | `vertex-live` | Vertex AI Live with ADC authentication |
-| LiveKit | Any (bridge) | WebRTC | `livekit` | Production WebRTC bridge to Gemini/OpenAI |
+| Provider | Model | Transport | Feature |
+|----------|-------|-----------|---------|
+| OpenAI | `gpt-realtime-2.1` | WebSocket | `openai` |
+| OpenAI | `gpt-realtime-2.1` | WebRTC with Opus | `openai-webrtc` |
+| Google Gemini Live | `gemini-3.1-flash-live-preview` | WebSocket | `gemini` |
+| Vertex AI Live | for example `gemini-live-2.5-flash-native-audio` | WebSocket with OAuth2 (ADC) | `vertex-live` |
+| LiveKit | any of the above | WebRTC bridge | `livekit` |
 
 ## Quick Start
-
-Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 adk-realtime = { version = "3.0.0", features = ["openai"] }
 ```
 
-### Using RealtimeAgent (Recommended)
+### Low-level session
+
+The program sends one text turn and prints the text reply.
 
 ```rust
-use adk_realtime::{RealtimeAgent, openai::OpenAIRealtimeModel};
-use std::sync::Arc;
+use adk_realtime::openai::OpenAIRealtimeModel;
+use adk_realtime::{RealtimeConfig, RealtimeModel, ServerEvent};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key = std::env::var("OPENAI_API_KEY")?;
-    let model = Arc::new(OpenAIRealtimeModel::new(&api_key, "gpt-realtime-2.1"));
+    let model = OpenAIRealtimeModel::new(std::env::var("OPENAI_API_KEY")?, "gpt-realtime-2.1");
+
+    let config = RealtimeConfig::default()
+        .with_instruction("You are a helpful assistant. Answer in one sentence.")
+        .with_modalities(vec!["text".to_string()]);
+
+    let session = model.connect(config).await?;
+    session.send_text("Name one planet.").await?;
+    session.create_response().await?;
+
+    while let Some(event) = session.next_event().await {
+        match event? {
+            ServerEvent::TextDelta { delta, .. } => print!("{delta}"),
+            ServerEvent::AudioDelta { .. } => { /* play audio */ }
+            ServerEvent::ResponseDone { .. } => break,
+            _ => {}
+        }
+    }
+    println!();
+    session.close().await?;
+    Ok(())
+}
+```
+
+### RealtimeAgent
+
+`RealtimeAgent` implements `adk_core::Agent`, so `adk_runner::Runner` runs it like any other agent.
+
+```rust
+use adk_realtime::RealtimeAgent;
+use adk_realtime::openai::OpenAIRealtimeModel;
+use std::sync::Arc;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let model = Arc::new(OpenAIRealtimeModel::new(std::env::var("OPENAI_API_KEY")?, "gpt-realtime-2.1"));
 
     let agent = RealtimeAgent::builder("voice_assistant")
         .model(model)
@@ -94,78 +122,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .server_vad()
         .build()?;
 
-    // RealtimeAgent implements the Agent trait — use with ADK runner
+    println!("built {}", adk_core::Agent::name(&agent));
     Ok(())
 }
 ```
 
-### Using Low-Level Session API
+`RealtimeAgentBuilder::build` fails with `agent.duplicate_tool_name` when two registered tools
+share a name.
 
-```rust
-use adk_realtime::{RealtimeModel, RealtimeConfig, ServerEvent};
-use adk_realtime::openai::OpenAIRealtimeModel;
+## Transport guides
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = OpenAIRealtimeModel::new(
-        std::env::var("OPENAI_API_KEY")?,
-        "gpt-realtime-2.1",
-    );
-
-    let config = RealtimeConfig::default()
-        .with_instruction("You are a helpful voice assistant.")
-        .with_voice("alloy");
-
-    let session = model.connect(config).await?;
-    session.send_text("Hello!").await?;
-    session.create_response().await?;
-
-    while let Some(event) = session.next_event().await {
-        match event? {
-            ServerEvent::AudioDelta { delta, .. } => { /* play audio */ }
-            ServerEvent::TextDelta { delta, .. } => print!("{}", delta),
-            _ => {}
-        }
-    }
-    Ok(())
-}
-```
-
-## Transport Guides
-
-### Vertex AI Live
-
-Connect to Gemini Live API via Vertex AI with Application Default Credentials:
+### Gemini Live
 
 ```toml
-adk-realtime = { version = "3.0.0", features = ["vertex-live"] }
+adk-realtime = { version = "3.0.0", features = ["gemini"] }
+adk-core = { version = "3.0.0", features = ["rustls"] }
 ```
 
 ```rust
 use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};
+use adk_realtime::{RealtimeConfig, RealtimeModel};
 
-// Convenience constructor — auto-discovers ADC credentials
-let backend = GeminiLiveBackend::vertex_adc("my-project", "us-central1")?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    adk_core::ensure_crypto_provider();
+    let backend = GeminiLiveBackend::studio(std::env::var("GOOGLE_API_KEY")?);
+    let model = GeminiRealtimeModel::new(backend, "models/gemini-3.1-flash-live-preview");
 
-// Or manual credentials construction
-let credentials = google_cloud_auth::credentials::Credentials::default().await?;
-let backend = GeminiLiveBackend::Vertex {
-    credentials,
-    region: "us-central1".into(),
-    project_id: std::env::var("GOOGLE_CLOUD_PROJECT")?,
-};
-
-let model = GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio");
-let session = model.connect(config).await?;
+    let session = model.connect(RealtimeConfig::default().with_instruction("You are concise.")).await?;
+    session.close().await?;
+    Ok(())
+}
 ```
 
-Prerequisites:
-- Google Cloud project with Vertex AI API enabled
-- ADC configured (`gcloud auth application-default login`)
+The `gemini` feature compiles in more than one rustls crypto provider, so the program installs
+`aws-lc-rs` with `adk_core::ensure_crypto_provider()` (`adk-core` feature `rustls`) before it
+connects; without a process-level provider the connection panics.
+Gemini Live takes 16 kHz mono PCM16 input and returns 24 kHz mono PCM16 output.
+
+### Vertex AI Live
+
+```toml
+adk-realtime = { version = "3.0.0", features = ["vertex-live"] }
+adk-core = { version = "3.0.0", features = ["rustls"] }
+```
+
+```rust
+use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};
+use adk_realtime::{RealtimeConfig, RealtimeModel};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    adk_core::ensure_crypto_provider();
+    // Application Default Credentials, for example from `gcloud auth application-default login`.
+    let backend = GeminiLiveBackend::vertex_adc(std::env::var("GOOGLE_CLOUD_PROJECT")?, "us-central1")?;
+    let model = GeminiRealtimeModel::new(backend, "gemini-live-2.5-flash-native-audio");
+
+    let session = model.connect(RealtimeConfig::default()).await?;
+    session.close().await?;
+    Ok(())
+}
+```
+
+`GeminiLiveBackend::Vertex { credentials, region, project_id }` takes credentials you built
+yourself, and `gemini::build_vertex_live_url(region, project_id)` returns the endpoint.
 
 ### OpenAI WebRTC
-
-Lower-latency audio transport using Sans-IO WebRTC with Opus codec:
 
 ```toml
 adk-realtime = { version = "3.0.0", features = ["openai-webrtc"] }
@@ -173,294 +195,215 @@ adk-realtime = { version = "3.0.0", features = ["openai-webrtc"] }
 
 ```rust
 use adk_realtime::openai::{OpenAIRealtimeModel, OpenAITransport};
+use adk_realtime::{RealtimeConfig, RealtimeModel};
 
-let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1")
-    .with_transport(OpenAITransport::WebRTC);
-let session = model.connect(config).await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let model = OpenAIRealtimeModel::new(std::env::var("OPENAI_API_KEY")?, "gpt-realtime-2.1")
+        .with_transport(OpenAITransport::WebRTC);
+
+    let session = model.connect(RealtimeConfig::default()).await?;
+    session.close().await?;
+    Ok(())
+}
 ```
 
-Build requirement: `cmake` must be installed (the `audiopus` crate builds the Opus C library from source). With cmake >= 4.0, set the environment variable:
+`openai-webrtc` builds the Opus C library from source through `audiopus`, so `cmake` must be
+installed. With cmake 4.0 or later, set `CMAKE_POLICY_VERSION_MINIMUM=3.5`.
 
-```bash
-export CMAKE_POLICY_VERSION_MINIMUM=3.5
-```
-
-### LiveKit WebRTC Bridge
-
-Bridge any `EventHandler` to a LiveKit room for production voice apps:
+### LiveKit bridge
 
 ```toml
 adk-realtime = { version = "3.0.0", features = ["livekit", "openai"] }
 ```
 
-#### LiveKitConfig and LiveKitRoomBuilder
-
-Use the typestate builder for secure room connections. Credentials are stored with `secrecy::SecretString` and redacted in Debug output:
+`LiveKitRoomBuilder` is a typestate builder: `connect()` is available once `identity` is set.
+`LiveKitConfig` keeps the API key and secret as `secrecy::SecretString` and redacts them in
+`Debug` output.
 
 ```rust
 use adk_realtime::livekit::{LiveKitConfig, LiveKitRoomBuilder};
 
-let config = LiveKitConfig::new(
-    "wss://your-server.livekit.cloud",
-    std::env::var("LIVEKIT_API_KEY")?,
-    std::env::var("LIVEKIT_API_SECRET")?,
-)?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = LiveKitConfig::new(
+        "wss://your-server.livekit.cloud",
+        std::env::var("LIVEKIT_API_KEY")?,
+        std::env::var("LIVEKIT_API_SECRET")?,
+    )?;
 
-let bundle = LiveKitRoomBuilder::new(config)
-    .identity("my-agent")           // required — enables connect()
-    .name("Voice Agent")            // optional display name
-    .room_name("session-room-123")  // optional — auto-generated if omitted
-    .with_audio(24_000, 1)          // publish a local audio track
-    .connect()
-    .await?;
+    let bundle = LiveKitRoomBuilder::new(config)
+        .identity("my-agent")
+        .name("Voice Agent")
+        .room_name("session-room-123")
+        .with_audio(24_000, 1)
+        .connect()
+        .await?;
+
+    println!("joined {}", bundle.room.name());
+    Ok(())
+}
 ```
 
-#### Bridging Audio
+`LiveKitEventHandler::new(inner, audio_source, sample_rate, channels)` wraps an `EventHandler`
+and publishes model audio to the room. `bridge_input(track, &runner)` feeds a participant's audio
+track into a `RealtimeRunner`; `bridge_gemini_input` does the same at Gemini's 16 kHz.
+
+## Mid-session context mutation
+
+`RealtimeRunner::update_session` swaps instructions and tools without dropping the call:
 
 ```rust
-use adk_realtime::livekit::{LiveKitEventHandler, bridge_input};
+use adk_realtime::RealtimeRunner;
+use adk_realtime::config::{RealtimeConfig, SessionUpdateConfig};
 
-// Wrap your event handler to publish model audio to LiveKit
-let lk_handler = LiveKitEventHandler::new(inner_handler, audio_source, 24000, 1);
-
-// Bridge participant audio from LiveKit into the RealtimeRunner
-tokio::spawn(bridge_input(remote_track, runner));
+async fn become_billing_agent(runner: &RealtimeRunner) -> adk_realtime::Result<()> {
+    let update = SessionUpdateConfig(
+        RealtimeConfig::default().with_instruction("You are now a billing specialist."),
+    );
+    runner.update_session(update).await
+}
 ```
 
-For Gemini's 16 kHz format, use `bridge_gemini_input` instead.
+| Provider | Outcome |
+|----------|---------|
+| OpenAI | Updates the session in place with `session.update` (`ContextMutationOutcome::Applied`) |
+| Gemini | Queues a transport resumption that runs when the session is idle (`ContextMutationOutcome::RequiresResumption`); a newer update replaces a pending one |
 
-## Mid-Session Context Mutation
+See [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md) and the `openai_session_update` and
+`gemini_context_mutation` examples.
 
-Swap instructions and tools during a live voice session without dropping the call:
+## Interruption detection
 
 ```rust
-use adk_realtime::config::{SessionUpdateConfig, RealtimeConfig};
+use adk_realtime::{InterruptionDetection, RealtimeConfig};
 
-// Create a delta config with only the fields you want to change
-let update = SessionUpdateConfig(
-    RealtimeConfig::default()
-        .with_instruction("You are now a billing specialist.")
-);
-
-// Apply mid-session — provider handles the rest
-runner.update_session(update).await?;
+fn main() {
+    let config = RealtimeConfig::default().with_interruption_detection(InterruptionDetection::Automatic);
+    assert_eq!(config.interruption_detection, Some(InterruptionDetection::Automatic));
+}
 ```
 
-The runner handles provider differences automatically:
-- **OpenAI**: Updates the session in place via `session.update` → `ContextMutationOutcome::Applied`
-- **Gemini**: Queues a session resumption with `SessionResumptionConfig` → `ContextMutationOutcome::RequiresResumption`
+- `Manual` (default): the application cancels responses explicitly.
+- `Automatic`: VAD detects the start of user speech and cancels the agent's audio output.
 
-See `SESSION_MANAGEMENT.md` for the full architecture and `examples/openai_session_update.rs` / `examples/gemini_context_mutation.rs` for working examples.
+## Tool governance
 
-## Interruption Detection
+`RealtimeAgent`, `RealtimeRunner`, and `IntegratedRealtimeRunner` (`integration` feature) dispatch
+every tool call through `adk_core::authorize_tool_call`. `RealtimeAgent` reads the kill switch,
+`ToolPolicy`, and confirmation from the run's `RunConfig` and runs the runner's plugin callbacks;
+the runners take them from `tool_governance` on their builders.
 
-Control how VAD handles user interruptions:
+| Behaviour | Rule |
+|-----------|------|
+| Tool timeout | `tool_timeout(duration)` answers a call that runs too long with an error; the default is five minutes |
+| Malformed arguments | Arguments that are not valid JSON are answered with an error and the tool does not run |
+| Tool and callback errors | The model receives the error's component, category, and code; `expose_tool_error_messages(true)` sends the full message |
+| After-tool failure | An after-tool callback or plugin error withholds the result (`result_withheld`) |
+| Result screening | `tool_result_screen(screen)` rewrites or withholds each result before the model sees it; a screen that cannot decide withholds the result |
 
-```rust
-use adk_realtime::InterruptionDetection;
+## RealtimeAgent builder
 
-let config = RealtimeConfig::default()
-    .with_interruption_detection(InterruptionDetection::Automatic);
-```
+| Method | Description |
+|--------|-------------|
+| `instruction(str)`, `instruction_provider(fn)` | Static or dynamic system instruction |
+| `global_instruction(str)`, `global_instruction_provider(fn)` | Global instruction, prepended |
+| `tool(Arc<dyn Tool>)`, `toolset(Arc<dyn Toolset>)` | Register tools |
+| `sub_agent(Arc<dyn Agent>)` | Register a sub-agent for handoff |
+| `before_agent_callback`, `after_agent_callback` | Agent callbacks |
+| `before_tool_callback`, `after_tool_callback` | Tool callbacks |
+| `tool_timeout`, `tool_result_screen`, `expose_tool_error_messages` | See [Tool governance](#tool-governance) |
+| `voice(str)` | Voice, such as `"alloy"` |
+| `server_vad()`, `vad(VadConfig)` | Server-side VAD with defaults, or custom VAD |
+| `modalities(vec)` | Output modalities, such as `["text", "audio"]` |
+| `on_audio`, `on_transcript`, `on_speech_started`, `on_speech_stopped` | Event callbacks |
+| `avatar(AvatarConfig)`, `avatar_provider(provider)` | Video avatar (`video-avatar`) |
 
-- `Manual` (default): Application calls cancellation explicitly
-- `Automatic`: VAD detects user speech onset and cancels agent audio output
+## Events
 
-## Feature Flags
+| Server event | Description |
+|--------------|-------------|
+| `SessionCreated`, `SessionUpdated` | Session established or updated |
+| `AudioDelta`, `AudioDone` | Output audio chunk, end of output audio |
+| `TextDelta`, `TextDone` | Text response chunk, end of text |
+| `TranscriptDelta`, `TranscriptDone` | Transcript of the output audio |
+| `InputTranscriptDelta`, `InputTranscriptCompleted` | Transcript of the user's input audio |
+| `FunctionCallDelta`, `FunctionCallDone` | Tool call arguments, completed tool call |
+| `ResponseCreated`, `ResponseDone` | Response started, response completed |
+| `SpeechStarted`, `SpeechStopped` | VAD detected speech or silence |
+| `Error` | Provider error |
+| `Unknown` | An event type this version does not model |
 
-| Flag | Dependencies | Description |
-|------|-------------|-------------|
-| `openai` | `async-openai`, `tokio-tungstenite` | OpenAI Realtime API (WebSocket) |
-| `gemini` | `tokio-tungstenite`, `adk-gemini` | Gemini Live API (AI Studio) |
-| `vertex-live` | `gemini` + `google-cloud-auth` | Vertex AI Live API (OAuth2/ADC) |
-| `livekit` | `livekit`, `livekit-api` | LiveKit WebRTC bridge |
-| `openai-webrtc` | `openai` + `str0m`, `audiopus`, `reqwest` | OpenAI WebRTC transport (requires cmake) |
-| `full` | all of the above except openai-webrtc | Everything that doesn't require cmake |
-| `full-webrtc` | `full` + `openai-webrtc` | Everything including WebRTC (requires cmake) |
+| Client event | Description |
+|--------------|-------------|
+| `AudioDelta` | Append audio to the input buffer |
+| `InputAudioBufferCommit`, `InputAudioBufferClear` | Commit or clear the input buffer |
+| `ConversationItemCreate` | Send a text message or tool response |
+| `ResponseCreate`, `ResponseCancel` | Request or cancel a response |
+| `SessionUpdate` | Update the session configuration |
 
-Default features: none. You opt in to exactly what you need.
+## Audio formats
 
+| Encoding | Sample rate | Provider |
+|----------|-------------|----------|
+| PCM16 mono | 24 kHz | OpenAI input and output, Gemini output |
+| PCM16 mono | 16 kHz | Gemini input |
+| G.711 µ-law, A-law | 8 kHz | OpenAI |
+| Opus | 24 kHz mono | OpenAI WebRTC |
 
-### Feature Flag Dependency Graph
+## Feature flags
 
-```
-vertex-live  ──► gemini + google-cloud-auth
-openai-webrtc ──► openai + str0m + audiopus + reqwest
-livekit      ──► livekit + livekit-api
-full         ──► openai + gemini + vertex-live + livekit
-full-webrtc  ──► full + openai-webrtc
-```
+| Feature | Enables | Requires |
+|---------|---------|----------|
+| `openai` | OpenAI Realtime API over WebSocket | |
+| `gemini` | Gemini Live API over WebSocket | |
+| `vertex-live` | Vertex AI Live API with ADC (implies `gemini`) | GCP credentials |
+| `openai-webrtc` | OpenAI WebRTC transport with Opus (implies `openai`) | cmake |
+| `livekit` | LiveKit WebRTC bridge | a LiveKit server |
+| `video-avatar` | Avatar configuration and the `AvatarProvider` trait | |
+| `heygen-avatar` | HeyGen LiveAvatar provider (implies `video-avatar`, `livekit`) | |
+| `did-avatar` | D-ID Realtime Agents provider (implies `video-avatar`) | |
+| `integration` | `IntegratedRealtimeRunner`: sessions, memory, and plugins around `RealtimeRunner` | |
+| `record-payloads` | Quotes provider frames in OpenAI schema-drift warnings; without it they are redacted | |
+| `full` | `openai`, `gemini`, `vertex-live`, `livekit` | |
+| `full-webrtc` | `full` and `openai-webrtc` | cmake |
 
-## RealtimeAgent Features
-
-### Shared with LlmAgent
-
-| Feature | Description |
-|---------|-------------|
-| `instruction(str)` | Static system instruction |
-| `instruction_provider(fn)` | Dynamic instruction based on context |
-| `global_instruction(str)` | Global instruction (prepended) |
-| `tool(Arc<dyn Tool>)` | Register a tool |
-| `sub_agent(Arc<dyn Agent>)` | Register sub-agent for handoffs |
-| `before_agent_callback` | Called before agent runs |
-| `after_agent_callback` | Called after agent completes |
-| `before_tool_callback` | Called before tool execution |
-| `after_tool_callback` | Called after tool execution |
-| `tool_timeout(duration)` | Answer a tool call that runs too long with an error (default 5 min) |
-| `tool_result_screen(screen)` | Rewrite or withhold each tool result before the model and the session see it; a failing screen withholds it (`adk_guardrail::ToolGuardrailSet` is a screen) |
-| `expose_tool_error_messages(bool)` | Send tool and callback error messages to the model (default: component, category, and code only) |
-| Run-wide governance | The run's `ToolPolicy`, kill switch, confirmation, and runner plugin hooks apply to every tool call |
-
-### Realtime-Specific
-
-| Feature | Description |
-|---------|-------------|
-| `voice(str)` | Voice selection ("alloy", "coral", "sage", etc.) |
-| `server_vad()` | Enable server-side VAD with defaults |
-| `vad(VadConfig)` | Custom VAD configuration |
-| `modalities(vec)` | Output modalities (["text", "audio"]) |
-| `on_audio(callback)` | Callback for audio output events |
-| `on_transcript(callback)` | Callback for transcript events |
-| `on_speech_started(callback)` | Callback when speech detected |
-| `on_speech_stopped(callback)` | Callback when speech ends |
-
-## Event Types
-
-### Server Events
-
-| Event | Description |
-|-------|-------------|
-| `SessionCreated` | Connection established |
-| `AudioDelta` | Audio chunk (base64 PCM or Opus) |
-| `TextDelta` | Text response chunk |
-| `TranscriptDelta` | Input audio transcript |
-| `FunctionCallDone` | Tool call request |
-| `ResponseDone` | Response completed |
-| `SpeechStarted` | VAD detected speech |
-| `SpeechStopped` | VAD detected silence |
-| `Error` | Error occurred |
-
-### Client Events
-
-| Event | Description |
-|-------|-------------|
-| `AudioAppend` | Send audio chunk |
-| `AudioCommit` | Commit audio buffer |
-| `ItemCreate` | Send text or tool response |
-| `ResponseCreate` | Request a response |
-| `ResponseCancel` | Interrupt response |
-| `SessionUpdate` | Update configuration |
-
-## Audio Formats
-
-| Format | Sample Rate | Bits | Channels | Provider |
-|--------|-------------|------|----------|----------|
-| PCM16 | 24000 Hz | 16 | Mono | OpenAI |
-| PCM16 | 16000 Hz | 16 | Mono | Gemini (input) |
-| PCM16 | 24000 Hz | 16 | Mono | Gemini (output) |
-| Opus | 24000 Hz | — | Mono | OpenAI WebRTC |
-| G711 u-law | 8000 Hz | 8 | Mono | OpenAI |
-| G711 A-law | 8000 Hz | 8 | Mono | OpenAI |
-
-## Error Types
-
-Transport-specific error variants with actionable context:
-
-| Variant | Feature | Description |
-|---------|---------|-------------|
-| `OpusCodecError` | `openai-webrtc` | Opus encoding/decoding failures |
-| `WebRTCError` | `openai-webrtc` | WebRTC connection and signaling failures |
-| `LiveKitError` | `livekit` | LiveKit bridge failures |
-| `AuthError` | `vertex-live` | OAuth2/ADC credential failures |
-| `ConfigError` | all | Missing or invalid configuration |
-| `ConnectionError` | all | Transport connection failures |
+No feature is enabled by default.
 
 ## Examples
 
 ```bash
-# Vertex AI Live voice assistant (requires ADC + GCP project)
-cargo run --example vertex_live_voice --features vertex-live
+# OpenAI mid-session context mutation
+cargo run -p adk-realtime --example openai_session_update --features openai
 
-# LiveKit bridge with OpenAI model (requires LiveKit server)
-cargo run --example livekit_bridge --features "livekit,openai"
+# Gemini mid-session context mutation (session resumption)
+cargo run -p adk-realtime --example gemini_context_mutation --features gemini
 
-# OpenAI WebRTC low-latency session (requires cmake + API key)
-CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo run --example openai_webrtc --features openai-webrtc
+# Vertex AI Live voice assistant and tools (ADC and a GCP project)
+cargo run -p adk-realtime --example vertex_live_voice --features vertex-live
+cargo run -p adk-realtime --example vertex_live_tools --features vertex-live
 
-# Mid-session context mutation — OpenAI (swap persona + tools)
-cargo run --example openai_session_update --features openai
+# LiveKit bridge with OpenAI or Gemini (a LiveKit server)
+cargo run -p adk-realtime --example livekit_bridge --features "livekit,openai"
+cargo run -p adk-realtime --example livekit_gemini_bridge --features "livekit,gemini"
 
-# Mid-session context mutation — Gemini (session resumption)
-cargo run --example gemini_context_mutation --features gemini
+# OpenAI WebRTC (cmake)
+CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo run -p adk-realtime --example openai_webrtc --features openai-webrtc
+
+# Video avatars
+cargo run -p adk-realtime --example heygen_avatar --features heygen-avatar
+cargo run -p adk-realtime --example did_avatar --features did-avatar
 ```
 
 ## Testing
 
 ```bash
-# Property tests (no credentials needed)
-cargo test -p adk-realtime --test error_context_tests
-cargo test -p adk-realtime --features vertex-live --test vertex_url_property_tests
-cargo test -p adk-realtime --features livekit --test livekit_delegation_tests
-CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo test -p adk-realtime --features openai-webrtc --test opus_roundtrip_tests
-CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo test -p adk-realtime --features openai-webrtc --test sdp_offer_tests
+cargo nextest run -p adk-realtime
+cargo nextest run -p adk-realtime --features full
+CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo nextest run -p adk-realtime --features openai-webrtc
 
-# All features
-CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo test -p adk-realtime --features full
-
-# Integration tests (require real credentials, marked #[ignore])
+# Integration tests that need credentials are #[ignore]
 cargo test -p adk-realtime --features vertex-live -- --ignored
-```
-
-## Compilation Verification
-
-```bash
-cargo check -p adk-realtime                          # default (no deps)
-cargo check -p adk-realtime --features openai        # OpenAI WebSocket
-cargo check -p adk-realtime --features gemini        # Gemini Live
-cargo check -p adk-realtime --features vertex-live   # Vertex AI Live
-cargo check -p adk-realtime --features livekit       # LiveKit bridge
-CMAKE_POLICY_VERSION_MINIMUM=3.5 \
-  cargo check -p adk-realtime --features openai-webrtc  # OpenAI WebRTC
-CMAKE_POLICY_VERSION_MINIMUM=3.5 \
-  cargo check -p adk-realtime --features full            # everything
-```
-
-## Feature Flags
-
-| Flag | Description | Requires |
-|------|-------------|----------|
-| `openai` | OpenAI Realtime API (WebSocket) | |
-| `gemini` | Gemini Live API (WebSocket) | |
-| `vertex-live` | Vertex AI Live API (OAuth2 via ADC) | GCP credentials |
-| `livekit` | LiveKit WebRTC bridge | LiveKit server |
-| `openai-webrtc` | OpenAI WebRTC transport with Opus codec | cmake |
-| `full` | All providers except WebRTC (no cmake needed) | |
-| `full-webrtc` | Everything including WebRTC | cmake |
-
-### Vertex AI Live
-
-Connect to Gemini via Vertex AI with Application Default Credentials:
-
-```rust
-use adk_realtime::gemini::{GeminiLiveBackend, GeminiLiveModel, build_vertex_live_url};
-
-// Uses ADC — no API key needed, just `gcloud auth application-default login`
-let model = GeminiLiveModel::new(GeminiLiveBackend::Vertex {
-    project_id: "my-project".into(),
-    region: "us-central1".into(),
-    model: "gemini-live-2.5-flash-native-audio".into(),
-});
-```
-
-### Feature Flag Graph
-
-```
-vertex-live  → gemini + google-cloud-auth
-livekit      → livekit + livekit-api
-openai-webrtc → openai + str0m + audiopus (requires cmake)
-full         → openai + gemini + vertex-live + livekit
-full-webrtc  → full + openai-webrtc
-```
 ```
 
 ## License
