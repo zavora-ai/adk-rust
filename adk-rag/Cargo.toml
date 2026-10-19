@@ -11,6 +11,11 @@ documentation = "https://docs.rs/adk-rag"
 keywords = ["ai", "agent", "adk", "rag", "retrieval"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+# lancedb needs protoc and surrealdb builds RocksDB from C++, so both are left out.
+features = ["gemini", "openai", "qdrant", "pgvector", "agent-retrieval", "vertex-rag"]
 
 [dependencies]
 adk-core.workspace = true
