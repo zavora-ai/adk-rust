@@ -5,11 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Rust Agent Development Kit - Build AI agents in Rust with modular components for models, tools, memory, and more."
+description = "Rust Agent Development Kit (ADK-Rust): build AI agents in Rust with modular components for models, tools, memory, and more"
 homepage = "https://github.com/zavora-ai/adk-rust"
-repository = "https://github.com/zavora-ai/adk-rust"
+repository.workspace = true
 documentation = "https://docs.rs/adk-rust"
-keywords = ["ai", "agent", "gemini", "llm", "adk"]
+keywords = ["ai", "agent", "llm", "adk", "framework"]
 categories = ["api-bindings", "asynchronous", "web-programming"]
 readme = "README.md"
 

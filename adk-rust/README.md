@@ -1,32 +1,30 @@
 # ADK-Rust
 
-**Rust Agent Development Kit (ADK-Rust)** - Build AI agents in Rust with modular components for models, tools, memory, RAG, security, realtime voice, and more.
+**Rust Agent Development Kit (ADK-Rust)** — build AI agents in Rust with modular components for models, tools, memory, RAG, security, realtime voice, graph workflows, and more.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-rust.svg)](https://crates.io/crates/adk-rust)
 [![Documentation](https://docs.rs/adk-rust/badge.svg)](https://docs.rs/adk-rust)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](../LICENSE)
 
-A flexible framework for developing AI agents with simplicity and power. Model-agnostic, deployment-agnostic, optimized for frontier AI models. Includes support for realtime voice agents, RAG pipelines, graph workflows, declarative security, and 120+ working examples.
+`adk-rust` is the umbrella crate: it re-exports the ADK-Rust crates behind feature flags, grouped into four tiers. It is model-agnostic and deployment-agnostic.
 
 ## Supported Providers
 
-| Provider | Feature Flag | Default Model |
-|----------|-------------|---------------|
-| Gemini | `gemini` (default) | `gemini-3.7-flash` |
+| Provider | Feature | Catalog default model |
+|----------|---------|-----------------------|
+| Gemini | `gemini` (in every tier) | `gemini-3.7-flash` |
 | OpenAI | `openai` | `gpt-5.6-terra` |
 | Anthropic | `anthropic` | `claude-sonnet-5` |
-| DeepSeek | `deepseek` | `deepseek-v4-flash` |
+| DeepSeek | `deepseek` | `deepseek-flash` |
 | Groq | `groq` | `openai/gpt-oss-120b` |
 | Ollama | `ollama` | `qwen3.5` |
-| Fireworks AI | `openai` preset | `accounts/fireworks/models/kimi-k2p6` |
-| Together AI | `openai` preset | `MiniMaxAI/MiniMax-M2.7` |
-| Mistral AI | `openai` preset | `mistral-medium-latest` |
-| Perplexity | `openai` preset | `sonar-pro` |
-| Cerebras | `cerebras` | `gpt-oss-120b` |
-| SambaNova | `sambanova` | `gpt-oss-120b` |
-| OrcaRouter | `openai` preset | `openai/gpt-5.6-terra` |
-| Amazon Bedrock | `bedrock` | (account/region-specific) |
-| Azure AI Inference | `azure-ai` | (endpoint-specific) |
+| OpenRouter | `openrouter` | `qwen/qwen3.7-max` |
+| OpenCode Go and Zen | `opencode` | — |
+| Amazon Bedrock | `bedrock` | account- and region-specific |
+| Azure AI Inference | `azure-ai` | endpoint-specific |
+| Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI, OrcaRouter, and other OpenAI-compatible APIs | `openai` (`OpenAICompatibleConfig` presets) | per preset |
+
+The catalog defaults are `adk_rust::model::catalog` constants; every client takes any model ID.
 
 ## Quick Start
 
@@ -41,7 +39,7 @@ cargo new my_agent && cd my_agent
 ```toml
 [dependencies]
 adk-rust = "3.0.0"
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 ```
 
@@ -54,9 +52,8 @@ echo 'GOOGLE_API_KEY=your-key' > .env
 **4. Write `src/main.rs`:**
 
 ```rust
-use adk_rust::prelude::*;
 use adk_rust::Launcher;
-use std::sync::Arc;
+use adk_rust::prelude::*;
 
 #[tokio::main]
 async fn main() -> AnyhowResult<()> {
@@ -80,121 +77,85 @@ async fn main() -> AnyhowResult<()> {
 cargo run
 ```
 
-### Even Faster — `adk::run()`
+With the default `minimal` tier, `Launcher` is `adk_runner::Launcher`, a console loop. With the `cli` feature it is `adk_cli::Launcher`, which also serves the web UI (`cargo run -- serve --port 8080`, on `127.0.0.1`).
 
-Auto-detect your provider and run an agent in one call:
+### One Call — `adk_rust::run()`
 
 ```rust
-use adk_rust::run;
+use adk_rust::prelude::*;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
-    // Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
     let response = run("You are a helpful assistant.", "What is Rust?").await?;
     println!("{response}");
     Ok(())
 }
 ```
 
-`provider_from_env()` first honors the Vertex opt-in flags
-`GOOGLE_GENAI_USE_ENTERPRISE` / `GOOGLE_GENAI_USE_VERTEXAI`, then checks
-`ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GOOGLE_API_KEY`. It uses the shared
-catalog defaults for the selected provider.
+`run()` builds an agent on `provider_from_env()`, which first honors the Vertex opt-in flags `GOOGLE_GENAI_USE_ENTERPRISE` / `GOOGLE_GENAI_USE_VERTEXAI` (with `gemini-vertex`), then checks `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GOOGLE_API_KEY`, using the catalog default model of the first provider whose feature is compiled. The default `minimal` tier compiles only Gemini; add `openai` or `anthropic` to widen detection.
 
 ## Adding Tools
 
 ```rust
-let agent = LlmAgentBuilder::new("researcher")
-    .instruction("Search the web and summarize findings.")
-    .model(Arc::new(model))
-    .tool(Arc::new(GoogleSearchTool::new()))
-    .build()?;
+use adk_rust::prelude::*;
+use adk_rust::tool::GoogleSearchTool;
+
+fn researcher(model: Arc<dyn Llm>) -> Result<LlmAgent> {
+    LlmAgentBuilder::new("researcher")
+        .instruction("Search the web and summarize findings.")
+        .model(model)
+        .tool(Arc::new(GoogleSearchTool::new()))
+        .build()
+}
 ```
 
-## Workflow Agents
+`tools` is in the `standard` tier and above. Tool calls run through the governed path — tool policy, guardrails, and confirmation — before `execute()`; see [Tool Authorization](../docs/official_docs/security/tool-authorization.md).
+
+## Workflow and Multi-Agent Systems
 
 ```rust
-// Sequential execution
-let pipeline = SequentialAgent::new("pipeline", vec![agent1, agent2, agent3]);
+use adk_rust::prelude::*;
 
-// Parallel execution
-let parallel = ParallelAgent::new("analysis", vec![analyst1, analyst2]);
+fn workflows(model: Arc<dyn Llm>, a: Arc<dyn Agent>, b: Arc<dyn Agent>) -> Result<()> {
+    // Sequential, parallel, and loop workflows
+    let _pipeline = SequentialAgent::new("pipeline", vec![a.clone(), b.clone()]);
+    let _parallel = ParallelAgent::new("analysis", vec![a.clone(), b.clone()]);
+    let _refiner = LoopAgent::new("refiner", vec![a.clone()]).with_max_iterations(5);
 
-// Loop until condition (max 5 iterations)
-let loop_agent = LoopAgent::new("refiner", vec![agent])
-    .with_max_iterations(5);
+    // A coordinator that transfers to specialists
+    let _coordinator = LlmAgentBuilder::new("coordinator")
+        .instruction("Delegate tasks to specialists.")
+        .model(model)
+        .sub_agent(a)
+        .sub_agent(b)
+        .build()?;
+    Ok(())
+}
 ```
 
-## Multi-Agent Systems
+## Graph Workflows
 
 ```rust
-let coordinator = LlmAgentBuilder::new("coordinator")
-    .instruction("Delegate tasks to specialists.")
-    .model(model)
-    .sub_agent(code_agent)
-    .sub_agent(test_agent)
-    .build()?;
+use adk_rust::graph::prelude::*;
+use serde_json::json;
+
+fn graph() -> Result<GraphAgent> {
+    GraphAgent::builder("processor")
+        .node_fn("fetch", |_ctx| async move { Ok(NodeOutput::new().with_update("data", json!("raw"))) })
+        .node_fn("transform", |ctx| async move {
+            let data = ctx.get("data").cloned().unwrap_or_default();
+            Ok(NodeOutput::new().with_update("result", data))
+        })
+        .edge(START, "fetch")
+        .edge("fetch", "transform")
+        .edge("transform", END)
+        .checkpointer(MemoryCheckpointer::new())
+        .build()
+}
 ```
 
-## Realtime Voice Agents
-
-Build voice-enabled AI assistants with bidirectional audio streaming:
-
-```rust
-use adk_realtime::{RealtimeAgent, openai::OpenAIRealtimeModel, RealtimeModel};
-
-let model: Arc<dyn RealtimeModel> = Arc::new(
-    OpenAIRealtimeModel::new(&api_key, "gpt-realtime-2.1")
-);
-
-let agent = RealtimeAgent::builder("voice_assistant")
-    .model(model)
-    .instruction("You are a helpful voice assistant.")
-    .voice("alloy")
-    .server_vad()  // Voice activity detection
-    .build()?;
-```
-
-Features:
-- OpenAI Realtime API & Gemini Live API
-- Vertex AI Live with Application Default Credentials
-- LiveKit WebRTC bridge for production audio routing
-- Bidirectional audio (PCM16, G711, Opus)
-- Server-side VAD
-- Mid-session context mutation (swap instructions/tools without dropping the call)
-- Real-time tool calling
-- Multi-agent handoffs
-
-## Graph-Based Workflows
-
-Build complex workflows using LangGraph-style graph agents:
-
-```rust
-use adk_graph::prelude::*;
-
-let agent = GraphAgent::builder("processor")
-    .node_fn("fetch", |ctx| async move { /* ... */ })
-    .node_fn("transform", |ctx| async move { /* ... */ })
-    .edge(START, "fetch")
-    .edge("fetch", "transform")
-    .edge("transform", END)
-    .checkpointer(SqliteCheckpointer::new("sqlite:state.db?mode=rwc").await?)
-    .build()?;
-```
-
-Features:
-- Cyclic graphs for ReAct patterns
-- Conditional routing, and `with_goto` for a node that picks its own successor
-- State management with reducers
-- Checkpointing (memory, SQLite), delta checkpoints, and retention policies
-- Human-in-the-loop interrupts, before or after a node
-- Subgraphs — a compiled graph as a node, nested, with its own checkpoint thread
-- Per-node retry with capped backoff, node timeouts, and a concurrency bound
-- Time travel — step, fork, and state history
-
-The `SqliteCheckpointer` above needs the `graph-sqlite` feature. `adk-graph` has no
-default features, so each capability is forwarded from this crate:
+`adk-graph` has no default features, so each capability is forwarded from this crate:
 
 | Feature | Enables | In `full` |
 |---------|---------|-----------|
@@ -204,146 +165,126 @@ default features, so each capability is forwarded from this crate:
 | `graph-time-travel` | step, fork, and state history | yes |
 | `graph-sqlite` | the SQLite checkpointer | no — needs a database |
 | `graph-redis-cache` | Redis-backed node cache | no — needs a server |
+| `graph-postgres`, `graph-redis`, `graph-mongodb`, `graph-neo4j`, `graph-firestore` | shared-database checkpointers | no — need a server |
 
-## Browser Automation
-
-Give agents web browsing capabilities with 46 tools (`browser_evaluate_js` is opt-in, and navigation accepts only `http`/`https` by default):
+## Realtime Voice Agents
 
 ```rust
-use adk_browser::{BrowserSession, BrowserToolset, BrowserConfig};
-use std::sync::Arc;
+use adk_rust::prelude::*;
+use adk_rust::realtime::openai::OpenAIRealtimeModel;
+use adk_rust::realtime::{RealtimeAgent, RealtimeModel};
 
-let config = BrowserConfig::new().webdriver_url("http://localhost:4444");
-let session = Arc::new(BrowserSession::new(config));
-let toolset = BrowserToolset::new(session);
-let tools = toolset.all_tools();  // 45 browser tools; .with_evaluate_js(true) adds the 46th
+fn voice(api_key: &str) -> Result<RealtimeAgent> {
+    let model: Arc<dyn RealtimeModel> =
+        Arc::new(OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1"));
 
-let mut builder = LlmAgentBuilder::new("web_agent")
-    .model(model);
-
-for tool in tools {
-    builder = builder.tool(tool);
+    RealtimeAgent::builder("voice_assistant")
+        .model(model)
+        .instruction("You are a helpful voice assistant.")
+        .voice("alloy")
+        .server_vad()
+        .build()
 }
-
-let agent = builder.build()?;
 ```
 
-Tools include navigation, extraction, forms, screenshots, JavaScript execution, and more.
+`realtime` is in the `enterprise` tier and enables `adk-realtime` without a provider transport. The umbrella forwards `vertex-live`, `livekit`, and `openai-webrtc`; for the OpenAI or Gemini Live WebSocket transport, enable the `adk-realtime` feature beside it:
 
-## Agent Evaluation
-
-Test and validate agent behavior:
-
-```rust
-use adk_eval::{Evaluator, EvaluationConfig, EvaluationCriteria};
-
-let evaluator = Evaluator::new(EvaluationConfig::with_criteria(
-    EvaluationCriteria::exact_tools().with_response_similarity(0.8)
-));
-
-let report = evaluator.evaluate_file(agent, "tests/agent.test.json").await?;
-assert!(report.all_passed());
+```toml
+[dependencies]
+adk-rust = { version = "3.0.0", features = ["realtime"] }
+adk-realtime = { version = "3.0.0", features = ["openai"] }
 ```
 
-## RAG Pipeline
-
-Build retrieval-augmented generation pipelines with `adk-rag`:
-
-```rust
-use adk_rag::{RagPipelineBuilder, InMemoryVectorStore, FixedSizeChunker};
-
-let pipeline = RagPipelineBuilder::new()
-    .chunker(FixedSizeChunker::new(512, 50))
-    .vector_store(InMemoryVectorStore::new())
-    .embedding_provider(embedding_model)
-    .build()?;
-
-// Ingest documents
-pipeline.ingest("doc1", "Your document text here...").await?;
-
-// Search
-let results = pipeline.search("query", 5).await?;
-```
-
-Features:
-- 3 chunking strategies (fixed-size, recursive, markdown-aware)
-- 6 vector store backends (in-memory, Qdrant, Milvus, Weaviate, Pinecone, SurrealDB)
-- Pluggable embedding providers and rerankers
-- Ready-made `RagTool` for agent integration
+See the [adk-realtime README](../adk-realtime/README.md).
 
 ## Declarative Security
 
-Tools declare their required scopes — the framework enforces automatically:
-
 ```rust
-use adk_tool::FunctionTool;
-use adk_auth::{ScopeGuard, ContextScopeResolver};
+use adk_rust::auth::{ContextScopeResolver, ScopeGuard};
+use adk_rust::prelude::*;
+use adk_rust::tool::FunctionTool;
+use serde_json::{Value, json};
 
-// Tool declares what scopes it needs
-let transfer = FunctionTool::new("transfer", "Transfer funds", handler)
-    .with_scopes(&["finance:write", "verified"]);
+async fn transfer_funds(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    Ok(json!({ "transferred": args["amount"] }))
+}
 
-// Framework enforces before execution — no imperative checks in handlers
-let guard = ScopeGuard::new(ContextScopeResolver);
-let protected = guard.protect(transfer);
+fn protected_transfer() -> impl Tool {
+    // The tool declares the scopes it needs
+    let transfer = FunctionTool::new("transfer", "Transfer funds", transfer_funds)
+        .with_scopes(&["finance:write", "verified"]);
+
+    // The guard enforces them before execution
+    ScopeGuard::new(ContextScopeResolver).protect(transfer)
+}
 ```
 
-Features:
-- Declarative `required_scopes()` on the `Tool` trait
-- `ScopeGuard` with pluggable resolvers (context, static, custom)
-- Role-based access control with allow/deny rules
-- SSO/OAuth integration (Auth0, Okta, Azure AD, Google OIDC)
-- Audit logging for all access decisions
+`adk-auth` also provides role-based access control, SSO/OIDC token validation, audit sinks, and a signed audit log; the runtime adds tool policies, a kill switch, run budgets, a spend ledger, and an action ledger in `adk-core`.
 
-## Deployment
-
-```bash
-# Console mode (default)
-cargo run
-
-# Server mode
-cargo run -- serve --port 8080
-```
-
-## Installation Options
+## Feature Tiers
 
 ```toml
-# Minimal (default) — agents, Gemini, runner, sessions (fastest build)
+# Minimal (default) — agents, models, Gemini, runner, sessions
 adk-rust = "3.0.0"
 
-# Standard — minimal + tools, memory, OpenAI, Anthropic, server, auth,
-# graph, eval, guardrails, skills, plugins, artifacts, telemetry
+# Standard — minimal + OpenAI, Anthropic (and the adk-anthropic client), skills, graph,
+# auth, server, eval, guardrail, plugin, artifacts, tools, memory, telemetry, computer-use
 adk-rust = { version = "3.0.0", features = ["standard"] }
 
 # Enterprise — standard + realtime, browser, rag, payments, awp
 adk-rust = { version = "3.0.0", features = ["enterprise"] }
 
-# Full — enterprise + experimental crates (audio, code, sandbox, code-tools)
+# Full — enterprise + audio, code, sandbox, code-tools, and the graph-functional,
+# graph-node-cache, graph-delta, and graph-time-travel capabilities
 adk-rust = { version = "3.0.0", features = ["full"] }
 
-# Gemini Enterprise Agent Platform — every Vertex/EAP integration except
-# realtime transports; composable with any tier. The right default for
-# ReasoningEngine BYOC deployments. Deploy-time tooling is host-side and
-# not included.
+# Gemini Enterprise Agent Platform — every Vertex/EAP integration except realtime
+# transports; composable with any tier. Deploy-time tooling is host-side and not included.
 adk-rust = { version = "3.0.0", features = ["standard", "gemini-agent-platform"] }
 
-# gemini-agent-platform + Vertex AI Live API (pulls in the realtime WebSocket/audio stack)
+# gemini-agent-platform + the Vertex AI Live API (pulls in the realtime stack)
 adk-rust = { version = "3.0.0", features = ["standard", "gemini-agent-platform-full"] }
 
-# Custom
-adk-rust = { version = "3.0.0", default-features = false, features = ["agents", "gemini", "tools"] }
-
-# With new providers (forwarded to adk-model)
-adk-model = { version = "3.0.0", features = ["fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova", "bedrock", "azure-ai"] }
+# Custom selection
+adk-rust = { version = "3.0.0", default-features = false, features = ["agents", "gemini", "runner", "sessions", "tools"] }
 ```
+
+Features outside the tiers, composable with any of them:
+
+| Group | Features |
+|-------|----------|
+| Providers | `deepseek`, `groq`, `ollama`, `openrouter`, `opencode`, `bedrock`, `azure-ai`, `gemini-vertex`, `gemini-interactions` |
+| CLI | `cli`, `cli-openai`, `cli-anthropic`, `cli-deepseek`, `cli-groq`, `cli-ollama`, `cli-all-providers`, `cli-telemetry-otlp`, `optimize` |
+| Production backends (need infrastructure) | `postgres-session`, `redis-session`, `mongodb-session`, `firestore-session`, `neo4j-session`, `vertex-session`, `sqlite-memory`, `database-memory`, `redis-memory`, `mongodb-memory`, `neo4j-memory`, `vertex-memory`, `auth-bridge` |
+| Managed agents | `managed-runtime` (with the `gemini`, `openai`, `anthropic`, and `ollama` features for its model resolver), `enterprise-client` |
+| Server | `a2a`, `yaml-agent`, `agent-registry`, `agent-engine`, `vertex-remote-engine` |
+| Tools | `mcp`, `mcp-http`, `mcp-sampling`, `memory-tools`, `slack`, `bigquery`, `spanner`, `example-store`, `vertex-agent-registry`, `code-tools`, `code-embedded-js`, `code-embedded-python`, `code-docker`, `codeact`, `codeact-monty` |
+| Telemetry | `telemetry-otlp`, `telemetry-sqlite`, `gcp-telemetry`, `record-payloads` |
+| Realtime and audio | `vertex-live`, `livekit`, `openai-webrtc`, `video-avatar`, `audio-*`, `whisper-onnx`, `distil-whisper`, `moonshine`, `kokoro`, `chatterbox`, `qwen3-tts`, `all-onnx` |
+| Graph actions | `action`, `action-http`, `action-trigger`, `action-db`, `action-code`, `action-email`, `action-rss`, `action-full` |
+| Other | `acp`, `skills-progressive-disclosure`, `personas`, `sandbox-workspace`, `sandbox-docker`, `aws-secrets`, `azure-keyvault`, `gcp-secrets`, `gcs-artifacts`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-skill-registry`, `gcp-deploy` |
+
+`adk-rust/Cargo.toml` is the authoritative list.
+
+## Modules
+
+Each enabled crate is re-exported as a module: `agent`, `model`, `tool`, `skill`, `session`, `artifact`, `memory`, `runner`, `server`, `telemetry`, `graph`, `realtime`, `browser`, `eval`, `guardrail`, `auth`, `payment`, `plugin`, `audio`, `rag`, `code`, `sandbox`, `computer_use`, `managed`, `anthropic_client`, `deploy`, and others. `adk_core` is re-exported at the crate root, and `adk_rust::prelude` brings the common types into scope.
+
+## Changes in 3.0
+
+- The server binds `127.0.0.1` and refuses unlisted hosts and cross-origin requests by default.
+- Tool calls run through one governed path: tool policy, guardrails, and confirmation bound to the acting agent and the tool's origin.
+- Run budgets, a spend ledger, an action ledger, durable runs, approvals, and audit records are part of the runtime, with stores on every session backend.
+- `standard` includes `computer-use`; provider features also enable `adk-managed`'s model resolver when `managed-runtime` is on.
+
+See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md).
 
 ## Documentation
 
 - [API Reference](https://docs.rs/adk-rust)
-- [Official Guides](https://github.com/zavora-ai/adk-rust/tree/main/docs/official_docs)
-- [Examples](https://github.com/zavora-ai/adk-rust/tree/main/examples) — 75+ working examples in-repo, 120+ in the [playground](https://github.com/zavora-ai/adk-playground)
-- [Wiki](https://github.com/zavora-ai/adk-rust/wiki) — Comprehensive guides and tutorials
+- [Official Guides](../docs/official_docs/index.md)
+- [Examples](../examples/README.md) — standalone example crates in this repository; more in the [playground](https://github.com/zavora-ai/adk-playground)
 
 ## License
 
-Apache 2.0
+Apache-2.0

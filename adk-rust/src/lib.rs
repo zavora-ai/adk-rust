@@ -5,22 +5,22 @@
 //! [![License](https://img.shields.io/crates/l/adk-rust.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 //!
 //! A flexible and modular framework for developing and deploying AI agents in Rust.
-//! While optimized for Gemini and the Google ecosystem, ADK is model-agnostic,
-//! deployment-agnostic, and compatible with other frameworks.
+//! ADK-Rust is model-agnostic and deployment-agnostic: this umbrella crate re-exports the
+//! ADK-Rust crates behind feature flags grouped into four tiers.
 //!
 //! ## Quick Start
 //!
 //! Create your first AI agent in minutes:
 //!
-//! ```ignore
+//! ```no_run
 //! use adk_rust::prelude::*;
 //! use adk_rust::Launcher;
 //! use std::sync::Arc;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 //!     let api_key = std::env::var("GOOGLE_API_KEY")?;
-//!     let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+//!     let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
 //!
 //!     let agent = LlmAgentBuilder::new("assistant")
 //!         .description("A helpful AI assistant")
@@ -51,14 +51,15 @@
 //! # Minimal (default) — agents, Gemini, runner, sessions (fastest build)
 //! adk-rust = "3.0.0"
 //!
-//! # Standard — minimal + tools, memory, OpenAI, Anthropic, server, auth,
-//! # graph, eval, guardrails, skills, plugins, artifacts, telemetry
+//! # Standard — minimal + OpenAI, Anthropic (and the adk-anthropic client), skills, graph,
+//! # auth, server, eval, guardrail, plugin, artifacts, tools, memory, telemetry, computer-use
 //! adk-rust = { version = "3.0.0", features = ["standard"] }
 //!
 //! # Enterprise — standard + realtime, browser, rag, payments, awp
 //! adk-rust = { version = "3.0.0", features = ["enterprise"] }
 //!
-//! # Full — enterprise + experimental crates (audio, code, sandbox)
+//! # Full — enterprise + audio, code, sandbox, code-tools, and the graph-functional,
+//! # graph-node-cache, graph-delta, and graph-time-travel capabilities
 //! adk-rust = { version = "3.0.0", features = ["full"] }
 //!
 //! # Custom — pick exactly what you need
@@ -83,7 +84,7 @@
 //!
 //! # async fn example() -> Result<()> {
 //! let api_key = std::env::var("GOOGLE_API_KEY").map_err(|e| AdkError::config(e.to_string()))?;
-//! let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+//! let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
 //!
 //! let agent = LlmAgentBuilder::new("researcher")
 //!     .description("Research assistant with web search")
@@ -209,7 +210,7 @@
 //! let client = ().serve(TokioChildProcess::new(
 //!     Command::new("npx")
 //!         .arg("-y")
-//!         .arg("@anthropic/mcp-server-filesystem")
+//!         .arg("@modelcontextprotocol/server-filesystem")
 //!         .arg("/path/to/dir")
 //! )?).await?;
 //!
@@ -334,15 +335,16 @@
 //!
 //! ### Server Mode (REST API)
 //!
+//! With the `cli` feature, [`Launcher`] is `adk_cli::Launcher`, which also serves the agent
+//! over HTTP on `127.0.0.1`:
+//!
 //! ```bash
-//! # Run your agent as a web server
 //! cargo run -- serve --port 8080
 //! ```
 //!
-//! Provides endpoints:
-//! - `POST /chat` - Send messages
-//! - `GET /sessions` - List sessions
-//! - `GET /health` - Health check
+//! The server exposes `GET /api/health`, the session endpoints under `/api/sessions` and
+//! `/api/apps/{app}/users/{user}/sessions`, `POST /api/run/{app}/{user}/{session}` (SSE),
+//! `POST /api/run_sse`, and the web UI at `/ui/`. See `adk-server` for the full list.
 //!
 //! ### Agent-to-Agent (A2A) Protocol
 //!
@@ -417,6 +419,8 @@
 //! | `gemini` | Gemini model support | minimal (default) |
 //! | `runner` | Execution runtime | minimal (default) |
 //! | `sessions` | Session management | minimal (default) |
+//! | `openai` | OpenAI model support | standard |
+//! | `anthropic` / `anthropic-client` | Anthropic model support / the `adk-anthropic` client | standard |
 //! | `tools` | Tool system | standard |
 //! | `skills` | Skill discovery | standard |
 //! | `artifacts` | Artifact storage | standard |
@@ -428,31 +432,24 @@
 //! | `server` | HTTP server + A2A | standard |
 //! | `graph` | Graph workflows | standard |
 //! | `eval` | Agent evaluation | standard |
-//! | `openai` | OpenAI model support | standard |
-//! | `anthropic` | Anthropic model support | standard |
+//! | `computer-use` | Governed desktop-automation orchestration | standard |
 //! | `realtime` | Voice/audio streaming | enterprise |
 //! | `browser` | Browser automation | enterprise |
 //! | `rag` | RAG pipeline | enterprise |
 //! | `payments` | Agentic commerce (ACP/AP2) | enterprise |
 //! | `awp` | Agentic Web Protocol | enterprise |
-//! | `code` | Code execution | full (experimental) |
-//! | `sandbox` | Sandboxed execution | full (experimental) |
-//! | `audio` | Audio processing | full (experimental) |
-//! | `cli` | CLI launcher | (opt-in, any preset) |
-//! | `agent-engine` | Agent Engine runtime contract: dispatch endpoints + `serve_agent_engine` entrypoint | (opt-in, any preset) |
-//! | `example-store` | Vertex AI Example Store client + few-shot retrieval provider | (opt-in, any preset) |
-//! | `vertex-sandbox` | Vertex AI Agent Engine managed code-execution sandbox (adk-code) | (opt-in, any preset) |
-//! | `vertex-eval` | Gen AI Evaluation Service bridge (adk-eval) | (opt-in, any preset) |
-//! | `vertex-rag` | Vertex AI RAG Engine retrieval client + tool (adk-rag) | (opt-in, any preset) |
-//! | `agent-retrieval` | Agent Retrieval (Vector Search 2.0) store backend (adk-rag) | (opt-in, any preset) |
-//! | `vertex-agent-registry` | Agent Registry client + discovery tool (adk-tool) | (opt-in, any preset) |
-//! | `vertex-skill-registry` | Skill Registry read client + remote skills (adk-skill) | (opt-in, any preset) |
-//! | `vertex-remote-engine` | Remote ReasoningEngine agent invocation (adk-server) | (opt-in, any preset) |
-//! | `gemini-agent-platform` | Gemini Enterprise Agent Platform integrations (Vertex model backend, managed Sessions, GCP Secret Manager, GCS artifacts, Cloud telemetry, Agent Engine runtime contract, Example Store, code-execution Sandbox); excludes realtime transports and host-side deploy tooling | (opt-in, any preset) |
-//! | `vertex-memory` | Vertex AI Memory Bank backend for adk-memory | (opt-in, any preset) |
-//! | `gcp-deploy` | Agent Engine deployment client (host-side; not part of `gemini-agent-platform`) | (opt-in, any preset) |
-//! | `gemini-agent-platform` | Gemini Enterprise Agent Platform integrations (Vertex model backend, managed Sessions, GCP Secret Manager, GCS artifacts, Cloud telemetry, Agent Engine runtime contract, Memory Bank); excludes realtime transports and host-side deploy tooling | (opt-in, any preset) |
-//! | `gemini-agent-platform-full` | `gemini-agent-platform` + Vertex AI Live API (realtime stack) | (opt-in, any preset) |
+//! | `code`, `sandbox`, `code-tools` | Code execution and sandboxed execution | full |
+//! | `audio` | Audio processing | full |
+//! | `graph-functional`, `graph-node-cache`, `graph-delta`, `graph-time-travel` | Graph capabilities | full |
+//! | `cli` | CLI launcher with serve mode | opt-in |
+//! | `managed-runtime` | Managed agent runtime (`adk-managed`) | opt-in |
+//! | `enterprise-client` | Enterprise client SDK (`adk-enterprise`) | opt-in |
+//! | `gemini-agent-platform` | Every Gemini Enterprise Agent Platform integration except realtime transports and host-side deploy tooling | opt-in |
+//! | `gemini-agent-platform-full` | `gemini-agent-platform` + Vertex AI Live API (realtime stack) | opt-in |
+//! | `gcp-deploy` | Agent Engine deployment client (host-side; not part of `gemini-agent-platform`) | opt-in |
+//!
+//! Production backends (`postgres-session`, `redis-memory`, ...), additional providers,
+//! and specialist integrations are opt-in features as well; `Cargo.toml` lists every one.
 //!
 //! ## Examples
 //!
