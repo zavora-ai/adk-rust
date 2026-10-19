@@ -22,16 +22,13 @@ use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 /// identifiers, the request's `model` field is set. Any identifier outside
 /// this list (and [`AGENT_TARGETS`]) is rejected with an `InvalidInput` error.
 pub const MODEL_TARGETS: &[&str] = &[
+    "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-3.1-pro-preview",
-    "gemini-3-flash-preview",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
     "lyria-3-clip-preview",
     "lyria-3-pro-preview",
 ];
@@ -61,8 +58,8 @@ pub const AGENT_TARGETS: &[&str] = &[
 /// ```rust,ignore
 /// use adk_model::gemini::interactions_target::InteractionTarget;
 ///
-/// let target = InteractionTarget::Model("gemini-2.5-flash".to_string());
-/// assert_eq!(target.identifier(), "gemini-2.5-flash");
+/// let target = InteractionTarget::Model("gemini-3.7-flash".to_string());
+/// assert_eq!(target.identifier(), "gemini-3.7-flash");
 /// assert!(!target.is_agent());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,7 +102,7 @@ impl InteractionTarget {
     /// ```rust,ignore
     /// use adk_model::gemini::interactions_target::InteractionTarget;
     ///
-    /// let model = InteractionTarget::parse("gemini-2.5-flash")?;
+    /// let model = InteractionTarget::parse("gemini-3.7-flash")?;
     /// assert!(model.is_model());
     ///
     /// let agent = InteractionTarget::parse("deep-research-preview-04-2026")?;
@@ -195,13 +192,11 @@ mod tests {
     #[test]
     fn documented_model_targets_present() {
         for expected in [
+            "gemini-3.7-flash",
             "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
             "gemini-3.1-flash-lite",
             "gemini-3.1-pro-preview",
-            "gemini-3-flash-preview",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
             "lyria-3-clip-preview",
             "lyria-3-pro-preview",
         ] {
@@ -222,8 +217,8 @@ mod tests {
 
     #[test]
     fn accessors_report_variant_and_identifier() {
-        let model = InteractionTarget::Model("gemini-2.5-flash".to_string());
-        assert_eq!(model.identifier(), "gemini-2.5-flash");
+        let model = InteractionTarget::Model("gemini-3.7-flash".to_string());
+        assert_eq!(model.identifier(), "gemini-3.7-flash");
         assert!(model.is_model());
         assert!(!model.is_agent());
 
@@ -255,7 +250,15 @@ mod tests {
 
     #[test]
     fn parse_rejects_unsupported_targets_with_invalid_input() {
-        for id in ["gpt-4", "gemini-2.0-flash", "", "deep-research", "GEMINI-2.5-FLASH"] {
+        for id in [
+            "gpt-4",
+            "gemini-2.0-flash",
+            "gemini-2.5-flash",
+            "gemini-3-flash-preview",
+            "",
+            "deep-research",
+            "GEMINI-3.7-FLASH",
+        ] {
             let err = InteractionTarget::parse(id).expect_err("unsupported target should error");
             assert_eq!(
                 err.category,
@@ -270,7 +273,7 @@ mod tests {
         let err = InteractionTarget::parse("gpt-4").expect_err("unsupported target should error");
         let message = err.to_string();
         // Mentions a supported model target.
-        assert!(message.contains("gemini-2.5-flash"), "message should name a model target");
+        assert!(message.contains("gemini-3.7-flash"), "message should name a model target");
         // Mentions a supported agent target.
         assert!(
             message.contains("deep-research-preview-04-2026"),

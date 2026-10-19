@@ -986,7 +986,7 @@ mod tests {
 
     fn request_with(contents: Vec<Content>) -> LlmRequest {
         LlmRequest {
-            model: "gemini-2.5-flash".to_string(),
+            model: "gemini-3.7-flash".to_string(),
             contents,
             config: None,
             tools: HashMap::new(),
@@ -995,7 +995,7 @@ mod tests {
     }
 
     fn model_target() -> InteractionTarget {
-        InteractionTarget::Model("gemini-2.5-flash".to_string())
+        InteractionTarget::Model("gemini-3.7-flash".to_string())
     }
 
     #[test]
@@ -1005,7 +1005,7 @@ mod tests {
         let built = build_request(&request, &model_target(), None, true, true)
             .expect("build_request should succeed");
 
-        assert_eq!(built.model.as_deref(), Some("gemini-2.5-flash"));
+        assert_eq!(built.model.as_deref(), Some("gemini-3.7-flash"));
         assert_eq!(built.agent, None);
         match built.input {
             Input::Content(blocks) => {
@@ -1485,7 +1485,7 @@ mod tests {
     fn interaction_with(id: &str, status: InteractionStatus, steps: Vec<Step>) -> Interaction {
         Interaction {
             id: id.to_string(),
-            model: Some("gemini-2.5-flash".to_string()),
+            model: Some("gemini-3.7-flash".to_string()),
             agent: None,
             status,
             steps,

@@ -726,7 +726,7 @@ impl GeminiModel {
     ///
     /// # #[tokio::main]
     /// # async fn main() -> adk_core::Result<()> {
-    /// let model = GeminiModel::from_env("gemini-2.5-flash")?;
+    /// let model = GeminiModel::from_env("gemini-3.7-flash")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -798,7 +798,7 @@ impl GeminiModel {
     ///     );
     ///
     /// // Gemini 2.5 — budget-based thinking
-    /// let model = GeminiModel::new(api_key, "gemini-2.5-flash")?
+    /// let model = GeminiModel::new(api_key, "gemini-3.7-flash")?
     ///     .with_thinking_config(
     ///         ThinkingConfig::new().with_thinking_budget(2048)
     ///     );
@@ -875,7 +875,7 @@ impl GeminiModel {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let model = GeminiModel::new(api_key, "gemini-2.5-flash")?
+    /// let model = GeminiModel::new(api_key, "gemini-3.7-flash")?
     ///     .use_interactions_api(true)?;
     /// ```
     #[cfg(feature = "gemini-interactions")]
@@ -2907,14 +2907,14 @@ mod interactions_transport_tests {
 
     #[test]
     fn new_model_defaults_to_generate_content_transport() {
-        let model = GeminiModel::new("test-key", "gemini-2.5-flash")
+        let model = GeminiModel::new("test-key", "gemini-3.7-flash")
             .expect("constructing a Gemini model should not require network");
         assert_eq!(model.transport(), GeminiTransport::GenerateContent);
     }
 
     #[test]
     fn use_interactions_api_enables_transport_for_allowlisted_model() {
-        let model = GeminiModel::new("test-key", "gemini-2.5-flash")
+        let model = GeminiModel::new("test-key", "gemini-3.7-flash")
             .expect("construct model")
             .use_interactions_api(true)
             .expect("allowlisted model should enable the Interactions transport");
@@ -2922,7 +2922,7 @@ mod interactions_transport_tests {
         assert_eq!(model.transport(), GeminiTransport::Interactions);
         assert_eq!(
             model.interaction_target,
-            Some(InteractionTarget::Model("gemini-2.5-flash".to_string()))
+            Some(InteractionTarget::Model("gemini-3.7-flash".to_string()))
         );
     }
 
@@ -2942,7 +2942,7 @@ mod interactions_transport_tests {
 
     #[test]
     fn use_interactions_api_false_reverts_to_generate_content() {
-        let model = GeminiModel::new("test-key", "gemini-2.5-flash")
+        let model = GeminiModel::new("test-key", "gemini-3.7-flash")
             .expect("construct model")
             .use_interactions_api(true)
             .expect("enable interactions")
@@ -2961,7 +2961,7 @@ mod interactions_transport_tests {
             background: BackgroundMode::Always,
             poll_interval: std::time::Duration::from_millis(250),
         };
-        let model = GeminiModel::new("test-key", "gemini-2.5-flash")
+        let model = GeminiModel::new("test-key", "gemini-3.7-flash")
             .expect("construct model")
             .interaction_options(opts.clone());
 
@@ -2975,7 +2975,7 @@ mod interactions_transport_tests {
     #[test]
     fn resolve_background_honors_background_mode() {
         // Always → true regardless of target.
-        let always = GeminiModel::new("test-key", "gemini-2.5-flash")
+        let always = GeminiModel::new("test-key", "gemini-3.7-flash")
             .expect("construct model")
             .use_interactions_api(true)
             .expect("enable")
@@ -2986,7 +2986,7 @@ mod interactions_transport_tests {
         assert!(always.resolve_background());
 
         // Never → false regardless of target.
-        let never = GeminiModel::new("test-key", "gemini-2.5-flash")
+        let never = GeminiModel::new("test-key", "gemini-3.7-flash")
             .expect("construct model")
             .use_interactions_api(true)
             .expect("enable")
@@ -2997,7 +2997,7 @@ mod interactions_transport_tests {
         assert!(!never.resolve_background());
 
         // AgentTargetsOnly → false for a model target.
-        let model_target = GeminiModel::new("test-key", "gemini-2.5-flash")
+        let model_target = GeminiModel::new("test-key", "gemini-3.7-flash")
             .expect("construct model")
             .use_interactions_api(true)
             .expect("enable");
@@ -3065,7 +3065,7 @@ mod interactions_transport_tests {
 
         let interaction = Interaction {
             id: "v1_failed".to_string(),
-            model: Some("gemini-2.5-flash".to_string()),
+            model: Some("gemini-3.7-flash".to_string()),
             agent: None,
             status: InteractionStatus::Failed,
             steps: Vec::new(),

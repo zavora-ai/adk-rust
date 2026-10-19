@@ -386,22 +386,20 @@ A **model** target sets the request `model` field; an **agent** target sets the
 
 **Model targets:**
 
+- `gemini-3.8-flash`
 - `gemini-3.7-flash`
 - `gemini-3.6-flash`
 - `gemini-3.5-flash`
 - `gemini-3.5-flash-lite`
 - `gemini-3.1-flash-lite`
 - `gemini-3.1-pro-preview`
-- `gemini-3-flash-preview`
-- `gemini-2.5-pro`
-- `gemini-2.5-flash`
-- `gemini-2.5-flash-lite`
 - `lyria-3-clip-preview`
 - `lyria-3-pro-preview`
 
 This is the transport's compatibility allowlist, not a recommendation list.
-New applications should start with `gemini-3.7-flash`; older and preview IDs
-remain listed because the Interactions endpoint still accepts them.
+New applications should start with `gemini-3.7-flash`. The Gemini 2.5 models, which
+the endpoint no longer serves to new projects, and the deprecated
+`gemini-3-flash-preview` are rejected.
 
 **Agent targets:**
 
