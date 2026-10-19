@@ -36,7 +36,7 @@
 //!     max_cases: Some(100),
 //! };
 //! let adapter = BfclAdapter::new(config);
-//! let result = adapter.run("gemini-2.5-flash").await?;
+//! let result = adapter.run("gemini-3.5-flash-lite").await?;
 //! println!("Accuracy: {:.1}%", result.accuracy * 100.0);
 //! ```
 

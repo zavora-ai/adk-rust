@@ -41,7 +41,8 @@ use crate::config::BenchConfig;
 use crate::error::{BenchError, Result};
 use crate::instrumented_llm::InstrumentedLlm;
 use crate::metrics::{
-    BenchmarkResult, ConcurrencyLevel, DurationStats, RunMetadata, ThroughputMetrics, compute_stats,
+    BenchmarkResult, ConcurrencyLevel, DurationStats, MemoryMetrics, RunMetadata,
+    ThroughputMetrics, compute_stats,
 };
 use crate::workload::{
     Workload, builtin_workloads, load_workload, multi_agent_delegation_workload,
@@ -318,7 +319,7 @@ impl BenchRunner {
             let completion_tokens = turns * ESTIMATED_OUTPUT_TOKENS_PER_TURN * total_iterations;
 
             if let Some(cost) =
-                self.cost_tracker.compute_cost(&workload.model, prompt_tokens, completion_tokens)
+                self.cost_tracker.compute_cost(&self.config.model, prompt_tokens, completion_tokens)
             {
                 total_cost += cost;
             }
@@ -346,15 +347,23 @@ impl BenchRunner {
             runs = self.config.runs,
             "starting measurement phase"
         );
-        let mut cold_start_durations = Vec::new();
-        let mut overhead_durations = Vec::new();
-
-        for i in 0..self.config.runs {
-            tracing::debug!(workload = workload.name, iteration = i, "measurement iteration");
-            let (cold_start, overheads) = self.execute_single_workload(workload).await?;
-            cold_start_durations.push(cold_start);
-            overhead_durations.extend(overheads);
-        }
+        let ((cold_start_durations, overhead_durations), memory) = self
+            .measure_memory(1, async {
+                let mut cold_start_durations = Vec::new();
+                let mut overhead_durations = Vec::new();
+                for i in 0..self.config.runs {
+                    tracing::debug!(
+                        workload = workload.name,
+                        iteration = i,
+                        "measurement iteration"
+                    );
+                    let (cold_start, overheads) = self.execute_single_workload(workload).await?;
+                    cold_start_durations.push(cold_start);
+                    overhead_durations.extend(overheads);
+                }
+                Ok((cold_start_durations, overhead_durations))
+            })
+            .await?;
 
         let cold_start_stats = compute_stats(&cold_start_durations);
         let overhead_stats = compute_stats(&overhead_durations);
@@ -365,14 +374,12 @@ impl BenchRunner {
         Ok(BenchmarkResult {
             schema_version: 1,
             workload_name: workload.name.clone(),
-            model: workload.model.clone(),
+            model: self.config.model.clone(),
             metadata: self.build_run_metadata(),
             cold_start: cold_start_stats,
             agent_loop_overhead: overhead_stats,
-            tool_invocation: None,
             throughput: None,
-            memory: None,
-            token_overhead: None,
+            memory,
             reproducibility_rate: None,
             iterations: self.config.runs,
         })
@@ -402,22 +409,27 @@ impl BenchRunner {
             concurrency,
             "starting concurrent measurement phase"
         );
-        let mut cold_start_durations = Vec::new();
-        let mut overhead_durations = Vec::new();
-        let mut completion_times = Vec::new();
+        let ((cold_start_durations, overhead_durations, completion_times), memory) = self
+            .measure_memory(concurrency, async {
+                let mut cold_start_durations = Vec::new();
+                let mut overhead_durations = Vec::new();
+                let mut completion_times = Vec::new();
+                for _ in 0..self.config.runs {
+                    let batch_start = Instant::now();
+                    let batch_results =
+                        self.execute_concurrent_batch(workload, concurrency).await?;
+                    let batch_elapsed = batch_start.elapsed();
 
-        for _ in 0..self.config.runs {
-            let batch_start = Instant::now();
-            let batch_results = self.execute_concurrent_batch(workload, concurrency).await?;
-            let batch_elapsed = batch_start.elapsed();
-
-            for (cold_start, overheads) in &batch_results {
-                cold_start_durations.push(*cold_start);
-                overhead_durations.extend(overheads.iter().copied());
-            }
-            // Per-agent completion time is the full batch divided by concurrency
-            completion_times.push(batch_elapsed);
-        }
+                    for (cold_start, overheads) in &batch_results {
+                        cold_start_durations.push(*cold_start);
+                        overhead_durations.extend(overheads.iter().copied());
+                    }
+                    // Per-agent completion time is the full batch divided by concurrency
+                    completion_times.push(batch_elapsed);
+                }
+                Ok((cold_start_durations, overhead_durations, completion_times))
+            })
+            .await?;
 
         let cold_start_stats = compute_stats(&cold_start_durations);
         let overhead_stats = compute_stats(&overhead_durations);
@@ -446,14 +458,12 @@ impl BenchRunner {
         Ok(BenchmarkResult {
             schema_version: 1,
             workload_name: workload.name.clone(),
-            model: workload.model.clone(),
+            model: self.config.model.clone(),
             metadata: self.build_run_metadata(),
             cold_start: cold_start_stats,
             agent_loop_overhead: overhead_stats,
-            tool_invocation: None,
             throughput,
-            memory: None,
-            token_overhead: None,
+            memory,
             reproducibility_rate: None,
             iterations: self.config.runs,
         })
@@ -483,11 +493,41 @@ impl BenchRunner {
             self.execute_concurrent_batch(workload, min_level).await?;
         }
 
+        let peak_level = levels_to_test.iter().copied().max().unwrap_or(1);
+        let ((all_cold_starts, all_overheads, throughput_levels), memory) =
+            self.measure_memory(peak_level, self.sweep_levels(workload, &levels_to_test)).await?;
+
+        let cold_start_stats = compute_stats(&all_cold_starts);
+        let overhead_stats = compute_stats(&all_overheads);
+
+        // CV warning for Agent_Loop_Overhead
+        self.emit_cv_warning(&overhead_stats, &workload.name);
+
+        Ok(BenchmarkResult {
+            schema_version: 1,
+            workload_name: workload.name.clone(),
+            model: self.config.model.clone(),
+            metadata: self.build_run_metadata(),
+            cold_start: cold_start_stats,
+            agent_loop_overhead: overhead_stats,
+            throughput: Some(ThroughputMetrics { levels: throughput_levels }),
+            memory,
+            reproducibility_rate: None,
+            iterations: self.config.runs,
+        })
+    }
+
+    /// Runs the measurement iterations at every sweep level.
+    async fn sweep_levels(
+        &self,
+        workload: &Workload,
+        levels_to_test: &[usize],
+    ) -> Result<(Vec<Duration>, Vec<Duration>, Vec<ConcurrencyLevel>)> {
         let mut all_cold_starts = Vec::new();
         let mut all_overheads = Vec::new();
         let mut throughput_levels = Vec::new();
 
-        for &level in &levels_to_test {
+        for &level in levels_to_test {
             tracing::info!(
                 workload = workload.name,
                 concurrency = level,
@@ -524,26 +564,35 @@ impl BenchRunner {
             });
         }
 
-        let cold_start_stats = compute_stats(&all_cold_starts);
-        let overhead_stats = compute_stats(&all_overheads);
+        Ok((all_cold_starts, all_overheads, throughput_levels))
+    }
 
-        // CV warning for Agent_Loop_Overhead
-        self.emit_cv_warning(&overhead_stats, &workload.name);
+    /// Runs `phase` while sampling the process RSS every `memory_sample_interval_ms`.
+    ///
+    /// The peak is the highest sample; the per-agent figure is the growth over the RSS before
+    /// the phase, divided by the agents that ran at once. `None` where RSS cannot be read.
+    async fn measure_memory<T>(
+        &self,
+        concurrency: usize,
+        phase: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<(T, Option<MemoryMetrics>)> {
+        let before = crate::memory::current_rss_bytes().ok();
+        let interval = Duration::from_millis(self.config.memory_sample_interval_ms.max(1));
+        let (sampler, samples) = crate::memory::spawn_memory_sampler(interval);
+        let output = phase.await;
+        sampler.abort();
+        let output = output?;
 
-        Ok(BenchmarkResult {
-            schema_version: 1,
-            workload_name: workload.name.clone(),
-            model: workload.model.clone(),
-            metadata: self.build_run_metadata(),
-            cold_start: cold_start_stats,
-            agent_loop_overhead: overhead_stats,
-            tool_invocation: None,
-            throughput: Some(ThroughputMetrics { levels: throughput_levels }),
-            memory: None,
-            token_overhead: None,
-            reproducibility_rate: None,
-            iterations: self.config.runs,
-        })
+        let mut samples = samples.lock().await.clone();
+        // A phase shorter than one interval still gets a sample.
+        samples.extend(crate::memory::current_rss_bytes().ok());
+        let memory = samples.iter().copied().max().map(|peak_rss_bytes| MemoryMetrics {
+            peak_rss_bytes,
+            per_agent_bytes: before
+                .map(|before| peak_rss_bytes.saturating_sub(before) / concurrency.max(1) as u64),
+            sample_count: samples.len(),
+        });
+        Ok((output, memory))
     }
 
     /// Executes a batch of concurrent workload instances.
@@ -876,6 +925,26 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    async fn measurement_phases_report_the_memory_they_used() {
+        let runner =
+            BenchRunner::new(BenchConfig { memory_sample_interval_ms: 5, ..test_config() });
+        let ((), memory) = runner
+            .measure_memory(4, async {
+                let held = vec![1u8; 8 * 1024 * 1024];
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                drop(std::hint::black_box(held));
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let memory = memory.expect("RSS is readable on this platform");
+        assert!(memory.peak_rss_bytes > 0);
+        assert!(memory.sample_count >= 2, "{memory:?}");
+        assert!(memory.per_agent_bytes.is_some());
+    }
+
+    #[tokio::test]
     async fn test_dry_run_returns_empty() {
         let config = BenchConfig { dry_run: true, ..test_config() };
         let runner = BenchRunner::new(config);
@@ -996,10 +1065,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1000)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(100)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1039,10 +1106,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1000)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(100)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1062,10 +1127,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1200)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(100)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1109,10 +1172,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1000)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(100)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1132,10 +1193,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1050)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(105)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1171,10 +1230,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1000)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(100)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1194,10 +1251,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(800)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(80)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1229,10 +1284,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1000)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(100)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1268,10 +1321,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1000)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(100)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1292,10 +1343,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1100)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(110)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1332,10 +1381,8 @@ mod tests {
                 },
                 cold_start: compute_stats(&[Duration::from_micros(1000)]),
                 agent_loop_overhead: compute_stats(&[Duration::from_micros(100)]),
-                tool_invocation: None,
                 throughput: None,
                 memory: None,
-                token_overhead: None,
                 reproducibility_rate: None,
                 iterations: 5,
             },
@@ -1352,10 +1399,8 @@ mod tests {
                 },
                 cold_start: compute_stats(&[Duration::from_micros(2000)]),
                 agent_loop_overhead: compute_stats(&[Duration::from_micros(200)]),
-                tool_invocation: None,
                 throughput: None,
                 memory: None,
-                token_overhead: None,
                 reproducibility_rate: None,
                 iterations: 5,
             },
@@ -1377,10 +1422,8 @@ mod tests {
                 },
                 cold_start: compute_stats(&[Duration::from_micros(1300)]),
                 agent_loop_overhead: compute_stats(&[Duration::from_micros(100)]),
-                tool_invocation: None,
                 throughput: None,
                 memory: None,
-                token_overhead: None,
                 reproducibility_rate: None,
                 iterations: 5,
             },
@@ -1397,10 +1440,8 @@ mod tests {
                 },
                 cold_start: compute_stats(&[Duration::from_micros(2000)]),
                 agent_loop_overhead: compute_stats(&[Duration::from_micros(200)]),
-                tool_invocation: None,
                 throughput: None,
                 memory: None,
-                token_overhead: None,
                 reproducibility_rate: None,
                 iterations: 5,
             },
@@ -1441,10 +1482,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1000)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(200)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];
@@ -1464,10 +1503,8 @@ mod tests {
             },
             cold_start: compute_stats(&[Duration::from_micros(1500)]),
             agent_loop_overhead: compute_stats(&[Duration::from_micros(200)]),
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }];

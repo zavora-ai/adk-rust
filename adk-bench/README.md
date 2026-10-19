@@ -37,10 +37,12 @@ APIs and compares ADK-Rust with other agent frameworks through a subprocess prot
 | Cold start | `BenchRunner` | Run start (model creation) to the first LLM request; for external frameworks, process spawn to the first LLM call |
 | Agent loop overhead | `BenchRunner` | Per-turn framework time: total turn time minus the LLM round trip |
 | Concurrent throughput | `BenchRunner` with `--sweep` or `--concurrency` | Agents completed per second at each concurrency level |
+| Memory | `BenchRunner` | Peak process RSS during the measurement phase, sampled every `memory_sample_interval_ms`, and the growth per concurrent agent; Linux and macOS only |
 | Peak RSS, token overhead | External harnesses (EBP) | Reported by the harness in its JSON output |
 
 `memory::current_rss_bytes` and `memory::spawn_memory_sampler` read the RSS from
-`/proc/self/statm` on Linux and `mach_task_basic_info` on macOS.
+`/proc/self/statm` on Linux and `mach_task_basic_info` on macOS. `BenchmarkResult::model` is
+the model the run called (`BenchConfig::model`).
 
 ## Usage
 

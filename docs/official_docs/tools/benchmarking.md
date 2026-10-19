@@ -9,9 +9,8 @@ The `adk-bench` crate and the `cargo adk bench` command benchmark ADK-Rust agent
 | Cold start | Time from launch to the first LLM call |
 | Agent loop overhead | Per-turn framework time: total turn time minus the LLM round trip |
 | Concurrent throughput | Agents per second under Tokio async load (`--concurrency`, `--sweep`) |
-| Memory | RSS sampled on Linux and macOS |
-| Tool invocation latency | Deserialization, validation, and dispatch time |
-| Token overhead | Tokens the framework adds to each request |
+| Memory | Peak RSS during the measurement phase and its growth per concurrent agent, sampled on Linux and macOS |
+| Token overhead | Reported by external harnesses only, in their EBP output |
 | CV (coefficient of variation) | Stability across runs; a high CV is reported as a warning |
 
 Model calls use `temperature = 0` and a fixed seed (`DeterministicConfig`).

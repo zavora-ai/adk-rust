@@ -141,23 +141,6 @@ fn format_table(result: &BenchmarkResult) -> String {
         out.push_str(&format!("    Samples:         {}\n", memory.sample_count));
     }
 
-    // Token Overhead (if present)
-    if let Some(ref tokens) = result.token_overhead {
-        out.push_str("\n  Token Overhead\n");
-        out.push_str(&format!("    Total tokens:    {}\n", tokens.total_tokens));
-        out.push_str(&format!("    User content:    {}\n", tokens.user_content_tokens));
-        out.push_str(&format!(
-            "    Overhead:        {} ({:.1}%)\n",
-            tokens.overhead_tokens, tokens.overhead_percentage
-        ));
-        out.push_str(&format!(
-            "    Breakdown:       system={}, tools={}, wrapper={}\n",
-            tokens.breakdown.system_prompt_tokens,
-            tokens.breakdown.tool_schema_tokens,
-            tokens.breakdown.framework_wrapper_tokens,
-        ));
-    }
-
     out
 }
 
@@ -338,25 +321,6 @@ fn format_markdown(result: &BenchmarkResult) -> String {
         out.push_str(&format!("| Samples | {} |\n", memory.sample_count));
     }
 
-    // Token Overhead (if present)
-    if let Some(ref tokens) = result.token_overhead {
-        out.push_str("\n### Token Overhead\n\n");
-        out.push_str("| Metric | Value |\n");
-        out.push_str("|--------|-------|\n");
-        out.push_str(&format!("| Total Tokens | {} |\n", tokens.total_tokens));
-        out.push_str(&format!("| User Content | {} |\n", tokens.user_content_tokens));
-        out.push_str(&format!(
-            "| Framework Overhead | {} ({:.1}%) |\n",
-            tokens.overhead_tokens, tokens.overhead_percentage
-        ));
-        out.push_str(&format!("| System Prompt | {} |\n", tokens.breakdown.system_prompt_tokens));
-        out.push_str(&format!("| Tool Schema | {} |\n", tokens.breakdown.tool_schema_tokens));
-        out.push_str(&format!(
-            "| Framework Wrapper | {} |\n",
-            tokens.breakdown.framework_wrapper_tokens
-        ));
-    }
-
     out
 }
 
@@ -526,7 +490,7 @@ mod tests {
     use crate::external::{ExternalDurationStats, ExternalTokenOverhead};
     use crate::metrics::{
         BenchmarkResult, ConcurrencyLevel, DurationStats, MemoryMetrics, RunMetadata,
-        ThroughputMetrics, TokenBreakdown, TokenOverheadMetrics,
+        ThroughputMetrics,
     };
 
     fn sample_result() -> BenchmarkResult {
@@ -563,10 +527,8 @@ mod tests {
                 count: 10,
                 coefficient_of_variation: 0.32,
             },
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: None,
             reproducibility_rate: None,
             iterations: 5,
         }
@@ -595,17 +557,6 @@ mod tests {
             peak_rss_bytes: 52_428_800,
             per_agent_bytes: Some(2_097_152),
             sample_count: 50,
-        });
-        result.token_overhead = Some(TokenOverheadMetrics {
-            total_tokens: 1200,
-            user_content_tokens: 950,
-            overhead_tokens: 250,
-            overhead_percentage: 20.83,
-            breakdown: TokenBreakdown {
-                system_prompt_tokens: 100,
-                tool_schema_tokens: 100,
-                framework_wrapper_tokens: 50,
-            },
         });
         result
     }
@@ -721,7 +672,7 @@ mod tests {
 
         assert!(md.contains("### Throughput"));
         assert!(md.contains("### Memory"));
-        assert!(md.contains("### Token Overhead"));
+        assert!(!md.contains("Token Overhead"));
         assert!(md.contains("| Peak RSS |"));
     }
 

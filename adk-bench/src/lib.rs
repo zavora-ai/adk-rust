@@ -14,6 +14,7 @@
 //! - **Cold start**: run start to the first LLM request (process spawn for external harnesses)
 //! - **Agent loop overhead**: per-turn framework time, excluding the LLM round trip
 //! - **Concurrent throughput**: agents per second at each concurrency level
+//! - **Memory**: peak RSS during the measurement phase and its growth per agent (Linux, macOS)
 //! - **External comparison**: peak RSS and token overhead as reported by each harness
 //! - **Regression detection**: baselines compared with a configurable tolerance
 //!
@@ -60,7 +61,7 @@ pub use formatter::{ComparisonResult, format_comparison, format_result};
 pub use instrumented_llm::{DeterministicConfig, InstrumentedLlm, LlmCallRecord};
 pub use metrics::{
     BenchmarkResult, ConcurrencyLevel, DurationStats, MemoryMetrics, MetricCollector, RunMetadata,
-    ThroughputMetrics, TokenBreakdown, TokenOverheadMetrics, ToolInvocationMetrics, compute_stats,
+    ThroughputMetrics, compute_stats,
 };
 pub use runner::{BenchRunner, RegressionReport};
 pub use workload::{

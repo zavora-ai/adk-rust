@@ -25,7 +25,7 @@
 //!     .build();
 //!
 //! let adapter = Tau2Adapter::new(config);
-//! let result = adapter.run("gemini-2.5-flash").await?;
+//! let result = adapter.run("gemini-3.5-flash-lite").await?;
 //! println!("Accuracy: {:.1}%", result.accuracy * 100.0);
 //! ```
 

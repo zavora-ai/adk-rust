@@ -74,18 +74,12 @@ pub struct BenchmarkResult {
     pub cold_start: DurationStats,
     /// Per-turn agent loop overhead (total_turn - llm_round_trip).
     pub agent_loop_overhead: DurationStats,
-    /// Tool invocation latency breakdown.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_invocation: Option<ToolInvocationMetrics>,
     /// Concurrent throughput (agents/sec at each concurrency level).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throughput: Option<ThroughputMetrics>,
-    /// Memory footprint measurements.
+    /// Process RSS sampled during the measurement phase; `None` where RSS cannot be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<MemoryMetrics>,
-    /// Token overhead analysis.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_overhead: Option<TokenOverheadMetrics>,
     /// Reproducibility rate (percentage of semantically equivalent responses across runs).
     /// Semantic equivalence = same tool calls + same structured output field values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -113,20 +107,6 @@ pub struct RunMetadata {
     pub os: String,
     /// CPU architecture.
     pub arch: String,
-}
-
-/// Tool invocation latency breakdown.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolInvocationMetrics {
-    /// Total tool invocation latency.
-    pub total: DurationStats,
-    /// Argument deserialization time.
-    pub deserialization: DurationStats,
-    /// Schema validation time.
-    pub schema_validation: DurationStats,
-    /// Execution dispatch time.
-    pub execution_dispatch: DurationStats,
 }
 
 /// Throughput measurements at various concurrency levels.
@@ -160,34 +140,6 @@ pub struct MemoryMetrics {
     pub per_agent_bytes: Option<u64>,
     /// Number of memory samples taken.
     pub sample_count: usize,
-}
-
-/// Token overhead analysis.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct TokenOverheadMetrics {
-    /// Total tokens sent to LLM.
-    pub total_tokens: u64,
-    /// Tokens from user content only.
-    pub user_content_tokens: u64,
-    /// Framework overhead tokens.
-    pub overhead_tokens: u64,
-    /// Overhead as percentage of total.
-    pub overhead_percentage: f64,
-    /// Breakdown by category.
-    pub breakdown: TokenBreakdown,
-}
-
-/// Token overhead breakdown by category.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct TokenBreakdown {
-    /// Tokens from framework-injected system prompts.
-    pub system_prompt_tokens: u64,
-    /// Tokens consumed by serialized tool/function definitions.
-    pub tool_schema_tokens: u64,
-    /// Tokens added as framework wrappers around user messages.
-    pub framework_wrapper_tokens: u64,
 }
 
 /// Computes a statistical summary from a slice of durations.
@@ -618,20 +570,8 @@ mod tests {
                 count: 10,
                 coefficient_of_variation: 0.32,
             },
-            tool_invocation: None,
             throughput: None,
             memory: None,
-            token_overhead: Some(TokenOverheadMetrics {
-                total_tokens: 1200,
-                user_content_tokens: 950,
-                overhead_tokens: 250,
-                overhead_percentage: 20.83,
-                breakdown: TokenBreakdown {
-                    system_prompt_tokens: 100,
-                    tool_schema_tokens: 100,
-                    framework_wrapper_tokens: 50,
-                },
-            }),
             reproducibility_rate: Some(0.95),
             iterations: 5,
         }
@@ -686,7 +626,7 @@ mod tests {
 
     #[test]
     fn test_benchmark_result_deserialize_missing_optional_fields() {
-        // Simulate older schema without token_overhead, reproducibility_rate, etc.
+        // Simulate older schema without memory, reproducibility_rate, etc.
         let json = r#"{
             "schemaVersion": 1,
             "workloadName": "simple_tool_call",
@@ -713,11 +653,9 @@ mod tests {
 
         let result: BenchmarkResult = serde_json::from_str(json).unwrap();
         // All optional fields default to None
-        assert_eq!(result.token_overhead, None);
         assert_eq!(result.reproducibility_rate, None);
         assert_eq!(result.memory, None);
         assert_eq!(result.throughput, None);
-        assert_eq!(result.tool_invocation, None);
     }
 
     #[test]
