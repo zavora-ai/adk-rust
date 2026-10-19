@@ -232,7 +232,7 @@ impl<'a> PregelExecutor<'a> {
         while !self.pending_nodes.is_empty() {
             // Check recursion limit
             let steps_taken = self.step.saturating_sub(self.run_start_step);
-            if steps_taken >= self.config.recursion_limit {
+            if steps_taken >= self.recursion_limit() {
                 return Err(GraphError::RecursionLimitExceeded(steps_taken));
             }
 
@@ -340,7 +340,7 @@ impl<'a> PregelExecutor<'a> {
             while !self.pending_nodes.is_empty() {
                 // Check recursion limit
                 let steps_taken = self.step.saturating_sub(self.run_start_step);
-                if steps_taken >= self.config.recursion_limit {
+                if steps_taken >= self.recursion_limit() {
                     yield Err(GraphError::RecursionLimitExceeded(steps_taken));
                     return;
                 }
@@ -1578,6 +1578,11 @@ impl<'a> PregelExecutor<'a> {
             }
         }
         Ok((next, routes))
+    }
+
+    /// The run's step budget: the config's override, else the graph's own limit.
+    fn recursion_limit(&self) -> usize {
+        self.config.recursion_limit.unwrap_or(self.graph.recursion_limit)
     }
 
     /// Rejects an update naming a channel the schema does not declare.

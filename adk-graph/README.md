@@ -533,7 +533,7 @@ fn harden(graph: CompiledGraph) -> CompiledGraph {
 
 | Default | Value |
 |---------|-------|
-| Super-steps per run | 50 (`ExecutionConfig::recursion_limit`; raise it with `ExecutionConfig::with_recursion_limit`) |
+| Super-steps per run | 100 (`CompiledGraph::with_recursion_limit` or `GraphAgentBuilder::recursion_limit`; `ExecutionConfig::with_recursion_limit` overrides it for one run) |
 | Retry when no policy is attached | one attempt |
 | `RetryPolicy::default()` | ten attempts; 1s initial delay doubling to a 60s cap, with full jitter — the nine sleeps average about 151s in total |
 | Concurrency | the whole frontier |

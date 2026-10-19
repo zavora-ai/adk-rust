@@ -121,7 +121,7 @@ fn test_execution_config() {
         .with_metadata("key", json!("value"));
 
     assert_eq!(config.thread_id, "thread-123");
-    assert_eq!(config.recursion_limit, 100);
+    assert_eq!(config.recursion_limit, Some(100));
     assert_eq!(config.metadata.get("key"), Some(&json!("value")));
     assert!(config.resume_from.is_none());
 }

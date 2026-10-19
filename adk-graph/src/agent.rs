@@ -665,7 +665,6 @@ impl GraphAgentBuilder {
         self
     }
 
-    /// Set recursion limit
     /// Cap how many nodes execute concurrently within one super-step.
     ///
     /// See [`CompiledGraph::with_max_concurrency`](crate::graph::CompiledGraph::with_max_concurrency).
@@ -674,6 +673,9 @@ impl GraphAgentBuilder {
         self
     }
 
+    /// Sets how many super-steps each turn may take; 100 when unset.
+    ///
+    /// See [`CompiledGraph::with_recursion_limit`](crate::graph::CompiledGraph::with_recursion_limit).
     pub fn recursion_limit(mut self, limit: usize) -> Self {
         self.recursion_limit = limit;
         self

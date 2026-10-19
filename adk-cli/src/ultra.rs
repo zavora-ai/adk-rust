@@ -216,7 +216,10 @@ fn build_graph(
         )
         .add_edge("finalize", END);
 
-    Ok(graph.compile()?.with_recursion_limit(16))
+    // A round is three super-steps (revise or implement, the reviewers, synthesize), and
+    // finalize is one more, so the step cap never cuts a run short of `max_rounds`.
+    let steps = 3 * usize::try_from(max_rounds.max(1)).unwrap_or(1) + 1;
+    Ok(graph.compile()?.with_recursion_limit(steps.max(16)))
 }
 
 fn coding_agent(model: Arc<dyn Llm>, root: &Path) -> Arc<dyn Agent> {

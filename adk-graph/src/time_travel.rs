@@ -227,9 +227,9 @@ impl<'g> TimeTravelHandle<'g> {
         })?;
 
         // Create an ExecutionConfig that resumes from this checkpoint
-        let resume_config = ExecutionConfig::new(&config.thread_id)
-            .with_resume_from(&checkpoint.checkpoint_id)
-            .with_recursion_limit(config.recursion_limit);
+        let mut resume_config =
+            ExecutionConfig::new(&config.thread_id).with_resume_from(&checkpoint.checkpoint_id);
+        resume_config.recursion_limit = config.recursion_limit;
 
         // Invoke the graph with the checkpoint's state — the executor will
         // restore state from the checkpoint and continue execution from there

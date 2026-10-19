@@ -445,7 +445,12 @@ impl CompiledGraph {
         self
     }
 
-    /// Set recursion limit for cycles
+    /// Sets how many super-steps one run may take; 100 when unset.
+    ///
+    /// A run that would take more fails with
+    /// [`GraphError::RecursionLimitExceeded`]. An
+    /// [`ExecutionConfig::with_recursion_limit`](crate::node::ExecutionConfig::with_recursion_limit)
+    /// value overrides it for one run.
     pub fn with_recursion_limit(mut self, limit: usize) -> Self {
         self.recursion_limit = limit;
         self

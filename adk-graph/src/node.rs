@@ -32,8 +32,14 @@ pub struct ExecutionConfig {
     /// node that runs again later, such as in the next pass of a loop or on the
     /// next turn of a [`GraphAgent`](crate::agent::GraphAgent), pauses again.
     pub resume_values: HashMap<String, Value>,
-    /// Recursion limit for cycles
-    pub recursion_limit: usize,
+    /// How many super-steps one run may take before it fails with
+    /// [`GraphError::RecursionLimitExceeded`](crate::error::GraphError::RecursionLimitExceeded).
+    ///
+    /// `None` uses the graph's own limit, set with
+    /// [`CompiledGraph::with_recursion_limit`](crate::graph::CompiledGraph::with_recursion_limit)
+    /// or [`GraphAgentBuilder::recursion_limit`](crate::agent::GraphAgentBuilder::recursion_limit)
+    /// (100 when neither is set); a value here overrides it for this run.
+    pub recursion_limit: Option<usize>,
     /// Additional configuration
     pub metadata: HashMap<String, Value>,
     /// The invocation this graph run belongs to, when it has one.
@@ -71,7 +77,7 @@ impl ExecutionConfig {
             thread_id: thread_id.to_string(),
             resume_from: None,
             resume_values: HashMap::new(),
-            recursion_limit: 50,
+            recursion_limit: None,
             metadata: HashMap::new(),
             parent_context: None,
             durability: crate::checkpoint::Durability::default(),
@@ -139,9 +145,19 @@ impl ExecutionConfig {
         self
     }
 
-    /// Set the recursion limit
+    /// Overrides the graph's recursion limit for this run.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::ExecutionConfig;
+    ///
+    /// let config = ExecutionConfig::new("thread").with_recursion_limit(500);
+    /// assert_eq!(config.recursion_limit, Some(500));
+    /// assert_eq!(ExecutionConfig::new("thread").recursion_limit, None);
+    /// ```
     pub fn with_recursion_limit(mut self, limit: usize) -> Self {
-        self.recursion_limit = limit;
+        self.recursion_limit = Some(limit);
         self
     }
 
