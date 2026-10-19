@@ -2,6 +2,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/adk-acp.svg)](https://crates.io/crates/adk-acp)
 [![docs.rs](https://docs.rs/adk-acp/badge.svg)](https://docs.rs/adk-acp)
+[![License](https://img.shields.io/crates/l/adk-acp.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 
 Agent Client Protocol support for ADK-Rust. Use an external coding agent from an
 ADK-Rust application, or expose an ADK-Rust agent to an ACP-compatible editor.
@@ -19,18 +20,32 @@ approval requests over JSON-RPC.
 | ACP client/host | An ADK-Rust coordinator should delegate work to a local ACP coding-agent process | `AcpAgentTool`, `AcpToolset`, `AcpSession`, `stream_prompt` |
 | ACP agent/server | An editor or another ACP client should talk to an ADK-Rust agent | `AcpServer` with the `server` feature |
 
-Both directions implement stable ACP protocol version 1 using
-`agent-client-protocol` 3.3. Crate version 3.3 is the Rust SDK release; it does
-not mean ACP protocol v2.
+Both directions implement stable ACP protocol version 1 using the official
+`agent-client-protocol` Rust SDK 3.3 (ACP schema 1.11), re-exported as
+`adk_acp::agent_client_protocol`. SDK version 3.3 is the Rust SDK release; it does
+not mean ACP protocol v3. Code that uses the re-export follows the SDK's
+[3.0 migration notes](https://github.com/agentclientprotocol/rust-sdk/blob/main/src/agent-client-protocol/CHANGELOG.md).
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-acp = "3.0.0"
+adk-acp = "3.0"
 
 # Add the server feature only when exposing an ADK-Rust agent to a client.
-adk-acp = { version = "3.0.0", features = ["server"] }
+adk-acp = { version = "3.0", features = ["server"] }
+```
+
+| Feature | Description |
+|---------|-------------|
+| (default) | Client and host APIs for connecting to ACP agents |
+| `server` | `AcpServer` for exposing an ADK-Rust agent to ACP clients |
+
+Or use the meta-crate's `acp` feature, which is not part of any tier:
+
+```toml
+[dependencies]
+adk-rust = { version = "3.0", features = ["acp"] }
 ```
 
 ## Use an ACP agent as an ADK-Rust tool
@@ -39,33 +54,34 @@ adk-acp = { version = "3.0.0", features = ["server"] }
 v1, creates a session rooted at the selected project, sends one prompt, and
 returns the agent's text as normal ADK tool output.
 
-```rust,ignore
+```rust
 use adk_acp::{AcpAgentTool, PermissionDecision, PermissionPolicy};
-use adk_agent::LlmAgentBuilder;
+use adk_agent::{LlmAgent, LlmAgentBuilder};
+use adk_core::Llm;
 use std::sync::Arc;
 
-let coding_agent = AcpAgentTool::new(
-        "npx -y @agentclientprotocol/codex-acp@latest"
-    )
-    .name("coding_agent")
-    .description("Inspect and change code in the current project")
-    .working_dir("/absolute/path/to/project")
-    .permission_policy(PermissionPolicy::Custom(Box::new(|request| {
-        if request.title.to_lowercase().contains("delete") {
-            PermissionDecision::deny()
-        } else {
-            PermissionDecision::allow_once()
-        }
-    })));
+fn orchestrator(model: Arc<dyn Llm>) -> adk_core::Result<LlmAgent> {
+    let coding_agent = AcpAgentTool::new("npx -y @agentclientprotocol/codex-acp@latest")
+        .name("coding_agent")
+        .description("Inspect and change code in the current project")
+        .working_dir("/absolute/path/to/project")
+        .permission_policy(PermissionPolicy::Custom(Box::new(|request| {
+            if request.title.to_lowercase().contains("delete") {
+                PermissionDecision::deny()
+            } else {
+                PermissionDecision::allow_once()
+            }
+        })));
 
-let orchestrator = LlmAgentBuilder::new("orchestrator")
-    .model(model)
-    .instruction("Delegate repository changes to coding_agent.")
-    .tool(Arc::new(coding_agent))
-    .build()?;
+    LlmAgentBuilder::new("orchestrator")
+        .model(model)
+        .instruction("Delegate repository changes to coding_agent.")
+        .tool(Arc::new(coding_agent))
+        .build()
+}
 ```
 
-Permissions are denied by default. `AutoApprove` selects an allow option by its
+Permissions are denied by default (`PermissionPolicy::DenyAll`). `AutoApprove` selects an allow option by its
 ACP permission kind rather than by menu order, but it should be reserved for a
 trusted development environment. Custom policies receive the real session ID,
 tool-call ID, title, kind, raw input, and every option offered by the agent.
@@ -112,22 +128,41 @@ unless the external agent advertises those optional transports.
 The server path uses the official SDK's `Agent.builder()` and `Stdio` transport.
 It does not maintain a parallel wire format.
 
-```rust,ignore
+Requires the `server` feature.
+
+```rust
 use adk_acp::server::{AcpServer, AcpServerConfigBuilder};
+use adk_core::Agent;
 use adk_session::InMemorySessionService;
 use std::sync::Arc;
 
-let config = AcpServerConfigBuilder::new()
-    .agent(Arc::new(agent))
-    .session_service(Arc::new(InMemorySessionService::new()))
-    .agent_name("repository-guide")
-    .agent_description("Explains and improves this Rust workspace")
-    .max_sessions(16)
-    .build()?;
+async fn serve(agent: Arc<dyn Agent>) -> Result<(), Box<dyn std::error::Error>> {
+    let config = AcpServerConfigBuilder::new()
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        .agent_name("repository-guide")
+        .agent_description("Explains and improves this Rust workspace")
+        .max_sessions(16)
+        .build()?;
 
-let handle = AcpServer::run(config).await?;
-handle.wait().await?;
+    let handle = AcpServer::run(config).await?;
+    handle.wait().await?;
+    Ok(())
+}
 ```
+
+| `AcpServerConfigBuilder` option | Default |
+|---------------------------------|---------|
+| `agent`, `session_service` | Required; `build()` fails without them |
+| `agent_name` | `"adk-agent"` |
+| `agent_description` | Empty |
+| `user_id` | `"acp-client"`, the ADK user that owns every session |
+| `max_sessions` | 16; `build()` fails on 0 |
+| `shutdown_timeout` | 30 seconds; `build()` fails on 0 |
+| `session_controls` | None |
+| `transport` | `TransportConfig::Stdio`, the only transport |
+
+Protocol traffic is the only data written to stdout; send tracing and diagnostics to stderr.
 
 The server implements:
 
@@ -144,7 +179,7 @@ The server implements:
 - `session/cancel` plus SDK-level `$/cancel_request` handling;
 - `session/request_permission` bridging: an agent tool-confirmation pause is
   turned into a native ACP permission request and the client's outcome resumes
-  the turn (allow → approve, deny/cancel → deny), correlated by function-call id;
+  the turn (allow → approve, deny/cancel → deny), bound to the call's fingerprint;
 - `session/fork`: branch a persisted session into a new session id whose history
   is a copy of the source's, leaving the source unchanged;
 - `session/set_mode` and `session/set_config_option`: change the current session
@@ -153,8 +188,10 @@ The server implements:
   a `CurrentModeUpdate` / `ConfigOptionUpdate`; the selection persists across
   load / resume / fork;
 - `session/close`, `session/resume`, `session/list`, and `session/delete`;
-- client-supplied stdio MCP servers, started per session and exposed to
-  LlmAgent and CodeActAgent through invocation-scoped toolsets;
+- client-supplied stdio MCP servers in `session/new`, `session/load`,
+  `session/resume`, or `session/fork`, started per session and exposed to
+  LlmAgent and CodeActAgent through invocation-scoped toolsets named
+  `acp:{server name}`;
 - one ACP session mapped to one persisted ADK-Rust session and Runner context;
 - concurrent-session limits and one active prompt per session.
 
@@ -167,10 +204,13 @@ capabilities (`list`, `delete`, `resume`, `close`, `fork`,
 only when the agent supplies a `SessionControls` provider — an agent without one
 advertises no modes and no options, so advertised capabilities always match what
 the server implements. It does not advertise optional HTTP or SSE MCP support.
-MCP startup has a bounded timeout, session capacity is reserved before a process
-starts, duplicate names and environment entries are rejected, servers that
-publish the same tool name are rejected at session setup, and close, delete,
-and shutdown cancel the session-owned MCP services.
+Before starting a process the server rejects more than 16 servers, a non-stdio
+server, an empty or repeated name or environment variable name, and a command
+that is not an absolute path. Each startup handshake is bounded to 15 seconds,
+session capacity is reserved before a process starts, servers that publish the
+same tool name are rejected at session setup with an error naming both servers
+and the tool, and close, delete, and shutdown cancel the session-owned MCP
+services.
 
 ### Session modes, configuration options, and commands
 
@@ -218,15 +258,16 @@ client share one implementation:
   URI-less binary MIME types, so those parts are not emitted.
 - ACP image `uri` and content annotations have no corresponding fields in the
   current `adk_core::Part` shapes, so an inbound image preserves its MIME type
-  and bytes but not those optional display hints. Extending the core content
-  model to retain them remains post-v2 work.
-- `UsageUpdate` notifications are emitted from ADK usage metadata (token counts,
-  plus cost in USD when reported). Nothing is emitted when an event carries no
-  usage metadata, and counts are never fabricated.
-- `ToolCallUpdate` notifications include the tool result content, the affected
-  file locations, and a tool `kind` inferred from the tool name, while
-  preserving the identifier correlation between a `ToolCall` and its later
-  `ToolCallUpdate`.
+  and bytes but not those optional display hints.
+- `UsageUpdate` notifications are emitted from ADK usage metadata: `used` is the
+  turn's total token count, plus cost in USD when reported. ADK does not know the
+  model's context-window size, so `size` is `0`. Nothing is emitted when an event
+  carries no usage metadata.
+- A tool call starts as an `in_progress` `ToolCall` with a `kind` inferred from
+  the tool name (`read`, `edit`, `execute`, and so on, else `other`). Its result
+  arrives as a `completed` `ToolCallUpdate` with the same identifier, carrying the
+  result content and the file locations the result names in `path`, `paths`, or
+  `locations`.
 
 ### Client streaming surface
 
@@ -239,9 +280,6 @@ External_Agent. Beyond agent text (`Text`), reasoning (`Thought`), tool starts
   extracted content text, and affected file locations.
 - `OutputChunk::Usage` — an External_Agent's `UsageUpdate`, carrying tokens
   `used`/`size` and, when reported, the cumulative `cost` and `currency`.
-
-Agent message text is surfaced exactly as before, so existing text consumers see
-no change.
 
 ## Verified protocol flow
 
@@ -298,25 +336,32 @@ cargo check --manifest-path examples/acp_server/Cargo.toml
   restarts. `InMemorySessionService` is suitable for local editor use and tests.
 - The ACP server bridges ADK tool confirmations to native ACP permission
   requests. When the agent pauses on a `ToolConfirmationRequest`, the server
-  sends a `session/request_permission` to the client, awaits the outcome, and
-  resumes the turn with the mapped decision (allow → approve, deny/cancel →
-  deny), correlated to the tool call by its function-call id. The nested
+  sends a `session/request_permission` titled `Run tool '{name}'` with the
+  options `acp-allow-once` and `acp-reject-once`, awaits the outcome, and resumes
+  the turn with the mapped decision: `acp-allow-once` approves; any other
+  selection, and a cancellation, deny. Each outcome is recorded under the call's
+  function-call id and bound to the call's fingerprint — the acting agent, the
+  tool's origin, the tool name, and the arguments — so a reused call id on
+  another agent's call, or on a tool another MCP server publishes, is not
+  authorized. A confirmation without a call id fails the prompt, and one prompt
+  resolves at most 64 rounds of confirmations. The resumed run dispatches the
+  held call under its original id before the next model call. The nested
   request is issued from the spawned prompt task, so the outer prompt response
-  still completes — an earlier concern that the official Rust SDK loses the
-  outer prompt response after a nested bidirectional request does not reproduce
-  with this pause/resume flow (covered by the in-memory interoperability
-  tests).
+  still completes.
+- `AcpServerConfigBuilder` takes no `ToolPolicy` or run budget. In-process
+  controls belong on the agent: tool confirmation, callbacks, guardrails, and
+  `adk-auth` wrappers.
 
 ## Runnable examples
 
 | Example | What it demonstrates |
 |---|---|
-| [`acp_client_host`](../examples/acp_client_host) | A vendor-neutral ACP client with streamed events, a read-only filesystem host, and an async permission policy |
-| [`acp_kiro`](../examples/acp_kiro) | Direct, delegated, persistent-session, environment, and cancellation flows against a real external coding agent |
-| [`acp_server`](../examples/acp_server) | A real ADK-Rust LLM agent exposed to editors and other ACP clients through the official server SDK |
-| [`acp_full_protocol`](../examples/acp_full_protocol) | In-process, no-API-key `Runner`-backed reference exercising the full Phase 2 server surface (embedded-resource + image/audio prompts, permission bridge, `session/load` replay, usage/tool-call updates) with a validating test |
+| [`acp_client_host`](https://github.com/zavora-ai/adk-rust/tree/main/examples/acp_client_host) | A vendor-neutral ACP client with streamed events, a read-only filesystem host, and an async permission policy |
+| [`acp_kiro`](https://github.com/zavora-ai/adk-rust/tree/main/examples/acp_kiro) | Direct, delegated, persistent-session, environment, and cancellation flows against a real external coding agent |
+| [`acp_server`](https://github.com/zavora-ai/adk-rust/tree/main/examples/acp_server) | A real ADK-Rust LLM agent exposed to editors and other ACP clients through the official server SDK |
+| [`acp_full_protocol`](https://github.com/zavora-ai/adk-rust/tree/main/examples/acp_full_protocol) | In-process, no-API-key `Runner`-backed reference exercising the server surface (embedded-resource and image/audio prompts, permission bridge, `session/load` replay, usage and tool-call updates) with a validating test |
 
-Read the [official ADK-Rust ACP guide](../docs/official_docs/acp/index.md) for
+Read the [official ADK-Rust ACP guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/acp/index.md) for
 architecture, client and server design choices, deployment boundaries, and the
 focused verification matrix. The protocol specification is at
 [agentclientprotocol.com](https://agentclientprotocol.com/).
@@ -324,3 +369,7 @@ focused verification matrix. The protocol specification is at
 ## License
 
 Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.

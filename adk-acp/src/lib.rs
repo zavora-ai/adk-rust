@@ -3,24 +3,23 @@
 //! Connect ADK-Rust applications to ACP-compatible coding agents, or expose an
 //! ADK-Rust agent as the coding agent behind an ACP-compatible editor or client.
 //! Both directions use stable ACP protocol version 1 through the official
-//! `agent-client-protocol` Rust SDK.
+//! `agent-client-protocol` Rust SDK 3.3, re-exported as [`agent_client_protocol`].
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
+//! ```rust,no_run
 //! use adk_acp::AcpAgentTool;
-//! use adk_agent::LlmAgentBuilder;
+//! use adk_core::Tool;
 //! use std::sync::Arc;
 //!
-//! // Wrap any ACP-compatible coding agent as a tool your agent can delegate to.
-//! let coding_agent = AcpAgentTool::new("my-coding-agent --acp")
-//!     .description("Delegate repository work to an ACP coding agent");
-//!
-//! let agent = LlmAgentBuilder::new("orchestrator")
-//!     .instruction("Use claude-code for complex refactoring tasks.")
-//!     .model(model)
-//!     .tool(Arc::new(coding_agent))
-//!     .build()?;
+//! // Wrap any ACP-compatible coding agent as a tool your agent can delegate to,
+//! // then register it with `LlmAgentBuilder::tool`.
+//! let coding_agent: Arc<dyn Tool> = Arc::new(
+//!     AcpAgentTool::new("my-coding-agent --acp")
+//!         .name("coding_agent")
+//!         .description("Delegate repository work to an ACP coding agent"),
+//! );
+//! # let _ = coding_agent;
 //! ```
 //!
 //! ## What is ACP?
