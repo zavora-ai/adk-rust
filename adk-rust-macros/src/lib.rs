@@ -1,13 +1,22 @@
-//! # adk-macros
+//! # adk-rust-macros
 //!
-//! Proc macros for ADK-Rust that eliminate tool registration boilerplate.
+//! Procedural macros for ADK-Rust.
+//!
+//! | Macro | Generates |
+//! |-------|-----------|
+//! | [`macro@tool`] | A zero-sized struct implementing `adk_core::Tool` from an async function |
+//! | [`macro@entrypoint`] | An `adk-graph` functional workflow agent struct |
+//! | [`macro@task`] | A checkpointed, optionally retried `adk-graph` task wrapper |
 //!
 //! ## `#[tool]`
 //!
-//! Turns an async function into a fully-wired `adk_tool::Tool` implementation:
+//! Turns an async function into a `Tool` implementation. The generated code refers to
+//! `adk_tool`, `schemars`, and `serde_json`, so the calling crate depends on all three;
+//! `adk-tool` re-exports the macro as `adk_tool::tool`.
 //!
-//! ```rust,ignore
-//! use adk_macros::tool;
+//! ```rust
+//! use adk_rust_macros::tool;
+//! use adk_tool::{AdkError, Tool};
 //! use schemars::JsonSchema;
 //! use serde::Deserialize;
 //!
@@ -18,13 +27,15 @@
 //! }
 //!
 //! /// Get the current weather for a city.
-//! #[tool]
-//! async fn get_weather(args: WeatherArgs) -> Result<serde_json::Value, adk_tool::AdkError> {
+//! #[tool(read_only)]
+//! async fn get_weather(args: WeatherArgs) -> Result<serde_json::Value, AdkError> {
 //!     Ok(serde_json::json!({ "temp": 72, "city": args.city }))
 //! }
 //!
-//! // This generates a struct `GetWeather` that implements `adk_tool::Tool`.
-//! // Use it like: Arc::new(GetWeather)
+//! // Generates `pub struct GetWeather` implementing `adk_tool::Tool`.
+//! // Register it with `agent_builder.tool(Arc::new(GetWeather))`.
+//! assert_eq!(GetWeather.name(), "get_weather");
+//! assert!(GetWeather.is_read_only());
 //! ```
 //!
 //! The macro:

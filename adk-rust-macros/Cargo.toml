@@ -5,11 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Proc macros for ADK-Rust — #[tool] attribute for zero-boilerplate tool registration"
-repository = "https://github.com/zavora-ai/adk-rust"
-documentation = "https://docs.rs/adk-macros"
+description = "Procedural macros for ADK-Rust: #[tool] tool definitions and #[entrypoint]/#[task] graph workflows"
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/adk-rust-macros"
 keywords = ["adk", "agent", "macro", "tool", "ai"]
-categories = ["development-tools::procedural-macro-helpers"]
+categories = ["development-tools"]
 readme = "README.md"
 
 [lib]
