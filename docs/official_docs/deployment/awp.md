@@ -1,6 +1,6 @@
 # Agentic Web Protocol (AWP)
 
-ADK-Rust provides [Agentic Web Protocol (AWP)](https://agenticwebprotocol.com) types and Axum integration for making websites and services accessible to AI agents. The implementation spans two crates: `awp-types` (pure protocol types) and `adk-awp` (routes, middleware, and service interfaces). Applications supply agent dispatch, authentication, authorization, and durable webhook delivery.
+ADK-Rust provides [Agentic Web Protocol (AWP)](https://agenticwebprotocol.com) types and Axum integration for making websites and services accessible to AI agents. The implementation spans two crates: `awp-types` (pure protocol types) and `adk-awp` (routes, middleware, and service interfaces). Applications supply agent dispatch, authentication, authorization, and durable subscription storage.
 
 ## Overview
 
@@ -10,7 +10,7 @@ Use AWP when:
 - You want AI agents to discover and interact with your service programmatically
 - You need trust-level metadata and a hook for application-enforced access control
 - You want to serve both human visitors and AI agents from the same endpoints
-- You need event subscriptions and HMAC-SHA256 signing primitives
+- You need event subscriptions with signed webhook delivery
 - You want a health state machine for service monitoring
 
 ## Architecture
@@ -27,20 +27,20 @@ sequenceDiagram
     participant Events as /awp/events/subscribe
 
     ExtAgent->>Discovery: GET /.well-known/awp.json
-    Discovery-->>ExtAgent: {version, manifest_url, capabilities}
+    Discovery-->>ExtAgent: {version, siteName, capabilityManifestUrl, ...}
     
     ExtAgent->>Manifest: GET /awp/manifest
     Manifest-->>ExtAgent: JSON-LD capability manifest
     
     ExtAgent->>Health: GET /awp/health
-    Health-->>ExtAgent: {status: "healthy", trust_level}
+    Health-->>ExtAgent: {state: "healthy", message, timestamp}
     
     ExtAgent->>A2A: POST /awp/a2a (agent message)
     A2A-->>ExtAgent: Agent response
     
     ExtAgent->>Events: POST /awp/events/subscribe
-    Events-->>ExtAgent: {subscription_id, webhook_url}
-    Note over Events,ExtAgent: The application delivery service sends<br/>HMAC-SHA256 signed webhooks
+    Events-->>ExtAgent: {id}
+    Note over Events,ExtAgent: The subscription service sends<br/>Standard Webhooks-signed deliveries
 ```
 
 ### Application Layout
@@ -72,7 +72,7 @@ sequenceDiagram
 | Crate | Purpose | Dependencies |
 |-------|---------|-------------|
 | `awp-types` | Protocol types (enums, structs, errors) | Zero `adk-*` deps — `serde`, `uuid`, `chrono`, `thiserror` only |
-| `adk-awp` | Routes, middleware, service interfaces, and in-memory implementations | `awp-types`, `adk-core`, `axum` 0.8, `tokio`, `dashmap` |
+| `adk-awp` | Routes, middleware, service interfaces, and in-memory implementations | `awp-types`, `adk-core` (`webhook-delivery`), `axum` 0.8, `tokio`, `dashmap` |
 
 The split means any Rust project can depend on `awp-types` without pulling in the ADK tree.
 
@@ -161,22 +161,24 @@ impl AwpA2aHandler for ApplicationA2a {
     }
 }
 
-let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
-let a2a_token: Arc<str> = std::env::var("AWP_A2A_TOKEN")?.into();
-let state = AwpState::builder(loader.context_ref())
-    .a2a_handler(Arc::new(ApplicationA2a { bearer_token: a2a_token }))
-    .build();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
+    let a2a_token: Arc<str> = std::env::var("AWP_A2A_TOKEN")?.into();
+    let state = AwpState::builder(loader.context_ref())
+        .a2a_handler(Arc::new(ApplicationA2a { bearer_token: a2a_token }))
+        .build();
 
-let app = axum::Router::new()
-    .merge(awp_routes(state))
-    .merge(your_custom_routes);
+    let app = axum::Router::new().merge(awp_routes(state));
 
-let listener = tokio::net::TcpListener::bind("127.0.0.1:3456").await?;
-axum::serve(
-    listener,
-    app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-)
-.await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3456").await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
+    Ok(())
+}
 ```
 
 This registers the four public AWP endpoints with version negotiation, rate
@@ -347,11 +349,12 @@ All AWP routes include version negotiation middleware:
 
 Subscription management is a privileged surface. Mount
 `awp_management_routes()` behind authentication before accepting these
-requests. Callback URLs must be absolute HTTPS URLs and signing secrets must
-contain at least 32 bytes:
+requests. Callback URLs must be absolute HTTPS URLs that do not name a
+loopback, private, or link-local address, and signing secrets must contain 32
+to 4096 bytes:
 
 ```bash
-# Subscribe
+# Subscribe — answers 201 with {"id": "..."}
 curl -X POST http://localhost:3456/awp/events/subscribe \
   -H "Authorization: Bearer $AWP_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
@@ -362,24 +365,50 @@ curl -X POST http://localhost:3456/awp/events/subscribe \
     "secret": "replace-with-at-least-32-random-bytes"
   }'
 
-# List subscriptions
+# List subscriptions (the secret is never returned)
 curl -H "Authorization: Bearer $AWP_ADMIN_TOKEN" \
   http://localhost:3456/awp/events/subscriptions
 ```
 
-`InMemoryEventSubscriptionService` signs and logs matching deliveries but
-performs no network I/O. Production applications implement
-`EventSubscriptionService` with destination validation, a durable queue,
-bounded retries, and their HTTP client.
+`InMemoryEventSubscriptionService`, the default, keeps subscriptions in memory
+and delivers each matching event over HTTP through
+`adk_core::webhook_delivery::WebhookDelivery`:
 
-An HTTP delivery implementation can carry an `X-AWP-Signature` header with the
-HMAC-SHA256 signature:
+- Each delivery carries [Standard Webhooks](https://www.standardwebhooks.com/)
+  headers (`webhook-id`, `webhook-timestamp`, `webhook-signature`), signed with
+  the subscription secret's bytes as the key; the event ID is the `webhook-id`.
+- Failed deliveries are retried with exponential backoff and jitter, and
+  dead-lettered after the last attempt. Redirects are not followed.
+- The egress policy refuses plain-HTTP, loopback, private, and link-local
+  destinations at subscription time and again when the host name resolves.
+- `deliver` starts the deliveries and returns at once; `deliver_and_wait`
+  returns a `DeliveryReport` per subscription. `with_delivery` sets the retry
+  policy, dead-letter sink, or egress policy.
 
+Implement `EventSubscriptionService` for durable subscription storage.
+
+Receivers verify a delivery with `adk_core::webhook::WebhookVerifier` (feature
+`webhooks`):
+
+```rust
+use adk_core::webhook::{WebhookHeaders, WebhookSecret, WebhookVerifier};
+
+fn verify(
+    secret: &str,
+    id: &str,
+    timestamp: &str,
+    signature: &str,
+    body: &[u8],
+) -> Result<(), adk_core::webhook::WebhookError> {
+    let verifier = WebhookVerifier::new(WebhookSecret::from_bytes(secret.as_bytes().to_vec())?);
+    let headers = WebhookHeaders { id, timestamp: timestamp.into(), signature };
+    verifier.verify(&headers, body)?;
+    Ok(())
+}
 ```
-X-AWP-Signature: sha256=<hex_digest>
-```
 
-Verify signatures with `adk_awp::verify_signature(payload, secret, signature)`.
+`adk_awp::sign_payload` and `verify_signature` remain for receivers of the
+earlier `sha256=<hex_digest>` format; the built-in service no longer sends it.
 
 ## Health State Machine
 
@@ -395,7 +424,10 @@ Healthy → Degrading → Degraded
 State changes emit `health.changed` events to all matching subscribers.
 
 ```rust
-use adk_awp::HealthStateMachine;
+use adk_awp::{HealthStateMachine, InMemoryEventSubscriptionService};
+use std::sync::Arc;
+
+let health = HealthStateMachine::new(Arc::new(InMemoryEventSubscriptionService::new()));
 
 // Transition to degrading
 health.report_degrading("database latency high").await?;
@@ -407,17 +439,19 @@ health.report_degraded("database unreachable").await?;
 health.report_healthy().await?;
 ```
 
-Invalid transitions (e.g., Healthy → Degraded) return an error.
+Valid transitions are Healthy → Degrading, Degrading → Degraded, and Degrading or Degraded →
+Healthy. Any other (e.g., Healthy → Degraded) returns `AwpError::InvalidRequest`.
 
 ## Consent Storage
 
-AWP includes a consent storage interface. Regulatory compliance also requires
+AWP includes a consent storage interface, `ConsentService`, with in-memory and file-backed
+(`FileConsentService`) implementations. Regulatory compliance also requires
 application-specific notice, lawful basis, retention, access controls, and
 deletion policy; selecting a storage implementation does not establish
 compliance:
 
 ```rust
-use adk_awp::InMemoryConsentService;
+use adk_awp::{ConsentService, InMemoryConsentService};
 
 let consent = InMemoryConsentService::new();
 
@@ -436,7 +470,7 @@ consent.revoke_consent("visitor-123", "analytics").await?;
 AWP detects whether a request comes from a human or an AI agent:
 
 1. `X-AWP-Channel: agent` header → Agent (explicit override)
-2. `Accept: application/json` + agent User-Agent pattern → Agent
+2. `Accept` containing `application/json`, `application/ld+json`, or `application/awp+json`, plus an agent User-Agent pattern → Agent
 3. Otherwise → Human
 
 Agent User-Agent patterns: `bot`, `crawler`, `spider`, `agent`, `gpt`, `claude`, `gemini`, `perplexity`, `anthropic`, `openai`.
@@ -495,14 +529,18 @@ The `PaymentPolicy` evaluates whether to auto-approve or require owner approval:
 ```rust
 use awp_types::{PaymentPolicy, TrustLevel};
 
-let policy = PaymentPolicy::default(); // $50 auto-approve, $500 require approval
+let policy = PaymentPolicy::default(); // auto-approve up to $50 for Known callers and above
 
 let decision = policy.evaluate(2500, TrustLevel::Known);
 // PaymentPolicyDecision::AutoApprove (amount $25 <= $50 threshold)
 
 let decision = policy.evaluate(60_000, TrustLevel::Partner);
-// PaymentPolicyDecision::RequireApproval (amount $600 > $500 threshold)
+// PaymentPolicyDecision::RequireApproval (amount $600 > $50 threshold)
 ```
+
+`evaluate` auto-approves an amount at or below `auto_approve_threshold` (default 5000 cents)
+from a caller at or above `min_trust_for_auto_approve` (default `Known`), and requires approval
+for everything else. `require_approval_threshold` (default 50,000) does not change the decision.
 
 ## business.toml Schema
 
@@ -560,8 +598,8 @@ The example:
 4. **Implement custom `TrustLevelAssigner`** — the default intentionally assigns only `Anonymous`
 5. **Authenticate management routes** — never expose subscription CRUD from an unprotected router
 6. **Install real A2A dispatch** — the fail-closed default returns `503`
-7. **Use durable event delivery** — implement destination policy, queueing, and bounded retries
-8. **Verify webhook signatures** — validate `X-AWP-Signature` on incoming webhooks
+7. **Store subscriptions durably** — the in-memory service loses them on restart; implement `EventSubscriptionService` over your database
+8. **Verify webhook signatures** — check the Standard Webhooks headers with `WebhookVerifier` on incoming deliveries
 
 ## Related
 

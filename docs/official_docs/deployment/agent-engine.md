@@ -39,16 +39,19 @@ adk-rust = { version = "3.0.0", features = ["minimal", "gemini-agent-platform"] 
 ```
 
 `serve_agent_engine` is the whole `main` of a deployable engine. It binds
-`0.0.0.0:$PORT` (fallback `8080`) and serves until stopped:
+`0.0.0.0:$PORT` (fallback `8080`; `AgentEngineOptions::with_port` overrides both) and serves
+until stopped. A deployed container must listen on every interface, so this entrypoint does not
+use the loopback default of the [server](server.md#host-origin-and-bind-defaults):
 
 ```rust
 use adk_rust::prelude::*;
-use adk_server::agent_engine::{AgentEngineOptions, serve_agent_engine};
+use adk_rust::server::agent_engine::{AgentEngineOptions, serve_agent_engine};
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let api_key = std::env::var("GOOGLE_API_KEY")
+        .map_err(|_| AdkError::config("GOOGLE_API_KEY is not set"))?;
     let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
 
     let agent = LlmAgentBuilder::new("weather_agent")
@@ -69,7 +72,8 @@ curl -s -X POST localhost:8080/api/stream_reasoning_engine \
   -d '{"class_method": "async_stream_query", "input": {"user_id": "u", "message": "hi"}}'
 ```
 
-Each response line is one ADK event as JSON.
+Each response line is one ADK event as JSON. `GET /health` answers `ok`.
+`build_agent_engine_app(agent, options)` returns the same router without serving it.
 
 ## Operations
 
@@ -89,9 +93,11 @@ Python artifact the wire contract preserves.
 | `async_search_memory` | `async` | Search the configured memory service |
 | `register_operations` | `""` | Advertise this table to the host |
 
-Unknown class methods return `400` with a problem-JSON body. The memory
-methods return an `Unsupported` error (`501`) until a memory service is
-configured.
+Unknown class methods return `400` with a problem-JSON body
+(`agent_engine.unknown_class_method`). The memory methods return an
+`Unsupported` error (`501`, `agent_engine.memory_unavailable`) until a memory
+service is configured. A method sent to the wrong endpoint, such as
+`stream_query` to `/api/reasoning_engine`, is refused with the endpoint to use.
 
 > **Note:** `reasoningEngines:asyncQuery` (durable query jobs) is not
 > registered: the capability must be declared at engine create time, cannot
@@ -150,9 +156,22 @@ loads) and the dispatch state.
 ### Memory
 
 `AgentEngineOptions::with_memory_service` accepts any
-`adk_memory::MemoryService` and enables the two memory class methods. The
-platform's Memory Bank backend arrives with the `vertex-memory` feature in a
-later release.
+`adk_memory::MemoryService` and enables the two memory class methods. With the
+`vertex-memory` feature, `VertexAiMemoryBankService` stores memories in the
+platform's Memory Bank; `VertexAiMemoryConfig::from_env()` reads the same
+three variables as the session config:
+
+```rust
+use adk_memory::{VertexAiMemoryBankService, VertexAiMemoryConfig};
+use adk_server::agent_engine::AgentEngineOptions;
+use std::sync::Arc;
+
+fn memory_bank() -> adk_core::Result<AgentEngineOptions> {
+    let config = VertexAiMemoryConfig::from_env()?;
+    let memory = Arc::new(VertexAiMemoryBankService::new_with_adc(config)?);
+    Ok(AgentEngineOptions::new().with_memory_service(memory))
+}
+```
 
 ## ServerBuilder integration
 
@@ -191,7 +210,8 @@ adk-rust deploy agent-engine \
   --service-account agent-runner@PROJECT.iam.gserviceaccount.com
 ```
 
-Optional flags: `--display-name` (defaults to the image name) and
+Optional flags: `--service-account` (defaults to the platform's Reasoning
+Engine service agent), `--display-name` (defaults to the image name), and
 `--kms-key` for CMEK. The command declares the full class-method contract
 from the [operations table](#operations), waits for the create operation,
 and prints the engine resource name. The same client is available

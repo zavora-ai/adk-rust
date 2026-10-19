@@ -14,11 +14,17 @@ The Agent Registry is the Govern pillar of the Gemini Enterprise Agent Platform:
 
 Agent Engine deployments **register themselves**: creating an engine (e.g. with `adk-rust deploy agent-engine`) adds it to the registry and keeps the entry lifecycle-synced. Do not register it again — a manual entry would duplicate it under a different URN namespace.
 
-Manual registration exists for everything else, and that is what the CLI covers:
+Manual registration exists for everything else, and that is what the CLI covers. Install the
+CLI with the feature: `cargo install adk-cli --features vertex-agent-registry` (the binary is
+`adk-rust`).
 
 ```bash
 # A self-hosted adk-server agent, described by its A2A agent card
 adk-rust registry register-agent --service-id my-agent --card agent-card.json
+
+# The same agent described by its URL and protocol (jsonrpc, grpc, or http-json)
+adk-rust registry register-agent --service-id my-agent \
+  --url https://agents.example.com/jsonrpc --protocol jsonrpc
 
 # An external MCP server (you supply the tools/list payload; no introspection)
 adk-rust registry register-mcp --service-id my-mcp --tool-spec tools-list.json \
@@ -27,7 +33,7 @@ adk-rust registry register-mcp --service-id my-mcp --tool-spec tools-list.json \
 # A bare governed endpoint
 adk-rust registry register-endpoint --service-id my-api --url https://api.example.com/v1
 
-# Discovery
+# Discovery (--type agent, the default, or mcp-server)
 adk-rust registry search "travel planner" --type agent
 ```
 
@@ -51,7 +57,7 @@ let search_tool = Arc::new(AgentSearchTool::new(Arc::new(registry)));
 # }
 ```
 
-The tool returns `{urn, displayName, description, skills, endpoint}` summaries across agents, MCP servers, or endpoints.
+The tool searches agents (the default), MCP servers, or endpoints (`component_type`) and returns summaries such as `{urn, displayName, description, skills, endpoint}` for an agent.
 
 ## Delegating to a deployed engine
 
