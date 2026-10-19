@@ -144,7 +144,8 @@ proptest! {
     ///
     /// *For any* list of events and *for any* `IntraCompactionConfig`,
     /// `maybe_compact` SHALL return `Some(compacted_events)` if and only if
-    /// `estimate_tokens(events, config.chars_per_token) > config.token_threshold`.
+    /// `estimate_tokens(events, config.chars_per_token) > config.token_threshold`
+    /// and the summary is smaller than the events it replaces.
     ///
     /// **Validates: Requirements 12.1**
     #[test]
@@ -181,8 +182,14 @@ proptest! {
             // Should have compacted (unless all events are in overlap window)
             let summarize_end = events.len().saturating_sub(overlap.min(events.len()));
             if summarize_end > 0 {
-                prop_assert!(result.is_some(),
-                    "Expected compaction: estimated={estimated} > threshold={token_threshold}, overlap={overlap}, events={}", events.len());
+                // A summary that is not smaller than the events it replaces is discarded.
+                let replaced = &events[..summarize_end];
+                let summary = rt.block_on(MockSummarizer.summarize_events(replaced)).unwrap().unwrap();
+                let shrinks = estimate_tokens(std::slice::from_ref(&summary), chars_per_token)
+                    < estimate_tokens(replaced, chars_per_token);
+                prop_assert_eq!(result.is_some(), shrinks,
+                    "estimated={} > threshold={}, overlap={}, events={}, summary shrinks={}",
+                    estimated, token_threshold, overlap, events.len(), shrinks);
             }
         } else {
             prop_assert!(result.is_none(),

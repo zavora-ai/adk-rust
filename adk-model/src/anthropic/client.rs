@@ -1691,14 +1691,22 @@ mod tests {
     }
 
     /// Generator for a Content with role "user" containing a single text part.
+    /// Generator for user and assistant turn text that is never blank.
+    ///
+    /// `build_message_params` drops a turn whose text is only whitespace, because the API
+    /// rejects it; these properties are about turns that reach the request.
+    fn arb_turn_text() -> impl Strategy<Value = String> {
+        "[A-Za-z0-9.,!?][A-Za-z0-9 .,!?]{0,79}".prop_map(String::from)
+    }
+
     fn arb_user_text_content() -> impl Strategy<Value = Content> {
-        arb_system_text()
+        arb_turn_text()
             .prop_map(|text| Content { role: "user".to_string(), parts: vec![Part::Text { text }] })
     }
 
     /// Generator for a Content with role "model" (assistant) containing a single text part.
     fn arb_assistant_content() -> impl Strategy<Value = Content> {
-        arb_system_text().prop_map(|text| Content {
+        arb_turn_text().prop_map(|text| Content {
             role: "model".to_string(),
             parts: vec![Part::Text { text }],
         })
