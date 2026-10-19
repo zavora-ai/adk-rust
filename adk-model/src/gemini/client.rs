@@ -1107,11 +1107,22 @@ impl GeminiModel {
 
         // Serialize grounding metadata into provider_metadata so consumers
         // can display search queries and sources without changing the answer.
-        let provider_metadata = resp
+        let mut provider_metadata = resp
             .candidates
             .first()
             .and_then(|c| c.grounding_metadata.as_ref())
             .and_then(|g| serde_json::to_value(g).ok());
+        // Requested through `GenerateContentConfig::top_logprobs`; kept as Gemini sent them.
+        if let Some(logprobs) = resp
+            .candidates
+            .first()
+            .and_then(|c| c.logprobs_result.as_ref())
+            .and_then(|result| serde_json::to_value(result).ok())
+            && let serde_json::Value::Object(metadata) =
+                provider_metadata.get_or_insert_with(|| serde_json::json!({}))
+        {
+            metadata.insert("logprobs".to_string(), logprobs);
+        }
 
         Ok(LlmResponse {
             content,
@@ -1513,6 +1524,13 @@ impl GeminiModel {
                 top_p: config.top_p,
                 top_k: config.top_k,
                 max_output_tokens: config.max_output_tokens,
+                stop_sequences: (!config.stop_sequences.is_empty())
+                    .then_some(config.stop_sequences),
+                seed: config.seed,
+                presence_penalty: config.presence_penalty,
+                frequency_penalty: config.frequency_penalty,
+                response_logprobs: config.top_logprobs.map(|_| true),
+                logprobs: config.top_logprobs.map(i32::from),
                 response_schema: config.response_schema,
                 response_mime_type: if has_schema {
                     Some("application/json".to_string())
@@ -2612,6 +2630,8 @@ mod tests {
                 grounding_metadata: None,
                 finish_reason: Some(adk_gemini::FinishReason::Stop),
                 index: Some(0),
+                logprobs_result: None,
+                avg_logprobs: None,
             }],
             prompt_feedback: None,
             usage_metadata: None,
@@ -2649,6 +2669,8 @@ mod tests {
                 grounding_metadata: None,
                 finish_reason: Some(adk_gemini::FinishReason::Stop),
                 index: Some(0),
+                logprobs_result: None,
+                avg_logprobs: None,
             }],
             prompt_feedback: None,
             usage_metadata: None,
@@ -2691,6 +2713,8 @@ mod tests {
                 grounding_metadata: None,
                 finish_reason: Some(adk_gemini::FinishReason::Stop),
                 index: Some(0),
+                logprobs_result: None,
+                avg_logprobs: None,
             }],
             prompt_feedback: None,
             usage_metadata: None,

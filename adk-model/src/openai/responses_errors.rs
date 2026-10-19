@@ -10,6 +10,8 @@ struct HttpError {
     error: ApiErrorResponse,
     retry_after: Option<Duration>,
     request_id: Option<String>,
+    /// The provider's code, read from the raw body by the rule every client shares.
+    provider_code: Option<String>,
 }
 
 impl fmt::Debug for HttpError {
@@ -44,22 +46,27 @@ pub(super) async fn normalize_response(
     let request_id = header(http::HeaderName::from_static("x-request-id"))
         .and_then(identifier)
         .map(str::to_owned);
-    let api_error = match response.bytes().await {
-        Ok(bytes) => api_error(status, &bytes, open_responses_mode),
+    let (api_error, provider_code) = match response.bytes().await {
+        Ok(bytes) => (
+            api_error(status, &bytes, open_responses_mode),
+            crate::error_metadata::code_from_body(&String::from_utf8_lossy(&bytes)),
+        ),
         Err(error) => {
             tracing::debug!(error = %error, http.status = status.as_u16(), "failed to read responses error body");
-            ApiError {
+            let api_error = ApiError {
                 message: format!("HTTP {status} (error body could not be read)"),
                 r#type: None,
                 param: None,
                 code: None,
-            }
+            };
+            (api_error, None)
         }
     };
     Err(OpenAIError::Boxed(Box::new(HttpError {
         error: ApiErrorResponse { status_code: status, api_error },
         retry_after,
         request_id,
+        provider_code,
     })))
 }
 
@@ -107,7 +114,11 @@ pub(super) fn mapped_http_error(error: &OpenAIError) -> Option<AdkError> {
     };
     let error = error.downcast_ref::<HttpError>()?;
     // A delay above `RetryConfig::max_delay` is capped by the retry loop.
-    let mapped = with_retry_after(map_api_error(&error.error), error.retry_after);
+    let mut mapped = with_retry_after(map_api_error(&error.error), error.retry_after);
+    // The body's `status`, and a `code` that is not a string, do not survive `ApiError`.
+    if error.provider_code.is_some() {
+        mapped = crate::error_metadata::with_code(mapped, error.provider_code.as_deref());
+    }
     Some(match &error.request_id {
         Some(request_id) => mapped.with_request_id(request_id.as_str()),
         None => mapped,
@@ -128,7 +139,7 @@ pub(super) fn map_api_error(api_err: &ApiErrorResponse) -> AdkError {
         400..=499 => (ErrorCategory::InvalidInput, "model.openai_responses.invalid_request"),
         _ => (ErrorCategory::Internal, "model.openai_responses.api_error"),
     };
-    let mut mapped = AdkError::new(
+    let mapped = AdkError::new(
         ErrorComponent::Model,
         category,
         code,
@@ -137,13 +148,10 @@ pub(super) fn map_api_error(api_err: &ApiErrorResponse) -> AdkError {
     )
     .with_provider("openai-responses")
     .with_upstream_status(status_code);
-    if let Some(provider_code) = api_err.api_error.code.as_deref().and_then(identifier) {
-        mapped.details.metadata.insert(
-            "provider_error_code".to_string(),
-            serde_json::Value::String(provider_code.to_string()),
-        );
-    }
-    mapped
+    crate::error_metadata::with_first_code(
+        mapped,
+        [api_err.api_error.code.as_deref(), api_err.api_error.r#type.as_deref()],
+    )
 }
 
 #[cfg(test)]
@@ -206,6 +214,57 @@ mod tests {
         let mapped = map_api_error(&error);
         assert_eq!(mapped.details.upstream_status_code, Some(400));
         assert_eq!(mapped.details.metadata["provider_error_code"], "invalid_schema");
+    }
+
+    #[test]
+    fn falls_back_to_the_error_type() {
+        let error = ApiErrorResponse {
+            status_code: reqwest_openai::StatusCode::BAD_REQUEST,
+            api_error: ApiError {
+                message: "invalid".into(),
+                r#type: Some("invalid_request_error".into()),
+                param: None,
+                code: None,
+            },
+        };
+        let mapped = map_api_error(&error);
+        assert_eq!(mapped.details.metadata["provider_error_code"], "invalid_request_error");
+    }
+
+    async fn http_error_code(body: serde_json::Value) -> Option<serde_json::Value> {
+        let response = http::Response::builder().status(400).body(body.to_string()).unwrap();
+        let error = normalize_response(reqwest_openai::Response::from(response), false)
+            .await
+            .expect_err("a 400 is an error");
+        let mapped = mapped_http_error(&error).expect("an HTTP error");
+        mapped.details.metadata.get("provider_error_code").cloned()
+    }
+
+    #[tokio::test]
+    async fn http_errors_take_the_code_then_type_then_status() {
+        assert_eq!(
+            http_error_code(
+                serde_json::json!({"error": {"message": "m", "type": "invalid_request_error",
+                                               "param": null, "code": null}})
+            )
+            .await,
+            Some("invalid_request_error".into())
+        );
+        assert_eq!(
+            http_error_code(serde_json::json!({"error": {"message": "m", "code": 400,
+                                               "status": "INVALID_ARGUMENT"}}))
+            .await,
+            Some("INVALID_ARGUMENT".into())
+        );
+        assert_eq!(
+            http_error_code(
+                serde_json::json!({"error": {"message": "m", "type": "invalid_request_error",
+                                               "code": "invalid_schema"}})
+            )
+            .await,
+            Some("invalid_schema".into())
+        );
+        assert_eq!(http_error_code(serde_json::json!({"error": {"message": "m"}})).await, None);
     }
 
     #[test]

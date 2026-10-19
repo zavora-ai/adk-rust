@@ -161,6 +161,21 @@ pub fn chat_response_to_llm_response(
     }
 }
 
+/// Removes a line's `logprobs`, which the `ollama-rs` response type cannot read when Ollama
+/// leaves out a token's `bytes`, and returns its entries.
+pub fn take_logprobs(line: &mut Value) -> Vec<Value> {
+    match line.as_object_mut().and_then(|line| line.remove("logprobs")) {
+        Some(Value::Array(entries)) => entries,
+        Some(_) | None => Vec::new(),
+    }
+}
+
+/// `provider_metadata` carrying the turn's log probabilities as `{"logprobs": {"content":
+/// [...]}}`, the shape the Chat Completions clients return.
+pub fn logprobs_metadata(logprobs: Vec<Value>) -> Option<Value> {
+    (!logprobs.is_empty()).then(|| serde_json::json!({"logprobs": {"content": logprobs}}))
+}
+
 /// Create a streaming delta response carrying one part of the turn the `done` line ends.
 pub fn part_delta_response(part: Part) -> LlmResponse {
     LlmResponse {

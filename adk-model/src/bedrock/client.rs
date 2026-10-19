@@ -59,7 +59,8 @@ impl BedrockClient {
         let prompt_caching = config.prompt_caching.clone();
 
         let mut sdk_config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(aws_config::Region::new(config.region.clone()));
+            .region(aws_config::Region::new(config.region.clone()))
+            .timeout_config(timeout_config(crate::HttpTimeouts::default()));
 
         if let Some(endpoint_url) = &config.endpoint_url {
             sdk_config_loader = sdk_config_loader.endpoint_url(endpoint_url);
@@ -99,7 +100,8 @@ impl BedrockClient {
         let mut sdk = aws_sdk_bedrockruntime::Config::builder()
             .behavior_version_latest()
             .region(aws_sdk_bedrockruntime::config::Region::new(config.region.clone()))
-            .bearer_token(aws_sdk_bedrockruntime::config::Token::new(api_key, None));
+            .bearer_token(aws_sdk_bedrockruntime::config::Token::new(api_key, None))
+            .timeout_config(timeout_config(crate::HttpTimeouts::default()));
         if let Some(endpoint) = &config.endpoint_url {
             sdk = sdk.endpoint_url(endpoint);
         }
@@ -109,7 +111,8 @@ impl BedrockClient {
     /// Supply a configured SDK client, preserving its identity and transport ownership.
     ///
     /// ADK retries are disabled because the supplied client carries its own retry
-    /// configuration.
+    /// configuration. The client keeps its own connect and read timeouts; the default idle
+    /// timeout bounds each stream event, and `with_timeouts` sets all three.
     ///
     /// # Example
     ///
@@ -161,12 +164,8 @@ impl BedrockClient {
     /// This method does not fail today; the `Result` matches the other clients'
     /// `with_timeouts`.
     pub fn with_timeouts(mut self, timeouts: crate::HttpTimeouts) -> Result<Self, AdkError> {
-        let timeout_config = aws_smithy_types::timeout::TimeoutConfig::builder()
-            .connect_timeout(timeouts.connect)
-            .read_timeout(timeouts.idle)
-            .build();
         self.client = aws_sdk_bedrockruntime::Client::from_conf(
-            self.client.config().to_builder().timeout_config(timeout_config).build(),
+            self.client.config().to_builder().timeout_config(timeout_config(timeouts)).build(),
         );
         self.stream_idle = timeouts.idle;
         Ok(self)
@@ -256,6 +255,41 @@ impl Llm for BedrockClient {
     }
 }
 
+/// The SDK timeouts for `timeouts`: `connect`, and `idle` as the wait for the response.
+fn timeout_config(timeouts: crate::HttpTimeouts) -> aws_smithy_types::timeout::TimeoutConfig {
+    aws_smithy_types::timeout::TimeoutConfig::builder()
+        .connect_timeout(timeouts.connect)
+        .read_timeout(timeouts.idle)
+        .build()
+}
+
+/// A failed Converse call, as `Timeout` when the connect or read timeout expired.
+fn send_error<E, R>(
+    error: &aws_sdk_bedrockruntime::error::SdkError<E, R>,
+    region: &str,
+    model_id: &str,
+) -> AdkError
+where
+    aws_sdk_bedrockruntime::error::SdkError<E, R>: std::fmt::Display,
+{
+    use aws_sdk_bedrockruntime::error::SdkError;
+
+    let message = format!("Bedrock API error for region={region}, model={model_id}: {error}");
+    let timed_out = matches!(error, SdkError::TimeoutError(_))
+        || matches!(error, SdkError::DispatchFailure(failure) if failure.is_timeout());
+    if timed_out {
+        AdkError::new(
+            adk_core::ErrorComponent::Model,
+            adk_core::ErrorCategory::Timeout,
+            "model.bedrock.timeout",
+            message,
+        )
+        .with_provider("bedrock")
+    } else {
+        AdkError::model(message)
+    }
+}
+
 impl BedrockClient {
     /// Non-streaming: call `converse` and wrap the single response in a stream.
     async fn generate_non_streaming(
@@ -274,12 +308,7 @@ impl BedrockClient {
             .set_tool_config(input.tool_config)
             .send()
             .await
-            .map_err(|e| {
-                AdkError::model(format!(
-                    "Bedrock API error for region={}, model={}: {e}",
-                    self.region, self.model_id
-                ))
-            })?;
+            .map_err(|e| send_error(&e, &self.region, &self.model_id))?;
 
         let output = response.output.ok_or_else(|| {
             AdkError::model(format!("Bedrock response missing output for model={}", self.model_id))
@@ -312,12 +341,7 @@ impl BedrockClient {
             .set_tool_config(input.tool_config)
             .send()
             .await
-            .map_err(|e| {
-                AdkError::model(format!(
-                    "Bedrock API error for region={}, model={}: {e}",
-                    self.region, self.model_id
-                ))
-            })?;
+            .map_err(|e| send_error(&e, &self.region, &self.model_id))?;
 
         let model_id = self.model_id.clone();
         let region = self.region.clone();
@@ -505,5 +529,32 @@ impl BedrockClient {
         };
 
         Ok(Box::pin(response_stream))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn sdk_timeouts(client: &BedrockClient) -> (Option<Duration>, Option<Duration>) {
+        let config = client.client.config().timeout_config();
+        config.map_or((None, None), |config| (config.connect_timeout(), config.read_timeout()))
+    }
+
+    #[test]
+    fn the_default_timeouts_bound_connecting_and_the_response() {
+        let client =
+            BedrockClient::new_with_api_key(BedrockConfig::new("us-east-1", "m"), "key").unwrap();
+        let defaults = crate::HttpTimeouts::default();
+        assert_eq!(sdk_timeouts(&client), (Some(defaults.connect), Some(defaults.idle)));
+
+        let client = client
+            .with_timeouts(crate::HttpTimeouts::new(Duration::from_secs(2), Duration::from_secs(9)))
+            .unwrap();
+        assert_eq!(
+            sdk_timeouts(&client),
+            (Some(Duration::from_secs(2)), Some(Duration::from_secs(9)))
+        );
     }
 }

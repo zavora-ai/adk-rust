@@ -450,7 +450,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
             "length" => FinishReason::MaxTokens,
             "tool_calls" => FinishReason::Stop,
             "content_filter" => FinishReason::Safety,
-            _ => FinishReason::Stop,
+            _ => FinishReason::Other,
         });
 
         if let Some(msg) = &choice.message {

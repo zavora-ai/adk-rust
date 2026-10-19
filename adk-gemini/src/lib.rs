@@ -103,10 +103,11 @@ pub use generation::{
     model::CitationSource, model::FinishReason, model::GenerateContentRequest,
     model::GenerationConfig, model::GenerationResponse, model::GroundingChunk,
     model::GroundingMetadata, model::GroundingSegment, model::GroundingSupport,
-    model::MultiSpeakerVoiceConfig, model::PrebuiltVoiceConfig, model::PromptFeedback,
-    model::PromptTokenDetails, model::SearchEntryPoint, model::SpeakerVoiceConfig,
-    model::SpeechConfig, model::ThinkingConfig, model::ThinkingLevel, model::UsageMetadata,
-    model::VoiceConfig, model::WebGroundingChunk,
+    model::LogprobsCandidate, model::LogprobsResult, model::MultiSpeakerVoiceConfig,
+    model::PrebuiltVoiceConfig, model::PromptFeedback, model::PromptTokenDetails,
+    model::SearchEntryPoint, model::SpeakerVoiceConfig, model::SpeechConfig, model::ThinkingConfig,
+    model::ThinkingLevel, model::TopLogprobsCandidates, model::UsageMetadata, model::VoiceConfig,
+    model::WebGroundingChunk,
 };
 
 // ========== Text Embeddings ==========

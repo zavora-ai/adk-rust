@@ -134,7 +134,7 @@ impl OpenRouterClient {
             .map_err(|err| {
                 AdkError::new(
                     ErrorComponent::Model,
-                    ErrorCategory::Unavailable,
+                    crate::http_timeouts::transport_category(&err),
                     "model.openrouter.request_failed",
                     "OpenRouter request failed before the server returned a response",
                 )
@@ -147,7 +147,7 @@ impl OpenRouterClient {
         let body = response.text().await.map_err(|err| {
             AdkError::new(
                 ErrorComponent::Model,
-                ErrorCategory::Internal,
+                crate::http_timeouts::transport_category(&err),
                 "model.openrouter.response_read_failed",
                 "OpenRouter returned a response body that could not be read",
             )
@@ -191,7 +191,7 @@ impl OpenRouterClient {
             .map_err(|err| {
                 AdkError::new(
                     ErrorComponent::Model,
-                    ErrorCategory::Unavailable,
+                    crate::http_timeouts::transport_category(&err),
                     "model.openrouter.request_failed",
                     "OpenRouter request failed before the server returned a response",
                 )
@@ -205,7 +205,7 @@ impl OpenRouterClient {
             let body = response.text().await.map_err(|err| {
                 AdkError::new(
                     ErrorComponent::Model,
-                    ErrorCategory::Internal,
+                    crate::http_timeouts::transport_category(&err),
                     "model.openrouter.response_read_failed",
                     "OpenRouter returned a response body that could not be read",
                 )
@@ -223,7 +223,7 @@ impl OpenRouterClient {
                 let chunk = chunk.map_err(|err| {
                     AdkError::new(
                         ErrorComponent::Model,
-                        ErrorCategory::Unavailable,
+                        crate::http_timeouts::transport_category(&err),
                         "model.openrouter.chat_stream_read_failed",
                         "OpenRouter chat stream could not be read",
                     )
@@ -276,7 +276,7 @@ impl OpenRouterClient {
             .map_err(|err| {
                 AdkError::new(
                     ErrorComponent::Model,
-                    ErrorCategory::Unavailable,
+                    crate::http_timeouts::transport_category(&err),
                     "model.openrouter.request_failed",
                     "OpenRouter request failed before the server returned a response",
                 )
@@ -289,7 +289,7 @@ impl OpenRouterClient {
         let body = response.text().await.map_err(|err| {
             AdkError::new(
                 ErrorComponent::Model,
-                ErrorCategory::Internal,
+                crate::http_timeouts::transport_category(&err),
                 "model.openrouter.response_read_failed",
                 "OpenRouter returned a response body that could not be read",
             )
@@ -333,7 +333,7 @@ impl OpenRouterClient {
             .map_err(|err| {
                 AdkError::new(
                     ErrorComponent::Model,
-                    ErrorCategory::Unavailable,
+                    crate::http_timeouts::transport_category(&err),
                     "model.openrouter.request_failed",
                     "OpenRouter request failed before the server returned a response",
                 )
@@ -347,7 +347,7 @@ impl OpenRouterClient {
             let body = response.text().await.map_err(|err| {
                 AdkError::new(
                     ErrorComponent::Model,
-                    ErrorCategory::Internal,
+                    crate::http_timeouts::transport_category(&err),
                     "model.openrouter.response_read_failed",
                     "OpenRouter returned a response body that could not be read",
                 )
@@ -365,7 +365,7 @@ impl OpenRouterClient {
                 let chunk = chunk.map_err(|err| {
                     AdkError::new(
                         ErrorComponent::Model,
-                        ErrorCategory::Unavailable,
+                        crate::http_timeouts::transport_category(&err),
                         "model.openrouter.responses_stream_read_failed",
                         "OpenRouter responses stream could not be read",
                     )
@@ -465,7 +465,7 @@ impl OpenRouterClient {
             self.http_client().get(self.endpoint_url(path)).send().await.map_err(|err| {
                 AdkError::new(
                     ErrorComponent::Model,
-                    ErrorCategory::Unavailable,
+                    crate::http_timeouts::transport_category(&err),
                     "model.openrouter.request_failed",
                     "OpenRouter request failed before the server returned a response",
                 )
@@ -478,7 +478,7 @@ impl OpenRouterClient {
         let body = response.text().await.map_err(|err| {
             AdkError::new(
                 ErrorComponent::Model,
-                ErrorCategory::Internal,
+                crate::http_timeouts::transport_category(&err),
                 "model.openrouter.response_read_failed",
                 "OpenRouter returned a response body that could not be read",
             )

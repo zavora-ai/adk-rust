@@ -861,3 +861,65 @@ mod openrouter {
         assert_eq!(error.code, "model.openrouter.response_failed");
     }
 }
+
+/// A finish reason the client does not know reads as `Other`, not `Stop`.
+#[cfg(any(feature = "groq", feature = "deepseek"))]
+mod unknown_finish_reason {
+    #[cfg(feature = "deepseek")]
+    use super::chat::*;
+    use super::*;
+    use adk_core::FinishReason;
+    use serde_json::json;
+
+    fn completion(reason: &str) -> Vec<Vec<u8>> {
+        vec![
+            json!({
+                "id": "chatcmpl-1", "object": "chat.completion", "created": 1, "model": "scripted",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Partial"},
+                             "finish_reason": reason}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}
+            })
+            .to_string()
+            .into_bytes(),
+        ]
+    }
+
+    #[cfg(feature = "deepseek")]
+    fn streamed(reason: &str) -> Vec<Vec<u8>> {
+        let mut writes = sse(&[text_chunk("Partial"), chunk(json!({}), Some(reason))]);
+        writes.push(done());
+        writes
+    }
+
+    fn finish_reason(outcome: (Vec<LlmResponse>, Option<AdkError>)) -> Option<FinishReason> {
+        let (responses, error) = outcome;
+        assert!(error.is_none(), "{error:?}");
+        responses.iter().rev().find_map(|response| response.finish_reason)
+    }
+
+    #[cfg(feature = "groq")]
+    #[tokio::test]
+    async fn groq_complete_response() {
+        use adk_model::groq::{GroqClient, GroqConfig};
+        let base = serve("application/json", completion("model_context_window_exceeded")).await;
+        let model = GroqClient::new(GroqConfig::new("gsk-test", "m").with_base_url(base)).unwrap();
+        let outcome = collect(&model, request("m"), false).await;
+        assert_eq!(finish_reason(outcome), Some(FinishReason::Other));
+    }
+
+    #[cfg(feature = "deepseek")]
+    #[tokio::test]
+    async fn deepseek_complete_and_streamed_responses() {
+        use adk_model::deepseek::{DeepSeekClient, DeepSeekConfig};
+        let client = |base: String| {
+            DeepSeekClient::new(DeepSeekConfig::new("sk-test", "m").with_base_url(base)).unwrap()
+        };
+        let reason = "insufficient_system_resource";
+        let base = serve("application/json", completion(reason)).await;
+        let outcome = collect(&client(base), request("m"), false).await;
+        assert_eq!(finish_reason(outcome), Some(FinishReason::Other));
+        let base = serve("text/event-stream", streamed(reason)).await;
+        let outcome = collect(&client(base), request("m"), true).await;
+        assert_eq!(finish_reason(outcome), Some(FinishReason::Other));
+    }
+}

@@ -177,6 +177,7 @@ fn arb_generation_config() -> impl Strategy<Value = GenerationConfig> {
                     response_modalities: None,
                     speech_config: None,
                     thinking_config: None,
+                    ..Default::default()
                 }
             },
         )

@@ -117,9 +117,49 @@ impl OllamaModel {
             if let Some(top_k) = cfg.top_k {
                 options = options.top_k(top_k as u32);
             }
+            if !cfg.stop_sequences.is_empty() {
+                options = options.stop(cfg.stop_sequences.clone());
+            }
         }
 
         options
+    }
+
+    /// The `/api/chat` body: `chat_request` plus the options `ModelOptions` has no setter for.
+    ///
+    /// The seed goes in as sent, since Ollama's seed is 64-bit and `ModelOptions::seed` takes
+    /// an `i32`.
+    fn request_body(
+        chat_request: &ChatMessageRequest,
+        request: &LlmRequest,
+    ) -> Result<serde_json::Value> {
+        let mut body = serde_json::to_value(chat_request).map_err(|e| {
+            AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Internal,
+                "model.ollama.request_serialization",
+                format!("Failed to serialize Ollama request: {e}"),
+            )
+            .with_provider("ollama")
+        })?;
+        if let Some(cfg) = &request.config
+            && let Some(options) = body
+                .as_object_mut()
+                .map(|body| body.entry("options").or_insert_with(|| serde_json::json!({})))
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            let fields = [
+                ("seed", cfg.seed.map(serde_json::Value::from)),
+                ("presence_penalty", cfg.presence_penalty.map(serde_json::Value::from)),
+                ("frequency_penalty", cfg.frequency_penalty.map(serde_json::Value::from)),
+            ];
+            for (name, value) in fields {
+                if let Some(value) = value {
+                    options.insert(name.to_string(), value);
+                }
+            }
+        }
+        Ok(body)
     }
 
     /// Convert ADK tool declarations to Ollama tools.
@@ -260,6 +300,10 @@ impl Llm for OllamaModel {
 
         // Build chat request
         let mut chat_request = ChatMessageRequest::new(model, messages).options(options);
+        let top_logprobs = request.config.as_ref().and_then(|config| config.top_logprobs);
+        if let Some(top_logprobs) = top_logprobs {
+            chat_request = chat_request.logprobs(true).top_logprobs(u32::from(top_logprobs));
+        }
 
         // Add tools if present
         if !request.tools.is_empty() {
@@ -276,6 +320,7 @@ impl Llm for OllamaModel {
         // Text-encoded tool calls are honoured only for tools this request declared.
         let declared_tools: std::collections::HashSet<String> =
             request.tools.keys().cloned().collect();
+        let body = Self::request_body(&chat_request, &request)?;
 
         // The same endpoint `ollama-rs` derives from the configured host.
         let chat_url = format!("{}api/chat", self.client.url_str());
@@ -286,15 +331,7 @@ impl Llm for OllamaModel {
                 // Streaming mode — Ollama supports streaming with tool calls since May 2025
                 use futures::StreamExt;
 
-                let mut body = serde_json::to_value(&chat_request).map_err(|e| {
-                    AdkError::new(
-                        ErrorComponent::Model,
-                        ErrorCategory::Internal,
-                        "model.ollama.request_serialization",
-                        format!("Failed to serialize Ollama request: {e}"),
-                    )
-                    .with_provider("ollama")
-                })?;
+                let mut body = body;
                 body["stream"] = serde_json::Value::Bool(true);
 
                 let response = http.post(&chat_url).json(&body).send().await.map_err(|e| {
@@ -331,6 +368,8 @@ impl Llm for OllamaModel {
                     declared_tools.clone(),
                 );
                 let mut ended = false;
+                // Each line carries the log probabilities of its own tokens.
+                let mut logprobs = Vec::new();
 
                 while !ended {
                     match byte_stream.next().await {
@@ -353,12 +392,13 @@ impl Llm for OllamaModel {
                         if parsed.is_err() && ended && done {
                             continue;
                         }
-                        let value = parsed.map_err(|error| {
+                        let mut value = parsed.map_err(|error| {
                             crate::stream_error::undecodable("ollama", INVALID_CHUNK, &error)
                         })?;
                         if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
                             Err(crate::stream_error::reported("ollama", STREAM_ERROR, error))?;
                         }
+                        logprobs.extend(convert::take_logprobs(&mut value));
                         // Kept as received: the final line's usage is read from it.
                         let response = ChatMessageResponse::deserialize(&value).map_err(|error| {
                             crate::stream_error::undecodable("ollama", INVALID_CHUNK, &error)
@@ -416,7 +456,9 @@ impl Llm for OllamaModel {
                                 yield convert::part_delta_response(part);
                             }
                             done = true;
-                            yield convert::chat_response_to_llm_response(&response, &value, false, &declared_tools);
+                            let mut last = convert::chat_response_to_llm_response(&response, &value, false, &declared_tools);
+                            last.provider_metadata = convert::logprobs_metadata(std::mem::take(&mut logprobs));
+                            yield last;
                         }
                     }
                 }
@@ -426,15 +468,7 @@ impl Llm for OllamaModel {
             } else {
                 // Non-streaming mode. The body is read as received so that usage reports
                 // whichever counts Ollama sent.
-                let mut body = serde_json::to_value(&chat_request).map_err(|e| {
-                    AdkError::new(
-                        ErrorComponent::Model,
-                        ErrorCategory::Internal,
-                        "model.ollama.request_serialization",
-                        format!("Failed to serialize Ollama request: {e}"),
-                    )
-                    .with_provider("ollama")
-                })?;
+                let mut body = body;
                 body["stream"] = serde_json::Value::Bool(false);
 
                 let response = http.post(&chat_url).json(&body).send().await.map_err(|e| {
@@ -448,10 +482,15 @@ impl Llm for OllamaModel {
                 })?;
                 let status = response.status();
                 let text = response.text().await.map_err(|e| {
+                    let (category, code) = if e.is_timeout() {
+                        (ErrorCategory::Timeout, "model.ollama.timeout")
+                    } else {
+                        (ErrorCategory::Unavailable, "model.ollama.unavailable")
+                    };
                     AdkError::new(
                         ErrorComponent::Model,
-                        ErrorCategory::Unavailable,
-                        "model.ollama.unavailable",
+                        category,
+                        code,
                         format!("Ollama error: failed to read the response: {e}"),
                     )
                     .with_provider("ollama")
@@ -460,12 +499,13 @@ impl Llm for OllamaModel {
                     Err(ollama_error_to_adk(&format!("Ollama error: {text}"))
                         .with_upstream_status(status.as_u16()))?;
                 }
-                let line: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+                let mut line: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
                     ollama_error_to_adk(&format!(
                         "Ollama error: invalid response JSON: {}",
                         adk_core::json_error_summary(&e)
                     ))
                 })?;
+                let logprobs = convert::take_logprobs(&mut line);
                 let parsed: ChatMessageResponse = serde_json::from_value(line.clone()).map_err(|e| {
                     ollama_error_to_adk(&format!(
                         "Ollama error: unexpected response shape: {}",
@@ -473,7 +513,9 @@ impl Llm for OllamaModel {
                     ))
                 })?;
 
-                yield convert::chat_response_to_llm_response(&parsed, &line, false, &declared_tools);
+                let mut response = convert::chat_response_to_llm_response(&parsed, &line, false, &declared_tools);
+                response.provider_metadata = convert::logprobs_metadata(logprobs);
+                yield response;
             }
         };
 

@@ -130,7 +130,7 @@ pub struct CitationSource {
 }
 
 /// A candidate response
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Candidate {
     /// The content of the candidate
@@ -151,6 +151,66 @@ pub struct Candidate {
     /// The index of the candidate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<i32>,
+    /// Log probabilities of the chosen and top tokens, when the request set
+    /// [`GenerationConfig::response_logprobs`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logprobs_result: Option<LogprobsResult>,
+    /// Average log probability of the candidate's tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avg_logprobs: Option<f64>,
+}
+
+/// Log probabilities of a candidate's tokens.
+///
+/// # Example
+///
+/// ```
+/// use adk_gemini::LogprobsResult;
+///
+/// let result: LogprobsResult = serde_json::from_value(serde_json::json!({
+///     "topCandidates": [{"candidates": [{"token": "Hi", "tokenId": 17, "logProbability": -0.01}]}],
+///     "chosenCandidates": [{"token": "Hi", "tokenId": 17, "logProbability": -0.01}],
+///     "logProbabilitySum": -0.01
+/// }))
+/// .unwrap();
+/// assert_eq!(result.chosen_candidates[0].token.as_deref(), Some("Hi"));
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LogprobsResult {
+    /// The most likely tokens at each decoding step, most likely first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_candidates: Vec<TopLogprobsCandidates>,
+    /// The token chosen at each decoding step; it may not be among `top_candidates`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chosen_candidates: Vec<LogprobsCandidate>,
+    /// Sum of the log probabilities of every chosen token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_probability_sum: Option<f64>,
+}
+
+/// The top candidate tokens at one decoding step.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopLogprobsCandidates {
+    /// Candidates sorted by log probability, most likely first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<LogprobsCandidate>,
+}
+
+/// One token and its log probability.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LogprobsCandidate {
+    /// The token text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// The token id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<i32>,
+    /// The token's log probability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_probability: Option<f64>,
 }
 
 /// Metadata about token usage.
@@ -838,6 +898,35 @@ pub struct GenerationConfig {
     /// The model will stop generating content when it encounters any of these sequences.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+
+    /// Seed used in decoding, so repeated requests with the same seed return the same output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
+
+    /// Penalty applied to tokens that already appear in the response, encouraging new topics.
+    ///
+    /// The API rejects it with `INVALID_ARGUMENT` for models that do not enable penalties.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+
+    /// Penalty scaled by how often a token already appears in the response.
+    ///
+    /// The API rejects it with `INVALID_ARGUMENT` for models that do not enable penalties.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+
+    /// Whether to return the log probabilities of the chosen tokens in
+    /// [`Candidate::logprobs_result`].
+    ///
+    /// The API rejects it with `INVALID_ARGUMENT` for models that do not enable log
+    /// probabilities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_logprobs: Option<bool>,
+
+    /// Number of top candidate tokens, with their log probabilities, to return at each
+    /// decoding step. Requires `response_logprobs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<i32>,
 
     /// The response mime type
     ///

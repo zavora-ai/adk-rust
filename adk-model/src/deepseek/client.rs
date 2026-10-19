@@ -10,8 +10,8 @@ use super::convert::{
 };
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
-    AdkError, ErrorCategory, ErrorComponent, FinishReason, GenericSchemaAdapter, Llm, LlmRequest,
-    LlmResponse, LlmResponseStream, Part, SchemaAdapter,
+    AdkError, ErrorComponent, FinishReason, GenericSchemaAdapter, Llm, LlmRequest, LlmResponse,
+    LlmResponseStream, Part, SchemaAdapter,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -311,7 +311,7 @@ impl Llm for DeepSeekClient {
                         .await
                         .map_err(|e| AdkError::new(
                             ErrorComponent::Model,
-                            ErrorCategory::Unavailable,
+                            crate::http_timeouts::transport_category(&e),
                             "model.deepseek.request",
                             format!("DeepSeek API request failed: {e}"),
                         ).with_provider("deepseek"))?;
@@ -433,7 +433,7 @@ impl Llm for DeepSeekClient {
                                                     "length" => FinishReason::MaxTokens,
                                                     "tool_calls" => FinishReason::Stop,
                                                     "content_filter" => FinishReason::Safety,
-                                                    _ => FinishReason::Stop,
+                                                    _ => FinishReason::Other,
                                                 }
                                             });
 
@@ -529,8 +529,12 @@ impl Llm for DeepSeekClient {
                 }
             } else {
                 // Non-streaming mode
-                let response_text = response.text().await
-                    .map_err(|e| AdkError::model(format!("failed to read response: {e}")))?;
+                let response_text = response.text().await.map_err(|e| AdkError::new(
+                    ErrorComponent::Model,
+                    crate::http_timeouts::transport_category(&e),
+                    "model.deepseek.request",
+                    format!("failed to read response: {e}"),
+                ).with_provider("deepseek"))?;
 
                 let chat_response: ChatCompletionResponse = serde_json::from_str(&response_text)
                     .map_err(|e| AdkError::model(format!(

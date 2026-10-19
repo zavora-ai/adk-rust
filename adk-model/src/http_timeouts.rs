@@ -9,13 +9,17 @@ use std::time::Duration;
 /// | `connect` | establishing the connection, TLS included |
 /// | `idle` | each wait for data: the response headers, then every gap between body chunks of a streamed or complete response |
 ///
-/// A stream that stops sending data fails after `idle` with a `Timeout` error instead of
-/// holding the run, while a long stream that keeps sending data is never cut off. The
-/// defaults are 30 seconds to connect and 10 minutes idle, the request timeout of the
-/// official OpenAI and Anthropic SDKs, which leaves room for reasoning models that think for
-/// minutes before their first token. The OpenAI-compatible, OpenAI Responses, Azure OpenAI,
-/// Azure AI, Groq, DeepSeek, OpenRouter, Ollama, and Bedrock clients apply them by default
-/// and take others through `with_timeouts`.
+/// A request that gets no response headers within `idle`, a stream that stops sending data
+/// for `idle`, and a complete response whose body stalls for `idle` all fail with
+/// `ErrorCategory::Timeout` instead of holding the run, as does a connection not established
+/// within `connect`; a long stream that keeps sending data is never cut off. The defaults are
+/// 30 seconds to connect and 10 minutes idle, the request timeout of the official OpenAI and
+/// Anthropic SDKs, which leaves room for reasoning models that think for minutes before
+/// their first token. The OpenAI-compatible, OpenAI Responses, Azure OpenAI, Azure AI, Groq,
+/// DeepSeek, OpenRouter, Ollama, and Bedrock clients apply them by default and take others
+/// through `with_timeouts`. Bedrock applies them as the SDK's connect and read timeouts plus
+/// a bound on each stream event; an SDK client passed to `BedrockClient::from_client` keeps
+/// its own connect and read timeouts until `with_timeouts` replaces them.
 ///
 /// # Example
 ///
@@ -62,5 +66,22 @@ impl HttpTimeouts {
     /// Applies both bounds to a `reqwest` client builder.
     pub(crate) fn apply(self, builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
         builder.connect_timeout(self.connect).read_timeout(self.idle)
+    }
+}
+
+/// The category of a transport failure: `Timeout` when a bound expired, before the response
+/// headers or between body chunks, otherwise `Unavailable`.
+#[cfg(any(
+    feature = "openai",
+    feature = "groq",
+    feature = "deepseek",
+    feature = "azure-ai",
+    feature = "openrouter"
+))]
+pub(crate) fn transport_category(error: &reqwest::Error) -> adk_core::ErrorCategory {
+    if error.is_timeout() {
+        adk_core::ErrorCategory::Timeout
+    } else {
+        adk_core::ErrorCategory::Unavailable
     }
 }

@@ -297,7 +297,9 @@ fn status_label(status: InteractionStatus) -> &'static str {
 ///   [`ResponseFormat::json_schema`].
 /// - **Generation config.** `thinking_level` plus common sampling parameters
 ///   (`max_output_tokens`, `temperature`, `top_p`, `seed`, `stop_sequences`) are
-///   forwarded into [`GenerationConfig`].
+///   forwarded into [`GenerationConfig`]. `frequency_penalty`, `presence_penalty`, and
+///   `top_logprobs` have no Interactions field and fail the request with
+///   `model.unsupported_config`.
 /// - **Continuity.** When `stateful` and `store` are both `true` and the request
 ///   carries a `previous_response_id`, it is set as `previous_interaction_id`.
 ///
@@ -329,6 +331,9 @@ fn status_label(status: InteractionStatus) -> &'static str {
 /// offending built-in tool(s) and points the developer at
 /// `with_bypass_multi_tools_limit`. A uniform tool set (all function tools, all
 /// built-in tools, or no tools) builds successfully.
+///
+/// Returns `model.unsupported_config` when the config sets `frequency_penalty`,
+/// `presence_penalty`, or `top_logprobs`.
 pub fn build_request(
     request: &LlmRequest,
     target: &InteractionTarget,
@@ -386,7 +391,19 @@ pub fn build_request(
         .and_then(|config| config.response_schema.clone())
         .map(ResponseFormat::json_schema);
 
-    // 6. Generation config (thinking level + common sampling parameters).
+    // 6. Generation config (thinking level + common sampling parameters). The Interactions
+    //    `generation_config` has no penalty or log-probability field.
+    crate::generation_config::reject_unsupported(
+        "Gemini Interactions",
+        request.config.as_ref(),
+        crate::generation_config::Supports {
+            stop_sequences: true,
+            seed: true,
+            penalties: false,
+            top_logprobs: false,
+        },
+    )
+    .map_err(|error| error.with_provider("gemini"))?;
     let generation_config = build_generation_config(request.config.as_ref(), thinking_level);
 
     // 7. Resolve the model/agent target field.
@@ -1208,6 +1225,28 @@ mod tests {
         assert_eq!(gen_config.top_p, Some(0.9));
         assert_eq!(gen_config.seed, Some(42));
         assert_eq!(gen_config.stop_sequences, vec!["STOP".to_string()]);
+    }
+
+    #[test]
+    fn penalties_and_logprobs_fail_by_name() {
+        let mut request = request_with(vec![Content::new("user").with_text("Configure me")]);
+        request.config = Some(GenerateContentConfig {
+            presence_penalty: Some(0.25),
+            frequency_penalty: Some(0.5),
+            top_logprobs: Some(2),
+            seed: Some(42),
+            ..Default::default()
+        });
+
+        let error = build_request(&request, &model_target(), None, true, true)
+            .expect_err("the Interactions API has no penalty or logprobs field");
+
+        assert_eq!(error.code, "model.unsupported_config");
+        assert!(
+            error.message.contains("`frequency_penalty`, `presence_penalty`, `top_logprobs`"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

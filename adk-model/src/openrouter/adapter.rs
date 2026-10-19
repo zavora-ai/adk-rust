@@ -302,6 +302,8 @@ async fn build_chat_llm_stream(
             let mut final_parts = Vec::new();
             let mut final_finish_reason = None;
             let mut final_usage_metadata = None;
+            // Each chunk carries the log probabilities of its own tokens.
+            let mut logprobs = Vec::new();
             // A finish reason or `[DONE]` marks a complete response; without one the
             // answer or a tool call may be truncated.
             let mut finished = false;
@@ -314,6 +316,16 @@ async fn build_chat_llm_stream(
                         }
 
                         if let Some(choice) = chunk.choices.first() {
+                            logprobs.extend(
+                                choice
+                                    .logprobs
+                                    .as_ref()
+                                    .and_then(|logprobs| logprobs.get("content"))
+                                    .and_then(Value::as_array)
+                                    .into_iter()
+                                    .flatten()
+                                    .cloned(),
+                            );
                             if let Some(delta) = choice.delta.as_ref() {
                                 let (reasoning_parts, reasoning_metadata) =
                                     chat_message_reasoning_to_parts(delta);
@@ -368,7 +380,7 @@ async fn build_chat_llm_stream(
                             std::mem::take(&mut final_parts),
                             final_usage_metadata.take(),
                             final_finish_reason.take(),
-                            None,
+                            logprobs_metadata(std::mem::take(&mut logprobs)),
                             false,
                             true,
                         ) {
@@ -391,7 +403,7 @@ async fn build_chat_llm_stream(
                 final_parts,
                 final_usage_metadata,
                 final_finish_reason,
-                None,
+                logprobs_metadata(logprobs),
                 false,
                 true,
             ) {
@@ -659,6 +671,18 @@ fn build_responses_request(
     };
 
     if let Some(config) = request.config.as_ref() {
+        // OpenRouter's Responses API has no `seed`.
+        crate::generation_config::reject_unsupported(
+            "OpenRouter Responses",
+            Some(config),
+            crate::generation_config::Supports {
+                stop_sequences: true,
+                seed: false,
+                penalties: true,
+                top_logprobs: true,
+            },
+        )
+        .map_err(|error| error.with_provider("openrouter"))?;
         apply_generate_config_to_responses_request(&mut responses_request, config, &request.model);
     }
 
@@ -870,6 +894,18 @@ fn responses_response_to_llm_response(
     }
 
     merge_metadata_object(&mut provider_metadata, responses_provider_metadata(response));
+    // Requested through `top_logprobs`; the tokens of every `output_text` part, in order.
+    let logprobs: Vec<Value> = response
+        .output
+        .iter()
+        .filter(|item| item.kind == "message")
+        .filter_map(|item| item.content.as_ref().and_then(Value::as_array))
+        .flatten()
+        .filter_map(|part| part.get("logprobs").and_then(Value::as_array))
+        .flatten()
+        .cloned()
+        .collect();
+    merge_metadata_object(&mut provider_metadata, logprobs_metadata(logprobs));
 
     if let Some(previous_response_id) = response.previous_response_id.as_ref() {
         provider_metadata.insert(
@@ -1030,6 +1066,12 @@ fn responses_finish_reason(response: &OpenRouterResponse) -> Option<FinishReason
         Some("failed" | "cancelled") => Some(FinishReason::Other),
         _ => None,
     }
+}
+
+/// `{"logprobs": {"content": [...]}}`, the shape a complete chat response carries, or `None`
+/// when no token has one.
+fn logprobs_metadata(logprobs: Vec<Value>) -> Option<Value> {
+    (!logprobs.is_empty()).then(|| json!({"logprobs": {"content": logprobs}}))
 }
 
 fn merge_metadata_object(target: &mut Map<String, Value>, value: Option<Value>) {

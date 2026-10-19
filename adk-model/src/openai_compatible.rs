@@ -296,7 +296,7 @@ impl OpenAICompatibleConfig {
 /// dedicated clients reported, because error codes are part of the public contract.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ErrorCodes {
-    /// Transport failure before a response arrived.
+    /// Transport failure: no response arrived, or its body stopped arriving.
     pub(crate) request: &'static str,
     /// Non-success HTTP status without a status-specific code.
     pub(crate) api_error: &'static str,
@@ -790,7 +790,7 @@ async fn send_request(
     let http_resp = http_req.send().await.map_err(|e| {
         AdkError::new(
             ErrorComponent::Model,
-            if e.is_timeout() { ErrorCategory::Timeout } else { ErrorCategory::Unavailable },
+            crate::http_timeouts::transport_category(&e),
             error_codes.request,
             format!("{provider_name} request error: {e}"),
         )
@@ -1340,12 +1340,24 @@ impl Llm for OpenAICompatible {
                     async move {
                         let http_resp = send_request(&http, &target, &body).await?;
 
-                        let raw_json: serde_json::Value = http_resp.json().await.map_err(|e| {
+                        let bytes = http_resp.bytes().await.map_err(|e| {
+                            AdkError::new(
+                                ErrorComponent::Model,
+                                crate::http_timeouts::transport_category(&e),
+                                error_codes.request,
+                                format!("{provider_name} response could not be read: {e}"),
+                            )
+                            .with_provider(&provider_name)
+                        })?;
+                        let raw_json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
                             AdkError::new(
                                 ErrorComponent::Model,
                                 ErrorCategory::Internal,
                                 error_codes.parse,
-                                format!("{provider_name} response parse error: {e}"),
+                                format!(
+                                    "{provider_name} response parse error: {}",
+                                    adk_core::json_error_summary(&e)
+                                ),
                             )
                             .with_provider(&provider_name)
                         })?;

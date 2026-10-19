@@ -13,6 +13,15 @@ use adk_core::{AdkError, ErrorCategory, ErrorComponent, Llm, LlmRequest, LlmResp
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::StreamExt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+tokio::task_local! {
+    /// Set while a streamed generation request is sent; the transport raises it when the
+    /// response body hits the idle timeout. The SDK reports a failed SSE stream only as text,
+    /// so the flag is how the stream's error is classified as a timeout.
+    static STREAM_IDLE_TIMEOUT: Arc<AtomicBool>;
+}
 
 /// Client for the OpenAI Responses API (`/responses` endpoint).
 ///
@@ -396,6 +405,9 @@ fn with_transport(
         let transport = transport.clone();
         let adapter = adapter.clone();
         let observer = observer.clone();
+        // Read while the caller's request future polls this one, before the body is handed
+        // to the SDK's stream task.
+        let idle_timeout = STREAM_IDLE_TIMEOUT.try_with(Arc::clone).ok();
         async move {
             let streaming = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let requested_streaming = streaming.clone();
@@ -455,6 +467,7 @@ fn with_transport(
                 uses_max_reasoning,
                 open_responses_mode,
                 streaming.load(std::sync::atomic::Ordering::Relaxed),
+                idle_timeout,
             )
             .await
         }
@@ -468,16 +481,15 @@ async fn normalize_responses_response(
     uses_max_reasoning: bool,
     open_responses_mode: bool,
     requested_streaming: bool,
+    idle_timeout: Option<Arc<AtomicBool>>,
 ) -> Result<reqwest_openai::Response, async_openai::error::OpenAIError> {
-    use reqwest_openai::ResponseBuilderExt;
+    use futures::TryStreamExt;
 
     if !response.status().is_success() {
         return responses_errors::normalize_response(response, open_responses_mode).await;
     }
     // OpenAI's own stream framing needs no rewrite; the SDK's SSE parser handles it.
-    if !uses_max_reasoning && !open_responses_mode {
-        return Ok(response);
-    }
+    let rewrite = uses_max_reasoning || open_responses_mode;
 
     // Some compatible endpoints omit Content-Type even when a streaming
     // request receives SSE. The adapted request is authoritative in that case.
@@ -487,6 +499,11 @@ async fn normalize_responses_response(
         .and_then(|value| value.to_str().ok());
     let is_event_stream =
         content_type.map_or(requested_streaming, |value| value.starts_with("text/event-stream"));
+    // An event stream is wrapped to report an idle timeout, even when it needs no rewrite.
+    let watch_idle = is_event_stream && idle_timeout.is_some();
+    if !(rewrite || watch_idle) {
+        return Ok(response);
+    }
     let status = response.status();
     let version = response.version();
     let url = response.url().clone();
@@ -494,7 +511,22 @@ async fn normalize_responses_response(
     headers.remove(reqwest_openai::header::CONTENT_LENGTH);
 
     let body = if is_event_stream {
-        let mut upstream = response.bytes_stream();
+        let mut upstream = response.bytes_stream().inspect_err(move |error| {
+            if error.is_timeout()
+                && let Some(idle_timeout) = &idle_timeout
+            {
+                idle_timeout.store(true, Ordering::Relaxed);
+            }
+        });
+        if !rewrite {
+            return rebuild(
+                status,
+                version,
+                url,
+                headers,
+                reqwest_openai::Body::wrap_stream(upstream),
+            );
+        }
         let normalized = async_stream::stream! {
             let mut lines = responses_lines::Lines::default();
             let mut stream_state = OpenResponsesStreamState::default();
@@ -539,11 +571,24 @@ async fn normalize_responses_response(
         ))
     };
 
+    rebuild(status, version, url, headers, body)
+}
+
+/// A response with `body` in place of the one it was read from.
+fn rebuild(
+    status: reqwest_openai::StatusCode,
+    version: http::Version,
+    url: reqwest_openai::Url,
+    headers: http::HeaderMap,
+    body: reqwest_openai::Body,
+) -> Result<reqwest_openai::Response, async_openai::error::OpenAIError> {
+    use reqwest_openai::ResponseBuilderExt;
+
     let mut rebuilt =
         http::Response::builder().status(status).version(version).url(url).body(body).map_err(
             |error| {
                 async_openai::error::OpenAIError::InvalidArgument(format!(
-                    "failed to rebuild max-reasoning response: {error}"
+                    "failed to rebuild the Responses response: {error}"
                 ))
             },
         )?;
@@ -847,11 +892,13 @@ fn map_error(e: async_openai::error::OpenAIError, layer: parse::Layer) -> AdkErr
         return responses_errors::map_api_error(api_err);
     }
 
-    // Reqwest / network errors → Unavailable (retryable)
-    if let async_openai::error::OpenAIError::Reqwest(_) = e {
+    // Network errors, and responses that stall past an `HttpTimeouts` bound; both retryable.
+    if let async_openai::error::OpenAIError::Reqwest(ref error) = e {
+        let category =
+            if error.is_timeout() { ErrorCategory::Timeout } else { ErrorCategory::Unavailable };
         return AdkError::new(
             ErrorComponent::Model,
-            ErrorCategory::Unavailable,
+            category,
             "model.openai_responses.request",
             format!("OpenAI Responses API network error: {error_string}"),
         )
@@ -928,26 +975,41 @@ impl Llm for OpenAIResponsesClient {
             let mut create_request = create_request;
             create_request.stream = Some(true);
 
-            let event_stream =
-                execute_with_retry(&self.retry_config, is_retryable_model_error, || {
-                    let client = self.client.clone();
-                    let request = create_request.clone();
-                    async move {
-                        client
-                            .responses()
-                            .create_stream_byot::<_, serde_json::Value>(request)
-                            .await
-                            .map_err(|error| map_error(error, parse::Layer::StreamSetup))
-                    }
-                })
+            let idle_timeout = Arc::new(AtomicBool::new(false));
+            let event_stream = STREAM_IDLE_TIMEOUT
+                .scope(
+                    idle_timeout.clone(),
+                    execute_with_retry(&self.retry_config, is_retryable_model_error, || {
+                        let client = self.client.clone();
+                        let request = create_request.clone();
+                        async move {
+                            client
+                                .responses()
+                                .create_stream_byot::<_, serde_json::Value>(request)
+                                .await
+                                .map_err(|error| map_error(error, parse::Layer::StreamSetup))
+                        }
+                    }),
+                )
                 .await?;
 
             let mut state = StreamState::new(native_tools);
             let response_stream = try_stream! {
                 futures::pin_mut!(event_stream);
                 while let Some(event_result) = event_stream.next().await {
-                    let value = event_result
-                        .map_err(|error| map_error(error, parse::Layer::StreamEvent))?;
+                    let value = event_result.map_err(|error| {
+                        if idle_timeout.load(Ordering::Relaxed) {
+                            AdkError::new(
+                                ErrorComponent::Model,
+                                ErrorCategory::Timeout,
+                                "model.openai_responses.stream",
+                                "OpenAI Responses stream sent no data within the idle timeout",
+                            )
+                            .with_provider("openai-responses")
+                        } else {
+                            map_error(error, parse::Layer::StreamEvent)
+                        }
+                    })?;
                     match wire::event(value)? {
                         wire::Event::Terminal(response) => {
                             yield state.finish(&response)?;

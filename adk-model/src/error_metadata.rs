@@ -35,7 +35,7 @@ pub(crate) fn with_code(mut error: AdkError, code: Option<&str>) -> AdkError {
 
 /// Records the first candidate that is a bounded code, for providers whose error object
 /// is already deserialized.
-#[cfg(feature = "openrouter")]
+#[cfg(any(feature = "openai", feature = "openrouter"))]
 pub(crate) fn with_first_code<'a>(
     error: AdkError,
     candidates: impl IntoIterator<Item = Option<&'a str>>,

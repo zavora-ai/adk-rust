@@ -4,7 +4,7 @@
   `presence_penalty`, and `top_logprobs`. Each now sends the ones its API supports; a request
   that sets any of the others fails before it is sent with `model.unsupported_config`
   (`InvalidInput`) naming them, so remove those fields from the config used with that
-  provider. `OpenRouterClient`, `GeminiModel`, and `OllamaModel` are unchanged.
+  provider. `GeminiModel`, `OllamaModel`, and `OpenRouterClient` have their own entry.
   - Chat Completions (`OpenAIClient`, `OpenAICompatible` and its presets, `AzureOpenAIClient`,
     OpenCode Chat): all five; log probabilities return in `provider_metadata["logprobs"]`.
   - `GroqClient` and `AzureAIClient`: stop sequences, seed, and penalties.

@@ -839,7 +839,7 @@ OpenAI-compatible, Azure OpenAI, Azure AI Inference, Anthropic, DeepSeek, Groq).
 | Transient upstream errors | HTTP 500, 502, 503, 504, and 529 map to `ErrorCategory::Unavailable` with the upstream status recorded, so `RetryConfig` retries them |
 | `Retry-After` | A delay in seconds is attached to the error and used for the next retry, capped at `RetryConfig::max_delay` (default 5 seconds) |
 | Mid-stream Anthropic `error` event | Fails the stream with the category of the equivalent HTTP error, so `overloaded_error` and `rate_limit_error` are retryable |
-| Provider error codes | `AdkError::details.metadata["provider_error_code"]` holds the provider's own code as a string: the first Google `ErrorInfo.reason`, then the error object's string `code`, `type`, or `status`. Gemini (AI Studio and Vertex AI), OpenAI, OpenAI-compatible, Azure OpenAI, Azure AI Inference, DeepSeek, Anthropic, and OpenRouter record it; codes over 128 bytes or outside `[A-Za-z0-9_.-]` are dropped |
+| Provider error codes | `AdkError::details.metadata["provider_error_code"]` holds the provider's own code as a string: the first Google `ErrorInfo.reason`, then the error object's string `code`, `type`, or `status`. Gemini (AI Studio and Vertex AI), OpenAI (Chat Completions and Responses), OpenAI-compatible, Azure OpenAI, Azure AI Inference, DeepSeek, Anthropic, and OpenRouter record it; codes over 128 bytes or outside `[A-Za-z0-9_.-]` are dropped |
 | Malformed tool arguments | Arguments that are not a JSON object, streamed or not (truncated JSON, an array, a number), or an Anthropic call cut off by `max_tokens`, become `adk_core::invalid_tool_arguments(reason, raw)`; the turn continues and `LlmAgent` answers the call with an error without executing it, so the model can send it again. An empty payload is a zero-argument call with `{}` |
 | Text-encoded tool calls | Recognised only when the request declares the named tool; a ` ```json ` fence also needs an `arguments` or `parameters` object. DeepSeek-V3 native tokens (`<｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME` with a fenced arguments object, and the V3.1 `NAME<｜tool▁sep｜>{...}` form) become calls. The OpenAI-compatible clients and `OllamaModel` recognise them in streamed and complete responses |
 | Several function responses in one content | The Chat Completions clients (OpenAI-compatible and its presets, OpenCode Chat, Azure OpenAI, Azure AI Inference, Groq, DeepSeek, OpenRouter) send one `tool` message per response, in order, and the content's other parts as a user message after them |
@@ -872,16 +872,30 @@ client cannot honour fails the request before anything is sent, with
 `model.unsupported_config` (`ErrorCategory::InvalidInput`) and a message naming the field,
 instead of a generation that silently runs without it.
 
-| Field | Chat Completions (OpenAI, OpenAI-compatible, Azure OpenAI) | OpenAI Responses | Anthropic | Bedrock | Groq | DeepSeek | Azure AI Inference |
-|-------|------|------|------|------|------|------|------|
-| `stop_sequences` | `stop` | rejected | `stop_sequences` | `stopSequences` | `stop` | `stop` | `stop` |
-| `seed` | `seed` | rejected | rejected | rejected | `seed` | rejected | `seed` |
-| `frequency_penalty`, `presence_penalty` | sent | rejected | rejected | rejected | sent | sent | sent |
-| `top_logprobs` | `logprobs` and `top_logprobs`; tokens in `provider_metadata["logprobs"]` | `top_logprobs`; tokens in `provider_metadata["openai"]["logprobs"]` | rejected | rejected | rejected | rejected | rejected |
+| Client | `stop_sequences` | `seed` | `frequency_penalty`, `presence_penalty` | `top_logprobs` |
+|--------|------------------|--------|-----------------------------------------|----------------|
+| Chat Completions (OpenAI, OpenAI-compatible, Azure OpenAI) | `stop` | `seed` | sent | `logprobs` and `top_logprobs`; tokens in `provider_metadata["logprobs"]` |
+| OpenAI Responses | rejected | rejected | rejected | `top_logprobs`; tokens in `provider_metadata["openai"]["logprobs"]` |
+| Gemini (`generateContent`, AI Studio and Vertex AI) | `stopSequences` | `seed` | `frequencyPenalty`, `presencePenalty` | `responseLogprobs` and `logprobs`; Gemini's `logprobsResult` in `provider_metadata["logprobs"]` |
+| Gemini Interactions | `stop_sequences` | `seed` | rejected | rejected |
+| Anthropic | `stop_sequences` | rejected | rejected | rejected |
+| Bedrock | `stopSequences` | rejected | rejected | rejected |
+| Groq | `stop` | `seed` | sent | rejected |
+| DeepSeek | `stop` | rejected | sent | rejected |
+| Azure AI Inference | `stop` | `seed` | sent | rejected |
+| Ollama | `options.stop` | `options.seed` | `options.frequency_penalty`, `options.presence_penalty` | `logprobs` and `top_logprobs`; tokens in `provider_metadata["logprobs"]` |
+| OpenRouter Chat Completions | `stop` | `seed` | sent | `top_logprobs`; tokens in `provider_metadata["logprobs"]` |
+| OpenRouter Responses | `stop` | rejected | sent | `top_logprobs`; tokens in `provider_metadata["logprobs"]` |
+
+Where the table says tokens are in `provider_metadata["logprobs"]` without naming another
+shape, the value is `{"content": [...]}` with one entry per token, as Chat Completions
+returns it; a streamed answer carries every token's entry on its final response.
 
 A model can still reject a field its API accepts: GPT-5 models answer `stop` with HTTP 400,
-so stop sequences on OpenAI need a model such as `gpt-4.1-mini`. OpenRouter sends every
-field; `top_k` is not covered by this check.
+so stop sequences on OpenAI need a model such as `gpt-4.1-mini`, and current Gemini models
+(`gemini-3.5-flash-lite`, `gemini-3.7-flash`) answer penalties and log probabilities with
+`INVALID_ARGUMENT` ("Penalty is not enabled for this model"), which fails the request with
+`ErrorCategory::InvalidInput`. `top_k` is not covered by this check.
 
 ```rust
 use adk_core::GenerateContentConfig;
@@ -988,14 +1002,24 @@ the run instead of holding it. Anthropic has its own bounds (see
 | `connect` | 30 seconds | establishing the connection, TLS included |
 | `idle` | 10 minutes | each wait for data: the response headers, then every gap between body chunks |
 
-A stalled stream fails with `ErrorCategory::Timeout`, under the client's incomplete-stream
-code (`model.openai_compat.incomplete_stream` for the OpenAI-compatible clients,
-`model.bedrock.stream_idle_timeout` for Bedrock). A long stream that keeps sending data is
-never cut off, and a reasoning model that thinks for minutes before its first chunk stays
-within the 10-minute default. `with_timeouts` sets both bounds on `OpenAIClient` (Chat
-Completions and its Responses route), `OpenAICompatible`, `AzureOpenAIClient`,
-`OpenAIResponsesClient`, `AzureAIClient`, `GroqClient`, `DeepSeekClient`, `OpenRouterClient`,
-`OllamaModel`, and `BedrockClient`.
+A request whose response headers do not arrive, a stream that stalls, and a complete
+response whose body stalls all fail with `ErrorCategory::Timeout`, which is retryable; any
+other transport failure is `ErrorCategory::Unavailable`. The error keeps the code of the step
+that stalled:
+
+| Stall | Code |
+|-------|------|
+| No response headers, or a complete response's body | the client's request code, such as `model.groq.request`, `model.openai_compat.request`, `model.openai_responses.request`, `model.openrouter.request_failed` or `model.openrouter.response_read_failed`, `model.ollama.timeout`, `model.bedrock.timeout` |
+| A stream | the client's incomplete-stream code (`model.openai_compat.incomplete_stream` for the OpenAI-compatible clients), `model.openai_responses.stream`, `model.openrouter.chat_stream_read_failed`, `model.openrouter.responses_stream_read_failed`, `model.bedrock.stream_idle_timeout` |
+
+A long stream that keeps sending data is never cut off, and a reasoning model that thinks for
+minutes before its first chunk stays within the 10-minute default. `with_timeouts` sets both
+bounds on `OpenAIClient` (Chat Completions and its Responses route), `OpenAICompatible`,
+`AzureOpenAIClient`, `OpenAIResponsesClient`, `AzureAIClient`, `GroqClient`, `DeepSeekClient`,
+`OpenRouterClient`, `OllamaModel`, and `BedrockClient`. `BedrockClient` sets them as the AWS
+SDK's connect and read timeouts and bounds each stream event by `idle`; an SDK client passed
+to `BedrockClient::from_client` keeps its own connect and read timeouts until
+`with_timeouts` replaces them.
 
 ```rust
 use std::time::Duration;

@@ -283,7 +283,9 @@ pub mod gemini;
     feature = "bedrock",
     feature = "groq",
     feature = "deepseek",
-    feature = "azure-ai"
+    feature = "azure-ai",
+    feature = "gemini-interactions",
+    feature = "openrouter"
 ))]
 mod generation_config;
 #[cfg(feature = "groq")]

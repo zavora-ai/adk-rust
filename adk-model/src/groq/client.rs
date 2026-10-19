@@ -4,8 +4,7 @@ use super::config::{GROQ_API_BASE, GroqConfig};
 use super::convert::{self, ChatCompletionRequest, ChatCompletionResponse};
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
-    AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part,
+    AdkError, ErrorComponent, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -234,7 +233,7 @@ impl Llm for GroqClient {
                         .await
                         .map_err(|e| AdkError::new(
                             ErrorComponent::Model,
-                            ErrorCategory::Unavailable,
+                            crate::http_timeouts::transport_category(&e),
                             "model.groq.request",
                             format!("Groq API request failed: {e}"),
                         ).with_provider("groq"))?;
@@ -474,8 +473,12 @@ impl Llm for GroqClient {
                 }
             } else {
                 // Non-streaming mode
-                let response_text = response.text().await
-                    .map_err(|e| AdkError::model(format!("Failed to read response: {e}")))?;
+                let response_text = response.text().await.map_err(|e| AdkError::new(
+                    ErrorComponent::Model,
+                    crate::http_timeouts::transport_category(&e),
+                    "model.groq.request",
+                    format!("Failed to read response: {e}"),
+                ).with_provider("groq"))?;
 
                 let chat_response: ChatCompletionResponse = serde_json::from_str(&response_text)
                     .map_err(|e| AdkError::model(format!(
