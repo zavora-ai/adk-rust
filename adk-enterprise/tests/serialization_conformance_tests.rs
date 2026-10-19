@@ -1,4 +1,4 @@
-//! Serialization conformance tests — validates CANON wire-format compliance.
+//! Serialization conformance tests — validates the service's wire format.
 //!
 //! This file covers remaining serialization/deserialization gaps not already
 //! tested in `user_event_serialization_tests.rs` and

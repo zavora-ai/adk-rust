@@ -1,4 +1,4 @@
-//! CANON wire-shape contract tests (RS-7).
+//! Wire-shape contract tests.
 //!
 //! Ensures the SDK types serialize/deserialize to the exact wire format
 //! expected by the server. If these tests break, the SDK is incompatible.
@@ -6,7 +6,7 @@
 use adk_enterprise::*;
 
 #[test]
-fn agent_deserializes_canon_snake_case() {
+fn agent_deserializes_snake_case() {
     let json = r#"{"id":"agt_x","name":"a","model":"gemini-2.5-flash","tools":[],"mcp_servers":[],"skills":[],"version":1,"created_at":"2026-06-01T00:00:00Z","updated_at":"2026-06-01T00:00:00Z"}"#;
     let agent: Agent = serde_json::from_str(json).unwrap();
     assert_eq!(agent.id, "agt_x");
@@ -17,7 +17,7 @@ fn agent_deserializes_canon_snake_case() {
 }
 
 #[test]
-fn session_deserializes_canon_snake_case() {
+fn session_deserializes_snake_case() {
     let json = r#"{"id":"ses_1","agent_id":"agt_1","status":"idle","created_at":"2026-06-01T00:00:00Z","updated_at":"2026-06-01T00:00:00Z"}"#;
     let session: Session = serde_json::from_str(json).unwrap();
     assert_eq!(session.agent_id, "agt_1");
@@ -43,7 +43,7 @@ fn create_agent_params_serializes_snake_case() {
 }
 
 #[test]
-fn list_response_deserializes_canon() {
+fn list_response_deserializes_wire_shape() {
     let json = r#"{"data":[{"id":"agt_1","name":"a","model":"m","version":1,"created_at":"t","updated_at":"t"}],"next_cursor":"cur_x","has_more":true}"#;
     let resp: ListResponse<Agent> = serde_json::from_str(json).unwrap();
     assert_eq!(resp.data.len(), 1);
@@ -67,7 +67,7 @@ fn status_idle_carries_usage() {
 }
 
 #[test]
-fn custom_tool_result_uses_canon_field_names() {
+fn custom_tool_result_uses_wire_field_names() {
     let event = UserEvent::custom_tool_result("ctu_123", vec![ContentBlock::text("result")]);
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"], "user.custom_tool_result");
@@ -86,7 +86,7 @@ fn tool_confirmation_uses_result_field() {
 
 #[test]
 fn user_message_serializes_with_content_blocks() {
-    // CANON §3.4: user.message carries content: ContentBlock[], not text: String
+    // user.message carries content: ContentBlock[], not text: String
     let event = UserEvent::message("Hello, agent!");
     let json = serde_json::to_value(&event).unwrap();
 
@@ -98,7 +98,7 @@ fn user_message_serializes_with_content_blocks() {
 }
 
 #[test]
-fn user_message_deserializes_from_canon() {
+fn user_message_deserializes_from_wire_shape() {
     let json = r#"{"type":"user.message","content":[{"type":"text","text":"Hi there"}]}"#;
     let event: UserEvent = serde_json::from_str(json).unwrap();
     match event {

@@ -1,6 +1,7 @@
 //! Wire types for the Enterprise Managed Agent Service.
 //!
-//! These types are self-contained copies of the CANON wire format.
+//! These types are self-contained copies of the service's wire format, with no dependency
+//! on the `adk-*` runtime crates.
 //! They serialize/deserialize using Rust's native snake_case field names,
 //! matching the server's wire format. Enum variants that require case
 //! conversion retain `#[serde(rename_all = "camelCase")]` (e.g., PermissionMode).

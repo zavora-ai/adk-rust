@@ -1,8 +1,8 @@
 //! Declarative agent definition type.
 //!
 //! `ManagedAgentDef` is the top-level struct that describes an agent declaratively.
-//! It serializes to the CANON §3.1 wire shape and is the input to
-//! `ManagedAgentRuntime::create()`.
+//! It serializes to the agent definition a managed agent service accepts and is the input
+//! to `ManagedAgentRuntime::create()`.
 
 use std::collections::BTreeMap;
 
@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{McpServerConfig, ModelRef, PermissionPolicy, SkillRef, ToolConfig};
 
-/// Declarative agent definition. Serializes to CANON §3.1/§3.6–§3.9.
+/// Declarative agent definition: model, system prompt, tools, MCP servers, skills, and
+/// permission policy, in the service's snake_case wire shape.
 ///
 /// This struct fully describes an agent's configuration: which model to use,
 /// system prompt, available tools, MCP servers, skills, and permission policies.
@@ -142,7 +143,7 @@ mod tests {
     use crate::types::{ModelConfig, PermissionMode, Provider};
 
     #[test]
-    fn test_serialize_full_def_matches_canon() {
+    fn test_serialize_full_def_matches_wire_shape() {
         let def = ManagedAgentDef {
             name: "research-agent".to_string(),
             model: ModelRef::Structured {

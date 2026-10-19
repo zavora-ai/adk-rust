@@ -1,6 +1,7 @@
 //! Tool configuration types.
 //!
-//! Covers CANON §3.7-§3.9: ToolConfig, McpServerConfig, SkillRef, PermissionPolicy.
+//! [`ToolConfig`], [`McpServerConfig`], [`SkillRef`], and [`PermissionPolicy`], as an agent
+//! definition carries them.
 
 use std::collections::HashMap;
 
@@ -11,9 +12,9 @@ use serde::{Deserialize, Serialize};
 /// Supports built-in platform tools (identified by type string) and
 /// custom user-defined tools with a JSON schema.
 ///
-/// # Wire Format (CANON §3.7)
+/// # Wire Format
 ///
-/// Built-in: `{"type": "bash"}` or `{"type": "web_search"}`
+/// Built-in: `{"type": "builtin", "name": "bash"}`
 /// Custom: `{"type": "custom", "name": "...", "description": "...", "input_schema": {...}}`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -89,7 +90,7 @@ impl ToolConfig {
 /// Defines how to connect to an MCP (Model Context Protocol) server
 /// that provides additional tools to the agent.
 ///
-/// # Wire Format (CANON §3.8)
+/// # Wire Format
 ///
 /// ```json
 /// {
@@ -128,7 +129,7 @@ pub struct McpServerConfig {
 ///
 /// Skills are pre-built capability packages that can be attached to agents.
 ///
-/// # Wire Format (CANON §3.9)
+/// # Wire Format
 ///
 /// ```json
 /// { "skill_id": "sk_abc123" }
@@ -143,7 +144,7 @@ pub struct SkillRef {
 ///
 /// Controls how the agent handles tool execution authorization.
 ///
-/// # Wire Format (CANON §3.9)
+/// # Wire Format
 ///
 /// ```json
 /// { "mode": "autoApprove" }

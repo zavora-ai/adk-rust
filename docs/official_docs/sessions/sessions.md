@@ -216,9 +216,12 @@ let request = DeleteRequest {
 ### Identifier Validation
 
 Every backend validates the identifiers a call carries before it reads or writes storage, and
-rejects an invalid one with an `InvalidInput` error. An identifier is valid when it is
-non-empty, at most `MAX_ID_LEN` (512) bytes, and free of NUL characters — the `AppName`,
-`UserId`, and `SessionId` rules.
+rejects an invalid one with `session.invalid_identifier` (`ErrorCategory::InvalidInput`,
+HTTP 400). An identifier is valid when it is non-empty, at most `MAX_ID_LEN` (512) bytes, and
+free of NUL characters — the `AppName`, `UserId`, and `SessionId` rules. `Runner::run_str`
+and every conversion of an `IdentityError` into `AdkError` return the same code. A backend
+with stricter rules of its own reports them under its own code after these checks pass, such
+as `session.firestore.invalid_identifier` for an ID Firestore cannot use as a document ID.
 
 | Method | Validated identifiers |
 |--------|-----------------------|
@@ -574,7 +577,7 @@ async fn main() -> anyhow::Result<()> {
 
 Stores sessions in MongoDB. Supports both standalone and replica-set deployments out of the box.
 
-On startup, `MongoSessionService::new()` issues a `hello` command and enables transactions when the reply names a replica set (`setName`). Multi-document writes then run in one transaction; otherwise they execute one after another without a transaction.
+On startup, `MongoSessionService::new()` issues a `hello` command and enables transactions when the reply names a replica set (`setName`) or comes from a sharded cluster's `mongos` router (`msg: "isdbgrid"`). Multi-document writes then run in one transaction; otherwise they execute one after another without a transaction.
 
 ```rust
 use adk_session::{MongoSessionService, SessionService, CreateRequest};
@@ -619,9 +622,9 @@ async fn main() -> anyhow::Result<()> {
 
 | Deployment | `hello` reply | Transactions | Behavior |
 |------------|---------------|--------------|----------|
-| Standalone | No `setName` | No | Sequential writes |
+| Standalone | Neither `setName` nor `msg: "isdbgrid"` | No | Sequential writes |
 | Replica set | `setName` | Yes | Multi-document transactions |
-| Sharded cluster (`mongos`) | No `setName` | No | Sequential writes |
+| Sharded cluster (`mongos`) | `msg: "isdbgrid"` | Yes | Multi-document transactions |
 
 #### MongoDB collections
 

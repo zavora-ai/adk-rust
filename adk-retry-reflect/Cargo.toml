@@ -25,3 +25,4 @@ thiserror = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 proptest = "1.4"
+tracing-subscriber = { workspace = true, features = ["registry"] }

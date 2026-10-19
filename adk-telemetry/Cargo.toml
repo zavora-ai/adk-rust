@@ -25,7 +25,7 @@ opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"], optional = true
 opentelemetry-otlp = { version = "0.32", features = ["metrics", "grpc-tonic"], optional = true }
 tracing-opentelemetry = { version = "0.33", optional = true }
 serde_json = { workspace = true, optional = true }
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+rusqlite = { version = "0.39", features = ["bundled"], optional = true }
 google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
 http = { version = "1", optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "time"] }
@@ -53,8 +53,9 @@ gcp = [
     "opentelemetry-otlp/tls-webpki-roots",
 ]
 # Direct span export to a local SQLite file — zero-infrastructure tracing
-# (no collector or backend to deploy). rusqlite is pinned to the release that
-# shares libsqlite3-sys with the workspace's sqlx crates (`links` allows one).
+# (no collector or backend to deploy). rusqlite 0.39 links libsqlite3-sys 0.37, the
+# newest release sqlx-sqlite 0.9 accepts (`>=0.30.1, <0.38`); `links` allows one copy, so
+# a rusqlite needing another libsqlite3-sys cannot share a lockfile with SQLite sessions.
 sqlite = ["dep:rusqlite", "dep:serde_json"]
 
 [dev-dependencies]

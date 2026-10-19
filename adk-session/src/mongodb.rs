@@ -35,6 +35,14 @@ use std::collections::HashMap;
 use tracing::instrument;
 use uuid::Uuid;
 
+/// Whether the deployment that sent `reply` to `hello` runs multi-document transactions.
+///
+/// A replica set member names its set (`setName`), and the `mongos` router of a sharded
+/// cluster answers `msg: "isdbgrid"`; a standalone `mongod` does neither.
+pub(crate) fn hello_supports_transactions(reply: &Document) -> bool {
+    reply.contains_key("setName") || reply.get_str("msg") == Ok("isdbgrid")
+}
+
 /// MongoDB-backed session service implementing [`SessionService`].
 ///
 /// Uses four collections for the three-tier state model:
@@ -54,8 +62,9 @@ pub struct MongoSessionService {
 impl MongoSessionService {
     /// Connect to MongoDB using a connection string and database name.
     ///
-    /// Automatically detects whether the deployment supports transactions
-    /// by checking for replica set membership via the `hello` command.
+    /// Automatically detects whether the deployment supports transactions from the
+    /// `hello` command: a replica set member and a sharded cluster's `mongos` router do,
+    /// a standalone server does not. A failed `hello` is treated as standalone.
     pub async fn new(connection_string: &str, database_name: &str) -> Result<Self> {
         let client_options = mongodb::options::ClientOptions::parse(connection_string)
             .await
@@ -64,17 +73,19 @@ impl MongoSessionService {
             .map_err(|e| adk_core::AdkError::session(format!("mongodb connection failed: {e}")))?;
         let db = client.database(database_name);
 
-        // Detect replica set support via hello command.
         let supports_transactions = match db.run_command(doc! { "hello": 1 }).await {
-            Ok(reply) => reply.get_str("setName").is_ok(),
-            Err(_) => false,
+            Ok(reply) => hello_supports_transactions(&reply),
+            Err(error) => {
+                tracing::warn!(error = %error, "mongodb hello failed; writing without transactions");
+                false
+            }
         };
 
         if supports_transactions {
-            tracing::info!("MongoDB replica set detected — transactions enabled");
+            tracing::info!("mongodb replica set or sharded cluster detected; transactions enabled");
         } else {
             tracing::info!(
-                "MongoDB standalone detected — using sequential writes (no transactions)"
+                "mongodb standalone detected; writing sequentially without transactions"
             );
         }
 
@@ -852,5 +863,31 @@ impl Events for MongoSession {
     }
     fn at(&self, index: usize) -> Option<&Event> {
         self.events.get(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replica_set_members_support_transactions() {
+        let primary = doc! { "isWritablePrimary": true, "setName": "rs0", "hosts": ["a:27017"] };
+        assert!(hello_supports_transactions(&primary));
+        let secondary = doc! { "isWritablePrimary": false, "secondary": true, "setName": "rs0" };
+        assert!(hello_supports_transactions(&secondary));
+    }
+
+    #[test]
+    fn mongos_routers_support_transactions() {
+        let mongos = doc! { "isWritablePrimary": true, "msg": "isdbgrid", "maxWireVersion": 21 };
+        assert!(hello_supports_transactions(&mongos));
+    }
+
+    #[test]
+    fn standalone_servers_do_not_support_transactions() {
+        let standalone = doc! { "isWritablePrimary": true, "maxWireVersion": 21 };
+        assert!(!hello_supports_transactions(&standalone));
+        assert!(!hello_supports_transactions(&doc! { "msg": "not a router" }));
     }
 }

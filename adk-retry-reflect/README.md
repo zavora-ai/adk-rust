@@ -72,6 +72,7 @@ fn agent(model: Arc<dyn Llm>, tool: Arc<dyn Tool>) -> Result<LlmAgent, Box<dyn s
 | `template` | Built-in | Custom reflection prompt template |
 | `priority` | 200 | Plugin execution priority |
 | `enable_global_tracking` | disabled | Circuit-breaker threshold: failures of one tool, across invocations, since its last success |
+| `record_payloads` | false | Whether log lines carry the tool's error text; set it to the run's `RunConfig::record_payloads` |
 
 ## Retry Counts
 
@@ -107,7 +108,9 @@ Two errors pass through unchanged, with no retry suggested: an authorization or 
 
 ## Tracing Events
 
-The plugin emits structured tracing events:
+The plugin emits structured tracing events. Each names the error by its component,
+category, and code (`error`); its text (`error.message`) is logged only under
+`record_payloads(true)`:
 
 - `retry_reflect.retry` (info) — When a retry is initiated
 - `retry_reflect.exhausted` (warn) — When a tool's retry limit is exceeded

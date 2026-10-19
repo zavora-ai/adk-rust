@@ -1,0 +1,31 @@
+[package]
+name = "security-sessions-contracts-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Escalated payments resumed from the approval store, SSO decisions refused when the audit sink fails, and typed artifact and session identifier errors"
+
+[workspace]
+
+[dependencies]
+adk-agent = { path = "../../adk-agent" }
+adk-artifact = { path = "../../adk-artifact" }
+adk-auth = { path = "../../adk-auth", features = ["sso"] }
+adk-core = { path = "../../adk-core" }
+adk-model = { path = "../../adk-model", default-features = false, features = ["openai"] }
+adk-payments = { path = "../../adk-payments" }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session", features = ["sqlite", "redis", "encrypted-session"] }
+anyhow = "1.0"
+async-trait = "0.1"
+aws-lc-rs = "1.18"
+axum = "0.8"
+base64 = "0.22"
+chrono = "0.4"
+dotenvy = "0.15"
+futures = "0.3"
+jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
+serde_json = "1.0"
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
