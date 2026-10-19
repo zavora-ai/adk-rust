@@ -15,11 +15,13 @@ use std::time::Instant;
 use audiopus::coder::{Decoder, Encoder};
 use audiopus::{Application, Channels, MutSignals, SampleRate};
 use parking_lot::Mutex as ParkingMutex;
-use str0m::Rtc;
 use str0m::change::SdpAnswer;
 use str0m::channel::ChannelId;
 use str0m::media::{Direction, Frequency, MediaKind, MediaTime, Mid, Pt};
-use tokio::sync::{Mutex, mpsc};
+use str0m::net::{Protocol, Receive};
+use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
+use tokio::net::UdpSocket;
+use tokio::sync::{Mutex, Notify, mpsc};
 
 use std::sync::atomic::AtomicU64;
 
@@ -200,8 +202,8 @@ const DATA_CHANNEL_LABEL: &str = "oai-events";
 ///
 /// 1. Create `str0m::Rtc` instance with audio track and data channel
 /// 2. Generate local SDP offer
-/// 3. Request ephemeral token from OpenAI `/v1/realtime/sessions`
-/// 4. Exchange SDP offer with OpenAI `/v1/realtime?model=...`
+/// 3. Request an ephemeral key from OpenAI `/v1/realtime/client_secrets`
+/// 4. Exchange the SDP offer with OpenAI `/v1/realtime/calls`
 /// 5. Apply SDP answer to complete the WebRTC handshake
 ///
 /// # Example
@@ -249,19 +251,17 @@ pub struct OpenAIWebRTCSession {
     pending_dc_messages: Arc<Mutex<Vec<Vec<u8>>>>,
     /// Whether the data channel has been opened and is ready for writes.
     dc_open: Arc<AtomicBool>,
+    /// Wakes the I/O driver after a write queues output on the `Rtc`.
+    wake: Arc<Notify>,
+    /// The task that moves datagrams between the UDP socket and the `Rtc`.
+    driver: tokio::task::AbortHandle,
 }
 
-/// Response from OpenAI's ephemeral token endpoint.
+/// Response from `POST /v1/realtime/client_secrets`: the ephemeral key, its expiry, and the
+/// session it was minted for.
 #[derive(Debug, serde::Deserialize)]
-struct EphemeralTokenResponse {
-    /// The ephemeral client secret token.
-    client_secret: ClientSecret,
-}
-
-/// Client secret within the ephemeral token response.
-#[derive(Debug, serde::Deserialize)]
-struct ClientSecret {
-    /// The actual token value.
+struct ClientSecretResponse {
+    /// The ephemeral key (`ek_...`) the SDP exchange authenticates with.
     value: String,
 }
 
@@ -296,9 +296,20 @@ impl OpenAIWebRTCSession {
     /// Returns `RealtimeError::ConnectionError` if SDP signaling fails.
     /// Returns `RealtimeError::AuthError` if the ephemeral token request fails.
     /// Returns `RealtimeError::WebRTCError` if the Rtc instance cannot be configured.
-    pub async fn connect(api_key: &str, model_id: &str, _config: RealtimeConfig) -> Result<Self> {
+    pub async fn connect(api_key: &str, model_id: &str, config: RealtimeConfig) -> Result<Self> {
+        adk_core::ensure_crypto_provider();
         // Step 1: Create str0m Rtc instance
         let mut rtc = Rtc::new(Instant::now());
+
+        // The host candidate is the socket the driver reads and writes; it must be in the offer.
+        let socket = bind_host_socket().await?;
+        let local_addr = socket
+            .local_addr()
+            .map_err(|e| RealtimeError::webrtc(format!("UDP socket has no local address: {e}")))?;
+        let candidate = Candidate::host(local_addr, "udp").map_err(|e| {
+            RealtimeError::webrtc(format!("Invalid host candidate {local_addr}: {e}"))
+        })?;
+        rtc.add_local_candidate(candidate);
 
         // Step 2: Add audio track (Opus, send+recv) and data channel via SDP API
         let mut changes = rtc.sdp_api();
@@ -332,13 +343,12 @@ impl OpenAIWebRTCSession {
         let http_client = reqwest::Client::new();
 
         let ephemeral_token =
-            Self::request_ephemeral_token(&http_client, api_key, model_id).await?;
+            Self::request_ephemeral_token(&http_client, api_key, model_id, &config).await?;
 
         tracing::debug!("Obtained ephemeral token for WebRTC signaling");
 
         // Step 5: Exchange SDP offer with OpenAI endpoint
-        let answer_sdp =
-            Self::exchange_sdp(&http_client, &ephemeral_token, model_id, &offer_sdp).await?;
+        let answer_sdp = Self::exchange_sdp(&http_client, &ephemeral_token, &offer_sdp).await?;
 
         // Step 6: Parse and apply SDP answer
         let answer = SdpAnswer::from_sdp_string(&answer_sdp)
@@ -375,11 +385,31 @@ impl OpenAIWebRTCSession {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         let session_id = uuid::Uuid::new_v4().to_string();
+        let connected = Arc::new(AtomicBool::new(true));
+        let rtc = Arc::new(Mutex::new(rtc));
+        let pending_dc_messages = Arc::new(Mutex::new(Vec::new()));
+        let dc_open = Arc::new(AtomicBool::new(false));
+        let wake = Arc::new(Notify::new());
+
+        let driver = Driver {
+            rtc: rtc.clone(),
+            socket,
+            local_addr,
+            data_channel_id,
+            pending_dc_messages: pending_dc_messages.clone(),
+            dc_open: dc_open.clone(),
+            connected: connected.clone(),
+            wake: wake.clone(),
+            event_tx: event_tx.clone(),
+            decoder: ParkingMutex::new(OpusCodec::new(24000, 1)?),
+            output_item_id: String::new(),
+        };
+        let driver = tokio::spawn(driver.run()).abort_handle();
 
         Ok(Self {
             session_id,
-            connected: Arc::new(AtomicBool::new(true)),
-            rtc: Arc::new(Mutex::new(rtc)),
+            connected,
+            rtc,
             audio_track_id,
             data_channel_id,
             opus_encoder: Arc::new(ParkingMutex::new(opus_codec)),
@@ -388,30 +418,32 @@ impl OpenAIWebRTCSession {
             rtp_sample_offset: AtomicU64::new(0),
             event_rx: Arc::new(Mutex::new(event_rx)),
             event_tx,
-            pending_dc_messages: Arc::new(Mutex::new(Vec::new())),
-            dc_open: Arc::new(AtomicBool::new(false)),
+            pending_dc_messages,
+            dc_open,
+            wake,
+            driver,
         })
     }
 
-    /// Request an ephemeral token from OpenAI's session endpoint.
+    /// Request an ephemeral key for the WebRTC call.
     ///
-    /// POST /v1/realtime/sessions with the API key to get a short-lived
-    /// client secret for WebRTC signaling.
+    /// `POST /v1/realtime/client_secrets` with the API key returns a short-lived key for a
+    /// session configured from `config`: the same session object `session.update` sends.
     async fn request_ephemeral_token(
         client: &reqwest::Client,
         api_key: &str,
         model_id: &str,
+        config: &RealtimeConfig,
     ) -> Result<String> {
-        let url = format!("{}/realtime/sessions", OPENAI_API_BASE);
+        let url = format!("{OPENAI_API_BASE}/realtime/client_secrets");
+        let mut session = crate::openai::protocol::convert_config_to_openai(config);
+        session["model"] = serde_json::json!(model_id);
 
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "model": model_id,
-                "voice": "alloy",
-            }))
+            .json(&serde_json::json!({ "session": session }))
             .send()
             .await
             .map_err(|e| {
@@ -426,24 +458,23 @@ impl OpenAIWebRTCSession {
             )));
         }
 
-        let token_response: EphemeralTokenResponse = response.json().await.map_err(|e| {
+        let token_response: ClientSecretResponse = response.json().await.map_err(|e| {
             RealtimeError::AuthError(format!("Failed to parse ephemeral token response: {e}"))
         })?;
 
-        Ok(token_response.client_secret.value)
+        Ok(token_response.value)
     }
 
     /// Exchange the local SDP offer with OpenAI's WebRTC endpoint.
     ///
-    /// POST /v1/realtime?model=... with the SDP offer and ephemeral token,
-    /// receiving an SDP answer in return.
+    /// `POST /v1/realtime/calls` with the SDP offer and the ephemeral key returns the SDP
+    /// answer; the model is the one the key's session was created for.
     async fn exchange_sdp(
         client: &reqwest::Client,
         ephemeral_token: &str,
-        model_id: &str,
         offer_sdp: &str,
     ) -> Result<String> {
-        let url = format!("{}/realtime?model={}", OPENAI_API_BASE, model_id);
+        let url = format!("{OPENAI_API_BASE}/realtime/calls");
 
         let response = client
             .post(&url)
@@ -475,13 +506,15 @@ impl OpenAIWebRTCSession {
             RealtimeError::connection(format!("Failed to read SDP answer body: {e}"))
         })?;
 
-        if content_type.contains("application/sdp") {
+        // An SDP document starts with its version line, whatever the declared type.
+        if content_type.contains("application/sdp") || body.trim_start().starts_with("v=") {
             Ok(body)
         } else {
             // Try parsing as JSON with an "sdp" field
             let parsed: SdpExchangeResponse = serde_json::from_str(&body).map_err(|e| {
                 RealtimeError::connection(format!(
-                    "Failed to parse SDP exchange response as JSON: {e}"
+                    "Failed to parse the SDP exchange response ({content_type}, {} bytes) as JSON: {e}",
+                    body.len()
                 ))
             })?;
             Ok(parsed.sdp)
@@ -535,30 +568,36 @@ impl OpenAIWebRTCSession {
         let json_bytes = serde_json::to_vec(value)
             .map_err(|e| RealtimeError::protocol(format!("JSON serialize error: {e}")))?;
 
-        if !self.dc_open.load(Ordering::Acquire) {
-            // Channel not open yet — queue for later flush
+        {
+            // Checked under the queue's lock, which the flush holds while it opens the channel,
+            // so a message is either flushed or written directly, never stranded.
             let mut pending = self.pending_dc_messages.lock().await;
-            // Cap at 50 messages to prevent unbounded growth
-            if pending.len() >= 50 {
-                return Err(RealtimeError::webrtc(
-                    "Data channel message queue full (50 messages). Channel may not be opening.",
-                ));
+            if !self.dc_open.load(Ordering::Acquire) {
+                // Cap at 50 messages to prevent unbounded growth
+                if pending.len() >= 50 {
+                    return Err(RealtimeError::webrtc(
+                        "Data channel message queue full (50 messages). Channel may not be opening.",
+                    ));
+                }
+                pending.push(json_bytes);
+                tracing::debug!(
+                    "Data channel not open yet, queued message ({} pending)",
+                    pending.len()
+                );
+                return Ok(());
             }
-            pending.push(json_bytes);
-            tracing::debug!(
-                "Data channel not open yet, queued message ({} pending)",
-                pending.len()
-            );
-            return Ok(());
         }
 
-        let mut rtc = self.rtc.lock().await;
-        let mut channel = rtc
-            .channel(self.data_channel_id)
-            .ok_or_else(|| RealtimeError::webrtc("Data channel 'oai-events' not available"))?;
-        channel
-            .write(true, json_bytes.as_slice())
-            .map_err(|e| RealtimeError::webrtc(format!("Data channel write failed: {e}")))?;
+        {
+            let mut rtc = self.rtc.lock().await;
+            let mut channel = rtc
+                .channel(self.data_channel_id)
+                .ok_or_else(|| RealtimeError::webrtc("Data channel 'oai-events' not available"))?;
+            channel
+                .write(true, json_bytes.as_slice())
+                .map_err(|e| RealtimeError::webrtc(format!("Data channel write failed: {e}")))?;
+        }
+        self.wake.notify_one();
 
         Ok(())
     }
@@ -568,27 +607,9 @@ impl OpenAIWebRTCSession {
     /// Called when the data channel `OnOpen` event is received from str0m.
     /// Drains the pending message queue in FIFO order.
     pub async fn flush_pending_dc_messages(&self) -> Result<()> {
-        self.dc_open.store(true, Ordering::Release);
-
-        let mut pending = self.pending_dc_messages.lock().await;
-        if pending.is_empty() {
-            return Ok(());
-        }
-
-        let count = pending.len();
-        tracing::info!("Data channel opened — flushing {count} queued messages");
-
-        let mut rtc = self.rtc.lock().await;
-        let mut channel = rtc.channel(self.data_channel_id).ok_or_else(|| {
-            RealtimeError::webrtc("Data channel 'oai-events' not available during flush")
-        })?;
-
-        for msg in pending.drain(..) {
-            channel
-                .write(true, msg.as_slice())
-                .map_err(|e| RealtimeError::webrtc(format!("Data channel flush failed: {e}")))?;
-        }
-
+        flush_pending(&self.rtc, &self.pending_dc_messages, &self.dc_open, self.data_channel_id)
+            .await?;
+        self.wake.notify_one();
         Ok(())
     }
 
@@ -625,6 +646,8 @@ impl OpenAIWebRTCSession {
         writer
             .write(self.opus_pt, now, rtp_time, opus_data)
             .map_err(|e| RealtimeError::webrtc(format!("Audio track write failed: {e}")))?;
+        drop(rtc);
+        self.wake.notify_one();
 
         Ok(())
     }
@@ -691,8 +714,185 @@ impl OpenAITransportLink for OpenAIWebRTCSession {
 
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
+        self.driver.abort();
         let mut rtc = self.rtc.lock().await;
         rtc.disconnect();
         Ok(())
     }
+}
+
+impl Drop for OpenAIWebRTCSession {
+    fn drop(&mut self) {
+        self.driver.abort();
+    }
+}
+
+/// Binds the UDP socket offered as the host candidate.
+///
+/// Connecting a UDP socket sends nothing; it selects the interface that routes to OpenAI,
+/// whose address is the one the remote peer can answer.
+async fn bind_host_socket() -> Result<UdpSocket> {
+    let route =
+        |e: std::io::Error| RealtimeError::webrtc(format!("No route for WebRTC media: {e}"));
+    let probe = UdpSocket::bind("0.0.0.0:0").await.map_err(route)?;
+    probe.connect("api.openai.com:443").await.map_err(route)?;
+    let ip = probe.local_addr().map_err(route)?.ip();
+    UdpSocket::bind((ip, 0)).await.map_err(route)
+}
+
+/// Writes the messages queued before the data channel opened, then marks it open.
+async fn flush_pending(
+    rtc: &Mutex<Rtc>,
+    pending: &Mutex<Vec<Vec<u8>>>,
+    dc_open: &AtomicBool,
+    channel_id: ChannelId,
+) -> Result<()> {
+    let mut pending = pending.lock().await;
+    if !pending.is_empty() {
+        tracing::debug!(queued = pending.len(), "data channel opened, flushing queued messages");
+        let mut rtc = rtc.lock().await;
+        let mut channel = rtc.channel(channel_id).ok_or_else(|| {
+            RealtimeError::webrtc("Data channel 'oai-events' not available during flush")
+        })?;
+        for msg in pending.drain(..) {
+            channel
+                .write(true, msg.as_slice())
+                .map_err(|e| RealtimeError::webrtc(format!("Data channel flush failed: {e}")))?;
+        }
+    }
+    dc_open.store(true, Ordering::Release);
+    Ok(())
+}
+
+/// Drives the Sans-IO `Rtc`: sends what it transmits, feeds it datagrams and timeouts, and
+/// turns its events into [`ServerEvent`]s.
+struct Driver {
+    rtc: Arc<Mutex<Rtc>>,
+    socket: UdpSocket,
+    local_addr: std::net::SocketAddr,
+    data_channel_id: ChannelId,
+    pending_dc_messages: Arc<Mutex<Vec<Vec<u8>>>>,
+    dc_open: Arc<AtomicBool>,
+    connected: Arc<AtomicBool>,
+    wake: Arc<Notify>,
+    event_tx: mpsc::UnboundedSender<Result<ServerEvent>>,
+    /// Behind a lock only so the driver is `Sync`; the driver task is its one user.
+    decoder: ParkingMutex<OpusCodec>,
+    /// The output item the model is speaking, which the audio frames belong to.
+    output_item_id: String,
+}
+
+impl Driver {
+    async fn run(mut self) {
+        if let Err(error) = self.drive().await {
+            tracing::warn!(error = %error, "openai webrtc transport stopped");
+            let _ = self.event_tx.send(Err(error));
+        }
+        self.connected.store(false, Ordering::Relaxed);
+    }
+
+    async fn drive(&mut self) -> Result<()> {
+        let mut buf = vec![0u8; 2000];
+        loop {
+            let (deadline, events) = self.poll().await?;
+            for event in events {
+                if !self.handle(event).await? {
+                    return Ok(());
+                }
+            }
+
+            let wait = deadline.saturating_duration_since(Instant::now());
+            tokio::select! {
+                received = self.socket.recv_from(&mut buf) => {
+                    let (len, source) = received.map_err(|e| {
+                        RealtimeError::connection(format!("WebRTC socket read failed: {e}"))
+                    })?;
+                    let Ok(contents) = buf[..len].try_into() else { continue };
+                    let input = Input::Receive(
+                        Instant::now(),
+                        Receive { proto: Protocol::Udp, source, destination: self.local_addr, contents },
+                    );
+                    let mut rtc = self.rtc.lock().await;
+                    if rtc.accepts(&input) {
+                        rtc.handle_input(input).map_err(webrtc_error)?;
+                    }
+                }
+                () = tokio::time::sleep(wait) => {
+                    self.rtc.lock().await.handle_input(Input::Timeout(Instant::now())).map_err(webrtc_error)?;
+                }
+                () = self.wake.notified() => {}
+            }
+        }
+    }
+
+    /// Drains the `Rtc`'s output: transmits datagrams and returns the next deadline with the
+    /// events to handle once the lock is released.
+    async fn poll(&self) -> Result<(Instant, Vec<Event>)> {
+        let mut rtc = self.rtc.lock().await;
+        let mut events = Vec::new();
+        loop {
+            match rtc.poll_output().map_err(webrtc_error)? {
+                Output::Timeout(deadline) => return Ok((deadline, events)),
+                Output::Transmit(transmit) => {
+                    // UDP: a datagram the kernel cannot take now is lost, as on the wire.
+                    let _ = self.socket.try_send_to(&transmit.contents, transmit.destination);
+                }
+                Output::Event(event) => events.push(event),
+            }
+        }
+    }
+
+    /// Handles one `Rtc` event; returns `false` once the connection has ended.
+    async fn handle(&mut self, event: Event) -> Result<bool> {
+        match event {
+            Event::ChannelOpen(id, _) if id == self.data_channel_id => {
+                flush_pending(&self.rtc, &self.pending_dc_messages, &self.dc_open, id).await?;
+            }
+            Event::ChannelData(data) if data.id == self.data_channel_id => {
+                match serde_json::from_slice::<ServerEvent>(&data.data) {
+                    Ok(event) => {
+                        if let ServerEvent::OutputItemAdded { item, .. } = &event
+                            && let Some(id) = item.get("id").and_then(Value::as_str)
+                        {
+                            self.output_item_id = id.to_string();
+                        }
+                        self.send(Ok(event));
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, payload.bytes = data.data.len(), "realtime event failed to parse");
+                    }
+                }
+            }
+            Event::MediaData(media) => match self.decoder.lock().decode(&media.data) {
+                Ok(pcm) => {
+                    let delta = pcm.iter().flat_map(|sample| sample.to_le_bytes()).collect();
+                    self.send(Ok(ServerEvent::AudioDelta {
+                        event_id: String::new(),
+                        response_id: String::new(),
+                        item_id: self.output_item_id.clone(),
+                        output_index: 0,
+                        content_index: 0,
+                        delta,
+                    }));
+                }
+                // One undecodable frame is a gap in the audio, not the end of the session.
+                Err(error) => tracing::debug!(error = %error, "skipped an undecodable opus frame"),
+            },
+            Event::IceConnectionStateChange(IceConnectionState::Disconnected)
+            | Event::ChannelClose(_) => {
+                return Ok(false);
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    fn send(&self, event: Result<ServerEvent>) {
+        // The receiver is gone once the session is dropped; the abort follows.
+        let _ = self.event_tx.send(event);
+    }
+}
+
+fn webrtc_error(error: str0m::RtcError) -> RealtimeError {
+    RealtimeError::webrtc(format!("WebRTC transport error: {error}"))
 }

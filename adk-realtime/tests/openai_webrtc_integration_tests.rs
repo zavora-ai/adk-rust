@@ -39,7 +39,7 @@ async fn test_openai_webrtc_text_exchange() {
     tokio::time::timeout(timeout, async {
         let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
 
-        let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17")
+        let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1")
             .with_transport(OpenAITransport::WebRTC);
 
         let config = RealtimeConfig::default()
@@ -59,6 +59,7 @@ async fn test_openai_webrtc_text_exchange() {
             .send_text("Hello, say one word.")
             .await
             .expect("Failed to send text over data channel");
+        session.create_response().await.expect("Failed to request a response");
 
         // Verify we receive at least one response event
         let mut received_event = false;
@@ -100,7 +101,7 @@ async fn test_openai_webrtc_audio_roundtrip() {
     tokio::time::timeout(timeout, async {
         let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
 
-        let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17")
+        let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1")
             .with_transport(OpenAITransport::WebRTC);
 
         let config = RealtimeConfig::default()
@@ -142,7 +143,7 @@ async fn test_openai_webrtc_session_id() {
     tokio::time::timeout(timeout, async {
         let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
 
-        let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17")
+        let model = OpenAIRealtimeModel::new(api_key, "gpt-realtime-2.1")
             .with_transport(OpenAITransport::WebRTC);
 
         let config = RealtimeConfig::default();

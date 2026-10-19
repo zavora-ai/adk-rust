@@ -22,6 +22,10 @@ fn openai_model() -> anyhow::Result<BoxedModel> {
 | `gpt-realtime-translate` | Translation, on its own endpoint (`/v1/realtime/translations`); see the [`live_translation` example](examples.md#live_translation) |
 
 - **Transport**: WebSocket (`openai` feature) or WebRTC (`openai-webrtc`, needs `cmake`).
+  WebRTC mints an ephemeral key with `POST /v1/realtime/client_secrets` for a session built
+  from the `RealtimeConfig`, exchanges SDP with `POST /v1/realtime/calls`, and carries audio
+  as Opus over UDP from the interface that routes to OpenAI; events use the `oai-events`
+  data channel.
 - **Audio**: 24 kHz PCM16 in and out.
 - **Voices**: `marin`, `alloy`, and the other OpenAI voices; set with
   `RealtimeConfig::with_voice("marin")`.
