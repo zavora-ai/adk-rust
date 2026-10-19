@@ -1,256 +1,113 @@
 //! # adk-model
-#![allow(clippy::result_large_err)]
-#![deny(missing_docs)]
 //!
-//! LLM model integrations for ADK (Gemini, OpenAI, OpenRouter, Anthropic, DeepSeek, Groq,
-//! Ollama, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, Amazon
-//! Bedrock, Azure AI Inference).
+//! LLM provider clients for ADK-Rust. Every client implements [`adk_core::Llm`], so agents and
+//! runners accept any of them.
 //!
-//! ## Overview
+//! ## Providers
 //!
-//! This crate provides LLM implementations for ADK agents. Currently supports:
+//! | Client | Provider | Feature |
+//! |--------|----------|---------|
+//! | [`GeminiModel`] | Google Gemini (AI Studio, Vertex AI with `gemini-vertex`) | `gemini` (default) |
+//! | `OpenAIClient` | OpenAI Chat Completions | `openai` |
+//! | `openai::OpenAIResponsesClient` | OpenAI Responses API | `openai` |
+//! | `AzureOpenAIClient` | Azure OpenAI | `openai` |
+//! | `OpenAICompatible` | Any OpenAI-compatible endpoint, with presets for xAI, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, OrcaRouter, MiniMax, Zhipu AI, Baidu, Cohere, ByteDance, and Gemini | `openai` |
+//! | `AnthropicClient` | Anthropic Claude | `anthropic` |
+//! | `DeepSeekClient` | DeepSeek | `deepseek` |
+//! | `GroqClient` | Groq | `groq` |
+//! | `OllamaModel` | Ollama (local) | `ollama` |
+//! | `OpenRouterClient` | OpenRouter, with its native chat, responses, routing, discovery, and credits APIs | `openrouter` |
+//! | `OpenCodeClient` | OpenCode Go and Zen | `opencode` |
+//! | `BedrockClient` | Amazon Bedrock | `bedrock` |
+//! | `AzureAIClient` | Azure AI Inference | `azure-ai` |
+//! | [`ScriptedLlm`] | Test double that answers each call with the next scripted reply and records every request | always |
+//! | [`MockLlm`] | Test double that replays the same responses on every call | always |
 //!
-//! - [`GeminiModel`] - Google's Gemini models (3 Pro, 2.5 Flash, etc.)
-//! - `OpenAIClient` - OpenAI models (GPT-5, GPT-5-mini, o3, etc.) — requires `openai` feature
-//! - `AzureOpenAIClient` - Azure OpenAI Service — requires `openai` feature
-//! - `OpenAICompatible` - Any OpenAI-compatible API (xAI, Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, OrcaRouter, or custom) — requires `openai` feature, use `OpenAICompatibleConfig` presets
-//! - `AnthropicClient` - Anthropic Claude models — requires `anthropic` feature
-//! - `DeepSeekClient` - DeepSeek models — requires `deepseek` feature
-//! - `GroqClient` - Groq ultra-fast inference — requires `groq` feature
-//! - `OpenRouterClient` - OpenRouter-native chat, responses, and discovery APIs — requires `openrouter` feature
-//! - `OllamaModel` - Local LLMs via Ollama — requires `ollama` feature
-//! - `BedrockClient` - Amazon Bedrock via AWS SDK — requires `bedrock` feature
-//! - `AzureAIClient` - Azure AI Inference endpoints — requires `azure-ai` feature
-//! - [`ScriptedLlm`] - Test double that answers each call with the next scripted reply and records every request
-//! - [`MockLlm`] - Mock LLM that replays the same responses on every call
+//! [`catalog`] holds the recommended model per provider and the lifecycle of known model IDs;
+//! [`pricing::PricingCatalog`] prices usage for every provider.
 //!
-//! ## Quick Start
-//!
-//! ### Gemini
+//! ## Quick start
 //!
 //! ```rust,no_run
-//! use adk_model::GeminiModel;
-//! use std::sync::Arc;
-//!
-//! let api_key = std::env::var("GOOGLE_API_KEY").unwrap();
-//! let model = GeminiModel::new(&api_key, "gemini-2.5-flash").unwrap();
-//! ```
-//!
-//! ### OpenAI
-//!
-//! ```rust,ignore
-//! use adk_model::openai::{OpenAIClient, OpenAIConfig};
-//!
-//! let model = OpenAIClient::new(OpenAIConfig::new(
-//!     std::env::var("OPENAI_API_KEY").unwrap(),
-//!     "gpt-5-mini",
-//! )).unwrap();
-//! ```
-//!
-//! ### OpenRouter
-//!
-//! ```rust,ignore
 //! use adk_core::{Content, Llm, LlmRequest};
-//! use adk_model::openrouter::{OpenRouterClient, OpenRouterConfig};
+//! use adk_model::GeminiModel;
 //! use futures::StreamExt;
 //!
-//! let client = OpenRouterClient::new(
-//!     OpenRouterConfig::new(
-//!         std::env::var("OPENROUTER_API_KEY").unwrap(),
-//!         "openai/gpt-4.1-mini",
-//!     )
-//!     .with_http_referer("https://github.com/zavora-ai/adk-rust")
-//!     .with_title("ADK-Rust"),
-//! ).unwrap();
-//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
 //! let request = LlmRequest::new(
-//!     "openai/gpt-4.1-mini",
-//!     vec![Content::new("user").with_text("Reply in one short sentence.")],
+//!     "gemini-3.7-flash",
+//!     vec![Content::new("user").with_text("Name one planet in a short sentence.")],
 //! );
 //!
-//! # tokio_test::block_on(async {
-//! let mut stream = client.generate_content(request, true).await.unwrap();
-//! while let Some(item) = stream.next().await {
-//!     let _response = item.unwrap();
+//! let mut responses = model.generate_content(request, false).await?;
+//! while let Some(response) = responses.next().await {
+//!     if let Some(content) = response?.content {
+//!         for part in &content.parts {
+//!             if let Some(text) = part.text() {
+//!                 print!("{text}");
+//!             }
+//!         }
+//!     }
 //! }
-//! # });
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! Native OpenRouter APIs such as model discovery, credits, routing configuration, plugins, and
-//! exact Responses payload access remain available on `OpenRouterClient` itself.
+//! ## Other providers
 //!
-//! ### Anthropic
+//! Each client is built from its config and used the same way:
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # #[cfg(all(feature = "openai", feature = "anthropic", feature = "deepseek"))]
+//! # fn main() -> Result<(), adk_core::AdkError> {
 //! use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+//! use adk_model::deepseek::DeepSeekClient;
+//! use adk_model::openai::{OpenAIClient, OpenAIConfig, OpenAIResponsesClient, OpenAIResponsesConfig};
+//! use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
 //!
-//! let model = AnthropicClient::new(AnthropicConfig::new(
-//!     std::env::var("ANTHROPIC_API_KEY").unwrap(),
-//!     "claude-sonnet-4-5-20250929",
-//! )).unwrap();
+//! let chat = OpenAIClient::new(OpenAIConfig::new("sk-...", "gpt-5.6-terra"))?;
+//! let responses = OpenAIResponsesClient::new(OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra"))?;
+//! let claude = AnthropicClient::new(AnthropicConfig::new("sk-ant-...", "claude-sonnet-5"))?;
+//! let deepseek = DeepSeekClient::v4_flash("sk-...")?;
+//! let grok = OpenAICompatible::new(OpenAICompatibleConfig::xai("xai-...", "grok-4.6"))?;
+//! # let _ = (chat, responses, claude, deepseek, grok);
+//! # Ok(())
+//! # }
+//! # #[cfg(not(all(feature = "openai", feature = "anthropic", feature = "deepseek")))]
+//! # fn main() {}
 //! ```
 //!
-//! ### DeepSeek
+//! ## Test doubles
 //!
-//! ```rust,ignore
-//! use adk_model::deepseek::{DeepSeekClient, DeepSeekConfig};
+//! ```rust
+//! use adk_core::{Content, Llm, LlmRequest};
+//! use adk_model::{ScriptedLlm, ScriptedResponse};
+//! use futures::StreamExt;
 //!
-//! // Chat model
-//! let chat = DeepSeekClient::chat(std::env::var("DEEPSEEK_API_KEY").unwrap()).unwrap();
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let model = ScriptedLlm::new("scripted", vec![ScriptedResponse::text("Mars.")]);
+//! let request = LlmRequest::new("scripted", vec![Content::new("user").with_text("Name a planet.")]);
 //!
-//! // Reasoner with thinking mode
-//! let reasoner = DeepSeekClient::reasoner(std::env::var("DEEPSEEK_API_KEY").unwrap()).unwrap();
+//! let response = model.generate_content(request, false).await?.next().await.ok_or("no response")??;
+//! assert_eq!(response.content.unwrap().parts[0].text(), Some("Mars."));
+//! assert_eq!(model.requests().len(), 1);
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! ### OpenAI-Compatible Providers (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI, OrcaRouter)
+//! ## OpenRouter scope boundary
 //!
-//! All OpenAI-compatible providers use `OpenAICompatible` with provider presets:
-//!
-//! ```rust,ignore
-//! use adk_model::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
-//!
-//! // Fireworks AI
-//! let model = OpenAICompatible::new(OpenAICompatibleConfig::fireworks(
-//!     std::env::var("FIREWORKS_API_KEY").unwrap(),
-//!     "accounts/fireworks/models/llama-v3p1-8b-instruct",
-//! )).unwrap();
-//!
-//! // Together AI
-//! let model = OpenAICompatible::new(OpenAICompatibleConfig::together(
-//!     std::env::var("TOGETHER_API_KEY").unwrap(),
-//!     "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-//! )).unwrap();
-//!
-//! // Or any custom OpenAI-compatible endpoint
-//! let model = OpenAICompatible::new(
-//!     OpenAICompatibleConfig::new("your-api-key", "your-model")
-//!         .with_base_url("https://your-endpoint.com/v1")
-//!         .with_provider_name("my-provider"),
-//! ).unwrap();
-//! ```
-//!
-//! ### Amazon Bedrock
-//!
-//! ```rust,ignore
-//! use adk_model::bedrock::{BedrockClient, BedrockConfig};
-//!
-//! // Uses AWS IAM credentials from the environment (no API key needed)
-//! let config = BedrockConfig::new("us-east-1", "anthropic.claude-sonnet-4-20250514-v1:0");
-//! let model = BedrockClient::new(config).await.unwrap();
-//! ```
-//!
-//! ### Azure AI Inference
-//!
-//! ```rust,ignore
-//! use adk_model::azure_ai::{AzureAIClient, AzureAIConfig};
-//!
-//! let model = AzureAIClient::new(AzureAIConfig::new(
-//!     "https://my-endpoint.eastus.inference.ai.azure.com",
-//!     std::env::var("AZURE_AI_API_KEY").unwrap(),
-//!     "meta-llama-3.1-8b-instruct",
-//! )).unwrap();
-//! ```
-//!
-//! ### Ollama (Local)
-//!
-//! ```rust,ignore
-//! use adk_model::ollama::{OllamaModel, OllamaConfig};
-//!
-//! // Default: localhost:11434
-//! let model = OllamaModel::new(OllamaConfig::new("llama3.2")).unwrap();
-//! ```
-//!
-//! ## Supported Models
-//!
-//! ### Gemini
-//! | Model | Description |
-//! |-------|-------------|
-//! | `gemini-3.7-flash` | Current balanced default (1M context) |
-//! | `gemini-3.6-flash` | Previous balanced generation (1M context) |
-//! | `gemini-3.5-flash-lite` | Cost-efficient high-volume model (1M context) |
-//!
-//! ### OpenAI
-//! | Model | Description |
-//! |-------|-------------|
-//! | `gpt-5.6-terra` | Balanced default for agents |
-//! | `gpt-5.6-sol` | Flagship reasoning and coding |
-//! | `gpt-5.6-luna` | Cost-efficient high-volume model |
-//!
-//! ### Anthropic
-//! | Model | Description |
-//! |-------|-------------|
-//! | `claude-sonnet-5` | Balanced default |
-//! | `claude-fable-5-1` | Most capable; demanding reasoning and long-horizon work |
-//! | `claude-opus-5-5` | Current Opus; long-running agentic coding |
-//! | `claude-sonnet-5-5` | Current Sonnet |
-//! | `claude-haiku-5-5` | Current Haiku; high-volume, latency-sensitive work |
-//! | `claude-opus-5` | Previous Opus |
-//! | `claude-fable-5` | Premium creative and long-form work |
-//!
-//! ### DeepSeek
-//! | Model | Description |
-//! |-------|-------------|
-//! | `deepseek-flash` | Fast balanced default |
-//! | `deepseek-v4-pro` | Advanced reasoning |
-//!
-//! ### Groq
-//! | Model | Description |
-//! |-------|-------------|
-//! | `openai/gpt-oss-120b` | Production default via Groq LPU |
-//! | `openai/gpt-oss-20b` | Lower-latency economy model |
-//!
-//! ### OpenAI-Compatible Providers (via `openai` feature)
-//!
-//! Use `OpenAICompatibleConfig` presets — one client, one feature flag:
-//!
-//! | Provider | Preset | Env Var |
-//! |----------|--------|---------|
-//! | Fireworks AI | `OpenAICompatibleConfig::fireworks()` | `FIREWORKS_API_KEY` |
-//! | Together AI | `OpenAICompatibleConfig::together()` | `TOGETHER_API_KEY` |
-//! | Mistral AI | `OpenAICompatibleConfig::mistral()` | `MISTRAL_API_KEY` |
-//! | Perplexity | `OpenAICompatibleConfig::perplexity()` | `PERPLEXITY_API_KEY` |
-//! | Cerebras | `OpenAICompatibleConfig::cerebras()` | `CEREBRAS_API_KEY` |
-//! | SambaNova | `OpenAICompatibleConfig::sambanova()` | `SAMBANOVA_API_KEY` |
-//! | xAI (Grok) | `OpenAICompatibleConfig::xai()` | `XAI_API_KEY` |
-//! | OrcaRouter | `OpenAICompatibleConfig::orcarouter()` | `ORCAROUTER_API_KEY` |
-//!
-//! ### Other Providers
-//!
-//! | Provider | Feature Flag | Env Var |
-//! |----------|-------------|---------|
-//! | Amazon Bedrock | `bedrock` | AWS IAM credentials |
-//! | Azure AI Inference | `azure-ai` | `AZURE_AI_API_KEY` |
-//! | OpenRouter | `openrouter` | `OPENROUTER_API_KEY` |
-//!
-//! ## Features
-//!
-//! - Async streaming with backpressure
-//! - Tool/function calling support
-//! - Multimodal input (text, images, audio, video, PDF)
-//! - Generation configuration (temperature, top_p, etc.)
-//! - OpenAI-compatible APIs (Ollama, vLLM, etc.)
-//!
-//! ## OpenRouter Scope Boundary
-//!
-//! `OpenRouterClient` exposes the provider's native surfaces:
-//!
-//! - chat completions
-//! - responses
-//! - model discovery and credits
-//! - provider routing and fallback
-//! - OpenRouter plugins and built-in tools
-//! - exact provider metadata and annotations
-//!
-//! The generic `Llm` adapter exists for agent compatibility and covers text generation,
-//! streaming, reasoning parts, tool/function calling, and OpenRouter request options through
-//! `openrouter::OpenRouterRequestOptions`.
-//!
-//! Use the native OpenRouter APIs whenever you need exact request or response parity, discovery,
-//! or provider-specific features that do not fit the generic `LlmRequest` / `LlmResponse`
-//! shape without information loss.
-//!
-//! For end-to-end agentic validation, see the local `examples/openrouter` crate and the
-//! `adk-model/examples/openrouter_*` binaries.
+//! `OpenRouterClient`'s native methods cover model discovery and credits, exact chat and
+//! responses payloads, routing and fallback, plugins, and built-in tools. Its [`adk_core::Llm`]
+//! adapter covers streaming, reasoning parts, tool calling, and multimodal requests, takes
+//! OpenRouter tuning through `openrouter::OpenRouterRequestOptions`, and maps responses into
+//! the generic [`adk_core::LlmResponse`] shape.
+
+#![allow(clippy::result_large_err)]
+#![deny(missing_docs)]
 
 #[cfg(feature = "anthropic")]
 pub mod anthropic;

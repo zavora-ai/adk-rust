@@ -5,12 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+homepage.workspace = true
 description = "LLM model integrations for Rust Agent Development Kit (ADK-Rust) (Gemini, OpenAI, Claude, DeepSeek, etc.)"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-model"
 keywords = ["ai", "agent", "adk", "gemini", "llm"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+
+[package.metadata.docs.rs]
+features = ["all-providers", "gemini-vertex", "gemini-interactions", "openai-responses-full"]
 
 [dependencies]
 adk-core.workspace = true
