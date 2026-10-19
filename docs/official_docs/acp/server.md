@@ -36,6 +36,17 @@ The server uses the official SDK `Agent` builder and stdio transport. Protocol
 traffic is the only data written to stdout; configure tracing and diagnostics
 to use stderr.
 
+| `AcpServerConfigBuilder` option | Default |
+|---------------------------------|---------|
+| `agent`, `session_service` | Required; `build()` fails without them |
+| `agent_name` | `"adk-agent"`, reported in `initialize` with the `adk-acp` version |
+| `agent_description` | Empty; reported as the implementation title when set |
+| `user_id` | `"acp-client"`, the ADK user that owns every session |
+| `max_sessions` | 16; `build()` fails on 0 |
+| `shutdown_timeout` | 30 seconds; `build()` fails on 0 |
+| `session_controls` | None; see [Session modes](#session-modes-configuration-options-and-fork) |
+| `transport` | `TransportConfig::Stdio`, the only transport |
+
 ## Runtime mapping
 
 ```mermaid
@@ -156,13 +167,22 @@ stays dormant until an ADK plan primitive surfaces plan entries.
 
 ## Client-supplied MCP servers
 
-The client may include stdio MCP servers in `session/new` or `session/resume`.
-The server validates names, commands, arguments, and environment entries before
-starting a process. It then:
+The client may include stdio MCP servers in `session/new`, `session/load`,
+`session/resume`, or `session/fork`. Before starting a process the server
+rejects the request when:
+
+- more than 16 servers are attached;
+- a server is not stdio (HTTP and SSE are not advertised);
+- a name is empty or repeated, or an environment variable name is empty or
+  repeated within one server; or
+- a command is not an absolute path.
+
+It then:
 
 1. starts each child in the session workspace;
-2. applies a bounded startup handshake;
-3. wraps the connection as an ADK `McpToolset`;
+2. bounds each startup handshake to 15 seconds;
+3. wraps the connection as an ADK `McpToolset` named `acp:{server name}`, so its
+   tools' origin is `mcp:acp:{server name}`;
 4. lists every server's tools and fails setup with `MalformedMessage` when two
    servers publish the same tool name, naming both servers and the tool;
 5. injects the toolset into that Runner invocation;
@@ -190,28 +210,35 @@ The server bridges ADK tool confirmations to native ACP permission requests.
 When the configured agent pauses on a `ToolConfirmationRequest` during a prompt
 turn — surfaced on `event.actions.tool_confirmation` when an agent awaits human
 approval of a tool call — the server sends a `session/request_permission`
-request describing the tool and its arguments, awaits the client's outcome, and
-resumes execution with the mapped decision. An approval maps to allow, and a
-denial or a cancellation both map to deny, so a cancelled request never executes
-the tool. Each outcome is correlated to the exact call by its function-call
-identifier and fed back to the runner through
-`RunConfig::tool_confirmation_decisions`. The resumed run carries an empty user
-turn, and an `LlmAgent` dispatches the held call again under its original ID
-before its next model call, so the decision applies whether or not the model
-would issue the call again. A call the model issues again under a new ID is a
-new call and produces a new permission request.
+request titled `Run tool '{name}'` with the tool's arguments, offering two
+options, `acp-allow-once` and `acp-reject-once`, awaits the client's outcome, and
+resumes execution with the mapped decision. `acp-allow-once` maps to allow; any
+other selection, and a cancellation, map to deny, so a cancelled request never
+executes the tool.
+
+Each outcome is recorded under the call's function-call identifier in
+`RunConfig::tool_confirmation_decisions` and bound, through
+`RunConfig::tool_confirmation_fingerprints`, to the call's fingerprint: the
+acting agent, the tool's origin, the tool name, and the arguments. A reused call
+ID on another agent's call, or on a tool another MCP server publishes, is
+therefore not authorized. A confirmation without a call ID fails the prompt,
+and one prompt resolves at most 64 rounds of confirmations. The resumed run
+carries an empty user turn, and an `LlmAgent` dispatches the held call again
+under its original ID before its next model call, so the decision applies
+whether or not the model would issue the call again. A call the model issues
+again under a new ID is a new call and produces a new permission request.
 
 The nested `session/request_permission` is issued from the task that already
 handles the outer `session/prompt`, spawned through `ConnectionTo::spawn`, so it
 does not block the connection's dispatch loop and the outer prompt response
-still completes. An earlier concern that the official Rust SDK loses the outer
-prompt response after a nested bidirectional request does not reproduce with
-this pause/resume flow; it is covered by the in-memory interoperability tests.
+still completes. The in-memory interoperability tests cover this flow.
 
 Server-owned tool authorization, read-only tools, RBAC, guardrails, and workflow
 interrupts remain available where approval must happen entirely inside the
-ADK-Rust process. The client-side permission path for external ACP agents is
-also fully implemented.
+ADK-Rust process. Each prompt runs on a `Runner` the server builds with
+only the decisions above: `AcpServerConfigBuilder` takes no `ToolPolicy` or run
+budget, so in-process controls belong on the agent — tool confirmation,
+callbacks, guardrails, and `adk-auth` wrappers.
 
 ## Deploy safely
 

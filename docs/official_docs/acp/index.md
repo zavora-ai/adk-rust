@@ -139,23 +139,22 @@ message chunk. Beyond that surface, two kinds of update give a client a richer
 view of the turn:
 
 - **Usage updates.** When an ADK event carries usage metadata, the server sends
-  a `UsageUpdate` reflecting the reported token counts, plus cost in USD when
-  the runtime reports it. Events without usage metadata produce no update, and
-  the server never fabricates counts.
-- **Rich tool-call updates.** A tool call starts as a `ToolCall` with a tool
-  `kind` inferred from the tool's declared behavior. Its later `ToolCallUpdate`
-  carries the tool result content and the file locations the tool reports it
-  affected, so an editor can render diffs and affected-file lists. The update
-  keeps the same identifier as the originating `ToolCall`, preserving
-  correlation across the turn.
+  a `UsageUpdate` whose `used` is the turn's total token count, plus cost in USD
+  when the runtime reports it. ADK does not know the model's context-window
+  size, so `size` is `0`. Events without usage metadata produce no update.
+- **Rich tool-call updates.** A tool call starts as an `in_progress` `ToolCall`
+  with a tool `kind` inferred from the tool's name (`read`, `edit`, `execute`,
+  and so on, else `other`). Its result arrives as a `completed`
+  `ToolCallUpdate` with the same identifier, carrying the result content and
+  the file locations the result names in `path`, `paths`, or `locations`, so an
+  editor can render diffs and affected-file lists.
 
 The client direction has the matching fidelity. When an ADK-Rust application
-consumes an External_Agent, its streaming surface (`OutputChunk`) exposes not
-only agent text and thoughts but also the External_Agent's `ToolCallUpdate` (as
-an id-correlated tool-update carrying status, kind, title, content text, and
-affected file locations) and its `UsageUpdate` (tokens used and size, plus cost
-and currency when reported). Agent message text is surfaced exactly as before,
-so existing text consumers are unaffected.
+consumes an external agent, its streaming surface (`OutputChunk`) exposes agent
+text and thoughts, `ToolCall` (the tool's title), `ToolUpdate` (the agent's
+tool-call id, status, kind, title, content text, and affected file locations),
+and `Usage` (tokens used and context size, plus cost and currency when
+reported).
 
 ## Permission requests bridge tool confirmations
 
@@ -164,8 +163,11 @@ An ADK-Rust agent can pause a turn pending human approval of a tool call
 `session/request_permission` request describing the tool and its arguments. The
 client's outcome resumes the turn: an approval maps to allow, and a denial or a
 cancellation both map to deny, so a cancelled request never executes the tool.
-Each outcome is correlated to the exact call by its function-call identifier and
-fed back to the runner through its tool-confirmation decisions. The nested
+Each outcome is recorded under the call's function-call identifier and bound to
+the call's fingerprint — the acting agent, the tool's origin, the tool name, and
+the arguments — so a reused call ID on another agent's call, or on a tool another
+server publishes, is not authorized by it. A confirmation without a call ID fails
+the prompt, and a prompt resolves at most 64 rounds of confirmations. The nested
 permission request is issued from the spawned prompt task, so the outer
 `session/prompt` response still completes normally.
 

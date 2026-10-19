@@ -11,8 +11,18 @@ ADK-Rust implements both sides of stable ACP protocol version 1:
 - expose an ADK-Rust agent as an ACP process an editor can start.
 
 The implementation uses the official `agent-client-protocol` Rust SDK. The SDK
-crate version and ACP wire version are separate: ADK-Rust currently uses SDK
-3.3 while negotiating protocol version 1 during `initialize`.
+crate version and ACP wire version are separate: ADK-Rust uses SDK 3.3 (ACP
+schema 1.11) while negotiating protocol version 1 during `initialize`. `adk-acp`
+re-exports the SDK as `adk_acp::agent_client_protocol`, so code that uses the
+SDK types directly follows the SDK's own 3.0 migration notes.
+
+```toml
+[dependencies]
+adk-acp = "3.0.0"                                       # client
+# adk-acp = { version = "3.0.0", features = ["server"] } # also expose an agent
+```
+
+`adk-rust` does not re-export `adk_acp`, so depend on `adk-acp` directly.
 
 ## Read this section
 
@@ -45,7 +55,8 @@ MCP supplies tools and resources used during that conversation.
 | [`examples/acp_client_host`](../../../examples/acp_client_host) | Streamed client UI, asynchronous permissions, and a workspace-bounded read-only filesystem |
 | [`examples/acp_kiro`](../../../examples/acp_kiro) | Direct delegation, an ACP agent as an ADK tool, persistent sessions, environment configuration, and concurrent cancellation |
 | [`examples/acp_server`](../../../examples/acp_server) | A tool-using ADK-Rust LLM agent exposed to editors through ACP v1 |
-| [`examples/acp_full_protocol`](../../../examples/acp_full_protocol) | In-process, no-API-key `Runner`-backed reference exercising the full Phase 2 server surface (embedded-resource + image/audio prompts, permission bridge, `session/load` replay, usage/tool-call updates) with a validating test |
+| [`examples/acp_full_protocol`](../../../examples/acp_full_protocol) | In-process, no-API-key `Runner`-backed reference exercising the server surface (embedded-resource and image/audio prompts, permission bridge, `session/load` replay, usage/tool-call updates) with a validating test |
+| [`examples/acp_openai_e2e`](../../../examples/acp_openai_e2e) | Both directions against a live OpenAI model: one-shot prompts, a persistent session behind an ADK coordinator, and the permission bridge |
 
 ---
 

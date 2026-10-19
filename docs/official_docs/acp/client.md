@@ -47,6 +47,10 @@ let answer = prompt_agent_with_policy(
 `DenyAll` is the default because a spawned coding agent can request operations
 with real side effects. Use `AutoApprove` only inside a trusted local workflow.
 
+The command string is split into words with POSIX shell rules, so a backslash
+escapes the next character; single-quote an argument that contains backslashes,
+such as a Windows path: `python3 'C:\agents\agent.py'`.
+
 ## Send rich prompt content
 
 `prompt_agent_content_with_policy` transmits a full `adk_core::Content` value —
@@ -64,7 +68,7 @@ use std::sync::Arc;
 
 let mut content = Content::new("user");
 content.parts.push(Part::Text { text: "What is in this image?".into() });
-content.parts.push(Part::InlineData { mime_type: "image/png".into(), data: png_bytes });
+content.parts.push(Part::inline_data("image/png", png_bytes));
 
 let config = AcpAgentConfig::new("my-coding-agent --acp")
     .working_dir("/absolute/path/to/project");
@@ -108,6 +112,14 @@ Each `AcpAgentTool` call starts a fresh process and session. Choose this shape
 when the delegated task is self-contained and the coordinator needs only the
 final text as its tool result.
 
+| Property | Value |
+|----------|-------|
+| Name | `name(...)`, else the first word of the command |
+| Parameters | `prompt`: string (required) |
+| Returns | `{"response": "<the agent's final text>"}` |
+| Effect | `ToolEffect::NonIdempotent` (the default), so a default-deny `DeclarativePolicy` must allow it by name |
+| Failure | A tool error; `LlmAgent` sends the model its category and code, not the agent's error text, unless `expose_tool_error_messages(true)` is set |
+
 ## Persistent sessions and cancellation
 
 ```rust,ignore
@@ -137,21 +149,22 @@ the same session accept another prompt without a stale response in its queue.
 
 ## Stream a turn into a UI
 
-`stream_prompt` yields `OutputChunk` values for agent text, thoughts, tool
-starts, permission decisions, completion, and errors. Beyond those, it surfaces
-two richer views of an External_Agent's turn:
+`stream_prompt(config, prompt, policy, status_tracker)` yields `OutputChunk`
+values for agent text, thoughts, tool starts (`ToolCall`, carrying the tool's
+title), permission decisions, completion, and errors. It also surfaces two
+richer views of the external agent's turn:
 
-- `OutputChunk::ToolUpdate` — the External_Agent's `ToolCallUpdate`, correlated
-  by tool-call `id`, carrying the reported status, kind, updated title,
-  extracted content text, and affected file locations. This lets a UI render
-  tool progress, diffs, and affected-file lists rather than only the final text.
-- `OutputChunk::Usage` — the External_Agent's `UsageUpdate`, carrying tokens
-  `used` and context-window `size`, plus the cumulative `cost` and `currency`
-  when the agent reports them, so a UI can display context-window consumption.
+- `OutputChunk::ToolUpdate` — the agent's `ToolCallUpdate`: the tool-call `id`,
+  reported status, kind, updated title, extracted content text, and affected
+  file locations. This lets a UI render tool progress, diffs, and affected-file
+  lists rather than only the final text. `ToolCall` carries no id, so group
+  updates by their `id`.
+- `OutputChunk::Usage` — the agent's `UsageUpdate`, carrying tokens `used` and
+  context-window `size`, plus the cumulative `cost` and `currency` when the
+  agent reports them, so a UI can display context-window consumption.
 
-Agent message text is surfaced exactly as before, so a UI that only reads text
-chunks is unaffected. The application may hide thought chunks, render tool
-activity separately, and expose the shared `StatusTracker` in its interface.
+The application may hide thought chunks, render tool activity separately, and
+expose the shared `StatusTracker` in its interface.
 
 See the runnable [`acp_client_host`](../../../examples/acp_client_host) crate for
 the complete loop.
