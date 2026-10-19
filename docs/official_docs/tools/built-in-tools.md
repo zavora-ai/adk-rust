@@ -2,7 +2,7 @@
 
 ADK-Rust provides several built-in tools that extend agent capabilities without requiring custom implementation. These tools are ready to use out of the box and integrate seamlessly with the agent framework.
 
-Provider-native tools are now declared through the normal `Tool` API instead of provider-specific `GenerateContentConfig.extensions` blobs. This means you can mix native tools such as Gemini Google Search, Anthropic Web Search, or OpenAI Responses web search with ordinary `FunctionTool` instances in the same agent.
+Provider-native tools are declared through the normal `Tool` API, so you can mix native tools such as Gemini Google Search, Anthropic Web Search, or OpenAI Responses web search with ordinary `FunctionTool` instances in the same agent.
 
 ## Overview
 
@@ -189,13 +189,15 @@ The delegate's run config is built from the caller's field by field:
 | Name | Same as the wrapped agent's name |
 | Description | Same as the wrapped agent's description |
 | Parameters | `request`: string (the input to send to the sub-agent) |
+| Effect | `ToolEffect::NonIdempotent` (the default) |
 | Returns | `{"response": "..."}` with the sub-agent's text output, plus `"server_tool_responses": [...]` with the payloads of its provider-side tool results (such as Gemini code execution's `codeExecutionResult`) when it ran any; the tool result the sub-agent ended on when it ended on one (a tool that skips summarization, or a nested `AgentTool` with `skip_summarization(true)`), or `{"responses": [{"name", "response"}, ...]}` for several |
 
 ### Failures and Timeouts
 
 | Outcome | `ReturnErrorObject` (default) | `Propagate` |
 |---------|-------------------------------|-------------|
-| The sub-agent fails | `{"error": "...", "agent": "..."}` result | The sub-agent's error, with its category and code |
+| The sub-agent fails | `{"error": "agent execution failed: <error>", "agent": "<name>"}` result, which quotes the sub-agent's error message | The sub-agent's error, with its category and code; `LlmAgent` sends the model only those, not the message |
+| A write breaks the state merge policy | `{"error": "...", "agent": "...", "code": "tool.agent.state_policy_violation"}` result | A `tool.agent.state_policy_violation` error |
 | The delegation runs past `timeout` | `Timeout` tool error | `Timeout` tool error |
 | The sub-agent holds a call for confirmation | The call is held by the parent | The call is held by the parent |
 
@@ -277,9 +279,14 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 | Property | Value |
 |----------|-------|
 | Name | `exit_loop` |
-| Description | "Exits the loop. Call this function only when you are instructed to do so." |
+| Description | `"Exits the loop.\nCall this function only when you are instructed to do so."` |
 | Parameters | None |
 | Returns | Empty object `{}` |
+| Effect | `ToolEffect::NonIdempotent` (the default) |
+
+> **Note:** `ExitLoopTool`, `LoadArtifactsTool`, and `AgentTool` keep the default
+> `NonIdempotent` effect, so a default-deny `DeclarativePolicy` withholds them, and
+> `allow_read_only()` does not admit them; allow them by name.
 
 ### Best Practices
 
@@ -339,8 +346,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 |----------|-------|
 | Name | `load_artifacts` |
 | Description | "Loads artifacts by name and returns their content. Accepts an array of artifact names." |
-| Parameters | `artifact_names`: Array of strings |
+| Parameters | `artifact_names`: Array of strings (required) |
 | Returns | Object with `artifacts` array |
+| Effect | `ToolEffect::NonIdempotent` (the default) |
 
 ### Parameters
 
@@ -361,13 +369,15 @@ The tool returns an object containing the loaded artifacts:
   "artifacts": [
     {
       "name": "document.txt",
-      "content": "The text content of the document..."
+      "content": { "type": "text", "text": "The text content of the document..." }
     },
     {
       "name": "image.png",
       "content": {
+        "type": "inline_data",
         "mime_type": "image/png",
-        "data": "base64-encoded-data..."
+        "data_base64": "iVBORw0KGgo...",
+        "size_bytes": 20480
       }
     },
     {
@@ -377,6 +387,10 @@ The tool returns an object containing the loaded artifacts:
   ]
 }
 ```
+
+An artifact whose part is neither text nor inline data is returned as
+`{"type": "unknown"}`. Without an artifact service the call fails with the tool error
+`ArtifactService not available`.
 
 ### Requirements
 
@@ -394,8 +408,12 @@ use std::sync::Arc;
 let artifact_service = Arc::new(InMemoryArtifactService::new());
 
 // Configure runner with artifact service
-let runner = Runner::new(agent)
-    .with_artifact_service(artifact_service);
+let runner = Runner::builder()
+    .app_name("document_app")
+    .agent(agent)
+    .session_service(Arc::new(InMemorySessionService::new()))
+    .artifact_service(artifact_service)
+    .build()?;
 ```
 
 ## Combining Built-in Tools
