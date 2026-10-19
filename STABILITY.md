@@ -92,20 +92,21 @@ ADK-Rust follows a predictable deprecation lifecycle so that consumers have time
 
 1. **Announcement.** When a public item is deprecated, the crate annotates it with `#[deprecated(since = "X.Y.Z", note = "Use <replacement> instead. Will be removed in X.(Y+2).0.")]`. The `since` field records the version that introduced the deprecation. The `note` field provides migration instructions.
 
-2. **Grace period.** Deprecated public items remain available and functional for at least **N+2 minor releases** after the release in which the deprecation is announced. For example, an item deprecated in `0.6.0` will not be removed before `0.8.0`.
+2. **Grace period.** Deprecated public items remain available and functional for at least **N+2 minor releases** after the release in which the deprecation is announced. For example, an item deprecated in `3.1.0` will not be removed before `3.3.0`.
 
 3. **Removal.** After the grace period, the item may be removed in the next minor (pre-1.0) or major (post-1.0) release. Removal is documented in the `CHANGELOG.md` with a reference to the original deprecation notice.
 
 ### Example
 
 ```rust
-#[deprecated(
-    since = "0.6.0",
-    note = "Use `SessionService::get_or_create` instead. Will be removed in 0.8.0."
-)]
-pub fn create_session(/* ... */) -> Result<Session> {
-    // ...
+/// Replaced by [`new_function`].
+#[deprecated(since = "3.1.0", note = "Use `new_function` instead. Will be removed in 4.0.0.")]
+pub fn old_function() {
+    new_function()
 }
+
+/// The replacement.
+pub fn new_function() {}
 ```
 
 ## Non-Breaking Field Addition Policy
@@ -121,7 +122,7 @@ Public structs in Stable-tier crates that are constructed by downstream consumer
    - Session service request structs in `adk-session`
    - Any future configuration or request structs added to Stable-tier crates
 
-4. **Struct literal construction.** All public structs support direct struct literal construction with `..Default::default()` for forward compatibility. Builder patterns are provided as a convenience but are not required.
+4. **Struct literal construction.** Public configuration and request structs that downstream code constructs, such as `RunConfig`, `EventActions`, and `LlmResponse`, implement `Default`, so a struct literal that ends with `..Default::default()` keeps compiling when a field is added. A few types are built only through constructors — `ToolApproval` (`approve()` / `deny()`) and `adk_graph::node::ExecutionConfig` (`ExecutionConfig::new`); `RunnerConfig` is best built with `Runner::builder()`.
 
 ## Public Dependency Policy
 
@@ -196,4 +197,32 @@ The complete breaking-change list, generated with `cargo semver-checks`, is in
 
 - Breaking changes to Stable-tier crates require a 3.0.0 release
 - Beta crates may have breaking changes in 2.x minor releases (with migration guides)
+- Experimental crates may change without notice
+
+## 3.0 Milestone
+
+ADK-Rust 3.0.0 is the third major release. It keeps the Stable-tier commitment and spends
+the major version on the breaking changes listed in the
+[2.x → 3.0 migration guide](docs/official_docs/migration/2.x-to-3.0.md).
+
+### What the major version bought
+
+| Area | Change |
+|---|---|
+| Tool authorization | One governed path (`authorize_tool_call`): kill switch, `ToolPolicy`, tool guardrails, and confirmation, after plugin and callback rewrites; fingerprints name the acting agent and the tool's origin |
+| Agent identity | Every run has an acting agent (`ActingContext`), and a run acts for its session's user unless a subject delegation policy allows another |
+| Retries and side effects | `ToolEffect` governs retries; an `ActionLedger` keeps `NonIdempotent` calls at most once, answering unknown outcomes as `outcome_unknown` |
+| Budgets and spend | `RunBudget`, `SpendLedger`, and `ModelCallScope` meter every model call of a run |
+| Durable runtime | `LeaseStore`, `DurableRunStore`, `ScheduleStore`, `GovernanceStateStore`, approval and audit log stores, with backends for every `adk-session` database |
+| Server exposure | `adk-server` binds `127.0.0.1` through the launchers, refuses unlisted hosts, and allows no cross-origin access by default |
+| Errors | `ErrorCategory` gains `Conflict` and `ResourceExhausted`; guardrail blocks and tool argument errors carry stable codes |
+| Dependencies | SQLx 0.9 for every SQL backend; see the [Public Dependency Policy](#public-dependency-policy) |
+
+`cargo semver-checks` runs in the `semver` gate with `SEMVER_RELEASE_TYPE: major` while the
+3.0.0 release candidate is open.
+
+### Post-3.0 Contract
+
+- Breaking changes to Stable-tier crates require a 4.0.0 release
+- Beta crates may have breaking changes in 3.x minor releases (with migration guides)
 - Experimental crates may change without notice

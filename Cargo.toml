@@ -56,7 +56,7 @@ members = [
     # Multi-process durability gates on every durable backend (publish = false)
     "adk-durability-gates",
 
-    # Local LLM inference (now publishable - mistralrs on crates.io)
+    # Local LLM inference via mistral.rs; GPU features (cuda, metal) are opt-in
     "adk-mistralrs",
 
     # Managed agent runtime
