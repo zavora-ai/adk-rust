@@ -39,13 +39,13 @@ adk-session = "3.0.0"
 
 ### Minimal Example (ScriptedLlm — no API key)
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 use adk_managed::{
     DefaultManagedAgentRuntime, ManagedAgentRuntime, ManagedOwner, ModelResolver,
     ScriptedLlm, ScriptedTurn,
     resolver::ResolverResult,
-    types::{ContentBlock, ManagedAgentDef, ModelRef, UserEvent},
+    types::{ContentBlock, ManagedAgentDef, ModelRef, SessionEvent, UserEvent},
 };
 use adk_session::InMemorySessionService;
 use async_trait::async_trait;
@@ -89,9 +89,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         content: vec![ContentBlock::Text { text: "Hi!".into() }],
     }).await?;
 
-    // 6. Collect events
+    // 6. Collect events until the turn ends; the stream stays open for later turns
     while let Some(event) = stream.next().await {
         println!("{event:?}");
+        if matches!(event, SessionEvent::StatusIdle { .. }) {
+            break;
+        }
     }
     Ok(())
 }
@@ -101,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│                Platform Layer (ep-* crates)                  │
+│                      Platform Layer                          │
 │    HTTP Routes │ Auth │ Billing │ Multi-tenancy              │
 └──────────────────────────┬──────────────────────────────────┘
                            │ Rust trait calls (in-process)
@@ -133,7 +136,7 @@ The central async trait defining the full agent lifecycle:
 | Method | Description |
 |--------|-------------|
 | `create(def)` | Register an agent definition, returns `AgentHandle` |
-| `start_session(agent, env?)` | Start a new session, initial status `Queued` |
+| `start_session(agent, owner, env?)` | Start a session for a `ManagedOwner`; initial status `Queued` |
 | `send_event(session, event)` | Send a `UserEvent` to the session |
 | `stream_events(session, from_seq?)` | Subscribe to `SessionEvent` stream |
 | `interrupt(session)` | Stop at next boundary, emit `status.idle` |
@@ -151,12 +154,14 @@ Declarative agent definition with builder API:
 let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.7-flash".into()))
     .with_system("You are a helpful assistant.")
     .with_description("Research agent with web search")
-    .with_tools(vec![ToolConfig::BuiltIn(ManagedBuiltinTool::WebSearch)]);
+    .with_tools(vec![ToolConfig::WebSearch {}]);
 ```
 
 ### SessionEvent
 
 Provider-neutral event stream with monotonic sequence numbers:
+
+Each event serializes with its name as `type` and its `seq`:
 
 - `agent.message` — Assistant text content
 - `agent.tool_use` — Built-in tool invocation
@@ -217,7 +222,8 @@ let stream = runtime.stream_events(&session, Some(5)).await?; // continues from 
 
 ### Custom Tool Calls
 
-A custom tool is executed by the client. When the model calls one, the turn ends:
+A custom tool (`ToolConfig::Custom { name, description, input_schema }`) is executed by the
+client. When the model calls one, the turn ends:
 `agent.custom_tool_use` is emitted, `status.idle` carries `requires_action` with the
 call's ID, and the turn's run parks in the run store until the call expires
 (`DurableConfig::pending_expiry`, five minutes by default). The session keeps reading
@@ -237,8 +243,9 @@ runtime.send_event(&session, UserEvent::CustomToolResult {
 The result is recorded in the decision store and wakes the run. The resumed turn shows the
 model the result in place of the call's pending response; a text result reaches the model
 as `{"result": "<text>"}`. A call that expires is answered with an expiry error and the
-turn continues. A message sent while calls are pending, or a result for an ID the session
-is not waiting on, is refused with an error.
+turn continues. While calls are pending the session status is `Idle`; a message sent then is
+refused with a conflict error naming the pending IDs, and a result for an ID the session is not
+waiting on is refused as an invalid request.
 
 ### Tool Confirmations
 
@@ -317,8 +324,18 @@ let stream = runtime.stream_events(&session, Some(42)).await?;
 
 ### Provider Parity
 
-Identical `ManagedAgentDef` produces byte-identical event type sequences across
-Gemini, OpenAI, Anthropic, Ollama, and OpenAI-compatible providers (fixture F-8).
+Events are provider-neutral. A turn that calls a custom tool emits the same sequence on
+Gemini, OpenAI, and Anthropic models:
+
+```text
+status.running
+agent.custom_tool_use        { custom_tool_use_id, name, input }
+status.idle                  { stop_reason: requires_action { event_ids: [...] } }
+# after user.custom_tool_result
+status.running
+agent.message
+status.idle                  { stop_reason: end_turn }
+```
 
 ## Testing with ScriptedLlm
 
@@ -429,11 +446,10 @@ transitions are visible, not just control-plane ones:
 | `Queued` → `Running` | A turn begins |
 | `Running` → `Idle` | The turn completes and usage is recorded |
 | any → `Paused` | `pause` |
+| `Paused` → `Running` | `resume` |
 | any → `Archived` | `archive` or `delete_session` |
 
-> **Note:** before this was one shared handle, `status` reported `Queued` for the entire life
-> of a session, including while it was executing turns. Control-plane transitions
-> (pause, resume, archive) were visible because they wrote to the handle directly.
+A turn that ends waiting on the client — `requires_action` — leaves the session `Idle`.
 
 ## Deletion semantics
 
@@ -466,7 +482,7 @@ every Runner call the session loop makes uses it:
 use adk_managed::{ManagedAgentRuntime, ManagedOwner};
 
 # async fn start(runtime: &dyn ManagedAgentRuntime, agent: &adk_managed::AgentHandle)
-# -> Result<(), adk_managed::RuntimeError> {
+# -> Result<(), adk_managed::types::RuntimeError> {
 let owner = ManagedOwner::new("support-console", "user-42")?;
 let session = runtime.start_session(agent, &owner, None).await?;
 # Ok(())
@@ -476,10 +492,6 @@ let session = runtime.start_session(agent, &owner, None).await?;
 Both components are required and must be non-blank. Sessions belonging to different owners are
 addressed separately, so lookup and deletion are scoped to one owner and cannot reach another's
 data.
-
-> **Note:** every managed session was previously persisted under the constants `managed` /
-> `managed_user`, so all of them shared one logical namespace: nothing could be scoped to a
-> caller and no session could be attributed to one.
 
 ## Environment configuration
 
@@ -493,8 +505,5 @@ process-global state shared with other sessions. Pass `None`, or configure a san
 ```
 
 Sessions run in-process, so applying per-session environment variables or a working directory
-would mutate state shared with every other session. Refusing is the honest outcome; a sandboxed
-execution boundary is what would make the request satisfiable.
-
-> **Note:** the argument was previously named `_env` and discarded, so a caller supplying
-> environment configuration received a session that silently ignored it.
+would mutate state shared with every other session. Pass `None`, or run the session in a
+sandboxed runtime.
