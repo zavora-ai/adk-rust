@@ -1,243 +1,89 @@
 # Plugins
 
-The `adk-plugin` crate provides a lifecycle hook system for agents. Plugins intercept tool calls, model calls, and execution events without modifying agent code — useful for logging, guardrails, caching, cost tracking, and custom middleware.
+The `adk-plugin` crate hooks into agent runs without changing agent code — for logging,
+guardrails, caching, cost tracking, and other middleware. It has two plugin kinds:
 
-## Overview
-
-The plugin system is built around the `EnhancedPlugin` trait. You implement only the hooks you need:
-
-- **before_run / after_run** — Wrap entire agent invocations
-- **before_tool / after_tool** — Intercept tool execution (modify args, short-circuit, inspect results)
-- **before_model / after_model** — Intercept LLM calls (modify requests, cache responses)
-- **on_event** — Observe every event emitted by the agent
-
-Plugins run in a priority-ordered pipeline, enabling composable middleware stacks.
+| Kind | Defined with | Registered on | Hooks |
+|------|--------------|---------------|-------|
+| `Plugin` | `PluginBuilder` or `PluginConfig` (closures) | A `PluginManager` on the `Runner` | Run, user message, event, agent, model, model error, tool, tool error, close |
+| `EnhancedPlugin` | A trait | `LlmAgentBuilder::enhanced_plugin`, or an `EnhancedPluginManager` on `IntegratedRealtimeRunner` | Before and after each tool call and model call, with priority ordering and typed shared state |
 
 ## Installation
 
 ```toml
 [dependencies]
 adk-plugin = "3.0.0"
-
-# Or via umbrella crate (included in standard tier)
-adk-rust = { version = "3.0.0", features = ["standard"] }
+adk-runner = "3.0.0"
+# `EnhancedPlugin` on `LlmAgent` needs adk-agent's `enhanced-plugins` feature;
+# adk-rust's `plugin` feature (in the `standard` tier) enables it.
+adk-agent = { version = "3.0.0", features = ["enhanced-plugins"] }
 ```
 
-## Quick Start
+## Runner plugins
+
+A `PluginManager` holds `Plugin`s. The runner runs the run, user-message, and event callbacks
+itself, and adds the manager to `RunConfig::invocation_hooks`, so every `LlmAgent` and
+`CodeActAgent` in the run — transfer targets and agents behind an `AgentTool` included — runs
+the agent, model, and tool callbacks ahead of its own. See
+[Plugin hooks](runner.md#plugin-hooks) for when each runs.
+
+| `PluginBuilder` method | Callback receives | Returning a value |
+|------------------------|-------------------|-------------------|
+| `before_run` | The invocation context | `Some(content)` ends the run with that content |
+| `after_run` | The invocation context | — (side effects only) |
+| `on_user_message` | The context and the user content | `Some(content)` replaces the message |
+| `on_event` | The context and each event | `Some(event)` replaces the event |
+| `before_agent`, `after_agent` | The callback context | `Some(content)` answers in the agent's place, or replaces its output |
+| `before_model` | The callback context and the `LlmRequest` | `BeforeModelResult::Continue(request)` with a possibly changed request, or `Skip(response)` to skip the call |
+| `after_model` | The callback context and the `LlmResponse` | `Some(response)` replaces the response |
+| `on_model_error` | The callback context, the request, and the error message | `Some(response)` answers the turn in the failed call's place |
+| `before_tool` | The callback context (`tool_name()`, `tool_input()`) | `Some(content)` skips the tool and answers the call with the content |
+| `after_tool` | The callback context | `Some(content)` replaces the result |
+| `on_tool_error` | The callback context, the tool, its arguments, and the error message | `Some(value)` answers the failed call with that result |
+| `close_fn` | — | Runs on `Runner::close` |
+
+For a callback that can change a value, the first plugin that returns one wins, and a plugin
+callback that returns a value short-circuits the agent's own callbacks of that kind.
 
 ```rust
-use adk_plugin::{EnhancedPlugin, PluginContext, ToolCallInfo, ToolResultInfo};
-use adk_core::{Content, Result};
-use async_trait::async_trait;
-use serde_json::Value;
+use adk_core::{CallbackContext, Content};
+use adk_plugin::{PluginBuilder, PluginManager};
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
+use std::sync::Arc;
 
-struct LoggingPlugin;
+fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
+    let deny_deletes = PluginBuilder::new("deny-deletes")
+        .before_tool(Box::new(|ctx: Arc<dyn CallbackContext>| {
+            Box::pin(async move {
+                if ctx.tool_name() == Some("delete_file") {
+                    // Text-only content answers the call as `{"error": "<text>"}`.
+                    return Ok(Some(Content::new("tool").with_text("delete_file is disabled")));
+                }
+                Ok(None)
+            })
+        }))
+        .on_event(Box::new(|_ctx, event| {
+            Box::pin(async move {
+                tracing::debug!(event.id = %event.id, event.author = %event.author, "event");
+                Ok(None)
+            })
+        }))
+        .build();
 
-#[async_trait]
-impl EnhancedPlugin for LoggingPlugin {
-    fn name(&self) -> &str { "logging" }
-    fn priority(&self) -> i32 { 0 }
-
-    async fn before_tool(
-        &self,
-        ctx: &PluginContext,
-        tool_call: &mut ToolCallInfo,
-    ) -> Result<Option<Value>> {
-        tracing::info!(
-            tool = tool_call.name,
-            args = %tool_call.args,
-            "tool call started"
-        );
-        Ok(None) // Continue to actual tool execution
-    }
-
-    async fn after_tool(
-        &self,
-        ctx: &PluginContext,
-        tool_result: &mut ToolResultInfo,
-    ) -> Result<()> {
-        tracing::info!(
-            tool = tool_result.name,
-            duration_ms = tool_result.duration_ms,
-            "tool call completed"
-        );
-        Ok(())
-    }
+    Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        .plugin_manager(Arc::new(PluginManager::new(vec![deny_deletes])))
+        .build()
 }
 ```
 
-## EnhancedPlugin Trait
+### Model fallback
 
-```rust
-#[async_trait]
-pub trait EnhancedPlugin: Send + Sync {
-    /// Unique plugin identifier
-    fn name(&self) -> &str;
-
-    /// Execution order (lower = runs first) [default: 0]
-    fn priority(&self) -> i32 { 0 }
-
-    /// Called before agent execution starts
-    async fn before_run(&self, ctx: &PluginContext) -> Result<()> { Ok(()) }
-
-    /// Called after agent execution completes
-    async fn after_run(&self, ctx: &PluginContext) -> Result<()> { Ok(()) }
-
-    /// Called before each tool execution.
-    /// Return Some(value) to short-circuit (skip tool, return this value).
-    /// Return None to continue with normal execution.
-    async fn before_tool(
-        &self,
-        ctx: &PluginContext,
-        tool_call: &mut ToolCallInfo,
-    ) -> Result<Option<Value>> { Ok(None) }
-
-    /// Called after each tool execution.
-    /// Can modify the result before it's returned to the LLM.
-    async fn after_tool(
-        &self,
-        ctx: &PluginContext,
-        tool_result: &mut ToolResultInfo,
-    ) -> Result<()> { Ok(()) }
-
-    /// Called before each model (LLM) call.
-    /// Can modify the request or short-circuit with a cached response.
-    async fn before_model(
-        &self,
-        ctx: &PluginContext,
-        request: &mut ModelCallInfo,
-    ) -> Result<Option<Content>> { Ok(None) }
-
-    /// Called after each model call.
-    /// Can modify the response before it's processed.
-    async fn after_model(
-        &self,
-        ctx: &PluginContext,
-        response: &mut ModelResultInfo,
-    ) -> Result<()> { Ok(()) }
-
-    /// Called for every event emitted during execution.
-    async fn on_event(
-        &self,
-        ctx: &PluginContext,
-        event: &Event,
-    ) -> Result<()> { Ok(()) }
-}
-```
-
-## Tool-Call Interception
-
-### Argument Modification
-
-Modify tool arguments before execution:
-
-```rust
-async fn before_tool(
-    &self,
-    ctx: &PluginContext,
-    tool_call: &mut ToolCallInfo,
-) -> Result<Option<Value>> {
-    // Inject default values
-    if tool_call.name == "search" {
-        if tool_call.args.get("limit").is_none() {
-            tool_call.args["limit"] = serde_json::json!(10);
-        }
-    }
-    Ok(None) // Continue to tool execution
-}
-```
-
-### Short-Circuit (Skip Tool Execution)
-
-Return a value directly without calling the tool:
-
-```rust
-async fn before_tool(
-    &self,
-    ctx: &PluginContext,
-    tool_call: &mut ToolCallInfo,
-) -> Result<Option<Value>> {
-    // Check cache
-    let cache_key = format!("{}:{}", tool_call.name, tool_call.args);
-    if let Some(cached) = self.cache.get(&cache_key).await {
-        return Ok(Some(cached)); // Short-circuit: return cached result
-    }
-    Ok(None) // Cache miss: proceed with tool execution
-}
-```
-
-### Result Modification
-
-Modify tool results after execution:
-
-```rust
-async fn after_tool(
-    &self,
-    ctx: &PluginContext,
-    tool_result: &mut ToolResultInfo,
-) -> Result<()> {
-    // Redact sensitive data from results
-    if let Some(obj) = tool_result.result.as_object_mut() {
-        if obj.contains_key("ssn") {
-            obj.insert("ssn".into(), serde_json::json!("***-**-****"));
-        }
-    }
-    Ok(())
-}
-```
-
-## Model-Call Interception
-
-### Request Modification
-
-Modify LLM requests before they're sent:
-
-```rust
-async fn before_model(
-    &self,
-    ctx: &PluginContext,
-    request: &mut ModelCallInfo,
-) -> Result<Option<Content>> {
-    // Add system context to every request
-    if let Some(ref mut instruction) = request.system_instruction {
-        instruction.push_str("\nAlways respond in JSON format.");
-    }
-    Ok(None)
-}
-```
-
-### Response Caching
-
-```rust
-async fn before_model(
-    &self,
-    ctx: &PluginContext,
-    request: &mut ModelCallInfo,
-) -> Result<Option<Content>> {
-    let key = self.hash_request(request);
-    if let Some(cached) = self.cache.get(&key).await {
-        return Ok(Some(cached)); // Return cached response
-    }
-    Ok(None)
-}
-
-async fn after_model(
-    &self,
-    ctx: &PluginContext,
-    response: &mut ModelResultInfo,
-) -> Result<()> {
-    // Cache the response for future calls
-    let key = self.hash_request(&response.original_request);
-    self.cache.set(&key, response.content.clone()).await;
-    Ok(())
-}
-```
-
-### Model Fallback
-
-A `Plugin` registered with the runner's `PluginManager` can answer a model call that fails.
-`LlmAgent` calls `on_model_error` when the model call or its response stream fails, before
-it fails the turn, with the request the model was sent and the error message. A response the
+`LlmAgent` calls `on_model_error` when the model call or its response stream fails, before it
+fails the turn, with the request the model was sent and the error message. A response the
 callback returns answers the turn in the failed call's place: its text is the answer and its
 tool calls run. A refusal by the run's budget or spend ledger is not reported.
 
@@ -250,10 +96,10 @@ use std::sync::Arc;
 fn model_fallback(fallback: Arc<dyn Llm>) -> PluginManager {
     PluginManager::new(vec![Plugin::new(PluginConfig {
         name: "model-fallback".to_string(),
-        on_model_error: Some(Box::new(move |_ctx, mut request, error| {
+        on_model_error: Some(Box::new(move |_ctx, mut request, _error| {
             let fallback = fallback.clone();
             Box::pin(async move {
-                tracing::warn!(error = %error, "primary model failed; using the fallback");
+                tracing::warn!("primary model failed; using the fallback");
                 request.model = fallback.name().to_string();
                 let mut responses = fallback.generate_content(request, false).await?;
                 let mut answer: Option<LlmResponse> = None;
@@ -268,118 +114,102 @@ fn model_fallback(fallback: Arc<dyn Llm>) -> PluginManager {
 }
 ```
 
-## Priority-Based Pipeline
+## Enhanced plugins
 
-Plugins execute in priority order (lower numbers run first):
+`EnhancedPlugin` is a trait whose hooks default to passing their input through, so a plugin
+implements only what it needs. Each hook's output feeds the next plugin's input.
 
-```rust
-struct AuthPlugin;
-impl EnhancedPlugin for AuthPlugin {
-    fn name(&self) -> &str { "auth" }
-    fn priority(&self) -> i32 { -10 } // Runs first
-    // ...
-}
+| Method | Default | Returns |
+|--------|---------|---------|
+| `name()` | Required | The plugin's identifier |
+| `priority()` | `100` | Order: lower values run first; equal priorities run in registration order |
+| `before_tool_call(tool, args, ctx, plugin_ctx)` | Continue with `args` | `BeforeToolCallResult::Continue(args)` with possibly rewritten arguments, or `ShortCircuit(result)` to skip the tool |
+| `after_tool_call(tool, args, result, ctx, plugin_ctx)` | Continue with `result` | `AfterToolCallResult::Continue(result)`; called after a successful execution |
+| `before_model_call(request, ctx, plugin_ctx)` | Continue with `request` | `BeforeModelCallResult::Continue(request)` or `ShortCircuit(response)` |
+| `after_model_call(response, ctx, plugin_ctx)` | Continue with `response` | `AfterModelCallResult::Continue(response)` |
+| `close()` | Nothing | Runs when the plugin shuts down |
 
-struct LogPlugin;
-impl EnhancedPlugin for LogPlugin {
-    fn name(&self) -> &str { "log" }
-    fn priority(&self) -> i32 { 0 } // Runs second
-    // ...
-}
-
-struct CachePlugin;
-impl EnhancedPlugin for CachePlugin {
-    fn name(&self) -> &str { "cache" }
-    fn priority(&self) -> i32 { 10 } // Runs last
-    // ...
-}
-```
-
-For `before_*` hooks, plugins run lowest-priority-first. For `after_*` hooks, they run in reverse order (highest-priority-first), creating a nested middleware pattern.
-
-## PluginContext — Shared State
-
-`PluginContext` provides shared state accessible across all plugins during an invocation:
+An `Err` from any hook stops the pipeline and fails the call. In `LlmAgent`,
+`before_tool_call` runs before the run's tool policy, so the policy checks the rewritten
+arguments; see [Tool Authorization](../security/tool-authorization.md).
 
 ```rust
-use adk_plugin::PluginContext;
-
-async fn before_tool(
-    &self,
-    ctx: &PluginContext,
-    tool_call: &mut ToolCallInfo,
-) -> Result<Option<Value>> {
-    // Read shared state
-    let call_count: u64 = ctx.get("tool_call_count").unwrap_or(0);
-
-    // Write shared state
-    ctx.set("tool_call_count", call_count + 1);
-
-    // Access invocation metadata
-    let user_id = ctx.user_id();
-    let session_id = ctx.session_id();
-    let agent_name = ctx.agent_name();
-
-    Ok(None)
-}
-```
-
-## Registering Plugins with an Agent
-
-```rust
-use adk_agent::LlmAgentBuilder;
+use adk_core::{CallbackContext, Result, Tool};
+use adk_plugin::{BeforeToolCallResult, EnhancedPlugin, PluginContext};
+use async_trait::async_trait;
+use serde_json::{Value, json};
 use std::sync::Arc;
 
-let agent = LlmAgentBuilder::new("my_agent")
-    .model(model)
-    .instruction("You are a helpful assistant.")
-    .tool(Arc::new(my_tool))
-    .plugin(Arc::new(LoggingPlugin))
-    .plugin(Arc::new(CachePlugin::new(cache_store)))
-    .plugin(Arc::new(CostTrackingPlugin::new()))
-    .build()?;
-```
+#[derive(Clone, Default)]
+struct SearchCalls(u32);
 
-## Example: Cost Tracking Plugin
-
-```rust
-use adk_plugin::{EnhancedPlugin, PluginContext, ModelResultInfo};
-use adk_core::Result;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-struct CostPlugin {
-    total_tokens: AtomicU64,
-}
+struct SearchLimits;
 
 #[async_trait]
-impl EnhancedPlugin for CostPlugin {
-    fn name(&self) -> &str { "cost_tracker" }
-    fn priority(&self) -> i32 { 100 }
+impl EnhancedPlugin for SearchLimits {
+    fn name(&self) -> &str {
+        "search-limits"
+    }
 
-    async fn after_model(
+    fn priority(&self) -> i32 {
+        10
+    }
+
+    async fn before_tool_call(
         &self,
-        ctx: &PluginContext,
-        response: &mut ModelResultInfo,
-    ) -> Result<()> {
-        if let Some(usage) = &response.usage {
-            let tokens = usage.prompt_tokens + usage.completion_tokens;
-            self.total_tokens.fetch_add(tokens as u64, Ordering::Relaxed);
-            tracing::info!(
-                total_tokens = self.total_tokens.load(Ordering::Relaxed),
-                "token usage updated"
-            );
+        tool: Arc<dyn Tool>,
+        mut args: Value,
+        _ctx: Arc<dyn CallbackContext>,
+        plugin_ctx: &PluginContext,
+    ) -> Result<BeforeToolCallResult> {
+        if tool.name() != "search" {
+            return Ok(BeforeToolCallResult::Continue(args));
         }
-        Ok(())
+        let SearchCalls(count) = plugin_ctx.get::<SearchCalls>().await.unwrap_or_default();
+        plugin_ctx.insert(SearchCalls(count + 1)).await;
+        if count >= 5 {
+            return Ok(BeforeToolCallResult::ShortCircuit(json!({ "error": "search limit reached" })));
+        }
+        // Default the page size.
+        if args.get("limit").is_none() {
+            args["limit"] = json!(10);
+        }
+        Ok(BeforeToolCallResult::Continue(args))
     }
 }
 ```
 
+`PluginContext` is a typed store shared by every enhanced plugin of an agent: each Rust type
+is its own key (`insert`, `get`, `contains`, `remove`).
+
+Register enhanced plugins on the agent:
+
+```rust
+use adk_agent::{LlmAgent, LlmAgentBuilder};
+use adk_core::Llm;
+use adk_plugin::EnhancedPlugin;
+use std::sync::Arc;
+
+fn build(model: Arc<dyn Llm>, plugin: Arc<dyn EnhancedPlugin>) -> adk_core::Result<LlmAgent> {
+    LlmAgentBuilder::new("my_agent")
+        .model(model)
+        .instruction("You are a helpful assistant.")
+        .enhanced_plugin(plugin)
+        .build()
+}
+```
+
+`AdaptedPlugin::new(plugin, priority)` runs a closure-based `Plugin` in the enhanced pipeline.
+Its `before_tool` content refuses the call, as an agent's own before-tool callback does; its
+arguments and `after_tool` results pass through unchanged.
+
 ## Related
 
-- [Retry & Reflect](../tools/retry-reflect.md) — Built-in plugin for tool failure recovery
-- [Guardrails](../security/guardrails.md) — Input/output validation plugins
+- [Runner](runner.md#plugin-hooks) — When each runner plugin callback runs
+- [Retry & Reflect](../tools/retry-reflect.md) — An enhanced plugin for tool failure recovery
+- [Guardrails](../security/guardrails.md) — Input, output, and tool-result validation
 - [Telemetry](../observability/telemetry.md) — Observability integration
-- [Callbacks](../callbacks/callbacks.md) — Simpler hook system for common cases
+- [Callbacks](../callbacks/callbacks.md) — Per-agent callbacks
 
 ---
 

@@ -198,6 +198,7 @@ same store and queue shares the work.
 | `run_timeout` | `None` | Fails an attempt that runs longer (not retried) |
 | `retain_finished` | 24 h | Finished runs older than this are pruned by the claim loop |
 | `approval_timeout` | `None` | How long a run parked on a held tool call waits for a decision; `None` waits until woken |
+| `allowed_principals` | Empty | Agent ids beyond the worker's own and the target's derived id that a run's stored principal may name (`with_allowed_principal`); any other fails the run with `identity.principal_not_allowed` |
 
 One attempt of a claimed run:
 
@@ -239,19 +240,23 @@ resumes it counts no further attempt, so a freeze never uses up a queued run's a
 | `heartbeat_now()` | Makes every in-flight attempt heartbeat now, so a cancellation requested in this process is seen at once |
 | `abort()` | Drops the loop and every in-flight attempt without writing, as a crash would; their leases expire and another worker recovers them |
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 
+use adk_core::{DurableRunStore, GovernanceControl};
+use adk_runner::Runner;
 use adk_server::background::{DurableWorker, DurableWorkerConfig, WorkflowRegistry};
 
-let worker = DurableWorker::new(run_store)
-    .with_agent("support", Arc::new(runner))
-    .with_workflows(Arc::new(WorkflowRegistry::new()))
-    .with_governance(governance.clone())
-    .with_config(DurableWorkerConfig::default().with_queue("default"));
-let handle = worker.spawn();
-// ...
-handle.shutdown().await;
+async fn serve(run_store: Arc<dyn DurableRunStore>, runner: Runner, governance: GovernanceControl) {
+    let worker = DurableWorker::new(run_store)
+        .with_agent("support", Arc::new(runner))
+        .with_workflows(Arc::new(WorkflowRegistry::new()))
+        .with_governance(governance.clone())
+        .with_config(DurableWorkerConfig::default().with_queue("default"));
+    let handle = worker.spawn();
+    // ... serve until shutdown ...
+    handle.shutdown().await;
+}
 ```
 
 ## Parking on held tool calls
@@ -300,22 +305,27 @@ A workflow registered with `WorkflowRegistry::register_durable` (or an executor 
 checkpoints with `record_checkpoint`, which is fenced by the claim's epoch. A workflow
 registered with `register` restarts from its input.
 
-```rust,ignore
+```rust
+use std::sync::Arc;
+
+use adk_graph::graph::CompiledGraph;
 use adk_graph::node::ExecutionConfig;
 use adk_graph::state::State;
 use adk_server::background::WorkflowRegistry;
 
-let registry = WorkflowRegistry::new().register_durable("settle", move |input, run| {
-    let graph = graph.clone();
-    async move {
-        let state: State = input.into_iter().collect();
-        let out = graph
-            .invoke(state, ExecutionConfig::new(&run.thread_id))
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok(serde_json::json!({ "receipt": out.get("receipt") }))
-    }
-});
+fn registry(graph: Arc<CompiledGraph>) -> WorkflowRegistry {
+    WorkflowRegistry::new().register_durable("settle", move |input, run| {
+        let graph = graph.clone();
+        async move {
+            let state: State = input.into_iter().collect();
+            let out = graph
+                .invoke(state, ExecutionConfig::new(&run.thread_id))
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(serde_json::json!({ "receipt": out.get("receipt") }))
+        }
+    })
+}
 ```
 
 **Across processes.** The `crash_mid_payment` gate in `adk-durability-gates` runs this with
@@ -346,14 +356,19 @@ While the governance control refuses work, nothing fires and nothing advances. O
 lifts, the missed-fire policy decides which fire times that fell due during it run.
 `start_cron_scheduler` runs the tick loop every second; start it on every replica.
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 
+use adk_core::{DurableRunStore, GovernanceControl, ScheduleStore};
 use adk_server::background::DurableScheduler;
 
-let handle = DurableScheduler::new(schedule_store, run_store)
-    .with_governance(governance.clone())
-    .spawn();
+fn start(
+    schedule_store: Arc<dyn ScheduleStore>,
+    run_store: Arc<dyn DurableRunStore>,
+    governance: GovernanceControl,
+) -> tokio::task::JoinHandle<()> {
+    DurableScheduler::new(schedule_store, run_store).with_governance(governance).spawn()
+}
 ```
 
 ## Replicated kill switch
@@ -389,19 +404,27 @@ freeze also requests cancellation of every running run in the background run sto
 the builder. Responses report `frozen`, `reason`, `mirrored`, `stale`, and, for a freeze,
 `cancelledRuns`; a store write failure returns `503` with `error`.
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 use std::time::Duration;
 
-use adk_core::GovernanceControl;
-use adk_core::governance::GovernanceMirrorConfig;
+use adk_core::{AgentLoader, GovernanceControl, GovernanceMirrorConfig, GovernanceStateStore};
+use adk_server::ServerConfig;
+use adk_session::SessionService;
 
-let control = GovernanceControl::mirrored(
-    governance_store,
-    GovernanceMirrorConfig::default().with_poll_interval(Duration::from_secs(1)),
-);
-let _mirror = control.spawn_mirror();
-let config = ServerConfig::new(loader, sessions).with_governance(control);
+fn config(
+    governance_store: Arc<dyn GovernanceStateStore>,
+    loader: Arc<dyn AgentLoader>,
+    sessions: Arc<dyn SessionService>,
+) -> ServerConfig {
+    let control = GovernanceControl::mirrored(
+        governance_store,
+        GovernanceMirrorConfig::default().with_poll_interval(Duration::from_secs(1)),
+    );
+    // Reads the store on a background task every poll interval.
+    let _mirror = control.spawn_mirror();
+    ServerConfig::new(loader, sessions).with_governance(control)
+}
 ```
 
 ## Cancel across replicas
@@ -623,24 +646,11 @@ The gates use a 2 s run lease, a 100 ms governance poll interval, and a 1 s stal
 each finishes in seconds. Gates sharing one server run one at a time (nextest test groups in
 `.config/nextest.toml`).
 
-### Results
+### Where the gates run
 
-Pass counts per backend and gate. SQLite runs on every pull request (feature-coverage shard 2);
-the server backends run in the nightly `durable-stores` job against service containers.
-
-| Backend | `crash_mid_payment` | `one_firing_per_schedule` | `stalled_worker` | `kill_switch` |
-|---------|---------------------|---------------------------|------------------|---------------|
-| SQLite | 5/5 | 5/5 | 5/5 | 5/5 |
-| PostgreSQL 17 | 5/5 | 5/5 | 5/5 | 5/5 |
-| Redis 7 | 5/5 | 5/5 | 5/5 | 5/5 |
-| MongoDB 7 (replica set) | 2/2 | 2/2 | 2/2 | 2/2 |
-| Neo4j 5 | 2/2 | 2/2 | 2/2 | 2/2 |
-| Firestore emulator | 2/2 | 2/2 | 2/2 | 2/2 |
-
-Counts are two `durable-stores` runs plus, for SQLite, PostgreSQL, and Redis, three local runs
-on macOS. On the Firestore emulator the schedule gate takes about 40 s instead of 5 s: the
-emulator holds contended transactions on lock waits, so three schedulers advance a schedule
-more slowly. Every occurrence still fires exactly once.
+The SQLite gates run in the PR tier (`adk-durability-gates sqlite` in
+`scripts/feature-coverage-pairs.txt`); the server backends run in the nightly `durable-stores`
+job against service containers and the Firestore emulator.
 
 ### Running the gates
 

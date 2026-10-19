@@ -4,13 +4,13 @@ The execution runtime from `adk-runner` that orchestrates agent execution.
 
 ## Overview
 
-The `Runner` manages the complete lifecycle of agent execution:
+The `Runner` manages the lifecycle of agent execution:
 
-- Session management (create/retrieve sessions)
-- Memory injection (search and inject relevant memories)
-- Artifact handling (scoped artifact access)
-- Event streaming (process and forward events)
-- Agent transfers (handle multi-agent handoffs)
+- Loads the session and persists every event of the run
+- Gives agents the configured memory and artifact services, scoped to the session
+- Streams events to the caller
+- Applies transfers between agents, and the run's identity, budget, spend, policy, and kill
+  switch
 
 ```mermaid
 sequenceDiagram
@@ -50,70 +50,53 @@ sequenceDiagram
 adk-runner = "3.0.0"
 ```
 
-## RunnerConfig
+## Building a Runner
 
-Configure the runner with required services:
+`Runner::builder()` is a typestate builder: `app_name`, `agent`, and `session_service` are
+required, and `build()` exists only once all three are set, so a missing one is a compile
+error. Every other setting is optional.
 
 ```rust
-use adk_runner::{Runner, RunnerConfig};
-use adk_session::InMemorySessionService;
 use adk_artifact::InMemoryArtifactService;
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
 use std::sync::Arc;
 
-let config = RunnerConfig {
-    app_name: "my_app".to_string(),
-    agent: Arc::new(my_agent),
-    session_service: Arc::new(InMemorySessionService::new()),
-    artifact_service: Some(Arc::new(InMemoryArtifactService::new())),
-    memory_service: None,
-    plugin_manager: None,
-    run_config: None,
-    compaction_config: None,
-    context_cache_config: None,
-    cache_capable: None,
-    request_context: None,
-    cancellation_token: None,
-};
-
-let runner = Runner::new(config)?;
+fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
+    Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        // Optional settings: only set what you need.
+        .artifact_service(Arc::new(InMemoryArtifactService::new()))
+        .build()
+}
 ```
 
-### RunnerConfigBuilder (Recommended)
+`build_config()` returns the `RunnerConfig` instead, for `Runner::new`.
 
-Use the typestate builder to construct a Runner. The builder enforces required fields at compile time and defaults all optional fields, so adding new fields in future releases won't break your code:
+### Builder settings
 
-```rust
-use adk_runner::Runner;
-
-let runner = Runner::builder()
-    .app_name("my_app")
-    .agent(Arc::new(my_agent))
-    .session_service(Arc::new(InMemorySessionService::new()))
-    // Optional fields — only set what you need
-    .artifact_service(Arc::new(InMemoryArtifactService::new()))
-    .build()?;
-```
-
-The builder requires three fields: `app_name`, `agent`, and `session_service`. Everything else is optional and has sensible defaults. The `build()` method is only available once all three required fields are set — missing one is a compile-time error, not a runtime one.
-
-### Configuration Fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `app_name` | `String` | Yes | Application identifier |
-| `agent` | `Arc<dyn Agent>` | Yes | Root agent to execute |
-| `session_service` | `Arc<dyn SessionService>` | Yes | Session storage backend |
-| `artifact_service` | `Option<Arc<dyn ArtifactService>>` | No | Artifact storage |
-| `memory_service` | `Option<Arc<dyn Memory>>` | No | Long-term memory |
-| `plugin_manager` | `Option<Arc<PluginManager>>` | No | Plugin lifecycle hooks |
-| `compaction_config` | `Option<EventsCompactionConfig>` | No | Context compaction settings |
-| `run_config` | `Option<RunConfig>` | No | Execution options |
-| `context_cache_config` | `Option<ContextCacheConfig>` | No | Runner-level context cache lifecycle (experimental — see below) |
-| `cache_capable` | `Option<Arc<dyn CacheCapable>>` | No | Cache-capable model reference (experimental — see below) |
-| `request_context` | `Option<RequestContext>` | No | Auth middleware context |
-| `cancellation_token` | `Option<CancellationToken>` | No | Cooperative cancellation |
-| `tool_policy` | `Option<Arc<dyn ToolPolicy>>` | No | Allow, deny, or require approval for every tool call; see [Tool Authorization](../security/tool-authorization.md#tool-policy) |
-| `governance` | `Option<GovernanceControl>` | No | Shared kill switch; the runner creates its own when unset, reachable through `Runner::governance()` |
+| Builder method | Sets | Purpose |
+|----------------|------|---------|
+| `app_name`, `agent`, `session_service` | Required | The application, the root agent, and the session backend |
+| `artifact_service` | `ArtifactService` | Artifact storage |
+| `memory_service` | `Memory` | Long-term memory |
+| `plugin_manager` | `PluginManager` | Runner plugins (see [Plugin hooks](#plugin-hooks)) |
+| `run_config` | `RunConfig` | Default execution options for every run |
+| `budget` | `RunBudget` | Per-run limits (see [Run Budgets](#run-budgets)) |
+| `compaction_config`, `intra_compaction_config`, `intra_compaction_summarizer`, `context_compaction` | Compaction | Keep the model context bounded (see [Context Compaction](#context-compaction)) |
+| `context_cache_config`, `cache_capable` | Gemini explicit caching | Experimental; see [Prompt caching](#prompt-caching) |
+| `request_context` | `RequestContext` | The authenticated caller, from auth middleware |
+| `cancellation_token` | `CancellationToken` | Cooperative cancellation |
+| `tool_policy` | `ToolPolicy` | Allow, deny, or require approval per tool call; see [Tool Authorization](../security/tool-authorization.md#tool-policy) |
+| `governance` | `GovernanceControl` | The kill switch; the runner creates its own when unset, reachable through `Runner::governance()` |
+| `action_ledger` | `ActionLedger` | Records non-idempotent tool calls so a resumed run never repeats one |
+| `approval_store` | `ApprovalStore` | Decisions for held tool calls |
+| `spend_ledger` | `SpendLedger` | Spend caps across runs (see [Spend ledger](#spend-ledger)) |
+| `durable_run_store` | `DurableRunStore` | Lets `interrupt` cancel the session's durable runs; see [Durable Runtime](durable-runtime.md) |
+| `audit_log`, `audit_failure_mode` | `AuditRecorder` | The runtime audit trail; `AuditFailureMode::Block` (default) refuses an action that cannot be recorded |
+| `agent_principal`, `identity_source`, `subject_delegation` | Agent identity | See [Agent identity](#agent-identity) |
 
 ### Plugin hooks
 
@@ -156,41 +139,46 @@ use adk_runner::Runner;
 use adk_session::InMemorySessionService;
 use std::sync::Arc;
 
-# async fn shutdown(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<()> {
-let runner = Runner::builder()
-    .app_name("my_app")
-    .agent(agent)
-    .session_service(Arc::new(InMemorySessionService::new()))
-    .build()?;
-// ... serve requests ...
-runner.close().await;
-# Ok(())
-# }
+async fn serve_then_close(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<()> {
+    let runner = Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        .build()?;
+    // ... serve requests ...
+    runner.close().await;
+    Ok(())
+}
 ```
+
+A runner plugin that refuses one tool; see [Plugins](plugins.md) for every callback.
 
 ```rust
 use adk_core::{CallbackContext, Content};
 use adk_plugin::{PluginBuilder, PluginManager};
 use adk_runner::Runner;
+use adk_session::InMemorySessionService;
 use std::sync::Arc;
 
-let deny_deletes = PluginBuilder::new("deny-deletes")
-    .before_tool(Box::new(|ctx: Arc<dyn CallbackContext>| {
-        Box::pin(async move {
-            if ctx.tool_name() == Some("delete_file") {
-                return Ok(Some(Content::new("function").with_text("delete_file is disabled")));
-            }
-            Ok(None)
-        })
-    }))
-    .build();
+fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
+    let deny_deletes = PluginBuilder::new("deny-deletes")
+        .before_tool(Box::new(|ctx: Arc<dyn CallbackContext>| {
+            Box::pin(async move {
+                if ctx.tool_name() == Some("delete_file") {
+                    return Ok(Some(Content::new("tool").with_text("delete_file is disabled")));
+                }
+                Ok(None)
+            })
+        }))
+        .build();
 
-let runner = Runner::builder()
-    .app_name("my_app")
-    .agent(Arc::new(my_agent))
-    .session_service(Arc::new(InMemorySessionService::new()))
-    .plugin_manager(Arc::new(PluginManager::new(vec![deny_deletes])))
-    .build()?;
+    Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        .plugin_manager(Arc::new(PluginManager::new(vec![deny_deletes])))
+        .build()
+}
 ```
 
 ### Prompt caching
@@ -202,66 +190,68 @@ provider integration handles it where the request is assembled:
 |----------|-----------|---------|
 | Anthropic / Bedrock | `cache_control` breakpoints | **on** (`AnthropicConfig::prompt_caching`, opt out with `with_prompt_caching(false)`) |
 | OpenAI | server-side prompt caching, `PromptCacheRetention` for retention | automatic |
-| Gemini | implicit caching on 2.5/3.x — a shared prefix earns a discount with no code change | automatic |
+| Gemini | implicit caching — a shared prefix earns a discount with no code change | automatic |
 
-Cache hits are observable without any extra wiring: the Gemini integration
-records `cachedContentTokenCount` on each response.
+Cache hits are observable without any extra wiring: providers report cached prompt tokens in
+`UsageMetadata::cache_read_input_token_count`.
 
-> **`context_cache_config` and `cache_capable` are experimental and should be
-> left unset.** They drive Gemini's *explicit* `cachedContents` API from the
-> Runner. That API requires the cache to **replace** `system_instruction`,
-> `tools`, and `tool_config` — sending a cache alongside any of them is rejected
-> with `INVALID_ARGUMENT`. The Runner selects a cache before the agent resolves
-> its tools, so it cannot assemble that request, and enabling these fields does
-> not currently produce cache hits. Guaranteed (rather than best-effort) caching
-> for Gemini belongs in the model integration, alongside how the other providers
-> do it.
+> **Note:** `context_cache_config` and `cache_capable` are experimental; leave them unset.
+> They drive Gemini's explicit `cachedContents` API from the Runner. That API requires the
+> cache to replace `system_instruction`, `tools`, and `tool_config`, and the Runner selects a
+> cache before the agent resolves its tools, so these settings do not produce cache hits.
 
 ## Running Agents
 
-Execute an agent with user input:
+`run` takes typed identifiers and the user's content, and returns the run's event stream:
 
 ```rust
 use adk_core::{Content, SessionId, UserId};
+use adk_runner::Runner;
 use futures::StreamExt;
 
-let user_content = Content::new("user").with_text("Hello!");
+async fn ask(runner: &Runner) -> adk_core::Result<()> {
+    let user_content = Content::new("user").with_text("Hello!");
+    let mut stream =
+        runner.run(UserId::new("user-123")?, SessionId::new("session-456")?, user_content).await?;
 
-let mut stream = runner.run(
-    UserId::new("user-123")?,
-    SessionId::new("session-456")?,
-    user_content,
-).await?;
-
-while let Some(event) = stream.next().await {
-    match event {
-        Ok(e) => {
-            if let Some(content) = e.content() {
-                for part in &content.parts {
-                    if let Some(text) = part.text() {
-                        print!("{}", text);
-                    }
+    while let Some(event) = stream.next().await {
+        let event = event?;
+        // Streamed deltas arrive as partial events; the final event carries the whole answer.
+        if event.llm_response.partial {
+            continue;
+        }
+        if let Some(content) = event.content() {
+            for part in &content.parts {
+                if let Some(text) = part.text() {
+                    print!("{text}");
                 }
             }
         }
-        Err(e) => eprintln!("Error: {}", e),
     }
+    Ok(())
 }
 ```
+
+The session must exist: a run for an unknown session fails with `session.not_found`. Create
+it first with `SessionService::create`.
 
 ### String Convenience Method
 
 For simple call sites, `run_str()` accepts plain `&str` arguments and handles the newtype conversion internally:
 
 ```rust
-let mut stream = runner.run_str(
-    "user-123",
-    "session-456",
-    Content::new("user").with_text("Hello!"),
-).await?;
+use adk_core::Content;
+use adk_runner::Runner;
+
+async fn ask(runner: &Runner) -> adk_core::Result<()> {
+    let _stream =
+        runner.run_str("user-123", "session-456", Content::new("user").with_text("Hello!")).await?;
+    Ok(())
+}
 ```
 
-If the string fails validation (empty, contains null bytes, or exceeds the length limit), `run_str()` returns an error before starting the agent loop. The existing `run()` method with typed `UserId`/`SessionId` remains unchanged.
+If a string fails validation (empty, contains null bytes, or exceeds 512 bytes), `run_str()`
+returns an error before the agent starts. `run_with_config` takes a `RunConfig` for one run.
 
 ## Interruption and Run Isolation
 
@@ -276,8 +266,12 @@ that stream is dropped — including when it is dropped without ever being polle
 | `active_session_ids()` | Deduplicated session IDs of in-flight runs |
 
 ```rust
-// Cancel one tenant's run without touching another that shares the session ID
-let cancelled = runner.interrupt_identity("my-app", "user-1", "session-1");
+use adk_runner::Runner;
+
+fn cancel(runner: &Runner) -> bool {
+    // Cancel one tenant's run without touching another that shares the session ID.
+    runner.interrupt_identity("my-app", "user-1", "session-1")
+}
 ```
 
 A session ID is only unique within an app and user, so `interrupt(session_id)` is
@@ -355,44 +349,25 @@ the raw-session-ID `append_event` path entirely.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## InvocationContext
+## InvocationContext and RunConfig
 
-The context provided to agents during execution:
+Agents receive an `InvocationContext`; see [Context Traits](core.md#context-traits).
+`RunConfig` holds one run's execution options. Commonly set fields:
 
-```rust
-pub trait InvocationContext: CallbackContext {
-    /// The agent being executed
-    fn agent(&self) -> Arc<dyn Agent>;
-    
-    /// Memory service (if configured)
-    fn memory(&self) -> Option<Arc<dyn Memory>>;
-    
-    /// Current session
-    fn session(&self) -> &dyn Session;
-    
-    /// Execution configuration
-    fn run_config(&self) -> &RunConfig;
-    
-    /// Signal end of invocation
-    fn end_invocation(&self);
-    
-    /// Check if invocation has ended
-    fn ended(&self) -> bool;
-}
-```
+| Field | Purpose |
+|-------|---------|
+| `streaming_mode` | `StreamingMode::SSE` (default), `None`, or `Bidi` (realtime) |
+| `tool_policy`, `governance`, `tool_confirmation_handler`, `tool_confirmation_decisions`, `tool_approvals`, `approval_store`, `approval_service`, `tool_confirmation_timeout` | The governed tool path; see [Tool Authorization](../security/tool-authorization.md) |
+| `budget`, `budget_tracker` | Run limits |
+| `spend_ledger`, `llm_spend_estimate` | Spend caps |
+| `action_ledger` | Non-idempotent call records |
+| `invocation_hooks` | Run-wide hooks; the runner adds its `PluginManager` here |
+| `audit` | The run's audit trail |
+| `acting` | The acting agents' principals and the subject (`ActingConfig`) |
+| `record_payloads`, `trace_payload_max_bytes` | Whether logs and traces may carry request content |
+| `history_max_events` | A window over the session history sent to the model |
 
-## RunConfig
-
-Execution options:
-
-```rust
-pub struct RunConfig {
-    /// Streaming mode for responses
-    pub streaming_mode: StreamingMode,
-    // ... other fields (tool_confirmation_decisions, tool_policy, tool_approvals,
-    // approval_store, governance, cached_content, etc.)
-}
-```
+`RunConfig::builder()` builds one.
 
 ### Spend ledger
 
@@ -415,32 +390,22 @@ Controls how multiple tool calls from a single LLM response are dispatched:
 Set per-agent via `LlmAgentBuilder`:
 
 ```rust
-use adk_core::ToolExecutionStrategy;
+use adk_agent::{LlmAgent, LlmAgentBuilder};
+use adk_core::{Llm, Tool, ToolExecutionStrategy};
+use adk_tool::FunctionTool;
+use std::sync::Arc;
 
-let agent = LlmAgentBuilder::new("fast_agent")
-    .model(model)
-    .tool_execution_strategy(ToolExecutionStrategy::Auto)
-    .tool(Arc::new(
-        search_tool
-            .with_read_only(true)
-            .with_concurrency_safe(true),
-    ))
-    .tool(Arc::new(save_tool)) // runs after the concurrent safe subset
-    .build()?;
+fn build(model: Arc<dyn Llm>, search_tool: FunctionTool, save_tool: Arc<dyn Tool>) -> adk_core::Result<LlmAgent> {
+    LlmAgentBuilder::new("fast_agent")
+        .model(model)
+        .tool_execution_strategy(ToolExecutionStrategy::Auto)
+        .tool(Arc::new(search_tool.with_read_only(true).with_concurrency_safe(true)))
+        .tool(save_tool) // runs after the concurrent safe subset
+        .build()
+}
 ```
 
 In `Auto` mode, the dispatch loop queries both `is_read_only()` and `is_concurrency_safe()`. Calls whose selected tools return `true` for both methods run concurrently first; all remaining calls then run sequentially. `Parallel` bypasses these metadata checks as an explicit caller override. Results are always reassembled in the original LLM-returned order regardless of strategy. Failed tools produce a JSON error response without aborting the batch.
-
-```rust
-pub enum StreamingMode {
-    /// No streaming, return complete response
-    None,
-    /// Server-Sent Events (default)
-    SSE,
-    /// Bidirectional streaming (realtime)
-    Bidi,
-}
-```
 
 ## Run Budgets
 
@@ -458,21 +423,20 @@ use adk_core::RunBudget;
 use adk_runner::Runner;
 use adk_session::InMemorySessionService;
 
-# fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
-let runner = Runner::builder()
-    .app_name("my_app")
-    .agent(agent)
-    .session_service(Arc::new(InMemorySessionService::new()))
-    .budget(
-        RunBudget::new()
-            .max_cost_usd(50.0)
-            .max_model_calls(200)
-            .max_tool_calls(100)
-            .max_wall_time(Duration::from_secs(600)),
-    )
-    .build()?;
-# Ok(runner)
-# }
+fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
+    Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        .budget(
+            RunBudget::new()
+                .max_cost_usd(50.0)
+                .max_model_calls(200)
+                .max_tool_calls(100)
+                .max_wall_time(Duration::from_secs(600)),
+        )
+        .build()
+}
 ```
 
 | Checkpoint | Limits checked |
@@ -524,16 +488,19 @@ several runs.
 
 ## Agent Transfers
 
-The Runner handles multi-agent transfers automatically:
+The Runner handles multi-agent transfers. Besides the model's `transfer_to_agent` call, a tool
+can request one through its event actions:
 
 ```rust
-// In an agent's tool or callback
-if should_transfer {
-    // Set transfer in event actions
-    ctx.set_actions(EventActions {
-        transfer_to_agent: Some("specialist_agent".to_string()),
-        ..Default::default()
-    });
+use adk_core::{Result, ToolContext};
+use serde_json::{Value, json};
+use std::sync::Arc;
+
+async fn escalate(ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    let mut actions = ctx.actions();
+    actions.transfer_to_agent = Some("specialist_agent".to_string());
+    ctx.set_actions(actions);
+    Ok(json!({ "escalated": true }))
 }
 ```
 
@@ -556,72 +523,96 @@ with `strict_transfer_policy` fails the run with `agent.transfer.target_forbidde
 For long-running sessions, enable automatic context compaction to keep the LLM context window bounded:
 
 ```rust
-use adk_runner::{Runner, RunnerConfig, EventsCompactionConfig};
 use adk_agent::LlmEventSummarizer;
+use adk_core::{EventsCompactionConfig, Llm};
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
 use std::sync::Arc;
 
-let summarizer = LlmEventSummarizer::new(model.clone());
-
-let config = RunnerConfig {
-    // ... other fields ...
-    compaction_config: Some(EventsCompactionConfig {
-        compaction_interval: 3,  // Compact every 3 invocations
-        overlap_size: 1,         // Keep 1 event overlap for continuity
-        summarizer: Arc::new(summarizer),
-    }),
-    // ...
-};
+fn build(agent: Arc<dyn adk_core::Agent>, model: Arc<dyn Llm>) -> adk_core::Result<Runner> {
+    Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        .compaction_config(EventsCompactionConfig {
+            compaction_interval: 3, // compact every 3 invocations
+            overlap_size: 1,        // keep 1 event of overlap for continuity
+            summarizer: Arc::new(LlmEventSummarizer::new(model)),
+        })
+        .build()
+}
 ```
 
-When compaction triggers, older events are replaced by a summary event. `conversation_history()` automatically uses the summary instead of the original events.
+When compaction triggers, older events are replaced by a summary event, and
+`conversation_history()` uses the summary instead of the original events. Compaction never
+covers a tool call still held for confirmation, and never cuts between a call and its
+response.
 
 See [Context Compaction](../sessions/context-compaction.md) for full documentation.
 
-## Integration with Launcher
+## Agent identity
 
-The `Launcher` uses `Runner` internally:
+Every run has an acting agent (see [Agent identity](core.md#agent-identity)):
 
 ```rust
-// Launcher creates Runner with default services
-Launcher::new(agent)
-    .app_name("my_app")
-    .run()
-    .await?;
+use adk_core::principal::{AgentId, AgentPrincipal};
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
+use std::sync::Arc;
 
-// Equivalent to using the builder:
-let runner = Runner::builder()
-    .app_name("my_app")
-    .agent(agent)
-    .session_service(Arc::new(InMemorySessionService::new()))
-    .build()?;
+fn build(agent: Arc<dyn adk_core::Agent>) -> Result<Runner, Box<dyn std::error::Error>> {
+    let principal = AgentPrincipal::new(AgentId::new("spiffe://example.org/agent/billing")?)
+        .with_tenant("acme");
+    Ok(Runner::builder()
+        .app_name("billing")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        .agent_principal(principal) // the root agent's identity
+        .build()?)
+}
 ```
 
-## Custom Runner Usage
+| Builder method | Effect |
+|----------------|--------|
+| `agent_principal(principal)` | The root agent acts as `principal` |
+| `identity_source(source)` | An `IdentitySource` resolves principals: `current` for the root agent, `principal_for(name)` for any agent |
+| `subject_delegation(policy)` | A `SubjectDelegationPolicy` that allows a run to act for a subject other than the session's user; without it such a run fails with `identity.subject_mismatch` |
 
-For advanced scenarios, use Runner directly:
+`Runner::default_principal(agent_name).await` returns the principal an agent acts as when no
+`RunConfig` names one. See [Agent Identity](../security/agent-identity.md).
+
+## Kill switch
 
 ```rust
 use adk_runner::Runner;
 
-// Production configuration using the builder
-let runner = Runner::builder()
-    .app_name("production_app")
-    .agent(my_agent)
-    .session_service(Arc::new(SqliteSessionService::new(db_pool)))
-    .artifact_service(Arc::new(S3ArtifactService::new(s3_client)))
-    .memory_service(Arc::new(QdrantMemoryService::new(qdrant_client)))
-    .build()?;
+fn freeze(runner: &Runner) {
+    // New runs fail at their start, and running ones stop before their next model or tool call.
+    runner.governance().freeze("incident 4521");
+}
+```
 
-// Use in HTTP handler with run_str() for convenience
-async fn chat_handler(runner: &Runner, request: ChatRequest) -> Response {
-    let stream = runner.run_str(
-        &request.user_id,
-        &request.session_id,
-        request.content,
-    ).await?;
-    
-    // Stream events to client
-    Response::sse(stream)
+A frozen run fails with `governance.frozen`. Pass one `GovernanceControl` to several runners
+with `governance(...)` to freeze them together, or a mirrored one to freeze every replica; see
+[Replicated kill switch](durable-runtime.md#replicated-kill-switch).
+
+## Recovering unanswered calls
+
+`Runner::recover_unanswered_calls` answers every tool call a session left without a response —
+after a crash, for example — from the action ledger: `already_succeeded`, `already_failed`,
+or `outcome_unknown`. The durable worker calls it when it resumes a run; see
+[Crash resume](durable-runtime.md#crash-resume).
+
+## Integration with Launcher
+
+`Launcher` builds a `Runner` with an in-memory session service and runs a console loop:
+
+```rust
+use adk_runner::Launcher;
+use std::sync::Arc;
+
+async fn console(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<()> {
+    Launcher::new(agent).app_name("my_app").run().await
 }
 ```
 

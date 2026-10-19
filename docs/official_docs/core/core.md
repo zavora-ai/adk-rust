@@ -1,365 +1,263 @@
 # Core Types
 
-Fundamental types and traits from `adk-core` that form the foundation of ADK-Rust.
+Fundamental types and traits from `adk-core` that every other ADK-Rust crate builds on.
 
 ## Content and Part
 
-Every message in ADK flows through `Content` and `Part`. Understanding these types is essential for working with agents, tools, and callbacks.
+Every message in ADK flows through `Content` and `Part`.
 
 ### Content
 
-`Content` represents a single message in a conversation. It has a `role` (who sent it) and one or more `parts` (the actual content).
+`Content` is one message: a `role` and one or more `parts`.
 
-**Roles:**
-- `"user"` - Messages from the user
-- `"model"` - Responses from the AI model
-- `"tool"` - Results from tool execution
+| Role | Sent by |
+|------|---------|
+| `"user"` | The user |
+| `"model"` | The model |
+| `"system"` | Agent instructions; `LlmAgent` sends its instruction, global instruction, and output-schema directive with this role, and providers with a system parameter receive them there |
+| `"function"` | Tool results that `LlmAgent` records |
 
 ```rust
 use adk_core::Content;
 
-// Simple text message from user
-let user_msg = Content::new("user")
-    .with_text("What's the weather like?");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // A text message from the user.
+    let user_msg = Content::new("user").with_text("What's the weather like?");
 
-// Model response
-let model_msg = Content::new("model")
-    .with_text("The weather is sunny and 72°F.");
+    // Several text parts in one message.
+    let detailed = Content::new("user")
+        .with_text("Here's my question:")
+        .with_text("What is the capital of France?");
 
-// Multiple text parts in one message
-let detailed_msg = Content::new("user")
-    .with_text("Here's my question:")
-    .with_text("What is the capital of France?");
+    // An image from bytes, and one by reference.
+    let image_bytes = std::fs::read("photo.jpg")?;
+    let image = Content::new("user")
+        .with_text("What's in this image?")
+        .with_inline_data("image/jpeg", image_bytes);
+    let remote = Content::new("user")
+        .with_text("Describe this chart")
+        .with_file_uri("image/png", "https://example.com/chart.png");
+
+    let _ = (user_msg, detailed, image, remote);
+    Ok(())
+}
 ```
 
-**Multimodal Content:**
-
-Content can include images, audio, PDFs, and other binary data alongside text:
-
-```rust
-// Image from bytes (e.g., read from file)
-let image_bytes = std::fs::read("photo.jpg")?;
-let content = Content::new("user")
-    .with_text("What's in this image?")
-    .with_inline_data("image/jpeg", image_bytes);
-
-// Image from URL (model fetches it)
-let content = Content::new("user")
-    .with_text("Describe this image")
-    .with_file_uri("image/png", "https://example.com/chart.png");
-
-// PDF document
-let pdf_bytes = std::fs::read("report.pdf")?;
-let content = Content::new("user")
-    .with_text("Summarize this document")
-    .with_inline_data("application/pdf", pdf_bytes);
-```
+`with_inline_data` panics when the data exceeds `MAX_INLINE_DATA_SIZE` (10 MB).
 
 ### Part
 
-`Part` is an enum representing different types of content within a message:
+`Part` is an enum with one variant per kind of content:
+
+| Variant | Fields | Carries |
+|---------|--------|---------|
+| `Text` | `text` | Plain text |
+| `Thinking` | `thinking`, `signature` | A reasoning trace; the signature is replayed to providers that require it |
+| `InlineData` | `mime_type`, `data`, `uri`, `annotations` | Binary data in the message |
+| `FileData` | `mime_type`, `file_uri`, `annotations` | A reference to a file by URL or cloud storage path |
+| `FunctionCall` | `name`, `args`, `id`, `thought_signature` | A tool call from the model |
+| `FunctionResponse` | `function_response` (`FunctionResponseData`), `id`, `annotations` | A tool result |
+| `ServerToolCall` | `server_tool_call` | A provider-executed tool call (Gemini code execution, OpenAI hosted tools, ...) |
+| `ServerToolResponse` | `server_tool_response` | Its result |
+| `EmbeddedResource` | `resource` | A source URI plus inline text or binary contents, as in an MCP or ACP embedded-resource block |
+
+`Part` is not `#[non_exhaustive]`, but a `match` that only reads some variants needs a
+`_ => {}` arm:
 
 ```rust
-pub enum Part {
-    // Plain text
-    Text { text: String },
-    
-    // Binary data embedded in the message
-    InlineData {
-        mime_type: String,
-        data: Vec<u8>,
-        uri: Option<String>,
-        annotations: Option<Value>,
-    },
-    
-    // Reference to external file (URL or cloud storage)
-    FileData {
-        mime_type: String,
-        file_uri: String,
-        annotations: Option<Value>,
-    },
-    
-    // Model requesting a tool call
-    FunctionCall { name: String, args: Value, id: Option<String> },
-    
-    // Result of a tool execution
-    FunctionResponse {
-        function_response: FunctionResponseData,
-        id: Option<String>,
-        annotations: Option<Value>,
-    },
-    
-    // A complete resource embedded in the message (source URI + inline contents)
-    EmbeddedResource { resource: EmbeddedResource },
-}
-```
+use adk_core::{Content, Part};
 
-**Embedded resources:**
-
-`Part::EmbeddedResource` carries a complete resource — a source URI plus inline
-text or binary contents — mirroring the MCP / ACP embedded-resource block. This
-lets `@`-mentioned file context round-trip losslessly through session
-persistence and protocol layers such as `adk-acp`.
-
-```rust
-use adk_core::{BlobResourceContents, Content, EmbeddedResource, TextResourceContents};
-
-// Text resource (verbatim UTF-8 payload, never base64-encoded)
-let text = EmbeddedResource::Text(TextResourceContents::new(
-    "file:///src/main.rs",
-    Some("text/x-rust".to_string()),
-    "fn main() {}",
-));
-
-// Binary resource (checked constructor rejects payloads over MAX_INLINE_DATA_SIZE)
-let blob = EmbeddedResource::Blob(BlobResourceContents::new(
-    "file:///logo.png",
-    Some("image/png".to_string()),
-    vec![0x89, 0x50, 0x4E, 0x47],
-)?);
-
-let content = Content::new("user")
-    .with_text("Here is the entry point and the logo:")
-    .with_embedded_resource(text)
-    .with_embedded_resource(blob);
-```
-
-`EmbeddedResource` is an untagged enum with `Text(TextResourceContents)` and
-`Blob(BlobResourceContents)` variants, each carrying a required `uri` and an
-optional `mime_type`. The variant is additive: older serialized `Content`
-values deserialize unchanged, and existing `Part::InlineData` construction sites
-are unaffected.
-
-**Creating Parts Directly:**
-
-```rust
-use adk_core::Part;
-
-// Text part
-let text = Part::text_part("Hello, world!");
-
-// Image from bytes
-let image = Part::inline_data("image/png", png_bytes);
-
-// Image from URL
-let remote_image = Part::file_data("image/jpeg", "https://example.com/photo.jpg");
-```
-
-**Inspecting Parts:**
-
-```rust
-// Get text content (returns None for non-text parts)
-if let Some(text) = part.text() {
-    println!("Text: {}", text);
-}
-
-// Get MIME type (for InlineData and FileData)
-if let Some(mime) = part.mime_type() {
-    println!("MIME type: {}", mime);
-}
-
-// Get file URI (for FileData only)
-if let Some(uri) = part.file_uri() {
-    println!("File URI: {}", uri);
-}
-
-// Check if part contains media (image, audio, video, etc.)
-if part.is_media() {
-    println!("This part contains binary media");
-}
-```
-
-**Iterating Over Parts:**
-
-```rust
-for part in &content.parts {
-    match part {
-        Part::Text { text } => println!("Text: {}", text),
-        Part::InlineData { mime_type, data } => {
-            println!("Binary data: {} ({} bytes)", mime_type, data.len());
-        }
-        Part::FileData { mime_type, file_uri } => {
-            println!("File: {} at {}", mime_type, file_uri);
-        }
-        Part::FunctionCall { name, args, .. } => {
-            println!("Tool call: {}({})", name, args);
-        }
-        Part::FunctionResponse { function_response, .. } => {
-            println!("Tool result: {} -> {}", 
-                function_response.name, 
-                function_response.response
-            );
-        }
-        Part::EmbeddedResource { resource } => {
-            println!("Embedded resource: {}", resource.uri());
+fn describe(content: &Content) {
+    for part in &content.parts {
+        match part {
+            Part::Text { text } => tracing::info!(%text, "text"),
+            Part::InlineData { mime_type, data, .. } => {
+                tracing::info!(%mime_type, bytes = data.len(), "binary data")
+            }
+            Part::FileData { mime_type, file_uri, .. } => tracing::info!(%mime_type, %file_uri, "file"),
+            Part::FunctionCall { name, args, .. } => tracing::info!(%name, %args, "tool call"),
+            Part::FunctionResponse { function_response, .. } => {
+                tracing::info!(name = %function_response.name, "tool result")
+            }
+            Part::EmbeddedResource { resource } => tracing::info!(uri = resource.uri(), "resource"),
+            _ => {}
         }
     }
 }
 ```
+
+| Constructor or accessor | Returns |
+|-------------------------|---------|
+| `Part::text_part(text)`, `Part::inline_data(mime, bytes)`, `Part::file_data(mime, uri)` | A part of that kind |
+| `part.text()` | `Some(&str)` for a text part |
+| `part.thinking_text()`, `part.is_thinking()` | The reasoning trace of a thinking part |
+| `part.mime_type()`, `part.file_uri()`, `part.uri()` | Media details for inline and file data |
+| `part.is_media()` | `true` for inline and file data |
+| `part.embedded_resource()` | The resource of an embedded-resource part |
+
+### Embedded resources
+
+```rust
+use adk_core::{BlobResourceContents, Content, EmbeddedResource, TextResourceContents};
+
+fn main() -> adk_core::Result<()> {
+    // A text resource: the UTF-8 payload is kept verbatim, never base64-encoded.
+    let text = EmbeddedResource::Text(TextResourceContents::new(
+        "file:///src/main.rs",
+        Some("text/x-rust".to_string()),
+        "fn main() {}",
+    ));
+
+    // A binary resource: the checked constructor rejects payloads over MAX_INLINE_DATA_SIZE.
+    let blob = EmbeddedResource::Blob(BlobResourceContents::new(
+        "file:///logo.png",
+        Some("image/png".to_string()),
+        vec![0x89, 0x50, 0x4E, 0x47],
+    )?);
+
+    let content = Content::new("user")
+        .with_text("Here is the entry point and the logo:")
+        .with_embedded_resource(text)
+        .with_embedded_resource(blob);
+    assert_eq!(content.parts.len(), 3);
+    Ok(())
+}
+```
+
+`EmbeddedResource` is an untagged enum with `Text(TextResourceContents)` and
+`Blob(BlobResourceContents)` variants, each with a required `uri` and an optional `mime_type`.
 
 ---
 
 ## Agent Trait
 
-The `Agent` trait is the core abstraction for all agents in ADK. Every agent type—LLM agents, workflow agents, custom agents—implements this trait.
+Every agent type — LLM agents, workflow agents, custom agents — implements `Agent`.
+
+| Method | Required | Purpose |
+|--------|----------|---------|
+| `name()` | Yes | Identifies the agent in logs, transfers, and its default identity; unique within one agent tree |
+| `description()` | Yes | Shown to models when the agent is a transfer target or a tool |
+| `sub_agents()` | Yes | Child agents; `&[]` for a leaf agent |
+| `run(ctx)` | Yes | Runs the agent and returns an `EventStream` |
+| `close()` | No | Releases what the agent holds; the default closes each sub-agent. `Runner::close` calls it on the root agent |
+| `allows_transfer_to_parent()`, `allows_transfer_to_peers()` | No | Transfer restrictions the runner enforces (default `true`) |
+| `screen_user_input(content)` | No | Screens a user message with the input guardrails of the agent and every agent below it; the runner calls it on the root agent and saves only what it returns |
 
 ```rust
+use adk_core::{Agent, Content, Event, EventStream, InvocationContext, Result};
+use async_trait::async_trait;
+use std::sync::Arc;
+
+struct EchoAgent;
+
 #[async_trait]
-pub trait Agent: Send + Sync {
-    /// Unique identifier for this agent
-    fn name(&self) -> &str;
-    
-    /// Human-readable description of what this agent does
-    fn description(&self) -> &str;
-    
-    /// Child agents (for workflow agents like Sequential, Parallel)
-    fn sub_agents(&self) -> &[Arc<dyn Agent>];
-    
-    /// Execute the agent and return a stream of events
-    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream>;
+impl Agent for EchoAgent {
+    fn name(&self) -> &str {
+        "echo"
+    }
+
+    fn description(&self) -> &str {
+        "Repeats the user's message"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let mut event = Event::new(ctx.invocation_id());
+        event.author = self.name().to_string();
+        let text = ctx.user_content().parts.iter().filter_map(|part| part.text()).collect::<String>();
+        event.set_content(Content::new("model").with_text(text));
+        Ok(Box::pin(futures::stream::iter([Ok(event)])))
+    }
 }
 ```
 
-**Key Points:**
-
-- `name()`: Used for logging, transfers, and identification. Must be unique within a multi-agent system.
-- `description()`: Shown to LLMs when the agent is used as a tool or for routing decisions.
-- `sub_agents()`: Returns child agents. Empty for leaf agents (LlmAgent), populated for containers (SequentialAgent, ParallelAgent).
-- `run()`: The main execution method. Receives context and returns a stream of events.
-
-**Why EventStream?**
-
-Agents return `EventStream` (a stream of `Result<Event>`) rather than a single response because:
-1. **Streaming**: Responses can be streamed token-by-token for better UX
-2. **Tool calls**: Multiple tool calls and responses happen during execution
-3. **State changes**: State updates are emitted as events
-4. **Transfers**: Agent transfers are signaled through events
+Agents return an `EventStream` — `Pin<Box<dyn Stream<Item = Result<Event>> + Send>>` — rather
+than one response, because a turn streams text, runs tool calls, changes state, and signals
+transfers as it goes.
 
 ---
 
 ## Tool Trait
 
-Tools extend agent capabilities beyond conversation. They let agents interact with APIs, databases, file systems, or perform computations.
+| Method | Default | Purpose |
+|--------|---------|---------|
+| `name()`, `description()` | Required | The function name and description the model sees |
+| `parameters_schema()` | `None` | JSON Schema of the arguments; without one the model has no parameters to fill |
+| `response_schema()` | `None` | JSON Schema of the result |
+| `execute(ctx, args)` | Required | Runs the tool |
+| `effect()` | `ReadOnly` when `is_read_only()`, otherwise `NonIdempotent` | The side effect class (`ToolEffect`); decides retries, the action ledger, and `DeclarativePolicy::allow_read_only` |
+| `is_read_only()`, `is_concurrency_safe()` | `false` | Parallel dispatch under `ToolExecutionStrategy::Auto` |
+| `is_long_running()` | `false` | The tool starts work and returns before it finishes |
+| `origin()` | `"static"` | Where the tool came from (an MCP server's tools report `mcp:{name}`); part of an approval's binding |
+| `required_scopes()` | `&[]` | Scopes the caller must hold |
+| `timeout_override()` | `None` | A per-tool timeout instead of the agent's |
 
 ```rust
-#[async_trait]
-pub trait Tool: Send + Sync {
-    /// Tool name (used in function calls from the model)
-    fn name(&self) -> &str;
-    
-    /// Description shown to the LLM to help it decide when to use this tool
-    fn description(&self) -> &str;
-    
-    /// JSON Schema defining the expected parameters
-    fn parameters_schema(&self) -> Option<Value> { None }
-    
-    /// JSON Schema defining the response format
-    fn response_schema(&self) -> Option<Value> { None }
-    
-    /// Whether this tool runs asynchronously (returns task ID immediately)
-    fn is_long_running(&self) -> bool { false }
-    
-    /// Execute the tool with given arguments
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
-}
-```
-
-**Key Points:**
-
-- `name()`: The function name the model uses to call this tool. Keep it short and descriptive (e.g., `get_weather`, `search_database`).
-- `description()`: Critical for the model to understand when to use the tool. Be specific about what it does and when to use it.
-- `parameters_schema()`: JSON Schema that tells the model what arguments to provide. Without this, the model guesses.
-- `execute()`: Receives parsed arguments as `serde_json::Value`. Return the result as JSON.
-
-**Implementing a Custom Tool:**
-
-```rust
-use adk_core::{Tool, ToolContext, Result};
+use adk_core::{Result, Tool, ToolContext, ToolEffect};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
-struct WeatherTool {
-    api_key: String,
-}
+struct WeatherTool;
 
 #[async_trait]
 impl Tool for WeatherTool {
-    fn name(&self) -> &str { 
-        "get_weather" 
+    fn name(&self) -> &str {
+        "get_weather"
     }
-    
-    fn description(&self) -> &str { 
+
+    fn description(&self) -> &str {
         "Get current weather for a city. Use this when the user asks about weather conditions."
     }
-    
+
     fn parameters_schema(&self) -> Option<Value> {
         Some(json!({
             "type": "object",
             "properties": {
-                "city": { 
-                    "type": "string",
-                    "description": "City name (e.g., 'London', 'New York')"
-                },
-                "units": {
-                    "type": "string",
-                    "enum": ["celsius", "fahrenheit"],
-                    "description": "Temperature units"
-                }
+                "city": { "type": "string", "description": "City name (e.g., 'London')" },
+                "units": { "type": "string", "enum": ["celsius", "fahrenheit"] }
             },
             "required": ["city"]
         }))
     }
-    
+
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::ReadOnly
+    }
+
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let city = args["city"].as_str().unwrap_or("Unknown");
         let units = args["units"].as_str().unwrap_or("celsius");
-        
-        // Call weather API here...
-        
-        Ok(json!({
-            "city": city,
-            "temperature": 22,
-            "units": units,
-            "condition": "sunny"
-        }))
+        Ok(json!({ "city": city, "temperature": 22, "units": units, "condition": "sunny" }))
     }
 }
 ```
 
-**Long-Running Tools:**
-
-For operations that take a long time (file processing, external API calls), mark the tool as long-running:
-
-```rust
-fn is_long_running(&self) -> bool { true }
-```
-
-Long-running tools return a task ID immediately. The model is instructed not to call the tool again while it's pending.
+A tool that fails with `Err(AdkError)` is answered to the model with the error's component,
+category, and code, not its message; see [Function Tools](../tools/function-tools.md) for what
+the model receives and for `FunctionTool` and `#[tool]`.
 
 ---
 
 ## Toolset Trait
 
-`Toolset` provides tools dynamically based on context. Use this when:
-- Tools depend on user permissions
-- Tools are loaded from external sources (MCP servers)
-- Tool availability changes during execution
+A `Toolset` provides tools per context — by user, from an MCP server, or changing during a run.
+
+| Method | Default | Purpose |
+|--------|---------|---------|
+| `name()` | Required | Identifies the toolset |
+| `tools(ctx)` | Required | The tools for this context |
+| `process_llm_request(...)` | Nothing | Adjusts the model request |
+| `close()` | Nothing | Releases what the toolset holds; `Agent::close` calls it |
 
 ```rust
-#[async_trait]
-pub trait Toolset: Send + Sync {
-    /// Toolset identifier
-    fn name(&self) -> &str;
-    
-    /// Return available tools for the current context
-    async fn tools(&self, ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>>;
-}
-```
+use adk_core::{ReadonlyContext, Result, Tool, Toolset};
+use async_trait::async_trait;
+use std::sync::Arc;
 
-**Example: Permission-Based Toolset:**
-
-```rust
 struct AdminToolset {
     admin_tools: Vec<Arc<dyn Tool>>,
     user_tools: Vec<Arc<dyn Tool>>,
@@ -367,8 +265,10 @@ struct AdminToolset {
 
 #[async_trait]
 impl Toolset for AdminToolset {
-    fn name(&self) -> &str { "admin_toolset" }
-    
+    fn name(&self) -> &str {
+        "admin_toolset"
+    }
+
     async fn tools(&self, ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
         if ctx.user_id().starts_with("admin_") {
             Ok(self.admin_tools.clone())
@@ -383,517 +283,319 @@ impl Toolset for AdminToolset {
 
 ## Context Traits
 
-Contexts provide information and services to agents and tools during execution. There's a hierarchy of context traits, each adding more capabilities.
+Contexts give agents, callbacks, and tools what they need while they run. Each trait extends
+the one before it.
 
-### ReadonlyContext
+| Trait | Adds |
+|-------|------|
+| `ReadonlyContext` | `invocation_id`, `agent_name`, `user_id`, `app_name`, `session_id`, `branch`, `user_content`, `acting_context` (the acting agent; see [Identity](#identity)), `state`, and the typed `try_*` identity accessors |
+| `CallbackContext` | `artifacts`, `shared_state`, and, in tool callbacks, `tool_name`, `tool_input`, `tool_outcome` |
+| `ToolContext` | `function_call_id`, `idempotency_key`, `actions` / `set_actions`, `search_memory` |
+| `InvocationContext` | `agent`, `memory`, `session`, `run_config`, `end_invocation` / `ended`, and capability methods with defaults: `is_cancelled`, `user_scopes`, `request_metadata`, `get_secret`, `get_secret_for`, delegation depth, and transfer details |
 
-Basic information available everywhere:
-
-```rust
-pub trait ReadonlyContext: Send + Sync {
-    /// Unique ID for this invocation
-    fn invocation_id(&self) -> &str;
-    
-    /// Name of the currently executing agent
-    fn agent_name(&self) -> &str;
-    
-    /// User identifier
-    fn user_id(&self) -> &str;
-    
-    /// Application name
-    fn app_name(&self) -> &str;
-    
-    /// Session identifier
-    fn session_id(&self) -> &str;
-    
-    /// The user's input that triggered this invocation
-    fn user_content(&self) -> &Content;
-}
-```
-
-### CallbackContext
-
-Adds artifact access (extends ReadonlyContext):
-
-```rust
-pub trait CallbackContext: ReadonlyContext {
-    /// Access to artifact storage (if configured)
-    fn artifacts(&self) -> Option<Arc<dyn Artifacts>>;
-}
-```
-
-### ToolContext
-
-For tool execution (extends CallbackContext):
-
-```rust
-pub trait ToolContext: CallbackContext {
-    /// ID of the function call that triggered this tool
-    fn function_call_id(&self) -> &str;
-    
-    /// Get current event actions (transfer, escalate, etc.)
-    fn actions(&self) -> EventActions;
-    
-    /// Set event actions (e.g., trigger a transfer)
-    fn set_actions(&self, actions: EventActions);
-    
-    /// Search long-term memory
-    async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>>;
-}
-```
-
-### InvocationContext
-
-Full context for agent execution (extends CallbackContext):
-
-```rust
-pub trait InvocationContext: CallbackContext {
-    /// The agent being executed
-    fn agent(&self) -> Arc<dyn Agent>;
-
-    /// Memory service (if configured)
-    fn memory(&self) -> Option<Arc<dyn Memory>>;
-
-    /// Current session with state and history
-    fn session(&self) -> &dyn Session;
-
-    /// Execution configuration
-    fn run_config(&self) -> &RunConfig;
-
-    /// Signal that this invocation should end
-    fn end_invocation(&self);
-
-    /// Check if invocation has been ended
-    fn ended(&self) -> bool;
-
-    // Capability methods — all have defaults, so an implementation may omit them.
-
-    /// Whether the run has been cancelled, e.g. by `Runner::interrupt`.
-    /// Default: `false`.
-    fn is_cancelled(&self) -> bool;
-
-    /// Authenticated scopes for the caller. Default: empty.
-    fn user_scopes(&self) -> Vec<String>;
-
-    /// Request-scoped metadata. Default: empty.
-    fn request_metadata(&self) -> HashMap<String, serde_json::Value>;
-
-    /// Resolve a secret through the configured provider. Default: `Ok(None)`.
-    async fn get_secret(&self, name: &str) -> Result<Option<String>>;
-}
-```
-
-#### Capability preservation in derived contexts
-
-The capability methods above, plus `shared_state()` and `artifacts()` on
-`CallbackContext`, all have permissive defaults — `false`, empty, or `None`. That
-matters when a context is *derived*: workflow agents wrap the caller's context to
-change one thing (a branch, the user content, the session), and a wrapper that
-does not forward a capability method silently falls back to its default rather
-than failing to compile.
-
-Every wrapper in the workspace forwards all of them, and a conformance suite
-enforces it by pushing a context with non-default values for each capability
-through each wrapper, including a composed stack. Practically this means
-cancellation, secrets, scopes, request metadata, shared state, artifacts, and
-memory reach a sub-agent regardless of whether it runs directly, under a
-`LoopAgent`, under a `ParallelAgent`, or with skills injected.
-
-> **Note:** if you implement `InvocationContext` yourself by wrapping another
-> context, forward every method above. `ToolContext` does not expose
-> `is_cancelled` or `request_metadata`, so an agent invoked *as a tool* does not
-> currently observe cancellation.
+A context that wraps another — as workflow agents do to change the branch, the user content,
+or the session — must forward every capability method and `acting_context()`; a method it
+does not forward falls back to its default (`false`, empty, `None`, or the derived identity)
+instead of failing to compile. Every wrapper in the workspace forwards them, and a conformance
+suite pushes a context with non-default values through each wrapper.
 
 ---
 
 ## Session and State
 
-Sessions track conversations. State stores data within sessions.
+| `Session` method | Returns |
+|------------------|---------|
+| `id()`, `app_name()`, `user_id()` | The session's address |
+| `state()` | The session's `State` |
+| `conversation_history()` | The session's contents, as the model sees them |
 
-### Session
+`State` reads with `get(key)` and `all()`. Agents and tools change state through event
+actions, which the runner applies and persists:
 
 ```rust
-pub trait Session: Send + Sync {
-    /// Unique session identifier
-    fn id(&self) -> &str;
-    
-    /// Application this session belongs to
-    fn app_name(&self) -> &str;
-    
-    /// User who owns this session
-    fn user_id(&self) -> &str;
-    
-    /// Mutable state storage
-    fn state(&self) -> &dyn State;
-    
-    /// Previous messages in this conversation
-    fn conversation_history(&self) -> Vec<Content>;
+use adk_core::{Result, ToolContext};
+use serde_json::{Value, json};
+use std::sync::Arc;
+
+async fn remember_topic(ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    let mut actions = ctx.actions();
+    actions.state_delta.insert("current_topic".to_string(), json!("weather"));
+    actions.state_delta.insert("user:theme".to_string(), json!("dark"));
+    actions.state_delta.insert("temp:step_count".to_string(), json!(1));
+    ctx.set_actions(actions);
+    Ok(json!({ "saved": true }))
 }
 ```
 
-### State
+| Prefix | Constant | Scope |
+|--------|----------|-------|
+| `user:` | `KEY_PREFIX_USER` | Every session of the user |
+| `app:` | `KEY_PREFIX_APP` | Every session of the application |
+| `temp:` | `KEY_PREFIX_TEMP` | The current invocation; never persisted |
+| (none) | — | This session |
 
-Key-value storage with scoped prefixes:
-
-```rust
-pub trait State: Send + Sync {
-    /// Get a value by key
-    fn get(&self, key: &str) -> Option<Value>;
-    
-    /// Set a value
-    fn set(&mut self, key: String, value: Value);
-    
-    /// Get all key-value pairs
-    fn all(&self) -> HashMap<String, Value>;
-}
-```
-
-**State Prefixes:**
-
-State keys use prefixes to control scope and persistence:
-
-| Prefix | Scope | Persistence | Use Case |
-|--------|-------|-------------|----------|
-| `user:` | User-level | Across all sessions | User preferences, settings |
-| `app:` | Application-level | Application-wide | Shared configuration |
-| `temp:` | Turn-level | Cleared each turn | Temporary computation data |
-| (none) | Session-level | This session only | Conversation context |
-
-```rust
-// In a callback or tool
-let state = ctx.session().state();
-
-// User preference (persists across sessions)
-state.set("user:theme".into(), json!("dark"));
-
-// Session-specific data
-state.set("current_topic".into(), json!("weather"));
-
-// Temporary data (cleared after this turn)
-state.set("temp:step_count".into(), json!(1));
-
-// Read values
-if let Some(theme) = state.get("user:theme") {
-    println!("Theme: {}", theme);
-}
-```
+See [Sessions](../sessions/sessions.md) and [State](../sessions/state.md).
 
 ---
 
 ## Error Handling
 
-ADK uses a unified structured error type for all operations:
+`AdkError` is the structured error every ADK operation returns:
 
 ```rust
-use adk_core::{AdkError, ErrorComponent, ErrorCategory};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 
-// AdkError is a struct with component, category, code, message, retry hint, and details
-let err = AdkError::new(
-    ErrorComponent::Model,
-    ErrorCategory::RateLimited,
-    "model.openai.rate_limited",
-    "Too many requests",
-);
+fn main() {
+    let err = AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::RateLimited,
+        "model.openai.rate_limited",
+        "Too many requests",
+    );
 
-// Backward-compatible shorthand (produces .legacy codes)
-let err = AdkError::model("something went wrong");
+    assert!(err.is_retryable()); // RateLimited, Unavailable, and Timeout are retryable
+    assert_eq!(err.http_status_code(), 429);
+    let _problem = err.to_problem_json(); // a JSON Problem Details body for HTTP responses
 
-// Check error properties
-err.is_retryable();    // true for RateLimited, Unavailable, Timeout
-err.is_not_found();    // category == NotFound
-err.http_status_code(); // 429 for RateLimited
-err.to_problem_json(); // structured JSON for HTTP responses
-
-pub type Result<T> = std::result::Result<T, AdkError>;
-```
-
-**Error Handling in Tools:**
-
-```rust
-async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-    let city = args["city"]
-        .as_str()
-        .ok_or_else(|| AdkError::tool("Missing 'city' parameter"))?;
-    
-    let response = reqwest::get(&format!("https://api.weather.com/{}", city))
-        .await
-        .map_err(|e| AdkError::tool(format!("API error: {e}")))?;
-    
-    Ok(json!({ "weather": "sunny" }))
+    // Shorthand constructors produce `*.legacy` codes.
+    let _legacy = AdkError::model("something went wrong");
 }
 ```
 
-See [Development Guidelines](../development/development-guidelines.md#error-handling) for the full error handling guide.
+| Category | HTTP | Retryable by default |
+|----------|------|----------------------|
+| `InvalidInput` | 400 | No |
+| `Unauthorized`, `Forbidden` | 401, 403 | No |
+| `NotFound` | 404 | No |
+| `Timeout` | 408 | Yes |
+| `Conflict` | 409 | No |
+| `RateLimited` | 429 | Yes |
+| `ResourceExhausted` | 429 | No |
+| `Cancelled` | 499 | No |
+| `Internal` | 500 | No |
+| `Unsupported` | 501 | No |
+| `Unavailable` | 503 | Yes |
+
+`ResourceExhausted` marks a used-up run, team, or spend budget, and `Conflict` a write that
+lost a race or used a stale version (`lease.stale_epoch`, `run_store.stale_epoch`,
+`governance.conflict`, `approval.version_conflict`). `AdkError::diagnostics()` displays an
+error by everything but its message, for log lines that must not carry request content.
+
+See [Development Guidelines](../development/development-guidelines.md#error-handling) for the
+full guide.
 
 ---
 
 ## Identity
 
-ADK-Rust uses typed identity primitives to prevent accidental ID mixing and make session addressing explicit. There are three distinct identity layers, each serving a different purpose.
+ADK-Rust keeps four identities apart:
 
-### Auth Identity (`RequestContext`)
+| Identity | Type | Answers |
+|----------|------|---------|
+| Auth | `RequestContext` | Who is authenticated and with which scopes (`user_id`, `scopes`, `metadata`); set at HTTP ingress |
+| Session | `AdkIdentity` | Which conversation: `app_name`, `user_id`, `session_id` |
+| Execution | `ExecutionIdentity` | Which invocation of the session, on which branch, by which agent |
+| Agent | `ActingContext` | Which agent is acting, for which subject, through which delegation chain |
 
-Auth identity represents who is authenticated and what they are allowed to do. It lives in `RequestContext` and is populated at HTTP or Studio ingress:
-
-- `user_id` — the authenticated user
-- `scopes` — authorization scopes (e.g. `["read", "write"]`)
-- `metadata` — additional request-level key-value pairs
-
-Auth identity does not include session or invocation information. It answers: "Who is making this request?"
-
-### Session Identity (`AdkIdentity`)
-
-Session identity is the stable address of a conversation session. It is a composite of three typed fields:
+### Session and execution identity
 
 ```rust
-use adk_core::{AdkIdentity, AppName, SessionId, UserId};
+use adk_core::{AdkIdentity, AppName, ExecutionIdentity, InvocationId, SessionId, UserId};
 
-let identity = AdkIdentity::new(
-    AppName::try_from("weather-app")?,
-    UserId::try_from("tenant:alice@example.com")?,
-    SessionId::generate(),
-);
+fn main() -> adk_core::Result<()> {
+    let identity = AdkIdentity::new(
+        AppName::try_from("weather-app")?,
+        UserId::try_from("tenant:alice@example.com")?,
+        SessionId::generate(),
+    );
+    assert_eq!(identity.app_name.as_ref(), "weather-app");
 
-// Each field is a typed wrapper — no accidental swaps
-assert_eq!(identity.app_name.as_ref(), "weather-app");
+    let exec = ExecutionIdentity {
+        adk: identity.clone(),
+        invocation_id: InvocationId::generate(),
+        branch: String::new(),
+        agent_name: "planner".to_string(),
+    };
+    let _ = exec;
+    Ok(())
+}
 ```
 
-`AdkIdentity` replaces the pattern of passing `(app_name, user_id, session_id)` as three separate strings. It eliminates parameter ordering bugs and makes the addressing model explicit across all session backends.
+`AppName`, `UserId`, `SessionId`, and `InvocationId` share one validation rule: not empty, no
+null bytes, at most 512 bytes (`MAX_ID_LEN`). Characters such as `:`, `@`, and `/` are allowed.
+All four serialize as plain strings (`#[serde(transparent)]`). `ReadonlyContext` and `Session`
+parse them on demand with `try_identity()`, `try_execution_identity()`, `try_app_name()`,
+`try_user_id()`, and the other `try_*` accessors, which return an error instead of panicking.
 
-Session identity answers: "Which conversation session is being addressed?"
+### Agent identity
 
-### Execution Identity (`ExecutionIdentity`)
+Every run has an acting agent. `ReadonlyContext::acting_context()` returns an
+`ActingContext` (`adk_core::principal`): the agent's `AgentPrincipal` (an `AgentId` with
+tenant, class, instance, sponsor, and attributes), the `SubjectRef` it acts for, and the
+delegation chain.
 
-Execution identity extends session identity with per-invocation runtime coordinates:
+| Source of the agent's principal | Applies to |
+|---------------------------------|------------|
+| `RunConfig::acting` (`ActingConfig::principals` by agent name, `RunConfigBuilder::agent_principal`) | Any agent in the run |
+| The runner's `identity_source(...)` (`IdentitySource::current` for the root agent, `principal_for` for any agent) | Any agent |
+| `Runner::builder().agent_principal(...)` | The root agent |
+| None of these | `urn:adk:agent:{app}/{agent}` (`AgentPrincipal::derived`) |
+
+The subject is always the session's user, as `ActingConfig::subject_kind` (`Human` by
+default, `Service` for runs a scheduler, webhook, or queue creates). A run configured to act
+for anyone else fails at its start with `identity.subject_mismatch` (`Forbidden`) unless the
+runner's `subject_delegation(...)` policy allows it. `AgentTool` delegation appends the
+caller to the delegate's chain.
 
 ```rust
-use adk_core::{ExecutionIdentity, InvocationId};
+use adk_core::principal::{ActingContext, AgentId, AgentPrincipal, SubjectRef};
+use adk_core::{RunConfig, SubjectKind};
 
-let exec = ExecutionIdentity {
-    adk: identity.clone(),
-    invocation_id: InvocationId::generate(),
-    branch: String::new(),
-    agent_name: "planner".to_string(),
-};
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let billing = AgentPrincipal::new(AgentId::new("urn:adk:agent:billing")?).with_tenant("acme");
+    let config = RunConfig::builder()
+        .agent_principal("billing_agent", billing.clone())
+        .subject_kind(SubjectKind::Human)
+        .build();
+    let _ = config;
+
+    let acting = ActingContext::new(billing).on_behalf_of(SubjectRef::human("bob@example.com"));
+    assert_eq!(serde_json::to_value(&acting)?["onBehalfOf"]["kind"], "human");
+    Ok(())
+}
 ```
 
-The runtime stores `ExecutionIdentity` internally so that event creation, agent transfers, and telemetry correlation work with validated IDs — no re-parsing of raw strings after the initial boundary parse.
-
-Execution identity answers: "Which invocation of which session is currently running, and which agent is executing?"
-
-### Leaf Identifier Types
-
-The four leaf types — `AppName`, `UserId`, `SessionId`, `InvocationId` — all share the same validation rules:
-
-- Must not be empty
-- Must not contain null bytes
-- Must not exceed 512 bytes
-- Characters like `:`, `@`, `/` are allowed (validation is not coupled to backend key encoding)
-
-All four use `#[serde(transparent)]`, so existing JSON and SSE payloads continue to encode identifiers as plain strings.
-
-```rust
-use adk_core::{AppName, SessionId, InvocationId};
-
-// Parse at trust boundaries
-let app = AppName::try_from("my-app")?;
-
-// Generate internally
-let session = SessionId::generate();
-let invocation = InvocationId::generate();
-
-// Use as &str anywhere
-println!("app={}, session={}", app.as_ref(), session.as_ref());
-```
-
-### Reading Typed Identity from Context
-
-Both `ReadonlyContext` and `Session` provide typed helper methods that parse the underlying string values on demand:
-
-```rust
-// From a ReadonlyContext (agent or tool execution)
-let identity = ctx.try_identity()?;           // AdkIdentity
-let exec = ctx.try_execution_identity()?;     // ExecutionIdentity
-let app = ctx.try_app_name()?;               // AppName
-
-// From a Session
-let identity = session.try_identity()?;       // AdkIdentity
-let user = session.try_user_id()?;           // UserId
-```
-
-These methods return `Result<T>` — if the underlying string is invalid (e.g. empty), you get a descriptive error instead of a panic.
-
-### Use Cases
-
-| Use Case | Identity Layer | Why |
-|----------|---------------|-----|
-| Multi-tenant isolation | `AdkIdentity` | The `(app, user, session)` triple ensures sessions never cross tenant boundaries |
-| Audit correlation | `ExecutionIdentity` | Links every event to a specific invocation, agent, and session |
-| Replay and resume | `AdkIdentity` + `InvocationId` | Stable session address plus invocation ID enables deterministic replay |
-| Safer plugin/tool contracts | Typed leaf IDs | Plugins receive `AppName` and `UserId` instead of raw strings — no accidental swaps |
-| Boundary validation | `TryFrom<&str>` | Parse once at HTTP ingress, reject bad input early with a 400 error |
-
-### Identity Separation Summary
-
-```
-RequestContext          → Auth: who is authenticated, what scopes
-    ↓ (user binding)
-AdkIdentity             → Session: which app + user + session
-    ↓ (+ invocation)
-ExecutionIdentity       → Runtime: which invocation, branch, agent
-```
-
-These three layers are intentionally separate. `RequestContext` may share the same `UserId` type, but the structs are never merged. Auth concerns stay in auth, session addressing stays in session identity, and runtime coordinates stay in execution identity.
+The acting context reaches `ToolPolicyRequest::acting`, `ToolConfirmationRequest::acting`,
+`SpendKey::agent`, and audit records. See [Agent Identity](../security/agent-identity.md).
 
 ---
 
-## EventStream
+## Governance
 
-Agents return a stream of events rather than a single response:
+The governed path and its stores live in `adk-core`, so every runtime — `LlmAgent`,
+`CodeActAgent`, the realtime runtimes, the durable worker — enforces them the same way:
+
+| Type | Role | Guide |
+|------|------|-------|
+| `GovernanceControl` | Kill switch: `freeze(reason)` fails new runs at their start and stops running ones before their next model or tool call; `GovernanceControl::mirrored` replicates it through a `GovernanceStateStore` | [Durable Runtime](durable-runtime.md#replicated-kill-switch) |
+| `ToolPolicy`, `DeclarativePolicy` | Allow, deny, or require approval per tool call | [Tool Authorization](../security/tool-authorization.md) |
+| `authorize_tool_call` | The governed path: kill switch, policy, guardrails, confirmation, on a call's final arguments | [Tool Authorization](../security/tool-authorization.md) |
+| `ApprovalStore`, `ApprovalService` | Recorded decisions for held calls, bound to the call's fingerprint | [Approval Service](../security/approval-service.md) |
+| `RunBudget`, `BudgetTracker` | Per-run limits on model calls, tokens, cost, tool calls, and wall time | [Run Budgets](runner.md#run-budgets) |
+| `SpendLedger`, `ModelCallScope` | Hard spend caps across runs, reserved before each model call | [Spend Ledger](../security/spend-ledger.md) |
+| `ActionLedger` | Records non-idempotent calls so a resumed run never repeats one | [Durable Stores](../security/durable-stores.md) |
 
 ```rust
-pub type EventStream = Pin<Box<dyn Stream<Item = Result<Event>> + Send>>;
+use adk_core::{GOVERNANCE_FROZEN_CODE, GovernanceControl};
+
+fn main() {
+    let control = GovernanceControl::new();
+    control.freeze("incident 4521");
+    let refused = control.check().expect_err("a frozen control refuses work");
+    assert_eq!(refused.code, GOVERNANCE_FROZEN_CODE);
+    control.unfreeze();
+    assert!(control.check().is_ok());
+}
 ```
 
-**Processing Events:**
+A runner creates its own control when none is set; `Runner::governance()` returns it.
+
+---
+
+## Events
 
 ```rust
+use adk_core::{Event, EventStream};
 use futures::StreamExt;
 
-let mut stream = agent.run(ctx).await?;
-
-while let Some(result) = stream.next().await {
-    match result {
-        Ok(event) => {
-            // Check for text content
-            if let Some(content) = event.content() {
-                for part in &content.parts {
-                    if let Some(text) = part.text() {
-                        print!("{}", text);
-                    }
-                }
+async fn print_events(mut stream: EventStream) {
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(event) => print_event(&event),
+            Err(error) => {
+                tracing::warn!(error = %error.diagnostics(), "run failed");
+                break;
             }
-            
-            // Check for state changes
-            for (key, value) in event.state_delta() {
-                println!("State changed: {} = {}", key, value);
-            }
-            
-            // Check if this is the final response
-            if event.is_final_response() {
-                println!("\n[Done]");
-            }
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            break;
         }
     }
 }
+
+fn print_event(event: &Event) {
+    // Streamed deltas arrive as partial events; the final event carries the whole answer.
+    if event.llm_response.partial {
+        return;
+    }
+    if let Some(content) = event.content() {
+        for part in &content.parts {
+            if let Some(text) = part.text() {
+                print!("{text}");
+            }
+        }
+    }
+    for (key, value) in &event.actions.state_delta {
+        tracing::info!(%key, %value, "state changed");
+    }
+    if event.is_final_response() {
+        println!();
+    }
+}
 ```
+
+See [Events](../events/events.md).
 
 ---
 
 ## Llm Trait
 
-The trait that all LLM providers implement:
+Every model provider implements `Llm`:
+
+| Method | Default | Purpose |
+|--------|---------|---------|
+| `name()` | Required | The model identifier |
+| `generate_content(request, stream)` | Required | Returns an `LlmResponseStream` |
+| `schema_adapter()` | `GenericSchemaAdapter` | Normalizes tool schemas for the provider |
+| `max_cost_micro_usd(request)` | `None` | An upper bound on the call's cost, for spend reservations |
+
+| `LlmRequest` field | Holds |
+|--------------------|-------|
+| `model` | The model identifier |
+| `contents` | The conversation, instructions included as `system` contents |
+| `config` | `Option<GenerateContentConfig>`: temperature, `top_p`, `top_k`, `max_output_tokens`, `stop_sequences`, `seed`, penalties, `top_logprobs`, `response_schema`, `cached_content`, and provider `extensions` |
+| `tools` | Tool declarations by name |
+| `previous_response_id` | A provider-side continuation id, used by the Gemini Interactions transport |
 
 ```rust
-#[async_trait]
-pub trait Llm: Send + Sync {
-    /// Model identifier (e.g., "gemini-3.7-flash", "gpt-5.6-terra")
-    fn name(&self) -> &str;
-    
-    /// Generate content (streaming or non-streaming)
-    async fn generate_content(
-        &self,
-        request: LlmRequest,
-        stream: bool,
-    ) -> Result<LlmResponseStream>;
-}
-```
-
-**LlmRequest:**
-
-```rust
-pub struct LlmRequest {
-    pub contents: Vec<Content>,           // Conversation history
-    pub tools: Vec<ToolDeclaration>,      // Available tools
-    pub system_instruction: Option<String>, // System prompt
-    pub config: GenerateContentConfig,    // Temperature, max_tokens, etc.
-}
-```
-
-**LlmRequest Builder Methods:**
-
-`LlmRequest` provides builder methods for convenient construction:
-
-```rust
-use adk_core::{LlmRequest, Content, GenerateContentConfig};
+use adk_core::{Content, GenerateContentConfig, LlmRequest};
 use serde_json::json;
 
-// Basic request
-let request = LlmRequest::new(vec![
-    Content::new("user").with_text("Hello!")
-]);
-
-// With system instruction
-let request = LlmRequest::new(contents)
-    .with_system_instruction("You are a helpful assistant.");
-
-// With response schema for structured output
-let request = LlmRequest::new(contents)
-    .with_response_schema(json!({
-        "type": "object",
-        "properties": {
-            "name": { "type": "string" },
-            "age": { "type": "number" }
-        },
-        "required": ["name", "age"]
-    }));
-
-// With full config
-let config = GenerateContentConfig {
-    temperature: Some(0.7),
-    max_output_tokens: Some(1024),
-    response_schema: Some(schema),
-    ..Default::default()
-};
-let request = LlmRequest::new(contents).with_config(config);
-```
-
-| Method | Description |
-|--------|-------------|
-| `new(contents)` | Create request with conversation history |
-| `with_system_instruction(text)` | Set the system prompt |
-| `with_response_schema(schema)` | Set JSON schema for structured output |
-| `with_config(config)` | Set full generation config |
-| `with_tools(tools)` | Add tool declarations |
-
-**LlmResponse:**
-
-```rust
-pub struct LlmResponse {
-    pub content: Option<Content>,         // Generated content
-    pub finish_reason: Option<FinishReason>, // Why generation stopped
-    pub usage: Option<UsageMetadata>,     // Token counts
-    pub partial: bool,                    // Is this a streaming chunk?
-    pub turn_complete: bool,              // Is the turn finished?
+fn main() {
+    let request = LlmRequest::new("gemini-3.7-flash", vec![Content::new("user").with_text("Hello!")])
+        .with_config(GenerateContentConfig {
+            temperature: Some(0.7),
+            max_output_tokens: Some(1024),
+            ..Default::default()
+        })
+        .with_response_schema(json!({
+            "type": "object",
+            "properties": { "name": { "type": "string" } },
+            "required": ["name"]
+        }));
+    assert!(request.config.and_then(|config| config.response_schema).is_some());
 }
 ```
 
-All providers (Gemini, OpenAI, Anthropic, Ollama, etc.) implement this trait, making them interchangeable:
+| `LlmResponse` field | Holds |
+|---------------------|-------|
+| `content` | The generated content |
+| `usage_metadata` | Token counts, cost, built-in tool uses, and the provider's own usage object |
+| `finish_reason` | Why generation stopped (`FinishReason`) |
+| `partial`, `turn_complete` | Whether this is a streamed delta, and whether the turn is finished |
+| `error_code`, `error_message` | A provider-reported failure, such as a blocked prompt |
+| `provider_metadata` | Provider-specific details (grounding, log probabilities, response ids) |
+| `model`, `provider` | Which model and provider produced the response |
+| `interaction_id`, `citation_metadata`, `interrupted` | Interactions continuity, citations, and realtime interruption |
 
-```rust
-// Switch providers by changing one line
-let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&key, "gemini-3.7-flash")?);
-// let model: Arc<dyn Llm> = Arc::new(OpenAIClient::new(config)?);
-// let model: Arc<dyn Llm> = Arc::new(AnthropicClient::new(config)?);
-
-let agent = LlmAgentBuilder::new("assistant")
-    .model(model)
-    .build()?;
-```
+Clients for each provider are in `adk-model`; see [Model Providers](../models/providers.md).
 
 ---
 
