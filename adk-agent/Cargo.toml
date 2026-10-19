@@ -5,12 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Agent implementations for Rust Agent Development Kit (ADK-Rust, LLM, Custom, Workflow agents)"
-repository = "https://github.com/zavora-ai/adk-rust"
+description = "Agent implementations for Rust Agent Development Kit (ADK-Rust): LLM, custom, workflow, and team agents"
+homepage.workspace = true
+repository.workspace = true
 documentation = "https://docs.rs/adk-agent"
 keywords = ["ai", "agent", "adk", "llm", "workflow"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+
+[package.metadata.docs.rs]
+features = ["guardrails", "enhanced-plugins", "skills-progressive-disclosure", "team-tools", "codeact", "coding", "sandbox", "ambient", "record-payloads"]
 
 [dependencies]
 adk-core.workspace = true
