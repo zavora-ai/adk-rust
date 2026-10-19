@@ -4,6 +4,46 @@
 server. It performs no actuation itself: it orders observation, approval, mutation, and
 verification as a deterministic graph, and checks what the external runtime returns.
 
+## Use it
+
+```toml
+[dependencies]
+adk-computer-use = "3.0.0"
+```
+
+The umbrella crate's `computer-use` feature, included in `standard`, re-exports it as
+`adk_rust::computer_use`.
+
+| Entry point | Role |
+|-------------|------|
+| `build_reference_graph(runtime, authorizer)` | Builds the reference `adk-graph` workflow: parallel observation, preview, digest-bound approval interrupt, one execution, verification |
+| `build_reference_graph_with_checkpointer(runtime, authorizer, checkpointer)` | The same graph with a checkpointer, for resume after an approval interrupt |
+| `ScopeAuthorizer::new([...])` | The `computer:*` scopes the graph may use, checked against an `adk-auth`-verified identity (`ComputerUseAuthContext`) |
+| `ComputerUseRuntime` | The trait the graph drives; `ComputerUseMcpRuntime` (with `ComputerUseMcpConfig`) is the adapter for a running `computer-use-mcp` server |
+| `CancellationBridge` | Revokes desktop authority before stopping the agent |
+| `ComputerUseEvaluator` | Scores a trajectory and produces a tamper-evident `AdkEvaluationReceipt` |
+
+```rust
+use adk_computer_use::{ComputerUseRuntime, ScopeAuthorizer, build_reference_graph};
+use std::sync::Arc;
+
+fn build(runtime: Arc<dyn ComputerUseRuntime>) -> Result<(), adk_graph::GraphError> {
+    let authorizer =
+        Arc::new(ScopeAuthorizer::new(["computer:plan", "computer:execute:background"]));
+    let graph = build_reference_graph(runtime, authorizer)?;
+    let _ = graph;
+    Ok(())
+}
+```
+
+The crate's examples run with `cargo run -p adk-computer-use --example <name>`:
+
+| Example | Needs |
+|---------|-------|
+| `minimal_graph` | Nothing; an in-process runtime, on any platform |
+| `live_clipboard` | A running `computer-use-mcp` server (macOS, Linux, Windows) |
+| `live_form`, `live_background_finder` | A running `computer-use-mcp` server and macOS tooling; see `examples/macos/README.md` |
+
 ## Response binding
 
 The external runtime is authoritative, but its responses are checked locally before entering
@@ -89,9 +129,8 @@ The graph's `verify` node writes `verified`, `committed`, and a `result.verifica
 explaining anything short of `Verified`.
 
 > **Important:** a committed receipt is an acknowledgement that the action was accepted and
-> performed. It is not evidence that the intended effect occurred. `verify` previously returned
-> `receipt.status == Committed`, which reported a committed-but-ineffective action as
-> completed — from a node labelled "verify".
+> performed. It is not evidence that the intended effect occurred, so a committed receipt alone
+> is never reported as `completed`.
 
 ### What counts as evidence
 
@@ -122,10 +161,5 @@ A lease is refused unless all of these hold:
 | Window boundary | the envelope's `target.window_id` is absent from a non-empty `boundaries.window_ids` |
 
 Empty boundaries mean "not scoped" and authorize any target — absence of a restriction is not a
-restriction to nothing.
-
-> **Important:** the first version of this validator checked `action_budget == 0`, which is the
-> *total* budget, so a lease with `action_budget: 1, actions_used: 1` passed while authorizing
-> nothing. It also never read `expires_at` or `boundaries`, so an expired lease and a lease scoped
-> to a different application were both accepted. An unparseable expiry is rejected rather than
-> ignored: a lease whose validity cannot be established is not valid.
+restriction to nothing. An unparseable expiry is rejected rather than ignored: a lease whose
+validity cannot be established is not valid.

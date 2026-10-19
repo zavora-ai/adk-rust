@@ -1,178 +1,150 @@
 # Benchmarking
 
-The `adk-bench` crate and `cargo adk bench` command provide real-LLM benchmarking for ADK-Rust agents. Unlike synthetic microbenchmarks, `adk-bench` measures actual end-to-end performance with live model calls, isolating framework overhead from provider latency.
+The `adk-bench` crate and the `cargo adk bench` command benchmark ADK-Rust agents against a live Gemini model. Each model call is timed separately, so framework overhead is measured apart from provider latency.
 
 ## What It Measures
 
 | Metric | Description |
 |--------|-------------|
-| Cold start | Time from process launch to first LLM response |
-| Agent loop overhead | Framework cost per tool-call round-trip (excludes LLM wait time) |
-| Throughput | Requests per second under sustained load |
-| Memory | Peak RSS during execution |
-| Token overhead | Extra tokens added by framework instrumentation |
-| CV (Coefficient of Variation) | Stability of measurements across runs |
+| Cold start | Time from launch to the first LLM call |
+| Agent loop overhead | Per-turn framework time: total turn time minus the LLM round trip |
+| Concurrent throughput | Agents per second under Tokio async load (`--concurrency`, `--sweep`) |
+| Memory | RSS sampled on Linux and macOS |
+| Tool invocation latency | Deserialization, validation, and dispatch time |
+| Token overhead | Tokens the framework adds to each request |
+| CV (coefficient of variation) | Stability across runs; a high CV is reported as a warning |
+
+Model calls use `temperature = 0` and a fixed seed (`DeterministicConfig`).
 
 ## Quick Start
 
+`cargo adk bench` reads `GOOGLE_API_KEY` and runs every built-in workload against Gemini:
+
 ```bash
-# Run all benchmarks with default settings
+# Estimate the cost without calling the model
+cargo adk bench --dry-run
+
+# Run all built-in workloads with the defaults
 cargo adk bench
 
-# Run a specific workload
+# Run one workload, by name or by the path of a workload JSON file
 cargo adk bench --workload simple_tool_call
-
-# Dry run (no LLM calls, validates config only)
-cargo adk bench --dry-run
 ```
 
 ## CLI Reference
 
-```bash
-cargo adk bench [OPTIONS]
-
-OPTIONS:
-    --workload <NAME>          Run a specific workload (simple_tool_call,
-                               multi_step_reasoning, parallel_tool_invocation)
-    --iterations <N>           Number of iterations per workload [default: 10]
-    --warmup <N>               Warmup iterations before measurement [default: 2]
-    --provider <NAME>          LLM provider to benchmark [default: gemini]
-    --model <MODEL>            Model ID to use [default: gemini-3.5-flash-lite]
-    --output <FORMAT>          Output format: table, json, csv [default: table]
-    --output-file <PATH>       Write results to file instead of stdout
-
-    # Cost control
-    --dry-run                  Validate configuration without making LLM calls
-    --max-cost-usd <AMOUNT>    Abort if estimated cost exceeds this amount
-    --confirm-cost             Prompt for confirmation before running
-
-    # Regression detection
-    --save-baseline <NAME>     Save results as a named baseline
-    --check-regression <NAME>  Compare against a saved baseline
-    --tolerance <PERCENT>      Regression threshold percentage [default: 10]
-
-    # External comparison
-    --ebp                      Enable External Benchmark Protocol output
-    --harness <PATH>           Path to external framework harness config
-```
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model <MODEL>` | `gemini-3.7-flash` | Gemini model ID |
+| `--runs <N>` | 5 | Measurement iterations per workload |
+| `--warmup <N>` | 3 | Iterations run first and discarded |
+| `--concurrency <N>` | 1 | Agents run concurrently |
+| `--sweep` | off | Measure concurrency levels 1, 2, 4, 8, 16, 32, 64 |
+| `--workload <NAME or PATH>` | all built-in | One workload |
+| `--experimental` | off | Also run the experimental `multi_agent_delegation` workload |
+| `--format <FORMAT>` | `table` | `table`, `json`, or `markdown` |
+| `--output <PATH>` | stdout | Write the formatted results to a file |
+| `--dry-run` | off | Log the estimated cost and exit without calling the model |
+| `--max-cost-usd <AMOUNT>` | none | Fail when the estimated cost exceeds the amount |
+| `--confirm-cost` | off | Required to run when the estimated cost exceeds $1.00 |
+| `--save-baseline` | off | Save the results as the regression baseline |
+| `--check-regression` | off | Compare the results with the saved baseline |
+| `--tolerance <FRACTION>` | `0.10` | Allowed relative degradation (0.10 = 10%) |
+| `--external-config <PATH>` | none | External frameworks to run on the same workload (see below) |
+| `--external-timeout <SECS>` | 300 | Time limit for each external framework run |
 
 ## Cost Control
 
-Benchmarks make real LLM calls. Use these flags to avoid unexpected bills:
+Benchmarks make real LLM calls. The command estimates the cost of the selected workloads, runs, and
+concurrency before it calls the model:
 
 ```bash
-# Preview what would run without spending anything
+# Log the estimate without spending anything
 cargo adk bench --dry-run
 
-# Set a hard cost ceiling
-cargo adk bench --max-cost-usd 5.00
+# Fail when the estimate is above a ceiling
+cargo adk bench --max-cost-usd 0.50
 
-# Require manual confirmation after cost estimate
-cargo adk bench --confirm-cost
+# Proceed with an estimate above $1.00
+cargo adk bench --runs 20 --confirm-cost
 ```
 
-The cost estimator uses token counts from previous runs (or estimates from the workload definition) multiplied by the provider's published per-token pricing.
+Without `--confirm-cost`, an estimate above $1.00 fails the command before any model call.
 
 ## Regression Detection
 
-Track performance across releases:
-
 ```bash
-# Establish a baseline after a release
-cargo adk bench --save-baseline v1.0.0
+# Save a baseline
+cargo adk bench --save-baseline
 
-# On the next change, check for regressions
-cargo adk bench --check-regression v1.0.0 --tolerance 10
-
-# Tighter tolerance for critical paths
-cargo adk bench --workload simple_tool_call --check-regression v1.0.0 --tolerance 5
+# On the next change, compare against it
+cargo adk bench --check-regression --tolerance 0.10
 ```
 
-Exit codes:
-- `0` — no regressions detected
-- `1` — at least one metric regressed beyond tolerance
-- `2` — configuration or runtime error
+The baseline is `.bench-baseline.json` in the current directory. A timing metric regresses when
+`(current - baseline) / baseline` exceeds the tolerance; without a baseline file the check is
+skipped.
 
-Baselines are stored in `.adk-bench/baselines/` as JSON files.
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Success; no regression detected |
+| `1` | Configuration, run, cost-limit, or output error |
+| `2` | At least one metric regressed beyond the tolerance |
 
 ## External Framework Comparison (EBP)
 
-The External Benchmark Protocol (EBP) enables apples-to-apples comparison with other agent frameworks. EBP defines a standard workload format and measurement protocol so results are comparable across implementations.
+The External Benchmark Protocol runs another framework as a subprocess on the same workload and
+compares its metrics with ADK-Rust's. `ExternalRunner` sets `BENCH_START_EPOCH_NS`, passes the
+workload JSON file as the last argument, and parses the framework's JSON metrics from stdout. A
+run past `--external-timeout` fails with `ExternalTimeout`, and the subprocess is killed.
 
 ```bash
-# Output EBP-compatible results
-cargo adk bench --ebp --output json > results.json
-
-# Run against an external harness (e.g., LangGraph, Python SDK)
-cargo adk bench --harness harnesses/langraph.toml
+cargo adk bench --workload simple_tool_call --external-config adk-bench/harnesses/external-frameworks.json
 ```
 
-Harness configuration files define how to invoke external frameworks with the same workloads and measure their results using the same methodology.
-
-## Benchmark Results
-
-Published results comparing ADK-Rust against other frameworks (deterministic config, same model, same workload):
-
-| Metric | ADK-Rust | Gemini Python SDK | LangGraph |
-|--------|----------|-------------------|-----------|
-| **Cold start** | 109 ms | 501 ms | 502 ms |
-| **Loop overhead** | 568 μs | 253 μs | 1228 ms |
-| **simple_tool_call** | 1.2s total | 1.8s total | 2.1s total |
-| **multi_step_reasoning** | 4.1s total | 5.9s total | 7.3s total |
-| **parallel_tool_invocation** | 2.3s total | 3.7s total | 4.8s total |
-
-**Methodology:**
-- Real Gemini 3.5 Flash-Lite calls (not mocked)
-- Deterministic config: `temperature=0`, fixed seed
-- 10 iterations after 2 warmup runs
-- Overhead isolation: total time minus measured LLM latency
-- Same tool definitions and prompts across all frameworks
+The configuration lists each framework's `name`, `command`, `args`, `env`, and `workingDir`.
+`adk-bench/harnesses` contains harnesses for the Gemini Python SDK and LangGraph.
 
 ## Workloads
 
-### simple_tool_call
+| Workload | Exercises |
+|----------|-----------|
+| `simple_tool_call` | One weather query and one tool call — the closest isolation of framework overhead |
+| `multi_step_reasoning` | Sequential tool use where each step depends on the previous: search products, get details, calculate shipping |
+| `parallel_tool_invocation` | Stock price, news, and analyst rating fetched concurrently |
+| `multi_agent_delegation` (`--experimental`) | A coordinator delegating research and writing to specialist agents |
 
-Single user message → one tool call → one response. Measures the minimal round-trip overhead.
-
-### multi_step_reasoning
-
-Multi-turn conversation requiring 3–5 sequential tool calls with reasoning between each. Measures sustained loop performance.
-
-### parallel_tool_invocation
-
-Single user message triggering 3 parallel tool calls. Measures concurrent dispatch overhead.
+The multi-step and parallel workloads include simulated tool latency in their overhead
+measurement.
 
 ## Programmatic Usage
 
 ```rust
-use adk_bench::{BenchmarkSuite, BenchConfig, Workload};
+use adk_bench::{BenchConfig, BenchRunner, OutputFormat, format_result};
 
-let config = BenchConfig::builder()
-    .iterations(10)
-    .warmup(2)
-    .provider("gemini")
-    .model("gemini-3.5-flash-lite")
-    .build()?;
+let config = BenchConfig {
+    model: "gemini-3.5-flash-lite".to_string(),
+    runs: 5,
+    warmup: 3,
+    workload: Some("simple_tool_call".to_string()),
+    ..BenchConfig::default()
+};
 
-let suite = BenchmarkSuite::new(config);
-let results = suite.run_all().await?;
+let runner = BenchRunner::new(config);
+let results = runner.run().await?;
 
 for result in &results {
-    println!("{}: cold_start={}ms overhead={}μs",
-        result.workload,
-        result.cold_start_ms,
-        result.loop_overhead_us,
-    );
+    println!("{}", format_result(result, OutputFormat::Table));
 }
 ```
 
+`BenchConfig::default()` uses `gemini-3.5-flash-lite`, 5 runs, 3 warm-up iterations, and
+concurrency 1.
+
 ## Further Reading
 
-See `adk-bench/README.md` for:
-- Custom workload definitions
-- Harness authoring guide
-- CI integration patterns
-- Historical result tracking
+`adk-bench/README.md` records historical results with the model and settings they were measured
+under, and describes the EBP output format.
 
 ---
 

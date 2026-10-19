@@ -25,16 +25,16 @@ crate name:
 
 Two things about the process backend worth knowing:
 
-- **Programs are resolved before the environment is cleared.** A bare `python3`, `node`,
-  or `rustc` is looked up on the caller's `PATH` and passed to the child as an absolute
-  path. That means the child does not need a `PATH` of its own to start — previously a
-  caller had to put `PATH` in `ExecRequest::env`, which also let the executed code spawn
-  anything else on it.
-- **Compilation runs through the same boundary as execution.** Rust source used to be
-  compiled by a command built outside the shared path, so the compile had no enforcer
-  wrapper, no timeout, and no process group. That matters because compilation is not
+- **How the program is found.** Without an enforcer, a bare `python3`, `node`, or
+  `rustc` is looked up on the caller's `PATH` and passed to the child as an absolute
+  path, so the child needs no `PATH` of its own. Under an enforcer only the wrapper
+  (`sandbox-exec` or `bwrap`) is resolved that way; the program inside it is found
+  through the child's `PATH`, which comes from the policy's or the request's `env`.
+  Set `ProcessConfig::python_path` and `node_path` to absolute paths to avoid the lookup.
+- **Compilation runs through the same boundary as execution.** Compilation is not
   inert: `include_str!` reads files and procedural macros run arbitrary code before the
-  produced binary exists. The compile phase receives a platform-specific toolchain
+  produced binary exists, so the compile runs with the enforcer wrapper, the timeout,
+  and a process group. The compile phase receives a platform-specific toolchain
   allow-list; on Windows this includes the MSVC and Windows SDK paths, discovered
   from the installed toolchain when the caller is not already in a Developer shell.
   Compilation uses the Rust toolchain's `rust-lld` linker so an unrelated `link.exe`
@@ -43,7 +43,7 @@ Two things about the process backend worth knowing:
 ### Environment Precedence
 
 `SandboxPolicy::env` supplies defaults for every execution and `ExecRequest::env`
-overrides them per call. The policy's variables were previously ignored entirely.
+overrides them per call.
 
 ### Input, Output, and Lifetime
 
@@ -70,18 +70,23 @@ OS-level sandbox enforcement restricts child processes at the kernel level. This
 
 ```rust
 use adk_sandbox::{
-    ProcessBackend, ProcessConfig, SandboxBackend,
+    ExecRequest, Language, ProcessBackend, ProcessConfig, SandboxBackend,
     SandboxPolicyBuilder, get_enforcer,
 };
+use std::collections::HashMap;
+use std::time::Duration;
+
+// Policy paths must exist: the enforcer resolves them when it builds the profile.
+std::fs::create_dir_all("/tmp/work")?;
 
 // 1. Define what the sandboxed process can do. Seatbelt adds the macOS system
 //    runtime itself; bubblewrap mounts only what is listed.
 let policy = SandboxPolicyBuilder::new()
-    .allow_read("/usr")           // Read system libraries
+    .allow_read("/usr")            // Read system libraries
     .allow_read_write("/tmp/work") // Write to work directory
-    .allow_process_spawn()         // Python needs to exec
-    // Network is denied by default
-    .env("PATH", "/usr/bin:/usr/local/bin")
+    // Network and process creation are denied by default.
+    // The interpreter is found through this PATH inside the sandbox.
+    .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin")
     .build();
 
 // 2. Get the platform-appropriate enforcer
@@ -95,8 +100,22 @@ let backend = ProcessBackend::with_sandbox(
 );
 
 // 4. Execute code — network is blocked, reads and writes restricted
+let request = ExecRequest {
+    language: Language::Python,
+    code: "print(1 + 1)".to_string(),
+    stdin: None,
+    timeout: Duration::from_secs(30),
+    memory_limit_mb: None,
+    env: HashMap::new(),
+};
 let result = backend.execute(request).await?;
+assert_eq!(result.stdout.trim(), "2");
 ```
+
+> **Note:** On macOS, `/usr/bin/python3` is a shim that loads the active Xcode or Command
+> Line Tools, which the Seatbelt profile does not grant; the call then exits with an
+> `xcrun` error. Put a standalone interpreter first on the policy's `PATH` (Homebrew's
+> `/opt/homebrew/bin` is granted), or `allow_read` the developer directory.
 
 Under an enforcer each execution runs in a fresh scratch directory that holds its source
 file and compiler output. It is the working directory and is granted read-write in
@@ -160,6 +179,17 @@ The `workspace` feature adds a `provision → session → exec → snapshot → 
 
 `LocalUnixClient` is not an isolation boundary; use `DockerClient` for untrusted commands.
 `GitRepo` manifest entries need a `DockerClient` network mode other than `none`.
+
+A `LocalUnixSession` file operation fails with `SandboxError::PathTraversal` when its
+path leaves the workspace: an absolute path, a `..` that escapes, a symlink that resolves
+outside, a dangling or looping symlink, a file named in an `apply_patch` header, or a
+manifest entry. Symlinks that stay inside the workspace are allowed. The check is not a
+lock — a process that can create symlinks in the workspace can race it — and commands run
+with `exec_command` are not confined.
+
+`SandboxError` is `#[non_exhaustive]`, and its workspace variants, such as
+`PathTraversal`, exist only with the `workspace` feature, so a `match` on it outside the
+crate needs a wildcard arm.
 
 ### Example
 

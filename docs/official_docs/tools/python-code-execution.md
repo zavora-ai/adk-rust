@@ -109,9 +109,10 @@ let executor = MontyExecutorBuilder::new()
 
 For the full trait form, implement `HostFunction` (`name`, `description`,
 optional `signature` for the LLM prompt, and async `call` with JSON-converted
-positional and keyword arguments). Registry validation happens at `build_*()`:
-names must be valid Python identifiers, unique, and must not collide with
-Python built-ins.
+positional and keyword arguments). Validation happens at `build_*()` and fails
+with a `MontyBuildError`: function names must be valid Python identifiers,
+unique, not Python built-ins, and not the reserved `input`; mount virtual paths
+must be normalized absolute paths and unique.
 
 Inside a script, host functions are called synchronously — never with
 `await`. A returned `Err` becomes a catchable Python exception carrying the
