@@ -2,7 +2,24 @@
 
 Shared Google Cloud REST plumbing for [ADK-Rust](https://github.com/zavora-ai/adk-rust) Vertex AI backends: Application Default Credentials with cached auth headers, a bounded redirect-disabled HTTP transport, and long-running-operation polling.
 
-Every Vertex integration in the workspace — sessions, memory, example store, artifact storage, deployment — needs the same three pieces. This crate holds the single copy.
+[![Crates.io](https://img.shields.io/crates/v/adk-gcp.svg)](https://crates.io/crates/adk-gcp)
+[![Documentation](https://docs.rs/adk-gcp/badge.svg)](https://docs.rs/adk-gcp)
+[![License](https://img.shields.io/crates/l/adk-gcp.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
+
+Every Vertex integration in the workspace — sessions, memory, artifact storage, RAG, evaluation, code sandboxes, the example store and registries, the Agent Engine server and deployment — needs the same three pieces. This crate holds the single copy.
+
+## Installation
+
+```toml
+[dependencies]
+adk-gcp = "3.0"
+adk-core = "3.0"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde_json = "1"
+```
+
+The crate has no feature flags. Applications usually reach it through the Vertex features of
+other crates, such as `adk-memory`'s `vertex-memory` or `adk-code`'s `vertex-sandbox`.
 
 ## Components
 
@@ -15,7 +32,7 @@ Every Vertex integration in the workspace — sessions, memory, example store, a
 
 ## Error identity
 
-`AdkError` codes are `&'static str`, so each consuming crate declares its code table as a `const` and the shared plumbing stamps every failure with that identity. Errors produced through this crate are indistinguishable from the ones each backend previously built for itself — contract tests keep passing across the migration.
+`AdkError` codes are `&'static str`, so each consuming crate declares its code table as a `const` and the shared plumbing stamps every failure with that identity. Errors produced through this crate carry the consuming backend's component, codes, and provider.
 
 ```rust
 use adk_core::ErrorComponent;
@@ -90,3 +107,7 @@ Defaults mirror the workspace's Vertex backends; every knob is a builder method 
 ## License
 
 Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.

@@ -4,7 +4,7 @@ Deployment manifest, bundling, and control-plane client for ADK-Rust agents.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-deploy.svg)](https://crates.io/crates/adk-deploy)
 [![Documentation](https://docs.rs/adk-deploy/badge.svg)](https://docs.rs/adk-deploy)
-[![License](https://img.shields.io/crates/l/adk-deploy.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-deploy.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 
 ## Overview
 
@@ -19,8 +19,17 @@ Deployment manifest, bundling, and control-plane client for ADK-Rust agents.
 
 ```toml
 [dependencies]
-adk-deploy = "3.0.0"
+adk-deploy = "3.0"
+
+# With the Agent Engine (ReasoningEngine) deployment client:
+adk-deploy = { version = "3.0", features = ["gcp"] }
 ```
+
+| Feature | Description |
+|---------|-------------|
+| `gcp` | `gcp::GcpDeployClient` for Gemini Enterprise Agent Platform ReasoningEngine BYOC deployment; forwarded by `adk-rust` as `gcp-deploy` |
+
+No feature is enabled by default.
 
 ## Manifest Format
 
@@ -77,7 +86,6 @@ required = true
 
 [env]
 LOG_LEVEL = "info"
-OPENAI_API_KEY = { secretRef = "OPENAI_API_KEY" }
 
 [telemetry]
 otlpEndpoint = "https://otel.example.com:4317"
@@ -111,26 +119,33 @@ timezone = "America/New_York"
 ### Loading and Validating a Manifest
 
 ```rust
-use adk_deploy::DeploymentManifest;
+use adk_deploy::{DeployResult, DeploymentManifest};
 use std::path::Path;
 
-let manifest = DeploymentManifest::from_path(Path::new("adk-deploy.toml"))?;
-println!("Agent: {} v{}", manifest.agent.name, manifest.agent.version);
+fn load() -> DeployResult<DeploymentManifest> {
+    // Parses the TOML and runs `DeploymentManifest::validate`
+    let manifest = DeploymentManifest::from_path(Path::new("adk-deploy.toml"))?;
+    println!("Agent: {} v{}", manifest.agent.name, manifest.agent.version);
+    Ok(manifest)
+}
 ```
 
 ### Building a Bundle
 
 ```rust
-use adk_deploy::{BundleBuilder, DeploymentManifest};
+use adk_deploy::{BundleArtifact, BundleBuilder, DeployResult, DeploymentManifest};
 use std::path::Path;
 
-let manifest_path = Path::new("adk-deploy.toml");
-let manifest = DeploymentManifest::from_path(manifest_path)?;
-let builder = BundleBuilder::new(manifest_path, manifest);
+fn bundle() -> DeployResult<BundleArtifact> {
+    let manifest_path = Path::new("adk-deploy.toml");
+    let manifest = DeploymentManifest::from_path(manifest_path)?;
+    let builder = BundleBuilder::new(manifest_path, manifest);
 
-let artifact = builder.build()?;
-println!("Bundle: {}", artifact.bundle_path.display());
-println!("SHA-256: {}", artifact.checksum_sha256);
+    let artifact = builder.build()?;
+    println!("Bundle: {}", artifact.bundle_path.display());
+    println!("SHA-256: {}", artifact.checksum_sha256);
+    Ok(artifact)
+}
 ```
 
 The bundle builder:
@@ -142,59 +157,77 @@ The bundle builder:
 ### Pushing a Deployment
 
 ```rust
-use adk_deploy::{DeployClient, DeployClientConfig, PushDeploymentRequest};
+use adk_deploy::{
+    BundleArtifact, DeployClient, DeployClientConfig, DeployResult, DeploymentManifest,
+    PushDeploymentRequest,
+};
 
-let config = DeployClientConfig::load()?;
-let client = DeployClient::new(config);
+async fn push(manifest: &DeploymentManifest, artifact: &BundleArtifact) -> DeployResult<()> {
+    let config = DeployClientConfig::load()?;
+    let client = DeployClient::new(config);
 
-let response = client.push_deployment(&PushDeploymentRequest {
-    workspace_id: Some("ws-123".into()),
-    environment: "production".into(),
-    manifest: manifest.clone(),
-    bundle_path: artifact.bundle_path.to_string_lossy().into(),
-    checksum_sha256: artifact.checksum_sha256.clone(),
-    binary_path: None,
-}).await?;
+    let response = client
+        .push_deployment(&PushDeploymentRequest {
+            workspace_id: Some("ws-123".into()),
+            environment: "production".into(),
+            manifest: manifest.clone(),
+            bundle_path: artifact.bundle_path.to_string_lossy().into(),
+            checksum_sha256: artifact.checksum_sha256.clone(),
+            binary_path: None,
+        })
+        .await?;
 
-println!("Deployed: {}", response.deployment.id);
+    println!("Deployed: {}", response.deployment.id);
+    Ok(())
+}
 ```
 
 ### Deployment Operations
 
 ```rust
-// Check status
-let status = client.status("production", Some("my-agent")).await?;
+use adk_deploy::{DeployClient, DeployResult};
 
-// View history
-let history = client.history("production", Some("my-agent")).await?;
+async fn operate(client: &DeployClient) -> DeployResult<()> {
+    // Check status
+    let status = client.status("production", Some("my-agent")).await?;
 
-// Rollback
-let rolled_back = client.rollback("deploy-id-123").await?;
+    // View history
+    let history = client.history("production", Some("my-agent")).await?;
 
-// Promote (canary → full)
-let promoted = client.promote("deploy-id-123").await?;
+    // Rollback
+    let rolled_back = client.rollback("deploy-id-123").await?;
 
-// Dashboard overview
-let dashboard = client.dashboard().await?;
+    // Promote (canary → full)
+    let promoted = client.promote("deploy-id-123").await?;
+
+    // Dashboard overview
+    let dashboard = client.dashboard().await?;
+    Ok(())
+}
 ```
 
 ### Secret Management
 
 ```rust
-use adk_deploy::SecretSetRequest;
+use adk_deploy::{DeployClient, DeployResult, SecretSetRequest};
 
-// Set a secret
-client.set_secret(&SecretSetRequest {
-    environment: "production".into(),
-    key: "OPENAI_API_KEY".into(),
-    value: "sk-...".into(),
-}).await?;
+async fn secrets(client: &DeployClient) -> DeployResult<()> {
+    // Set a secret
+    client
+        .set_secret(&SecretSetRequest {
+            environment: "production".into(),
+            key: "OPENAI_API_KEY".into(),
+            value: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+        })
+        .await?;
 
-// List secrets (keys only, values never returned)
-let secrets = client.list_secrets("production").await?;
+    // List secrets (keys only, values never returned)
+    let secrets = client.list_secrets("production").await?;
 
-// Delete a secret
-client.delete_secret("production", "OLD_KEY").await?;
+    // Delete a secret
+    client.delete_secret("production", "OLD_KEY").await?;
+    Ok(())
+}
 ```
 
 ## Manifest Sections
@@ -206,7 +239,7 @@ client.delete_secret("production", "OLD_KEY").await?;
 | `scaling` | Min/max instances, latency/CPU/concurrency targets |
 | `health` | Health check path, interval, timeout, failure threshold |
 | `strategy` | Rolling, blue-green, or canary with traffic percentage |
-| `services` | Service bindings (postgres, redis, sqlite, mongodb, neo4j, pgvector, MCP, checkpoints) |
+| `services` | Service bindings (postgres, redis, sqlite, mongodb, neo4j, firestore, pgvector, MCP, checkpoints) |
 | `secrets` | Secret key declarations with required flag |
 | `env` | Environment variables (plain values or secret refs) |
 | `telemetry` | OTLP endpoint, service name, resource attributes |
@@ -230,6 +263,7 @@ client.delete_secret("production", "OLD_KEY").await?;
 | `sqlite` | SQLite sessions |
 | `mongo-db` | MongoDB sessions |
 | `neo4j` | Neo4j sessions |
+| `firestore` | Firestore sessions |
 | `pgvector` | PostgreSQL + pgvector memory |
 | `redis-memory` | Redis memory |
 | `mongo-memory` | MongoDB memory |
@@ -252,21 +286,28 @@ client.delete_secret("production", "OLD_KEY").await?;
 All operations return `DeployResult<T>` with structured `DeployError` variants:
 
 ```rust
-use adk_deploy::DeployError;
+use adk_deploy::{DeployError, DeployResult, DeploymentManifest};
 
-match result {
-    Err(DeployError::ManifestNotFound { path }) => { /* file missing */ }
-    Err(DeployError::InvalidManifest { message }) => { /* validation failed */ }
-    Err(DeployError::BundleBuild { message }) => { /* cargo build failed */ }
-    Err(DeployError::Client { message }) => { /* HTTP request failed */ }
-    Err(DeployError::Config { message }) => { /* config persistence failed */ }
-    _ => {}
+fn explain(result: DeployResult<DeploymentManifest>) -> String {
+    match result {
+        Ok(manifest) => format!("loaded {}", manifest.agent.name),
+        Err(DeployError::ManifestNotFound { path }) => format!("missing {}", path.display()),
+        Err(DeployError::ManifestParse { message }) => format!("TOML error: {message}"),
+        Err(DeployError::InvalidManifest { message }) => format!("validation failed: {message}"),
+        Err(DeployError::BundleBuild { message }) => format!("cargo build failed: {message}"),
+        Err(DeployError::Client { message }) => format!("control plane error: {message}"),
+        Err(DeployError::Config { message }) => format!("config error: {message}"),
+        Err(DeployError::Io(error)) => format!("I/O error: {error}"),
+        Err(DeployError::Http(error)) => format!("HTTP error: {error}"),
+    }
 }
 ```
 
 ## Client Configuration
 
-The client config is stored at `~/.config/adk-deploy/config.json`:
+The client config is stored at `adk-deploy/config.json` under the platform configuration
+directory (`DeployClientConfig::default_path`): `~/.config/adk-deploy/config.json` on Linux and
+`~/Library/Application Support/adk-deploy/config.json` on macOS.
 
 ```json
 {

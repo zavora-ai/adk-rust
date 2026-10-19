@@ -1,5 +1,13 @@
 //! Deployment manifest, bundling, and control-plane client for ADK-Rust.
 //!
+//! - [`DeploymentManifest`] parses and validates `adk-deploy.toml`.
+//! - [`BundleBuilder`] builds the agent binary and packages it with its assets into a
+//!   `.tar.gz` with a SHA-256 checksum.
+//! - [`DeployClient`] pushes, inspects, rolls back, and promotes deployments on a control
+//!   plane, and manages its secrets.
+//! - `gcp::GcpDeployClient` (feature `gcp`) creates, polls, gets, and deletes Gemini
+//!   Enterprise Agent Platform ReasoningEngines for BYOC containers.
+//!
 //! # Example
 //!
 //! ```no_run
