@@ -32,8 +32,10 @@
 //!     .build()
 //!     .expect("valid configuration");
 //!
-//! // Register with EnhancedPluginManager
-//! // let manager = EnhancedPluginManager::new(vec![Box::new(plugin)]);
+//! // Register it on an agent with `LlmAgentBuilder::enhanced_plugin(Arc::new(plugin))`
+//! // (adk-agent's `enhanced-plugins` feature), or run it in an `EnhancedPluginManager`.
+//! let manager = adk_plugin::EnhancedPluginManager::new(vec![std::sync::Arc::new(plugin)]);
+//! assert_eq!(manager.plugin_count(), 1);
 //! ```
 //!
 //! ## Configuration

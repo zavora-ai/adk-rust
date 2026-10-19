@@ -2,9 +2,21 @@
 
 A Retry & Reflect plugin for ADK-Rust that intercepts tool call failures and injects structured reflection prompts to help the agent self-correct.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-retry-reflect.svg)](https://crates.io/crates/adk-retry-reflect)
+[![Documentation](https://docs.rs/adk-retry-reflect/badge.svg)](https://docs.rs/adk-retry-reflect)
+[![License](https://img.shields.io/crates/l/adk-retry-reflect.svg)](../LICENSE)
+
 ## Overview
 
-Instead of immediately propagating errors, the plugin constructs a reflection prompt containing the error details, original arguments, and guidance text, then returns it as a modified tool result so the agent can retry with corrected arguments on the next turn.
+`RetryReflectPlugin` is an `adk_plugin::EnhancedPlugin`. In its `after_tool_call` hook it turns a failed tool result into a reflection prompt containing the error, the original arguments, and guidance text, so the agent can retry with corrected arguments on the next turn.
+
+## Installation
+
+```toml
+[dependencies]
+adk-retry-reflect = "3.0.0"
+adk-agent = { version = "3.0.0", features = ["enhanced-plugins"] }
+```
 
 ## Features
 
@@ -19,21 +31,31 @@ Instead of immediately propagating errors, the plugin constructs a reflection pr
 ## Quick Start
 
 ```rust
+use std::sync::Arc;
 use std::time::Duration;
+
+use adk_agent::{LlmAgent, LlmAgentBuilder};
+use adk_core::{Llm, Tool};
 use adk_retry_reflect::RetryReflectPluginBuilder;
-use adk_plugin::EnhancedPluginManager;
 
-// Create a plugin with exponential backoff
-let plugin = RetryReflectPluginBuilder::new()
-    .max_retries(3)
-    .backoff_exponential(Duration::from_millis(100))
-    .max_backoff(Duration::from_secs(10))
-    .build()
-    .expect("valid configuration");
+fn agent(model: Arc<dyn Llm>, tool: Arc<dyn Tool>) -> Result<LlmAgent, Box<dyn std::error::Error>> {
+    // A plugin with exponential backoff
+    let plugin = RetryReflectPluginBuilder::new()
+        .max_retries(3)
+        .backoff_exponential(Duration::from_millis(100))
+        .max_backoff(Duration::from_secs(10))
+        .build()?;
 
-// Register with EnhancedPluginManager
-let manager = EnhancedPluginManager::new(vec![Box::new(plugin)]);
+    // Register it on an agent (adk-agent's `enhanced-plugins` feature)
+    Ok(LlmAgentBuilder::new("assistant")
+        .model(model)
+        .tool(tool)
+        .enhanced_plugin(Arc::new(plugin))
+        .build()?)
+}
 ```
+
+`adk_plugin::EnhancedPluginManager::new(vec![Arc::new(plugin)])` runs it outside an agent.
 
 ## Configuration
 
@@ -88,11 +110,26 @@ Two errors pass through unchanged, with no retry suggested: an authorization or 
 The plugin emits structured tracing events:
 
 - `retry_reflect.retry` (info) — When a retry is initiated
-- `retry_reflect.exhausted` (warn) — When retry limit is exceeded
+- `retry_reflect.exhausted` (warn) — When a tool's retry limit is exceeded
+- `retry_reflect.global_limit_exhausted` (warn) — When the invocation's global limit is exceeded
 - `retry_reflect.circuit_broken` (warn) — When global threshold is exceeded
 - `retry_reflect.skipped_authorization_denial` (info) — When a refusal passes through
 - `retry_reflect.skipped_non_idempotent_timeout` (warn) — When a non-idempotent timeout passes through
 
+## Changes in 3.0
+
+| Change | Migration |
+|--------|-----------|
+| `RetryTracker::increment`, `get`, and `total` take the invocation ID and tool name; `reset_tool` and `tracked_invocations` are new; at most 1,024 invocations are tracked | Pass the invocation ID |
+| `GlobalRetryTracker::record_success` clears a tool's failures | — |
+| Authorization and approval refusals, and timeouts of a `NonIdempotent` tool, pass through unchanged | — |
+
+See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
+
 ## License
 
 Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.
