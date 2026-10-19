@@ -275,13 +275,16 @@ impl Default for SkillToolsetConfig {
 /// # Example
 ///
 /// ```rust,ignore
-/// use adk_agent::LlmAgent;
+/// use adk_agent::LlmAgentBuilder;
 /// use adk_skill::{SkillToolset, SkillToolsetConfig, load_skill_index};
 /// use std::sync::Arc;
 ///
 /// let index = Arc::new(load_skill_index(".")?);
 /// let skills = SkillToolset::new(index, Arc::new(tool_registry), SkillToolsetConfig::default());
-/// let agent = LlmAgent::builder().toolset(Arc::new(skills)).build()?;
+/// let agent = LlmAgentBuilder::new("assistant")
+///     .model(model)
+///     .toolset(Arc::new(skills))
+///     .build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone)]
@@ -396,7 +399,7 @@ impl SkillToolset {
     /// use std::sync::Arc;
     ///
     /// let toolset = SkillToolset::new(index, tool_registry, config)
-    ///     .with_registry_client(Arc::new(SkillRegistryClient::new(registry_config)?));
+    ///     .with_registry_client(Arc::new(SkillRegistryClient::new_with_adc(registry_config)?));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[cfg(feature = "vertex-skill-registry")]

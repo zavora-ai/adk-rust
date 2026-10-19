@@ -79,9 +79,10 @@
 //! - **Model**: `generate_content_config` plus `temperature`/`top_p`/`top_k`/
 //!   `max_output_tokens` shorthands.
 //! - **Instructions** (assembled per invocation): `instruction` and
-//!   `instruction_provider`, `global_instruction` (+ provider), with
-//!   `{state.key}` template injection; the selected skill block, when a skills
-//!   index is configured (`skills` feature).
+//!   `instruction_provider`, `global_instruction` (+ provider), with session
+//!   state placeholders (`{key}`, `{key?}`, `{app:key}`, `{artifact.name}`) in
+//!   the static instructions; the selected skill block, when a skills index is
+//!   configured (`skills` feature).
 //! - **History**: `include_contents` controls how much session history seeds
 //!   the transcript.
 //! - **Tools**: static tools plus per-invocation `toolset`s; `tool_timeout`,

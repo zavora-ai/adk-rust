@@ -63,7 +63,8 @@ pub enum Model {
     /// Gemini 3.1 Pro preview — strongest reasoning.
     #[serde(rename = "models/gemini-3.1-pro-preview")]
     Gemini31ProPreview,
-    /// Gemini 3.1 Flash Lite — GA, most cost-efficient for high-volume agentic tasks.
+    /// Gemini 3.1 Flash Lite (deprecated, shuts down 2027-05-07). Use
+    /// [`Model::gemini_3_5_flash_lite`] instead.
     #[serde(rename = "models/gemini-3.1-flash-lite")]
     Gemini31FlashLite,
     /// Gemini 3.1 Flash Image (Nano Banana 2) — GA native image generation.
@@ -82,7 +83,8 @@ pub enum Model {
     #[deprecated(note = "Shut down June 25, 2026. Use Model::Gemini3ProImage instead.")]
     #[serde(rename = "models/gemini-3-pro-image-preview")]
     Gemini3ProImagePreview,
-    /// Gemini 3 Flash preview — good balance of speed and capability.
+    /// Gemini 3 Flash preview (deprecated). Use [`Model::gemini_3_6_flash`] or the default
+    /// [`Model::gemini_3_7_flash`] instead.
     #[serde(rename = "models/gemini-3-flash-preview")]
     Gemini3FlashPreview,
 
@@ -1581,13 +1583,13 @@ impl Gemini {
     /// Get metadata for a specific model by name.
     ///
     /// The name can be provided with or without the `models/` prefix
-    /// (e.g. both `"gemini-2.5-flash"` and `"models/gemini-2.5-flash"` work).
+    /// (e.g. both `"gemini-3.7-flash"` and `"models/gemini-3.7-flash"` work).
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let gemini = Gemini::new("YOUR_API_KEY")?;
-    /// let info = gemini.get_model("gemini-2.5-flash").await?;
+    /// let info = gemini.get_model("gemini-3.7-flash").await?;
     /// println!("Input limit: {} tokens", info.input_token_limit);
     /// println!("Output limit: {} tokens", info.output_token_limit);
     /// ```

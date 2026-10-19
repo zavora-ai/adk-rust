@@ -27,7 +27,7 @@
 //!
 //!     let model = GeminiRealtimeModel::new(
 //!         backend,
-//!         "models/gemini-live-2.5-flash-native-audio",
+//!         "models/gemini-3.1-flash-live-preview",
 //!     );
 //!
 //!     let config = RealtimeConfig::default()

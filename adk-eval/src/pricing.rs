@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 /// costs from token counts extracted during evaluation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelPricing {
-    /// Model identifier (e.g., "gemini-2.5-flash", "gpt-4o")
+    /// Model identifier (e.g., "gemini-3.7-flash", "gpt-5.6-terra")
     pub model_name: String,
     /// Cost per 1,000 input tokens in USD
     pub input_cost_per_1k: f64,

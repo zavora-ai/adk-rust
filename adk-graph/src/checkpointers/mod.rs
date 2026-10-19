@@ -2,7 +2,7 @@
 //!
 //! Each backend sits behind the feature of the same name and passes the
 //! conformance suite (the `conformance` feature). They store the whole
-//! [`Checkpoint`](crate::state::Checkpoint) as
+//! [`Checkpoint`] as
 //! JSON text next to the columns or keys they query, so a loaded checkpoint equals
 //! the saved one and new checkpoint fields need no schema change.
 //!

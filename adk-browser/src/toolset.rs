@@ -41,7 +41,7 @@ impl SessionResolver {
 ///
 /// let browser = Arc::new(BrowserSession::new(BrowserConfig::default()));
 /// let toolset = BrowserToolset::with_profile(browser, BrowserProfile::FormFilling);
-/// let tools = toolset.all_tools(); // 19 tools instead of 45
+/// let tools = toolset.all_tools(); // 19 tools instead of 44
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrowserProfile {
@@ -136,7 +136,7 @@ impl BrowserToolset {
     /// use adk_browser::{BrowserToolset, BrowserSessionPool, BrowserConfig};
     /// use std::sync::Arc;
     ///
-    /// let pool = Arc::new(BrowserSessionPool::new(BrowserConfig::default()));
+    /// let pool = Arc::new(BrowserSessionPool::new(BrowserConfig::default(), 10));
     /// let toolset = BrowserToolset::with_pool(pool);
     /// ```
     pub fn with_pool(pool: Arc<BrowserSessionPool>) -> Self {
@@ -154,7 +154,7 @@ impl BrowserToolset {
     /// use adk_browser::{BrowserToolset, BrowserProfile, BrowserSessionPool, BrowserConfig};
     /// use std::sync::Arc;
     ///
-    /// let pool = Arc::new(BrowserSessionPool::new(BrowserConfig::default()));
+    /// let pool = Arc::new(BrowserSessionPool::new(BrowserConfig::default(), 10));
     /// let toolset = BrowserToolset::with_pool_and_profile(pool, BrowserProfile::Minimal);
     /// ```
     pub fn with_pool_and_profile(pool: Arc<BrowserSessionPool>, profile: BrowserProfile) -> Self {

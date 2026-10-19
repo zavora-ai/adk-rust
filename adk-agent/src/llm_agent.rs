@@ -287,7 +287,7 @@ fn confirmation_event(
 /// executes tool calls from the response, and iterates until the model produces
 /// a final text response or the iteration limit is reached.
 ///
-/// Use [`LlmAgentBuilder`] (via `LlmAgent::builder()`) to construct instances.
+/// Use [`LlmAgentBuilder::new`] to construct instances.
 pub struct LlmAgent {
     name: String,
     description: String,

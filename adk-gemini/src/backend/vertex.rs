@@ -138,8 +138,9 @@ impl VertexBackend {
         Ok(())
     }
 
-    /// Shared non-streaming generate flow: gRPC first with a REST fallback on
-    /// transport errors, optionally declaring a Vertex RAG store.
+    /// Shared non-streaming generate flow over gRPC, optionally declaring a Vertex RAG
+    /// store. A transport failure is returned, never retried over REST: it can follow
+    /// model admission.
     async fn generate_content_impl(
         &self,
         request: GenerateContentRequest,

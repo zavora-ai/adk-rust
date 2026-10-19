@@ -165,7 +165,7 @@ pub enum FeeUnit {
 /// let fee = BuiltinToolFee::per_use(PriceVendor::Google, "google_search", 0.014)
 ///     .for_models(["gemini-3*"]);
 /// assert!(fee.applies_to("gemini-3.7-flash"));
-/// assert!(!fee.applies_to("gemini-2.5-flash"));
+/// assert!(!fee.applies_to("gemma-4-31b-it"));
 /// assert!((fee.cost_usd(3) - 0.042).abs() < 1e-12);
 /// ```
 #[derive(Debug, Clone, PartialEq)]

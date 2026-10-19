@@ -1737,7 +1737,7 @@ impl CodeActAgent {
     }
 
     /// Resolve the global instruction for this invocation (dynamic provider or
-    /// static `{state.key}` template), or `None` when unset/empty.
+    /// static `{key}` template), or `None` when unset/empty.
     async fn resolve_global_instruction(
         &self,
         ctx: &Arc<dyn InvocationContext>,
@@ -1985,7 +1985,7 @@ impl Agent for CodeActAgent {
         let resolved_tools = self.resolve_tools(&ctx).await?;
 
         // Resolve instructions per-invocation (providers are async, statics get
-        // `{state.key}` template injection), then assemble the full prompt.
+        // `{key}` template injection), then assemble the full prompt.
         let global = self.resolve_global_instruction(&ctx).await?;
         let instruction = self.resolve_instruction(&ctx).await?;
         let transfer_section =
@@ -2619,8 +2619,12 @@ impl CodeActAgentBuilder {
         self
     }
 
-    /// Set the agent instruction, placed first in the system prompt. Supports
-    /// `{state.key}` template injection from session state.
+    /// Set the agent instruction, placed first in the system prompt.
+    ///
+    /// `{key}` is replaced with the session state value under `key` (an error when it is
+    /// missing), `{key?}` with the value or nothing, `{app:key}`, `{user:key}`, and
+    /// `{temp:key}` with prefixed state, and `{artifact.name}` with the artifact's text. See
+    /// [`adk_core::inject_session_state`].
     pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
         self.instruction = Some(instruction.into());
         self
@@ -2633,8 +2637,8 @@ impl CodeActAgentBuilder {
         self
     }
 
-    /// Set a global instruction placed before the agent instruction. Supports
-    /// `{state.key}` template injection.
+    /// Set a global instruction placed before the agent instruction. Supports the same
+    /// `{key}` placeholders as [`instruction`](Self::instruction).
     pub fn global_instruction(mut self, instruction: impl Into<String>) -> Self {
         self.global_instruction = Some(instruction.into());
         self
