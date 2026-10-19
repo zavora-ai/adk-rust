@@ -99,3 +99,7 @@ adk-tool = { path = "../adk-tool" }
 adk-agent = { path = "../adk-agent" }
 # For exercising the `#[entrypoint]`/`#[task]` expansion against this crate.
 adk-rust-macros = { path = "../adk-rust-macros" }
+
+# Document every feature-gated API on docs.rs.
+[package.metadata.docs.rs]
+all-features = true

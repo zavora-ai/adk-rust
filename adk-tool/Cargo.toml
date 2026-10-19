@@ -126,3 +126,7 @@ required-features = ["example-store"]
 [[test]]
 name = "agent_registry_contract"
 required-features = ["vertex-agent-registry"]
+
+# Document every feature-gated API on docs.rs.
+[package.metadata.docs.rs]
+all-features = true

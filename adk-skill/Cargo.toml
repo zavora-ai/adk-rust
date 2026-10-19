@@ -58,3 +58,7 @@ required-features = ["vertex-skill-registry"]
 [[test]]
 name = "skill_registry_load"
 required-features = ["vertex-skill-registry"]
+
+# Document every feature-gated API on docs.rs.
+[package.metadata.docs.rs]
+all-features = true

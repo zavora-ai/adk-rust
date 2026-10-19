@@ -9,6 +9,8 @@ description = "Shared Google Cloud REST plumbing for Rust Agent Development Kit 
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-gcp"
 keywords = ["ai", "agent", "adk", "gcp", "vertex-ai"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
 
 [dependencies]
 adk-core.workspace = true

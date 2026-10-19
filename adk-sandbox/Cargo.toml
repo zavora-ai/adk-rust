@@ -66,3 +66,7 @@ sandbox-native = ["sandbox-macos", "sandbox-linux", "sandbox-windows"]
 [dev-dependencies]
 proptest = "1.4"
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
+
+# Document every feature-gated API on docs.rs.
+[package.metadata.docs.rs]
+all-features = true

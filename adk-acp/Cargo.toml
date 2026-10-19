@@ -51,3 +51,7 @@ adk-runner = { path = "../adk-runner" }
 adk-agent = { path = "../adk-agent" }
 # Server side of rmcp, used only to serve in-process MCP catalogs in tests.
 rmcp = { version = "3.1", features = ["client", "server"] }
+
+# Document every feature-gated API on docs.rs.
+[package.metadata.docs.rs]
+all-features = true

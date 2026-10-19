@@ -68,3 +68,7 @@ proptest = "1.5"
 # is gated on it. Without this the crate only compiles as part of a workspace
 # build that happens to unify the feature in from another member.
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util"] }
+
+# Document every feature-gated API on docs.rs.
+[package.metadata.docs.rs]
+all-features = true

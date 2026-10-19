@@ -42,3 +42,7 @@ gcp = ["adk-core", "adk-gcp", "google-cloud-auth"]
 tempfile = "3"
 axum = "0.8"
 tokio = { workspace = true, features = ["rt", "macros", "net"] }
+
+# Document every feature-gated API on docs.rs.
+[package.metadata.docs.rs]
+all-features = true
