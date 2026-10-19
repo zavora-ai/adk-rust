@@ -53,6 +53,11 @@ impl Toolset for FilteredToolset {
         let all = self.inner.tools(ctx).await?;
         Ok(all.into_iter().filter(|t| (self.predicate)(t.as_ref())).collect())
     }
+
+    /// Closes the inner toolset.
+    async fn close(&self) {
+        self.inner.close().await;
+    }
 }
 
 /// A toolset that merges tools from multiple inner toolsets into one.
@@ -119,6 +124,11 @@ impl Toolset for MergedToolset {
 
         Ok(merged)
     }
+
+    /// Closes every inner toolset, concurrently, so each one's close timeout runs at once.
+    async fn close(&self) {
+        futures::future::join_all(self.inner.iter().map(|toolset| toolset.close())).await;
+    }
 }
 
 /// A toolset wrapper that prefixes all tool names from an inner toolset.
@@ -162,6 +172,11 @@ impl Toolset for PrefixedToolset {
             .into_iter()
             .map(|t| -> Arc<dyn Tool> { Arc::new(PrefixedTool::new(t, &self.prefix)) })
             .collect())
+    }
+
+    /// Closes the inner toolset.
+    async fn close(&self) {
+        self.inner.close().await;
     }
 }
 

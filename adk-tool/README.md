@@ -199,7 +199,7 @@ manager.enable_server("github").await?;
 manager.save_json_file("mcp.json").await?;
 manager.remove_server("github").await?;
 
-// Graceful shutdown
+// Graceful shutdown: Runner::close leaves a shared manager's servers running
 manager.shutdown().await?;
 ```
 
@@ -212,10 +212,12 @@ turn that field into authorization or human approval policy.
 Connect to local MCP servers running as child processes:
 
 ```rust
+use adk_core::Toolset;
 use adk_tool::{
     McpToolset,
     mcp::rmcp::{ServiceExt, transport::TokioChildProcess},
 };
+use std::sync::Arc;
 use tokio::process::Command;
 
 // Connect to a local MCP server
@@ -226,17 +228,18 @@ let cmd = Command::new("/opt/company/bin/workspace-mcp")
 
 let client = ().serve(TokioChildProcess::new(cmd)?).await?;
 
-let toolset = McpToolset::new(client)
-    .with_name("filesystem-tools")
-    .with_filter(|name| matches!(name, "read_file" | "write_file"));
+let toolset = Arc::new(
+    McpToolset::new(client)
+        .with_name("filesystem-tools")
+        .with_filter(|name| matches!(name, "read_file" | "write_file")),
+);
 
-// Get cancellation token for graceful shutdown
-let cancel_token = toolset.cancellation_token().await;
+// ... use the toolset with an agent ...
 
-// ... use toolset with agent ...
-
-// Cleanup before exit
-cancel_token.cancel();
+// Ends the MCP session and waits for the server process to exit; `Runner::close`
+// does the same for every toolset of the runner's agents. A closed toolset fails
+// later requests with `tool.mcp.closed` and does not reconnect.
+toolset.close().await;
 ```
 
 ### MCP Schema Size Limits

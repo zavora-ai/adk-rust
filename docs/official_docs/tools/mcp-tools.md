@@ -95,13 +95,12 @@ let toolset = McpToolset::new(client)
 
 let agent = LlmAgentBuilder::new("support")
     .model(model)
-    .toolset(Arc::new(toolset.clone()))
+    .toolset(Arc::new(toolset))
     .build()?;
 
-// Keep the token when the application owns the process lifecycle.
-let shutdown = toolset.cancellation_token().await;
-// ... run the agent ...
-shutdown.cancel();
+// ... run the agent through `runner` ...
+// Ends the MCP session and waits for the server process to exit.
+runner.close().await;
 ```
 
 `McpToolset` keeps the server's input and output schemas intact. Each model
@@ -321,7 +320,8 @@ async fn shutdown(toolset: &McpToolset) {
 ```
 
 `McpServerManager` runs this cleanup for each server it stops, within the
-configured grace period and before it cancels the session.
+configured grace period and before it cancels the session. `Toolset::close`, which
+`Runner::close` calls, runs it within half of the toolset's close timeout.
 
 ## Capability map
 

@@ -79,7 +79,7 @@ pub struct McpServerManager {
     /// Interval between health check cycles. Default: 30 seconds.
     pub(crate) health_check_interval: Duration,
 
-    /// Grace period to wait for a cancelled MCP session before dropping its transport. Default: 5 seconds.
+    /// Grace period to wait for a cancelled MCP session and its child process before dropping its transport. Default: 5 seconds.
     pub(crate) grace_period: Duration,
 
     /// Cancellation token used to stop the health monitoring background task.
@@ -536,8 +536,9 @@ impl McpServerManager {
     ///
     /// Cancels the server's pending MCP tasks (see
     /// [`McpToolset::cancel_pending_tasks`]) and then its MCP session, both within
-    /// the grace period, drops the `McpToolset` connection, and sets the status
-    /// to `Stopped`.
+    /// the grace period, waits within it for the child process to exit, drops the
+    /// `McpToolset` connection, and sets the status to `Stopped`. Tools the server's
+    /// toolset produced fail from then on, and a restart serves new ones.
     ///
     /// If the server is not running, this is a no-op and returns `Ok(())`.
     ///
@@ -587,56 +588,12 @@ impl McpServerManager {
             return;
         }
 
-        // Cancel remote tasks, then the MCP session, and drop the toolset
+        // Cancel remote tasks, then the MCP session, and wait for the child to exit
         if let Some(ref toolset) = entry.toolset {
-            // Task cleanup and session close share one grace period.
-            let deadline = tokio::time::Instant::now() + grace_period;
-            match tokio::time::timeout_at(deadline, toolset.cancel_pending_tasks()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => tracing::warn!(
-                    server.id = id,
-                    error = %error,
-                    "MCP tasks did not confirm cancellation before shutdown"
-                ),
-                Err(_) => tracing::warn!(
-                    server.id = id,
-                    shutdown.grace_ms = grace_period.as_millis(),
-                    "MCP task cancellation did not finish within the grace period"
-                ),
-            }
-            // A call blocked on the server holds the connection lock, so even
-            // reaching the session's token is bounded by the grace period.
-            let closed = match tokio::time::timeout_at(deadline, toolset.cancellation_token()).await
-            {
-                Ok(cancel_token) => {
-                    cancel_token.cancel();
-                    tokio::time::timeout_at(deadline, async {
-                        while !toolset.is_closed().await {
-                            tokio::time::sleep(Duration::from_millis(10)).await;
-                        }
-                    })
-                    .await
-                    .is_ok()
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        server.id = id,
-                        shutdown.grace_ms = grace_period.as_millis(),
-                        "MCP connection lock was still held at the end of the grace period"
-                    );
-                    false
-                }
-            };
-            if !closed {
-                tracing::warn!(
-                    server.id = id,
-                    shutdown.grace_ms = grace_period.as_millis(),
-                    "MCP session did not close within the grace period; dropping its transport"
-                );
-            }
+            toolset.close_within(grace_period).await;
         }
 
-        // Drop the toolset — this cleans up the transport and child process
+        // A transport still closing after the grace period ends its child when dropped
         entry.toolset = None;
         entry.child = None;
 

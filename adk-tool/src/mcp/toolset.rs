@@ -16,7 +16,10 @@ use super::reconnect::{
 use super::schema_limits::McpSchemaLimits;
 use super::task::{McpTaskConfig, TaskError};
 use super::{ConnectionFactory, RefreshConfig, should_refresh_connection};
-use adk_core::{AdkError, ReadonlyContext, Result, Tool, ToolContext, ToolEffect, Toolset};
+use adk_core::{
+    AdkError, ErrorCategory, ErrorComponent, ReadonlyContext, Result, Tool, ToolContext,
+    ToolEffect, Toolset,
+};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt;
@@ -36,6 +39,7 @@ use rmcp::{
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
@@ -49,6 +53,29 @@ type Connection<S> = Arc<RunningService<RoleClient, S>>;
 
 /// How long a `tools/list` result is reused before discovery asks the server again.
 const DEFAULT_TOOL_LIST_CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// How long [`Toolset::close`] waits for the connection to finish closing. rmcp kills a
+/// stdio server that has not exited 3 seconds after its input closed, within this bound.
+const DEFAULT_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How often `close` checks whether the connection's service loop has ended.
+const CLOSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// The error code of a request made through a toolset after [`Toolset::close`].
+const CLOSED_CODE: &str = "tool.mcp.closed";
+
+/// The error for a request made through toolset `toolset` after it was closed.
+fn closed_error(toolset: &str) -> AdkError {
+    AdkError::new(
+        ErrorComponent::Tool,
+        ErrorCategory::Cancelled,
+        CLOSED_CODE,
+        format!(
+            "MCP toolset '{toolset}' is closed, so it sends nothing to its server; build a new \
+             McpToolset to connect again"
+        ),
+    )
+}
 
 /// The connection shared by a toolset, its clones, and every tool it produced.
 ///
@@ -64,6 +91,8 @@ where
     /// Held while a replacement connects, so concurrent failures replace a
     /// dead connection once instead of once per caller.
     refresh: Mutex<()>,
+    /// Set by `close`; no request is sent and no connection is made afterwards.
+    closed: AtomicBool,
     /// Run scopes that sampling requests count against, shared with every
     /// connection's [`AdkClientHandler`](super::AdkClientHandler).
     #[cfg(feature = "mcp-sampling")]
@@ -82,6 +111,7 @@ where
         Self {
             current: RwLock::new((Arc::new(client), 0)),
             refresh: Mutex::new(()),
+            closed: AtomicBool::new(false),
             #[cfg(feature = "mcp-sampling")]
             sampling_scopes,
         }
@@ -89,6 +119,14 @@ where
 
     async fn connection(&self) -> Connection<S> {
         Arc::clone(&self.current.read().await.0)
+    }
+
+    /// Returns the current connection, or the closed error once `toolset` was closed.
+    async fn open_connection(&self, toolset: &str) -> Result<Connection<S>> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(closed_error(toolset));
+        }
+        Ok(self.connection().await)
     }
 
     /// Returns the current connection with its generation, which changes on every refresh.
@@ -101,18 +139,22 @@ where
     /// has already closed and a factory is configured.
     ///
     /// Nothing was sent on a closed connection, so replacing it here never turns the
-    /// caller's next request into a replay.
+    /// caller's next request into a replay. Fails once `toolset` was closed.
     async fn live_connection(
         &self,
+        toolset: &str,
         factory: Option<&DynConnectionFactory<S>>,
         subscriptions: &RwLock<BTreeSet<String>>,
     ) -> Result<(Connection<S>, u64)> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(closed_error(toolset));
+        }
         let (connection, generation) = self.connection_with_generation().await;
         if factory.is_none() || !is_connection_closed(&connection) {
             return Ok((connection, generation));
         }
         debug!("MCP connection closed; reconnecting before the next request");
-        self.refresh(&connection, factory, subscriptions).await?;
+        self.refresh(toolset, &connection, factory, subscriptions).await?;
         Ok(self.connection_with_generation().await)
     }
 
@@ -121,9 +163,11 @@ where
     /// Returns `Ok(false)` when no factory is configured. When another caller
     /// already replaced `failed`, this returns `Ok(true)` without reconnecting,
     /// and the caller retries on the connection that caller installed. The old
-    /// connection closes once the last in-flight request on it finishes.
+    /// connection closes once the last in-flight request on it finishes. Fails,
+    /// without installing a connection, once `toolset` was closed.
     async fn refresh(
         &self,
+        toolset: &str,
         failed: &Connection<S>,
         factory: Option<&DynConnectionFactory<S>>,
         subscriptions: &RwLock<BTreeSet<String>>,
@@ -132,6 +176,9 @@ where
             return Ok(false);
         };
         let _refreshing = self.refresh.lock().await;
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(closed_error(toolset));
+        }
         if !Arc::ptr_eq(&self.current.read().await.0, failed) {
             return Ok(true);
         }
@@ -147,6 +194,12 @@ where
         }
 
         let mut current = self.current.write().await;
+        // `close` sets the flag before it takes this lock to read the connection, so a
+        // connection made during a close is either refused here or cancelled by it.
+        // Dropping a refused connection cancels it.
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(closed_error(toolset));
+        }
         current.0 = Arc::new(new_client);
         current.1 += 1;
         Ok(true)
@@ -530,6 +583,8 @@ where
     schema_limits: McpSchemaLimits,
     /// Bounds on each catalog listing.
     discovery_limits: McpDiscoveryLimits,
+    /// How long [`Toolset::close`] waits for the connection to finish closing.
+    close_timeout: Duration,
 }
 
 impl<S> Clone for McpToolset<S>
@@ -552,6 +607,7 @@ where
             mrtr_handler: self.mrtr_handler.clone(),
             schema_limits: self.schema_limits,
             discovery_limits: self.discovery_limits,
+            close_timeout: self.close_timeout,
         }
     }
 }
@@ -603,6 +659,7 @@ where
             mrtr_handler,
             schema_limits: McpSchemaLimits::default(),
             discovery_limits: McpDiscoveryLimits::default(),
+            close_timeout: DEFAULT_CLOSE_TIMEOUT,
         }
     }
 
@@ -751,6 +808,29 @@ where
         self
     }
 
+    /// Set how long [`Toolset::close`] waits for the connection to finish closing.
+    /// The default is 5 seconds.
+    ///
+    /// Remote tasks the toolset started get at most half of it to confirm their
+    /// cancellation; the session gets the rest. A connection still closing when the
+    /// timeout elapses keeps closing in the background: rmcp kills a stdio server
+    /// that is still running 3 seconds after its input closed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_tool::mcp::McpToolset;
+    /// use std::time::Duration;
+    ///
+    /// fn close_fast(toolset: McpToolset) -> McpToolset {
+    ///     toolset.with_close_timeout(Duration::from_secs(1))
+    /// }
+    /// ```
+    pub fn with_close_timeout(mut self, timeout: Duration) -> Self {
+        self.close_timeout = timeout;
+        self
+    }
+
     /// Drop the cached `tools/list` result, so the next [`Toolset::tools`] call
     /// asks the server again.
     ///
@@ -861,7 +941,9 @@ where
     /// Get a cancellation token that can be used to shutdown the MCP server.
     ///
     /// Call `cancel()` on the returned token to cleanly shutdown the MCP server.
-    /// This should be called before exiting to avoid EPIPE errors.
+    /// This should be called before exiting to avoid EPIPE errors. Cancelling does
+    /// not wait for the server to exit; [`Toolset::close`] does, and also stops the
+    /// toolset from reconnecting.
     ///
     /// # Example
     ///
@@ -881,10 +963,11 @@ where
     /// Check whether the underlying MCP service connection has been closed or cancelled.
     ///
     /// Returns `true` once the transport has closed, as it does when a stdio server
-    /// process exits, or the connection's cancellation token has fired. This is
-    /// useful for health monitoring — a closed connection indicates the server
-    /// process has crashed or the transport has been lost. With a connection
-    /// factory, the next request replaces a closed connection before sending.
+    /// process exits, the connection's cancellation token has fired, or the toolset
+    /// was closed with [`Toolset::close`]. This is useful for health monitoring — a
+    /// closed connection indicates the server process has crashed or the transport
+    /// has been lost. With a connection factory, the next request replaces a closed
+    /// connection before sending, unless the toolset was closed.
     ///
     /// # Example
     ///
@@ -894,7 +977,55 @@ where
     /// }
     /// ```
     pub async fn is_closed(&self) -> bool {
-        is_connection_closed(&*self.client.connection().await)
+        self.client.closed.load(Ordering::SeqCst)
+            || is_connection_closed(&*self.client.connection().await)
+    }
+
+    /// Closes the toolset, waiting at most `timeout` for its connection to finish closing.
+    ///
+    /// Marks the toolset closed first, so no new request starts and no connection
+    /// factory reconnects, then cancels the remote tasks it started (within half of
+    /// `timeout`) and the rmcp service. The service loop closes the transport before it
+    /// ends: a stdio server's input is closed and the process waited for, or killed after
+    /// 3 seconds; a Streamable HTTP session is ended with `DELETE`. A second call only
+    /// waits for that to finish.
+    pub(crate) async fn close_within(&self, timeout: Duration) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        if !self.client.closed.swap(true, Ordering::SeqCst) {
+            match tokio::time::timeout(timeout / 2, self.cancel_pending_tasks()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => warn!(
+                    toolset.name = %self.name,
+                    error = %error,
+                    "MCP tasks did not confirm cancellation before the toolset closed"
+                ),
+                Err(_) => warn!(
+                    toolset.name = %self.name,
+                    close.timeout_ms = timeout.as_millis(),
+                    "MCP task cancellation did not finish within half of the close timeout"
+                ),
+            }
+        }
+        // Read under the write lock, which a reconnect holds while it installs a
+        // connection, so a connection made during this close is the one cancelled here.
+        let connection = Arc::clone(&self.client.current.write().await.0);
+        connection.cancellation_token().cancel();
+        // The peer's channel closes when the service loop ends, after its transport closed.
+        let closed = tokio::time::timeout_at(deadline, async {
+            while !connection.peer().is_transport_closed() {
+                tokio::time::sleep(CLOSE_POLL_INTERVAL).await;
+            }
+        })
+        .await;
+        match closed {
+            Ok(()) => debug!(toolset.name = %self.name, "closed MCP connection"),
+            Err(_) => warn!(
+                toolset.name = %self.name,
+                close.timeout_ms = timeout.as_millis(),
+                "MCP connection did not finish closing within the close timeout; its transport \
+                 keeps closing in the background"
+            ),
+        }
     }
 
     /// Call one MCP tool and preserve structured, text, image, audio, and resource content
@@ -920,8 +1051,8 @@ where
         }
         let server_supports_tasks = self
             .client
-            .connection()
-            .await
+            .open_connection(&self.name)
+            .await?
             .peer_info()
             .is_some_and(|info| info.capabilities.supports_tasks());
         McpTool {
@@ -1057,7 +1188,7 @@ where
     /// Returns `AdkError::Tool` on transport or unexpected server errors, and when
     /// the listing exceeds the [discovery limits](Self::with_discovery_limits).
     pub async fn list_resources(&self) -> Result<Vec<Resource>> {
-        let client = self.client.connection().await;
+        let client = self.client.open_connection(&self.name).await?;
         let limits = self.discovery_limits;
         let method = "resources/list";
         let listing = list_pages(method, limits.max_pages, |cursor| {
@@ -1091,7 +1222,7 @@ where
     /// Returns `AdkError::Tool` on transport or unexpected server errors, and when
     /// the listing exceeds the [discovery limits](Self::with_discovery_limits).
     pub async fn list_resource_templates(&self) -> Result<Vec<ResourceTemplate>> {
-        let client = self.client.connection().await;
+        let client = self.client.open_connection(&self.name).await?;
         let limits = self.discovery_limits;
         let method = "resources/templates/list";
         let listing = list_pages(method, limits.max_pages, |cursor| {
@@ -1126,7 +1257,7 @@ where
     /// does not match any resource on the server. Returns a generic
     /// `AdkError::Tool` on transport or other server errors.
     pub async fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContents>> {
-        let client = self.client.connection().await;
+        let client = self.client.open_connection(&self.name).await?;
         let params = ReadResourceRequestParams::new(uri.to_string());
         match client.read_resource(params).await {
             Ok(result) => Ok(result.contents),
@@ -1149,7 +1280,7 @@ where
     /// Returns `AdkError::Tool` on transport or unexpected server errors, and when
     /// the listing exceeds the [discovery limits](Self::with_discovery_limits).
     pub async fn list_prompts(&self) -> Result<Vec<Prompt>> {
-        let client = self.client.connection().await;
+        let client = self.client.open_connection(&self.name).await?;
         let limits = self.discovery_limits;
         let method = "prompts/list";
         let listing = list_pages(method, limits.max_pages, |cursor| {
@@ -1181,7 +1312,7 @@ where
         if let Some(arguments) = arguments {
             params = params.with_arguments(arguments);
         }
-        let client = self.client.connection().await;
+        let client = self.client.open_connection(&self.name).await?;
         client
             .get_prompt(params)
             .await
@@ -1196,7 +1327,7 @@ where
         current_value: &str,
         context: Option<CompletionContext>,
     ) -> Result<CompletionInfo> {
-        let client = self.client.connection().await;
+        let client = self.client.open_connection(&self.name).await?;
         client
             .complete_prompt_argument(prompt_name, argument_name, current_value, context)
             .await
@@ -1215,7 +1346,7 @@ where
         current_value: &str,
         context: Option<CompletionContext>,
     ) -> Result<CompletionInfo> {
-        let client = self.client.connection().await;
+        let client = self.client.open_connection(&self.name).await?;
         client
             .complete_resource_argument(uri_template, argument_name, current_value, context)
             .await
@@ -1228,7 +1359,7 @@ where
 
     /// Subscribe to change notifications for a resource URI.
     pub async fn subscribe_resource(&self, uri: &str) -> Result<()> {
-        let client = self.client.connection().await;
+        let client = self.client.open_connection(&self.name).await?;
         // `subscriptions/listen` replaces this in 2026-07-28, but we negotiate
         // 2025-11-25, and `listen` also stops routing notifications through
         // `ClientHandler`, which this crate's resource callbacks rely on.
@@ -1242,7 +1373,7 @@ where
 
     /// Remove a resource subscription created by [`subscribe_resource`](Self::subscribe_resource).
     pub async fn unsubscribe_resource(&self, uri: &str) -> Result<()> {
-        let client = self.client.connection().await;
+        let client = self.client.open_connection(&self.name).await?;
         // Paired with `subscribe_resource`; see the note there.
         #[allow(deprecated)]
         client.unsubscribe(UnsubscribeRequestParams::new(uri)).await.map_err(|error| {
@@ -1270,7 +1401,11 @@ where
         let discovery = async {
             let (mut connection, mut generation) = self
                 .client
-                .live_connection(self.connection_factory.as_ref(), &self.resource_subscriptions)
+                .live_connection(
+                    &self.name,
+                    self.connection_factory.as_ref(),
+                    &self.resource_subscriptions,
+                )
                 .await?;
             // Read before fetching, so a change notified or an invalidation made mid-fetch
             // keeps the result out of the cache.
@@ -1332,6 +1467,7 @@ where
                 if !self
                     .client
                     .refresh(
+                        &self.name,
                         &connection,
                         self.connection_factory.as_ref(),
                         &self.resource_subscriptions,
@@ -1483,6 +1619,23 @@ where
         }
 
         Ok(tools)
+    }
+
+    /// Ends the MCP session and the server process behind it, waiting at most the
+    /// [close timeout](McpToolset::with_close_timeout).
+    ///
+    /// Pending remote tasks are cancelled first, then the rmcp service. A stdio server's
+    /// input is closed and its process waited for, or killed if it is still running 3
+    /// seconds later; a Streamable HTTP session is ended with `DELETE`.
+    ///
+    /// Closing is final and shared: clones of this toolset and every tool it produced
+    /// stop with it. Afterwards [`tools`](Toolset::tools), tool calls, and the resource
+    /// and prompt methods fail with an `AdkError` whose code is `tool.mcp.closed`, and a
+    /// [connection factory](McpToolset::with_connection_factory) is not used to
+    /// reconnect. Build a new toolset to reach the server again. Closing again only waits
+    /// for the first close to finish.
+    async fn close(&self) {
+        self.close_within(self.close_timeout).await;
     }
 }
 
@@ -1684,6 +1837,11 @@ impl<S> McpTool<S>
 where
     S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
 {
+    /// The name of the toolset that produced this tool.
+    fn toolset_name(&self) -> &str {
+        self.origin.strip_prefix("mcp:").unwrap_or(&self.origin)
+    }
+
     async fn execute_value(&self, args: Value) -> Result<Value> {
         let mut params = CallToolRequestParams::new(self.name.clone());
         if !(args.is_null() || args == json!({})) {
@@ -1790,7 +1948,11 @@ where
         loop {
             let (connection, _) = self
                 .client
-                .live_connection(self.connection_factory.as_ref(), &self.resource_subscriptions)
+                .live_connection(
+                    self.toolset_name(),
+                    self.connection_factory.as_ref(),
+                    &self.resource_subscriptions,
+                )
                 .await?;
             let call_result = send_tool_call(connection.peer(), params.clone()).await;
 
@@ -1872,6 +2034,7 @@ where
                     if !self
                         .client
                         .refresh(
+                            self.toolset_name(),
                             &connection,
                             self.connection_factory.as_ref(),
                             &self.resource_subscriptions,

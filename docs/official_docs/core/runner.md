@@ -148,6 +148,8 @@ run answers the calls from the action ledger and runs `after_run` when the run e
 `Runner::close` releases what the runner's agents and plugins hold: it calls `Agent::close`
 on the root agent, which closes each agent's toolsets (`Toolset::close`) and its sub-agents,
 then runs every plugin's close hook. Call it once the application stops running the agent.
+An `McpToolset` ends its MCP session and waits for a stdio server process to exit; see
+[Close the connection](../mcp/client.md#close-the-connection).
 
 ```rust
 use adk_runner::Runner;

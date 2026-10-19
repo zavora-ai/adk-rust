@@ -239,13 +239,20 @@ not contain `__` to avoid both cases.
 
 ## Shutdown behavior
 
-Stopping a server cancels its MCP session, waits up to the configured grace
-period for the connection to close, then drops the transport. The child process
-is owned by the `TokioChildProcess` transport rather than a separately retained
-process handle.
+Stopping a server cancels its pending MCP tasks and its MCP session, then waits
+up to the configured grace period for the child process to exit; rmcp kills a
+process still running 3 seconds after its input closed. A transport still
+closing when the grace period ends is dropped, which ends its child in the
+background. The child process is owned by the `TokioChildProcess` transport
+rather than a separately retained process handle. `stop_server` and `shutdown`
+return once each stopped server's process has exited or its grace period has
+elapsed.
 
-Call `shutdown()` before dropping the manager. Dropping a manager with running
-servers emits a warning because `Drop` cannot await asynchronous cleanup.
+`Runner::close` and `Toolset::close` leave the manager's servers running: one
+manager is shared by every agent that uses it, and the application starts its
+servers. Call `shutdown()` to stop them, and before dropping the manager.
+Dropping a manager with running servers emits a warning because `Drop` cannot
+await asynchronous cleanup.
 
 ## Verified example
 

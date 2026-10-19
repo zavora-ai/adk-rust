@@ -34,15 +34,13 @@ let toolset = McpToolset::new(client)
     .with_name("company_tools")
     .with_tools(&["find_customer", "read_order", "request_refund"]);
 
-let shutdown = toolset.cancellation_token().await;
-
 let agent = LlmAgentBuilder::new("support")
     .model(model)
     .toolset(Arc::new(toolset))
     .build()?;
 
-// Run the agent, then close the client-owned MCP session.
-shutdown.cancel();
+// Run the agent through a Runner, then end the MCP session and the server process.
+runner.close().await;
 ```
 
 Use an absolute binary path in production. Avoid package tags such as `latest`
@@ -230,6 +228,54 @@ another call.
 
 `ConnectionRefresher` and `SimpleClient` share their connection the same way:
 neither holds a lock across a request.
+
+## Close the connection
+
+`Runner::close` closes the toolsets of every agent in the runner's tree, and
+`Toolset::close` closes one toolset directly. Closing an `McpToolset` runs these
+steps and returns when the transport has closed or the close timeout elapses:
+
+| Step | stdio server | Streamable HTTP server |
+|------|--------------|------------------------|
+| 1 | The toolset is marked closed: no new request starts, and its connection factory is not used again | Same |
+| 2 | Remote tasks the toolset started are cancelled, within half of the close timeout | Same |
+| 3 | The rmcp service is cancelled, and its transport closes the server's input and waits for the process to exit; rmcp kills a process still running 3 seconds later | The transport ends the session with `DELETE` |
+
+```rust
+use adk_tool::McpToolset;
+use std::sync::Arc;
+use std::time::Duration;
+
+let toolset = McpToolset::new(client)
+    .with_name("company_tools")
+    .with_close_timeout(Duration::from_secs(2));
+let agent = LlmAgentBuilder::new("support")
+    .model(model)
+    .toolset(Arc::new(toolset))
+    .build()?;
+// ... run the agent through `runner` ...
+runner.close().await;
+```
+
+- **Final** — a closed toolset does not reconnect. `tools()`, tool calls, and the
+  resource and prompt methods fail with an `AdkError` whose code is
+  `tool.mcp.closed`. Build a new toolset to reach the server again.
+- **Shared** — clones of the toolset and every tool it produced share its
+  connection, so they close with it.
+- **Bounded** — the close timeout is 5 seconds by default. A transport still
+  closing when it elapses keeps closing in the background.
+- **Idempotent** — closing again only waits for the first close to finish.
+- **Composed toolsets** — `FilteredToolset` and `PrefixedToolset` close their
+  inner toolset, and `MergedToolset` closes every member concurrently.
+- **`McpServerManager`** — closing the manager as a toolset leaves its servers
+  running; call [`shutdown`](manager.md#shutdown-behavior) to stop them.
+
+The `mcp_close` example checks each of these against a stdio server, a
+Streamable HTTP server, and an `McpServerManager`:
+
+```bash
+cargo run --manifest-path examples/mcp_close/Cargo.toml
+```
 
 ## Resources, prompts, and completion
 

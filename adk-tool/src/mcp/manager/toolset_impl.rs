@@ -216,6 +216,20 @@ impl Toolset for McpServerManager {
 
         Ok(resolve_tool_names(&server_tools))
     }
+
+    /// Leaves every managed server running.
+    ///
+    /// One manager is typically shared, as an `Arc`, by several agents or runners, and the
+    /// application starts its servers, so `Runner::close` on one runner does not stop
+    /// servers another still uses. Call [`McpServerManager::shutdown`] to stop them; it
+    /// returns once each server's process has exited or its grace period has elapsed.
+    async fn close(&self) {
+        tracing::debug!(
+            manager.name = %self.name,
+            "closing the MCP server manager's toolset leaves its servers running; call shutdown \
+             to stop them"
+        );
+    }
 }
 
 #[cfg(test)]

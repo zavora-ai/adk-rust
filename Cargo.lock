@@ -1154,12 +1154,15 @@ dependencies = [
 name = "adk-tool"
 version = "3.0.0"
 dependencies = [
+ "adk-agent",
  "adk-code",
  "adk-core",
  "adk-gcp",
  "adk-memory",
+ "adk-runner",
  "adk-rust-macros",
  "adk-sandbox",
+ "adk-session",
  "adk-telemetry",
  "async-stream",
  "async-trait",
