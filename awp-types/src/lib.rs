@@ -16,10 +16,13 @@
 //! - [`AwpDiscoveryDocument`] — well-known discovery endpoint payload
 //! - [`CapabilityManifest`] / [`CapabilityEntry`] — JSON-LD capability descriptions
 //! - [`BusinessContext`] / [`BusinessCapability`] / [`BusinessPolicy`] — site configuration
+//! - [`PaymentIntent`] / [`PaymentIntentState`] / [`PaymentPolicy`] — owner-policy-driven payments
+//! - [`AwpTypedMessage`] / [`AwpMessageType`] — typed messages for agent routing
 //!
 //! ## Serialization
 //!
-//! All wire types use `#[serde(rename_all = "camelCase")]` for JSON serialization.
+//! Wire structs use `#[serde(rename_all = "camelCase")]` for JSON serialization; enum
+//! values are lowercase or snake_case.
 //! [`BusinessContext`] uses standard snake_case for TOML configuration files.
 
 mod a2a;

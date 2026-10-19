@@ -11,7 +11,8 @@
 //! - **Trust**: Trust level assignment from request headers
 //! - **Rate Limiting**: Per-trust-level sliding window rate limiter
 //! - **Consent**: Consent capture, check, and revocation
-//! - **Events**: Event subscription system with HMAC-SHA256 webhook signing
+//! - **Events**: Event subscriptions delivered as signed webhooks with retries and an
+//!   egress guard that refuses internal callback URLs
 //! - **Health**: Health state machine (Healthy/Degrading/Degraded)
 //! - **Middleware**: AWP version negotiation
 //! - **Router**: Safe public routes and separately composable management routes
@@ -19,13 +20,17 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
-//! use adk_awp::{BusinessContextLoader, generate_discovery_document, build_manifest, awp_routes};
+//! ```rust,no_run
+//! use adk_awp::{BusinessContextLoader, build_manifest, generate_discovery_document};
 //!
+//! # fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
 //! let ctx = loader.load();
 //! let discovery = generate_discovery_document(&ctx);
 //! let manifest = build_manifest(&ctx);
+//! # let _ = (discovery, manifest);
+//! # Ok(())
+//! # }
 //! ```
 
 pub mod a2a;

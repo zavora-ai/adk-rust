@@ -4,6 +4,7 @@ Shared protocol types for the [Agentic Web Protocol (AWP)](https://agenticwebpro
 
 [![crates.io](https://img.shields.io/crates/v/awp-types.svg)](https://crates.io/crates/awp-types)
 [![docs.rs](https://docs.rs/awp-types/badge.svg)](https://docs.rs/awp-types)
+[![License](https://img.shields.io/crates/l/awp-types.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 [![AWP](https://img.shields.io/badge/AWP-agenticwebprotocol.com-0F8A8A)](https://agenticwebprotocol.com)
 
 `awp-types` provides pure protocol types with **zero `adk-*` dependencies**, making it importable by any Rust project that needs to work with AWP messages — gateways, agents, CLI tools, or third-party integrations.
@@ -69,7 +70,7 @@ Use `awp-types` when you need to:
 
 | Type | Description |
 |------|-------------|
-| `PaymentIntent` | Owner-policy-driven payment with HMAC signature |
+| `PaymentIntent` | Owner-policy-driven payment with an HMAC-SHA256 `signature` field |
 | `PaymentIntentState` | Draft → PendingApproval → Approved → Executing → Settled/Rejected/Cancelled |
 | `PaymentPolicy` | Auto-approve/require-approval thresholds |
 | `PaymentPolicyDecision` | AutoApprove or RequireApproval |
@@ -78,34 +79,41 @@ Use `awp-types` when you need to:
 
 ```toml
 [dependencies]
-awp-types = "3.0.0"
+awp-types = "3.0"
 ```
 
+The crate has no feature flags.
+
 ```rust
-use awp_types::{TrustLevel, AwpVersion, CURRENT_VERSION, BusinessContext};
+use awp_types::{AwpError, AwpVersion, BusinessContext, CURRENT_VERSION, TrustLevel};
 
-// Trust level ordering
-assert!(TrustLevel::Anonymous < TrustLevel::Known);
-assert!(TrustLevel::Known < TrustLevel::Partner);
+fn main() {
+    // Trust level ordering
+    assert!(TrustLevel::Anonymous < TrustLevel::Known);
+    assert!(TrustLevel::Known < TrustLevel::Partner);
 
-// Version compatibility
-let v = AwpVersion { major: 1, minor: 3 };
-assert!(CURRENT_VERSION.is_compatible(&v)); // same major
+    // Version compatibility
+    let v = AwpVersion { major: 1, minor: 3 };
+    assert!(CURRENT_VERSION.is_compatible(&v)); // same major
 
-// Business context from TOML
-let ctx = BusinessContext::core("My Site", "A description", "example.com");
-assert_eq!(ctx.site_name, "My Site");
+    // Business context with only the required fields; `business.toml` deserializes into the same type
+    let ctx = BusinessContext::core("My Site", "A description", "example.com");
+    assert_eq!(ctx.site_name, "My Site");
+
+    // Errors map to HTTP status codes
+    assert_eq!(AwpError::NotFound("page".into()).status_code(), 404);
+}
 ```
 
 ## Serialization
 
-- All wire types use `#[serde(rename_all = "camelCase")]` for JSON
+- Wire structs use `#[serde(rename_all = "camelCase")]` for JSON; enum values are lowercase or snake_case
 - `BusinessContext` uses standard snake_case for TOML (`business.toml`)
 - All types implement `Serialize` and `Deserialize`
 
 ## Design Principles
 
-1. **Zero `adk-*` dependencies** — only `serde`, `uuid`, `chrono`, `thiserror`
+1. **Zero `adk-*` dependencies** — only `serde`, `serde_json`, `uuid`, `chrono`, `thiserror`
 2. **Backward-compatible** — all extended `BusinessContext` fields use `#[serde(default)]`
 3. **Type-safe** — ordered enums, exhaustive error variants, `Display` impls
 4. **Publishable** — suitable for crates.io (no git dependencies)
@@ -119,3 +127,7 @@ assert_eq!(ctx.site_name, "My Site");
 ## License
 
 Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.

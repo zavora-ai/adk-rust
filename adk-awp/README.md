@@ -4,6 +4,7 @@ Agentic Web Protocol (AWP) implementation for [ADK-Rust](https://github.com/zavo
 
 [![crates.io](https://img.shields.io/crates/v/adk-awp.svg)](https://crates.io/crates/adk-awp)
 [![docs.rs](https://docs.rs/adk-awp/badge.svg)](https://docs.rs/adk-awp)
+[![License](https://img.shields.io/crates/l/adk-awp.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 [![AWP](https://img.shields.io/badge/AWP-agenticwebprotocol.com-0F8A8A)](https://agenticwebprotocol.com)
 
 `adk-awp` provides AWP protocol types, route registration, middleware, rate
@@ -18,10 +19,31 @@ Use `adk-awp` when you need to:
 - serve AWP discovery documents and capability manifests from a `business.toml`
 - apply per-trust-level rate limiting (Anonymous: 30/min, Known: 120/min, Partner: 600/min)
 - manage consent records with in-memory or local file-backed storage
-- subscribe agents to events with HMAC-SHA256 webhook signing
+- subscribe agents to events delivered as signed webhooks (Standard Webhooks), with internal callback URLs refused
 - monitor service health with a validated state machine (Healthy → Degrading → Degraded)
 - detect whether requests come from humans or AI agents
 - negotiate AWP protocol versions automatically
+
+## Installation
+
+```toml
+[dependencies]
+adk-awp = "3.0"
+awp-types = "3.0"
+async-trait = "0.1"
+axum = "0.8"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+```
+
+Or use the meta-crate, where the `awp` feature (included in `enterprise`) re-exports it:
+
+```toml
+[dependencies]
+adk-rust = { version = "3.0", features = ["awp"] }
+```
+
+The crate has no feature flags of its own.
 
 ## Quick Start
 
@@ -80,22 +102,22 @@ impl AwpA2aHandler for ApplicationA2a {
     }
 }
 
-let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
-let a2a_token: Arc<str> = std::env::var("AWP_A2A_TOKEN")?.into();
-let state = AwpState::builder(loader.context_ref())
-    .a2a_handler(Arc::new(ApplicationA2a { bearer_token: a2a_token }))
-    .build();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
+    let a2a_token: Arc<str> = std::env::var("AWP_A2A_TOKEN")?.into();
+    let state = AwpState::builder(loader.context_ref())
+        .a2a_handler(Arc::new(ApplicationA2a { bearer_token: a2a_token }))
+        .build();
 
-let app = axum::Router::new()
-    .merge(awp_routes(state))
-    .merge(your_custom_routes);
+    // Merge your own routes alongside the AWP routes
+    let app = axum::Router::new().merge(awp_routes(state));
 
-let listener = tokio::net::TcpListener::bind("127.0.0.1:3456").await?;
-axum::serve(
-    listener,
-    app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-)
-.await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3456").await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .await?;
+    Ok(())
+}
 ```
 
 This registers the four public endpoints with version negotiation and rate
@@ -142,12 +164,14 @@ the health state machine is wired to the event service. A2A dispatch returns
 `503` until the application installs a handler:
 
 ```rust
-use adk_awp::{AwpState, FileConsentService};
+use adk_awp::{AwpState, BusinessContextLoader, FileConsentService};
 use std::sync::Arc;
 
-let state = AwpState::builder(loader.context_ref())
-    .consent_service(Arc::new(FileConsentService::new("data/consent.json")?))
-    .build();
+fn state(loader: &BusinessContextLoader) -> Result<AwpState, Box<dyn std::error::Error>> {
+    Ok(AwpState::builder(loader.context_ref())
+        .consent_service(Arc::new(FileConsentService::new("data/consent.json")?))
+        .build())
+}
 ```
 
 ### BusinessContextLoader
@@ -157,10 +181,13 @@ Parse and validate `business.toml` with hot-reload support:
 ```rust
 use adk_awp::BusinessContextLoader;
 
-let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
-loader.watch("business.toml".into()).await?; // hot-reload every 5s
-let ctx = loader.load();
-println!("Site: {}", ctx.site_name);
+async fn load() -> Result<(), Box<dyn std::error::Error>> {
+    let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
+    loader.watch("business.toml".into()).await?; // hot-reload every 5s
+    let ctx = loader.load();
+    println!("Site: {}", ctx.site_name);
+    Ok(())
+}
 ```
 
 ### Rate Limiting
@@ -179,9 +206,11 @@ use adk_awp::{InMemoryRateLimiter, RateLimitConfig};
 use awp_types::TrustLevel;
 use std::collections::HashMap;
 
-let mut limits = HashMap::new();
-limits.insert(TrustLevel::Anonymous, RateLimitConfig { max_requests: 10, window_secs: 60 });
-let limiter = InMemoryRateLimiter::with_config(limits);
+fn limiter() -> InMemoryRateLimiter {
+    let mut limits = HashMap::new();
+    limits.insert(TrustLevel::Anonymous, RateLimitConfig { max_requests: 10, window_secs: 60 });
+    InMemoryRateLimiter::with_config(limits)
+}
 ```
 
 `DefaultTrustAssigner` classifies every request as anonymous. An authorization
@@ -197,12 +226,15 @@ Two implementations:
   permissions, encryption, retention, and regulatory policy
 
 ```rust
-use adk_awp::FileConsentService;
+use adk_awp::{ConsentService, FileConsentService};
 
-let consent = FileConsentService::new("data/consent.json")?;
-consent.capture_consent("visitor-123", "analytics").await?;
-assert!(consent.check_consent("visitor-123", "analytics").await?);
-consent.revoke_consent("visitor-123", "analytics").await?;
+async fn consent() -> Result<(), Box<dyn std::error::Error>> {
+    let consent = FileConsentService::new("data/consent.json")?;
+    consent.capture_consent("visitor-123", "analytics").await?;
+    assert!(consent.check_consent("visitor-123", "analytics").await?);
+    consent.revoke_consent("visitor-123", "analytics").await?;
+    Ok(())
+}
 ```
 
 ### Health State Machine
@@ -217,13 +249,18 @@ Invalid transitions (e.g., Healthy → Degraded) return an error.
 
 ### Event Subscriptions
 
-CRUD with HMAC-SHA256 webhook signing:
+`EventSubscription::validate`, and with it `create` and `POST /awp/events/subscribe`, refuses a
+callback URL that names a loopback, private, or link-local address; `validate_with` checks
+against a given `EgressPolicy`. `deliver` returns at once and `deliver_and_wait` returns each
+delivery report. `sign_payload` and `verify_signature` are HMAC-SHA256 helpers:
 
 ```rust
 use adk_awp::{sign_payload, verify_signature};
 
-let sig = sign_payload(b"event payload", "webhook-secret");
-assert!(verify_signature(b"event payload", "webhook-secret", &sig));
+fn main() {
+    let sig = sign_payload(b"event payload", "webhook-secret");
+    assert!(verify_signature(b"event payload", "webhook-secret", &sig));
+}
 ```
 
 ### Requester Detection
@@ -232,18 +269,15 @@ Detect human vs agent from HTTP headers:
 
 ```rust
 use adk_awp::detect_requester_type;
+use awp_types::RequesterType;
 use axum::http::HeaderMap;
 
-let mut headers = HeaderMap::new();
-headers.insert("X-AWP-Channel", "agent".parse().unwrap());
-let requester = detect_requester_type(&headers);
-// RequesterType::Agent
+fn main() {
+    let mut headers = HeaderMap::new();
+    headers.insert("X-AWP-Channel", "agent".parse().unwrap());
+    assert_eq!(detect_requester_type(&headers), RequesterType::Agent);
+}
 ```
-
-`InMemoryEventSubscriptionService` signs and logs matching deliveries without
-performing network I/O. Implement `EventSubscriptionService` for production
-HTTP delivery so destination policy, retries, and durable storage remain under
-application control.
 
 ## Testing
 
@@ -255,9 +289,8 @@ cargo clippy -p adk-awp -- -D warnings  # zero warnings
 ## Example
 
 ```bash
-cd examples/awp_agent
-cp .env.example .env   # add your GOOGLE_API_KEY
-cargo run
+cp examples/awp_agent/.env.example examples/awp_agent/.env   # add your GOOGLE_API_KEY
+cargo run --manifest-path examples/awp_agent/Cargo.toml
 ```
 
 The example loads `business.toml`, installs authenticated A2A dispatch to a real
@@ -276,3 +309,7 @@ See [AWP Documentation](https://github.com/zavora-ai/adk-rust/blob/main/docs/off
 ## License
 
 Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.
