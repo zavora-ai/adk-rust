@@ -45,7 +45,8 @@
 //! ```
 //!
 //! To drive a real desktop, back the graph with [`ComputerUseMcpRuntime`] and a
-//! running `computer-use-mcp` server (see the macOS examples).
+//! running `computer-use-mcp` server (see the cross-platform `live_clipboard`
+//! example and the macOS examples).
 
 mod auth;
 mod cancellation;

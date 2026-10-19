@@ -11,35 +11,27 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
-//! use adk_browser::{BrowserSession, BrowserConfig, BrowserToolset};
-//! use adk_agent::LlmAgentBuilder;
+//! ```rust,no_run
+//! use adk_browser::{BrowserConfig, BrowserProfile, BrowserSession, BrowserToolset};
 //! use std::sync::Arc;
 //!
-//! async fn example() -> anyhow::Result<()> {
-//!     // Create browser session
-//!     let config = BrowserConfig::new()
-//!         .headless(true)
-//!         .viewport(1920, 1080);
+//! # async fn example() -> adk_core::Result<()> {
+//! // Create a browser session; it starts on first use
+//! let config = BrowserConfig::new().headless(true).viewport(1920, 1080);
+//! let browser = Arc::new(BrowserSession::new(config));
 //!
-//!     let browser = Arc::new(BrowserSession::new(config));
-//!     browser.start().await?;
+//! // Create a toolset and register it with `LlmAgentBuilder::toolset`
+//! let toolset = BrowserToolset::with_profile(browser.clone(), BrowserProfile::Scraping);
+//! assert_eq!(toolset.all_tools().len(), 13);
 //!
-//!     // Create toolset
-//!     let toolset = BrowserToolset::new(browser.clone());
-//!
-//!     // Add tools to agent (example - requires model)
-//!     // let agent = LlmAgentBuilder::new("browser_agent")
-//!     //     .model(model)
-//!     //     .instruction("You are a web automation assistant.")
-//!     //     .tools(toolset.all_tools())
-//!     //     .build()?;
-//!
-//!     // Clean up
-//!     browser.stop().await?;
-//!     Ok(())
-//! }
+//! // Clean up
+//! browser.stop().await?;
+//! # Ok(())
+//! # }
 //! ```
+//!
+//! `BrowserToolset::new` offers 44 tools. `browser_evaluate_js` and `browser_file_upload` are
+//! opt-in, navigation accepts only `http` and `https`, and private network addresses are refused.
 //!
 //! ## Available Tools
 //!

@@ -2,6 +2,10 @@
 
 Give an ADK agent safe, governed control of a real desktop.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-computer-use.svg)](https://crates.io/crates/adk-computer-use)
+[![Documentation](https://docs.rs/adk-computer-use/badge.svg)](https://docs.rs/adk-computer-use)
+[![License](https://img.shields.io/crates/l/adk-computer-use.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
+
 This crate is the ADK-Rust orchestration layer for
 [`computer-use-mcp`](https://github.com/zavora-ai/computer-use-mcp). It does not
 perform any desktop actuation itself. The actual clicking, typing, and
@@ -37,9 +41,27 @@ by wrapping every action in the same fixed, predictable control flow:
   not from model output or graph state, so a prompt cannot change who you are
   mid-run.
 
+## Installation
+
+```toml
+[dependencies]
+adk-computer-use = "3.0"
+adk-graph = "3.0"
+```
+
+Or use the meta-crate, where the `computer-use` feature (included in `standard`) exposes it as
+`adk_rust::computer_use`:
+
+```toml
+[dependencies]
+adk-rust = { version = "3.0", features = ["computer-use"] }
+```
+
+The crate has no feature flags of its own.
+
 ## How it fits together
 
-The core of the crate is a deterministic [`adk-graph`](../adk-graph) workflow you
+The core of the crate is a deterministic [`adk-graph`](https://crates.io/crates/adk-graph) workflow you
 build with `build_reference_graph`. It interacts with the outside world through a
 single trait, `ComputerUseRuntime`. In production that trait is backed by a live
 MCP server; in tests and the portable example it is a plain Rust struct you write
@@ -75,8 +97,8 @@ every error after it is acquired.
 
 | Module | What it provides |
 | --- | --- |
-| [`contracts`](src/contracts) | The `computer-use-mcp` MCP server wire types (`action`, `target`, `approval`, `receipt`, `lease`, `session`, `safety`), each validated so they cannot carry unsafe or disclosing data. |
-| [`runtime`](src/runtime) | The `ComputerUseRuntime` trait plus its live MCP adapter, `ComputerUseMcpRuntime`. |
+| `contracts` | The `computer-use-mcp` MCP server wire types (`action`, `target`, `approval`, `receipt`, `lease`, `session`, `safety`), each validated so they cannot carry unsafe or disclosing data. |
+| `runtime` | The `ComputerUseRuntime` trait plus its live MCP adapter, `ComputerUseMcpRuntime`. |
 | `graph` | `build_reference_graph` and its checkpointer-aware variant. |
 | `auth` | `ScopeAuthorizer` and `ComputerUseAuthContext` — the `computer:*` scope gate tied to your adk-auth identity. |
 | `cancellation` | `CancellationBridge` — revokes desktop authority first, then stops the agent. |
@@ -97,30 +119,31 @@ committed receipt. The example declares no postcondition, so it reports
 `committed: true` and `verified: false` rather than claiming an observation it
 did not make. In code:
 
-```rust,no_run
-use std::sync::Arc;
-use adk_computer_use::{build_reference_graph, ScopeAuthorizer, ComputerUseRuntime};
+```rust
+use adk_computer_use::{ComputerUseRuntime, ScopeAuthorizer, build_reference_graph};
 use adk_graph::{ExecutionConfig, State};
 use serde_json::json;
+use std::sync::Arc;
 
-# async fn run(runtime: Arc<dyn ComputerUseRuntime>) -> Result<(), Box<dyn std::error::Error>> {
-// Pass the graph a runtime (yours, or the MCP one) and the scopes you hold.
-let authorizer = Arc::new(ScopeAuthorizer::new(["computer:plan", "computer:execute:background"]));
-let graph = build_reference_graph(runtime, authorizer)?;
+async fn run(runtime: Arc<dyn ComputerUseRuntime>) -> Result<(), Box<dyn std::error::Error>> {
+    // Pass the graph a runtime (yours, or the MCP one) and the scopes you hold.
+    let authorizer =
+        Arc::new(ScopeAuthorizer::new(["computer:plan", "computer:execute:background"]));
+    let graph = build_reference_graph(runtime, authorizer)?;
 
-// Provide the action you want; the graph decides how, and whether, to run it.
-let mut input = State::new();
-input.insert("proposed_action".into(), json!({ "tool": "write_clipboard" }));
+    // Provide the action you want; the graph decides how, and whether, to run it.
+    let mut input = State::new();
+    input.insert("proposed_action".into(), json!({ "tool": "write_clipboard" }));
 
-let result = graph.invoke(input, ExecutionConfig::new("demo")).await?;
-assert_eq!(result.get("committed"), Some(&json!(true)));
-assert_eq!(result.get("verified"), Some(&json!(false)));
-# Ok(())
-# }
+    let result = graph.invoke(input, ExecutionConfig::new("demo")).await?;
+    assert_eq!(result.get("committed"), Some(&json!(true)));
+    assert_eq!(result.get("verified"), Some(&json!(false)));
+    Ok(())
+}
 ```
 
 The full in-process runtime is in
-[`examples/minimal_graph.rs`](examples/minimal_graph.rs), which is a good starting
+[`examples/minimal_graph.rs`](https://github.com/zavora-ai/adk-rust/blob/main/adk-computer-use/examples/minimal_graph.rs), which is a good starting
 point for writing your own.
 
 ## Driving a real desktop
@@ -141,7 +164,7 @@ cargo run -p adk-computer-use --example live_clipboard -- \
   macOS, `Get-Clipboard` on Windows, `wl-paste`/`xclip`/`xsel` on Linux).
 
 The native-UI showcases are macOS-specific (they build an AppKit window and drive
-Finder), and live under [`examples/macos/`](examples/macos/README.md):
+Finder), and live under [`examples/macos/`](https://github.com/zavora-ai/adk-rust/blob/main/adk-computer-use/examples/macos/README.md):
 
 - `live_form` — a native AppKit form, picture-in-picture approval, and an
   independent read-back to confirm the result.
@@ -175,4 +198,8 @@ output alone cannot promote a release.
 
 ## License
 
-Same terms as the ADK-Rust workspace — see the repository root.
+Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.
