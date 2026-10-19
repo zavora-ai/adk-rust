@@ -113,6 +113,8 @@ The turns of a case run in order through one session, using a `Runner` over a pr
 Validates that agents call expected tools in the correct order:
 
 ```rust
+use adk_eval::{EvaluationCriteria, ToolTrajectoryConfig};
+
 let criteria = EvaluationCriteria {
     tool_trajectory_score: Some(1.0),  // Require 100% match
     tool_trajectory_config: Some(ToolTrajectoryConfig {
@@ -142,6 +144,9 @@ Expected and actual arguments are compared recursively:
 Compare response text using various algorithms:
 
 ```rust
+use adk_eval::criteria::SimilarityAlgorithm;
+use adk_eval::{EvaluationCriteria, ResponseMatchConfig};
+
 let criteria = EvaluationCriteria {
     response_similarity: Some(0.8),  // 80% similarity required
     response_match_config: Some(ResponseMatchConfig {
@@ -273,12 +278,16 @@ println!("Pass Rate: {:.1}%", report.summary.pass_rate * 100.0);
 for result in report.failures() {
     println!("Failed: {}", result.eval_id);
     for failure in &result.failures {
-        println!("  - {}: {} (expected: {}, actual: {})",
+        println!("  - {}: score {:.2} below {:.2} (expected: {}, actual: {})",
             failure.criterion,
-            failure.message,
+            failure.score,
+            failure.threshold,
             failure.expected,
             failure.actual
         );
+        if let Some(details) = &failure.details {
+            println!("    {details}");
+        }
     }
 }
 
@@ -303,16 +312,16 @@ A `concurrency` of 0, or an empty `cases` slice, returns `EvalError::ConfigError
 
 ### Directory Evaluation
 
-Evaluate all test files in a directory:
+Evaluate all test files in a directory. The result holds one report per `*.test.json` file:
 
 ```rust
 let reports = evaluator
     .evaluate_directory(agent, "tests/eval_cases")
     .await?;
 
-for (file, report) in reports {
+for report in &reports {
     println!("{}: {} passed, {} failed",
-        file,
+        report.run_id,
         report.summary.passed,
         report.summary.failed
     );
@@ -352,7 +361,7 @@ The runnable evaluation gallery is maintained in [adk-playground](https://github
 
 ## Advanced Features
 
-The following capabilities bring `adk-eval` to parity with frameworks like Braintrust, LangSmith, and Inspect AI. They are additive to the existing API and feature-gated where they introduce new dependencies.
+The following capabilities are additive to the core API and feature-gated where they introduce new dependencies.
 
 ### Structured LLM Judge
 
@@ -622,7 +631,7 @@ cargo adk eval tests/ --agent-cmd "target/release/eval_agent" --check-regression
 |------|---------|---------|
 | `--agent-cmd` | Command that starts the agent, run with `sh -c` (`cmd /C` on Windows) | Required |
 | `--criteria` | `EvaluationCriteria` JSON file | `tool_trajectory_score` 1.0 and `response_similarity` 0.8 |
-| `--judge-model` | Judge for LLM-judged criteria: `gemini-*` (`GOOGLE_API_KEY`), `claude-*` (`ANTHROPIC_API_KEY`), or `gpt-*`/`o1`/`o3`/`o4` (`OPENAI_API_KEY`) | None; LLM-judged criteria are refused without it |
+| `--judge-model` | Judge for LLM-judged criteria: `gemini-*` (`GOOGLE_API_KEY` or `GEMINI_API_KEY`), `claude-*` (`ANTHROPIC_API_KEY`), or `gpt-*`/`o1`/`o3`/`o4` (`OPENAI_API_KEY`) | None; LLM-judged criteria are refused without it |
 | `--save-baseline` | Save this run's scores; refused when a case did not run to completion | Off |
 | `--check-regression` | Compare against the baseline; a missing baseline is an error | Off |
 | `--baseline` | Baseline file | `.eval-baseline.json` in the eval set's directory |

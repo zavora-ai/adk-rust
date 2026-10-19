@@ -1,128 +1,100 @@
-# Benchmark Results
+# Benchmarks
 
-Published performance benchmarks comparing ADK-Rust against other agent frameworks. All measurements use real LLM calls with deterministic configuration for reproducibility.
+`cargo adk bench` measures ADK-Rust's framework overhead against a live Gemini model, and can run
+other agent frameworks on the same workload for comparison. Results depend on the model, the
+network, the machine, and the workload, so this page describes how to produce and read them
+rather than publishing fixed numbers. The [Benchmarking](../tools/benchmarking.md) guide is the
+full CLI reference.
 
-## Summary
+## Output
 
-| Metric | ADK-Rust | Gemini Python SDK | LangGraph |
-|--------|----------|-------------------|-----------|
-| **Cold start** | 109 ms | 501 ms | 502 ms |
-| **Agent loop overhead** | 568 μs | 253 μs | 1228 ms |
-
-ADK-Rust achieves ~4.6× faster cold start than both Python frameworks and sub-millisecond loop overhead. The Gemini Python SDK has slightly lower loop overhead due to minimal abstraction, but ADK-Rust's overhead is negligible relative to typical LLM response times (500ms–3s).
-
-## Workload Results
-
-### simple_tool_call
-
-Single user message → one tool call → one final response. Measures minimal round-trip.
-
-| Framework | Total Time | Cold Start | Loop Overhead | CV |
-|-----------|-----------|------------|---------------|-----|
-| ADK-Rust | 1.2s | 109 ms | 568 μs | 4.2% |
-| Gemini Python SDK | 1.8s | 501 ms | 253 μs | 6.1% |
-| LangGraph | 2.1s | 502 ms | 1228 ms | 8.3% |
-
-### multi_step_reasoning
-
-Multi-turn conversation requiring 3–5 sequential tool calls with reasoning between each step.
-
-| Framework | Total Time | Cold Start | Loop Overhead | CV |
-|-----------|-----------|------------|---------------|-----|
-| ADK-Rust | 4.1s | 109 ms | 568 μs | 5.1% |
-| Gemini Python SDK | 5.9s | 501 ms | 253 μs | 7.8% |
-| LangGraph | 7.3s | 502 ms | 1228 ms | 9.4% |
-
-### parallel_tool_invocation
-
-Single user message triggering 3 parallel tool calls dispatched concurrently.
-
-| Framework | Total Time | Cold Start | Loop Overhead | CV |
-|-----------|-----------|------------|---------------|-----|
-| ADK-Rust | 2.3s | 109 ms | 568 μs | 3.9% |
-| Gemini Python SDK | 3.7s | 501 ms | 253 μs | 5.6% |
-| LangGraph | 4.8s | 502 ms | 1228 ms | 7.2% |
+The `table` format reports, per workload, the mean, P95, minimum, maximum, and CV of the cold
+start and the agent loop overhead, with the ADK, Rust, and OS versions of the run; `json` and
+`markdown` carry the same measurements.
 
 ## How to Reproduce
 
 ```bash
-# Run all benchmarks
+# Estimate the cost without calling the model
+cargo adk bench --dry-run
+
+# Run all built-in workloads
 cargo adk bench
 
 # Run a specific workload
 cargo adk bench --workload simple_tool_call
 
-# Save results as a baseline
-cargo adk bench --save-baseline v1.0.0
+# Save results as the regression baseline (.bench-baseline.json)
+cargo adk bench --save-baseline
 
-# Compare against baseline
-cargo adk bench --check-regression v1.0.0 --tolerance 10
+# Compare against the baseline; 0.10 allows a 10% relative degradation
+cargo adk bench --check-regression --tolerance 0.10
 
 # Output as JSON for CI
-cargo adk bench --output json --output-file results.json
+cargo adk bench --format json --output results.json
+
+# Run the Gemini Python SDK and LangGraph harnesses on the same workload
+cargo adk bench --workload simple_tool_call --external-config adk-bench/harnesses/external-frameworks.json
 ```
 
 Requirements:
 - `GOOGLE_API_KEY` environment variable set
-- Network access to Gemini API
-- For cross-framework comparison: Python 3.11+ with `google-genai` and `langgraph` installed
+- Network access to the Gemini API
+- For cross-framework comparison: Python 3 with the packages the harnesses in
+  `adk-bench/harnesses` import (`google-genai`, `langgraph`)
 
 ## Methodology
 
 ### Test Environment
 
-- Model: Gemini 3.5 Flash-Lite (`gemini-3.5-flash-lite`)
-- Temperature: 0 (deterministic)
-- Fixed random seed for reproducibility
-- 10 measurement iterations after 2 warmup runs
-- Network: same machine, same network for all frameworks
+- Model: `--model`, default `gemini-3.7-flash`
+- Model calls use temperature 0, `top_p` 1.0, and seed 42 (`DeterministicConfig`)
+- `--runs` measurement iterations (default 5) after `--warmup` iterations (default 3), which
+  are discarded
 
 ### Overhead Isolation
 
-Framework overhead is isolated by subtracting measured LLM latency from total execution time:
+Each model call is timed by an instrumented model wrapper. Framework overhead is the turn time
+minus the time spent in model calls:
 
 ```
-loop_overhead = total_time - sum(llm_response_times) - sum(tool_execution_times)
+loop_overhead = total_turn_time - sum(llm_round_trip_times)
 ```
 
-This isolates the framework's contribution: serialization, deserialization, context assembly, event dispatch, and state management.
+Tool execution, including the simulated latency of a workload's tools, is part of the overhead.
 
 ### What the Metrics Mean
 
 | Metric | Definition | Why It Matters |
 |--------|------------|----------------|
-| Cold start | Time from process launch to first LLM response received | Affects serverless/container startup, CLI responsiveness |
-| Loop overhead | Framework processing time per tool-call round-trip | Compounds over multi-step agents (5 steps × 1.2s = 6s wasted) |
-| Total time | End-to-end wall clock for the complete workflow | User-perceived latency |
-| CV | Coefficient of variation (std_dev / mean × 100) | Measurement stability — lower = more reliable |
+| Cold start | Time from the start of the run to the first model call | Affects serverless/container startup, CLI responsiveness |
+| Loop overhead | Turn time not spent in model calls, per turn | Compounds over multi-step agents |
+| CV | Coefficient of variation (std_dev / mean × 100) | Measurement stability — lower = more reliable; a high CV is logged as a warning |
 
 ### Deterministic Configuration
 
-All frameworks use identical:
-- Tool definitions (same names, schemas, mock implementations)
-- System prompts and user messages
-- Model settings (temperature=0, no sampling variation)
-- Tool implementations (return fixed responses, no I/O)
+The built-in workloads define their tools with fixed responses and simulated latency, so a run
+does no tool I/O. The external harnesses receive the same workload JSON file.
 
 ### Limitations
 
 - Results depend on network conditions and Gemini API load
-- Python frameworks measured with CPython 3.11 (not PyPy)
-- Cold start includes Python interpreter startup for Python frameworks
-- Loop overhead for LangGraph includes graph traversal and state serialization
+- Cold start for Python frameworks includes interpreter startup
+- Free-tier Gemini quotas limit how many runs complete in a minute
 
 ## Tracking Regressions
 
 Use benchmarks in CI to catch performance regressions:
 
 ```bash
-# In CI pipeline after merge to main
-cargo adk bench --check-regression v1.0.0 --tolerance 10
+# In a CI pipeline, after restoring .bench-baseline.json
+cargo adk bench --check-regression --tolerance 0.10
 
-# Exit code 1 if any metric regressed >10%
+# Exit code 2 if any metric regressed by more than 10%
 ```
 
-Baselines are stored in `.adk-bench/baselines/` and can be committed to the repository.
+The baseline is `.bench-baseline.json` in the current directory and can be committed to the
+repository. Without a baseline file the check is skipped.
 
 ## Further Reading
 
