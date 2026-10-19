@@ -124,7 +124,8 @@ the program's tool calls in order:
 ## The action ledger
 
 An `ActionLedger` records every `NonIdempotent` call before it executes and its outcome
-after. Set one on `RunConfig`:
+after. Set one on `RunConfig`, or on the runner with `Runner::builder().action_ledger(...)`,
+which installs it on every run whose `RunConfig` carries none:
 
 ```rust
 use adk_core::{InMemoryActionLedger, RunConfig};
@@ -141,8 +142,8 @@ governed path authorizes the call and before it executes:
 | Ledger state | Behaviour | Function response |
 |--------------|-----------|-------------------|
 | No record | `begin`, execute, `complete` | The tool's result |
-| Completed with a result | Not executed | `{"status": "already_succeeded", "result_digest": "fnv1a128:…"}` |
-| Completed with an error | Not executed | `{"status": "already_failed", "error": "…"}`, where `error` is the text the model was given when the call failed |
+| Completed with a result | Not executed | `{"status": "already_succeeded", "result_digest": "fnv1a128:…", "detail": "…"}` |
+| Completed with an error | Not executed | `{"status": "already_failed", "error": "…", "detail": "…"}`, where `error` is the text the model was given when the call failed |
 | Begun, never completed | Not executed | `{"status": "outcome_unknown", "detail": "…"}` |
 | Read or `begin` fails | Not executed | `{"error": "tool '…' was not executed: …"}`, naming the ledger error's component, category, and code; the message is logged |
 
@@ -206,6 +207,12 @@ When a run is cancelled — `Runner::interrupt()` or a cancellation token — th
 persists one function response for every call still in flight, so each call keeps exactly
 one response and the next turn's model request shows the call and its unknown outcome.
 `adk_core::is_outcome_unknown()` recognizes these responses.
+
+A process that stops mid-tool leaves its call with no response at all. Before a recovered
+session continues, `Runner::recover_unanswered_calls(user_id, session_id)` appends one response
+for each such call from the ledger record under its idempotency key — `already_succeeded`,
+`already_failed`, or `outcome_unknown` when the record has no outcome or there is none — and
+executes no tool.
 
 ## Delegation timeouts
 

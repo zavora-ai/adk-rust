@@ -1,6 +1,9 @@
 # Schema Normalization
 
-ADK-Rust automatically normalizes MCP tool schemas for each LLM provider at request time. This means MCP tools work seamlessly across Gemini, OpenAI, Anthropic, and other providers without manual schema tweaking.
+ADK-Rust normalizes every tool's parameters schema — from an MCP server, a `#[tool]`
+function, a `FunctionTool`, or a hand-written `Tool` — for each LLM provider at request time.
+A tool declares one schema, and each provider receives the form its function-calling API
+accepts.
 
 ## How It Works
 
@@ -14,13 +17,18 @@ MCP Server → raw JSON Schema → McpToolset (stores verbatim)
                           Provider API (Gemini/OpenAI/Anthropic)
 ```
 
-1. **McpToolset** discovers tools and stores their raw `inputSchema` without modification
+1. **McpToolset** discovers tools and stores their raw `inputSchema` without modification; a
+   schema over its `McpSchemaLimits` size or node limit is skipped at discovery (see
+   [MCP client](../mcp/client.md))
 2. When the model builds a request, it calls `schema_adapter().normalize_schema()` on each tool's schema
 3. Each provider has its own adapter that applies only the transforms its API requires
 4. Results are cached by content hash to avoid redundant normalization. The cache lock is
    not held while a schema is normalized, so one slow schema does not delay other requests
 
 ## Provider Behavior
+
+The Gemini column is the default `GeminiSchemaAdapter::new()` that `GeminiModel` uses; see
+[GeminiSchemaAdapter](#geminischemaadapter) for its other dialects.
 
 | Feature | Gemini | OpenAI Strict | OpenAI | Anthropic | Generic |
 |---------|--------|---------------|--------|-----------|---------|
@@ -41,32 +49,33 @@ MCP Server → raw JSON Schema → McpToolset (stores verbatim)
 
 ## The SchemaAdapter Trait
 
-All adapters implement this trait from `adk-core`:
+All adapters implement `adk_core::SchemaAdapter` (`Send + Sync + Debug`). Only
+`normalize_schema` is required:
 
-```rust
-use serde_json::Value;
-use std::borrow::Cow;
+| Method | Returns | Default |
+|--------|---------|---------|
+| `normalize_schema(&self, schema: Value)` | The schema in the form the provider accepts | Required |
+| `normalize_tool_name(&self, name: &str)` | `Cow<str>` | The name truncated to 64 bytes at a UTF-8 character boundary |
+| `empty_schema(&self)` | The schema for a tool with no `parameters_schema` | `{"type": "object", "properties": {}}` |
+| `parameters_field(&self)` | The function-declaration field the normalized schema is posted under | `"parameters"` |
 
-pub trait SchemaAdapter: Send + Sync + std::fmt::Debug {
-    /// Normalize a raw JSON Schema for this provider.
-    fn normalize_schema(&self, schema: Value) -> Value;
-
-    /// Normalize a tool name (default: truncate to 64 bytes at UTF-8 boundary).
-    fn normalize_tool_name<'a>(&self, name: &'a str) -> Cow<'a, str>;
-
-    /// Fallback schema when no parameters_schema is provided.
-    fn empty_schema(&self) -> Value;
-}
-```
-
-Each `Llm` implementation returns its adapter via `schema_adapter()`:
+Each `Llm` implementation returns its adapter via `schema_adapter()`, which defaults to
+`GenericSchemaAdapter`:
 
 ```rust
 use adk_core::Llm;
+use adk_model::GeminiModel;
 
 let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
-let adapter = model.schema_adapter(); // Returns &GeminiSchemaAdapter
+let adapter = model.schema_adapter(); // &dyn SchemaAdapter: a GeminiSchemaAdapter
 ```
+
+| Client | Adapter |
+|--------|---------|
+| `GeminiModel` | `GeminiSchemaAdapter::new()` |
+| `OpenAIClient`, Azure OpenAI | `OpenAiSchemaAdapter` |
+| `AnthropicClient` | `AnthropicSchemaAdapter` |
+| Ollama, DeepSeek, and clients that do not override `schema_adapter()` | `GenericSchemaAdapter` |
 
 ## Available Adapters
 
@@ -83,13 +92,28 @@ let adapter = GeminiSchemaAdapter::new();
 
 // Vertex AI (sets additionalProperties: false instead of removing)
 let adapter = GeminiSchemaAdapter::vertex_ai();
+
+// Standard JSON Schema, posted under `parametersJsonSchema`
+let adapter = GeminiSchemaAdapter::json_schema();
 ```
 
-Transform pipeline:
+The constructor picks a `GeminiSchemaDialect`, which decides both the reduction and the
+function-declaration field (`parameters_field()`):
+
+| Constructor | Dialect | Field | Reduction |
+|-------------|---------|-------|-----------|
+| `new()` (default) | `OpenApiSubset` | `parameters` | All steps below; removes `additionalProperties` |
+| `vertex_ai()` | `VertexOpenApiSubset` | `parameters` | All steps below; sets `additionalProperties: false` on objects instead of removing it |
+| `json_schema()` | `JsonSchema` | `parametersJsonSchema` | Steps 1, 2, 13, 14 and 15 only, so `allOf`, `anyOf`, `if`/`then`, `additionalProperties` and every bound stay |
+
+`GeminiModel` always uses `new()`. A Gemini Live session takes the JSON Schema dialect with
+`GeminiRealtimeModel::with_schema_dialect(GeminiSchemaDialect::JsonSchema)` in `adk-realtime`.
+
+Transform pipeline (`OpenApiSubset` and `VertexOpenApiSubset`):
 1. Resolve `$ref` (inline from definitions). Keywords beside a `$ref`, such as a field's own
    `description`, stay on the inlined schema and take precedence over the definition's. A
-   reference becomes `{"type": "object"}` when it names a definition already being inlined on
-   its path (so a self-referencing definition is expanded once), when the chain of references
+   reference becomes `{"type": "object"}` when it cannot be resolved, when it names a
+   definition already being inlined on its path (so a self-referencing definition is expanded once), when the chain of references
    is longer than 10, or when inlining it would copy more than
    `schema_utils::MAX_INLINED_REF_NODES` values in total.
 2. Strip `$schema`
@@ -114,7 +138,9 @@ Transform pipeline:
 
 ### OpenAiStrictSchemaAdapter
 
-Preserves schema structure while adding `additionalProperties: false` for structured outputs:
+Preserves schema structure while adding `additionalProperties: false` to every object, and
+returns `{"type": "object", "properties": {}, "additionalProperties": false}` as its empty
+schema, as OpenAI strict mode requires. No client selects it by default:
 
 ```rust
 use adk_model::openai::OpenAiStrictSchemaAdapter;
@@ -155,7 +181,7 @@ let adapter = GenericSchemaAdapter;
 
 ## Schema Caching
 
-Normalized schemas are cached by content hash to avoid redundant computation:
+Normalized schemas are cached by a hash of their content, independent of object key order:
 
 ```rust
 use adk_core::{GenericSchemaAdapter, SchemaCache};
@@ -176,12 +202,13 @@ cache.clear();
 ```
 
 Each cache owns one adapter instance, so entries normalized for different
-providers or adapter configurations cannot collide. Provider clients use these
-caches automatically during `generate_content()`.
+providers or adapter configurations cannot collide. The Gemini, OpenAI, Anthropic, and
+OpenAI-compatible clients use these caches automatically during `generate_content()`. The
+cache lock is held only for the lookup and the insert, never while a schema is normalized.
 
 ## Tool Name Truncation
 
-All adapters truncate tool names exceeding 64 bytes at valid UTF-8 character boundaries:
+All built-in adapters truncate tool names exceeding 64 bytes at valid UTF-8 character boundaries:
 
 ```rust
 use adk_core::SchemaAdapter;
@@ -273,19 +300,10 @@ impl SchemaAdapter for MyProviderAdapter {
 Run the schema normalization demo to see all adapters in action:
 
 ```bash
-cd examples/schema_normalization
-cargo run
+cargo run --manifest-path examples/schema_normalization/Cargo.toml
 ```
 
 No API keys needed — demonstrates normalization logic locally.
-
-## Migration from sanitize_schema
-
-If you previously relied on `McpToolset` returning pre-sanitized schemas:
-
-- **No code changes needed** for standard usage. The `Toolset` trait API is unchanged.
-- Schemas are now normalized at request time by the model adapter, not at tool registration.
-- If you were calling `parameters_schema()` and expecting Gemini-formatted output, the raw schema is now returned instead. Use the appropriate `SchemaAdapter` to normalize it yourself if needed.
 
 ---
 
