@@ -14,7 +14,7 @@ use super::manifest::Manifest;
 /// Capabilities that can be enabled on a sandbox session.
 ///
 /// Each capability determines which tools are bound to the agent
-/// by the [`SandboxRunner`] during session setup.
+/// by `adk-runner`'s `SandboxRunner` during session setup.
 ///
 /// # Example
 ///

@@ -3,6 +3,10 @@
 Developer tools for ADK-Rust coding agents — the inner-loop tools an agent needs
 to work on a codebase, scoped to a sandboxed workspace.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-devtools.svg)](https://crates.io/crates/adk-devtools)
+[![Documentation](https://docs.rs/adk-devtools/badge.svg)](https://docs.rs/adk-devtools)
+[![License](https://img.shields.io/crates/l/adk-devtools.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
+
 | Tool | Purpose |
 |------|---------|
 | `read_file` | Read a text file with line numbers (optional offset/limit). |
@@ -10,50 +14,86 @@ to work on a codebase, scoped to a sandboxed workspace.
 | `edit_file` | Exact-string replacement; requires a prior `read_file`. |
 | `glob` | List files matching a pattern (e.g. `src/**/*.rs`). |
 | `grep` | Regex content search across the tree. |
-| `bash` | Run a shell command in the workspace root, with a timeout. Streams stdout/stderr line-by-line via `ToolContext::emit_progress`. |
+| `bash` | Run a shell command in the workspace root, with a timeout. Opt-in. Streams stdout/stderr line-by-line via `ToolContext::emit_progress`. |
 
-All operations are rooted at a [`Workspace`] and rejected if they escape it.
-Mutations require a writable workspace; `bash` requires bash to be enabled.
+All operations are rooted at a `Workspace` and rejected if they escape it.
+Mutations require a writable workspace; `bash` requires `Workspace::allow_bash(true)`.
 
 The `bash` tool emits its output incrementally as it runs, so UIs can display a
-live terminal (see the `streaming_bash` example). The framework forwards each
-chunk as a partial event on the agent's `EventStream`; consumers detect them
-with `event.tool_progress_stream()`. The output is also returned as the tool's
-final result for the model, capped per stream at `Workspace::max_output_bytes`
+live terminal (see the
+[`streaming_bash`](https://github.com/zavora-ai/adk-rust/tree/main/examples/streaming_bash)
+example). The framework forwards each chunk as a partial event on the agent's `EventStream`;
+consumers detect them with `event.tool_progress_stream()`. The output is also returned as the
+tool's final result for the model, capped per stream at `Workspace::max_output_bytes`
 (default 1 MiB) as it is read; excess output is drained and discarded, and the
 result sets `truncated: true`.
 
+## Installation
+
+```toml
+[dependencies]
+adk-devtools = "3.0"
+```
+
+The crate has no feature flags.
+
 ## Usage
 
-```rust,ignore
+```rust
+use adk_agent::{LlmAgent, LlmAgentBuilder};
+use adk_core::Llm;
 use adk_devtools::{DevToolset, Workspace};
-use adk_agent::LlmAgentBuilder;
 use std::sync::Arc;
+use std::time::Duration;
 
-let workspace = Workspace::new("./my-repo")            // read-write, bash off
-    .allow_bash(true);                                 // opt in to the shell
-// let workspace = Workspace::read_only("./my-repo");  // explore / plan mode
+fn coding_agent(model: Arc<dyn Llm>) -> adk_core::Result<LlmAgent> {
+    let workspace = Workspace::new("./my-repo") // read-write, bash off
+        .allow_bash(true) // opt in to the shell
+        .bash_timeout(Duration::from_secs(60));
+    // let workspace = Workspace::read_only("./my-repo"); // explore / plan mode
 
-let agent = LlmAgentBuilder::new("coding-agent")
-    .model(model)
-    .toolset(Arc::new(DevToolset::new(workspace)))
-    .build()?;
+    LlmAgentBuilder::new("coding-agent")
+        .model(model)
+        .toolset(Arc::new(DevToolset::new(workspace)))
+        .build()
+}
 ```
 
 The toolset only exposes tools the workspace permits: a read-only workspace hides
-`write_file`/`edit_file`/`bash`.
+`write_file`/`edit_file`/`bash`, and `bash` is hidden until `allow_bash(true)`.
 
 ## Sandboxing
 
-`Workspace` enforces **path containment**, **read-only** mode, and a **bash
-timeout**. Containment is checked against resolved paths: a symlink pointing
-outside the root is refused, a dangling or looping symlink is refused wherever it
-points (a write would create its target), and `glob` refuses `..` and absolute
-patterns and never lists through a symlinked directory that leads outside. A
-timed-out or cancelled `bash` call kills the command's whole process group.
-Phase 1 runs `bash` host-local (`sh -c`, cwd pinned to the root); it is
-not strongly isolated. For strong isolation, run `bash` behind a containerized
-`CodeExecutor`. The policy vocabulary aligns with `adk-code`'s `SandboxPolicy` and
-will integrate with it directly in a later phase.
+| Control | Default | Builder |
+|---------|---------|---------|
+| Path containment | Always on | — |
+| Writes | Allowed (`Workspace::new`); denied (`Workspace::read_only`) | `writable` |
+| `bash` | Off | `allow_bash` |
+| `bash` timeout | 120 s; a call's `timeout_secs` can shorten it but not extend it | `bash_timeout` |
+| `bash` environment | Cleared, then `DEFAULT_ENV_ALLOWLIST` (`PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `TERM`, `USER`, `SHELL`) | `env_allowlist`, `inherit_env` |
+| Output per stream | 1 MiB | `max_output_bytes` |
 
-See `docs/design/coding-agent.md` for the overall coding-agent design.
+Containment is checked against resolved paths: a symlink pointing outside the root is refused,
+a dangling or looping symlink is refused wherever it points (a write would create its target),
+and `glob` refuses `..` and absolute patterns and never lists through a symlinked directory that
+leads outside. Writing a file with more than one hard link replaces it, keeping its permissions,
+instead of truncating it, so a link outside the workspace keeps its contents. A timed-out or
+cancelled `bash` call kills the command's whole process group.
+
+`bash` runs host-local (`sh -c`, cwd pinned to the root); it is not isolated, and a command can
+reach absolute paths and the network. The environment is cleared so a command cannot read
+provider API keys from the agent process with `env`; adding a credential to the allowlist, or
+`inherit_env(true)`, exposes it again. For strong isolation, run commands through a containerized
+`adk-code` executor or an `adk-sandbox` backend. The policy vocabulary aligns with `adk-code`'s
+`SandboxPolicy`.
+
+See [`docs/design/coding-agent.md`](https://github.com/zavora-ai/adk-rust/blob/main/docs/design/coding-agent.md)
+for the overall coding-agent design.
+
+## License
+
+Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.

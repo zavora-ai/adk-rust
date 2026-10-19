@@ -11,17 +11,17 @@
 //!
 //! ## Quick start
 //!
-//! ```rust,ignore
+//! ```rust
 //! use adk_devtools::{DevToolset, Workspace};
-//! use adk_agent::LlmAgentBuilder;
 //! use std::sync::Arc;
 //!
 //! // `bash` is off by default; enable it only for agents that need a shell.
 //! let workspace = Workspace::new("./my-repo").allow_bash(true);
-//! let agent = LlmAgentBuilder::new("coding-agent")
-//!     .model(model)
-//!     .toolset(Arc::new(DevToolset::new(workspace)))
-//!     .build()?;
+//! assert!(workspace.bash_allowed());
+//!
+//! // Register with an agent: `LlmAgentBuilder::new("coding-agent").toolset(toolset)`.
+//! let toolset = Arc::new(DevToolset::new(workspace));
+//! # let _ = toolset;
 //! ```
 //!
 //! ## Sandboxing
@@ -29,11 +29,11 @@
 //! [`Workspace`] enforces **path containment** (no escaping the root),
 //! **read-only** mode (deny writes/bash), **opt-in bash** (off until
 //! [`Workspace::allow_bash`] enables it), and a **bash timeout** that a call
-//! can shorten but not extend. Phase 1 runs
-//! `bash` host-local; for strong isolation, run behind a containerized
-//! `CodeExecutor` (see `docs/design/coding-agent.md`). The policy vocabulary is
-//! aligned with `adk-code`'s `SandboxPolicy` and will integrate with it directly
-//! in a later phase.
+//! can shorten but not extend. `bash` runs host-local with a cleared environment
+//! plus [`DEFAULT_ENV_ALLOWLIST`], so provider API keys in the agent process are not
+//! visible to commands; for strong isolation, run commands behind a containerized
+//! `adk-code` executor (see `docs/design/coding-agent.md`). The policy vocabulary is
+//! aligned with `adk-code`'s `SandboxPolicy`.
 
 mod error;
 mod toolset;

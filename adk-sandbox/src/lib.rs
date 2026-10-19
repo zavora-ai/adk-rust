@@ -14,11 +14,12 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
-//! use adk_sandbox::{ProcessBackend, ExecRequest, Language};
-//! use std::time::Duration;
+//! ```rust,no_run
+//! use adk_sandbox::{ExecRequest, Language, ProcessBackend, SandboxBackend};
 //! use std::collections::HashMap;
+//! use std::time::Duration;
 //!
+//! # async fn run() -> Result<(), adk_sandbox::SandboxError> {
 //! let backend = ProcessBackend::default();
 //! let request = ExecRequest {
 //!     language: Language::Python,
@@ -26,10 +27,12 @@
 //!     stdin: None,
 //!     timeout: Duration::from_secs(30),
 //!     memory_limit_mb: None,
-//!     env: HashMap::new(),
+//!     env: HashMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]),
 //! };
 //! let result = backend.execute(request).await?;
 //! println!("stdout: {}", result.stdout);
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## Feature Flags
@@ -38,6 +41,13 @@
 //! |-----------|--------------------------------------|---------|
 //! | `process` | Subprocess execution via tokio       | ✅      |
 //! | `wasm`    | In-process WASM execution via wasmtime | ❌    |
+//! | `sandbox-macos`, `sandbox-linux`, `sandbox-windows` | OS enforcers for `ProcessBackend` (Seatbelt, bubblewrap; the Windows AppContainer enforcer reports itself unavailable) | ❌ |
+//! | `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ |
+//! | `workspace` | Workspace lifecycle and `LocalUnixClient` | ❌ |
+//! | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ |
+//!
+//! [`SandboxError`] is `#[non_exhaustive]`; its workspace variants exist only with the
+//! `workspace` feature.
 
 pub mod backend;
 pub mod error;

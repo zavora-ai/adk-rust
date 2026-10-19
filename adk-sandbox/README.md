@@ -2,7 +2,28 @@
 
 Isolated code execution runtime for [ADK-Rust](https://github.com/zavora-ai/adk-rust) agents.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-sandbox.svg)](https://crates.io/crates/adk-sandbox)
+[![Documentation](https://docs.rs/adk-sandbox/badge.svg)](https://docs.rs/adk-sandbox)
+[![License](https://img.shields.io/crates/l/adk-sandbox.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
+
 `adk-sandbox` provides the `SandboxBackend` trait and two implementations for executing code in isolation. It separates the *isolation concern* from language-specific toolchains — `adk-code` handles compilation and language pipelines, while `adk-sandbox` handles running the resulting code safely.
+
+## Installation
+
+```toml
+[dependencies]
+adk-sandbox = "3.0"
+
+# OS-level enforcement and the WASM backend:
+adk-sandbox = { version = "3.0", features = ["sandbox-native", "wasm"] }
+```
+
+Or use the meta-crate, where the `sandbox` feature (included in `full`) re-exports it:
+
+```toml
+[dependencies]
+adk-rust = { version = "3.0", features = ["sandbox"] }
+```
 
 ## Feature Flags
 
@@ -13,7 +34,7 @@ Isolated code execution runtime for [ADK-Rust](https://github.com/zavora-ai/adk-
 | `sandbox-macos` | macOS Seatbelt enforcement          | ❌      | None               |
 | `sandbox-linux` | Linux bubblewrap enforcement        | ❌      | None (external `bwrap` binary) |
 | `sandbox-windows` | Windows AppContainer enforcement  | ❌      | `windows-sys`      |
-| `sandbox-native` | Auto-detect platform enforcer      | ❌      | All of the above   |
+| `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ | All of the above |
 | `workspace` | Workspace lifecycle + `LocalUnixClient` | ❌   | `tar`, `uuid`      |
 | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ | `bollard`, `futures` |
 
@@ -69,23 +90,25 @@ Note: `ExecRequest` has no `Default` implementation — `timeout` must always be
 `SandboxTool` implements `adk_core::Tool`, making sandbox execution available to LLM agents. Errors are returned as structured JSON (never as `ToolError`), so the agent can reason about failures.
 
 ```rust
-use adk_sandbox::{SandboxTool, ProcessBackend};
+use adk_agent::{LlmAgent, LlmAgentBuilder};
+use adk_core::Llm;
+use adk_sandbox::{ProcessBackend, SandboxTool};
 use std::sync::Arc;
 
-let backend = Arc::new(ProcessBackend::default());
-let tool = SandboxTool::new(backend);
+fn sandbox_agent(model: Arc<dyn Llm>) -> adk_core::Result<LlmAgent> {
+    let backend = Arc::new(ProcessBackend::default());
+    let tool = SandboxTool::new(backend);
 
-// Use with any LLM agent
-let agent = LlmAgentBuilder::new("sandbox_agent")
-    .tool(Arc::new(tool))
-    .build()?;
+    LlmAgentBuilder::new("sandbox_agent").model(model).tool(Arc::new(tool)).build()
+}
 ```
 
 The tool accepts `language`, `code`, optional `stdin`, and optional `timeout_secs` parameters. It requires the `code:execute` scope. `timeout_secs` is clamped to the schema's 1–300 second range; a missing or non-numeric value uses 30 seconds.
 
 ## Error Handling
 
-All backend errors use `SandboxError`:
+All backend errors use `SandboxError`, which is `#[non_exhaustive]`: a `match` outside the
+crate needs a wildcard arm.
 
 | Variant            | When                                          |
 |--------------------|-----------------------------------------------|
@@ -97,6 +120,7 @@ All backend errors use `SandboxError`:
 | `EnforcerFailed`   | Sandbox enforcer failed to apply profile      |
 | `EnforcerUnavailable` | Sandbox enforcer not functional on this system |
 | `PolicyViolation`  | A policy path could not be resolved           |
+| `ProvisionFailed`, `SessionNotFound`, `SnapshotNotFound`, `PathTraversal`, `DockerUnavailable`, `SessionTimeout` | Workspace lifecycle failures (`workspace` feature only) |
 
 Non-zero exit codes are **not** errors — they are returned in `ExecResult.exit_code`.
 
@@ -119,34 +143,33 @@ Under an enforcer, `ProcessBackend` runs each execution in a fresh scratch direc
 
 ```rust
 use adk_sandbox::{
-    ProcessBackend, ProcessConfig, SandboxBackend,
+    ExecRequest, ExecResult, ProcessBackend, ProcessConfig, SandboxBackend, SandboxError,
     SandboxPolicyBuilder, get_enforcer,
 };
 
-// 1. Build a policy. Seatbelt grants the macOS system runtime itself; bubblewrap
-//    mounts only the listed paths, so Linux policies list the system directories too.
-let policy = SandboxPolicyBuilder::new()
-    .allow_read("/usr")
-    .allow_read("/tmp")
-    .allow_read_write("/tmp/work")
-    .allow_process_spawn()
-    // Network is denied by default
-    .env("PATH", "/usr/bin:/usr/local/bin")
-    .build();
+async fn run_confined(request: ExecRequest) -> Result<ExecResult, SandboxError> {
+    // 1. Build a policy. Seatbelt grants the macOS system runtime itself; bubblewrap
+    //    mounts only the listed paths, so Linux policies list the system directories too.
+    //    Every allowed path must exist, or execution fails with `PolicyViolation`.
+    let policy = SandboxPolicyBuilder::new()
+        .allow_read("/usr")
+        .allow_read("/tmp")
+        .allow_read_write("/tmp/work")
+        .allow_process_spawn()
+        // Network is denied by default
+        .env("PATH", "/usr/bin:/bin")
+        .build();
 
-// 2. Get the platform enforcer
-let enforcer = get_enforcer()?;
-println!("Using enforcer: {}", enforcer.name());
+    // 2. Get the platform enforcer (needs `sandbox-macos`, `sandbox-linux`, or `sandbox-native`)
+    let enforcer = get_enforcer()?;
+    println!("Using enforcer: {}", enforcer.name());
 
-// 3. Create a sandboxed backend
-let backend = ProcessBackend::with_sandbox(
-    ProcessConfig::default(),
-    enforcer,
-    policy,
-);
+    // 3. Create a sandboxed backend
+    let backend = ProcessBackend::with_sandbox(ProcessConfig::default(), enforcer, policy);
 
-// 4. Execute code — network is blocked, writes restricted
-let result = backend.execute(request).await?;
+    // 4. Execute code — network is blocked, writes restricted
+    backend.execute(request).await
+}
 ```
 
 ### Platform Differences
@@ -170,7 +193,8 @@ The `workspace` feature provides the `provision → session → exec → snapsho
 
 | Control | `LocalUnixClient` | `DockerClient` |
 |---------|-------------------|----------------|
-| Filesystem | Host filesystem; the workspace is only the working directory | Container filesystem |
+| Commands' filesystem | Host filesystem; the workspace is only the working directory | Container filesystem |
+| Session file operations | `read_file`, `write_file`, `list_dir`, `apply_patch` headers, and the working directory resolve inside the workspace, following symlinks only within it; a dangling symlink is refused | Inside the container's `/workspace` |
 | Network | Host network | `none` by default; `with_network_mode("bridge")` to enable |
 | Capabilities | Host user | `cap_drop: ALL`, `no-new-privileges` |
 | Process count | Unlimited | 512 by default (`with_pids_limit`) |
@@ -178,12 +202,20 @@ The `workspace` feature provides the `provision → session → exec → snapsho
 | Output | 1 MiB per stream, read while the command runs | Unbounded |
 | Timeout | Kills the command's process group | Kills the command's process tree inside the container |
 
-`LocalUnixClient` is not an isolation boundary. Use `DockerClient` when workspace commands are untrusted. `DockerClient` passes paths, URLs, and branch names as command arguments rather than shell text, reads files as raw bytes, and needs a network mode other than `none` for `GitRepo` manifest entries.
+Session paths are relative: an absolute path or a `..` that leaves the root fails with
+`SandboxError::PathTraversal`. Writing a file with more than one hard link replaces it, keeping
+its permissions, instead of truncating it, so a link outside the workspace keeps its contents.
+
+`LocalUnixClient` is not an isolation boundary for commands. Use `DockerClient` when workspace commands are untrusted. `DockerClient` passes paths, URLs, and branch names as command arguments rather than shell text, reads files as raw bytes, and needs a network mode other than `none` for `GitRepo` manifest entries.
 
 ### Example
 
-See [`examples/sandbox_agent/`](../examples/sandbox_agent/) for a full LLM-agent-driven example that executes Python code in a sandboxed environment with network access blocked.
+See [`examples/sandbox_agent/`](https://github.com/zavora-ai/adk-rust/tree/main/examples/sandbox_agent) for a full LLM-agent-driven example that executes Python code in a sandboxed environment with network access blocked.
 
 ## License
 
 Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.

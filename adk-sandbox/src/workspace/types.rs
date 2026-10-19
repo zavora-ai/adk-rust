@@ -8,7 +8,7 @@ use std::time::Duration;
 
 /// Opaque handle to a provisioned sandbox session.
 ///
-/// Returned by [`SandboxClient::provision`] and used to reference
+/// Returned by [`SandboxClient::provision`](crate::workspace::SandboxClient::provision) and used to reference
 /// the session across lifecycle operations (start, stop, snapshot).
 ///
 /// # Example
@@ -36,8 +36,8 @@ impl SessionHandle {
 
 /// Opaque identifier for a persisted workspace snapshot.
 ///
-/// Returned by [`SandboxClient::snapshot`] and accepted by
-/// [`SandboxClient::resume`] to restore a workspace to a
+/// Returned by [`SandboxClient::snapshot`](crate::workspace::SandboxClient::snapshot) and accepted by
+/// [`SandboxClient::resume`](crate::workspace::SandboxClient::resume) to restore a workspace to a
 /// previously captured state.
 ///
 /// # Example

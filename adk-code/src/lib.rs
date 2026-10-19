@@ -14,7 +14,11 @@
 //! - Sandbox policy model ([`SandboxPolicy`], [`BackendCapabilities`])
 //! - Request validation helpers ([`validate_policy`], [`validate_request`])
 //! - Workspace abstraction for collaborative project builds ([`Workspace`], [`CollaborationEvent`])
-//! - Built-in execution backends (Rust sandbox, embedded JS, WASM guest, container)
+//! - Built-in execution backends: host-local Rust ([`RustSandboxExecutor`]), Rust over an
+//!   `adk-sandbox` backend ([`RustExecutor`], [`CodeTool`]), container execution
+//!   ([`ContainerCommandExecutor`], and `DockerExecutor` with the `docker` feature), embedded
+//!   JavaScript (`embedded-js`), embedded Python via Monty (`embedded-python`), and Vertex AI
+//!   Agent Engine sandboxes (`vertex-sandbox`)
 //!
 //! ## Product Direction
 //!
@@ -25,8 +29,9 @@
 //! - Export the same Rust body into generated projects
 //!
 //! Secondary support includes embedded JavaScript for lightweight transforms,
-//! WASM guest modules for portable sandboxed plugins, and container-backed
-//! execution for broader multi-language isolation.
+//! in-process Python through the Monty interpreter, and container-backed
+//! execution for broader multi-language isolation. [`WasmGuestExecutor`] validates
+//! WASM guest modules but does not run them.
 //!
 //! ## Quick Start
 //!
@@ -60,6 +65,8 @@
 //! - Depends on `adk-core` for shared error types
 //! - `adk-tool` depends on this crate for language-preset tool wrappers
 //! - `adk-studio` depends on this crate for live runner and code generation
+//! - Container executors drop every capability, set `no-new-privileges`, and limit the
+//!   container to [`DEFAULT_PIDS_LIMIT`] processes unless the config turns each off
 
 pub mod a2a_compat;
 mod code_tool;

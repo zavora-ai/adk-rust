@@ -1,7 +1,11 @@
 # adk-codeact-monty
 
-A Python [`CodeRuntime`](../adk-agent/src/codeact/runtime.rs) for the ADK-Rust
-[`CodeActAgent`](../adk-agent/src/codeact), backed by
+[![Crates.io](https://img.shields.io/crates/v/adk-codeact-monty.svg)](https://crates.io/crates/adk-codeact-monty)
+[![Documentation](https://docs.rs/adk-codeact-monty/badge.svg)](https://docs.rs/adk-codeact-monty)
+[![License](https://img.shields.io/crates/l/adk-codeact-monty.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
+
+A Python [`CodeRuntime`](https://docs.rs/adk-agent/latest/adk_agent/codeact/trait.CodeRuntime.html) for the ADK-Rust
+[`CodeActAgent`](https://docs.rs/adk-agent/latest/adk_agent/codeact/struct.CodeActAgent.html), backed by
 [Pydantic Monty](https://github.com/pydantic/monty) — a minimal, secure,
 Rust-native Python interpreter built for running LLM-generated code.
 
@@ -25,11 +29,21 @@ read-only or read-write paths and an explicit environment map (see
 
 ```toml
 [dependencies]
-adk-agent = { version = "3.0.0", features = ["codeact"] }
-adk-codeact-monty = "3.0.0"
+adk-agent = { version = "3.0", features = ["codeact"] }
+adk-codeact-monty = "3.0"
 ```
 
-> **Note:** this crate is **Experimental** (see [STABILITY.md](../STABILITY.md)) —
+Or use the meta-crate's `codeact-monty` feature, which implies `codeact` and is not part of any
+tier:
+
+```toml
+[dependencies]
+adk-rust = { version = "3.0", features = ["codeact-monty"] }
+```
+
+The crate has no feature flags of its own.
+
+> **Note:** this crate is **Experimental** (see [STABILITY.md](https://github.com/zavora-ai/adk-rust/blob/main/STABILITY.md)) —
 > the API may change in a minor release; pin an exact version for production use.
 
 ## Dependencies
@@ -47,34 +61,39 @@ cannot drift.
 
 ## Usage
 
-```rust,no_run
-use std::sync::Arc;
+```rust
 use adk_agent::codeact::CodeActAgent;
 use adk_codeact_monty::MontyRuntime;
+use adk_core::{Llm, Tool};
+use std::sync::Arc;
 
-let agent = CodeActAgent::builder()
-    .name("python_agent")
-    .model(model)
-    .runtime(Arc::new(MontyRuntime::new()))
-    .instruction("Solve the task by writing Python.")
-    .tool(Arc::new(MyTool))
-    .build()?;
+fn python_agent(model: Arc<dyn Llm>, tool: Arc<dyn Tool>) -> adk_core::Result<CodeActAgent> {
+    CodeActAgent::builder()
+        .name("python_agent")
+        .model(model)
+        .runtime(Arc::new(MontyRuntime::new()))
+        .instruction("Solve the task by writing Python.")
+        .tool(tool)
+        .build()
+}
 ```
 
-`MontyRuntime::new()` ships with **conservative default resource limits** (a
-per-advance wall-clock cap and a memory cap) so an accidental infinite loop or
+`MontyRuntime::new()` ships with **conservative default resource limits** (5 seconds of
+wall-clock time per advance and 256 MiB of memory) so an accidental infinite loop or
 runaway allocation in LLM-generated code cannot block the calling task. Limits
 ride along inside a serialized continuation, so a resumed run stays bounded too.
 Tighten or relax them with the builder:
 
 ```rust
-use std::time::Duration;
 use adk_codeact_monty::MontyRuntime;
+use std::time::Duration;
 
-let runtime = MontyRuntime::builder()
-    .max_duration(Duration::from_secs(2))
-    .max_memory(64 * 1024 * 1024)
-    .build();
+fn runtime() -> MontyRuntime {
+    MontyRuntime::builder()
+        .max_duration(Duration::from_secs(2))
+        .max_memory(64 * 1024 * 1024)
+        .build()
+}
 ```
 
 For **trusted** scripts only, remove the caps entirely (keeping just Monty's
@@ -83,7 +102,9 @@ recursion guard) with `unlimited()`:
 ```rust
 use adk_codeact_monty::MontyRuntime;
 
-let runtime = MontyRuntime::builder().unlimited().build();
+fn trusted_runtime() -> MontyRuntime {
+    MontyRuntime::builder().unlimited().build()
+}
 ```
 
 Tools are invoked through a single built-in function —
@@ -107,10 +128,10 @@ dispatched.
 ## Example
 
 A runnable example lives in
-[`examples/codeact_monty_agent`](../examples/codeact_monty_agent):
+[`examples/codeact_monty_agent`](https://github.com/zavora-ai/adk-rust/tree/main/examples/codeact_monty_agent):
 
 ```bash
-cd examples/codeact_monty_agent && cargo run
+cargo run --manifest-path examples/codeact_monty_agent/Cargo.toml
 ```
 
 It runs offline with a deterministic model that writes one Python script: it
@@ -176,76 +197,29 @@ unavailable regardless of policy.
 ```rust
 use adk_codeact_monty::{MontyRuntime, PathAccess};
 
-let runtime = MontyRuntime::builder()
-    .allow_path("/data", "/srv/agent/data", PathAccess::ReadOnly)
-    .allow_path("/out", "/srv/agent/out", PathAccess::ReadWrite)
-    .environ_var("PROJECT", "acme")
-    .build();
+fn runtime() -> MontyRuntime {
+    MontyRuntime::builder()
+        .allow_path("/data", "/srv/agent/data", PathAccess::ReadOnly)
+        .allow_path("/out", "/srv/agent/out", PathAccess::ReadWrite)
+        .environ_var("PROJECT", "acme")
+        .build()
+}
 ```
 
 The granted access is described to the model in the system prompt, so it knows
 which paths it may read or write and which environment variables exist.
 
-## Notes on the CodeActAgent API (dogfooding feedback)
+## Runtime contract
 
-Building this adapter surfaced several rough edges in the `CodeRuntime` seam.
-Four of the five have since been **fixed in `adk-agent`** (the fifth was left as
-is on purpose); this section records the original friction and what changed.
+| Concern | Behaviour |
+|---------|-----------|
+| Arguments | The adapter reports a call's positional and keyword arguments separately (`PendingCall::positional_args`, `keyword_args`); the CodeAct driver binds them onto the tool's parameters with `adk_agent::codeact::bind_call_args`. `call_tool` passes one named dict, so every argument binds by exact name. |
+| Errors | Every error the model can fix by writing different code, including a syntax error, is a `RunStep::Raised`; `RuntimeError` is reserved for host failures such as a corrupt snapshot. |
+| Output | Each `RunStep` carries the `stdout` the script printed since the previous step; the driver shows it to the model as a `user`-role note and persists it in checkpoints, so output printed before a suspend survives resume. |
+| Call ids | Monty numbers calls with `u32`; the adapter widens them to the seam's `u64`. |
+| State | The adapter is stateless; `render_tools` is a pure rendering of the tool slice. |
 
-1. **(fixed) Arguments are now positional + keyword, bound centrally.**
-   Originally `PendingCall::args()` was a single flattened JSON object, forcing a
-   runtime that gets positional *and* keyword arguments (like Monty's
-   `args`/`kwargs`) to map positional args back onto parameter names — with *no
-   schema at the call site*. The only workaround was to scrape schemas out of
-   `render_tools` and cache them in interior-mutable state. The seam now exposes
-   `PendingCall::positional_args()` and `keyword_args()` separately, and the
-   driver binds them onto the tool's parameters in one place
-   (`adk_agent::codeact::bind_call_args`). This adapter is now **stateless** — no
-   lock, no cached map.
-
-2. **(fixed) `render_tools` is now a pure rendering hook.** It used to be the
-   only place a runtime saw the tool set, so it doubled as "describe the tools"
-   and "remember them for arg-binding," which is what drove the shared mutable
-   state above. With central binding, a runtime never needs to remember anything
-   from it: `render_tools` is documented and used as a pure function of the tool
-   slice. (No signature change was required — removing the *reason* to cache was
-   the fix.)
-
-3. **(fixed) Script vs. host errors are now unambiguous.** Previously a runtime
-   had to split errors between `RunStep::Raised` (model's mistake → feed back)
-   and `RuntimeError` (host failure → abort), but the `RuntimeError::Parse`
-   variant blurred the line: a parse failure is a *model* mistake yet was modeled
-   as a host error. `RuntimeError::Parse` has been removed; **all** script-visible
-   errors — including syntax/parse failures — now flow through `RunStep::Raised`,
-   and `RuntimeError` is strictly host failure (snapshot/internal). The rustdoc
-   states the rule plainly: *if the model could fix it by writing different code,
-   it's `RunStep::Raised`.*
-
-4. **(left as-is, by request) `call_id` is `u64` on the seam but `u32` in Monty.**
-   A one-line `u64::from(...)` at the boundary; not worth a breaking change.
-
-5. **(fixed) `stdout` now has a channel.** Each `RunStep` carries the `stdout`
-   the script produced since the previous step (`RunStep::with_stdout`). This
-   adapter captures `print()` output with `PrintWriter::CollectString` and
-   attaches it; the driver surfaces it back to the model so it can see what its
-   code printed.
-
-### Re-evaluation after the changes
-
-The adapter shrank and lost all interior mutability. A couple of smaller things
-remain, none blocking:
-
-- **Argument binding is exact for this adapter.** Monty passes arguments as a
-  single named dict, so they reach `bind_call_args` as exact name→value pairs
-  with no positional-order inference. The framework's positional heuristic
-  (`required` first, then `properties`) only matters for runtimes that surface
-  positional arguments; this one never does.
-- **stdout is surfaced as a `user`-role transcript note** and persisted into
-  checkpoints so output printed before a suspend survives resume and crash
-  recovery. An agent that wants to route it elsewhere (a trace span, a UI
-  channel) can still consume the `stdout` field on each `RunStep` itself.
-
-### Safety and tool calling
+## Safety and tool calling
 
 - **Default resource limits.** `MontyRuntime::new()` applies conservative
   per-advance time and memory caps for untrusted code; `builder().unlimited()`
@@ -257,3 +231,11 @@ remain, none blocking:
   non-string key — is refused with a corrective error instead of being silently
   dispatched. The model has no ambiguous calling form to get wrong. Tool
   descriptions are collapsed to a single comment line in the catalog.
+
+## License
+
+Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.
