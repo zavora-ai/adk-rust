@@ -41,7 +41,8 @@ Requirements:
 - `GOOGLE_API_KEY` environment variable set
 - Network access to the Gemini API
 - For cross-framework comparison: Python 3 with the packages the harnesses in
-  `adk-bench/harnesses` import (`google-genai`, `langgraph`)
+  `adk-bench/harnesses` import (`google-generativeai`, `langgraph`, `langchain-google-genai`,
+  `langchain-core`), run from the repository root
 
 ## Methodology
 
