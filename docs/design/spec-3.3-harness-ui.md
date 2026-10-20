@@ -9,6 +9,7 @@
 | **Evidence** | The research report `reports/Harness UI expectations 2026.md` and its notes (113 GitHub issues read through the GitHub CLI on 2026-10-20, product documentation and changelogs dated 2026); every demand figure below is a 👍 count from that census |
 | **Affected crates** | NEW `adk-surface`; `adk-cli` (one renderer, status, headless contract, pairing); `adk-server` (surface routes, inbox wiring for interactive runs, AG-UI mapping, bundled web client, `/debug` routes); `adk-acp` (always-rules, diff and terminal blocks, session list); `adk-core` (two additive methods); `adk-harness` (diff preview, rewind ledger view); `adk-graph` (node progress in the runner stream) |
 | **Stability** | `adk-surface` enters at **Beta**; the bundled web client and the console renderer follow `adk-cli`'s tier |
+| **Self-improvement** | [`spec-3.4-self-improving-harness.md`](spec-3.4-self-improving-harness.md): a held `open_pull_request` is a decision card, and the web client gains Defects and Proposals tabs |
 
 ---
 

@@ -67,6 +67,7 @@ Autonomous agents that do vertically integrated tasks well, demonstrating:
 | Mega Agent (all capabilities combined) | 🚧 | Core capabilities exist; the integration showcase is the HarnessAgent — see [`docs/design/spec-3.1-harness-agent.md`](docs/design/spec-3.1-harness-agent.md) |
 | Agent Kernel (always-on harness: process model, wake sources, proactivity, drivers, partitions) | 🚧 | Designed — see [`docs/design/spec-3.2-agent-kernel.md`](docs/design/spec-3.2-agent-kernel.md); builds on the HarnessAgent |
 | Harness UI (one decision contract rendered by the console, web client, ACP, AG-UI and notifiers) | 🚧 | Designed — see [`docs/design/spec-3.3-harness-ui.md`](docs/design/spec-3.3-harness-ui.md); builds on specs 3.1 and 3.2 |
+| Self-improving harness (opt-in maintenance loop: defect mining, sealed gate, signed bot PRs, supervised patch upgrades) | 🚧 | Designed — see [`docs/design/spec-3.4-self-improving-harness.md`](docs/design/spec-3.4-self-improving-harness.md); Experimental, off by default |
 
 ### What's Shipped in Q2 2026
 

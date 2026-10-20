@@ -9,6 +9,7 @@
 | **Affected crates** | NEW `adk-kernel`; `adk-harness` (feature `kernel`, default on); `adk-cli` (`adk-rust up`, `attach`, `ps`, …); additive changes in `adk-agent` (ambient), `adk-server` (background, webhooks), `adk-tool` (MCP manager), `adk-devtools`, `adk-sandbox`; `adk-managed` (managed form) |
 | **Stability** | `adk-kernel` enters at **Beta** |
 | **Surfaces** | [`spec-3.3-harness-ui.md`](spec-3.3-harness-ui.md): the per-session surface feed that `/kernel/events` generalises, the decision contract every surface renders, pairing tokens the control plane honours |
+| **Self-improvement** | [`spec-3.4-self-improving-harness.md`](spec-3.4-self-improving-harness.md): the consolidation tick's defect-mining and proposal tools, the `self-improver` `Maintenance` process, and the supervisor's pinned patch upgrade with snapshot and rollback |
 
 ---
 

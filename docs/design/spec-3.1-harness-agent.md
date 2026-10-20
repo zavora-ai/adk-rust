@@ -10,6 +10,7 @@
 | **Stability** | `adk-harness` enters at **Beta** ([STABILITY.md](../../STABILITY.md)) |
 | **Extended by** | [`spec-3.2-agent-kernel.md`](spec-3.2-agent-kernel.md): the always-on form of the harness; `kernel` becomes a default feature of `adk-harness` |
 | **Surfaces** | [`spec-3.3-harness-ui.md`](spec-3.3-harness-ui.md): what each surface shows and how it answers (the console, web client, ACP, AG-UI and notifiers); it changes two statements here, recorded in its §10: a confirmation that times out parks the call when an approval store exists (§7.5), and the bundled web UI is authenticated and answers approvals (§8.2) |
+| **Self-improvement** | [`spec-3.4-self-improving-harness.md`](spec-3.4-self-improving-harness.md): the opt-in maintenance loop; it widens the protected-path list of §9.2 I29 to the evaluator, CI, release and governance paths, keys workspace trust (§7.7) to file content, and corrects §7.13's claim that spend is keyed per subject |
 
 ---
 
