@@ -227,12 +227,67 @@ host, and port and a path at or below the audience path; any other URL fails wit
 | Broker | Crate and feature | Source of the token |
 |--------|-------------------|---------------------|
 | `SecretCredentialBroker` | `adk-auth` | A `SecretProvider` secret bound to an exact `(AgentId, resource)` pair with its granted scopes |
-| `TokenExchangeBroker` | `adk-auth`, `token-exchange` | An RFC 8693 token exchange of the identity source's credential at an authorization server; optional RFC 7009 revocation |
+| `TokenExchangeBroker` | `adk-auth`, `token-exchange` | An RFC 8693 token exchange at an authorization server — of the identity source's credential, or, in on-behalf-of mode, of the subject's token with the agent's credential as the actor; optional RFC 7009 revocation |
 
-`TokenExchangeBroker` caches each token until shortly before it expires. Concurrent
-requests for a token that is not cached send one exchange and share its result. Its
-requests give up after 30 seconds (connect timeout 5 seconds); `with_http_client`
+`TokenExchangeBroker` caches each token per subject (`ActingContext::on_behalf_of`),
+delegation chain, agent, resource, and scope set until shortly before it expires, so a token
+minted while the agent acts for one user is never served to a run acting for another.
+Concurrent requests for a token that is not cached send one exchange and share its result.
+Its requests give up after 30 seconds (connect timeout 5 seconds); `with_http_client`
 replaces the client.
+
+| Mode | `subject_token` | `actor_token` |
+|------|-----------------|---------------|
+| Agent-only (default) | The identity source's credential | Not sent |
+| On-behalf-of (`on_behalf_of(subjects)`) | The token a `SubjectTokenSource` returns for the run's `on_behalf_of` subject, with its `SubjectToken::token_type` | The identity source's credential |
+
+In on-behalf-of mode the issued token carries the subject's authority with the agent recorded
+as the actor, so a `gh` or cloud API call is made as the user. A run acting for no subject
+fails with `credential.subject_missing` before any request is sent.
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use adk_auth::{SubjectToken, SubjectTokenSource, TokenExchangeBroker};
+use adk_core::{
+    ActingContext, AdkError, AgentCredential, AgentId, AgentPrincipal, CredentialKind,
+    ErrorCategory, ErrorComponent, StaticIdentitySource, SubjectRef, async_trait,
+    resource_indicator,
+};
+
+/// Access tokens captured when each user signed in.
+#[derive(Debug)]
+struct SignedInUsers(HashMap<String, String>);
+
+#[async_trait]
+impl SubjectTokenSource for SignedInUsers {
+    async fn subject_token(
+        &self,
+        subject: &SubjectRef,
+        _acting: &ActingContext,
+    ) -> adk_core::Result<SubjectToken> {
+        self.0.get(&subject.id).map(SubjectToken::access_token).ok_or_else(|| {
+            AdkError::new(
+                ErrorComponent::Auth,
+                ErrorCategory::Unauthorized,
+                "credential.subject_token_unavailable",
+                format!("'{}' has no token; sign in again", subject.id),
+            )
+        })
+    }
+}
+
+fn broker(users: SignedInUsers) -> adk_core::Result<TokenExchangeBroker> {
+    let id = AgentId::new("spiffe://acme.example/agent/github")?;
+    let identity = StaticIdentitySource::new(AgentPrincipal::new(id.clone()))
+        .with_credential(AgentCredential::new(id, CredentialKind::JwtSvid, "eyJ..."));
+    let sts = resource_indicator("https://sts.acme.example/token")?;
+    Ok(TokenExchangeBroker::new(sts, Arc::new(identity))
+        .with_client_credentials("github-agent", "client-secret")
+        .on_behalf_of(Arc::new(users)))
+}
+```
 
 ```rust
 use std::sync::Arc;
@@ -274,6 +329,7 @@ let broker = SecretCredentialBroker::new(secret_provider)
 | `credential.not_bound` | `Forbidden` | `SecretCredentialBroker` has no binding for the agent and resource |
 | `credential.scope_exceeded` | `Forbidden` | The requested scopes exceed the binding's grant |
 | `credential.subject_mismatch` | `Forbidden` | `TokenExchangeBroker`'s credential identifies a different agent |
+| `credential.subject_missing` | `Forbidden` | An on-behalf-of `TokenExchangeBroker` was asked for a token by a run acting for no subject |
 | `credential.exchange_unsupported` | `Unsupported` | `TokenExchangeBroker` cannot exchange an `X509` credential |
 | `credential.exchange_failed` | `Unavailable` or `Internal` | The authorization server refused the exchange or returned an unreadable response; the error carries the upstream status |
 | `credential.revocation_failed` | `Unavailable` | The RFC 7009 revocation endpoint refused a token |

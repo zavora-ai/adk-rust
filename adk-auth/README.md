@@ -42,7 +42,7 @@ Core RBAC, scope-based security, and audit logging are always available with no 
 |---------|-------------|
 | `sso` | JWT/OIDC providers (Google, Azure AD, Okta, Auth0, generic OIDC) |
 | `auth-bridge` | `JwtRequestContextExtractor` for `adk-server` identity flow (implies `sso`) |
-| `token-exchange` | `TokenExchangeBroker`: RFC 8693 token exchange of the agent's credential for resource-scoped tokens |
+| `token-exchange` | `TokenExchangeBroker`: RFC 8693 token exchange of the agent's credential, or of the subject's token with the agent as actor (`on_behalf_of`), for resource-scoped tokens |
 | `signed-audit` | `signed_audit::AuditLog`: the signed, Merkle-hashed audit log, and `signed_audit::verify` |
 | `postgres-audit` | `PostgresAuditSink` |
 | `otlp-audit` | `OtlpAuditSink` |
@@ -298,7 +298,7 @@ the requested resource (RFC 8707); `ScopedToken::authorize_for` refuses any othe
 | Broker | Feature | Token source |
 |--------|---------|--------------|
 | `SecretCredentialBroker` | none | A `SecretProvider` secret bound to an exact `(AgentId, resource)` pair and its granted scopes |
-| `TokenExchangeBroker` | `token-exchange` | RFC 8693 exchange of the `IdentitySource` credential; optional RFC 7009 revocation |
+| `TokenExchangeBroker` | `token-exchange` | RFC 8693 exchange of the `IdentitySource` credential, or, with `on_behalf_of(SubjectTokenSource)`, of the run's subject's token with the credential as `actor_token`; tokens are cached per subject, delegation chain, agent, resource, and scopes; optional RFC 7009 revocation |
 
 See [Agent Identity](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/agent-identity.md).
 
