@@ -605,9 +605,14 @@ pub(crate) struct Evaluated {
     pub(crate) base: TableDecision,
 }
 
-/// What the confirmation handler needs to know about a call the policy held.
+/// What the confirmation handler needs to know about a call the policy did not deny.
 #[derive(Clone, Debug)]
 pub(crate) struct PromptContext {
+    /// Whether the harness itself required approval. When it allowed the call, another
+    /// layer of the run's policy or the agent's confirmation policy held it.
+    pub(crate) harness_held: bool,
+    /// The other layers of the run's policy, for the handler's re-check.
+    pub(crate) peers: Option<Arc<dyn ToolPolicy>>,
     pub(crate) app_name: String,
     pub(crate) user_id: String,
     pub(crate) session_id: String,
@@ -646,17 +651,26 @@ impl PromptContext {
     }
 }
 
-/// Upper bound of remembered prompt contexts; the map is cleared when it is reached.
+/// Upper bound of remembered prompt contexts; the oldest are dropped first.
 const PROMPT_CONTEXT_CAP: usize = 4096;
 
 fn call_key(agent: &str, subject: &str, tool: &str, args: &Value) -> String {
     format!("{agent}\u{1f}{subject}\u{1f}{}", tool_call_fingerprint(tool, args))
 }
 
+/// Contexts by call ID, dropping the oldest beyond [`PROMPT_CONTEXT_CAP`], so the
+/// context of the call being decided is never the one dropped.
+#[derive(Debug, Default)]
+struct ByCall {
+    entries: HashMap<String, (u64, PromptContext)>,
+    order: VecDeque<(u64, String)>,
+    next: u64,
+}
+
 /// Prompt contexts recorded by the policy for the handler, by call ID and by call key.
 #[derive(Debug, Default)]
 pub(crate) struct PromptContexts {
-    by_call: Mutex<HashMap<String, PromptContext>>,
+    by_call: Mutex<ByCall>,
     by_key: Mutex<HashMap<String, VecDeque<PromptContext>>>,
 }
 
@@ -664,10 +678,20 @@ impl PromptContexts {
     fn insert(&self, call_id: Option<&str>, key: String, context: PromptContext) {
         if let Some(call_id) = call_id {
             let mut by_call = self.by_call.lock().unwrap_or_else(|e| e.into_inner());
-            if by_call.len() >= PROMPT_CONTEXT_CAP {
-                by_call.clear();
+            by_call.next += 1;
+            let seq = by_call.next;
+            by_call.entries.insert(call_id.to_string(), (seq, context.clone()));
+            by_call.order.push_back((seq, call_id.to_string()));
+            while by_call.order.len() > PROMPT_CONTEXT_CAP {
+                let Some((seq, oldest)) = by_call.order.pop_front() else { break };
+                if by_call.entries.get(&oldest).is_some_and(|(at, _)| *at == seq) {
+                    by_call.entries.remove(&oldest);
+                }
             }
-            by_call.insert(call_id.to_string(), context.clone());
+        }
+        if !context.harness_held {
+            // Only calls the harness held are looked up without their ID.
+            return;
         }
         let mut by_key = self.by_key.lock().unwrap_or_else(|e| e.into_inner());
         if by_key.len() >= PROMPT_CONTEXT_CAP {
@@ -683,7 +707,13 @@ impl PromptContexts {
     /// Takes the context recorded for `request`, by call ID first.
     pub(crate) fn take(&self, request: &ToolConfirmationRequest) -> Option<PromptContext> {
         if let Some(call_id) = request.function_call_id.as_deref() {
-            let found = self.by_call.lock().unwrap_or_else(|e| e.into_inner()).remove(call_id);
+            let found = self
+                .by_call
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entries
+                .remove(call_id)
+                .map(|(_, context)| context);
             if found.is_some() {
                 return found;
             }
@@ -744,6 +774,7 @@ pub(crate) struct PolicyInner {
 pub struct HarnessPolicy {
     pub(crate) inner: Arc<PolicyInner>,
     audit: Option<AuditTrail>,
+    peers: Option<Arc<dyn ToolPolicy>>,
 }
 
 impl std::fmt::Debug for HarnessPolicy {
@@ -758,12 +789,19 @@ impl std::fmt::Debug for HarnessPolicy {
 
 impl HarnessPolicy {
     pub(crate) fn new(inner: PolicyInner) -> Self {
-        Self { inner: Arc::new(inner), audit: None }
+        Self { inner: Arc::new(inner), audit: None, peers: None }
     }
 
     /// This policy, recording `harness.rule.*` evaluations through `audit`.
     pub(crate) fn with_audit(&self, audit: Option<AuditTrail>) -> Self {
-        Self { inner: self.inner.clone(), audit }
+        Self { inner: self.inner.clone(), audit, peers: self.peers.clone() }
+    }
+
+    /// This policy as one layer of a run's policy whose other layers are `peers`, which the
+    /// confirmation handler re-checks a held call against (spec 3.1 §7.3 compose rule).
+    pub(crate) fn with_peers(mut self, peers: Option<Arc<dyn ToolPolicy>>) -> Self {
+        self.peers = peers;
+        self
     }
 
     /// The default mode of sessions with no mode record.
@@ -1133,7 +1171,10 @@ impl HarnessPolicy {
                 }
             }
         }
-        if governed && matches!(decision, PolicyDecision::RequireApproval { .. }) {
+        // Recorded for every call the harness does not deny: another layer of the run's
+        // policy, or the agent's confirmation policy, can still hold a call the harness
+        // allows, and the handler must then ask the person rather than refuse.
+        if governed && !matches!(decision, PolicyDecision::Deny { .. }) {
             let subject = request
                 .acting
                 .as_ref()
@@ -1147,6 +1188,8 @@ impl HarnessPolicy {
                 call_id,
                 call_key(agent, subject, &request.tool_name, &request.args),
                 PromptContext {
+                    harness_held: matches!(decision, PolicyDecision::RequireApproval { .. }),
+                    peers: self.peers.clone(),
                     app_name: request.app_name.clone(),
                     user_id: request.user_id.clone(),
                     session_id: request.session_id.clone(),

@@ -303,7 +303,11 @@ impl HarnessLayer<'_> {
             if let Some(operator) = &runtime.operator_policy {
                 layers.push(operator.clone());
             }
-            layers.push(Arc::new(runtime.policy.with_audit(config.audit.clone())));
+            let peers = (!layers.is_empty()).then(|| {
+                Arc::new(adk_core::StrictestPolicy::new(layers.clone())) as Arc<dyn ToolPolicy>
+            });
+            layers
+                .push(Arc::new(runtime.policy.with_audit(config.audit.clone()).with_peers(peers)));
             config.tool_policy = Some(Arc::new(adk_core::StrictestPolicy::new(layers)));
         }
 

@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use adk_core::principal::{SubjectKind, SubjectRef};
 use adk_core::{
-    PolicyDecision, Result, ToolApproval, ToolConfirmationDecision, ToolConfirmationHandler,
-    ToolConfirmationRequest, async_trait,
+    PolicyCall, PolicyDecision, Result, ToolApproval, ToolConfirmationDecision,
+    ToolConfirmationHandler, ToolConfirmationRequest, async_trait,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -277,9 +277,11 @@ struct TurnState {
 /// A [`ToolConfirmationHandler`] that asks an [`ApprovalPrompter`] (spec 3.1 §7.5).
 ///
 /// Prompts are serialized, because calls in a batch are decided concurrently, and capped
-/// per turn. Before prompting, the call is decided again by the harness policy with its
-/// origin, so a rule granted for an earlier call in the same batch applies without a
-/// prompt. An approval with edited arguments returns them through `decide_approval`, and
+/// per turn. Before prompting, the call is decided again by the run's whole policy — the
+/// harness layer with the call's origin, made stricter by the run's and the operator's
+/// layers — so a rule granted for an earlier call in the same batch applies without a
+/// prompt when only the harness asked. A call another layer requires approval for, or the
+/// agent's confirmation policy holds, is always put to the person. An approval with edited arguments returns them through `decide_approval`, and
 /// the governed path checks them against the policy again. After a person denies a call,
 /// the rest of the turn's calls are denied (I19).
 ///
@@ -368,8 +370,30 @@ impl PromptingConfirmationHandler {
                 false,
             )
             .await;
-        match &evaluated.decision {
-            PolicyDecision::Allow => return Ok(ToolApproval::approve()),
+        // The re-check covers the run's whole policy: a rule granted for an earlier call
+        // in the batch answers the harness's own approval, never another layer's.
+        let peer_decision = match &context.peers {
+            Some(peers) => {
+                let mut call = PolicyCall::new();
+                if let Some(origin) = request.origin.as_ref() {
+                    call = call.with_origin(origin);
+                }
+                if let Some(call_id) = request.function_call_id.as_deref() {
+                    call = call.with_function_call_id(call_id);
+                }
+                Some(peers.evaluate_call(&policy_request, &call).await)
+            }
+            None => None,
+        };
+        let composed = match peer_decision.clone() {
+            Some(peers) => evaluated.decision.clone().stricter(peers),
+            None => evaluated.decision.clone(),
+        };
+        match &composed {
+            // Held by the harness alone, and the harness now allows it.
+            PolicyDecision::Allow if context.harness_held => return Ok(ToolApproval::approve()),
+            // Held by another layer or the agent's confirmation policy: the person decides.
+            PolicyDecision::Allow => {}
             PolicyDecision::Deny { reason } => return Ok(refuse(reason.clone())),
             PolicyDecision::RequireApproval { .. } => {}
         }
@@ -382,7 +406,15 @@ impl PromptingConfirmationHandler {
         turn.prompts += 1;
 
         let isolation = policy.isolation_status().clone();
-        let suggestions = if evaluated.kind.rule_eligible() && !evaluated.base.is_non_waivable() {
+        // A remembered rule answers only the harness's own approval, so one is offered only
+        // when no other layer asks too.
+        let only_the_harness_asks =
+            matches!(evaluated.decision, PolicyDecision::RequireApproval { .. })
+                && peer_decision.as_ref().is_none_or(|peers| *peers == PolicyDecision::Allow);
+        let suggestions = if only_the_harness_asks
+            && evaluated.kind.rule_eligible()
+            && !evaluated.base.is_non_waivable()
+        {
             StandingRule::suggestions(request)
         } else {
             Vec::new()
