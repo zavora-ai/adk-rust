@@ -1,12 +1,18 @@
 //! `bash` — run a shell command inside the workspace.
 //!
-//! Executes host-local (`sh -c`) with the working directory pinned to the
-//! workspace root and a timeout. Streams stdout/stderr incrementally via
-//! [`ToolContext::emit_progress`] for UI implementations that display live
-//! terminal output.
+//! Executes host-local (`sh -c`) by default, with the working directory pinned to
+//! the workspace root and a timeout. A [`CommandLauncher`] can build the process
+//! instead, for example to run the script under an OS sandbox. Streams
+//! stdout/stderr incrementally via [`ToolContext::emit_progress`] for UI
+//! implementations that display live terminal output.
 //!
-//! **Not** strongly isolated; production deployments should run behind a
-//! containerized `CodeExecutor` (see the coding-agent design, §9).
+//! The command runs with standard input at end of file, in a new session with no
+//! controlling terminal, and its process group is killed when the shell exits, on a
+//! timeout and when the call is cancelled.
+//!
+//! **Not** strongly isolated with the default [`HostLauncher`]; production
+//! deployments should run behind a sandboxing launcher or a containerized
+//! `CodeExecutor` (see the coding-agent design, §9).
 //! Mutating use requires [`Workspace::bash_allowed`].
 
 use std::process::Stdio;
@@ -19,6 +25,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::error::DevToolError;
+use crate::launcher::{CommandLauncher, HostLauncher};
 use crate::tools::read::require_str;
 use crate::workspace::Workspace;
 
@@ -29,16 +36,46 @@ use crate::workspace::Workspace;
 /// stdout and stderr, each capped at [`Workspace::max_output`] bytes; output
 /// past the cap is read and discarded, so memory stays bounded.
 ///
-/// Cancelling the call (dropping its future) kills the command and every
-/// process it started, as a timeout does.
+/// The command reads end of file from standard input and starts in a new session,
+/// so it has no controlling terminal and leads its own process group. When the
+/// shell exits, the rest of the group — anything it started in the background —
+/// is killed, unless [`Workspace::bash_kill_group_on_exit`] turns that off. A
+/// timeout or a cancelled call (dropping its future) kills the whole group too.
+/// A process that starts its own session or group escapes the kill.
+///
+/// The process comes from a [`CommandLauncher`]: [`HostLauncher`] by default,
+/// another one through [`with_launcher`](Self::with_launcher).
 pub struct BashTool {
     workspace: Workspace,
+    launcher: Arc<dyn CommandLauncher>,
 }
 
 impl BashTool {
-    /// Create a `bash` tool bound to `workspace`.
+    /// Create a `bash` tool bound to `workspace`, running commands with [`HostLauncher`].
     pub fn new(workspace: Workspace) -> Self {
-        Self { workspace }
+        Self { workspace, launcher: Arc::new(HostLauncher) }
+    }
+
+    /// Build each command with `launcher` instead of [`HostLauncher`].
+    ///
+    /// The timeout ceiling, output cap, streaming, standard input, session and
+    /// process-group kill stay with the tool. Implements spec 3.1 §10 D1.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_devtools::{BashTool, HostLauncher, Workspace};
+    ///
+    /// let workspace = Workspace::new("./my-repo").allow_bash(true);
+    /// let bash = BashTool::new(workspace).with_launcher(Arc::new(HostLauncher));
+    /// # let _ = bash;
+    /// ```
+    #[must_use]
+    pub fn with_launcher(mut self, launcher: Arc<dyn CommandLauncher>) -> Self {
+        self.launcher = launcher;
+        self
     }
 }
 
@@ -49,8 +86,16 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Run a shell command in the workspace root and return stdout, stderr, and the \
-         exit code. Streams output incrementally for live UI display. Has a timeout."
+        if self.workspace.kills_bash_group_on_exit() {
+            "Run a shell command in the workspace root and return stdout, stderr, and the \
+             exit code. Streams output incrementally for live UI display. Has a timeout. \
+             Standard input is empty, and background processes the command starts are \
+             stopped when it exits."
+        } else {
+            "Run a shell command in the workspace root and return stdout, stderr, and the \
+             exit code. Streams output incrementally for live UI display. Has a timeout. \
+             Standard input is empty."
+        }
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -76,40 +121,53 @@ impl Tool for BashTool {
             .and_then(Value::as_u64)
             .map_or(limit, |requested| Duration::from_secs(requested).min(limit));
 
-        let mut cmd = tokio::process::Command::new("sh");
-        cmd.arg("-c")
-            .arg(&command)
-            .current_dir(self.workspace.root())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+        let mut cmd = self.launcher.command(&self.workspace, &command, ctx.as_ref())?;
+        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
 
-        // The parent environment of an agent process routinely holds provider API keys,
-        // and `env` would print them. Pass through only what tools need, unless the
-        // workspace opts into inheriting.
-        if !self.workspace.inherits_env() {
-            cmd.env_clear();
-            for (key, value) in self.workspace.bash_env() {
-                cmd.env(key, value);
+        // A new session detaches the command from any controlling terminal, so it cannot
+        // read from or inject input into the agent's terminal, and makes it the leader of
+        // its own process group, so a timeout, a cancelled call or the shell's exit can
+        // terminate its descendants.
+        #[cfg(unix)]
+        {
+            // SAFETY: the closure runs in the forked child before `exec` and calls only
+            // `setsid`, which is async-signal-safe and touches no memory of the parent.
+            unsafe {
+                cmd.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
             }
         }
 
-        // Run in its own process group so a timeout or a cancelled call can terminate
-        // descendants. Killing only the direct child left `sh`'s children running.
-        #[cfg(unix)]
-        cmd.process_group(0);
-
         let mut child = cmd.spawn().map_err(DevToolError::from)?;
         let mut group = ProcessGroupGuard { pid: child.id() };
+        tracing::debug!(
+            bash.isolation = self.launcher.isolation(),
+            process.pid = child.id(),
+            "started bash command"
+        );
 
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         let cap = self.workspace.max_output();
+        let kill_group_on_exit = self.workspace.kills_bash_group_on_exit();
 
         let result = tokio::time::timeout(timeout, async {
-            let (stdout, stderr) = tokio::join!(
+            let exited = async {
+                // The shell has exited but is not reaped, so its pid, which is the group
+                // id, cannot be reused while the rest of the group is killed. That also
+                // closes the output pipes a background process holds open.
+                if kill_group_on_exit && wait_for_exit(child.id()).await {
+                    group.kill();
+                }
+            };
+            let (stdout, stderr, ()) = tokio::join!(
                 capture(stdout_pipe, cap, ctx.as_ref(), "stdout"),
                 capture(stderr_pipe, cap, ctx.as_ref(), "stderr"),
+                exited,
             );
             let status = child.wait().await?;
             // The child is reaped, so its pid may be reused and must not be signalled.
@@ -145,11 +203,11 @@ impl Tool for BashTool {
 
 /// Kills the command's whole process group, including when dropped.
 ///
-/// The child leads its own process group, so signalling the negated pid reaches
-/// grandchildren too. `kill_on_drop` reaches only the direct child, which left
-/// descendants — a spawned server, a background build — running after a timeout or a
-/// cancelled call. The guard is disarmed once the child is reaped, because its pid may
-/// then be reused.
+/// The child leads its own session and process group, so signalling the group
+/// reaches grandchildren too. `kill_on_drop` reaches only the direct child, which
+/// left descendants — a spawned server, a background build — running after a timeout
+/// or a cancelled call. The guard is disarmed once the child is reaped, because its
+/// pid may then be reused.
 struct ProcessGroupGuard {
     pid: Option<u32>,
 }
@@ -177,6 +235,48 @@ impl Drop for ProcessGroupGuard {
     fn drop(&mut self) {
         self.kill();
     }
+}
+
+/// Waits until the child `pid` has exited, without reaping it.
+///
+/// Returns `true` once the child is a zombie: `waitid` with `WNOWAIT` leaves it
+/// unreaped, so its pid stays reserved until `Child::wait` reaps it. The wait blocks,
+/// so it runs on the blocking pool.
+#[cfg(unix)]
+async fn wait_for_exit(pid: Option<u32>) -> bool {
+    let Some(pid) = pid else { return false };
+    let waited = tokio::task::spawn_blocking(move || {
+        loop {
+            // SAFETY: `info` is a zeroed, writable `siginfo_t` that outlives the call,
+            // and `waitid` writes only into it.
+            let status = unsafe {
+                let mut info: libc::siginfo_t = std::mem::zeroed();
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            };
+            if status == 0 {
+                return true;
+            }
+            if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                return false;
+            }
+        }
+    })
+    .await;
+    waited.unwrap_or_else(|error| {
+        tracing::debug!(error = %error, "waiting for the bash command to exit failed");
+        false
+    })
+}
+
+/// Off Unix there is no process group to kill, so the exit is observed by `Child::wait`.
+#[cfg(not(unix))]
+async fn wait_for_exit(_pid: Option<u32>) -> bool {
+    false
 }
 
 /// Reads one output stream to EOF, keeping at most `cap` bytes.

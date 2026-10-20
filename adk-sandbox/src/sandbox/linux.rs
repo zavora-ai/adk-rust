@@ -16,8 +16,18 @@
 //! - `--unshare-net` — isolate network namespace (no network access)
 //! - `--ro-bind <src> <dest>` — read-only filesystem bind mount
 //! - `--bind <src> <dest>` — read-write filesystem bind mount
-//! - `--new-session` — new session, so the child cannot inject input into the caller's terminal
+//! - `--new-session` — always: a new session with no controlling terminal, so the child
+//!   cannot inject input into the caller's terminal with `TIOCSTI`
 //! - `--seccomp <fd>` — seccomp program that denies process creation
+//!
+//! ## Nested Paths
+//!
+//! bubblewrap shows the last mount made over a path, so the policy's paths are mounted
+//! shallowest first and the most specific entry decides (spec 3.1 §10 S3): a read-only entry
+//! inside a read-write entry is mounted after it and stays read-only. Each writable directory
+//! above such an entry is also bound onto itself, which makes it a mount point the kernel
+//! refuses to rename or remove, so the entry cannot be carried away from its path and the
+//! path recreated writable.
 //!
 //! ## Process Spawning
 //!
@@ -33,6 +43,7 @@
 
 use std::ffi::{OsStr, OsString};
 
+use super::layering::Layering;
 use super::seccomp;
 use super::{AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy, WrappedCommand};
 use crate::error::SandboxError;
@@ -86,7 +97,10 @@ impl LinuxEnforcer {
 
     /// Generates bubblewrap arguments from the policy.
     ///
-    /// Always starts with `--die-with-parent` and `--unshare-pid`.
+    /// Always starts with `--die-with-parent` and `--unshare-pid`, and always passes
+    /// `--new-session`. Bind mounts follow, shallowest path first, with a read-write bind
+    /// of each writable directory above a nested read-only entry (see
+    /// [Nested Paths](self#nested-paths)).
     /// The returned arguments do NOT include the `--` separator or the
     /// original program/args — those are appended by `wrap_command`.
     ///
@@ -132,17 +146,22 @@ impl LinuxEnforcer {
             args.push("--unshare-net".to_string());
         }
 
+        // Always: a new session with no controlling terminal, so the child cannot inject
+        // input into the caller's terminal with `TIOCSTI` (spec 3.1 §10 S2).
+        args.push("--new-session".to_string());
+
         // Process spawn restriction: the seccomp program is what denies fork and clone.
         if !allow_process_spawn {
-            args.push("--new-session".to_string());
             args.push("--seccomp".to_string());
             args.push(SECCOMP_FD.to_string());
         }
 
-        // Filesystem bind mounts
-        for entry in paths {
-            let path_str = entry.path.to_string_lossy().to_string();
-            match entry.mode {
+        // Filesystem bind mounts, shallowest first: a later mount covers an earlier one, so the
+        // most specific entry decides. Pinned directories become mount points, which the
+        // kernel refuses to rename or remove.
+        for (path, mode) in Layering::new(paths).mounts() {
+            let path_str = path.to_string_lossy().to_string();
+            match mode {
                 AccessMode::ReadOnly => {
                     args.push("--ro-bind".to_string());
                     args.push(path_str.clone());
@@ -407,8 +426,27 @@ mod tests {
         let policy = SandboxPolicyBuilder::new().allow_process_spawn().build();
         let args = LinuxEnforcer::generate_args(&policy);
 
-        assert!(!args.contains(&"--new-session".to_string()));
         assert!(!args.contains(&"--seccomp".to_string()));
+    }
+
+    /// A shell is the case that allows process spawning, and it is the one that can reach a
+    /// controlling terminal, so the new session cannot depend on the seccomp filter.
+    #[test]
+    fn every_policy_starts_a_new_session() {
+        for allow_process_spawn in [false, true] {
+            for allow_network in [false, true] {
+                let args = LinuxEnforcer::generate_args_from_paths(
+                    &[],
+                    allow_network,
+                    allow_process_spawn,
+                );
+                assert_eq!(
+                    args.iter().filter(|arg| *arg == "--new-session").count(),
+                    1,
+                    "spawn={allow_process_spawn} network={allow_network}: {args:?}"
+                );
+            }
+        }
     }
 
     #[test]

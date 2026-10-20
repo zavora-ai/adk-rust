@@ -117,7 +117,7 @@ assert_eq!(result.stdout.trim(), "2");
 
 > **Note:** On macOS, `/usr/bin/python3` is a shim that runs the Python of the active Xcode
 > or Command Line Tools through `libxcrun`, which cannot run under Seatbelt. When the
-> program resolves to such a shim, `ProcessBackend` runs the interpreter behind it
+> program resolves to such a shim, `ProcessBackend` and `sandboxed_command` run the interpreter behind it
 > directly and grants read-only access to the developer directory, which holds Apple's
 > toolchain and no user data. A shim invoked from inside a script (`sh -c "python3 …"`)
 > is not resolved this way; put a standalone interpreter first on the policy's `PATH`
@@ -126,6 +126,80 @@ assert_eq!(result.stdout.trim(), "2");
 Under an enforcer each execution runs in a fresh scratch directory that holds its source
 file and compiler output. It is the working directory and is granted read-write in
 addition to the policy's paths.
+
+### Running a Command in a Workspace
+
+`ProcessBackend` runs code in a scratch directory. A harness shell runs in the user's
+workspace instead: `adk_sandbox::sandbox::sandboxed_command` builds the
+`tokio::process::Command` for one program under an enforcer and a policy, starting in the
+directory the caller names. `ProcessBackend` builds its own sandboxed commands through it.
+
+| Aspect | Value |
+|--------|-------|
+| Program | The enforcer's wrapper (`sandbox-exec`, `bwrap`), resolved on the caller's `PATH`; the program inside it is found through `policy.env`'s `PATH` |
+| Arguments | The wrapper's arguments, then the program and its arguments |
+| Working directory | The `cwd` argument. It is not granted: list it in `allowed_paths` |
+| Environment | Cleared, then exactly `policy.env` — set `HOME` and `TMPDIR` to a scratch directory to keep the host's out of reach |
+| Spawn-time state | What `SandboxEnforcer::configure_command` installs, such as the Linux seccomp descriptor |
+| Streams, process group, kill-on-drop | Left to the caller |
+
+```rust
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
+
+use adk_sandbox::SandboxError;
+use adk_sandbox::sandbox::{SandboxPolicyBuilder, get_enforcer, sandboxed_command};
+
+async fn run_in_workspace(workspace: &Path, scratch: &Path) -> Result<String, SandboxError> {
+    let policy = SandboxPolicyBuilder::new()
+        .allow_read_write(workspace)
+        .allow_read(workspace.join(".git")) // read-only inside the writable workspace
+        .allow_read_write(scratch)
+        .allow_process_spawn() // `sh -c` forks
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", scratch.display().to_string())
+        .env("TMPDIR", scratch.display().to_string())
+        .build();
+    let enforcer = get_enforcer()?;
+
+    let output = sandboxed_command(
+        enforcer.as_ref(),
+        OsStr::new("sh"),
+        &[OsString::from("-c"), OsString::from("git status --short")],
+        &policy,
+        workspace,
+    )?
+    .stdin(std::process::Stdio::null())
+    .output()
+    .await?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+```
+
+### Read-Only Paths Inside a Writable Path
+
+When allowed paths nest, the most specific entry decides, whatever order the policy lists
+them in; for the same path, read-write wins. A read-only entry inside a read-write entry
+refuses every write, creation, removal, rename, and hard or symbolic link beneath it, and
+the writable directories above it cannot be renamed or removed, so the entry cannot be
+carried away from its path and the path recreated writable. A read-write entry inside the
+read-only one is writable again, and fixed in place.
+
+| | macOS Seatbelt | Linux bubblewrap |
+|---|---|---|
+| Mechanism | Rules emitted shallowest first, so the last match is the most specific; `(deny file-write* (subpath ...))` for the read-only entry, since allow rules add up; `(deny file-write-unlink (literal ...))` for each writable directory above it | Mounts made shallowest first, so the read-only bind covers its parent's; each writable directory above the entry bound onto itself, which makes it a mount point the kernel will not rename |
+| A write beneath the entry | `Operation not permitted` | `Read-only file system` |
+| Renaming or removing the entry or a directory above it | `Operation not permitted` | `Resource busy` or `Invalid cross-device link`; GNU `mv` then copies, and the original stays in place |
+| A hard link to a file beneath it | `Operation not permitted` | `Invalid cross-device link` |
+
+`adk-sandbox/tests/nested_read_only_conformance_tests.rs` runs the same scripts under both
+enforcers. The read-only entry must exist when the command is built, as every allowed path
+must, so a path that does not exist yet cannot be protected from creation this way.
+
+> **Note:** bubblewrap mounts each allowed path at its resolved location. On a merged-`/usr`
+> distribution `/bin` and `/lib` are symbolic links into `/usr`, so a policy that lists them
+> does not mount the dynamic loader's `/lib` path, and dynamically linked programs fail to
+> start with `execvp: No such file or directory`. Allow `/` read-only on such hosts.
 
 ### Feature Flags
 
@@ -162,7 +236,7 @@ a pyenv interpreter, or Xcode must be passed to `allow_read`. File metadata is v
 everywhere because path resolution needs it; file contents are not. Paths are written into
 the profile as escaped string literals, so a directory name cannot add directives.
 
-**Linux (bubblewrap):** Uses namespace-based whitelist — nothing exists by default, you mount only what's needed. Without `allow_process_spawn`, a seccomp filter fails `fork`, `vfork`, and non-thread `clone` (x86-64 and AArch64; other architectures return `EnforcerFailed`). Install with `apt install bubblewrap` or `dnf install bubblewrap`.
+**Linux (bubblewrap):** Uses namespace-based whitelist — nothing exists by default, you mount only what's needed. Every command runs in a new session (`--new-session`) with no controlling terminal, so it cannot inject input into the caller's terminal with `TIOCSTI`. Without `allow_process_spawn`, a seccomp filter fails `fork`, `vfork`, and non-thread `clone` (x86-64 and AArch64; other architectures return `EnforcerFailed`). Install with `apt install bubblewrap` or `dnf install bubblewrap`.
 
 **Domain rules:** Seatbelt network filters accept only `*` or `localhost` as a host, and
 bubblewrap has no domain-level control, so `allow_domain` cannot be enforced. A policy
@@ -182,6 +256,33 @@ The `workspace` feature adds a `provision → session → exec → snapshot → 
 | Privileges | Host user | `cap_drop: ALL`, `no-new-privileges`, 512-process limit (`with_pids_limit`) |
 | Environment | Cleared except `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, `TERM` | Image environment |
 | Timeout | Kills the command's process group | Kills the command's process tree inside the container |
+| Host directories | The host filesystem | None by default; `with_bind_mount(host, container, read_only)` mounts one into every container |
+
+`DockerClient::with_bind_mount` gives commands in the container and file tools on the host
+one view of a workspace:
+
+```rust
+use adk_sandbox::workspace::{DockerClient, Manifest, SandboxClient};
+use adk_sandbox::SandboxError;
+
+async fn workspace_container() -> Result<(), SandboxError> {
+    let client = DockerClient::with_image("rust:1.95-slim")
+        .await?
+        .with_bind_mount("/home/me/project", "/workspace", false)
+        .with_bind_mount("/home/me/.cargo/registry", "/usr/local/cargo/registry", true);
+    let handle = client.provision(&Manifest { entries: vec![] }).await?;
+    let session = client.start(&handle).await?;
+    let output = session.exec_command("cargo test --offline", None).await?;
+    println!("{}", output.stdout);
+    client.stop(&handle).await
+}
+```
+
+Both paths must be absolute and the host path must exist; Docker refuses anything else when
+the container is created, and provisioning fails with `ProvisionFailed`. A read-only mount
+refuses writes from inside the container, whose dropped capabilities keep it from being
+remounted. Content under a mount stays on the host, so `snapshot` does not capture it and
+`resume` mounts the same host paths again.
 
 `LocalUnixClient` is not an isolation boundary; use `DockerClient` for untrusted commands.
 `GitRepo` manifest entries need a `DockerClient` network mode other than `none`.

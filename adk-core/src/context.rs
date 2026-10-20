@@ -110,6 +110,29 @@ pub trait ReadonlyContext: Send + Sync {
         )
     }
 
+    /// Returns whether [`user_id`](Self::user_id) comes from an authenticated
+    /// [`RequestContext`](crate::RequestContext) rather than from the caller's request body.
+    ///
+    /// The runner's invocation context answers `true` when the run carries a
+    /// `RequestContext`, which `adk-server` sets only from a request its
+    /// `RequestContextExtractor` authenticated. A wrapper context should forward it to the
+    /// context it wraps. The default is `false`, so a context that cannot tell treats the
+    /// identity as unauthenticated. Implements spec 3.1 §10 F5.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::ReadonlyContext;
+    ///
+    /// /// Standing approvals apply only to a user the server authenticated.
+    /// fn standing_rules_apply(ctx: &dyn ReadonlyContext) -> bool {
+    ///     ctx.is_authenticated()
+    /// }
+    /// ```
+    fn is_authenticated(&self) -> bool {
+        false
+    }
+
     /// Returns the session state when the runtime exposes it to dynamic toolsets.
     ///
     /// The default keeps lightweight contexts and third-party implementations
@@ -560,6 +583,10 @@ impl ReadonlyContext for ToolCallbackContext {
 
     fn acting_context(&self) -> crate::ActingContext {
         self.inner.acting_context()
+    }
+
+    fn is_authenticated(&self) -> bool {
+        self.inner.is_authenticated()
     }
 }
 

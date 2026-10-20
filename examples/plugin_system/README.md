@@ -27,7 +27,7 @@ Demonstrates the ADK-Rust Enhanced Plugin System (Sprint 1) with three custom pl
 - Checks if the same tool was called with the same arguments before
 - On cache HIT: returns `BeforeToolCallResult::ShortCircuit(cached_result)` — skips tool execution entirely
 - On cache MISS: passes through, then caches the result in `after_tool_call`
-- Uses `PluginContext` to track hit/miss statistics
+- Uses the agent-wide `PluginContext::shared()` to track hit/miss statistics
 
 ### 2. SanitizationPlugin (priority 50)
 - Runs second in the pipeline
@@ -38,7 +38,7 @@ Demonstrates the ADK-Rust Enhanced Plugin System (Sprint 1) with three custom pl
 ### 3. LoggingPlugin (priority 100)
 - Runs last in the pipeline (observes final state)
 - Logs all tool calls and model calls with details
-- Tracks call counts in `PluginContext` shared state
+- Tracks call counts in `PluginContext::shared()`, which every run of the agent shares
 - Demonstrates both tool and model hook interception
 
 ## Prerequisites
@@ -79,5 +79,5 @@ You'll see the plugin pipeline in action with clear output showing:
 - **Priority ordering**: Lower values execute first (security → cache → logging)
 - **BeforeToolCallResult::ShortCircuit**: Skip tool execution with a synthetic result
 - **BeforeToolCallResult::Continue**: Pass (modified) args to next plugin
-- **PluginContext**: Type-safe shared state across all plugin hooks
+- **PluginContext**: Type-safe state for one invocation's hooks; `shared()` for state every invocation sees
 - **EnhancedPlugin trait**: Implement only the hooks you need

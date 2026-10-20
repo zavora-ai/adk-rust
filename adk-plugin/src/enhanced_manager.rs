@@ -25,6 +25,13 @@
 //! Plugins execute in ascending priority order (lower values run first).
 //! Plugins with the same priority execute in registration order (stable sort).
 //!
+//! # Plugin state
+//!
+//! Every hook of one invocation receives that invocation's [`PluginContext`], so two users'
+//! concurrent runs of the same agent never see each other's plugin state. The per-agent
+//! context ([`EnhancedPluginManager::context`], or [`PluginContext::shared`] from a hook)
+//! holds state meant for every invocation.
+//!
 //! # Examples
 //!
 //! ```rust,ignore
@@ -41,9 +48,10 @@
 //! // Plugins will execute in order: Security → Cache → Logging
 //! ```
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 
-use adk_core::{CallbackContext, LlmRequest, LlmResponse, Result, Tool};
+use adk_core::{CallbackContext, LlmRequest, LlmResponse, ReadonlyContext, Result, Tool};
 use serde_json::Value;
 use tracing::{debug, warn};
 
@@ -54,11 +62,28 @@ use crate::hook_result::{
 };
 use crate::manager::PluginManagerConfig;
 
+/// The most invocation contexts a manager keeps; the least recently used is dropped first.
+const MAX_INVOCATION_CONTEXTS: usize = 1024;
+
+/// An invocation's app, user, session, and invocation id.
+type InvocationKey = (String, String, String, String);
+
+/// Invocation contexts with the logical time each was last used.
+#[derive(Default)]
+struct InvocationContexts {
+    by_invocation: HashMap<InvocationKey, (Arc<PluginContext>, u64)>,
+    clock: u64,
+}
+
 /// Manages enhanced plugins with priority-based pipeline execution.
 ///
 /// Plugins are stored sorted by priority (ascending). All pipeline methods
 /// iterate plugins in this order, passing each plugin's output as input to
 /// the next plugin in the chain.
+///
+/// Each invocation's hooks share one [`PluginContext`] of their own
+/// ([`invocation_context`](Self::invocation_context)); the manager keeps the 1024 most
+/// recently used and drops the least recently used beyond that.
 ///
 /// # Thread Safety
 ///
@@ -67,8 +92,10 @@ use crate::manager::PluginManagerConfig;
 pub struct EnhancedPluginManager {
     /// Plugins sorted by priority (ascending). Same-priority preserves registration order.
     plugins: Vec<Arc<dyn EnhancedPlugin>>,
-    /// Shared plugin context for the lifetime of this manager.
+    /// The per-agent context every invocation's context links to.
     context: Arc<PluginContext>,
+    /// One context per invocation, so concurrent runs never share plugin state.
+    invocations: Mutex<InvocationContexts>,
     /// Configuration for the manager (e.g., close timeout).
     config: PluginManagerConfig,
 }
@@ -95,6 +122,7 @@ impl EnhancedPluginManager {
         Self {
             plugins,
             context: Arc::new(PluginContext::new()),
+            invocations: Mutex::default(),
             config: PluginManagerConfig::default(),
         }
     }
@@ -105,7 +133,12 @@ impl EnhancedPluginManager {
         config: PluginManagerConfig,
     ) -> Self {
         plugins.sort_by_key(|p| p.priority());
-        Self { plugins, context: Arc::new(PluginContext::new()), config }
+        Self {
+            plugins,
+            context: Arc::new(PluginContext::new()),
+            invocations: Mutex::default(),
+            config,
+        }
     }
 
     /// Adds a plugin after construction, re-sorting by priority.
@@ -117,12 +150,57 @@ impl EnhancedPluginManager {
         self.plugins.sort_by_key(|p| p.priority());
     }
 
-    /// Returns a reference to the shared plugin context.
+    /// Returns the per-agent plugin context.
     ///
-    /// The context is shared across all hook invocations and persists for the
-    /// lifetime of this manager.
+    /// Every invocation of the agent shares it, and it lives as long as the manager. Hooks
+    /// receive their invocation's context instead and reach this one through
+    /// [`PluginContext::shared`].
     pub fn context(&self) -> &Arc<PluginContext> {
         &self.context
+    }
+
+    /// Returns the plugin context of the invocation `ctx` belongs to, creating it on first use.
+    ///
+    /// An invocation is identified by its app, user, session, and invocation id; every hook
+    /// of the invocation receives this context. Its [`shared`](PluginContext::shared) context
+    /// is [`context`](Self::context). Implements spec 3.1 §12 phase 0 (`PluginContext` per
+    /// invocation).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let manager = EnhancedPluginManager::new(plugins);
+    /// let alice = manager.invocation_context(alice_ctx.as_ref());
+    /// let bob = manager.invocation_context(bob_ctx.as_ref());
+    /// assert!(!Arc::ptr_eq(&alice, &bob));
+    /// assert!(std::ptr::eq(alice.shared(), manager.context().as_ref()));
+    /// ```
+    pub fn invocation_context(&self, ctx: &dyn ReadonlyContext) -> Arc<PluginContext> {
+        let key = (
+            ctx.app_name().to_string(),
+            ctx.user_id().to_string(),
+            ctx.session_id().to_string(),
+            ctx.invocation_id().to_string(),
+        );
+        let mut invocations = self.invocations.lock().unwrap_or_else(PoisonError::into_inner);
+        invocations.clock += 1;
+        let now = invocations.clock;
+        if let Some((context, last_used)) = invocations.by_invocation.get_mut(&key) {
+            *last_used = now;
+            return Arc::clone(context);
+        }
+        if invocations.by_invocation.len() >= MAX_INVOCATION_CONTEXTS
+            && let Some(oldest) = invocations
+                .by_invocation
+                .iter()
+                .min_by_key(|(_, (_, last_used))| *last_used)
+                .map(|(key, _)| key.clone())
+        {
+            invocations.by_invocation.remove(&oldest);
+        }
+        let context = Arc::new(PluginContext::with_shared(Arc::clone(&self.context)));
+        invocations.by_invocation.insert(key, (Arc::clone(&context), now));
+        context
     }
 
     /// Returns the number of registered plugins.
@@ -160,11 +238,12 @@ impl EnhancedPluginManager {
         ctx: Arc<dyn CallbackContext>,
     ) -> Result<BeforeToolCallResult> {
         let mut current_args = args;
+        let plugin_ctx = self.invocation_context(ctx.as_ref());
 
         for plugin in &self.plugins {
             debug!(plugin = plugin.name(), "running before_tool_call");
             match plugin
-                .before_tool_call(tool.clone(), current_args, ctx.clone(), &self.context)
+                .before_tool_call(tool.clone(), current_args, ctx.clone(), &plugin_ctx)
                 .await?
             {
                 BeforeToolCallResult::Continue(modified_args) => {
@@ -205,11 +284,12 @@ impl EnhancedPluginManager {
         ctx: Arc<dyn CallbackContext>,
     ) -> Result<AfterToolCallResult> {
         let mut current_result = result;
+        let plugin_ctx = self.invocation_context(ctx.as_ref());
 
         for plugin in &self.plugins {
             debug!(plugin = plugin.name(), "running after_tool_call");
             match plugin
-                .after_tool_call(tool.clone(), args, current_result, ctx.clone(), &self.context)
+                .after_tool_call(tool.clone(), args, current_result, ctx.clone(), &plugin_ctx)
                 .await?
             {
                 AfterToolCallResult::Continue(modified_result) => {
@@ -244,10 +324,11 @@ impl EnhancedPluginManager {
         ctx: Arc<dyn CallbackContext>,
     ) -> Result<BeforeModelCallResult> {
         let mut current_request = request;
+        let plugin_ctx = self.invocation_context(ctx.as_ref());
 
         for plugin in &self.plugins {
             debug!(plugin = plugin.name(), "running before_model_call");
-            match plugin.before_model_call(current_request, ctx.clone(), &self.context).await? {
+            match plugin.before_model_call(current_request, ctx.clone(), &plugin_ctx).await? {
                 BeforeModelCallResult::Continue(modified_request) => {
                     current_request = modified_request;
                 }
@@ -281,10 +362,11 @@ impl EnhancedPluginManager {
         ctx: Arc<dyn CallbackContext>,
     ) -> Result<AfterModelCallResult> {
         let mut current_response = response;
+        let plugin_ctx = self.invocation_context(ctx.as_ref());
 
         for plugin in &self.plugins {
             debug!(plugin = plugin.name(), "running after_model_call");
-            match plugin.after_model_call(current_response, ctx.clone(), &self.context).await? {
+            match plugin.after_model_call(current_response, ctx.clone(), &plugin_ctx).await? {
                 AfterModelCallResult::Continue(modified_response) => {
                     current_response = modified_response;
                 }
@@ -788,6 +870,56 @@ mod tests {
         let ctx = manager.context();
         // Just verify we can access it without panic
         assert!(Arc::strong_count(ctx) >= 1);
+    }
+
+    /// A context for invocation `n` of one session.
+    struct Invocation(String, AdkContent);
+
+    impl adk_core::ReadonlyContext for Invocation {
+        fn invocation_id(&self) -> &str {
+            &self.0
+        }
+        fn agent_name(&self) -> &str {
+            "test-agent"
+        }
+        fn user_id(&self) -> &str {
+            "test-user"
+        }
+        fn app_name(&self) -> &str {
+            "test-app"
+        }
+        fn session_id(&self) -> &str {
+            "test-session"
+        }
+        fn branch(&self) -> &str {
+            ""
+        }
+        fn user_content(&self) -> &AdkContent {
+            &self.1
+        }
+    }
+
+    fn invocation(n: usize) -> Invocation {
+        Invocation(format!("inv-{n}"), AdkContent::new("user"))
+    }
+
+    #[test]
+    fn the_least_recently_used_invocation_context_is_dropped() {
+        let manager = EnhancedPluginManager::new(vec![]);
+        let first = manager.invocation_context(&invocation(0));
+        let second = manager.invocation_context(&invocation(1));
+        for n in 2..MAX_INVOCATION_CONTEXTS {
+            manager.invocation_context(&invocation(n));
+        }
+        // Using the first keeps it; the second is now the least recently used.
+        assert!(Arc::ptr_eq(&first, &manager.invocation_context(&invocation(0))));
+
+        manager.invocation_context(&invocation(MAX_INVOCATION_CONTEXTS));
+        let invocations = manager.invocations.lock().unwrap();
+        assert_eq!(invocations.by_invocation.len(), MAX_INVOCATION_CONTEXTS);
+        drop(invocations);
+        assert!(Arc::ptr_eq(&first, &manager.invocation_context(&invocation(0))));
+        assert!(!Arc::ptr_eq(&second, &manager.invocation_context(&invocation(1))));
     }
 
     #[test]
