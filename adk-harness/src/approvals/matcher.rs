@@ -399,14 +399,59 @@ const PROTECTED_DIRS: &[&str] = &[".git", ".adk", ".skills", ".claude"];
 const PROTECTED_FILES: &[&str] =
     &["agents.md", "agent.md", "claude.md", "memory.md", ".envrc", "lefthook.yml", "lefthook.yaml"];
 
+/// Paths protected from the workspace root, the extended set every harness protects
+/// (spec 3.4 §7.5, §10 P1): the evaluator, the governance and approval code, the harness's
+/// own policy, CI, scripts, release and build configuration. `dir/**` covers the directory
+/// and everything below it.
+const ROOT_PROTECTED: &[&str] = &[
+    "adk-eval/**",
+    "adk-core/src/governance.rs",
+    "adk-core/src/policy.rs",
+    "adk-core/src/approval.rs",
+    "adk-core/src/audit_log.rs",
+    "adk-core/src/action_ledger.rs",
+    "adk-core/src/spend.rs",
+    "adk-core/src/budget.rs",
+    "adk-harness/src/policy.rs",
+    "adk-harness/src/approvals/**",
+    "adk-harness/src/selfimprove/**",
+    "adk-harness/tests/suite/**",
+    ".github/**",
+    "scripts/**",
+    "xtask/**",
+    "publish.sh",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "CODEOWNERS",
+    ".adk/selfimprove/**",
+];
+
+/// Whether the folded `components` of a root-relative path are in [`ROOT_PROTECTED`].
+fn root_protected(components: &[String]) -> bool {
+    ROOT_PROTECTED.iter().any(|pattern| {
+        let (prefix, subtree) = match pattern.strip_suffix("/**") {
+            Some(prefix) => (prefix, true),
+            None => (*pattern, false),
+        };
+        let parts: Vec<String> = prefix.split('/').map(fold).collect();
+        components.len() >= parts.len()
+            && components.iter().zip(&parts).all(|(component, part)| component == part)
+            && (subtree || components.len() == parts.len())
+    })
+}
+
 fn fold(component: &str) -> String {
     component.nfc().collect::<String>().to_lowercase()
 }
 
 /// Whether `path` (relative to the workspace root) is a protected path (spec 3.1 §9.2 I29).
 ///
-/// Matching is case-folded and Unicode-normalized (NFC), so `Agents.MD`, `.GIT/config`
-/// and decomposed spellings are protected too.
+/// Instruction, memory, hook and tool-configuration names are protected at any depth; the
+/// extended set of spec 3.4 §7.5 (`Cargo.toml`, `Cargo.lock`, `.github/**`, `scripts/**`,
+/// the evaluator and the governance sources, and more) from the workspace root. Matching
+/// is case-folded and Unicode-normalized (NFC), so `Agents.MD`, `.GIT/config` and
+/// decomposed spellings are protected too.
 ///
 /// # Example
 ///
@@ -417,6 +462,9 @@ fn fold(component: &str) -> String {
 /// assert!(is_protected_path("crates/x/Agents.MD"));
 /// assert!(is_protected_path(".git/hooks/pre-commit"));
 /// assert!(is_protected_path(".cargo/config.toml"));
+/// assert!(is_protected_path("Cargo.toml"));
+/// assert!(is_protected_path(".github/workflows/ci.yml"));
+/// assert!(!is_protected_path("crates/x/Cargo.toml"));
 /// assert!(!is_protected_path("src/lib.rs"));
 /// ```
 pub fn is_protected_path(path: &str) -> bool {
@@ -425,7 +473,9 @@ pub fn is_protected_path(path: &str) -> bool {
     if components.iter().any(|part| PROTECTED_DIRS.contains(&part.as_str())) {
         return true;
     }
-    if components.last().is_some_and(|last| PROTECTED_FILES.contains(&last.as_str())) {
+    if components.last().is_some_and(|last| PROTECTED_FILES.contains(&last.as_str()))
+        || root_protected(&components)
+    {
         return true;
     }
     components
@@ -674,6 +724,48 @@ mod tests {
             assert!(path_within(&root, path, "."), "{path}");
         }
         assert!(is_protected_target(&root, "/etc/passwd"));
+    }
+
+    #[test]
+    fn the_extended_set_is_protected_from_the_root() {
+        for path in [
+            "Cargo.toml",
+            "./cargo.LOCK",
+            "rust-toolchain.toml",
+            "CODEOWNERS",
+            "publish.sh",
+            "adk-eval",
+            "adk-eval/src/lib.rs",
+            "adk-core/src/governance.rs",
+            "adk-core/src/policy.rs",
+            "adk-core/src/approval.rs",
+            "adk-core/src/audit_log.rs",
+            "adk-core/src/action_ledger.rs",
+            "adk-core/src/spend.rs",
+            "adk-core/src/budget.rs",
+            "adk-harness/src/policy.rs",
+            "adk-harness/src/approvals/rule.rs",
+            "adk-harness/src/selfimprove/gate.rs",
+            "adk-harness/tests/suite/a.rs",
+            ".github/workflows/ci.yml",
+            "scripts/check.sh",
+            "xtask/src/main.rs",
+            ".adk/selfimprove/defects.json",
+        ] {
+            assert!(is_protected_path(path), "{path}");
+        }
+        for path in [
+            "crates/x/Cargo.toml",
+            "adk-core/src/lib.rs",
+            "adk-core/src/policy.rs.bak",
+            "adk-harness/src/harness.rs",
+            "adk-harness/tests/other.rs",
+            "src/policy.rs",
+            "docs/scripts/x.md",
+            "adk-evaluation/x.rs",
+        ] {
+            assert!(!is_protected_path(path), "{path}");
+        }
     }
 
     #[test]

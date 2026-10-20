@@ -49,6 +49,12 @@ agent tool — and the harness refuses to run without it.
 A standing rule turns an approval into Allow; it never applies to a non-waivable row, and a
 Deny rule always wins. A path is protected as written or at the target it resolves to, so a
 symlink inside the workspace to `AGENTS.md` or into `.git` is an edit of a protected path.
+Protected at any depth: `.git`, `.adk`, `.skills`, `.claude`, `.cargo/config*`,
+`AGENTS.md`, `AGENT.md`, `CLAUDE.md`, `MEMORY.md`, `.envrc`, `lefthook.yml`. Protected from
+the workspace root (spec 3.4 §7.5): `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`,
+`CODEOWNERS`, `publish.sh`, `.github/**`, `scripts/**`, `xtask/**`, `adk-eval/**`, the
+governance sources of `adk-core/src`, `adk-harness/src/{policy.rs,approvals/**,selfimprove/**}`,
+`adk-harness/tests/suite/**` and `.adk/selfimprove/**`.
 
 ## Example
 
