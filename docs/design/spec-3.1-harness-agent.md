@@ -9,6 +9,7 @@
 | **Affected crates** | NEW `adk-harness`; additive changes in `adk-core`, `adk-devtools`, `adk-sandbox`, `adk-cli`, `cargo-adk`, `adk-rust`; deprecation in `adk-agent` |
 | **Stability** | `adk-harness` enters at **Beta** ([STABILITY.md](../../STABILITY.md)) |
 | **Extended by** | [`spec-3.2-agent-kernel.md`](spec-3.2-agent-kernel.md): the always-on form of the harness; `kernel` becomes a default feature of `adk-harness` |
+| **Surfaces** | [`spec-3.3-harness-ui.md`](spec-3.3-harness-ui.md): what each surface shows and how it answers (the console, web client, ACP, AG-UI and notifiers); it changes two statements here, recorded in its §10: a confirmation that times out parks the call when an approval store exists (§7.5), and the bundled web UI is authenticated and answers approvals (§8.2) |
 
 ---
 
