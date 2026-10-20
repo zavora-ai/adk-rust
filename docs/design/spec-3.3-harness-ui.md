@@ -78,25 +78,39 @@ U1, U2, U5 and U6 together, decided once, parked rather than lost, reviewed befo
 
 ## 6. Architecture
 
-```text
-┌───────────────────────────────────────────────────────────────────────────────┐
-│ RENDERERS   console (adk-cli) · web client (adk-server/webui) · ACP (adk-acp)   │ §7.5–7.9
-│             AG-UI stream (adk-server) · notifiers (push, chat; adk-core trait) │
-│             none holds state; each implements `Renderer` over the contract     │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ CONTRACT    adk-surface: SurfaceEvent (cursor) · DecisionCard · StatusLine      │ §7.1–7.4
-│             SessionRow · ProcessRow · DiffPreview · RewindPlan · Correlator     │
-│             JSON Schema → TypeScript types; renderer conformance tests          │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ FEED        per-session surface feed with `seq`: /api/surface/{app}/{user}/    │ §7.3
-│             {session}/events?cursor=  (adk-server); the kernel's /kernel/events │
-│             (spec 3.2) is the same feed across sessions                         │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ SOURCES     Event + EventActions · ToolConfirmationRequest · ApprovalRequest    │
-│             (inbox, versioned) · RunRecord · AuditRecord · AgentTopology ·      │
-│             harness mode, todos, plan, rules, spend (spec 3.1)                  │
-└───────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph SRC["Sources (specs 3.1, 3.2)"]
+    direction LR
+    A1["Event + EventActions<br/>tool_confirmation, decision,<br/>transfer, artifacts"] ~~~ A2[("ApprovalRequest<br/>inbox, versioned")] ~~~ A3[("RunRecord,<br/>AuditRecord")] ~~~ A4["AgentTopology,<br/>graph node progress"] ~~~ A5["harness mode, todos,<br/>plan, rules"] ~~~ A6[("SpendLedger,<br/>usage")]
+  end
+
+  subgraph CON["Contract: adk-surface (§7.1 to §7.4)"]
+    direction LR
+    C1["Correlator<br/>stream hold to inbox entry"] ~~~ C2["DecisionCard<br/>one object per decision"] ~~~ C3["DiffPreview,<br/>RewindPlan"] ~~~ C4["StatusLine<br/>model, mode, context, spend"] ~~~ C5["SurfaceRow, SessionRow,<br/>ProcessRow"]
+  end
+
+  FEED["Surface feed (§7.3): seq cursor, replay then live, Last-Event-ID; /kernel/events across sessions"]
+
+  subgraph REND["Renderers hold no state (§7.5 to §7.9)"]
+    direction LR
+    R1["console"] ~~~ R2["web client, phone<br/>paired token"] ~~~ R3["ACP for IDEs<br/>always allow as a rule"] ~~~ R4["AG-UI stream<br/>interrupt and resume"] ~~~ R5["notifiers<br/>push, chat"]
+  end
+
+  DEC["ApprovalService::decide with expectedVersion<br/>writes the inbox entry (decided, or 409 already decided by);<br/>the held run resumes exactly once and every renderer sees the decision"]
+
+  SRC --> CON
+  CON --> FEED
+  FEED --> REND
+  REND -- "every answer" --> DEC
+
+  classDef store fill:#e0f2fe,stroke:#0369a1,color:#0c4a6e
+  classDef gate fill:#fef3c7,stroke:#b45309,color:#451a03
+  class A2,A3,A6 store
+  class DEC gate
 ```
+
+Every renderer reads the same feed and answers through the same versioned call; cylinders are stores, the amber node is the only write path for a decision.
 
 **Decisions**
 

@@ -91,23 +91,49 @@ K1, K2, K8 and K9 together — durable, free when asleep, preemptible, freezable
 
 ## 6. Architecture
 
-```text
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│ SURFACES   adk-rust attach · web UI · phone · voice · channels · adk-rust ps/kill  │ §7.11
-│            all over the control plane (local socket · HTTP) — none holds state     │
-├──────────────────────────────────────────────────────────────────────────────────┤
-│ KERNEL (adk-kernel)                                                                │
-│   Supervisor ─ Scheduler ─ WakeSources(cron · files · webhooks · queues · channels) │ §7.2–7.4
-│   Process table (runs) ─ Agenda & proactivity ─ Event bus ─ /proc                  │ §7.3, 7.5, 7.6, 7.10
-│   Drivers (supervised MCP processes with manifests) ─ Partitions ─ Quotas           │ §7.7–7.9
-├──────────────────────────────────────────────────────────────────────────────────┤
-│ USER SPACE  HarnessAgent (spec 3.1): modes · standing rules · shell · team · graph │
-├──────────────────────────────────────────────────────────────────────────────────┤
-│ GOVERNANCE  authorize_tool_call · kill switch (mirrored) · budgets · spend · audit  │
-├──────────────────────────────────────────────────────────────────────────────────┤
-│ DURABILITY  DurableRunStore · leases · ScheduleStore · ApprovalStore · sessions     │
-└──────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph SURF["Surfaces attach and hold no state (§7.11)"]
+    direction LR
+    S1["adk-rust attach,<br/>ps, kill, events"] ~~~ S2["web UI,<br/>phone"] ~~~ S3["voice,<br/>channels"]
+  end
+
+  CP["Control plane: Unix socket or named pipe, and HTTP; every action authenticated and audited"]
+
+  subgraph KER["Kernel: adk-kernel"]
+    direction LR
+    K1["Supervisor (§7.2)<br/>start, pause,<br/>drain, stop, health"] ~~~ K2["Process table (§7.3)<br/>run + parent, partition,<br/>queue, wake set"] ~~~ K3["Agenda (§7.5)<br/>propose_followup,<br/>consolidation tick"] ~~~ K4["Event bus (§7.6)<br/>KernelEvent"] ~~~ K5["Drivers (§7.7)<br/>supervised MCP servers,<br/>pinned digests"] ~~~ K6["Partitions (§7.8)<br/>policy class,<br/>memory scope"] ~~~ K7["/proc (§7.10)<br/>content-free ledger,<br/>baselines"]
+  end
+
+  subgraph WAKE["Wake and schedule (§7.4, §7.9)"]
+    direction LR
+    W1["Wake sources<br/>cron, file watch, signed webhooks,<br/>queues, approval decided, run finished"] --> W2{"wake matcher<br/>idempotency key"} --> W3["Scheduler<br/>interactive, background, maintenance queues;<br/>quotas, quiet hours, cost-aware admission"]
+  end
+
+  subgraph DUR["Durability"]
+    direction LR
+    D1[("DurableRunStore<br/>Waiting = asleep, no lease")] ~~~ D2[("ScheduleStore")] ~~~ D3[("ApprovalStore")] ~~~ D4[("ProcessStore,<br/>sessions")]
+  end
+
+  subgraph EXEC["User space and governance"]
+    direction LR
+    E1["DurableWorker<br/>one per queue"] --> E2["HarnessAgent<br/>(spec 3.1)"] --> E3["authorize_tool_call<br/>modes, rules, budgets, spend;<br/>kill switch mirrored across replicas"]
+  end
+
+  SURF <--> CP
+  CP <--> KER
+  KER -- "agenda items and schedules" --> WAKE
+  WAKE -- "NewRun, or wake a Waiting run" --> DUR
+  DUR <-- "claim with lease;<br/>held calls park, decisions wake runs" --> EXEC
+  KER <-. "driver tools to the harness;<br/>events and follow-ups to the kernel" .-> EXEC
+
+  classDef store fill:#e0f2fe,stroke:#0369a1,color:#0c4a6e
+  classDef gate fill:#fef3c7,stroke:#b45309,color:#451a03
+  class D1,D2,D3,D4 store
+  class E3 gate
 ```
+
+Cylinders are stores; the amber node is the governed path. A sleeping process is a `Waiting` run with no lease, so asleep costs nothing until a wake source or a decision moves it back to the queue.
 
 **Decisions**
 
