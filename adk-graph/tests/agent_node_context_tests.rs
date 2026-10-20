@@ -31,6 +31,7 @@ struct Observed {
     secret: Option<String>,
     cancelled: bool,
     has_memory: bool,
+    authenticated: bool,
 }
 
 /// An agent that records the capabilities of the context it runs under.
@@ -62,6 +63,7 @@ impl Agent for ObservingAgent {
             secret: ctx.get_secret("api-key").await?,
             cancelled: ctx.is_cancelled(),
             has_memory: ctx.memory().is_some(),
+            authenticated: ctx.is_authenticated(),
         };
         *self.observed.lock().unwrap() = Some(observed);
         Ok(Box::pin(futures::stream::empty()))
@@ -153,6 +155,9 @@ impl adk_core::ReadonlyContext for SentinelContext {
     }
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+    fn is_authenticated(&self) -> bool {
+        true
     }
 }
 
@@ -246,6 +251,10 @@ async fn a_graph_run_preserves_the_callers_identity_and_services() {
         "secret access disappeared inside the graph"
     );
     assert!(observed.has_memory, "memory access disappeared inside the graph");
+    assert!(
+        observed.authenticated,
+        "the caller's authenticated identity disappeared inside the graph"
+    );
 }
 
 #[tokio::test]
@@ -278,4 +287,5 @@ async fn standalone_execution_still_works_without_a_parent() {
     assert_eq!(observed.secret, None);
     assert!(!observed.has_memory);
     assert!(!observed.cancelled);
+    assert!(!observed.authenticated);
 }

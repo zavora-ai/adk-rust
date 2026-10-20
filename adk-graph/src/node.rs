@@ -1131,6 +1131,10 @@ impl adk_core::ReadonlyContext for GraphInvocationContext {
     fn acting_context(&self) -> adk_core::ActingContext {
         self.run_config.acting_context_for(&self.app_name, self.agent.name(), &self.user_id)
     }
+
+    fn is_authenticated(&self) -> bool {
+        self.parent.as_ref().is_some_and(|parent| parent.is_authenticated())
+    }
 }
 
 // Implement CallbackContext (required by InvocationContext)

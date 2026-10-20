@@ -153,6 +153,9 @@ impl ReadonlyContext for SentinelContext {
     fn acting_context(&self) -> adk_core::ActingContext {
         sentinel_acting()
     }
+    fn is_authenticated(&self) -> bool {
+        true
+    }
 }
 
 fn sentinel_acting() -> adk_core::ActingContext {
@@ -235,6 +238,7 @@ async fn assert_capabilities_preserved(label: &str, wrapped: Arc<dyn InvocationC
         "{label}: authenticated scopes were dropped"
     );
     assert_eq!(wrapped.acting_context(), sentinel_acting(), "{label}: acting context dropped");
+    assert!(wrapped.is_authenticated(), "{label}: the authenticated identity was dropped");
 
     assert!(
         wrapped.request_metadata().contains_key(SENTINEL_METADATA_KEY),
@@ -299,6 +303,10 @@ async fn shared_state_context_preserves_capabilities() {
         "SharedStateContext: acting context dropped"
     );
     assert!(wrapped.request_metadata().contains_key(SENTINEL_METADATA_KEY));
+    assert!(
+        wrapped.is_authenticated(),
+        "SharedStateContext: the authenticated identity was dropped"
+    );
     let secret = wrapped.get_secret(SENTINEL_SECRET_NAME).await.unwrap();
     assert_eq!(secret.as_deref(), Some(SENTINEL_SECRET_VALUE));
     let shared = wrapped.shared_state().expect("shared state missing");
@@ -361,6 +369,7 @@ async fn composed_wrappers_preserve_capabilities() {
 async fn sentinel_reports_non_default_capabilities() {
     let ctx = SentinelContext::with_shared(seeded_shared_state(SENTINEL_STATE_KEY).await);
     assert!(ctx.is_cancelled());
+    assert!(ctx.is_authenticated());
     assert!(!ctx.user_scopes().is_empty());
     assert!(!ctx.request_metadata().is_empty());
     assert!(ctx.shared_state().is_some());
@@ -381,6 +390,10 @@ async fn acting_agent_context_preserves_capabilities_and_names_its_agent() {
     assert!(wrapped.is_cancelled(), "ActingAgentContext: cancellation was dropped");
     assert_eq!(wrapped.user_scopes(), vec![SENTINEL_SCOPE.to_string()]);
     assert!(wrapped.request_metadata().contains_key(SENTINEL_METADATA_KEY));
+    assert!(
+        wrapped.is_authenticated(),
+        "ActingAgentContext: the authenticated identity was dropped"
+    );
     let secret = wrapped.get_secret(SENTINEL_SECRET_NAME).await.unwrap();
     assert_eq!(secret.as_deref(), Some(SENTINEL_SECRET_VALUE));
     assert!(wrapped.shared_state().is_some(), "ActingAgentContext: shared state was dropped");

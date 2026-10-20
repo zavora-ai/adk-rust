@@ -518,6 +518,10 @@ impl ReadonlyContext for BlackboardContext {
     fn acting_context(&self) -> adk_core::ActingContext {
         self.inner.acting_context()
     }
+
+    fn is_authenticated(&self) -> bool {
+        self.inner.is_authenticated()
+    }
 }
 
 #[async_trait]

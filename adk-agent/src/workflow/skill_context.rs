@@ -76,6 +76,10 @@ impl ReadonlyContext for UserContentOverrideContext {
     fn acting_context(&self) -> adk_core::ActingContext {
         self.parent.acting_context()
     }
+
+    fn is_authenticated(&self) -> bool {
+        self.parent.is_authenticated()
+    }
 }
 
 #[async_trait]
