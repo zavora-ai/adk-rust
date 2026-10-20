@@ -100,6 +100,7 @@ dependencies = [
  "adk-deploy",
  "adk-devtools",
  "adk-graph",
+ "adk-harness",
  "adk-model",
  "adk-runner",
  "adk-server",
@@ -110,17 +111,21 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "chrono",
  "clap",
  "dirs",
  "futures",
  "keyring",
+ "reqwest 0.12.28",
  "rustyline",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tokio-util",
  "toml",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -259,6 +264,7 @@ dependencies = [
  "futures",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror",
  "tokio",
  "tracing",
@@ -278,6 +284,36 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "adk-harness"
+version = "3.0.0"
+dependencies = [
+ "adk-agent",
+ "adk-auth",
+ "adk-core",
+ "adk-devtools",
+ "adk-eval",
+ "adk-graph",
+ "adk-runner",
+ "adk-sandbox",
+ "adk-session",
+ "adk-skill",
+ "adk-telemetry",
+ "adk-tool",
+ "async-trait",
+ "chrono",
+ "dirs",
+ "futures",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
+ "uuid",
 ]
 
 [[package]]
@@ -417,6 +453,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-sandbox"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "async-trait",
+ "find-msvc-tools",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "adk-server"
 version = "3.0.0"
 dependencies = [
@@ -470,12 +523,14 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "adk-plugin",
+ "async-trait",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
  "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
  "walkdir",
 ]

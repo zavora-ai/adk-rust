@@ -40,6 +40,13 @@ adk-telemetry.workspace = true
 adk-skill.workspace = true
 adk-deploy.workspace = true
 adk-graph = { workspace = true, features = ["time-travel"] }
+# The harness REPL, `code`, `goal`, `ultracode` and `serve` (spec 3.1 §8.1)
+adk-harness = { workspace = true, optional = true }
+# `adk-rust approvals --server` talks to a served harness's approval inbox
+reqwest = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 clap = { version = "4.6", features = ["derive"] }
 rustyline = "18.0"
 tokio = { workspace = true, features = ["full"] }
@@ -64,7 +71,7 @@ keyring = { version = "3.6.3", default-features = false, features = ["windows-na
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
-default = ["gemini", "openai", "anthropic", "audit", "persist"]
+default = ["gemini", "openai", "anthropic", "audit", "persist", "harness"]
 gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
@@ -90,8 +97,12 @@ graph-sqlite = ["adk-graph/sqlite"]
 audit = ["dep:adk-auth"]
 # `adk-rust audit export`: read signed audit logs from SQLite or PostgreSQL
 audit-sql = ["audit", "adk-session/sqlite", "adk-session/postgres"]
-# `adk-rust chat` keeps its sessions in SQLite at <config dir>/adk-rust/harness.db
-persist = ["adk-session/sqlite"]
+# Sessions, approvals, durable runs, modes and standing rules in SQLite at
+# <config dir>/adk-rust/harness.db
+persist = ["adk-session/sqlite", "adk-harness?/sqlite"]
+# `adk-rust` with no subcommand is the harness REPL; `code`, `goal`, `ultracode` and
+# `serve` run on the harness; `sessions`, `rules` and `approvals` manage it (spec 3.1 §8.1)
+harness = ["dep:adk-harness", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]
 # Hidden `--model-script` and `--approval-fixture` flags for binary end-to-end tests:
 # a scripted model and a tool that needs approval, no provider key required
 scripted-model = []

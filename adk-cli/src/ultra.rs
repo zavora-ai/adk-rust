@@ -1,27 +1,19 @@
 //! `ultracode`: a native, ultra-review-style coding workflow built on adk-graph.
 //!
 //! implement → fan out to parallel specialist reviewers → synthesize (fan-in) →
-//! revise loop → finalize. Mirrors Claude Code's ultracode/ultrareview pattern.
+//! revise loop → finalize. With the harness, implement and revise run in the user's mode
+//! and reviewers in read-only mode (spec 3.1 §8.1).
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use adk_agent::LlmAgentBuilder;
-use adk_agent::coding::CodingAgent;
-use adk_core::{Agent, Content, Llm, Part, SessionId, UserId};
-use adk_devtools::{DevToolset, Workspace};
 use adk_graph::edge::{END, START};
 use adk_graph::graph::StateGraph;
 use adk_graph::node::{ExecutionConfig, NodeOutput};
 use adk_graph::state::State;
 use adk_graph::{DeferredNodeConfig, MergeStrategy};
-use adk_runner::Runner;
-use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use anyhow::Result;
-use futures::StreamExt;
+use async_trait::async_trait;
 use serde_json::{Value, json};
-
-const APP: &str = "adk-rust";
 
 const REVIEWERS: &[(&str, &str)] = &[
     ("correctness", "whether the implementation fully and correctly satisfies the task"),
@@ -29,19 +21,39 @@ const REVIEWERS: &[(&str, &str)] = &[
     ("style", "readability, naming, structure, and idiomatic style"),
 ];
 
-/// Run the ultracode workflow on `task` in `dir`.
-///
-/// `instruction` is project guidance added to the implementing and reviewing agents.
-pub async fn run(
-    model: Arc<dyn Llm>,
+/// The agents the ultracode graph runs.
+#[async_trait]
+pub trait UltraAgents: Send + Sync {
+    /// Implements the task or applies review feedback.
+    async fn implement(&self, prompt: &str);
+
+    /// Reviews the workspace with one `focus` and returns the reviewer's text.
+    async fn review(&self, focus: &str, desc: &str, prompt: &str) -> String;
+}
+
+/// The reviewer instruction for `focus`, with project `guidance`.
+pub fn review_instruction(focus: &str, desc: &str, guidance: Option<&str>) -> String {
+    let mut instruction = format!(
+        "You are a strict but fair senior code reviewer. Focus ONLY on {focus}: {desc}. \
+         Use read_file/glob/grep to inspect the code in the workspace. Reply with a single \
+         final line 'VERDICT: approve' if it meets the bar, or 'VERDICT: changes' followed by \
+         a short bullet list of required changes. Do not request removing behavior the task \
+         requires. Do not modify files."
+    );
+    if let Some(guidance) = guidance {
+        instruction.push_str(&format!("\n\nProject guidance the code must follow:\n{guidance}"));
+    }
+    instruction
+}
+
+/// Run the ultracode workflow on `task` with `agents`.
+pub async fn run_with(
+    agents: Arc<dyn UltraAgents>,
     model_id: &str,
-    instruction: Option<String>,
-    dir: String,
+    dir: &str,
     task: String,
     max_rounds: i64,
 ) -> Result<()> {
-    let root = PathBuf::from(&dir);
-
     println!("ultracode ({model_id}) on {dir}");
     println!("task: {task}");
     println!(
@@ -49,7 +61,7 @@ pub async fn run(
         REVIEWERS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
     );
 
-    let graph = build_graph(model, root, instruction, max_rounds)?;
+    let graph = build_graph(agents, max_rounds)?;
     let mut input = State::new();
     input.insert("task".into(), json!(task));
     input.insert("round".into(), json!(0));
@@ -61,12 +73,7 @@ pub async fn run(
     Ok(())
 }
 
-fn build_graph(
-    model: Arc<dyn Llm>,
-    root: PathBuf,
-    instruction: Option<String>,
-    max_rounds: i64,
-) -> Result<adk_graph::CompiledGraph> {
+fn build_graph(agents: Arc<dyn UltraAgents>, max_rounds: i64) -> Result<adk_graph::CompiledGraph> {
     let mut graph = StateGraph::with_channels(&[
         "task",
         "round",
@@ -78,18 +85,13 @@ fn build_graph(
     ]);
 
     graph = graph.add_node_fn("implement", {
-        let model = model.clone();
-        let root = root.clone();
-        let instruction = instruction.clone();
+        let agents = agents.clone();
         move |ctx| {
-            let model = model.clone();
-            let root = root.clone();
-            let instruction = instruction.clone();
+            let agents = agents.clone();
             async move {
                 let task = ctx.get("task").and_then(Value::as_str).unwrap_or_default().to_string();
                 println!("━━ implement ━━");
-                let agent = coding_agent(model, &root, instruction);
-                run_agent(agent, "implement", &task, true).await.ok();
+                agents.implement(&task).await;
                 Ok(NodeOutput::new())
             }
         }
@@ -98,29 +100,22 @@ fn build_graph(
     for (name, desc) in REVIEWERS {
         let key = format!("rev_{name}");
         graph = graph.add_node_fn(&format!("review_{name}"), {
-            let model = model.clone();
-            let root = root.clone();
-            let instruction = instruction.clone();
+            let agents = agents.clone();
             let name = name.to_string();
             let desc = desc.to_string();
             let key = key.clone();
             move |ctx| {
-                let model = model.clone();
-                let root = root.clone();
-                let instruction = instruction.clone();
+                let agents = agents.clone();
                 let name = name.clone();
                 let desc = desc.clone();
                 let key = key.clone();
                 let task = ctx.get("task").and_then(Value::as_str).unwrap_or_default().to_string();
                 async move {
-                    let agent = review_agent(model, &root, &name, &desc, instruction.as_deref());
                     let prompt = format!(
                         "The task being implemented is:\n{task}\n\nReview the code in the \
                          workspace against this task now."
                     );
-                    let text = run_agent(agent, &format!("rev-{name}"), &prompt, false)
-                        .await
-                        .unwrap_or_default();
+                    let text = agents.review(&name, &desc, &prompt).await;
                     let (approved, notes) = parse_verdict(&text);
                     println!(
                         "  🔎 review:{name:<11} → {}",
@@ -176,12 +171,9 @@ fn build_graph(
     );
 
     graph = graph.add_node_fn("revise", {
-        let model = model.clone();
-        let root = root.clone();
+        let agents = agents.clone();
         move |ctx| {
-            let model = model.clone();
-            let root = root.clone();
-            let instruction = instruction.clone();
+            let agents = agents.clone();
             async move {
                 let notes = ctx.get("notes").and_then(Value::as_str).unwrap_or("").to_string();
                 println!("━━ revise ━━");
@@ -189,8 +181,7 @@ fn build_graph(
                     "Apply this review feedback, then verify it still works. Keep all behavior \
                      the task requires:\n{notes}"
                 );
-                let agent = coding_agent(model, &root, instruction);
-                run_agent(agent, "revise", &prompt, true).await.ok();
+                agents.implement(&prompt).await;
                 Ok(NodeOutput::new())
             }
         }
@@ -225,85 +216,114 @@ fn build_graph(
     Ok(graph.compile()?.with_recursion_limit(steps.max(16)))
 }
 
-fn coding_agent(model: Arc<dyn Llm>, root: &Path, instruction: Option<String>) -> Arc<dyn Agent> {
-    let mut builder =
-        CodingAgent::builder().model(model).workspace(Workspace::new(root).allow_bash(true));
-    if let Some(instruction) = instruction {
-        builder = builder.instruction(instruction);
-    }
-    builder.build().expect("coding agent").into_agent()
-}
+/// The ultracode agents without the harness: a `CodingAgent` per step and read-only
+/// reviewers, each in a fresh in-memory session.
+#[cfg(not(feature = "harness"))]
+pub mod legacy {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
-fn review_agent(
-    model: Arc<dyn Llm>,
-    root: &Path,
-    focus: &str,
-    desc: &str,
-    guidance: Option<&str>,
-) -> Arc<dyn Agent> {
-    let mut instruction = format!(
-        "You are a strict but fair senior code reviewer. Focus ONLY on {focus}: {desc}. \
-         Use read_file/glob/grep to inspect the code in the workspace. Reply with a single \
-         final line 'VERDICT: approve' if it meets the bar, or 'VERDICT: changes' followed by \
-         a short bullet list of required changes. Do not request removing behavior the task \
-         requires. Do not modify files."
-    );
-    if let Some(guidance) = guidance {
-        instruction.push_str(&format!("\n\nProject guidance the code must follow:\n{guidance}"));
-    }
-    Arc::new(
-        LlmAgentBuilder::new(format!("review-{focus}"))
-            .model(model)
-            .instruction(instruction)
-            .toolset(Arc::new(DevToolset::new(Workspace::read_only(root))))
-            .build()
-            .expect("review agent"),
-    )
-}
+    use adk_agent::LlmAgentBuilder;
+    use adk_agent::coding::CodingAgent;
+    use adk_core::{Agent, Content, Llm, Part, SessionId, UserId};
+    use adk_devtools::{DevToolset, Workspace};
+    use adk_runner::Runner;
+    use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+    use anyhow::Result;
+    use async_trait::async_trait;
+    use futures::StreamExt;
 
-async fn run_agent(
-    agent: Arc<dyn Agent>,
-    session_id: &str,
-    prompt: &str,
-    show_tools: bool,
-) -> Result<String> {
-    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
-    sessions
-        .create(CreateRequest {
-            app_name: APP.into(),
-            user_id: "user".into(),
-            session_id: Some(session_id.into()),
-            state: Default::default(),
-        })
-        .await?;
-    let runner = Runner::builder().app_name(APP).agent(agent).session_service(sessions).build()?;
-    let mut stream = runner
-        .run(
-            UserId::new("user")?,
-            SessionId::new(session_id)?,
-            Content::new("user").with_text(prompt),
-        )
-        .await?;
-    let mut text = String::new();
-    let mut text_deltas = adk_core::EventTextDeltas::default();
-    while let Some(event) = stream.next().await {
-        let event = event?;
-        let event = text_deltas.push(&event);
-        // A streamed function call arrives in a partial chunk and again in the complete event.
-        let partial = event.llm_response.partial;
-        if let Some(content) = &event.llm_response.content {
-            for part in &content.parts {
-                match part {
-                    Part::FunctionCall { name, .. } if show_tools && !partial => {
-                        println!("       🔧 {name}")
+    const APP: &str = "adk-rust";
+
+    /// `CodingAgent` implementers and `DevToolset` reviewers.
+    pub struct CodingAgents {
+        pub model: Arc<dyn Llm>,
+        pub root: PathBuf,
+        pub instruction: Option<String>,
+    }
+
+    #[async_trait]
+    impl super::UltraAgents for CodingAgents {
+        async fn implement(&self, prompt: &str) {
+            let agent = coding_agent(self.model.clone(), &self.root, self.instruction.clone());
+            run_agent(agent, "implement", prompt, true).await.ok();
+        }
+
+        async fn review(&self, focus: &str, desc: &str, prompt: &str) -> String {
+            let agent = Arc::new(
+                LlmAgentBuilder::new(format!("review-{focus}"))
+                    .model(self.model.clone())
+                    .instruction(super::review_instruction(
+                        focus,
+                        desc,
+                        self.instruction.as_deref(),
+                    ))
+                    .toolset(Arc::new(DevToolset::new(Workspace::read_only(&self.root))))
+                    .build()
+                    .expect("review agent"),
+            );
+            run_agent(agent, &format!("rev-{focus}"), prompt, false).await.unwrap_or_default()
+        }
+    }
+
+    fn coding_agent(
+        model: Arc<dyn Llm>,
+        root: &Path,
+        instruction: Option<String>,
+    ) -> Arc<dyn Agent> {
+        let mut builder =
+            CodingAgent::builder().model(model).workspace(Workspace::new(root).allow_bash(true));
+        if let Some(instruction) = instruction {
+            builder = builder.instruction(instruction);
+        }
+        builder.build().expect("coding agent").into_agent()
+    }
+
+    async fn run_agent(
+        agent: Arc<dyn Agent>,
+        session_id: &str,
+        prompt: &str,
+        show_tools: bool,
+    ) -> Result<String> {
+        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+        sessions
+            .create(CreateRequest {
+                app_name: APP.into(),
+                user_id: "user".into(),
+                session_id: Some(session_id.into()),
+                state: Default::default(),
+            })
+            .await?;
+        let runner =
+            Runner::builder().app_name(APP).agent(agent).session_service(sessions).build()?;
+        let mut stream = runner
+            .run(
+                UserId::new("user")?,
+                SessionId::new(session_id)?,
+                Content::new("user").with_text(prompt),
+            )
+            .await?;
+        let mut text = String::new();
+        let mut text_deltas = adk_core::EventTextDeltas::default();
+        while let Some(event) = stream.next().await {
+            let event = event?;
+            let event = text_deltas.push(&event);
+            // A streamed function call arrives in a partial chunk and again in the complete event.
+            let partial = event.llm_response.partial;
+            if let Some(content) = &event.llm_response.content {
+                for part in &content.parts {
+                    match part {
+                        Part::FunctionCall { name, .. } if show_tools && !partial => {
+                            println!("       🔧 {name}")
+                        }
+                        Part::Text { text: t } if !t.is_empty() => text.push_str(t),
+                        _ => {}
                     }
-                    Part::Text { text: t } if !t.is_empty() => text.push_str(t),
-                    _ => {}
                 }
             }
         }
+        Ok(text)
     }
-    Ok(text)
 }
 
 fn parse_verdict(text: &str) -> (bool, String) {

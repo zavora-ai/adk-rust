@@ -3,6 +3,12 @@ mod audit;
 mod cli;
 mod deploy;
 mod graph;
+#[cfg(feature = "harness")]
+mod harness_cli;
+#[cfg(not(feature = "harness"))]
+mod legacy;
+#[cfg(all(feature = "harness", feature = "persist"))]
+mod manage;
 #[cfg(feature = "vertex-agent-registry")]
 mod registry;
 #[cfg(feature = "scripted-model")]
@@ -14,43 +20,73 @@ mod skills;
 mod ultra;
 
 use adk_agent::LlmAgentBuilder;
-use adk_agent::coding::CodingAgent;
 use adk_cli::{Launcher, launcher::ThinkingDisplayMode};
-use adk_core::{Content, Llm, Part, SessionId, UserId};
-use adk_devtools::Workspace;
+use adk_core::Llm;
 use adk_model::ModelProvider;
-use adk_runner::Runner;
-use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_tool::GoogleSearchTool;
 use anyhow::Result;
 use clap::Parser;
 use cli::{AgentOptions, ChatArgs, Cli, Commands, ThinkingMode};
-use futures::StreamExt;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    #[cfg(feature = "harness")]
+    let Cli { command, options, harness } = Cli::parse();
+    #[cfg(not(feature = "harness"))]
     let Cli { command, options } = Cli::parse();
 
     match command {
+        #[cfg(feature = "harness")]
+        None => {
+            let model = resolve_model(&options)?;
+            harness_cli::repl(model, options.instruction.clone(), harness).await
+        }
+        #[cfg(not(feature = "harness"))]
         None => run_chat(&options, ChatArgs::default()).await,
         Some(Commands::Chat(args)) => run_chat(&options, args).await,
-        Some(Commands::Serve { port, host }) => {
-            let agent = build_agent(&options)?;
-            Launcher::new(Arc::new(agent))
-                .app_name("adk-rust")
-                .with_bind_address(host)
-                .run_serve_directly(port)
+        #[cfg(feature = "harness")]
+        Some(Commands::Serve {
+            port,
+            host,
+            agent: cli::ServeAgent::Harness,
+            auth_token,
+            harness,
+        }) => {
+            let model = resolve_model(&options)?;
+            let auth_token = auth_token.or_else(|| std::env::var("ADK_SERVE_TOKEN").ok());
+            harness_cli::serve(model, options.instruction.clone(), harness, port, host, auth_token)
                 .await
-                .map_err(Into::into)
         }
+        #[cfg(feature = "harness")]
+        Some(Commands::Serve { port, host, agent: cli::ServeAgent::Chat, .. }) => {
+            serve_chat(&options, port, host).await
+        }
+        #[cfg(not(feature = "harness"))]
+        Some(Commands::Serve { port, host }) => serve_chat(&options, port, host).await,
+        #[cfg(feature = "harness")]
+        Some(Commands::Code { task, harness, read_only }) => {
+            let model = resolve_model(&options)?;
+            exit_with(
+                harness_cli::code(model, options.instruction.clone(), harness, read_only, task)
+                    .await?,
+            )
+        }
+        #[cfg(not(feature = "harness"))]
         Some(Commands::Code { task, dir, read_only }) => {
             let model = resolve_model(&options)?;
-            run_code(model, options.instruction, dir, read_only, task).await
+            legacy::run_code(model, options.instruction, dir, read_only, task).await
         }
+        #[cfg(feature = "harness")]
+        Some(Commands::Goal { goal, until, harness, max_iters, state, resume }) => {
+            let model = resolve_model(&options)?;
+            let goal = harness_cli::GoalArgs { goal, until, max_iters, state, resume };
+            exit_with(harness_cli::goal(model, options.instruction.clone(), harness, goal).await?)
+        }
+        #[cfg(not(feature = "harness"))]
         Some(Commands::Goal { goal, until, dir, max_iters, state, resume }) => {
             let model = resolve_model(&options)?;
-            run_goal(GoalArgs {
+            legacy::run_goal(legacy::GoalArgs {
                 model,
                 instruction: options.instruction,
                 dir,
@@ -62,9 +98,38 @@ async fn main() -> Result<()> {
             })
             .await
         }
+        #[cfg(feature = "harness")]
+        Some(Commands::Ultracode { task, harness, max_rounds }) => {
+            let model = resolve_model(&options)?;
+            exit_with(
+                harness_cli::ultracode(
+                    model,
+                    options.instruction.clone(),
+                    harness,
+                    task,
+                    max_rounds,
+                )
+                .await?,
+            )
+        }
+        #[cfg(not(feature = "harness"))]
         Some(Commands::Ultracode { task, dir, max_rounds }) => {
             let model = resolve_model(&options)?;
-            ultra::run(model.llm, &model.id, options.instruction, dir, task, max_rounds).await
+            let agents = Arc::new(ultra::legacy::CodingAgents {
+                model: model.llm,
+                root: std::path::PathBuf::from(&dir),
+                instruction: options.instruction,
+            });
+            ultra::run_with(agents, &model.id, &dir, task, max_rounds).await
+        }
+        #[cfg(all(feature = "harness", feature = "persist"))]
+        Some(Commands::Sessions { command }) => manage::sessions(command).await,
+        #[cfg(all(feature = "harness", feature = "persist"))]
+        Some(Commands::Rules { command }) => manage::rules(command).await,
+        #[cfg(all(feature = "harness", feature = "persist"))]
+        Some(Commands::Approvals { command, server, token }) => {
+            let token = token.or_else(|| std::env::var("ADK_SERVE_TOKEN").ok());
+            manage::approvals(command, server, token).await
         }
         Some(Commands::Skills { command }) => skills::run(command).await,
         Some(Commands::Deploy { command }) => deploy::run(command).await,
@@ -76,11 +141,31 @@ async fn main() -> Result<()> {
     }
 }
 
+/// Exits with `code` when it is not success; harness commands report held calls with 3.
+#[cfg(feature = "harness")]
+fn exit_with(code: i32) -> Result<()> {
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
+}
+
+/// `serve` with the plain chat agent.
+async fn serve_chat(options: &AgentOptions, port: u16, host: std::net::IpAddr) -> Result<()> {
+    let agent = build_agent(options)?;
+    Launcher::new(Arc::new(agent))
+        .app_name("adk-rust")
+        .with_bind_address(host)
+        .run_serve_directly(port)
+        .await
+        .map_err(Into::into)
+}
+
 /// The model an agent command runs on, resolved through [`setup::resolve`].
-struct ResolvedModel {
-    llm: Arc<dyn Llm>,
+pub(crate) struct ResolvedModel {
+    pub(crate) llm: Arc<dyn Llm>,
     /// Display id, derived from the flags or saved config only, never from the key.
-    id: String,
+    pub(crate) id: String,
     provider: Option<ModelProvider>,
     /// The chat instruction: `--instruction`, or the default one.
     instruction: String,
@@ -162,280 +247,6 @@ async fn with_chat_sessions(launcher: Launcher, args: ChatArgs) -> Result<Launch
         );
     }
     Ok(launcher)
-}
-
-/// Drive one agent turn on an existing runner/session, streaming the trace.
-async fn stream_turn(runner: &Runner, session_id: &str, prompt: &str) -> Result<()> {
-    let mut stream = runner
-        .run(
-            UserId::new("user")?,
-            SessionId::new(session_id)?,
-            Content::new("user").with_text(prompt),
-        )
-        .await?;
-    let mut pending = String::new();
-    let mut text_deltas = adk_core::EventTextDeltas::default();
-    while let Some(event) = stream.next().await {
-        let event = event?;
-        let event = text_deltas.push(&event);
-        // A streamed function call arrives in a partial chunk and again in the complete event.
-        let partial = event.llm_response.partial;
-        if let Some(content) = &event.llm_response.content {
-            for part in &content.parts {
-                match part {
-                    Part::FunctionCall { name, args, .. } if !partial => {
-                        flush_text(&mut pending);
-                        println!("  🔧 {name}({})", first_line(&args.to_string()));
-                    }
-                    Part::FunctionResponse { function_response, .. } => {
-                        flush_text(&mut pending);
-                        println!("  ↩  {}", first_line(&function_response.response.to_string()));
-                    }
-                    Part::Text { text } if !text.is_empty() => pending.push_str(text),
-                    _ => {}
-                }
-            }
-        }
-    }
-    flush_text(&mut pending);
-    Ok(())
-}
-
-/// Run a shell command in `dir`; returns (exit_code, combined stdout+stderr).
-/// Run the goal-mode success check.
-///
-/// Uses the same environment policy as the agent's `bash` tool, so a check cannot see
-/// credentials the agent itself is not allowed to see.
-fn run_check(dir: &str, command: &str) -> (Option<i32>, String) {
-    let mut cmd = std::process::Command::new("sh");
-    cmd.arg("-c").arg(command).current_dir(dir);
-
-    let workspace = adk_devtools::Workspace::new(dir);
-    if !workspace.inherits_env() {
-        cmd.env_clear();
-        for (key, value) in workspace.bash_env() {
-            cmd.env(key, value);
-        }
-    }
-
-    match cmd.output() {
-        Ok(o) => {
-            let mut out = String::from_utf8_lossy(&o.stdout).to_string();
-            out.push_str(&String::from_utf8_lossy(&o.stderr));
-            (o.status.code(), out)
-        }
-        Err(e) => (None, e.to_string()),
-    }
-}
-
-/// Arguments for [`run_goal`].
-struct GoalArgs {
-    model: ResolvedModel,
-    instruction: Option<String>,
-    dir: String,
-    goal: String,
-    until: String,
-    max_iters: u32,
-    state: Option<String>,
-    resume: bool,
-}
-
-/// Durable goal state, checkpointed to disk after every iteration so a run can
-/// resume across restarts (mirrors Codex/Hermes persistent `/goal`).
-#[derive(serde::Serialize, serde::Deserialize, Default)]
-struct GoalState {
-    goal: String,
-    until: String,
-    iteration: u32,
-    /// "running" | "done" | "exhausted".
-    status: String,
-    last_output: String,
-}
-
-/// Autonomous goal mode: loop plan → act → verify until `until` passes or budget.
-async fn run_goal(args: GoalArgs) -> Result<()> {
-    let GoalArgs { model, instruction, dir, goal, until, max_iters, state, resume } = args;
-
-    let model_id = model.id;
-    let mut coding =
-        CodingAgent::builder().model(model.llm).workspace(Workspace::new(&dir).allow_bash(true));
-    if let Some(instruction) = instruction {
-        coding = coding.instruction(instruction);
-    }
-    let coding = coding.build()?;
-
-    let state_path = state.unwrap_or_else(|| format!("{dir}/.adk/goal.json"));
-
-    // Resume: if a saved state exists and is still running, continue from it.
-    let mut gs = if resume {
-        match std::fs::read_to_string(&state_path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<GoalState>(&s).ok())
-        {
-            Some(saved) if saved.status == "done" => {
-                println!("goal already complete (per {state_path}); nothing to do.");
-                return Ok(());
-            }
-            Some(saved) => {
-                println!("resuming goal from {state_path} (iteration {})", saved.iteration);
-                saved
-            }
-            None => {
-                println!("no resumable state at {state_path}; starting fresh.");
-                GoalState {
-                    goal: goal.clone(),
-                    until: until.clone(),
-                    status: "running".into(),
-                    ..Default::default()
-                }
-            }
-        }
-    } else {
-        GoalState {
-            goal: goal.clone(),
-            until: until.clone(),
-            status: "running".into(),
-            ..Default::default()
-        }
-    };
-
-    // One runner/session: the agent remembers prior attempts across iterations.
-    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
-    sessions
-        .create(CreateRequest {
-            app_name: "adk-rust".into(),
-            user_id: "user".into(),
-            session_id: Some("goal".into()),
-            state: Default::default(),
-        })
-        .await?;
-    let runner = Runner::builder()
-        .app_name("adk-rust")
-        .agent(coding.agent())
-        .session_service(sessions)
-        .build()?;
-
-    println!("goal mode ({model_id}) on {dir}");
-    println!("goal:  {goal}");
-    println!("until: {until}  (budget: {max_iters} iterations, state: {state_path})\n");
-
-    let start = gs.iteration + 1;
-    for iter in start..=max_iters {
-        println!("━━ iteration {iter}/{max_iters} ━━");
-        let prompt = if iter == 1 {
-            format!(
-                "Goal: {goal}\n\nWhen you believe the goal is met, the command `{until}` must \
-                 succeed (exit 0). Work toward that now."
-            )
-        } else {
-            format!(
-                "The success check `{until}` is not passing yet. Its latest output was:\n\
-                 ---\n{}\n---\nDiagnose and fix this, continuing toward the goal: {goal}",
-                gs.last_output
-            )
-        };
-        stream_turn(&runner, "goal", &prompt).await?;
-
-        let (code, output) = run_check(&dir, &until);
-        gs.iteration = iter;
-        gs.last_output = first_lines(&output, 40);
-        gs.status = if code == Some(0) { "done".into() } else { "running".into() };
-        save_goal_state(&state_path, &gs); // checkpoint after every iteration
-
-        if code == Some(0) {
-            println!(
-                "\n✅ goal met after {iter} iteration(s): `{until}` passed. (state: {state_path})"
-            );
-            return Ok(());
-        }
-        println!("  ✗ check `{until}` exited {code:?}; iterating.\n");
-    }
-    gs.status = "exhausted".into();
-    save_goal_state(&state_path, &gs);
-    println!("\n⚠️  budget exhausted; `{until}` still failing. Resume later with --resume.");
-    std::process::exit(1);
-}
-
-/// Atomically checkpoint goal state to disk (write temp + rename).
-fn save_goal_state(path: &str, state: &GoalState) {
-    let p = std::path::Path::new(path);
-    if let Some(parent) = p.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(state) {
-        let tmp = format!("{path}.tmp");
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(&tmp, path);
-        }
-    }
-}
-
-/// First `n` lines of `s` (for compact failure feedback).
-fn first_lines(s: &str, n: usize) -> String {
-    s.lines().take(n).collect::<Vec<_>>().join("\n")
-}
-
-/// Run the coding agent on a single task in a workspace directory.
-async fn run_code(
-    model: ResolvedModel,
-    instruction: Option<String>,
-    dir: String,
-    read_only: bool,
-    task: String,
-) -> Result<()> {
-    let model_id = model.id;
-    let workspace =
-        if read_only { Workspace::read_only(&dir) } else { Workspace::new(&dir).allow_bash(true) };
-    let mut coding = CodingAgent::builder().model(model.llm).workspace(workspace);
-    if let Some(instruction) = instruction {
-        coding = coding.instruction(instruction);
-    }
-    let coding = coding.build()?;
-
-    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
-    sessions
-        .create(CreateRequest {
-            app_name: "adk-rust".into(),
-            user_id: "user".into(),
-            session_id: Some("code".into()),
-            state: Default::default(),
-        })
-        .await?;
-    let runner = Runner::builder()
-        .app_name("adk-rust")
-        .agent(coding.agent())
-        .session_service(sessions)
-        .build()?;
-
-    println!("coding agent ({model_id}) on {dir}\ntask: {task}\n");
-    stream_turn(&runner, "code", &task).await?;
-
-    let todos = coding.todos();
-    if !todos.is_empty() {
-        println!("\nplan:");
-        for t in todos {
-            let mark = match t.status.as_str() {
-                "completed" => "✓",
-                "in_progress" => "▶",
-                _ => "·",
-            };
-            println!("  {mark} {}", t.content);
-        }
-    }
-    Ok(())
-}
-
-fn flush_text(pending: &mut String) {
-    let trimmed = pending.trim();
-    if !trimmed.is_empty() {
-        println!("  🤖 {trimmed}");
-    }
-    pending.clear();
-}
-
-fn first_line(s: &str) -> String {
-    let line = s.lines().next().unwrap_or("").trim();
-    if line.len() > 160 { format!("{}…", &line[..160]) } else { line.to_string() }
 }
 
 fn build_agent(options: &AgentOptions) -> Result<adk_agent::LlmAgent> {

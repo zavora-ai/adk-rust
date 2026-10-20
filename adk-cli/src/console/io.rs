@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::io::{IsTerminal, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, mpsc};
 
 use adk_core::{AdkError, Result};
@@ -58,6 +59,8 @@ pub struct ConsoleIo {
 struct Inner {
     backend: Backend,
     run: Mutex<Option<CancellationToken>>,
+    /// A person denied a call: the turn ends once the call's response is recorded.
+    end_turn: AtomicBool,
 }
 
 enum Backend {
@@ -113,7 +116,13 @@ impl ConsoleIo {
     }
 
     fn with_backend(backend: Backend) -> Self {
-        Self { inner: Arc::new(Inner { backend, run: Mutex::new(None) }) }
+        Self {
+            inner: Arc::new(Inner {
+                backend,
+                run: Mutex::new(None),
+                end_turn: AtomicBool::new(false),
+            }),
+        }
     }
 
     /// Whether a person can answer prompts: stdin is a terminal.
@@ -192,7 +201,21 @@ impl ConsoleIo {
 
     /// Records the run the console is driving, or `None` once it ends.
     pub fn set_run(&self, run: Option<CancellationToken>) {
+        self.inner.end_turn.store(false, Ordering::SeqCst);
         *lock(&self.inner.run) = run;
+    }
+
+    /// Asks the console to end the run it drives once the decided calls' responses are
+    /// recorded, before the next model call (spec 3.1 §9.2 I19).
+    #[cfg(feature = "harness")]
+    pub(crate) fn end_turn_after_responses(&self) {
+        self.inner.end_turn.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether [`end_turn_after_responses`](Self::end_turn_after_responses) was asked for
+    /// since the run started.
+    pub(crate) fn end_turn_requested(&self) -> bool {
+        self.inner.end_turn.load(Ordering::SeqCst)
     }
 
     /// Cancels the run the console is driving, if any.

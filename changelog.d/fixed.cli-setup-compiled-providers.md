@@ -6,4 +6,4 @@
   (flags, environment, secure storage, saved config, first-run setup), so without
   `--provider` they use the saved provider rather than always Gemini, and `--instruction`
   adds project guidance to their coding prompt. The default features are now `gemini`,
-  `openai`, `anthropic`, `audit` and `persist`.
+  `openai`, `anthropic`, `audit`, `persist` and `harness`.

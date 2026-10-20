@@ -631,91 +631,20 @@ impl Launcher {
                     user_content,
                 )
                 .await;
-            let mut events = match started {
+            let events = match started {
                 Ok(events) => events,
                 Err(error) => {
                     console.set_run(None);
                     return Err(error);
                 }
             };
-            let mut printer = StreamPrinter::new(thinking_mode);
-            let mut text_deltas = adk_core::EventTextDeltas::default();
-            let mut current_agent = String::new();
-            let mut printed_header = false;
-            let mut interrupted = false;
-
-            loop {
-                tokio::select! {
-                    event = events.next() => {
-                        let Some(event) = event else {
-                            break;
-                        };
-
-                        match event {
-                            Ok(evt) => {
-                                let evt = text_deltas.push(&evt);
-                                // Track agent switches in multi-agent workflows
-                                if !evt.author.is_empty()
-                                    && evt.author != "user"
-                                    && evt.author != current_agent
-                                {
-                                    if !current_agent.is_empty() {
-                                        println!();
-                                    }
-                                    current_agent = evt.author.clone();
-                                    // Only show agent label in multi-agent scenarios
-                                    if printed_header {
-                                        print!(
-                                            "\x1b[33m[{}]\x1b[0m ",
-                                            terminal_safe(&current_agent)
-                                        );
-                                        let _ = io::stdout().flush();
-                                    }
-                                    printed_header = true;
-                                }
-
-                                // Show agent transfer requests
-                                if let Some(target) = &evt.actions.transfer_to_agent {
-                                    print!(
-                                        "\x1b[90m[transfer -> {}]\x1b[0m ",
-                                        terminal_safe(target)
-                                    );
-                                    let _ = io::stdout().flush();
-                                }
-
-                                printer.handle_event(&evt);
-                            }
-                            Err(e) => {
-                                // The message is shown here, escaped; the log line
-                                // stays content-free, since it can be exported.
-                                eprintln!("\nError: {}", terminal_safe(&e.to_string()));
-                                error!(error = %e.diagnostics(), "stream error");
-                            }
-                        }
-                    }
-                    () = cancellation_token.cancelled() => {
-                        interrupted = true;
-                        break;
-                    }
-                    signal = tokio::signal::ctrl_c() => {
-                        match signal {
-                            Ok(()) => {
-                                cancellation_token.cancel();
-                                interrupted = true;
-                                break;
-                            }
-                            Err(err) => {
-                                error!("failed to listen for Ctrl+C: {err}");
-                            }
-                        }
-                    }
-                }
-            }
-
+            let turn = drive_turn(events, &console, &cancellation_token, thinking_mode, true).await;
             console.set_run(None);
-            printer.finish();
-            // The stream can end on its own once a prompt cancelled the run.
-            if interrupted || cancellation_token.is_cancelled() {
+            if turn.ended_by_denial {
+                println!("\nTurn ended: you denied a call. Say what to do instead.\n");
+                continue;
+            }
+            if turn.interrupted {
                 println!("\nInterrupted.\n");
                 continue;
             }
@@ -897,7 +826,9 @@ impl Launcher {
         println!("Open http://localhost:{port} in your browser");
         println!("Press Ctrl+C to stop\n");
 
-        axum::serve(listener, app)
+        // The peer address lets an extractor such as the harness's loopback operator see who
+        // connected.
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(shutdown_signal())
             .await
             .map_err(|e| adk_core::AdkError::config(format!("server error: {e}")))?;
@@ -941,8 +872,148 @@ async fn open_console_session(
     Ok(created.id().to_string())
 }
 
+/// How one console turn ended.
+#[derive(Debug, Default)]
+pub(crate) struct TurnEnd {
+    /// The run was cancelled: Ctrl-C during the run or at an approval prompt.
+    pub(crate) interrupted: bool,
+    /// The run stopped after a person denied a call, once the denial was recorded
+    /// (spec 3.1 §9.2 I19).
+    pub(crate) ended_by_denial: bool,
+    /// Calls the run held for a decision instead of deciding them at the console.
+    pub(crate) held: Vec<ToolConfirmationRequest>,
+    /// The text the agents wrote, without thoughts.
+    pub(crate) text: String,
+}
+
+/// Prints one run's events until it ends, Ctrl-C cancels it, or a person's denial ends
+/// the turn (spec 3.1 §8.1).
+///
+/// The runner records each event before yielding it, so stopping right after the event
+/// that carries the denied call's response leaves a complete call and response in the
+/// session and makes no further model call.
+///
+/// With `echo` false nothing is printed; the text is still collected.
+pub(crate) async fn drive_turn(
+    mut events: adk_core::EventStream,
+    console: &ConsoleIo,
+    cancellation_token: &CancellationToken,
+    thinking_mode: ThinkingDisplayMode,
+    echo: bool,
+) -> TurnEnd {
+    let mut printer = StreamPrinter::new(thinking_mode);
+    let mut text_deltas = adk_core::EventTextDeltas::default();
+    let mut current_agent = String::new();
+    let mut printed_header = false;
+    let mut end = TurnEnd::default();
+
+    loop {
+        tokio::select! {
+            event = events.next() => {
+                let Some(event) = event else {
+                    break;
+                };
+
+                match event {
+                    Ok(evt) => {
+                        let evt = text_deltas.push(&evt);
+                        if evt.author != "user"
+                            && let Some(content) = &evt.llm_response.content
+                        {
+                            for part in &content.parts {
+                                if let Part::Text { text } = part {
+                                    end.text.push_str(text);
+                                }
+                            }
+                        }
+                        // Track agent switches in multi-agent workflows
+                        if echo
+                            && !evt.author.is_empty()
+                            && evt.author != "user"
+                            && evt.author != current_agent
+                        {
+                            if !current_agent.is_empty() {
+                                println!();
+                            }
+                            current_agent = evt.author.clone();
+                            // Only show agent label in multi-agent scenarios
+                            if printed_header {
+                                print!(
+                                    "\x1b[33m[{}]\x1b[0m ",
+                                    terminal_safe(&current_agent)
+                                );
+                                let _ = io::stdout().flush();
+                            }
+                            printed_header = true;
+                        }
+
+                        // Show agent transfer requests
+                        if echo && let Some(target) = &evt.actions.transfer_to_agent {
+                            print!(
+                                "\x1b[90m[transfer -> {}]\x1b[0m ",
+                                terminal_safe(target)
+                            );
+                            let _ = io::stdout().flush();
+                        }
+
+                        if echo {
+                            printer.handle_event(&evt);
+                        }
+                        if let Some(request) = &evt.actions.tool_confirmation {
+                            end.held.push(request.clone());
+                        }
+                        let answered_calls = !evt.llm_response.partial
+                            && evt.llm_response.content.as_ref().is_some_and(|content| {
+                                content
+                                    .parts
+                                    .iter()
+                                    .any(|part| matches!(part, Part::FunctionResponse { .. }))
+                            });
+                        if answered_calls && console.end_turn_requested() {
+                            cancellation_token.cancel();
+                            end.ended_by_denial = true;
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        // The message is shown here, escaped; the log line
+                        // stays content-free, since it can be exported.
+                        eprintln!("\nError: {}", terminal_safe(&e.to_string()));
+                        error!(error = %e.diagnostics(), "stream error");
+                    }
+                }
+            }
+            () = cancellation_token.cancelled() => {
+                end.interrupted = true;
+                break;
+            }
+            signal = tokio::signal::ctrl_c() => {
+                match signal {
+                    Ok(()) => {
+                        cancellation_token.cancel();
+                        end.interrupted = true;
+                        break;
+                    }
+                    Err(err) => {
+                        error!("failed to listen for Ctrl+C: {err}");
+                    }
+                }
+            }
+        }
+    }
+
+    if echo {
+        printer.finish();
+    }
+    // The stream can end on its own once a prompt cancelled the run.
+    if cancellation_token.is_cancelled() && !end.ended_by_denial {
+        end.interrupted = true;
+    }
+    end
+}
+
 /// The registered command a slash line names, with the text after the name.
-fn find_command<'a>(
+pub(crate) fn find_command<'a>(
     commands: &'a [Arc<dyn ConsoleCommand>],
     line: &'a str,
 ) -> Option<(&'a Arc<dyn ConsoleCommand>, &'a str)> {
@@ -992,7 +1063,7 @@ fn print_banner(agent_name: &str, session_id: &str) {
 }
 
 /// The REPL commands, built-in and registered, for `/help`.
-fn help_text(commands: &[Arc<dyn ConsoleCommand>]) -> String {
+pub(crate) fn help_text(commands: &[Arc<dyn ConsoleCommand>]) -> String {
     let mut rows = vec![
         ("/help".to_string(), "Show this help".to_string()),
         ("/clear".to_string(), "Clear display (session state is kept)".to_string()),
@@ -1020,8 +1091,24 @@ fn help_text(commands: &[Arc<dyn ConsoleCommand>]) -> String {
     terminal_safe(&text).into_owned()
 }
 
-fn is_exit_command(input: &str) -> bool {
+pub(crate) fn is_exit_command(input: &str) -> bool {
     matches!(input, "quit" | "exit" | "/quit" | "/exit")
+}
+
+/// The text of a provider message item carried as a server tool call (`type: "message"`
+/// with `output_text` content), if `item` is one.
+fn message_text(item: &Value) -> Option<String> {
+    if item.get("type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    let text: String = item
+        .get("content")?
+        .as_array()?
+        .iter()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("output_text"))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect();
+    Some(text)
 }
 
 /// Escapes terminal control characters in model- or tool-controlled text.
@@ -1131,6 +1218,9 @@ impl<W: Write> StreamPrinter<W> {
         for part in parts {
             match part {
                 Part::FunctionCall { .. } if event.llm_response.partial => continue,
+                // Provider items replayed to the model (such as OpenAI Responses commentary)
+                // stream as partial chunks; the complete item is shown once.
+                Part::ServerToolCall { .. } if event.llm_response.partial => continue,
                 // The held call's line below says what the text says, with the call.
                 Part::Text { .. } if held.is_some() => continue,
                 Part::FunctionResponse { function_response, id, .. } => {
@@ -1212,7 +1302,12 @@ impl<W: Write> StreamPrinter<W> {
             }
             Part::ServerToolCall { server_tool_call } => {
                 self.flush_pending_thinking();
-                self.emit(&format!("\n[server-tool-call] {server_tool_call}\n"));
+                match message_text(server_tool_call) {
+                    // A model message kept for replay, such as OpenAI Responses commentary:
+                    // its text is what the model said.
+                    Some(text) => self.emit(&format!("{text}\n")),
+                    None => self.emit(&format!("\n[server-tool-call] {server_tool_call}\n")),
+                }
             }
             Part::ServerToolResponse { server_tool_response } => {
                 self.flush_pending_thinking();
@@ -1827,6 +1922,41 @@ mod tests {
         let ran = output.find("[tool-response] record_note {\"recorded\":\"hi\"}").expect(&output);
         let denied = output.find("[denied] record_note").expect(&output);
         assert!(approved < ran && ran < denied, "{output}");
+    }
+
+    #[test]
+    fn replayed_provider_messages_print_once_as_text() {
+        let commentary = |text: &str, status: &str| Part::ServerToolCall {
+            server_tool_call: serde_json::json!({
+                "type": "message", "phase": "commentary", "role": "assistant", "status": status,
+                "content": [{ "type": "output_text", "text": text, "annotations": [] }],
+            }),
+        };
+        let captured = Captured::default();
+        let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, captured.clone());
+        for (text, partial) in
+            [("Checking", true), (" the code", true), ("Checking the code", false)]
+        {
+            let mut event = Event::new("invocation");
+            event.set_content(Content {
+                role: "model".into(),
+                parts: vec![commentary(text, if partial { "in_progress" } else { "completed" })],
+            });
+            event.llm_response.partial = partial;
+            printer.handle_event(&event);
+        }
+        let mut other = Event::new("invocation");
+        other.set_content(Content {
+            role: "model".into(),
+            parts: vec![Part::ServerToolCall {
+                server_tool_call: serde_json::json!({ "type": "web_search_call" }),
+            }],
+        });
+        printer.handle_event(&other);
+        assert_eq!(
+            captured.text(),
+            "Checking the code\n\n[server-tool-call] {\"type\":\"web_search_call\"}\n"
+        );
     }
 
     #[test]

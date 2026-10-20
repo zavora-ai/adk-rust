@@ -13,6 +13,8 @@
 //! - [`ConsoleCommand`] — slash commands registered with the REPL
 //! - [`console::run_console`] — quick one-call REPL for examples
 //! - [`serve::run_serve`] — quick one-call HTTP server for examples
+//! - `harness` (feature `harness`, default) — the governed harness at the console and
+//!   behind the server: `HarnessLauncher`, `ConsolePrompter`, `HarnessArgs`
 //!
 //! ## Quick Start
 //!
@@ -35,6 +37,8 @@
 //! - **Server**: HTTP server with web UI (`serve --port 8080`), listening on `127.0.0.1` by default
 
 pub mod console;
+#[cfg(feature = "harness")]
+pub mod harness;
 pub mod launcher;
 pub mod serve;
 

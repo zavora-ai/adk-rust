@@ -1,4 +1,5 @@
-//! Persistent `chat` sessions in `<config dir>/adk-rust/harness.db` (spec 3.1 §8.1).
+//! Persistent sessions and the harness stores in `<config dir>/adk-rust/harness.db`
+//! (spec 3.1 §8.1).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -60,13 +61,43 @@ fn sqlite_url(path: &Path) -> String {
     url
 }
 
-/// The user `chat` sessions belong to: the OS username, or `"user"`.
-pub fn os_user() -> String {
-    ["USER", "USERNAME"]
-        .into_iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .find(|user| !user.trim().is_empty())
-        .unwrap_or_else(|| "user".to_string())
+pub use crate::setup::os_user;
+
+/// Every harness store in `harness.db`, sharing one connection pool; each store keeps its
+/// own migration table (spec 3.1 §8.1).
+#[cfg(feature = "harness")]
+pub struct HarnessDb {
+    pub sessions: Arc<SqliteSessionService>,
+    pub modes: Arc<adk_harness::SqliteModeStore>,
+    pub rules: Arc<adk_harness::SqliteStandingRuleStore>,
+    pub ledger: Arc<adk_harness::SqliteShellLedger>,
+    pub approvals: Arc<adk_session::SqliteApprovalStore>,
+    pub runs: Arc<adk_session::SqliteRunStore>,
+}
+
+/// Opens `harness.db` and migrates every store in it.
+#[cfg(feature = "harness")]
+pub async fn open_harness_db() -> Result<HarnessDb> {
+    let sessions = open().await?;
+    let pool = sessions.pool().clone();
+    let modes = adk_harness::SqliteModeStore::new(pool.clone());
+    modes.migrate().await?;
+    let rules = adk_harness::SqliteStandingRuleStore::new(pool.clone());
+    rules.migrate().await?;
+    let ledger = adk_harness::SqliteShellLedger::new(pool.clone());
+    ledger.migrate().await?;
+    let approvals = adk_session::SqliteApprovalStore::from_pool(pool.clone());
+    approvals.migrate().await?;
+    let runs = adk_session::SqliteRunStore::from_pool(pool);
+    runs.migrate().await?;
+    Ok(HarnessDb {
+        sessions,
+        modes: Arc::new(modes),
+        rules: Arc::new(rules),
+        ledger: Arc::new(ledger),
+        approvals: Arc::new(approvals),
+        runs: Arc::new(runs),
+    })
 }
 
 /// The id of `user_id`'s most recently updated session, if any.

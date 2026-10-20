@@ -1,0 +1,39 @@
+//! The `adk-rust` harness: [`HarnessAgent`](adk_harness::HarnessAgent) at the console and
+//! behind the server (spec 3.1 §8.1, §8.2; feature `harness`).
+//!
+//! | Item | Spec |
+//! |---|---|
+//! | [`HarnessArgs`], [`ResolvedHarnessArgs`] | §8.1 shared flags and their precedence |
+//! | [`ConsolePrompter`] | §8.1, §7.5 approvals at the terminal, `[a] always allow` |
+//! | [`HarnessLauncher`], [`TurnOutcome`] | §8.1 REPL, slash commands, one-turn runs; §8.2 serve |
+//! | [`LoopbackOperatorExtractor`], [`BearerTokenExtractor`] | §8.2 request identity |
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use std::sync::Arc;
+//!
+//! use adk_cli::console::ConsoleIo;
+//! use adk_cli::harness::{ConsolePrompter, HarnessLauncher};
+//! use adk_harness::HarnessAgent;
+//!
+//! async fn run(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<()> {
+//!     let harness = HarnessAgent::builder("harness")
+//!         .model(model)
+//!         .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+//!         .prompter(Arc::new(ConsolePrompter::new(ConsoleIo::terminal()?)))
+//!         .build()?;
+//!     HarnessLauncher::new(harness).run().await
+//! }
+//! ```
+
+mod args;
+mod commands;
+mod launcher;
+mod prompter;
+mod serve;
+
+pub use args::{HarnessArgs, MemberArg, MemberKindArg, PROJECT_CONFIG_FILE, ResolvedHarnessArgs};
+pub use launcher::{HarnessLauncher, HarnessRebuild, TurnOutcome};
+pub use prompter::ConsolePrompter;
+pub use serve::{BearerTokenExtractor, LoopbackOperatorExtractor, OPERATOR_SCOPE};

@@ -979,7 +979,7 @@ Always verify builds during publish — never use `--no-verify`. Verification en
 Crates must be published in dependency order. `cargo xtask publish` (via
 `./publish.sh`) computes the order from the workspace graph, so this list is
 documentation rather than configuration — `scripts/check-publish-order.sh` is the
-gate that keeps it satisfiable. The current 9 tiers over 44 publishable crates:
+gate that keeps it satisfiable. The current 11 tiers over 44 publishable crates:
 
 ```
 Tier 1: adk-anthropic, adk-core, adk-enterprise, adk-rust-macros, adk-telemetry,
@@ -991,9 +991,11 @@ Tier 3: adk-artifact, adk-code, adk-deploy, adk-graph, adk-memory, adk-model,
 Tier 4: adk-realtime, adk-runner, adk-tool
 Tier 5: adk-acp, adk-agent, adk-audio, adk-eval
 Tier 6: adk-bench, adk-codeact-monty, adk-managed, adk-server
-Tier 7: adk-auth, adk-cli, cargo-adk
+Tier 7: adk-auth, cargo-adk
 Tier 8: adk-computer-use, adk-payments
-Tier 9: adk-harness, adk-rust (umbrella — always last)
+Tier 9: adk-harness
+Tier 10: adk-cli
+Tier 11: adk-rust (umbrella — always last)
 ```
 
 > **Note:** internal **dev**-dependencies are declared path-only (no version) so

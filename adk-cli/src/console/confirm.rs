@@ -7,7 +7,7 @@ use adk_core::{
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::{ConsoleInput, ConsoleIo};
+use super::{ConsoleInput, ConsoleIo, Edited, edit_json};
 use crate::launcher::terminal_safe;
 
 const MENU: &str = "  [y] allow once  [n] deny (reason)  [e] edit args  [?] details > ";
@@ -126,7 +126,7 @@ impl ConsoleConfirmationHandler {
                         ConsoleInput::Line(_) | ConsoleInput::Eof => ToolApproval::deny(),
                     });
                 }
-                "e" | "edit" if full => match self.edit(&args).await {
+                "e" | "edit" if full => match edit_json(console, &args).await {
                     Edited::Args(edited) => {
                         args = edited;
                         console.print(&format!(
@@ -149,30 +149,6 @@ impl ConsoleConfirmationHandler {
         self.console.print("  denied; the run is interrupted\n");
         ToolApproval::deny().with_message("interrupted at the approval prompt")
     }
-
-    async fn edit(&self, args: &Value) -> Edited {
-        let current = serde_json::to_string_pretty(args).unwrap_or_else(|_| args.to_string());
-        let text = match self.console.can_open_editor().then(external_editor).flatten() {
-            Some(editor) => match run_editor(editor, current).await {
-                Ok(text) => text,
-                Err(error) => return Edited::Unchanged(format!("editor failed: {error}")),
-            },
-            None => match self.console.read_line("  arguments (JSON) > ").await {
-                ConsoleInput::Line(text) => text,
-                ConsoleInput::Interrupted => return Edited::Interrupted,
-                ConsoleInput::Eof => return Edited::Unchanged("arguments unchanged".into()),
-            },
-        };
-        if text.trim().is_empty() {
-            return Edited::Unchanged("arguments unchanged".into());
-        }
-        match serde_json::from_str::<Value>(&text) {
-            Ok(edited) => Edited::Args(edited),
-            Err(error) => {
-                Edited::Unchanged(format!("not valid JSON ({error}); arguments unchanged"))
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -185,45 +161,6 @@ impl ToolConfirmationHandler for ConsoleConfirmationHandler {
     async fn decide_approval(&self, request: &ToolConfirmationRequest) -> Result<ToolApproval> {
         self.prompt(request, true).await
     }
-}
-
-enum Edited {
-    Args(Value),
-    Unchanged(String),
-    Interrupted,
-}
-
-/// The editor named by `$VISUAL` or `$EDITOR`.
-fn external_editor() -> Option<String> {
-    ["VISUAL", "EDITOR"]
-        .into_iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .find(|editor| !editor.trim().is_empty())
-}
-
-/// Opens `current` in `editor` and returns the saved text.
-async fn run_editor(editor: String, current: String) -> std::io::Result<String> {
-    tokio::task::spawn_blocking(move || {
-        let path = std::env::temp_dir().join(format!(
-            "adk-tool-args-{}-{}.json",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.as_nanos())
-        ));
-        std::fs::write(&path, current)?;
-        let mut words = editor.split_whitespace();
-        let program = words.next().unwrap_or("vi");
-        let status = std::process::Command::new(program).args(words).arg(&path).status();
-        let text = std::fs::read_to_string(&path);
-        let _ = std::fs::remove_file(&path);
-        match status? {
-            exit if exit.success() => text,
-            exit => Err(std::io::Error::other(format!("{program} exited with {exit}"))),
-        }
-    })
-    .await
-    .map_err(std::io::Error::other)?
 }
 
 fn details(request: &ToolConfirmationRequest, args: &Value) -> String {

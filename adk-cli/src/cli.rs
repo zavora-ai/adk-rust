@@ -1,22 +1,30 @@
 use adk_model::ModelProvider;
 use clap::{Parser, Subcommand, ValueEnum};
 
-/// ADK-Rust CLI — chat with an AI agent, serve a web UI, or manage skills.
+/// ADK-Rust CLI — the governed harness in your terminal, a web server, and agent tooling.
 ///
-/// Running `adk-rust` with no subcommand starts an interactive REPL.
+/// Running `adk-rust` with no subcommand starts the harness REPL in the current directory:
+/// it reads, edits and runs code in the workspace under approvals (spec 3.1 §8.1).
 /// On first run, if no API key is configured, you'll be prompted to
 /// select a provider and enter your key.
 ///
 /// For custom agents, use [`adk_cli::Launcher`] in your own binary.
 #[derive(Parser)]
 #[command(name = "adk-rust")]
-#[command(about = "ADK-Rust CLI — interactive agent, web server, and skill tooling")]
+#[command(
+    about = "ADK-Rust CLI — governed coding harness, interactive agent, web server, and tooling"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
 
     #[command(flatten)]
     pub options: AgentOptions,
+
+    /// Harness flags for the REPL that runs without a subcommand.
+    #[cfg(feature = "harness")]
+    #[command(flatten)]
+    pub harness: adk_cli::harness::HarnessArgs,
 }
 
 /// Model and rendering options shared by every agent command.
@@ -87,41 +95,61 @@ pub enum ThinkingMode {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Interactive REPL with an AI agent (this is the default)
+    /// Interactive REPL with the plain chat agent (no workspace tools)
     Chat(ChatArgs),
 
-    /// Start web server with an AI agent, on 127.0.0.1 unless --host says otherwise
+    /// Serve the harness in plan mode with the approval inbox, on 127.0.0.1 unless --host
+    /// says otherwise
     Serve {
         /// Server port
         #[arg(long, default_value_t = 8080)]
         port: u16,
-        /// Address to listen on; pass 0.0.0.0 to listen on every interface
+        /// Address to listen on; anything but loopback needs --auth-token
         #[arg(long, default_value = "127.0.0.1")]
         host: std::net::IpAddr,
+        /// What to serve: the harness (default) or the plain chat agent
+        #[cfg(feature = "harness")]
+        #[arg(long, value_enum, default_value_t = ServeAgent::Harness)]
+        agent: ServeAgent,
+        /// Bearer token callers must present (default: $ADK_SERVE_TOKEN); required beyond
+        /// loopback
+        #[cfg(feature = "harness")]
+        #[arg(long)]
+        auth_token: Option<String>,
+        #[cfg(feature = "harness")]
+        #[command(flatten)]
+        harness: adk_cli::harness::HarnessArgs,
     },
 
-    /// Run the coding agent on a task in a workspace directory.
+    /// Run one harness turn on a task in a workspace directory.
     ///
-    /// The agent can read/edit files and run commands, confined to the
-    /// directory. Example: `adk-rust code "make the failing test pass"`
+    /// The agent reads and edits files in the workspace and runs commands after you approve
+    /// them. Exit code 3 means calls are held for a decision; the session id is printed.
+    /// Example: `adk-rust code "make the failing test pass"`
     Code {
         /// The task / instruction for the agent.
         task: String,
 
+        #[cfg(feature = "harness")]
+        #[command(flatten)]
+        harness: adk_cli::harness::HarnessArgs,
+
         /// Workspace directory the agent operates in. File tools are confined to it;
         /// `bash` runs on the host with the environment cleared, not in an OS sandbox.
+        #[cfg(not(feature = "harness"))]
         #[arg(short, long, default_value = ".")]
         dir: String,
 
-        /// Explore/plan only: no file writes, no shell.
-        #[arg(long)]
+        /// Explore/plan only: no file writes, no shell (`--mode read-only`).
+        #[arg(long, hide = cfg!(feature = "harness"))]
         read_only: bool,
     },
 
     /// Autonomous goal mode: work until a verifiable success condition passes.
     ///
     /// The agent loops plan → act → verify, self-correcting from the check's
-    /// output, until `--until` exits 0 or the iteration budget is reached.
+    /// output, until `--until` exits 0 or the iteration budget is reached. The goal and its
+    /// conversation are kept in the session, so `--resume` continues both.
     /// Example: `adk-rust goal "make all tests pass" --until "cargo test"`
     Goal {
         /// The high-level goal.
@@ -131,8 +159,13 @@ pub enum Commands {
         #[arg(long)]
         until: String,
 
+        #[cfg(feature = "harness")]
+        #[command(flatten)]
+        harness: adk_cli::harness::HarnessArgs,
+
         /// Workspace directory the agent operates in. File tools are confined to it;
         /// `bash` runs on the host with the environment cleared, not in an OS sandbox.
+        #[cfg(not(feature = "harness"))]
         #[arg(short, long, default_value = ".")]
         dir: String,
 
@@ -140,32 +173,67 @@ pub enum Commands {
         #[arg(long, default_value_t = 8)]
         max_iters: u32,
 
-        /// Path to the durable goal-state file (default: `<dir>/.adk/goal.json`).
-        #[arg(long)]
+        /// Path of a JSON mirror of the goal state (default without the harness:
+        /// `<dir>/.adk/goal.json`).
+        #[arg(long, hide = cfg!(feature = "harness"))]
         state: Option<String>,
 
-        /// Resume from a saved goal state instead of starting fresh.
+        /// Resume the latest unfinished goal in this workspace instead of starting fresh.
         #[arg(long)]
         resume: bool,
     },
 
     /// Ultracode: fan out to parallel specialist reviewers and iterate.
     ///
-    /// Implements the task, then runs correctness/edge-case/style reviewers in
-    /// parallel, synthesizes their verdicts, and revises until they approve.
-    /// Example: `adk-rust ultracode "add a /health endpoint"`
+    /// Implements the task in your mode, then runs correctness/edge-case/style reviewers
+    /// in read-only mode in parallel, synthesizes their verdicts, and revises until they
+    /// approve. Example: `adk-rust ultracode "add a /health endpoint"`
     Ultracode {
         /// The task to implement and review.
         task: String,
 
+        #[cfg(feature = "harness")]
+        #[command(flatten)]
+        harness: adk_cli::harness::HarnessArgs,
+
         /// Workspace directory the agent operates in. File tools are confined to it;
         /// `bash` runs on the host with the environment cleared, not in an OS sandbox.
+        #[cfg(not(feature = "harness"))]
         #[arg(short, long, default_value = ".")]
         dir: String,
 
         /// Maximum number of review→revise rounds.
         #[arg(long, default_value_t = 2)]
         max_rounds: i64,
+    },
+
+    /// Harness sessions kept in harness.db
+    #[cfg(all(feature = "harness", feature = "persist"))]
+    Sessions {
+        #[command(subcommand)]
+        command: SessionsCommands,
+    },
+
+    /// Standing rules: approvals and denials remembered across sessions
+    #[cfg(all(feature = "harness", feature = "persist"))]
+    Rules {
+        #[command(subcommand)]
+        command: RulesCommands,
+    },
+
+    /// Calls waiting for a decision, here or on a served harness
+    #[cfg(all(feature = "harness", feature = "persist"))]
+    Approvals {
+        #[command(subcommand)]
+        command: ApprovalsCommands,
+
+        /// A served harness to talk to instead of this machine's harness.db
+        #[arg(long, global = true)]
+        server: Option<String>,
+
+        /// Bearer token for --server (default: $ADK_SERVE_TOKEN)
+        #[arg(long, global = true)]
+        token: Option<String>,
     },
 
     /// Skills tooling (list/validate/match)
@@ -217,6 +285,101 @@ pub struct ChatArgs {
     /// Keep the conversation in memory only; nothing is written to disk
     #[arg(long)]
     pub ephemeral: bool,
+}
+
+/// What `adk-rust serve` serves (spec 3.1 §8.2).
+#[cfg(feature = "harness")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ServeAgent {
+    /// The harness, in plan mode unless --mode says otherwise, with the approval inbox
+    Harness,
+    /// The plain chat agent, as before the harness
+    Chat,
+}
+
+/// `adk-rust sessions` (spec 3.1 §8.1).
+#[cfg(all(feature = "harness", feature = "persist"))]
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum SessionsCommands {
+    /// List your sessions, most recent first
+    List,
+    /// Show a session's conversation
+    Show {
+        /// Session id
+        id: String,
+    },
+    /// Delete a session
+    Rm {
+        /// Session id
+        id: String,
+    },
+}
+
+/// `adk-rust rules` (spec 3.1 §8.1, §7.5).
+#[cfg(all(feature = "harness", feature = "persist"))]
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum RulesCommands {
+    /// List your standing rules
+    List,
+    /// Remember a decision for a harness tool
+    ///
+    /// Example: `adk-rust rules add bash --prefix "cargo test"` allows every `cargo test …`
+    /// command without asking; `--deny REASON` refuses instead.
+    Add {
+        /// The harness tool: bash, write_file, edit_file, or another tool's name with
+        /// --operator
+        tool: String,
+        /// For bash: the command's leading words, such as "cargo test"
+        #[arg(long)]
+        prefix: Option<String>,
+        /// For write_file and edit_file: the directory the path must be within
+        #[arg(long)]
+        path_within: Option<String>,
+        /// Refuse matching calls with this reason instead of allowing them
+        #[arg(long)]
+        deny: Option<String>,
+        /// Only in this session
+        #[arg(long)]
+        session: Option<String>,
+        /// Expire after this many hours
+        #[arg(long)]
+        hours: Option<u32>,
+        /// Pin the tool as the OS-sandboxed harness declares it
+        #[arg(long)]
+        sandbox: bool,
+        /// Operator rule: any declaration from the tool's publisher (`--source`)
+        #[arg(long)]
+        operator: bool,
+        /// With --operator: the tool's publisher, such as `mcp:github` (default `static`)
+        #[arg(long, requires = "operator")]
+        source: Option<String>,
+    },
+    /// Revoke a rule by its number in `rules list` or its id
+    Rm {
+        /// Rule number or id
+        rule: String,
+    },
+}
+
+/// `adk-rust approvals` (spec 3.1 §8.1, §8.2).
+#[cfg(all(feature = "harness", feature = "persist"))]
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum ApprovalsCommands {
+    /// List calls waiting for a decision
+    List,
+    /// Approve a call once
+    Approve {
+        /// The id `approvals list` shows
+        id: String,
+    },
+    /// Deny a call
+    Deny {
+        /// The id `approvals list` shows
+        id: String,
+        /// Reported to the model
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 #[cfg(feature = "audit")]

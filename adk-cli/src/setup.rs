@@ -22,6 +22,16 @@ pub struct CliConfig {
     pub legacy_api_key: Option<String>,
 }
 
+/// The user the CLI acts for: the OS username, or `"user"` (spec 3.1 §8.1).
+#[cfg(any(feature = "persist", feature = "harness"))]
+pub fn os_user() -> String {
+    ["USER", "USERNAME"]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|user| !user.trim().is_empty())
+        .unwrap_or_else(|| "user".to_string())
+}
+
 /// Where the config file lives.
 fn config_path() -> Result<PathBuf> {
     let dir = dirs::config_dir().context("could not determine config directory")?.join("adk-rust");

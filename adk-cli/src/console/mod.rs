@@ -10,10 +10,12 @@
 
 mod command;
 mod confirm;
+mod edit;
 mod io;
 
 pub use command::{ConsoleCommand, ConsoleCommandContext};
 pub use confirm::ConsoleConfirmationHandler;
+pub(crate) use edit::{Edited, edit_json};
 pub use io::{ConsoleInput, ConsoleIo};
 
 use adk_core::{Agent, SessionId, UserId};
