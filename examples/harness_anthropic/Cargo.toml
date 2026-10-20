@@ -1,0 +1,28 @@
+[package]
+name = "harness-anthropic-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "The adk-harness walkthrough on Anthropic: approvals, plan mode, plan graphs, durable goals, teams, identity, observability and the sandbox (spec 3.1)"
+
+[workspace]
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-auth = { path = "../../adk-auth" }
+adk-devtools = { path = "../../adk-devtools" }
+adk-harness = { path = "../../adk-harness", features = ["sqlite"] }
+adk-graph = { path = "../../adk-graph", features = ["sqlite"] }
+adk-model = { path = "../../adk-model", default-features = false, features = ["anthropic"] }
+adk-runner = { path = "../../adk-runner" }
+adk-server = { path = "../../adk-server", features = ["background"] }
+adk-session = { path = "../../adk-session", features = ["sqlite"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
+anyhow = "1.0"
+async-trait = "0.1"
+dotenvy = "0.15"
+futures = "0.3"
+serde_json = "1.0"
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

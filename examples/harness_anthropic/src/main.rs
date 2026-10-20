@@ -1,0 +1,31 @@
+//! The adk-harness walkthrough on Anthropic (spec 3.1 §5, §11).
+//!
+//! The scenarios are shared with `examples/harness_openai`; this crate supplies the model.
+//!
+//! ```text
+//! cargo run                         # every scenario, scripted, no key
+//! cargo run -- --live               # every scenario on claude-sonnet-4-6 (ANTHROPIC_API_KEY)
+//! cargo run -- --live approvals     # one scenario
+//! ```
+
+use std::sync::Arc;
+
+use adk_core::Llm;
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+
+#[path = "../../harness_walkthrough/mod.rs"]
+mod walkthrough;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    walkthrough::main(walkthrough::Provider {
+        name: "anthropic",
+        key_var: "ANTHROPIC_API_KEY",
+        model_var: "ANTHROPIC_MODEL",
+        default_model: "claude-sonnet-4-6",
+        build: |key, model| {
+            Ok(Arc::new(AnthropicClient::new(AnthropicConfig::new(key, model))?) as Arc<dyn Llm>)
+        },
+    })
+    .await
+}
