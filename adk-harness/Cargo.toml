@@ -1,0 +1,95 @@
+[package]
+name = "adk-harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Governed, durable harness agent for ADK-Rust: modes, standing approvals, shell, todos, instructions and skills over one governed tool path"
+repository.workspace = true
+documentation = "https://docs.rs/adk-harness"
+readme = "README.md"
+keywords = ["adk", "agent", "harness", "coding", "governance"]
+categories = ["development-tools", "asynchronous"]
+
+# Feature set of spec 3.1 §7.1. Packs (browser, computer-use, payments, voice,
+# managed) are off by default.
+[features]
+default = ["runner", "skills", "team", "graph", "sandbox", "observe", "auth", "memory"]
+# The `Harness` wrapper that owns a Runner.
+runner = ["dep:adk-runner", "dep:adk-session"]
+# Progressive skill disclosure (`list_skills`, `load_skill`, `load_skill_resource`).
+skills = ["dep:adk-skill", "adk-skill/progressive-disclosure", "adk-agent/skills"]
+# Skills from the Vertex AI Skill Registry (`search_skills`).
+skills-registry = ["skills", "adk-skill/vertex-skill-registry"]
+# Team members lowered to a `TeamSpec` (spec 3.1 §7.10).
+team = ["dep:adk-tool", "adk-agent/team-tools"]
+# Claude Code, Codex and Kiro as members over ACP.
+team-acp = ["team", "dep:adk-acp"]
+# Remote agents as members over A2A.
+team-a2a = ["team", "dep:adk-server"]
+# Plan graph and goal engine (spec 3.1 §7.11).
+graph = ["dep:adk-graph"]
+# OS sandbox for the shell (spec 3.1 §7.9).
+sandbox = ["dep:adk-sandbox", "adk-sandbox/sandbox-native"]
+# Container isolation for the shell.
+docker = ["sandbox", "adk-sandbox/workspace-docker"]
+# Spans, spend and the loop guard (spec 3.1 §7.13).
+observe = ["dep:adk-telemetry", "dep:adk-eval"]
+# RBAC wrappers, credential broker and signed audit (spec 3.1 §7.14).
+auth = ["dep:adk-auth", "adk-auth/signed-audit"]
+# File-based memory (spec 3.1 §7.15).
+memory = []
+# Graph memory tools from adk-memory.
+memory-graph = ["memory", "dep:adk-memory"]
+# SQLite backends for the mode, standing-rule and shell-ledger stores.
+sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-graph?/sqlite"]
+# Packs (spec 3.1 §7.16–§7.18).
+browser = ["dep:adk-browser"]
+computer-use = ["dep:adk-computer-use"]
+payments = ["dep:adk-payments"]
+voice = ["dep:adk-realtime"]
+managed = ["dep:adk-managed"]
+
+[dependencies]
+adk-core.workspace = true
+adk-agent.workspace = true
+adk-devtools.workspace = true
+adk-runner = { workspace = true, optional = true }
+adk-session = { workspace = true, optional = true }
+adk-skill = { workspace = true, optional = true }
+adk-tool = { workspace = true, optional = true }
+adk-acp = { workspace = true, optional = true }
+adk-server = { workspace = true, optional = true }
+adk-graph = { workspace = true, optional = true }
+adk-sandbox = { workspace = true, optional = true }
+adk-telemetry = { workspace = true, optional = true }
+adk-eval = { workspace = true, optional = true }
+adk-auth = { workspace = true, optional = true }
+adk-memory = { workspace = true, optional = true }
+adk-browser = { workspace = true, optional = true }
+adk-computer-use = { workspace = true, optional = true }
+adk-payments = { workspace = true, optional = true }
+adk-realtime = { workspace = true, optional = true }
+adk-managed = { workspace = true, optional = true }
+async-trait.workspace = true
+chrono.workspace = true
+dirs = "7"
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx = { workspace = true, optional = true, features = ["runtime-tokio"] }
+tokio = { workspace = true, features = ["sync", "time", "fs", "rt", "macros"] }
+tracing.workspace = true
+unicode-normalization = "0.1"
+uuid.workspace = true
+
+[dev-dependencies]
+adk-model = { path = "../adk-model", default-features = false }
+proptest = "1.5"
+tempfile = "3"
+tokio = { workspace = true, features = ["full"] }
+
+[package.metadata.docs.rs]
+all-features = true
