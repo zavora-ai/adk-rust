@@ -288,6 +288,8 @@ In server mode, the `cli` launcher:
 
 The app is built with `ServerBuilder`. The approval inbox answers `401` unless
 `with_request_context_extractor` authenticates the caller; see [Server API](server.md).
+`run_serve_directly` serves the router with `into_make_service_with_connect_info`, so an
+extractor can read the peer address from `ConnectInfo<SocketAddr>`.
 
 ### Production Escape Hatch
 
@@ -435,6 +437,37 @@ deployment. Use it in CI as a gate before `cargo adk deploy`.
 
 See [cargo adk build](../development/cargo-adk-build.md) for full command documentation.
 
+## Harness Launcher
+
+`adk_cli::harness::HarnessLauncher` (feature `harness`, on by default in `adk-cli`) is the
+launcher for a `HarnessAgent` (spec 3.1). It is what the `adk-rust` binary runs:
+
+| Mode | `Launcher` | `HarnessLauncher` |
+|------|------------|-------------------|
+| Console | REPL over any agent | Harness REPL: banner with workspace, mode and shell; approvals through the harness's prompter (`ConsolePrompter`, with `[a] always allow`); a denial ends the turn; `/mode`, `/sandbox`, `/todos`, `/rules`, `/approvals` and more |
+| One turn | — | `run_once(text)` returns the calls held for a decision |
+| Server | Web UI and REST API | The same server with the harness mounted behind an extractor: loopback peers are the operator by default (`LoopbackOperatorExtractor`), other addresses need one such as `BearerTokenExtractor` |
+
+```rust
+use std::sync::Arc;
+
+use adk_cli::console::ConsoleIo;
+use adk_cli::harness::{ConsolePrompter, HarnessLauncher};
+use adk_harness::HarnessAgent;
+
+async fn run(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<()> {
+    let harness = HarnessAgent::builder("my-harness")
+        .model(model)
+        .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+        .prompter(Arc::new(ConsolePrompter::new(ConsoleIo::terminal()?)))
+        .build()?;
+    HarnessLauncher::new(harness).run().await
+}
+```
+
+See [The harness in your terminal](../harness/cli.md) and
+[Serving the harness](../harness/serving.md).
+
 ## Best Practices
 
 1. **Environment Variables**: Load sensitive configuration (API keys) from environment variables
@@ -447,6 +480,7 @@ See [cargo adk build](../development/cargo-adk-build.md) for full command docume
 ## Related
 
 - [Server API](server.md) - Detailed REST API documentation
+- [The harness in your terminal](../harness/cli.md) - `adk-rust`, `HarnessLauncher` and approvals
 - [Sessions](../sessions/sessions.md) - Session management
 - [Artifacts](../artifacts/artifacts.md) - Artifact storage
 - [Observability](../observability/telemetry.md) - Telemetry and logging

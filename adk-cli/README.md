@@ -10,40 +10,45 @@ Command-line launcher for Rust Agent Development Kit (ADK-Rust) agents.
 
 `adk-cli` provides two things:
 
-- **`adk-rust` binary** — chat with an AI agent (6 providers), serve a web UI, run the
-  **coding agent** (`code` / `goal` / `ultracode`), manage skills, inspect graph checkpoints,
-  verify signed audit logs, and deploy
-- **`Launcher` library** — embed a REPL and web server into any custom agent binary
+- **`adk-rust` binary** — the governed **harness** (spec 3.1) in your terminal and behind the
+  server: a coding agent that edits files in the workspace and runs commands after you
+  approve them (`adk-rust`, `code`, `goal`, `ultracode`, `serve`), with remembered approvals
+  (`rules`), held calls (`approvals`) and sessions (`sessions`) in one SQLite file; plus a
+  plain chat agent (6 providers), skills, graph checkpoints, signed audit logs, and deploy
+- **`Launcher` library** — embed a REPL and web server into any custom agent binary;
+  `HarnessLauncher` does the same for a `HarnessAgent`
 
 ## Quick Start
 
 ```bash
 cargo install adk-cli
 
-# Just run it — interactive setup picks your provider on first run
-adk-rust
+# The harness REPL in the current project — interactive setup picks your provider on first run.
+# File tools are confined to the directory; edits and `bash` (on the host) wait for approval.
+cd my-project && adk-rust
 
 # Or pre-configure a provider (the default build compiles Gemini, OpenAI and Anthropic;
 # `cargo install adk-cli --features all-providers` adds the others)
 adk-rust --provider gemini --api-key your-key
 
-# Equivalent to:
-adk-rust chat
+# Harness sessions are kept on disk: continue the last one in this workspace, or a named one
+adk-rust --continue
+adk-rust --session release-notes --mode plan
 
-# Conversations are kept on disk: continue the last one, or a named one
-adk-rust chat --continue
-adk-rust chat --session release-notes
+# One task, a goal, or an implement-and-review loop on the harness
+adk-rust code "make the failing test pass"
+adk-rust goal "all tests green" --until "cargo test" --resume
+adk-rust ultracode "add input validation"
 
-# Web server
+# The harness behind the HTTP server, in plan mode, with the approval inbox
 adk-rust serve --port 3000
 
-# Coding agent: file tools are confined to the directory; `bash` runs on the host, not in an OS sandbox
-adk-rust code "make the failing test pass"
-adk-rust goal "all tests green" --until "cargo test" --resume   # autonomous, durable
-adk-rust ultracode "add input validation"                       # parallel ultra-review
+# The plain chat agent
+adk-rust chat
 ```
 
-See the [Coding Agent guide](../docs/official_docs/coding-agent/cli.md) for `code` / `goal` / `ultracode`.
+See [The harness in your terminal](../docs/official_docs/harness/cli.md) and
+[Serving the harness](../docs/official_docs/harness/serving.md).
 
 ## Feature Flags
 
@@ -51,7 +56,8 @@ See the [Coding Agent guide](../docs/official_docs/coding-agent/cli.md) for `cod
 |---------|---------|---------|
 | `gemini`, `openai`, `anthropic` | yes | The Gemini, OpenAI and Anthropic providers |
 | `audit` | yes | `adk-rust audit verify` and `audit keygen` (through `adk-auth`'s `signed-audit`) |
-| `persist` | yes | `adk-rust chat` sessions in SQLite at `adk-rust/harness.db` (through `adk-session`'s `sqlite`) |
+| `persist` | yes | Sessions, held calls, durable runs, modes and standing rules in SQLite at `adk-rust/harness.db` (through `adk-session`'s and `adk-harness`'s `sqlite`) |
+| `harness` | yes | The harness: `adk-rust` REPL, `code`, `goal`, `ultracode` and `serve` on `adk-harness`, `sessions`, `rules`, `approvals`, and the `adk_cli::harness` module |
 | `deepseek`, `groq`, `ollama` | no | The other providers |
 | `all-providers` | no | Every provider |
 | `audit-sql` | no | `adk-rust audit export` from SQLite or PostgreSQL audit stores |
@@ -97,12 +103,15 @@ saved or `--provider` choice that this build does not compile in fails with the
 ## Binary Commands
 
 ```text
-adk-rust              Interactive REPL (default, same as `chat`)
-adk-rust chat         Interactive REPL with an AI agent
-adk-rust serve        Start web server with an AI agent
-adk-rust code         Run the coding agent on a task in a workspace directory
-adk-rust goal         Work until a success-condition command exits 0
-adk-rust ultracode    Implement, then review with parallel specialist reviewers
+adk-rust              The harness REPL in the current directory (default)
+adk-rust chat         Interactive REPL with the plain chat agent
+adk-rust serve        Serve the harness (plan mode, approval inbox); `--agent chat` serves chat
+adk-rust code         One harness turn on a task; exit 3 when calls are held
+adk-rust goal         Harness turns until a success-condition command exits 0
+adk-rust ultracode    Implement, then review with parallel read-only reviewers
+adk-rust sessions     Harness sessions (list/show/rm)
+adk-rust rules        Standing rules (list/add/rm)
+adk-rust approvals    Held calls (list/approve/deny), locally or with --server
 adk-rust skills       Skill tooling (list/validate/match)
 adk-rust graph        Graph checkpoint inspection (steps/replay/fork/resume)
 adk-rust audit        Signed audit log tools (verify/keygen; export with `audit-sql`)
@@ -121,6 +130,23 @@ adk-rust registry     Agent Registry registration and search (`vertex-agent-regi
 | `--thinking-budget` | none | Enable provider-side thinking when supported |
 | `--thinking-mode` | `auto` | Render emitted thinking: `auto`, `show`, `hide` |
 
+### Harness options (the REPL, `code`, `goal`, `ultracode`, `serve`)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dir` | `.` | Workspace; the REPL refuses your home directory and `/` unless named |
+| `--mode` | `ask` (`plan` for `serve`) | `read-only`, `plan`, `ask` or `auto` |
+| `--yes` | off | Approve held calls without asking (never a policy denial, never an unsandboxed retry without `--allow-unsandboxed`) |
+| `--session` / `--continue` / `--ephemeral` | new session | Continue a session, the latest one in this workspace, or keep nothing on disk |
+| `--sandbox`, `--fail-if-unavailable` | off | Run `bash` in the OS sandbox; refuse to start without it |
+| `--allow-unsandboxed` | off | Let `--yes` approve an unsandboxed retry |
+| `--trust` | ask once | Trust the workspace's `AGENTS.md` without asking |
+| `--pack`, `--member` | none | Packs and team members |
+
+Settings also come from `.adk/harness.toml` in the workspace (which can only tighten) and
+`adk-rust/harness.toml` in the config directory; flags win. See
+[The harness in your terminal](../docs/official_docs/harness/cli.md).
+
 ### `adk-rust chat` options
 
 | Flag | Description |
@@ -138,7 +164,12 @@ shows the session id.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port` | `8080` | Server port |
-| `--host` | `127.0.0.1` | Listen address; `0.0.0.0` listens on every interface |
+| `--host` | `127.0.0.1` | Listen address; `0.0.0.0` listens on every interface and needs `--auth-token` |
+| `--agent` | `harness` | `harness`, or `chat` for the plain agent as before |
+| `--auth-token` | `$ADK_SERVE_TOKEN` | Bearer token callers present; without one only loopback peers are admitted |
+
+The harness is served in plan mode with `/api/approvals` and `/api/runs`; see
+[Serving the harness](../docs/official_docs/harness/serving.md).
 
 The server answers only loopback names and IP addresses, and allows no cross-origin browser
 access. The binary has no flag for more hosts or origins; a custom binary lists them with
@@ -219,7 +250,10 @@ not the bearer token itself.
 
 ### Approvals at the console
 
-A tool call held for confirmation (`require_tool_confirmation`, or a `ToolPolicy` that
+The harness asks with `[y] allow once  [a] always allow…  [n] deny (reason)  [e] edit args
+[?] details`: `[a]` remembers a standing rule, and a denial ends the turn (see
+[The harness in your terminal](../docs/official_docs/harness/cli.md#approvals-at-the-terminal)).
+For any other agent, a tool call held for confirmation (`require_tool_confirmation`, or a `ToolPolicy` that
 requires approval) is shown and asked about at the terminal:
 
 ```text
