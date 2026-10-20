@@ -17,6 +17,17 @@ pub mod windows;
 #[cfg(any(test, all(feature = "sandbox-linux", target_os = "linux")))]
 mod seccomp;
 
+pub(crate) mod command;
+
+#[cfg(any(
+    test,
+    all(feature = "sandbox-macos", target_os = "macos"),
+    all(feature = "sandbox-linux", target_os = "linux")
+))]
+mod layering;
+
+pub use command::sandboxed_command;
+
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -132,7 +143,14 @@ pub struct NetworkRule {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxPolicy {
-    /// Filesystem paths the process may access.
+    /// Filesystem paths the process may access. Each path must exist; enforcers resolve
+    /// them and fail with `PolicyViolation` otherwise.
+    ///
+    /// When entries nest, the most specific one decides, whatever their order (spec 3.1
+    /// §10 S3). A `ReadOnly` entry inside a `ReadWrite` entry — `.git` inside a workspace —
+    /// refuses every write, creation, removal, rename, and link beneath it on Seatbelt and
+    /// bubblewrap alike, and the writable directories above it cannot be renamed or removed.
+    /// For the same path, `ReadWrite` wins.
     pub allowed_paths: Vec<AllowedPath>,
     /// Whether the process may access the network (all domains/ports).
     pub allow_network: bool,
@@ -293,11 +311,12 @@ impl Default for SandboxPolicyBuilder {
 /// directly, because `tokio::process::Command` does not allow replacing the
 /// program after construction.
 ///
-/// # Integration with ProcessBackend
+/// # Building a Command
 ///
-/// `ProcessBackend::run_command()` calls `wrap_command()` to obtain the
-/// wrapper program and args, then constructs a new `Command` with those
-/// values. This avoids the limitation that tokio's Command doesn't expose
+/// [`sandboxed_command`] calls `wrap_command()` to obtain the wrapper program
+/// and args, constructs a new `Command` with those values, and then calls
+/// `configure_command()` on it. `ProcessBackend` builds its sandboxed commands
+/// the same way. This avoids the limitation that tokio's Command doesn't expose
 /// `get_program()`/`get_args()` setters after creation.
 ///
 /// # Windows Exception

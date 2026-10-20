@@ -10,7 +10,7 @@
 
 #![cfg(all(feature = "sandbox-macos", target_os = "macos"))]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use proptest::prelude::*;
 
@@ -99,6 +99,55 @@ fn single_path_directives<'a>(profile: &'a str, prefix: &'a str) -> impl Iterato
         .filter(move |line| line.starts_with(prefix) && line.matches("(subpath").count() == 1)
 }
 
+/// Policies over a two-letter alphabet, so nested and repeated paths are common.
+fn arb_nested_policy() -> impl Strategy<Value = SandboxPolicy> {
+    proptest::collection::vec(
+        ("/[ab](/[ab]){0,3}", arb_access_mode())
+            .prop_map(|(path, mode)| AllowedPath { path: PathBuf::from(path), mode }),
+        0..8,
+    )
+    .prop_map(|allowed_paths| SandboxPolicy {
+        allowed_paths,
+        allow_network: false,
+        allow_process_spawn: true,
+        network_rules: Vec::new(),
+        env: Default::default(),
+    })
+}
+
+/// The access the most specific entry at or above `path` grants, read-write winning
+/// between entries for the same path (spec 3.1 §10 S3).
+fn effective_mode(paths: &[AllowedPath], path: &Path, strictly_above: bool) -> Option<AccessMode> {
+    paths
+        .iter()
+        .filter(|entry| path.starts_with(&entry.path) && !(strictly_above && entry.path == path))
+        .max_by_key(|entry| (entry.path.components().count(), entry.mode == AccessMode::ReadWrite))
+        .map(|entry| entry.mode)
+}
+
+/// A read-only entry inside writable space, which the profile must deny writes to.
+fn is_shielded(paths: &[AllowedPath], entry: &AllowedPath) -> bool {
+    entry.mode == AccessMode::ReadOnly
+        && effective_mode(paths, &entry.path, true) == Some(AccessMode::ReadWrite)
+        && effective_mode(paths, &entry.path, false) == Some(AccessMode::ReadOnly)
+}
+
+/// Every path over the alphabet of [`arb_nested_policy`], one level deeper than it reaches.
+fn every_probe() -> Vec<PathBuf> {
+    let mut level = vec![PathBuf::from("/")];
+    let mut probes = Vec::new();
+    for _ in 0..5 {
+        level = level.iter().flat_map(|dir| [dir.join("a"), dir.join("b")]).collect();
+        probes.extend(level.iter().cloned());
+    }
+    probes
+}
+
+/// The quoted path in a single-path directive such as `(deny file-write* (subpath "/a"))`.
+fn directive_path<'a>(line: &'a str, prefix: &str) -> Option<&'a Path> {
+    line.strip_prefix(prefix)?.strip_suffix("\"))")?.strip_prefix('"').map(Path::new)
+}
+
 // ---------------------------------------------------------------------------
 // Property tests
 // ---------------------------------------------------------------------------
@@ -114,7 +163,8 @@ proptest! {
     /// - Contain `(allow process-fork)` iff `allow_process_spawn` is true
     /// - Have one `(allow file-read* (subpath "..."))` per read-only path
     /// - Have one `(allow file-read* file-write* (subpath "..."))` per read-write path
-    /// - Grant writes only through those read-write directives
+    /// - Mention writes only in those read-write directives and in the write denials for
+    ///   read-only entries inside writable space
     /// - Have balanced parentheses
     ///
     /// **Validates: Requirements 3.2, 3.4, 3.5, 3.6, 3.7, 9.2, 9.3, 9.4, 14.1, 14.2, 14.3, 14.4, 14.5**
@@ -151,7 +201,9 @@ proptest! {
             single_path_directives(&profile, "(allow file-read* file-write* (subpath ").count(),
             read_write_count
         );
-        prop_assert_eq!(profile.matches("file-write*").count(), read_write_count);
+        let shielded_count =
+            policy.allowed_paths.iter().filter(|entry| is_shielded(&policy.allowed_paths, entry)).count();
+        prop_assert_eq!(profile.matches("file-write*").count(), read_write_count + shielded_count);
 
         for entry in &policy.allowed_paths {
             let path_str = entry.path.to_string_lossy();
@@ -194,5 +246,54 @@ proptest! {
             "the path {:?} changed the profile structure",
             hostile
         );
+    }
+
+    /// Spec 3.1 §10 S3: whatever order the policy lists them in, the last write rule over a
+    /// path is its most specific entry's, so a read-only entry inside a read-write entry is
+    /// not writable and a read-write entry inside that is. Every writable directory above
+    /// a shielded entry is pinned against renaming, and nothing else is.
+    #[test]
+    fn prop_the_most_specific_entry_decides_writes(policy in arb_nested_policy()) {
+        let profile = MacOsEnforcer::generate_profile(&policy);
+        let paths = &policy.allowed_paths;
+
+        let write_rules: Vec<(bool, &Path)> = profile
+            .lines()
+            .filter_map(|line| {
+                directive_path(line, "(allow file-read* file-write* (subpath ")
+                    .map(|path| (true, path))
+                    .or_else(|| directive_path(line, "(deny file-write* (subpath ").map(|path| (false, path)))
+            })
+            .collect();
+        for probe in every_probe() {
+            let writable = write_rules
+                .iter()
+                .rev()
+                .find(|(_, path)| probe.starts_with(path))
+                .is_some_and(|(allow, _)| *allow);
+            prop_assert_eq!(
+                writable,
+                effective_mode(paths, &probe, false) == Some(AccessMode::ReadWrite),
+                "probe {:?}:\n{}",
+                probe,
+                profile
+            );
+        }
+
+        let pinned: Vec<&Path> = profile
+            .lines()
+            .filter_map(|line| directive_path(line, "(deny file-write-unlink (literal "))
+            .collect();
+        for pin in &pinned {
+            prop_assert_eq!(effective_mode(paths, pin, false), Some(AccessMode::ReadWrite));
+        }
+        for entry in paths.iter().filter(|entry| is_shielded(paths, entry)) {
+            for dir in entry.path.ancestors().skip(1) {
+                if effective_mode(paths, dir, false) != Some(AccessMode::ReadWrite) {
+                    break;
+                }
+                prop_assert!(pinned.contains(&dir), "{} is not pinned:\n{}", dir.display(), profile);
+            }
+        }
     }
 }

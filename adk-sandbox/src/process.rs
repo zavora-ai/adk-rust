@@ -49,7 +49,8 @@ use tracing::{Span, instrument};
 use crate::backend::{BackendCapabilities, EnforcedLimits, SandboxBackend};
 use crate::child_io::{collect_output, note_truncation, truncate_utf8};
 use crate::error::SandboxError;
-use crate::sandbox::{AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy};
+use crate::sandbox::command::resolve_program;
+use crate::sandbox::{AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy, sandboxed_command};
 use crate::types::{ExecRequest, ExecResult, Language};
 
 /// Maximum output size in bytes (1 MB).
@@ -181,104 +182,6 @@ pub enum IsolationClass {
     /// A child process wrapped by an OS enforcer — Seatbelt, bubblewrap, or AppContainer
     /// — under a [`SandboxPolicy`].
     OsEnforced,
-}
-
-/// Resolve a bare program name to an absolute path using the caller's `PATH`.
-///
-/// Returns `None` when the name already contains a path separator, or when nothing on
-/// `PATH` matches — in which case the command is left as it was so the spawn error still
-/// names the program the caller asked for.
-fn resolve_program(program: &OsStr) -> Option<std::path::PathBuf> {
-    let as_path = std::path::Path::new(program);
-    if as_path.components().count() > 1 {
-        return None;
-    }
-
-    let path_var = std::env::var_os("PATH")?;
-    std::env::split_paths(&path_var).find_map(|dir| {
-        let candidate = dir.join(program);
-        candidate.is_file().then_some(candidate)
-    })
-}
-
-/// The default search path `execvp` uses when the environment has no `PATH`.
-#[cfg(target_os = "macos")]
-const DEFAULT_EXEC_PATH: &str = "/usr/bin:/bin";
-
-/// The tool an Xcode command-line shim runs, and the developer directory that holds it.
-///
-/// `/usr/bin/python3`, `git`, `clang`, and the other shims find the active Xcode or Command
-/// Line Tools through `libxcrun`, which loads from the developer directory and caches in the
-/// user's temporary directory, so a shim fails under Seatbelt. The tool itself needs only to
-/// read the developer directory, which holds Apple's toolchain and no user data.
-#[cfg(target_os = "macos")]
-#[derive(Clone)]
-struct XcodeTool {
-    path: std::path::PathBuf,
-    developer_dir: std::path::PathBuf,
-}
-
-/// Resolves `program` as `execvp` would through `path_var`, and returns the tool behind it
-/// when that is an Xcode shim in `/usr/bin`.
-///
-/// Results are cached per shim path, since each check runs `xcrun`.
-#[cfg(target_os = "macos")]
-fn xcode_shim_target(program: &OsStr, path_var: &OsStr) -> Option<XcodeTool> {
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::sync::{Mutex, OnceLock};
-
-    static CHECKED: OnceLock<Mutex<HashMap<PathBuf, Option<XcodeTool>>>> = OnceLock::new();
-
-    let as_path = Path::new(program);
-    let resolved = if as_path.components().count() > 1 {
-        as_path.to_path_buf()
-    } else {
-        std::env::split_paths(path_var)
-            .map(|dir| dir.join(program))
-            .find(|candidate| candidate.is_file())?
-    };
-    if resolved.parent() != Some(Path::new("/usr/bin")) {
-        return None;
-    }
-    let checked = CHECKED.get_or_init(Mutex::default);
-    if let Some(known) = checked.lock().unwrap_or_else(|e| e.into_inner()).get(&resolved) {
-        return known.clone();
-    }
-
-    let tool = find_xcode_tool(&resolved);
-    if let Some(tool) = &tool {
-        tracing::debug!(
-            sandbox.program = %resolved.display(),
-            sandbox.resolved = %tool.path.display(),
-            "running the tool behind an Xcode shim directly"
-        );
-    }
-    checked.lock().unwrap_or_else(|e| e.into_inner()).insert(resolved, tool.clone());
-    tool
-}
-
-/// Asks `xcrun` for the tool behind the shim at `shim`, and `xcode-select` for the developer
-/// directory it must be inside.
-#[cfg(target_os = "macos")]
-fn find_xcode_tool(shim: &Path) -> Option<XcodeTool> {
-    use std::path::PathBuf;
-
-    let run = |command: &str, args: &[&OsStr]| {
-        std::process::Command::new(command)
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
-    };
-    let path = run("/usr/bin/xcrun", &[OsStr::new("--find"), shim.file_name()?])?;
-    let developer_dir = run("/usr/bin/xcode-select", &[OsStr::new("--print-path")])?;
-    let (real, developer_dir) = (path.canonicalize().ok()?, developer_dir.canonicalize().ok()?);
-    // A tool `xcrun` finds on `PATH` instead, such as `/usr/bin/ruby`, is not a shim.
-    (real.starts_with(&developer_dir) && path != shim).then_some(XcodeTool { path, developer_dir })
 }
 
 impl ProcessBackend {
@@ -618,38 +521,15 @@ impl ProcessBackend {
             policy
                 .allowed_paths
                 .push(AllowedPath { path: scratch.clone(), mode: AccessMode::ReadWrite });
+            // `sandboxed_command` finds an Xcode shim through the policy's PATH; the child's
+            // PATH is the request's when it sets one. The environment itself is applied below.
+            if let Some(path) = request.env.get("PATH") {
+                policy.env.insert("PATH".to_string(), path.clone());
+            }
 
             let std_cmd = cmd.as_std();
             let args: Vec<OsString> = std_cmd.get_args().map(OsStr::to_owned).collect();
-            #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
-            let mut program = std_cmd.get_program().to_owned();
-            // The program is found through the child's PATH, and an Xcode shim found there
-            // cannot run under Seatbelt, so the tool behind it runs instead.
-            #[cfg(target_os = "macos")]
-            {
-                let path_var = request
-                    .env
-                    .get("PATH")
-                    .or_else(|| policy.env.get("PATH"))
-                    .map_or(OsStr::new(DEFAULT_EXEC_PATH), OsStr::new);
-                if let Some(tool) = xcode_shim_target(&program, path_var) {
-                    policy
-                        .allowed_paths
-                        .push(AllowedPath { path: tool.developer_dir, mode: AccessMode::ReadOnly });
-                    program = tool.path.into_os_string();
-                }
-            }
-            let wrapped = enforcer.wrap_command(&program, &args, &policy)?;
-
-            // Resolved before `configure_command`, which may attach spawn-time state (the
-            // Linux seccomp descriptor, Windows process attributes) that rebuilding the
-            // command afterwards would discard.
-            let program = resolve_program(&wrapped.program)
-                .map_or(wrapped.program, std::path::PathBuf::into_os_string);
-            let mut wrapped_cmd = Command::new(program);
-            wrapped_cmd.args(&wrapped.args).current_dir(&scratch);
-            enforcer.configure_command(&mut wrapped_cmd, &policy)?;
-            wrapped_cmd
+            sandboxed_command(enforcer.as_ref(), std_cmd.get_program(), &args, &policy, &scratch)?
         } else {
             match resolve_program(cmd.as_std().get_program()) {
                 Some(resolved) => {

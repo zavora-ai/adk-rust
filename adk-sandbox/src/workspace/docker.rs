@@ -14,6 +14,7 @@
 //! | Privilege escalation | `no-new-privileges` | — |
 //! | Process count | [`DEFAULT_PIDS_LIMIT`] | [`DockerClient::with_pids_limit`] |
 //! | Memory, CPU | Unlimited | [`DockerClient::with_resource_limits`] |
+//! | Host directories | None mounted | [`DockerClient::with_bind_mount`] |
 //!
 //! `GitRepo` manifest entries clone from inside the container, so they need a network mode
 //! other than `none`.
@@ -23,6 +24,7 @@
 //! container together with its descendants.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -32,7 +34,7 @@ use bollard::container::{
 };
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::image::CommitContainerOptions;
-use bollard::models::HostConfig;
+use bollard::models::{HostConfig, Mount, MountTypeEnum};
 use futures::StreamExt;
 use tokio::sync::RwLock;
 
@@ -104,6 +106,8 @@ pub struct DockerClient {
     /// Maximum number of processes per container; `None` removes the limit.
     /// Default: [`DEFAULT_PIDS_LIMIT`].
     pub pids_limit: Option<i64>,
+    /// Host paths mounted into every new container, in the order they were added.
+    bind_mounts: Vec<BindMount>,
     /// Bollard Docker client for API communication.
     client: Docker,
     /// Active sessions mapping handle IDs to container IDs.
@@ -138,6 +142,7 @@ impl DockerClient {
             cpu_limit: None,
             network_mode: DEFAULT_NETWORK_MODE.to_string(),
             pids_limit: Some(DEFAULT_PIDS_LIMIT),
+            bind_mounts: Vec::new(),
             client: docker,
             sessions: RwLock::new(HashMap::new()),
         })
@@ -197,14 +202,61 @@ impl DockerClient {
         self
     }
 
+    /// Mounts the host path `host` at `container` in every container this client creates,
+    /// returning the modified client.
+    ///
+    /// Implements spec 3.1 §10 S4: mounting the host workspace at `/workspace` gives
+    /// commands in the container and file tools on the host one view of the same files. A
+    /// read-only mount refuses every write from inside the container.
+    ///
+    /// Both paths must be absolute, and `host` must exist and be valid UTF-8; Docker rejects
+    /// anything else when the container is created, and provisioning returns
+    /// `ProvisionFailed`. The container's capabilities stay dropped, so a process inside
+    /// cannot remount a read-only mount writable. Content under a mount stays on the host:
+    /// [`SandboxClient::snapshot`] does not capture it, and [`SandboxClient::resume`] mounts
+    /// the same host paths again.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::workspace::DockerClient;
+    ///
+    /// # async fn run() -> Result<(), adk_sandbox::SandboxError> {
+    /// let client = DockerClient::new()
+    ///     .await?
+    ///     .with_bind_mount("/home/me/project", "/workspace", false)
+    ///     .with_bind_mount("/home/me/.cargo/registry", "/usr/local/cargo/registry", true);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_bind_mount(
+        mut self,
+        host: impl Into<PathBuf>,
+        container: impl Into<String>,
+        read_only: bool,
+    ) -> Self {
+        self.bind_mounts.push(BindMount {
+            host: host.into(),
+            container: container.into(),
+            read_only,
+        });
+        self
+    }
+
     /// Generates a unique session handle ID.
     fn generate_session_id() -> String {
         format!("docker-session-{}", uuid::Uuid::new_v4())
     }
 
     /// Builds the `HostConfig` for a new container from this client's settings.
-    fn build_host_config(&self) -> HostConfig {
-        host_config(self.memory_limit_bytes, self.cpu_limit, &self.network_mode, self.pids_limit)
+    fn build_host_config(&self) -> Result<HostConfig, SandboxError> {
+        host_config(
+            self.memory_limit_bytes,
+            self.cpu_limit,
+            &self.network_mode,
+            self.pids_limit,
+            &self.bind_mounts,
+        )
     }
 
     /// Executes a command inside a container and returns stdout/stderr.
@@ -225,17 +277,53 @@ impl DockerClient {
     }
 }
 
+/// A host path mounted into every container a [`DockerClient`] creates.
+#[derive(Debug, Clone, PartialEq)]
+struct BindMount {
+    host: PathBuf,
+    container: String,
+    read_only: bool,
+}
+
 /// Builds the `HostConfig` for a sandbox container.
 ///
 /// Every container drops all capabilities and sets `no-new-privileges`; the network mode,
-/// process limit, and resource limits come from the caller.
+/// process limit, resource limits, and bind mounts come from the caller.
+///
+/// # Errors
+///
+/// Returns `ProvisionFailed` when a bind mount's host path is not valid UTF-8, which the
+/// Docker API cannot express.
 fn host_config(
     memory_limit_bytes: Option<u64>,
     cpu_limit: Option<f64>,
     network_mode: &str,
     pids_limit: Option<i64>,
-) -> HostConfig {
-    HostConfig {
+    bind_mounts: &[BindMount],
+) -> Result<HostConfig, SandboxError> {
+    let mounts = bind_mounts
+        .iter()
+        .map(|mount| {
+            let source = mount.host.to_str().ok_or_else(|| SandboxError::ProvisionFailed {
+                resource: mount.host.display().to_string(),
+                reason: "the bind mount's host path is not valid UTF-8".to_string(),
+                suggestion: "Rename the directory or mount a parent directory instead; the \
+                             Docker API takes UTF-8 paths."
+                    .to_string(),
+            })?;
+            Ok(Mount {
+                target: Some(mount.container.clone()),
+                source: Some(source.to_string()),
+                // A structured mount, unlike a `host:container:ro` bind string, keeps a `:`
+                // in either path from being read as an option separator.
+                typ: Some(MountTypeEnum::BIND),
+                read_only: Some(mount.read_only),
+                ..Default::default()
+            })
+        })
+        .collect::<Result<Vec<_>, SandboxError>>()?;
+
+    Ok(HostConfig {
         // Docker takes a signed byte count; saturate rather than wrap for absurd limits.
         memory: memory_limit_bytes.map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX)),
         // Docker uses NanoCPUs (1e9 = 1 core)
@@ -244,8 +332,9 @@ fn host_config(
         cap_drop: Some(vec!["ALL".to_string()]),
         security_opt: Some(vec!["no-new-privileges".to_string()]),
         pids_limit,
+        mounts: (!mounts.is_empty()).then_some(mounts),
         ..Default::default()
-    }
+    })
 }
 
 /// Command that writes its stdin to `path` with the path passed as `$1`, so no character
@@ -361,7 +450,7 @@ async fn exec_collect(
 impl SandboxClient for DockerClient {
     async fn provision(&self, manifest: &Manifest) -> Result<SessionHandle, SandboxError> {
         // Create container from base image with resource limits
-        let host_config = self.build_host_config();
+        let host_config = self.build_host_config()?;
 
         let config = Config {
             image: Some(self.base_image.clone()),
@@ -583,7 +672,7 @@ impl SandboxClient for DockerClient {
         let image_ref = snapshot_id.as_str();
 
         // Create a new container from the committed image
-        let host_config = self.build_host_config();
+        let host_config = self.build_host_config()?;
 
         let config = Config {
             image: Some(image_ref.to_string()),
@@ -847,6 +936,7 @@ impl std::fmt::Debug for DockerClient {
             .field("base_image", &self.base_image)
             .field("memory_limit_bytes", &self.memory_limit_bytes)
             .field("cpu_limit", &self.cpu_limit)
+            .field("bind_mounts", &self.bind_mounts)
             .finish_non_exhaustive()
     }
 }
@@ -890,7 +980,8 @@ mod tests {
 
     #[test]
     fn host_config_defaults_drop_capabilities_and_network() {
-        let config = host_config(None, None, DEFAULT_NETWORK_MODE, Some(DEFAULT_PIDS_LIMIT));
+        let config =
+            host_config(None, None, DEFAULT_NETWORK_MODE, Some(DEFAULT_PIDS_LIMIT), &[]).unwrap();
 
         assert_eq!(config.network_mode.as_deref(), Some("none"));
         assert_eq!(config.cap_drop, Some(owned(&["ALL"])));
@@ -900,11 +991,13 @@ mod tests {
         assert_eq!(config.nano_cpus, None);
         assert_eq!(config.cap_add, None, "no capability may be added back");
         assert_eq!(config.privileged, None);
+        assert_eq!(config.mounts, None, "no host path is mounted by default");
+        assert_eq!(config.binds, None);
     }
 
     #[test]
     fn host_config_applies_caller_choices() {
-        let config = host_config(Some(512 * 1024 * 1024), Some(1.5), "bridge", None);
+        let config = host_config(Some(512 * 1024 * 1024), Some(1.5), "bridge", None, &[]).unwrap();
 
         assert_eq!(config.network_mode.as_deref(), Some("bridge"));
         assert_eq!(config.memory, Some(512 * 1024 * 1024));
@@ -915,8 +1008,64 @@ mod tests {
 
     #[test]
     fn host_config_saturates_an_out_of_range_memory_limit() {
-        let config = host_config(Some(u64::MAX), None, DEFAULT_NETWORK_MODE, None);
+        let config = host_config(Some(u64::MAX), None, DEFAULT_NETWORK_MODE, None, &[]).unwrap();
         assert_eq!(config.memory, Some(i64::MAX));
+    }
+
+    #[test]
+    fn host_config_mounts_each_bind_mount_with_its_access() {
+        let mounts = [
+            BindMount {
+                host: PathBuf::from("/home/me/project"),
+                container: "/workspace".to_string(),
+                read_only: false,
+            },
+            BindMount {
+                host: PathBuf::from("/home/me/a:b"),
+                container: "/opt/ref".to_string(),
+                read_only: true,
+            },
+        ];
+
+        let config = host_config(None, None, DEFAULT_NETWORK_MODE, None, &mounts).unwrap();
+
+        assert_eq!(
+            config.mounts,
+            Some(vec![
+                Mount {
+                    target: Some("/workspace".to_string()),
+                    source: Some("/home/me/project".to_string()),
+                    typ: Some(MountTypeEnum::BIND),
+                    read_only: Some(false),
+                    ..Default::default()
+                },
+                Mount {
+                    target: Some("/opt/ref".to_string()),
+                    source: Some("/home/me/a:b".to_string()),
+                    typ: Some(MountTypeEnum::BIND),
+                    read_only: Some(true),
+                    ..Default::default()
+                },
+            ])
+        );
+        assert_eq!(config.binds, None, "mounts are structured, never `host:container` strings");
+        assert_eq!(config.cap_drop, Some(owned(&["ALL"])), "capabilities stay dropped");
+        assert_eq!(config.security_opt, Some(owned(&["no-new-privileges"])));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_config_refuses_a_host_path_docker_cannot_express() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let mounts = [BindMount {
+            host: PathBuf::from(std::ffi::OsStr::from_bytes(b"/home/\xff")),
+            container: "/workspace".to_string(),
+            read_only: false,
+        }];
+
+        let result = host_config(None, None, DEFAULT_NETWORK_MODE, None, &mounts);
+        assert!(matches!(result, Err(SandboxError::ProvisionFailed { .. })), "{result:?}");
     }
 
     #[test]

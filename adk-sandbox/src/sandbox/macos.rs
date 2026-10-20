@@ -20,7 +20,7 @@
 //! | `process-fork` | Only with `allow_process_spawn` |
 //! | `file-read*` | The system runtime (`/bin`, `/sbin`, `/usr`, `/System`, `/Library/Apple`, `/Library/Frameworks`, `/opt/homebrew`, `/private/etc` minus credential files, the dyld cache, time zone data), random devices, and the policy's allowed paths |
 //! | `file-read-metadata` | Every path — resolving a path needs `stat` and `readlink` on each ancestor, so existence, size, and timestamps are visible everywhere; contents are not |
-//! | `file-write*` | `/dev/null`, `/dev/zero`, `/dev/dtracehelper`, and the policy's read-write paths |
+//! | `file-write*` | `/dev/null`, `/dev/zero`, `/dev/dtracehelper`, and the policy's read-write paths, less any read-only entry inside them |
 //! | `network*` | Only with `allow_network`; `network_rules` are not enforceable and fail closed |
 //! | `mach-lookup` | User and group lookup, temp-dir resolution, notifications, logging, and preferences; DNS, trust evaluation, and network configuration only with `allow_network` |
 //! | `sysctl-read`, `user-preference-read`, `signal` within the sandbox | Always |
@@ -28,9 +28,22 @@
 //! Home directories, `/tmp`, `/private/var/folders`, and the rest of the host are not
 //! readable unless the policy names them. Programs installed outside the system runtime —
 //! a rustup toolchain, a pyenv interpreter, Xcode — need their directories allowed
-//! explicitly. The exception is a program that [`ProcessBackend`](crate::ProcessBackend)
-//! starts through an Xcode shim in `/usr/bin`, such as `python3`: it runs the tool behind
-//! the shim and grants the active developer directory read-only for that execution.
+//! explicitly. The exception is a program that
+//! [`sandboxed_command`](super::sandboxed_command) — and so
+//! [`ProcessBackend`](crate::ProcessBackend) — starts through an Xcode shim in `/usr/bin`,
+//! such as `python3`: it runs the tool behind the shim and grants the active developer
+//! directory read-only for that command.
+//!
+//! ## Nested Paths
+//!
+//! Seatbelt applies the last rule that matches a path, so the policy's paths are emitted
+//! shallowest first and the most specific entry decides (spec 3.1 §10 S3). A read-only
+//! entry inside a read-write entry adds `(deny file-write* (subpath ...))`, since allow
+//! rules add up and its own read grant would leave the parent's write grant in force. Each
+//! writable directory above such an entry gets `(deny file-write-unlink (literal ...))`, so
+//! it cannot be renamed or removed to carry the entry away from the path the rules name;
+//! a read-write entry inside read-only space gets the same, since moving it would change
+//! the read-only directory that holds it.
 //!
 //! Every path is interpolated as an escaped SBPL string literal, so a path containing `"`,
 //! `\`, or control characters cannot terminate the literal and inject profile directives.
@@ -42,10 +55,14 @@
 //! (allow file-read* (subpath "/usr") ...)
 //! (allow file-read* (subpath "/opt/data"))
 //! (allow file-read* file-write* (subpath "/private/tmp/work"))
+//! (allow file-read* (subpath "/private/tmp/work/.git"))
+//! (deny file-write* (subpath "/private/tmp/work/.git"))
+//! (deny file-write-unlink (literal "/private/tmp/work"))
 //! ```
 
 use std::ffi::{OsStr, OsString};
 
+use super::layering::Layering;
 use super::{AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy, WrappedCommand};
 use crate::error::SandboxError;
 
@@ -90,7 +107,9 @@ impl MacOsEnforcer {
     ///
     /// The profile begins with `(version 1)` and `(deny default)`, grants the
     /// system runtime described in the [module documentation](self), and adds
-    /// one directive per allowed path. Paths are rendered as escaped SBPL string
+    /// one directive per allowed path, shallowest first, plus the write and unlink
+    /// denials that keep a nested read-only entry read-only (see
+    /// [Nested Paths](self#nested-paths)). Paths are rendered as escaped SBPL string
     /// literals. Paths that are not valid UTF-8 are rendered lossily here;
     /// [`SandboxEnforcer::wrap_command`] rejects them instead.
     ///
@@ -195,16 +214,28 @@ impl MacOsEnforcer {
             );
         }
 
-        for entry in paths {
-            let path = sbpl_string(&entry.path.to_string_lossy());
-            match entry.mode {
+        // Shallowest first, so the last matching rule is the most specific entry's. A
+        // read-only entry inside a writable one also denies writes, since allows add up.
+        let layering = Layering::new(paths);
+        for layer in &layering.layers {
+            let path = sbpl_string(&layer.path.to_string_lossy());
+            match layer.mode {
                 AccessMode::ReadOnly => {
                     profile.push_str(&format!("(allow file-read* (subpath {path}))\n"));
+                    if layer.shielded {
+                        profile.push_str(&format!("(deny file-write* (subpath {path}))\n"));
+                    }
                 }
                 AccessMode::ReadWrite => {
                     profile.push_str(&format!("(allow file-read* file-write* (subpath {path}))\n"));
                 }
             }
+        }
+        // Last, so no grant overrides them: renaming one of these directories would carry a
+        // read-only entry away from the path its rule names.
+        for dir in &layering.pinned {
+            let path = sbpl_string(&dir.to_string_lossy());
+            profile.push_str(&format!("(deny file-write-unlink (literal {path}))\n"));
         }
 
         profile
