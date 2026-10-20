@@ -416,3 +416,48 @@ jobs:
       if: ${{ always() && (env.GOOGLE_API_KEY != '' || env.OPENAI_API_KEY != '' || env.ANTHROPIC_API_KEY != '') }}
       shell: bash
       run: echo "### 🌐 ignored integration tests completed" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Harness eval suite on live models (spec 3.1 §7.13) ─────────
+  # `examples/harness_eval` runs fix_failing_test, plan_mode_writes_nothing and goal_until
+  # on each provider's model and compares the `passed` metric with the provider's
+  # BaselineStore baseline (`baseline.live.<provider>.json`); a regression fails the job.
+  # The scripted run of the same cases is `adk-harness`'s `eval_suite` test, in the PR tier.
+  # Gated on each provider's secret, as the integration tests are.
+  harness-eval-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: openai
+            secret: OPENAI_API_KEY
+          - provider: anthropic
+            secret: ANTHROPIC_API_KEY
+          - provider: gemini
+            secret: GOOGLE_API_KEY
+    env:
+      PROVIDER_KEY: ${{ secrets[matrix.secret] }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      if: ${{ env.PROVIDER_KEY != '' }}
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: harness-eval-live
+        neutralize-wild: 'true'
+
+    - name: Run the harness eval suite on ${{ matrix.provider }}
+      if: ${{ env.PROVIDER_KEY != '' }}
+      run: cargo run --locked --manifest-path examples/harness_eval/Cargo.toml -- --live ${{ matrix.provider }}
+
+    - name: Skip notice (no ${{ matrix.secret }} configured)
+      if: ${{ env.PROVIDER_KEY == '' }}
+      shell: bash
+      run: |
+        echo "### ⏭️ harness eval (${{ matrix.provider }}) skipped" >> "$GITHUB_STEP_SUMMARY"
+        echo "No ${{ matrix.secret }} configured." >> "$GITHUB_STEP_SUMMARY"

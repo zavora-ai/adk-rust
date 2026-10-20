@@ -21,6 +21,8 @@ use crate::instructions::{
     InMemoryWorkspaceTrustStore, InstructionsConfig, ProjectInstructions, WorkspaceTrustStore,
 };
 use crate::mode::{HarnessMode, InMemoryModeStore, ModeStore};
+#[cfg(feature = "auth")]
+use crate::policy::ToolKind;
 use crate::policy::{
     HARNESS_TOOL_NAMES, HarnessPolicy, PolicyInner, PolicySwitches, PromptContexts, ShellView,
     ToolClassRegistry,
@@ -137,8 +139,15 @@ pub struct HarnessAgentBuilder {
     default_members: bool,
     member_model: Option<Arc<dyn Llm>>,
     plan_graph: bool,
+    #[cfg(feature = "memory")]
+    memory: Option<crate::memory::MemoryConfig>,
     budget: Option<RunBudget>,
     spend_ledger: Option<Arc<dyn SpendLedger>>,
+    audit_log: Option<Arc<dyn adk_core::audit_log::AuditRecorder>>,
+    #[cfg(feature = "auth")]
+    identity: IdentityOptions,
+    #[cfg(feature = "observe")]
+    loop_guard: Option<LoopGuard>,
     tools: Vec<Arc<dyn Tool>>,
     toolsets: Vec<Arc<dyn Toolset>>,
     max_iterations: u32,
@@ -188,8 +197,15 @@ impl HarnessAgentBuilder {
             default_members: true,
             member_model: None,
             plan_graph: cfg!(feature = "graph"),
+            #[cfg(feature = "memory")]
+            memory: None,
             budget: None,
             spend_ledger: None,
+            audit_log: None,
+            #[cfg(feature = "auth")]
+            identity: IdentityOptions::default(),
+            #[cfg(feature = "observe")]
+            loop_guard: None,
             tools: Vec::new(),
             toolsets: Vec::new(),
             max_iterations: 100,
@@ -415,6 +431,14 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// File memory (spec 3.1 §7.15; off until set): adds `memory_read`, `memory_write`
+    /// and `memory_delete`, and the memory index at the end of the instruction.
+    #[cfg(feature = "memory")]
+    pub fn memory(mut self, config: crate::memory::MemoryConfig) -> Self {
+        self.memory = Some(config);
+        self
+    }
+
     /// Resource limits for every run.
     pub fn budget(mut self, budget: RunBudget) -> Self {
         self.budget = Some(budget);
@@ -427,10 +451,53 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Where every run's audit records go, in Block mode (spec 3.1 §7.14, §9.3). A
+    /// runner's own `audit_log` takes precedence. With feature `auth` the default is an
+    /// [`EphemeralAuditLog`](crate::EphemeralAuditLog); without it, runs record only to
+    /// the trail the runner sets.
+    pub fn audit_log(mut self, recorder: Arc<dyn adk_core::audit_log::AuditRecorder>) -> Self {
+        self.audit_log = Some(recorder);
+        self
+    }
+
+    /// Mints short-lived tokens for the subject a run acts for through `broker`, and hands
+    /// them to `bash` for one call through a credential helper (spec 3.1 §7.14). The
+    /// resources come from [`shell_credential`](Self::shell_credential), or else from the
+    /// workspace's HTTPS git remotes.
+    #[cfg(feature = "auth")]
+    pub fn credentials(mut self, broker: Arc<dyn adk_core::CredentialBroker>) -> Self {
+        self.identity.broker = Some(broker);
+        self
+    }
+
+    /// Adds a resource the credential helper serves a token for (spec 3.1 §7.14).
+    #[cfg(feature = "auth")]
+    pub fn shell_credential(mut self, credential: crate::identity::ShellCredential) -> Self {
+        self.identity.shell_credentials.push(credential);
+        self
+    }
+
+    /// Requires a permission per tool class, checked when the tool executes
+    /// (spec 3.1 §7.14).
+    #[cfg(feature = "auth")]
+    pub fn rbac(mut self, map: crate::identity::RbacMap) -> Self {
+        self.identity.rbac = Some(map);
+        self
+    }
+
+    /// Serves the harness to users the server authenticates: standing rules and Auto apply
+    /// only to a run whose user was authenticated (`ReadonlyContext::is_authenticated`);
+    /// any other run is decided as in Ask with no standing rule (spec 3.1 §9.2 I6).
+    #[cfg(feature = "auth")]
+    pub fn require_authenticated_identity(mut self) -> Self {
+        self.identity.require_authenticated = true;
+        self
+    }
+
     /// Loop detection (spec 3.1 §7.13; not yet implemented).
     #[cfg(feature = "observe")]
-    pub fn loop_guard(mut self, _guard: LoopGuard) -> Self {
-        self.unimplemented.push("loop_guard (spec 3.1 §7.13)".to_string());
+    pub fn loop_guard(mut self, guard: LoopGuard) -> Self {
+        self.loop_guard = Some(guard);
         self
     }
 
@@ -595,7 +662,11 @@ impl HarnessAgentBuilder {
                 Some(launcher) => bash.with_sandbox(launcher),
                 None => bash,
             };
-            tools.push(Arc::new(bash));
+            #[cfg(feature = "auth")]
+            let bash = self.identity.with_credentials(bash, workspace.root());
+            #[cfg(not(feature = "auth"))]
+            let bash: Arc<dyn Tool> = Arc::new(bash);
+            tools.push(bash);
         }
         if self.todos {
             match &self.last_todos {
@@ -610,8 +681,43 @@ impl HarnessAgentBuilder {
             }
         }
         tools.push(Arc::new(ExitPlanModeTool::new(mode_store.clone(), self.mode)));
+        #[cfg(feature = "memory")]
+        let memory_resolver = self.memory.clone().map(|config| {
+            let resolver =
+                crate::tools::MemoryResolver::new(config, workspace.root().to_path_buf());
+            tools.push(Arc::new(crate::tools::MemoryReadTool::new(resolver.clone())));
+            tools.push(Arc::new(crate::tools::MemoryWriteTool::new(resolver.clone())));
+            tools.push(Arc::new(crate::tools::MemoryDeleteTool::new(resolver.clone())));
+            resolver
+        });
         let tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
-        let toolset = Arc::new(HarnessToolset::new(tools, mode_store.clone(), self.mode));
+        #[cfg(feature = "auth")]
+        let (tools, identity_gate) = {
+            let isolation = status.isolation();
+            let tools = self.identity.protect(tools, &registry, &self.name, isolation);
+            (
+                tools,
+                Arc::new(crate::identity::IdentityGate::new(self.identity.require_authenticated)),
+            )
+        };
+        #[cfg_attr(not(any(feature = "auth", feature = "observe")), allow(unused_mut))]
+        let mut toolset = HarnessToolset::new(tools, mode_store.clone(), self.mode);
+        #[cfg(feature = "auth")]
+        {
+            toolset = toolset.with_observer(identity_gate.clone());
+        }
+        #[cfg(feature = "observe")]
+        let run_trails = Arc::new(crate::observe::RunTrails::default());
+        #[cfg(feature = "observe")]
+        if let Some(guard) = self.loop_guard {
+            toolset = toolset.with_observer(Arc::new(crate::observe::LoopGuardObserver::new(
+                guard,
+                mode_store.clone(),
+                self.mode,
+                run_trails.clone(),
+            )));
+        }
+        let toolset = Arc::new(toolset);
 
         // 5 (policy first: the handler re-checks against it).
         let switches = PolicySwitches {
@@ -635,6 +741,10 @@ impl HarnessAgentBuilder {
             switches,
             trust_mcp_read_only_hints: self.trust_mcp_read_only_hints,
             prompts: PromptContexts::default(),
+            #[cfg(feature = "auth")]
+            identity: identity_gate.clone(),
+            #[cfg(feature = "observe")]
+            root_agent: self.name.clone(),
         });
         let handler: Option<Arc<dyn ToolConfirmationHandler>> =
             match (self.confirmation_handler, self.prompter) {
@@ -661,9 +771,22 @@ impl HarnessAgentBuilder {
             environment,
             state: instruction_state.clone(),
         });
-        let provider: InstructionProvider = Box::new(move |_ctx: Arc<dyn ReadonlyContext>| {
+        #[cfg(feature = "memory")]
+        let provider_memory = memory_resolver.clone();
+        let provider: InstructionProvider = Box::new(move |ctx: Arc<dyn ReadonlyContext>| {
             let parts = parts.clone();
-            Box::pin(async move { Ok(parts.assemble()) })
+            #[cfg(feature = "memory")]
+            let memory = provider_memory.clone();
+            Box::pin(async move {
+                let instruction = parts.assemble();
+                #[cfg(feature = "memory")]
+                let instruction = match memory {
+                    Some(memory) => memory.append_index(instruction, ctx.as_ref()).await,
+                    None => instruction,
+                };
+                let _ = &ctx;
+                Ok(instruction)
+            })
         });
         let non_waivable: BTreeSet<String> = ["exit_plan_mode", "memory_write", "memory_delete"]
             .into_iter()
@@ -692,6 +815,8 @@ impl HarnessAgentBuilder {
             }
         }
         for tool in self.tools {
+            #[cfg(feature = "auth")]
+            let tool = self.identity.protect_extra(tool);
             builder = builder.tool(tool);
         }
         for extra in self.toolsets {
@@ -699,6 +824,15 @@ impl HarnessAgentBuilder {
         }
         if let Some(customize) = self.customize {
             builder = customize(builder);
+        }
+        #[cfg(feature = "memory")]
+        if memory_resolver.is_some() {
+            builder = builder.tool_confirmation_policy(ToolConfirmationPolicy::PerTool(
+                ["exit_plan_mode", "memory_write", "memory_delete"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ));
         }
         let agent = builder.build()?;
 
@@ -738,13 +872,26 @@ impl HarnessAgentBuilder {
                 handler,
                 confirmation_timeout: self.confirmation_timeout,
                 budget: self.budget,
+                #[cfg(not(feature = "observe"))]
                 spend_ledger: self.spend_ledger,
+                // Spend is metered on every run by default (spec 3.1 §7.13).
+                #[cfg(feature = "observe")]
+                spend_ledger: self.spend_ledger.or_else(|| {
+                    Some(Arc::new(adk_core::InMemorySpendLedger::default()) as Arc<dyn SpendLedger>)
+                }),
                 history_max_events: self.history_max_events,
                 compaction,
                 toolset,
                 instructions: instruction_state,
                 non_waivable_tools: non_waivable,
                 workspace,
+                audit: crate::agent::harness_audit_trail(self.audit_log)?,
+                #[cfg(feature = "auth")]
+                identity: identity_gate,
+                #[cfg(feature = "observe")]
+                spend: Arc::default(),
+                #[cfg(feature = "observe")]
+                run_trails,
             },
             info,
         })
@@ -791,5 +938,78 @@ impl PromptParts {
         ));
         out.push_str(&self.state.instructions.render(self.state.trusted()));
         out.trim_end().to_string()
+    }
+}
+
+/// The identity configuration of a builder (spec 3.1 §7.14).
+#[cfg(feature = "auth")]
+#[derive(Default)]
+struct IdentityOptions {
+    broker: Option<Arc<dyn adk_core::CredentialBroker>>,
+    shell_credentials: Vec<crate::identity::ShellCredential>,
+    rbac: Option<crate::identity::RbacMap>,
+    require_authenticated: bool,
+}
+
+#[cfg(feature = "auth")]
+impl IdentityOptions {
+    /// `bash` with the credential helper when a broker is set.
+    fn with_credentials(&self, bash: HarnessBashTool, root: &std::path::Path) -> Arc<dyn Tool> {
+        let Some(broker) = &self.broker else {
+            return Arc::new(bash);
+        };
+        let calls = Arc::new(crate::identity::CallEnvironment::default());
+        let launcher_calls = calls.clone();
+        let bash = bash.with_launcher_layer(move |inner| {
+            Arc::new(crate::identity::CredentialLauncher::new(inner, launcher_calls.clone()))
+        });
+        Arc::new(crate::identity::CredentialedTool::new(
+            Arc::new(bash),
+            broker.clone(),
+            crate::identity::resolve_credentials(self.shell_credentials.clone(), root),
+            calls,
+        ))
+    }
+
+    /// The harness tools, each wrapped for the permission its class needs.
+    fn protect(
+        &self,
+        tools: Vec<Arc<dyn Tool>>,
+        registry: &ToolClassRegistry,
+        agent: &str,
+        isolation: crate::policy::Isolation,
+    ) -> Vec<Arc<dyn Tool>> {
+        let Some(rbac) = &self.rbac else {
+            return tools;
+        };
+        tools
+            .into_iter()
+            .map(|tool| {
+                let class = registry.classify(
+                    agent,
+                    tool.name(),
+                    None,
+                    &serde_json::json!({}),
+                    tool.effect(),
+                    isolation,
+                    false,
+                );
+                rbac.protect(tool, &class)
+            })
+            .collect()
+    }
+
+    /// An extra tool, wrapped for the permission its `External` class needs.
+    fn protect_extra(&self, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
+        match &self.rbac {
+            Some(rbac) => {
+                let class = ToolKind::External {
+                    effect: tool.effect(),
+                    trusted_origin: tool.origin() == adk_core::STATIC_TOOL_ORIGIN,
+                };
+                rbac.protect(tool, &class)
+            }
+            None => tool,
+        }
     }
 }

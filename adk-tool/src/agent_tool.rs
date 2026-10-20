@@ -1387,6 +1387,10 @@ impl ReadonlyContext for AgentToolInvocationContext {
     fn acting_context(&self) -> adk_core::ActingContext {
         self.run_config.acting_context_for(self.app_name(), self.agent_name(), self.user_id())
     }
+
+    fn is_authenticated(&self) -> bool {
+        self.parent_ctx.is_authenticated()
+    }
 }
 
 #[async_trait]
@@ -1899,6 +1903,7 @@ mod tests {
         emitted_events: Mutex<Vec<Event>>,
         delegation_depth: u32,
         max_delegation_depth: Option<u32>,
+        authenticated: bool,
     }
 
     impl TestToolContext {
@@ -1919,6 +1924,7 @@ mod tests {
                 emitted_events: Mutex::new(Vec::new()),
                 delegation_depth: 0,
                 max_delegation_depth: None,
+                authenticated: false,
             }
         }
     }
@@ -1945,6 +1951,9 @@ mod tests {
         }
         fn user_content(&self) -> &Content {
             &self.session.history[0]
+        }
+        fn is_authenticated(&self) -> bool {
+            self.authenticated
         }
     }
 
@@ -2070,6 +2079,46 @@ mod tests {
         assert!(actions.skip_summarization);
         assert_eq!(parent.session.state().get("child-key"), None);
         assert_eq!(parent.emitted_events.lock().expect("event lock").len(), 2);
+    }
+
+    /// Records whether the delegate's context reports an authenticated identity.
+    struct AuthenticationProbe {
+        seen: Arc<Mutex<Option<bool>>>,
+    }
+
+    #[async_trait]
+    impl Agent for AuthenticationProbe {
+        fn name(&self) -> &str {
+            "auth_probe"
+        }
+
+        fn description(&self) -> &str {
+            "records whether its caller was authenticated"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+
+        async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<adk_core::EventStream> {
+            *self.seen.lock().expect("seen lock") = Some(ctx.is_authenticated());
+            let mut event = Event::new(ctx.invocation_id());
+            event.author = "auth_probe".to_string();
+            event.llm_response.content = Some(Content::new("model").with_text("done"));
+            Ok(Box::pin(futures::stream::once(async { Ok(event) })))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_delegate_sees_whether_its_caller_was_authenticated() {
+        for authenticated in [true, false] {
+            let seen = Arc::new(Mutex::new(None));
+            let mut parent = TestToolContext::new();
+            parent.authenticated = authenticated;
+            let tool = AgentTool::new(Arc::new(AuthenticationProbe { seen: seen.clone() }));
+            tool.execute(Arc::new(parent), json!({"request": "go"})).await.unwrap();
+            assert_eq!(*seen.lock().expect("seen lock"), Some(authenticated));
+        }
     }
 
     struct WritePolicyAgent;

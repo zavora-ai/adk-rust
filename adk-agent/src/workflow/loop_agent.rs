@@ -454,6 +454,10 @@ impl adk_core::ReadonlyContext for HistoryTrackingContext {
     fn acting_context(&self) -> adk_core::ActingContext {
         self.parent_ctx.acting_context()
     }
+
+    fn is_authenticated(&self) -> bool {
+        self.parent_ctx.is_authenticated()
+    }
 }
 
 #[async_trait]

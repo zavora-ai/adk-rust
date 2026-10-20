@@ -292,6 +292,26 @@ impl HarnessBashTool {
             self.workspace.bash_env().into_iter().map(|(key, _)| key).collect()
         }
     }
+
+    /// Builds each command of every launcher — host, and the sandbox's read-write and
+    /// read-only ones — through `layer`, such as the credential helper of spec 3.1 §7.14.
+    #[cfg(feature = "auth")]
+    #[must_use]
+    pub(crate) fn with_launcher_layer(
+        mut self,
+        layer: impl Fn(Arc<dyn adk_devtools::CommandLauncher>) -> Arc<dyn adk_devtools::CommandLauncher>,
+    ) -> Self {
+        self.host =
+            BashTool::new(self.workspace.clone()).with_launcher(layer(Arc::new(HostLauncher)));
+        #[cfg(feature = "sandbox")]
+        if let Some(sandbox) = self.sandbox.as_mut() {
+            sandbox.read_write = BashTool::new(self.workspace.clone())
+                .with_launcher(layer(Arc::new(sandbox.launcher.clone())));
+            sandbox.read_only = BashTool::new(self.workspace.clone())
+                .with_launcher(layer(Arc::new(sandbox.launcher.read_only())));
+        }
+        self
+    }
 }
 
 fn refuse(code: &'static str, message: impl Into<String>) -> AdkError {

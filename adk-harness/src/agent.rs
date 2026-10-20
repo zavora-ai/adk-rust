@@ -111,6 +111,27 @@ pub struct HarnessRuntime {
     pub(crate) instructions: Arc<InstructionState>,
     pub(crate) non_waivable_tools: BTreeSet<String>,
     pub(crate) workspace: Workspace,
+    pub(crate) audit: Option<adk_core::audit_log::AuditTrail>,
+    #[cfg(feature = "auth")]
+    pub(crate) identity: Arc<crate::identity::IdentityGate>,
+    #[cfg(feature = "observe")]
+    pub(crate) spend: Arc<crate::observe::SpendAccounts>,
+    #[cfg(feature = "observe")]
+    pub(crate) run_trails: Arc<crate::observe::RunTrails>,
+}
+
+/// The harness's audit trail, in Block mode: `recorder`, or with feature `auth` an
+/// [`EphemeralAuditLog`](crate::EphemeralAuditLog) (spec 3.1 §9.2 I39).
+pub(crate) fn harness_audit_trail(
+    recorder: Option<Arc<dyn adk_core::audit_log::AuditRecorder>>,
+) -> Result<Option<adk_core::audit_log::AuditTrail>> {
+    #[cfg(feature = "auth")]
+    let recorder = match recorder {
+        Some(recorder) => Some(recorder),
+        None => Some(Arc::new(crate::identity::EphemeralAuditLog::new()?)
+            as Arc<dyn adk_core::audit_log::AuditRecorder>),
+    };
+    Ok(recorder.map(adk_core::audit_log::AuditTrail::new))
 }
 
 impl std::fmt::Debug for HarnessRuntime {
@@ -194,6 +215,18 @@ impl HarnessRuntime {
     pub fn compaction(&self) -> Option<&EventsCompactionConfig> {
         self.compaction.as_ref()
     }
+
+    /// The spend of `subject`, or of every subject, since the harness was built: per
+    /// acting agent, subject and vendor (spec 3.1 §7.13).
+    #[cfg(feature = "observe")]
+    pub fn spend(&self, subject: Option<&str>) -> crate::observe::SpendReport {
+        self.spend.report(subject)
+    }
+
+    /// The audit trail a run gets when it carries none (spec 3.1 §7.14, §9.2 I39).
+    pub fn audit_trail(&self) -> Option<&adk_core::audit_log::AuditTrail> {
+        self.audit.as_ref()
+    }
 }
 
 /// What `HarnessAgent::configure_run` applies to a run's config (spec 3.1 §7.3).
@@ -250,6 +283,12 @@ impl HarnessLayer<'_> {
     /// which binds it to the run's audit trail.
     fn apply_with(&self, config: &mut RunConfig, compose_policy: bool) {
         let runtime = self.runtime;
+        // Before the policy is composed, which binds it to the run's trail. The runner path
+        // installs the trail through `RunnerConfigBuilder::audit_log` instead, so a
+        // runner's own log takes precedence.
+        if compose_policy && config.audit.is_none() {
+            config.audit = runtime.audit.clone();
+        }
         if compose_policy && !config.tool_policy.as_deref().is_some_and(has_harness_layer) {
             let mut layers: Vec<Arc<dyn ToolPolicy>> = Vec::new();
             if let Some(existing) = config.tool_policy.take() {
@@ -309,6 +348,10 @@ impl HarnessLayer<'_> {
         }
         if config.spend_ledger.is_none() {
             config.spend_ledger = runtime.spend_ledger.clone();
+        }
+        #[cfg(feature = "observe")]
+        if compose_policy {
+            crate::observe::meter_run(&runtime.spend, config);
         }
         if config.history_max_events.is_none() {
             config.history_max_events = runtime.history_max_events;
@@ -408,6 +451,9 @@ impl HarnessAgent {
         self.runtime.layer().apply_with(&mut config, false);
         let mut builder =
             builder.run_config(config).approval_store(self.runtime.approval_store.clone());
+        if let Some(trail) = &self.runtime.audit {
+            builder = builder.audit_log(trail.recorder().clone());
+        }
         if let Some(compaction) = &self.runtime.compaction {
             builder = builder.compaction_config(compaction.clone());
         }
@@ -480,6 +526,16 @@ impl Agent for HarnessAgent {
                 ),
             ));
         }
+        #[cfg(feature = "auth")]
+        {
+            let blocking = config.audit.as_ref().is_some_and(|trail| {
+                trail.failure_mode() == adk_core::audit_log::AuditFailureMode::Block
+            });
+            if !blocking {
+                return Err(crate::identity::audit_required(self.name()));
+            }
+            self.runtime.identity.observe(ctx.as_ref());
+        }
         if ctx.user_id() != ctx.session().user_id() {
             return Err(AdkError::new(
                 ErrorComponent::Agent,
@@ -503,6 +559,33 @@ impl Agent for HarnessAgent {
                 )
                 .await?;
         }
+        #[cfg(feature = "observe")]
+        {
+            let mode = crate::observe::run_mode(
+                self.runtime.mode_store.as_ref(),
+                self.info.default_mode,
+                ctx.as_ref(),
+            )
+            .await;
+            let span = crate::observe::run_span(
+                self.name(),
+                ctx.invocation_id(),
+                mode,
+                &self.info.isolation,
+            );
+            let events = {
+                use tracing::Instrument as _;
+                self.root.run(ctx.clone()).instrument(span.clone()).await?
+            };
+            return Ok(crate::observe::observe_run(
+                events,
+                &ctx,
+                span,
+                self.runtime.spend.clone(),
+                self.runtime.run_trails.clone(),
+            ));
+        }
+        #[cfg(not(feature = "observe"))]
         self.root.run(ctx).await
     }
 }

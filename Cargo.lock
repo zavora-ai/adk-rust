@@ -710,6 +710,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "unicode-normalization",
  "uuid 1.25.0",
 ]

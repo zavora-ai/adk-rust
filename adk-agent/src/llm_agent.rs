@@ -2001,6 +2001,10 @@ impl ReadonlyContext for AgentToolContext {
     fn acting_context(&self) -> adk_core::ActingContext {
         self.parent_ctx.acting_context()
     }
+
+    fn is_authenticated(&self) -> bool {
+        self.parent_ctx.is_authenticated()
+    }
 }
 
 #[async_trait]
@@ -2183,6 +2187,10 @@ impl ReadonlyContext for ToolOutcomeCallbackContext {
 
     fn acting_context(&self) -> adk_core::ActingContext {
         self.inner.acting_context()
+    }
+
+    fn is_authenticated(&self) -> bool {
+        self.inner.is_authenticated()
     }
 }
 

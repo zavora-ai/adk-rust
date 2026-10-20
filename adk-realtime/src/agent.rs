@@ -1531,6 +1531,10 @@ impl ReadonlyContext for RealtimeToolContext {
     fn acting_context(&self) -> adk_core::ActingContext {
         self.parent_ctx.acting_context()
     }
+
+    fn is_authenticated(&self) -> bool {
+        self.parent_ctx.is_authenticated()
+    }
 }
 
 #[async_trait]
@@ -2079,6 +2083,9 @@ mod tool_safety_tests {
         fn user_content(&self) -> &Content {
             &self.content
         }
+        fn is_authenticated(&self) -> bool {
+            true
+        }
     }
 
     #[async_trait]
@@ -2136,6 +2143,7 @@ mod tool_safety_tests {
         );
         assert_eq!(ctx.get_secret("api_key").await.unwrap().as_deref(), Some("secret-for-api_key"));
         assert!(ctx.shared_state().is_some(), "shared state must reach realtime tools");
+        assert!(ctx.is_authenticated(), "an authenticated caller must not look anonymous");
         assert_eq!(ctx.app_name(), "app", "identity still delegates");
     }
 }

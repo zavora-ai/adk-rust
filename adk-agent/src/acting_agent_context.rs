@@ -75,6 +75,10 @@ impl ReadonlyContext for ActingAgentContext {
         acting
     }
 
+    fn is_authenticated(&self) -> bool {
+        self.inner.is_authenticated()
+    }
+
     fn state(&self) -> Option<&dyn adk_core::State> {
         self.inner.state()
     }
